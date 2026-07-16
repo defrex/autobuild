@@ -205,6 +205,10 @@ export class FileTicketSource implements TicketSource {
     if (found === null) {
       throw new Error(`file ticket source: transition on unknown ticket "${id}"`)
     }
+    // Idempotent by construction — the dispatcher retries transitions after a
+    // crash (file.test.ts explains the window). rename(2) would no-op here
+    // anyway, but resting idempotency on that POSIX subtlety would make it a
+    // property of the syscall rather than of this adapter.
     if (found.state === target) return
     await rename(found.path, this.pathIn(target, id))
   }

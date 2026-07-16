@@ -126,12 +126,29 @@ describe('FileTicketSource', () => {
     expect((await tickets.get('file-1'))?.state).toBe('Done')
   })
 
-  test('transition to the state it is already in is a no-op', async () => {
-    await seedTicket('file-1', { state: 'ready' })
+  // Idempotency, not the early-return at file.ts:208. This test CANNOT
+  // distinguish that guard from its absence: rename(2) on two paths resolving
+  // to the same file is defined to "return successfully and perform no other
+  // action", so ino/mtime/ctime are all untouched either way and there is
+  // nothing to observe. Do not try to give it teeth via stat() — only a spy on
+  // rename could tell the two apart, and that tests the implementation.
+  //
+  // What it does pin is a contract the dispatcher depends on for crash
+  // resumption (§3.3): dispatcher.ts:378 transitions a merged ticket to Done
+  // BEFORE appending build.completed. A crash between the two leaves the build
+  // un-completed, so the next janitor tick re-enters that branch and transitions
+  // an already-Done ticket again. If that threw, the janitor would wedge on the
+  // build forever. Same shape for the bounce/abort paths to Triage.
+  test('transition to the current state succeeds and leaves the ticket untouched', async () => {
+    const seeded = await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
     const tickets = source()
 
     await tickets.transition('file-1', 'Ready')
+    await tickets.transition('file-1', 'Ready') // retried after a crash
+
     expect((await tickets.get('file-1'))?.state).toBe('Ready')
+    expect(await readFile(path('ready', 'file-1'), 'utf8')).toBe(seeded)
+    expect(await readdir(join(dir, 'ready'))).toEqual(['file-1.md'])
   })
 
   test('transition on an unknown ticket throws', async () => {

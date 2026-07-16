@@ -12,10 +12,14 @@
  * of either side that silently stalls the dispatcher fails here and nowhere
  * else.
  *
- * Note it does NOT go through `ab dispatch`: src/cli/dispatch.ts cannot load
- * (see implement-notes — src/store/local/ is missing from the repo), so the
- * CLI seam is covered by construction here instead: MemoryBuildStore + fakes,
- * exactly as dispatcher.test.ts wires them.
+ * Note it does NOT go through `ab dispatch`, and that is permanent, not a
+ * workaround: abDispatch's defaultWire opens a real SQLite store and a real
+ * worktree provider under DEFAULT_LOCAL_ROOT (~/.autobuild), so driving the
+ * CLI entry point from a test would write into the developer's actual autobuild
+ * home. cli/dispatch.test.ts:202 carries that reasoning in full and stops at
+ * the `wire` seam for the same reason. This file covers the seam by
+ * construction instead: MemoryBuildStore + fakes, exactly as dispatcher.test.ts
+ * wires them.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
