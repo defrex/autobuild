@@ -20,9 +20,9 @@
  * next tick advances the post-PR epilogue (§15.7).
  */
 import { hostname } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { loadConfig } from '../config/load'
-import type { Config, TicketsConfig } from '../config/schema'
+import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { randomIds, type IdSource } from '../ids'
 import type { BuildState } from '../kernel/reducer'
@@ -129,16 +129,7 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     ...(token !== undefined && token !== '' ? { token } : {}),
   })
 
-  // A relative [tickets].dir is relative to the repo, not this process's cwd
-  // (mirrors `ab ticket create`).
-  if (config.tickets === undefined) {
-    throw new Error('unreachable: abDispatch checks config.tickets before wiring')
-  }
-  const ticketsConfig: TicketsConfig =
-    config.tickets.dir !== undefined
-      ? { ...config.tickets, dir: resolve(opts.targetRepo, config.tickets.dir) }
-      : config.tickets
-  const tickets = createTicketSource(ticketsConfig, opts.env)
+  const tickets = createTicketSource(config.tickets, opts.env, opts.targetRepo)
 
   return {
     store,
@@ -314,14 +305,6 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     }
     throw error
   }
-  if (config.tickets === undefined) {
-    throw new Error(
-      "autobuild.toml has no [tickets] table — 'ab dispatch' watches the " +
-        'configured TicketSource for Ready tickets (§3.3); add [tickets] with ' +
-        'source = "linear" (teamKey = "…") or source = "file" (dir = "…")',
-    )
-  }
-
   const wire = opts.wire ?? defaultWire
   const wiring = await wire(config, opts)
   const loop = new DispatchLoop(config, wiring, opts)

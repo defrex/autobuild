@@ -4,15 +4,25 @@
  * autobuild.toml — it comes from the LINEAR_API_KEY environment variable
  * (a local .env file works via the CLI's loader), and a missing key is a
  * hard error naming the variable (D6 discipline).
+ *
+ * This factory is also the single place that knows how a file tracker's
+ * directory is decided, because three facts have to be settled together and
+ * only here are all three in scope: the default (`.autobuild/tickets`), the
+ * repo-relative → absolute resolution, and whether the directory was DEFAULTED
+ * (which decides `selfIgnore`). Filling `dir` in earlier would destroy that
+ * last bit before the adapter is constructed.
  */
+import { resolve } from 'node:path'
 import type { TicketsConfig } from '../../config/schema'
 import type { TicketSource } from '../types'
-import { FileTicketSource } from './file'
+import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
 
 export function createTicketSource(
   config: TicketsConfig,
   env: Record<string, string | undefined>,
+  /** A relative [tickets].dir is relative to the repo, not this process's cwd. */
+  targetRepo: string,
 ): TicketSource {
   if (config.source === 'linear') {
     const apiKey = env['LINEAR_API_KEY']
@@ -42,13 +52,12 @@ export function createTicketSource(
     })
   }
 
-  if (config.dir === undefined) {
-    throw new Error(
-      '[tickets].source = "file" requires dir — the directory holding <id>.md ticket files',
-    )
-  }
   return new FileTicketSource({
-    dir: config.dir,
+    dir: resolve(targetRepo, config.dir ?? DEFAULT_TICKETS_DIR),
+    // Only the DEFAULTED backlog hides itself from git. An explicit dir is the
+    // user's directory — possibly tracked on purpose — and silently dropping it
+    // out of `git status` would be a bad, hard-to-notice failure.
+    selfIgnore: config.dir === undefined,
     ...(config.createState !== undefined
       ? { createState: config.createState }
       : {}),

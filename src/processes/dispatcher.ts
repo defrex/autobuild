@@ -37,6 +37,33 @@ import type {
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
 
+// ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
+
+/**
+ * What "ready for dispatch" means, resolved against the ticket source — the
+ * two trackers gate readiness differently and neither default can be global.
+ *
+ * Linear has no `ready/` directory, so a label is the only thing that can mark
+ * a ticket dispatchable: the historical `["autobuild"]` default is restored
+ * here, unchanged. The file tracker's gate IS the directory — `mv` into
+ * `ready/` is the whole grooming action — so it defaults to no label gate and
+ * the `Ready` state.
+ *
+ * An explicit `readyLabels` wins for either source: labels remain a supported
+ * optional frontmatter field, and silently ignoring config is worse than an
+ * odd-looking one.
+ */
+export function readyCriteria(config: Config): { labels: string[]; state?: string } {
+  const { readyLabels, readyState } = config.dispatcher
+  if (config.tickets.source === 'linear') {
+    return {
+      labels: readyLabels ?? ['autobuild'],
+      ...(readyState !== undefined ? { state: readyState } : {}),
+    }
+  }
+  return { labels: readyLabels ?? [], state: readyState ?? 'Ready' }
+}
+
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
 
 export interface SpecConformance {
@@ -482,12 +509,7 @@ export class Dispatcher {
     let capacity = config.dispatcher.capacity - active
     if (capacity <= 0) return
 
-    const ready = await tickets.listReady({
-      labels: config.dispatcher.readyLabels,
-      ...(config.dispatcher.readyState !== undefined
-        ? { state: config.dispatcher.readyState }
-        : {}),
-    })
+    const ready = await tickets.listReady(readyCriteria(config))
     for (const ticket of ready) {
       if (capacity <= 0) break
       // Claim-before-launch (§12): losing the claim means another dispatcher

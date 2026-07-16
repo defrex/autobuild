@@ -62,18 +62,34 @@ maxReviewRounds = 5
 
 [dispatcher]
 capacity = 1             # concurrent builds for this repo
-readyLabels = ["autobuild"] # labels that mark a ticket dispatchable ([] = no label gate)
-#readyState = "Ready"    # additionally require this workflow state (absent = any)
+# Absent readyLabels = the ticket source's own gate: the file tracker's `ready/`
+# directory, or the "autobuild" label on Linear. Set it only to require labels
+# ON TOP of that — with the file tracker, setting it here means `mv`ing a ticket
+# into ready/ is no longer enough to dispatch it.
+#readyLabels = ["autobuild"]
+#readyState = "Ready"    # workflow state a ticket must sit in (file: default "Ready")
 
-# Ticket source the dispatcher drives (§3.2, §13). The Linear API key is a
-# secret — set the LINEAR_API_KEY environment variable (a local .env works),
-# never put it in this file.
+# Ticket source the dispatcher drives (§3.2, §13).
+#
+# Omit this table entirely and you get a local file tracker at
+# `.autobuild/tickets/` — four state directories (triage/ ready/ doing/ done/)
+# of markdown tickets, where a ticket's state is the directory it's in. No
+# secret, no config, gitignored (the tracker excludes itself), `ls` is the UI,
+# and `mv triage/x.md ready/` dispatches. `/ab-tickets` teaches an agent to
+# drive it.
+#
+# To use Linear instead — the API key is a secret, so set the LINEAR_API_KEY
+# environment variable (a local .env works), never put it in this file:
 #[tickets]
 #source = "linear"
 #teamKey = "ENG"                 # Linear team key
 #claimedState = "In Progress"    # workflow state claim() moves an issue to
 #createState = "Triage"          # state new tickets are filed into (absent = provider default)
-# — or file-based: source = "file" with dir = "tickets"
+#
+# Or to put the file tracker somewhere other than the default:
+#[tickets]
+#source = "file"
+#dir = "tickets"                 # optional; default ".autobuild/tickets"
 
 # Cron schedules for outer-loop processes (§12).
 #[outer]
