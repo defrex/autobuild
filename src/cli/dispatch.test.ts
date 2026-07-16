@@ -1,8 +1,8 @@
 /**
  * `ab dispatch` (src/cli/dispatch.ts): the operator entry into the outer loop.
  *
- * The orchestration-unique surface is tested here — config loading, the
- * [tickets] guard, and the in-process fire-and-forget `launchRunner` that a
+ * The orchestration-unique surface is tested here — config loading, ticket
+ * source selection, and the in-process fire-and-forget `launchRunner` that a
  * `--once` pass must drain before exiting. The Dispatcher + BuildRunner +
  * real-CLI pipeline itself is proven exhaustively by the integration harness
  * (src/integration/*.test.ts); this drives abDispatch over that same machinery
@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchWiring } from './dispatch'
+import type { Config } from '../config/schema'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
 import {
@@ -38,8 +39,10 @@ import {
   type SkillHandlers,
 } from '../integration/harness'
 
-// A [tickets] table so abDispatch's guard passes; the injected wire ignores it
-// (it supplies a FakeTicketSource), so a file source with a dummy dir is fine.
+// The injected wire supplies a FakeTicketSource and ignores this table, so its
+// contents don't matter — it is here only to pin that an explicit [tickets]
+// table still parses and flows through. Omitting it would be equally valid now
+// (absent = the local file tracker); the zero-config path is covered below.
 const DISPATCH_CONFIG_TOML = `
 [project]
 baseBranch = "main"
@@ -196,23 +199,57 @@ describe('abDispatch guards', () => {
     }
   })
 
-  test('a config with no [tickets] table is rejected', async () => {
+  test('a config with no [tickets] table is accepted and selects the file source (AC 1)', async () => {
+    // The inverse of the rejection this used to assert: no [tickets] table is
+    // the zero-config default now, not an error.
+    //
+    // It stops at the `wire` seam deliberately. Unlike ticket.test.ts — whose
+    // real factory only writes under tmp — abDispatch's defaultWire would open
+    // a real SQLite store and a real worktree provider under DEFAULT_LOCAL_ROOT
+    // (~/.autobuild), i.e. side effects in the user's actual autobuild home.
+    // The old test never reached defaultWire because the deleted guard threw
+    // first, so letting it through now would be a new hazard, not a fuller test.
+    // What abDispatch itself owns is: don't reject, and hand the resolved
+    // config to the wire. That the config then yields a FileTicketSource under
+    // the repo is proven against the real factory in
+    // ports/tickets/create.test.ts, and end-to-end through a real dispatcher
+    // tick in processes/dispatcher-file-tickets.test.ts.
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
         '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\n',
       )
-      await expect(
-        abDispatch({
-          targetRepo: tmp,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-        }),
-      ).rejects.toThrow(/no \[tickets\] table/)
+      let wired: Config | undefined
+      const store = new MemoryBuildStore({ clock: systemClock })
+
+      await abDispatch({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: (config) => {
+          wired = config
+          return {
+            store,
+            tickets: new FakeTicketSource([]),
+            forge: new FakeForge(),
+            workspaces: new GitWorktreeProvider({ root: join(tmp, 'worktrees') }),
+            runners: {},
+            defaultRunner: 'claude',
+            storeRef: join(tmp, 'store'),
+            ids: sequentialIds(),
+            clock: systemClock,
+          }
+        },
+      })
+
+      // Reaching the wire at all IS the assertion: the guard used to throw
+      // before this point.
+      expect(wired?.tickets).toEqual({ source: 'file' })
+      await store.close()
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }

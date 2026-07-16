@@ -125,7 +125,7 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
   })
 })
 
-describe('ab-guide — model-invokable (AC3)', () => {
+describe('ab-guide — model-invocable (AC3)', () => {
   test('installs as ab-guide with no disable-model-invocation key', async () => {
     const skills = await readDistSkills(DIST_ROOT)
     const installed = skills.find((skill) => skill.name === 'guide')

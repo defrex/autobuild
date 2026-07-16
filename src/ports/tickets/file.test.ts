@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { manualClock } from '../../testing/fixed'
@@ -34,28 +34,28 @@ const SPEC_BODY = [
   '',
 ].join('\n')
 
+/** Seed `<state>/<id>.md` — the state is the directory, so it's a param of the path. */
 async function seedTicket(
   id: string,
-  over: { state?: string; labels?: string[]; body?: string; claimedBy?: string } = {},
+  over: { state?: string; labels?: string[]; body?: string } = {},
 ): Promise<string> {
-  const labels = (over.labels ?? []).map((l) => JSON.stringify(l)).join(', ')
-  const lines = [
-    '+++',
-    `id = ${JSON.stringify(id)}`,
-    `title = "Ticket ${id}"`,
-    `state = ${JSON.stringify(over.state ?? 'Ready')}`,
-    `labels = [ ${labels} ]`,
-  ]
-  if (over.claimedBy !== undefined) lines.push(`claimedBy = ${JSON.stringify(over.claimedBy)}`)
+  const state = (over.state ?? 'ready').toLowerCase()
+  const lines = ['+++', `id = ${JSON.stringify(id)}`, `title = "Ticket ${id}"`]
+  if (over.labels !== undefined) {
+    lines.push(`labels = [ ${over.labels.map((l) => JSON.stringify(l)).join(', ')} ]`)
+  }
   lines.push('+++')
   const content = `${lines.join('\n')}\n${over.body ?? SPEC_BODY}`
-  await writeFile(join(dir, `${id}.md`), content)
+  await mkdir(join(dir, state), { recursive: true })
+  await writeFile(join(dir, state, `${id}.md`), content)
   return content
 }
 
+const path = (state: string, id: string) => join(dir, state, `${id}.md`)
+
 describe('FileTicketSource', () => {
   test('full CRUD round-trip: create → get → listReady → claim → transition → comment', async () => {
-    const tickets = source({ claimant: 'dispatcher-a', createState: 'Ready' })
+    const tickets = source({ createState: 'Ready' })
 
     const created = await tickets.create({
       title: 'Rate-limit auth',
@@ -75,9 +75,10 @@ describe('FileTicketSource', () => {
     ).toEqual(['file-1'])
 
     expect(await tickets.claim('file-1')).toBe(true)
+    expect((await tickets.get('file-1'))?.state).toBe('Doing')
 
-    await tickets.transition('file-1', 'In Progress')
-    expect((await tickets.get('file-1'))?.state).toBe('In Progress')
+    await tickets.transition('file-1', 'Done')
+    expect((await tickets.get('file-1'))?.state).toBe('Done')
 
     await tickets.comment('file-1', 'Build started.')
     const after = await tickets.get('file-1')
@@ -85,13 +86,219 @@ describe('FileTicketSource', () => {
     expect(after?.body).toContain('Build started.')
   })
 
+  // ── The state is the directory ─────────────────────────────────────────────
+
+  test('create lands the ticket in triage/ (§12) and round-trips labels and body', async () => {
+    const tickets = source()
+    const created = await tickets.create({
+      title: 'Proposal',
+      body: 'evidence…',
+      labels: ['ingest:sentry'],
+    })
+
+    expect(created.state).toBe('Triage')
+    expect(await readdir(join(dir, 'triage'))).toEqual([`${created.ref.id}.md`])
+    expect(await readdir(join(dir, 'ready'))).toEqual([])
+
+    const got = await tickets.get(created.ref.id)
+    expect(got?.labels).toEqual(['ingest:sentry'])
+    expect(got?.body).toBe('evidence…')
+  })
+
+  test('a ticket moved into ready/ by hand is what listReady returns', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await seedTicket('file-2', { state: 'triage' })
+
+    // No label on either: `mv` into ready/ is sufficient — the headline claim.
+    expect((await source().listReady({ state: 'Ready' })).map((t) => t.ref.id)).toEqual([
+      'file-1',
+    ])
+  })
+
+  test('transition moves the file and leaves the bytes identical', async () => {
+    const seeded = await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
+    const tickets = source()
+
+    await tickets.transition('file-1', 'Done')
+
+    expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(seeded)
+    expect(await readdir(join(dir, 'ready'))).toEqual([])
+    expect((await tickets.get('file-1'))?.state).toBe('Done')
+  })
+
+  // Idempotency, not the early-return at file.ts:208. This test CANNOT
+  // distinguish that guard from its absence: rename(2) on two paths resolving
+  // to the same file is defined to "return successfully and perform no other
+  // action", so ino/mtime/ctime are all untouched either way and there is
+  // nothing to observe. Do not try to give it teeth via stat() — only a spy on
+  // rename could tell the two apart, and that tests the implementation.
+  //
+  // What it does pin is a contract the dispatcher depends on for crash
+  // resumption (§3.3): dispatcher.ts:378 transitions a merged ticket to Done
+  // BEFORE appending build.completed. A crash between the two leaves the build
+  // un-completed, so the next janitor tick re-enters that branch and transitions
+  // an already-Done ticket again. If that threw, the janitor would wedge on the
+  // build forever. Same shape for the bounce/abort paths to Triage.
+  test('transition to the current state succeeds and leaves the ticket untouched', async () => {
+    const seeded = await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
+    const tickets = source()
+
+    await tickets.transition('file-1', 'Ready')
+    await tickets.transition('file-1', 'Ready') // retried after a crash
+
+    expect((await tickets.get('file-1'))?.state).toBe('Ready')
+    expect(await readFile(path('ready', 'file-1'), 'utf8')).toBe(seeded)
+    expect(await readdir(join(dir, 'ready'))).toEqual(['file-1.md'])
+  })
+
+  test('transition on an unknown ticket throws', async () => {
+    await expect(source().transition('nope', 'Done')).rejects.toThrow('unknown ticket')
+  })
+
+  test('state names are case-insensitive in, canonical out', async () => {
+    await seedTicket('file-1', { state: 'triage' })
+    const tickets = source()
+
+    // `[dispatcher] readyState = "ready"` must mean the ready/ directory.
+    await tickets.transition('file-1', 'ready')
+    expect((await tickets.get('file-1'))?.state).toBe('Ready')
+    expect((await tickets.listReady({ state: 'READY' })).map((t) => t.ref.id)).toEqual([
+      'file-1',
+    ])
+  })
+
+  test('an unknown state name is an error listing the four directories', async () => {
+    await seedTicket('file-1')
+    await expect(source().transition('file-1', 'Shipped')).rejects.toThrow(
+      /unknown state "Shipped".*Triage, Ready, Doing, Done/s,
+    )
+    await expect(source().listReady({ state: 'Backlog' })).rejects.toThrow(
+      'unknown state "Backlog"',
+    )
+  })
+
+  // ── Claim ──────────────────────────────────────────────────────────────────
+
+  test('claim moves ready/ → doing/ once; a second claim is false and listReady is empty', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    const tickets = source()
+
+    expect(await tickets.claim('file-1')).toBe(true)
+    // The relocation IS the claim record — the ticket visibly leaves ready/.
+    expect(await readdir(join(dir, 'ready'))).toEqual([])
+    expect(await readdir(join(dir, 'doing'))).toEqual(['file-1.md'])
+
+    expect(await tickets.claim('file-1')).toBe(false)
+    expect(await tickets.listReady({ state: 'Ready' })).toEqual([])
+  })
+
+  test('claim succeeds on a ticket in triage/ — readyState = "Triage" must not stall', async () => {
+    // Regression guard, not an arbitrary edge case: claim refuses tickets
+    // ALREADY in Doing/Done rather than requiring Ready. Tighten it back to
+    // "must be Ready" and a legal `[dispatcher] readyState = "Triage"` silently
+    // stalls forever — listReady yields triage/ tickets and every claim refuses.
+    await seedTicket('file-1', { state: 'triage' })
+    const tickets = source()
+
+    expect(await tickets.claim('file-1')).toBe(true)
+    expect(await readdir(join(dir, 'doing'))).toEqual(['file-1.md'])
+  })
+
+  test('claim is false for a ticket already in doing/ or done/, and for unknown ids', async () => {
+    await seedTicket('file-1', { state: 'doing' })
+    await seedTicket('file-2', { state: 'done' })
+    const tickets = source()
+
+    expect(await tickets.claim('file-1')).toBe(false)
+    expect(await tickets.claim('file-2')).toBe(false)
+    expect(await tickets.claim('nope')).toBe(false)
+  })
+
+  test('claim preserves the body', async () => {
+    await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
+    const tickets = source()
+
+    await tickets.claim('file-1')
+    expect((await tickets.get('file-1'))?.body).toBe(SPEC_BODY)
+  })
+
+  // ── Duplicates: the failure that would be silent double-dispatch ───────────
+
+  test('the same id in two state dirs is an error naming both paths', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await seedTicket('file-1', { state: 'triage' })
+    const tickets = source()
+
+    for (const op of [
+      () => tickets.get('file-1'),
+      () => tickets.listReady({ state: 'Ready' }),
+      () => tickets.claim('file-1'),
+    ]) {
+      const rejects = expect(op()).rejects
+      await rejects.toThrow(path('ready', 'file-1'))
+      await rejects.toThrow(path('triage', 'file-1'))
+      await rejects.toThrow('use mv, not cp')
+    }
+  })
+
+  test('a .md at the tracker root is an error naming the path and the state dirs', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await writeFile(join(dir, 'loose.md'), '+++\nid = "loose"\ntitle = "x"\n+++\nbody\n')
+
+    await expect(source().listReady({})).rejects.toThrow(
+      /loose\.md.*outside a state directory.*triage\/, ready\/, doing\/, done\//s,
+    )
+  })
+
+  // ── Layout and the self-excluding .gitignore ───────────────────────────────
+
+  test('selfIgnore writes <dir>/.gitignore = * and is idempotent', async () => {
+    const tickets = source({ selfIgnore: true })
+
+    await tickets.create({ title: 'A', body: 'a' })
+    expect(await readFile(join(dir, '.gitignore'), 'utf8')).toBe('*\n')
+
+    await tickets.create({ title: 'B', body: 'b' })
+    expect(await readFile(join(dir, '.gitignore'), 'utf8')).toBe('*\n')
+  })
+
+  test('without selfIgnore no .gitignore is written — an explicit dir is the user’s', async () => {
+    await source().create({ title: 'A', body: 'a' })
+    expect(await readdir(dir)).not.toContain('.gitignore')
+  })
+
+  test('the four state dirs are created on first write', async () => {
+    await source().create({ title: 'A', body: 'a' })
+    expect((await readdir(dir)).sort()).toEqual(['doing', 'done', 'ready', 'triage'])
+  })
+
+  test('listReady on a tracker that does not exist yet returns []', async () => {
+    const tickets = new FileTicketSource({ dir: join(dir, 'missing') })
+    expect(await tickets.listReady({})).toEqual([])
+  })
+
+  // ── listReady filtering ────────────────────────────────────────────────────
+
+  test('listReady requires every requested label and matches state', async () => {
+    await seedTicket('file-1', { state: 'ready', labels: ['autobuild', 'bug'] })
+    await seedTicket('file-2', { state: 'ready', labels: ['autobuild'] })
+    await seedTicket('file-3', { state: 'triage', labels: ['autobuild', 'bug'] })
+    const tickets = source()
+
+    const ready = await tickets.listReady({ labels: ['autobuild', 'bug'], state: 'Ready' })
+    expect(ready.map((t) => t.ref.id)).toEqual(['file-1'])
+    expect(await tickets.listReady({})).toHaveLength(3)
+  })
+
+  // ── Comments ───────────────────────────────────────────────────────────────
+
   test('the spec in the body survives a comment append byte-exactly (§6.3, §13)', async () => {
     await seedTicket('file-1', { body: SPEC_BODY })
     const tickets = source()
 
-    const before = await readFile(join(dir, 'file-1.md'), 'utf8')
+    const before = await readFile(path('ready', 'file-1'), 'utf8')
     await tickets.comment('file-1', 'Spec imported as rev 0.')
-    const after = await readFile(join(dir, 'file-1.md'), 'utf8')
+    const after = await readFile(path('ready', 'file-1'), 'utf8')
 
     expect(after.startsWith(before)).toBe(true)
     expect(after.slice(before.length)).toBe(
@@ -119,107 +326,87 @@ describe('FileTicketSource', () => {
     expect(body.startsWith(SPEC_BODY)).toBe(true)
   })
 
-  test('claim writes claimedBy; a second claim returns false', async () => {
-    await seedTicket('file-1')
-    const tickets = source({ claimant: 'dispatcher-a' })
-
-    expect(await tickets.claim('file-1')).toBe(true)
-    const raw = await readFile(join(dir, 'file-1.md'), 'utf8')
-    expect(raw).toContain('claimedBy = "dispatcher-a"')
-
-    expect(await tickets.claim('file-1')).toBe(false)
-    expect(await source({ claimant: 'dispatcher-b' }).claim('file-1')).toBe(false)
-  })
-
-  test('claim preserves the body and returns false for unknown ids', async () => {
-    await seedTicket('file-1', { body: SPEC_BODY })
+  test('a comment survives a later transition byte-exactly', async () => {
+    await seedTicket('file-1', { state: 'ready' })
     const tickets = source()
 
-    expect(await tickets.claim('nope')).toBe(false)
-    await tickets.claim('file-1')
-    expect((await tickets.get('file-1'))?.body).toBe(SPEC_BODY)
-  })
-
-  test('transition rewrites state and preserves the body byte-exactly', async () => {
-    await seedTicket('file-1', { state: 'Ready', body: SPEC_BODY })
-    const tickets = source()
-
+    await tickets.comment('file-1', 'Build started.')
+    const before = await readFile(path('ready', 'file-1'), 'utf8')
     await tickets.transition('file-1', 'Done')
 
-    const after = await tickets.get('file-1')
-    expect(after?.state).toBe('Done')
-    expect(after?.body).toBe(SPEC_BODY)
+    expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(before)
   })
 
-  test('listReady requires every requested label and matches state', async () => {
-    await seedTicket('file-1', { state: 'Ready', labels: ['autobuild', 'bug'] })
-    await seedTicket('file-2', { state: 'Ready', labels: ['autobuild'] })
-    await seedTicket('file-3', { state: 'Triage', labels: ['autobuild', 'bug'] })
-    const tickets = source()
-
-    const ready = await tickets.listReady({ labels: ['autobuild', 'bug'], state: 'Ready' })
-    expect(ready.map((t) => t.ref.id)).toEqual(['file-1'])
-    expect((await tickets.listReady({}))).toHaveLength(3)
+  test('comment on an unknown ticket throws', async () => {
+    await expect(source().comment('nope', 'hi')).rejects.toThrow('unknown ticket')
   })
 
-  test('listReady on a directory that does not exist yet returns []', async () => {
-    const tickets = new FileTicketSource({ dir: join(dir, 'missing') })
-    expect(await tickets.listReady({})).toEqual([])
+  // ── Frontmatter ────────────────────────────────────────────────────────────
+
+  test('labels are optional: id + title alone parses', async () => {
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    await writeFile(path('ready', 'file-1'), '+++\nid = "file-1"\ntitle = "x"\n+++\nbody\n')
+
+    const got = await source().get('file-1')
+    expect(got?.labels).toEqual([])
+    expect(got?.title).toBe('x')
+  })
+
+  test('create omits labels from the frontmatter when there are none', async () => {
+    const created = await source().create({ title: 'A', body: 'a' })
+    expect(await readFile(path('triage', created.ref.id), 'utf8')).not.toContain('labels')
+  })
+
+  test('a stray state key in frontmatter is an error naming the file', async () => {
+    // Migration is out of scope (pre-release): an old flat-format file fails
+    // loudly and names itself rather than being silently misread.
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    await writeFile(
+      path('ready', 'file-1'),
+      '+++\nid = "file-1"\ntitle = "x"\nstate = "Ready"\nlabels = [ ]\n+++\nbody\n',
+    )
+    await expect(source().get('file-1')).rejects.toThrow(path('ready', 'file-1'))
   })
 
   test('malformed TOML frontmatter throws an error naming the file', async () => {
-    const path = join(dir, 'broken.md')
-    await writeFile(path, '+++\nid = broken oops\n+++\nbody\n')
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    await writeFile(path('ready', 'broken'), '+++\nid = broken oops\n+++\nbody\n')
     const tickets = source()
 
-    await expect(tickets.get('broken')).rejects.toThrow(path)
-    await expect(tickets.listReady({})).rejects.toThrow(path)
+    await expect(tickets.get('broken')).rejects.toThrow(path('ready', 'broken'))
+    await expect(tickets.listReady({})).rejects.toThrow(path('ready', 'broken'))
   })
 
   test('missing fences and missing required fields also name the file', async () => {
-    const noFence = join(dir, 'no-fence.md')
-    await writeFile(noFence, '# just markdown\n')
-    await expect(source().get('no-fence')).rejects.toThrow(noFence)
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    await writeFile(path('ready', 'no-fence'), '# just markdown\n')
+    await expect(source().get('no-fence')).rejects.toThrow(path('ready', 'no-fence'))
 
-    const missingField = join(dir, 'missing-field.md')
-    await writeFile(missingField, '+++\nid = "missing-field"\ntitle = "x"\n+++\nbody\n')
-    await expect(source().get('missing-field')).rejects.toThrow(missingField)
+    await writeFile(path('ready', 'missing-field'), '+++\nid = "missing-field"\n+++\nbody\n')
+    await expect(source().get('missing-field')).rejects.toThrow(
+      path('ready', 'missing-field'),
+    )
   })
 
   test('a frontmatter id that disagrees with the filename is an error naming the file', async () => {
-    const path = join(dir, 'file-1.md')
-    await writeFile(path, '+++\nid = "file-9"\ntitle = "x"\nstate = "Ready"\nlabels = [ ]\n+++\nbody\n')
-    await expect(source().get('file-1')).rejects.toThrow(path)
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    await writeFile(path('ready', 'file-1'), '+++\nid = "file-9"\ntitle = "x"\n+++\nbody\n')
+    await expect(source().get('file-1')).rejects.toThrow(path('ready', 'file-1'))
   })
 
-  test('create allocates the next free n, skipping existing files', async () => {
-    await seedTicket('file-1')
-    await seedTicket('file-3')
+  // ── Ids ────────────────────────────────────────────────────────────────────
+
+  test('create allocates the next free n across every state dir', async () => {
+    await seedTicket('file-1', { state: 'done' })
+    await seedTicket('file-3', { state: 'ready' })
     const tickets = source()
 
-    const a = await tickets.create({ title: 'A', body: 'a' })
-    expect(a.ref.id).toBe('file-2')
-
-    const b = await tickets.create({ title: 'B', body: 'b' })
-    expect(b.ref.id).toBe('file-4')
-  })
-
-  test('create defaults to Triage (§12) and round-trips labels and body', async () => {
-    const tickets = source()
-    const created = await tickets.create({
-      title: 'Proposal',
-      body: 'evidence…',
-      labels: ['ingest:sentry'],
-    })
-
-    expect(created.state).toBe('Triage')
-    const got = await tickets.get(created.ref.id)
-    expect(got?.labels).toEqual(['ingest:sentry'])
-    expect(got?.body).toBe('evidence…')
+    // Gaps are reused, but an id taken in ANY state is taken.
+    expect((await tickets.create({ title: 'A', body: 'a' })).ref.id).toBe('file-2')
+    expect((await tickets.create({ title: 'B', body: 'b' })).ref.id).toBe('file-4')
   })
 
   test('ids that escape the ticket directory are rejected', async () => {
-    const tickets = source()
-    await expect(tickets.get('../escape')).rejects.toThrow('invalid ticket id')
+    await expect(source().get('../escape')).rejects.toThrow('invalid ticket id')
   })
 })

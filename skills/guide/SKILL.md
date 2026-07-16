@@ -205,25 +205,55 @@ Every field is a **positive integer**.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `capacity` | `1` | positive integer | Concurrent builds for this repo. |
-| `readyLabels` | `["autobuild"]` | array of nonempty strings | A ticket must carry **every** one of these labels to be dispatchable (all, not any). `[]` = **no label gate**. |
-| `readyState` | — | optional, nonempty string | Workflow state a ticket must *additionally* sit in. **Absent = any state** (labels alone decide). |
+| `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** one of these labels to be dispatchable (all, not any). `[]` = **no label gate**. Absent falls back to the source's default gate — see below. |
+| `readyState` | — (source-aware) | optional, nonempty string | Workflow state a ticket must *additionally* sit in. See below: absent means *any state* for `linear`, but `Ready` for `file`. |
+
+**Both defaults are source-aware**, resolved by `readyCriteria` in
+`src/processes/dispatcher.ts` — the schema's `undefined` is not the effective
+value, so read that function rather than the field type:
+
+| `[tickets].source` | `readyLabels` absent | `readyState` absent |
+|---|---|---|
+| `"linear"` | `["autobuild"]` — the label gate | any state (labels alone decide) |
+| `"file"` | `[]` — **no label gate** | `"Ready"` — the `ready/` directory *is* the gate |
+
+An explicit value always wins for either source.
 
 ### `[tickets]`
 
-Optional table naming the TicketSource the dispatcher drives. Declarative only.
+Names the TicketSource the dispatcher drives. Declarative only.
+
+**Omitting the table entirely is a supported configuration, not an oversight**:
+it prefaults to `{ source = "file" }`, giving the local file tracker at
+`.autobuild/tickets` — a repo dispatches with no config edit and no secret.
+So `config.tickets` is always present; never write code or advice that treats
+"no `[tickets]` table" as a separate case.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `source` | — | **required**, `"linear"` \| `"file"` | Which provider backs ticket reads, claims, and creation. |
+| `source` | `"file"` (via the table's prefault) | `"linear"` \| `"file"` | Which provider backs ticket reads, claims, and creation. |
 | `teamKey` | — | `source = "linear"` **only, required there**; nonempty string | The Linear team key (e.g. `"ENG"`). |
 | `claimedState` | — | `source = "linear"` only; optional, nonempty string | Workflow state `claim()` moves an issue to when a build starts. |
 | `createState` | — | optional, nonempty string | State new tickets are filed into. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
-| `dir` | — | `source = "file"` **only, required there**; nonempty string | Directory holding `<id>.md` ticket files. |
+| `dir` | `.autobuild/tickets` | `source = "file"` **only**; optional, nonempty string | Root holding the state directories. Resolved relative to the repo. |
 
 Cross-field rules, each an **error**:
 
 - `source = "linear"` without `teamKey`; or with `dir` set.
-- `source = "file"` without `dir`; or with `teamKey` or `claimedState` set.
+- `source = "file"` with `teamKey` or `claimedState` set. `dir` is **optional**
+  here — absent means the default above, which is why the schema leaves it
+  optional rather than giving it a `.default()`: that is what keeps the
+  linear-only rule above meaningful and lets the factory tell a defaulted `dir`
+  from an explicit one.
+
+The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md` over
+`triage/ ready/ doing/ done/`. The directory *is* the state, so a transition or
+claim is a rename — frontmatter carries no `state`/`claimedBy`, and a ticket
+body survives byte-exactly because a move never rewrites the file. The same id
+in two state dirs is a loud error naming both paths. When `dir` is defaulted,
+the backlog writes its own `.gitignore` of `*`, so git never sees it; an
+explicit `dir` is the user's and is left alone. Agents drive this tracker
+through `ab-tickets` rather than running `mv` by hand.
 
 **Secrets never live in this file.** `LINEAR_API_KEY` is an environment
 variable (a local `.env` works). If a user asks you to put an API key in
@@ -254,7 +284,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   `.agents/skills/.ab-pristine/ab-<name>/SKILL.md` — repo-versioned, and the
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
-  `disable-model-invocation: true` on every skill outside the model-invokable
+  `disable-model-invocation: true` on every skill outside the model-invocable
   set (`ab-spec`, `ab-guide`).
 
 Per-skill outcomes: `installed` (new), `unchanged` (byte-identical to the
@@ -287,8 +317,9 @@ default, when you need to know what this repo's version says).
 
 | Skill | Place in the lifecycle | Purpose |
 |---|---|---|
-| `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invokable.** |
-| `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invokable.** |
+| `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
+| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
+| `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invocable.** |
 | `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
@@ -297,8 +328,11 @@ default, when you need to know what this repo's version says).
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
 
-Everything except `ab-spec` and `ab-guide` is **runner-invoked** by the kernel
-and carries `disable-model-invocation: true` — do not invoke a phase skill
-yourself, and do not remove that key to make one convenient to call. A model
-starting a pipeline phase by pattern-matching a description is exactly what the
-flag prevents.
+Everything except `ab-spec`, `ab-tickets`, and `ab-guide` is **runner-invoked**
+by the kernel and carries `disable-model-invocation: true` — do not invoke a
+phase skill yourself, and do not remove that key to make one convenient to call.
+A model starting a pipeline phase by pattern-matching a description is exactly
+what the flag prevents. The three exceptions drive no phase, which is the
+criterion for membership (§16.3): `ab-spec` and `ab-tickets` are the
+human/agent-facing surfaces that run before a build exists, and `ab-guide` is
+read-only reference material.

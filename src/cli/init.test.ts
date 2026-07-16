@@ -28,7 +28,7 @@ import {
   claudeSkillPath,
   defaultDistRoot,
   installedSkillPath,
-  MODEL_INVOKABLE_SKILLS,
+  MODEL_INVOCABLE_SKILLS,
   pristineSkillPath,
   rewriteSkillSource,
 } from './init'
@@ -36,7 +36,7 @@ import { runCli, type SessionlessCliDeps } from './main'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 
-/** The 9 canonical skills shipped in the distribution (§16.3). */
+/** The 10 canonical skills shipped in the distribution (§16.3). */
 const SKILL_NAMES = [
   'code-review',
   'finalize',
@@ -46,6 +46,7 @@ const SKILL_NAMES = [
   'plan-review',
   'reconcile',
   'spec',
+  'tickets',
   'verify-e2e',
 ]
 
@@ -87,16 +88,19 @@ describe('abInit — fresh install', () => {
     }
   })
 
-  test('frontmatter: name rewritten; disable-model-invocation everywhere EXCEPT the model-invokable set', async () => {
+  test('frontmatter: name rewritten; disable-model-invocation everywhere EXCEPT the model-invocable set', async () => {
     // The set is the policy (§16.3): skills that drive no phase may be
     // model-invoked; every phase skill must not be.
-    expect([...MODEL_INVOKABLE_SKILLS].sort()).toEqual(['guide', 'spec'])
+    expect([...MODEL_INVOCABLE_SKILLS].sort()).toEqual(['guide', 'spec', 'tickets'])
     await abInit({ targetRepo: target })
     for (const name of SKILL_NAMES) {
       const installed = await readFile(installedSkillPath(target, `ab-${name}`), 'utf8')
       const { front } = splitFrontmatter(installed)
       expect(front).toContain(`name: ab-${name}`)
-      if (MODEL_INVOKABLE_SKILLS.has(name)) {
+      if (MODEL_INVOCABLE_SKILLS.has(name)) {
+        // The model-invocable skills drive no phase (§16.3). "Move ticket X to
+        // ready" is a conversational trigger — auto-invocation is the point,
+        // where for a phase skill it would be a bug.
         expect(front.some((l) => l.startsWith('disable-model-invocation:'))).toBe(false)
       } else {
         expect(front).toContain('disable-model-invocation: true')
