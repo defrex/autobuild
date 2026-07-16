@@ -20,13 +20,28 @@ export type LinearFetch = (
 
 // ── Wire shapes (small structural types per operation) ───────────────────────
 
+/**
+ * Linear's own workflow-state types. `completed` and `canceled` are the
+ * resolved ones — that is Linear's classification, not ours, and the spec puts
+ * redefining completed/canceled/duplicate out of scope, so we take its word.
+ */
+const RESOLVED_STATE_TYPES = new Set(['completed', 'canceled'])
+
 interface GqlIssue {
   identifier: string
   title: string
   description: string | null
   url: string
-  state: { name: string } | null
+  state: { name: string; type: string } | null
   labels: { nodes: Array<{ name: string }> }
+  /**
+   * Relations where THIS issue is the `relatedIssue` side. A `blocks` relation
+   * means `issue` blocks this one — i.e. exactly this issue's blockers.
+   * (Verified against the live API: AUT-9 reads back `blocks` from AUT-8 here.)
+   */
+  inverseRelations: {
+    nodes: Array<{ type: string; issue: { identifier: string } | null }>
+  }
 }
 
 interface GqlTeamInfo {
@@ -40,7 +55,8 @@ interface GqlTeamInfo {
 }
 
 const ISSUE_FIELDS =
-  'identifier title description url state { name } labels { nodes { name } }'
+  'identifier title description url state { name type } labels { nodes { name } } ' +
+  'inverseRelations { nodes { type issue { identifier } } }'
 
 const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!) { issues(filter: $filter) { nodes { ${ISSUE_FIELDS} } } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
@@ -49,7 +65,11 @@ const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id 
 const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key: { eq: $teamKey } }) { nodes { id states { nodes { id name } } labels { nodes { id name } } } } }`
 const UPDATE_STATE_MUTATION = `mutation UpdateState($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`
 const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
-const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { ${ISSUE_FIELDS} } } }`
+// `id` (the UUID) rides along because relation creation needs it: the
+// identifier the rest of the adapter speaks is not what issueRelationCreate
+// takes.
+const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id ${ISSUE_FIELDS} } } }`
+const CREATE_RELATION_MUTATION = `mutation CreateRelation($input: IssueRelationCreateInput!) { issueRelationCreate(input: $input) { success } }`
 
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
@@ -182,13 +202,48 @@ export class LinearTicketSource implements TicketSource {
       }
       input['stateId'] = stateId
     }
+    const blockedBy = draft.blockedBy ?? []
+    // Resolve every blocker BEFORE creating the issue: an unknown id should
+    // fail with nothing written, rather than leave a dangling issue whose
+    // requested dependency never landed.
+    const blockerIds = new Map<string, string>()
+    for (const blocker of blockedBy) {
+      blockerIds.set(blocker, await this.resolveIssueId('create', blocker))
+    }
+
     const data = await this.gql<{
-      issueCreate: { success: boolean; issue: GqlIssue | null }
+      issueCreate: { success: boolean; issue: (GqlIssue & { id: string }) | null }
     }>('create', CREATE_ISSUE_MUTATION, { input })
     if (!data.issueCreate.success || !data.issueCreate.issue) {
       throw new Error(`linear create: issueCreate failed for "${draft.title}"`)
     }
-    return this.toTicket(data.issueCreate.issue)
+    const issue = data.issueCreate.issue
+    this.issueIds.set(issue.identifier, issue.id)
+
+    // Native Linear blocking relations (§13). Linear has no atomic
+    // multi-create, so a partial failure must be loud: the issue exists but
+    // does not carry the dependency the caller asked for, and a silently
+    // dependency-free ticket would dispatch too early.
+    for (const [blocker, blockerId] of blockerIds) {
+      const relation = await this.gql<{
+        issueRelationCreate: { success: boolean }
+      }>('create', CREATE_RELATION_MUTATION, {
+        // issueId blocks relatedIssueId — so the blocker is the `issue` side,
+        // and the new issue reads it back through `inverseRelations`.
+        input: { issueId: blockerId, relatedIssueId: issue.id, type: 'blocks' },
+      })
+      if (!relation.issueRelationCreate.success) {
+        throw new Error(
+          `linear create: issue ${issue.identifier} was created but the ` +
+            `"blocked by ${blocker}" relation did not land — add it in Linear ` +
+            'or the ticket may dispatch before its blocker is done',
+        )
+      }
+    }
+
+    // The created issue was fetched before its relations existed, so report
+    // what we just wrote rather than the stale read.
+    return { ...this.toTicket(issue), blockedBy: [...blockedBy] }
   }
 
   // ── Plumbing ───────────────────────────────────────────────────────────────
@@ -295,6 +350,12 @@ export class LinearTicketSource implements TicketSource {
       body: issue.description ?? '',
       state: issue.state?.name,
       labels: issue.labels.nodes.map((label) => label.name),
+      // Dependency and completion are Linear's answers, read as-is (§13).
+      blockedBy: issue.inverseRelations.nodes
+        .filter((relation) => relation.type === 'blocks' && relation.issue !== null)
+        .map((relation) => relation.issue!.identifier),
+      complete:
+        issue.state !== null && RESOLVED_STATE_TYPES.has(issue.state.type),
     }
   }
 }

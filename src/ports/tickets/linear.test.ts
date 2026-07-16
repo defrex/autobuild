@@ -40,8 +40,9 @@ function gqlIssue(over: Record<string, unknown> = {}) {
     title: 'Rate-limit auth',
     description: '# Spec\n\nToken bucket on /auth/*.',
     url: 'https://linear.app/acme/issue/ENG-42',
-    state: { name: 'Ready' },
+    state: { name: 'Ready', type: 'unstarted' },
     labels: { nodes: [{ name: 'autobuild' }] },
+    inverseRelations: { nodes: [] },
     ...over,
   }
 }
@@ -113,6 +114,8 @@ describe('LinearTicketSource', () => {
         body: '# Spec\n\nToken bucket on /auth/*.',
         state: 'Ready',
         labels: ['autobuild'],
+        blockedBy: [],
+        complete: false,
       },
     ])
   })
@@ -280,6 +283,117 @@ describe('LinearTicketSource', () => {
     })
     expect(created.ref.id).toBe('ENG-42')
     expect(created.labels).toEqual(['autobuild'])
+  })
+
+  test('create with blockedBy resolves blockers then writes native blocks relations', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issue: { id: 'uuid-blocker' } } } }, // resolve ENG-8
+      {
+        body: {
+          data: {
+            issueCreate: { success: true, issue: { id: 'uuid-new', ...gqlIssue() } },
+          },
+        },
+      },
+      { body: { data: { issueRelationCreate: { success: true } } } },
+    ])
+
+    const created = await makeSource(fetchFn).create({
+      title: 'Rate-limit auth',
+      body: 'spec',
+      blockedBy: ['ENG-8'],
+    })
+
+    // Direction, verified against the live API (AUT-9 reads back `blocks`
+    // from AUT-8 through inverseRelations): issueId BLOCKS relatedIssueId, so
+    // the blocker is issueId and the new issue is relatedIssueId.
+    expect(calls[3]?.variables).toEqual({
+      input: {
+        issueId: 'uuid-blocker',
+        relatedIssueId: 'uuid-new',
+        type: 'blocks',
+      },
+    })
+    // create() reports what it wrote — the issue was fetched before the
+    // relation existed, so the stale read must not be believed.
+    expect(created.blockedBy).toEqual(['ENG-8'])
+  })
+
+  test('create resolves EVERY blocker before creating the issue', async () => {
+    // An unknown blocker must fail with nothing written, rather than leave a
+    // dangling issue whose requested dependency never landed.
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issue: null } } }, // ENG-99 does not exist
+    ])
+
+    await expect(
+      makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-99'] }),
+    ).rejects.toThrow(/unknown ticket "ENG-99"/)
+    expect(calls.map((call) => call.query).join('\n')).not.toContain('issueCreate')
+  })
+
+  test('a relation that does not land throws naming the created issue and blocker', async () => {
+    const { fetchFn } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issue: { id: 'uuid-blocker' } } } },
+      {
+        body: {
+          data: {
+            issueCreate: { success: true, issue: { id: 'uuid-new', ...gqlIssue() } },
+          },
+        },
+      },
+      { body: { data: { issueRelationCreate: { success: false } } } },
+    ])
+
+    // Linear has no atomic multi-create: a partial failure must be loud, or
+    // the ticket silently dispatches without its dependency.
+    await expect(
+      makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-8'] }),
+    ).rejects.toThrow(/ENG-42 was created but the "blocked by ENG-8" relation did not land/)
+  })
+
+  test('toTicket maps inverse blocks relations to blockedBy, ignoring other types', async () => {
+    const { fetchFn } = fakeLinear([
+      {
+        body: {
+          data: {
+            issue: gqlIssue({
+              inverseRelations: {
+                nodes: [
+                  { type: 'related', issue: { identifier: 'ENG-10' } },
+                  { type: 'blocks', issue: { identifier: 'ENG-8' } },
+                  { type: 'duplicate', issue: { identifier: 'ENG-11' } },
+                ],
+              },
+            }),
+          },
+        },
+      },
+    ])
+
+    // `related` is symmetric and `duplicate` is not a blocker — only `blocks`
+    // means "this issue is blocked by that one". Shape taken from a live read.
+    expect((await makeSource(fetchFn).get('ENG-42'))?.blockedBy).toEqual(['ENG-8'])
+  })
+
+  test('complete follows Linear own state types, not a state name allowlist', async () => {
+    const cases: Array<[string, boolean]> = [
+      ['completed', true],
+      ['canceled', true],
+      ['started', false],
+      ['unstarted', false],
+      ['backlog', false],
+      ['triage', false],
+    ]
+    for (const [type, expected] of cases) {
+      const { fetchFn } = fakeLinear([
+        { body: { data: { issue: gqlIssue({ state: { name: 'Whatever', type } }) } } },
+      ])
+      expect((await makeSource(fetchFn).get('ENG-42'))?.complete).toBe(expected)
+    }
   })
 
   test('create with createState resolves the state id and files the issue there', async () => {
