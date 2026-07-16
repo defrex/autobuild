@@ -5,7 +5,8 @@
 ## Start here
 
 - `SPEC.md` is the source of truth for the design and terminology. Sections are decided unless marked `[OPEN]`.
-- `README.md` maps the specification to the codebase.
+- `docs/architecture.md` maps the specification to the codebase.
+- `README.md` is the user-facing guide: install, configure, operate.
 - `autobuild.toml` is this repository's declarative pipeline configuration.
 
 ## Core design rules
