@@ -10,6 +10,7 @@ import { runCli } from '../src/cli/main'
 import { loadDotEnv } from '../src/cli/dotenv'
 import { resolveCliEnv } from '../src/cli/env'
 import { resolveStore } from '../src/cli/store-ref'
+import { processTerminal } from '../src/cli/terminal'
 import { RemoteBuildStore } from '../src/store/remote/client'
 import { GitHubForge } from '../src/ports/forge/github'
 import { spawnExec } from '../src/ports/workspace/git-worktree'
@@ -43,6 +44,9 @@ async function main(): Promise<number> {
         exec: spawnExec,
         processEnv: process.env,
         signal: controller.signal,
+        // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
+        // TTY, so a pipe or redirect silently gets plain output.
+        terminal: processTerminal(process.stdout),
         stdout: (line) => console.log(line),
         stderr: (line) => console.error(line),
       })

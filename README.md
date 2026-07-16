@@ -35,6 +35,7 @@ points, declared per-repo in `autobuild.toml`.
 | `src/kernel/` | Phase table, reducer, converge, stall detection, engine, server lifecycle | §5, §10, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes | §3.2, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
+| `src/cli/dashboard/` | `ab dispatch`'s live build dashboard — a read-only projection of the reducer; plain-by-default, interactive only on a TTY | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty) | §3.3, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
