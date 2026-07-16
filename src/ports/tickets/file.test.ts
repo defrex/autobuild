@@ -36,7 +36,13 @@ const SPEC_BODY = [
 
 async function seedTicket(
   id: string,
-  over: { state?: string; labels?: string[]; body?: string; claimedBy?: string } = {},
+  over: {
+    state?: string
+    labels?: string[]
+    body?: string
+    claimedBy?: string
+    blockedBy?: string[]
+  } = {},
 ): Promise<string> {
   const labels = (over.labels ?? []).map((l) => JSON.stringify(l)).join(', ')
   const lines = [
@@ -46,6 +52,9 @@ async function seedTicket(
     `state = ${JSON.stringify(over.state ?? 'Ready')}`,
     `labels = [ ${labels} ]`,
   ]
+  if (over.blockedBy !== undefined) {
+    lines.push(`blockedBy = [ ${over.blockedBy.map((b) => JSON.stringify(b)).join(', ')} ]`)
+  }
   if (over.claimedBy !== undefined) lines.push(`claimedBy = ${JSON.stringify(over.claimedBy)}`)
   lines.push('+++')
   const content = `${lines.join('\n')}\n${over.body ?? SPEC_BODY}`
@@ -221,5 +230,117 @@ describe('FileTicketSource', () => {
   test('ids that escape the ticket directory are rejected', async () => {
     const tickets = source()
     await expect(tickets.get('../escape')).rejects.toThrow('invalid ticket id')
+  })
+
+  // ── Dependencies (§13) ─────────────────────────────────────────────────────
+
+  test('blockedBy round-trips through TOML frontmatter', async () => {
+    await seedTicket('file-1', { blockedBy: ['file-2', 'file-3'] })
+    const tickets = source()
+
+    expect((await tickets.get('file-1'))?.blockedBy).toEqual(['file-2', 'file-3'])
+  })
+
+  test('create records blockedBy in the frontmatter and reports it back', async () => {
+    const tickets = source()
+
+    const created = await tickets.create({
+      title: 'Dependent',
+      body: 'body',
+      blockedBy: ['file-9'],
+    })
+
+    expect(created.blockedBy).toEqual(['file-9'])
+    const written = await readFile(join(dir, `${created.ref.id}.md`), 'utf8')
+    expect(written).toContain('blockedBy = [ "file-9" ]')
+  })
+
+  test('a ticket without blockedBy is valid and reports no dependencies', async () => {
+    await seedTicket('file-1')
+    const tickets = source()
+
+    const ticket = await tickets.get('file-1')
+
+    expect(ticket?.blockedBy).toBeUndefined()
+    expect(await tickets.dependencyStates(['file-1'])).toEqual([
+      { id: 'file-1', exists: true, resolved: false, blockedBy: [] },
+    ])
+  })
+
+  /** The churn guard: a file that never declared blockers must not sprout
+   * `blockedBy = []` on the next write, or every existing ticket rewrites. */
+  test('a file without blockedBy re-serializes byte-identically after a transition', async () => {
+    const original = await seedTicket('file-1', { state: 'Ready', labels: ['autobuild'] })
+    const tickets = source()
+
+    await tickets.transition('file-1', 'Ready') // same state: a pure rewrite
+    const after = await readFile(join(dir, 'file-1.md'), 'utf8')
+
+    expect(after).toBe(original)
+    expect(after).not.toContain('blockedBy')
+  })
+
+  test('create without blockedBy writes no blockedBy key', async () => {
+    const tickets = source()
+    const created = await tickets.create({ title: 'Plain', body: 'body' })
+
+    const written = await readFile(join(dir, `${created.ref.id}.md`), 'utf8')
+    expect(written).not.toContain('blockedBy')
+  })
+
+  test('dependencyStates: only the done state resolves; every other state blocks', async () => {
+    await seedTicket('file-1', { state: 'Done' })
+    await seedTicket('file-2', { state: 'Ready' })
+    await seedTicket('file-3', { state: 'In Progress' })
+    await seedTicket('file-4', { state: 'Triage' })
+    const tickets = source()
+
+    const states = await tickets.dependencyStates([
+      'file-1',
+      'file-2',
+      'file-3',
+      'file-4',
+    ])
+
+    expect(states.map((s) => s.resolved)).toEqual([true, false, false, false])
+  })
+
+  test('dependencyStates honors a custom doneState', async () => {
+    await seedTicket('file-1', { state: 'Shipped' })
+    const tickets = source({ doneState: 'Shipped' })
+
+    expect((await tickets.dependencyStates(['file-1']))[0]?.resolved).toBe(true)
+  })
+
+  test('dependencyStates covers every requested id, in request order', async () => {
+    await seedTicket('file-2', { state: 'Done', blockedBy: ['file-7'] })
+    const tickets = source()
+
+    const states = await tickets.dependencyStates(['file-404', 'file-2'])
+
+    expect(states).toEqual([
+      { id: 'file-404', exists: false, resolved: false, blockedBy: [] },
+      { id: 'file-2', exists: true, resolved: true, blockedBy: ['file-7'] },
+    ])
+  })
+
+  /** A bad reference is a missing dependency, not a crashed tick. */
+  test('dependencyStates reports an unusable id as missing rather than throwing', async () => {
+    const tickets = source()
+
+    expect(await tickets.dependencyStates(['../escape'])).toEqual([
+      { id: '../escape', exists: false, resolved: false, blockedBy: [] },
+    ])
+  })
+
+  /** …but a malformed file IS operator error about a real ticket: it throws,
+   * and the dispatcher confines the damage to the ticket that referenced it. */
+  test('dependencyStates throws on a malformed blocker file', async () => {
+    await writeFile(join(dir, 'file-1.md'), '+++\nnot toml =\n+++\nbody\n')
+    const tickets = source()
+
+    await expect(tickets.dependencyStates(['file-1'])).rejects.toThrow(
+      /file-1\.md: malformed TOML frontmatter/,
+    )
   })
 })

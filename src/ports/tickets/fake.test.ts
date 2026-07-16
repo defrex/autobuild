@@ -9,6 +9,7 @@ function ticket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
     body: over.body ?? `Body of ${id}`,
     state: over.state ?? 'Ready',
     labels: over.labels ?? [],
+    ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
 }
 
@@ -102,6 +103,48 @@ describe('FakeTicketSource', () => {
     expect(second.ref.id).toBe('fake-2')
     expect(second.labels).toEqual(['autobuild'])
     expect((await source.get('fake-1'))?.body).toBe('a-body')
+  })
+
+  // ── Dependencies (§13) ─────────────────────────────────────────────────────
+
+  test('create preserves blockedBy verbatim — the fake discards nothing either', async () => {
+    const source = new FakeTicketSource()
+
+    const created = await source.create({
+      title: 'A',
+      body: 'b',
+      blockedBy: ['fake-9'],
+    })
+
+    expect(created.blockedBy).toEqual(['fake-9'])
+    expect((await source.get(created.ref.id))?.blockedBy).toEqual(['fake-9'])
+  })
+
+  test('create without blockedBy reports none at all', async () => {
+    const source = new FakeTicketSource()
+    expect((await source.create({ title: 'A', body: 'b' })).blockedBy).toBeUndefined()
+  })
+
+  test('dependencyStates resolves only the done state and echoes declared blockers', async () => {
+    const source = new FakeTicketSource([
+      ticket('t-1', { state: 'Done' }),
+      ticket('t-2', { state: 'Ready', blockedBy: ['t-1'] }),
+    ])
+
+    expect(await source.dependencyStates(['t-1', 't-2', 't-404'])).toEqual([
+      { id: 't-1', exists: true, resolved: true, blockedBy: [] },
+      { id: 't-2', exists: true, resolved: false, blockedBy: ['t-1'] },
+      { id: 't-404', exists: false, resolved: false, blockedBy: [] },
+    ])
+  })
+
+  test('dependencyStates honors a custom doneState and journals each query', async () => {
+    const source = new FakeTicketSource([ticket('t-1', { state: 'Shipped' })], {
+      doneState: 'Shipped',
+    })
+
+    expect((await source.dependencyStates(['t-1']))[0]?.resolved).toBe(true)
+    expect(source.dependencyQueries).toEqual([['t-1']])
   })
 
   test('created tickets land in Triage by default (§12: humans groom to Ready)', async () => {
