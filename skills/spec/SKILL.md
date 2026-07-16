@@ -34,6 +34,19 @@ this install; otherwise create it via the repo's ticket tracker and say
 where). The ticket lands in Triage — a human grooms it to Ready; creation is
 not dispatch.
 
+If grooming established that this work is blocked by other tickets, pass them
+at creation:
+
+```
+ab ticket create "…" --body spec.md --blocked-by AUT-8,AUT-9
+```
+
+The ids are source-local — whatever the repo's `[tickets]` source uses (e.g.
+`AUT-8` for linear, `file-1` for file). Never reach for a provider API or MCP
+call to wire the relationship: the dispatcher only honors dependencies
+recorded through this command, and it will hold the ticket unclaimed until
+every blocker completes.
+
 ## With a ticket argument: flesh out
 
 Fetch the ticket. Diff it against the standard: which of the four parts are
@@ -41,6 +54,11 @@ missing or unverifiable? Interview the user only on the gaps — don't
 re-litigate what the ticket already answers. Sync the conforming spec back
 to the ticket body, preserving anything the ticket carried that the standard
 doesn't structure (assignee, labels, discussion links).
+
+*Changing* an existing ticket's dependencies is not available through `ab` —
+`--blocked-by` is a creation-time affordance. If the conversation turns up a
+dependency the ticket lacks (or one it should drop), say so and let the human
+add or remove it in the tracker. Do not invent a workaround.
 
 ## Rules
 

@@ -59,7 +59,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets | Linear; later GitHub Issues, file-based |
+| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | Linear; later GitHub Issues, file-based |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -534,6 +534,20 @@ build never reads the tracker again. Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
+
+**Ticket dependencies.** A ticket may declare that it is blocked by other
+tickets of the same source, at creation (`ab ticket create --blocked-by`).
+The source owns both halves of what a provider-neutral caller cannot know:
+how a blocker relationship is *represented* (Linear issue relations; the file
+source's TOML `blockedBy`) and what *complete* means for one (Linear's
+`state.type`; the file source's `Done`). The dispatcher owns the decision
+built on those facts — an unresolved blocker means the ticket is not claimed
+and not dispatched, and it creates no build. Dependencies are written at
+creation and read at dispatch time, both of which are **initiation**, so the
+rule above — never consulted mid-build — is untouched. A dependency-blocked
+ticket stays queued source work rather than becoming a blocked build: the
+runtime `blocked` status is for builds awaiting a human, not for work that
+has not started.
 
 ## 14. Operator UI
 
