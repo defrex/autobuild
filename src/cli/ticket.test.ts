@@ -112,9 +112,12 @@ describe('abTicketCreate', () => {
     })
 
     expect(out).toEqual(['ticket created: file:file-1 (Triage)'])
-    const written = await readFile(join(tmp, 'tickets', 'file-1.md'), 'utf8')
+    // Triage is the directory, not a frontmatter field — new tickets land in
+    // <dir>/triage/ (the printed state above is read back off that directory).
+    const written = await readFile(join(tmp, 'tickets', 'triage', 'file-1.md'), 'utf8')
     expect(written).toContain('title = "Real file ticket"')
     expect(written).toContain('the spec body')
+    expect(written).not.toContain('state =')
   })
 
   test('a missing autobuild.toml is an error naming the path', async () => {
