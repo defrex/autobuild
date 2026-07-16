@@ -19,6 +19,9 @@ export interface TicketCreateOpts {
   /** Path to the ticket body — the spec (docs/spec-standard.md). */
   bodyFile: string
   labels?: string[]
+  /** Source-local ids of tickets that must complete before this one is
+   * dispatched (§13). Validated against the configured source before create. */
+  blockedBy?: string[]
   /** Process environment — adapter secrets (D8-adjacent, never in config). */
   env: Record<string, string | undefined>
   stdout: (line: string) => void
@@ -71,12 +74,36 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       : config.tickets
   const factory = opts.sourceFactory ?? createTicketSource
   const source = factory(tickets, opts.env)
+
+  // Validate blockers BEFORE creating: a ticket referencing a nonexistent
+  // blocker would never dispatch, and failing here costs nothing, whereas
+  // failing after create leaves a stranded ticket behind.
+  const blockedBy = [...new Set(opts.blockedBy ?? [])]
+  if (blockedBy.length > 0) {
+    const states = await source.dependencyStates(blockedBy)
+    const unknown = states.filter((state) => !state.exists).map((s) => s.id)
+    if (unknown.length > 0) {
+      throw new Error(
+        `--blocked-by: no ticket ${unknown.map((id) => `"${id}"`).join(', ')} ` +
+          `in the configured ${source.name} ticket source — blocker ids are ` +
+          'source-local (e.g. AUT-8 for linear, file-1 for file)',
+      )
+    }
+  }
+
   const ticket = await source.create({
     title: opts.title,
     body,
     ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+    ...(blockedBy.length > 0 ? { blockedBy } : {}),
   })
   const state = ticket.state ?? 'created'
   const url = ticket.ref.url !== undefined ? ` — ${ticket.ref.url}` : ''
-  opts.stdout(`ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${url}`)
+  const blockers =
+    ticket.blockedBy !== undefined && ticket.blockedBy.length > 0
+      ? ` — blocked by ${ticket.blockedBy.join(', ')}`
+      : ''
+  opts.stdout(
+    `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${url}`,
+  )
 }

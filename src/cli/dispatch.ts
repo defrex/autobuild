@@ -257,9 +257,19 @@ class DispatchLoop {
     }
   }
 
+  /**
+   * Dependency diagnostics print as their own lines above the counts — this
+   * is the operator's only view of why a ready ticket is sitting still, and
+   * the acceptance criterion is that it needs no provider, filesystem, or
+   * database inspection. The counts map guards on `typeof count === 'number'`
+   * because a non-numeric TickReport field would otherwise be dropped here
+   * silently (`count > 0` is false for an array, with no type error).
+   */
   private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>): void {
-    const parts = Object.entries(report)
-      .filter(([, count]) => count > 0)
+    const { dependencyDiagnostics, ...counts } = report
+    for (const line of dependencyDiagnostics) this.opts.stdout(line)
+    const parts = Object.entries(counts)
+      .filter(([, count]) => typeof count === 'number' && count > 0)
       .map(([name, count]) => `${name}=${count}`)
     this.opts.stdout(parts.length > 0 ? `tick: ${parts.join(' ')}` : 'tick: idle')
   }

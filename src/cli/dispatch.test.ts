@@ -90,7 +90,10 @@ interface Fixture {
 
 /** A wire that supplies fakes over a REAL git worktree provider and a scripted
  * agent driving the real `ab` CLI (the harness happy-path handlers). */
-async function makeFixture(ticket: Ticket, handlers: SkillHandlers): Promise<Fixture> {
+async function makeFixture(
+  ticket: Ticket | Ticket[],
+  handlers: SkillHandlers,
+): Promise<Fixture> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
   const origin = join(tmp, 'origin')
   await initOrigin(origin)
@@ -98,7 +101,7 @@ async function makeFixture(ticket: Ticket, handlers: SkillHandlers): Promise<Fix
   const ids = sequentialIds()
   const store = new MemoryBuildStore({ clock: systemClock })
   const forge = new FakeForge()
-  const tickets = new FakeTicketSource([ticket])
+  const tickets = new FakeTicketSource(Array.isArray(ticket) ? ticket : [ticket])
   const workspaces = new GitWorktreeProvider({ root: join(tmp, 'worktrees') })
   const cliErrors: string[] = []
 
@@ -167,13 +170,15 @@ async function makeFixture(ticket: Ticket, handlers: SkillHandlers): Promise<Fix
   }
 }
 
-function readyTicket(id: string): Ticket {
+function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
+  const title = over.title ?? 'Add rate limiting'
   return {
-    ref: { source: 'fake', id, title: 'Add rate limiting' },
-    title: 'Add rate limiting',
-    body: CONFORMING_BODY,
-    state: 'Ready',
-    labels: ['autobuild'],
+    ref: { source: 'fake', id, title },
+    title,
+    body: over.body ?? CONFORMING_BODY,
+    state: over.state ?? 'Ready',
+    labels: over.labels ?? ['autobuild'],
+    ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
 }
 
@@ -252,6 +257,53 @@ describe('abDispatch --once', () => {
 
       // The operator saw the build park.
       expect(out.some((line) => line.includes(`build ${slug} parked`))).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  /**
+   * The observability criterion: a dependency-blocked ticket and its
+   * unresolved blockers must be discoverable from dispatcher output alone —
+   * no provider API, filesystem, or database inspection.
+   *
+   * Also the regression guard for printReport's shape assumption: it filters
+   * `Object.entries(report)` by `count > 0`, which silently drops a non-numeric
+   * field (an array is never `> 0`, and TypeScript does not complain). Without
+   * this test, the diagnostics could vanish from output while the counter
+   * incremented, and every other test would still pass.
+   */
+  test('prints dependency diagnostics as lines AND still prints numeric counts', async () => {
+    const fx = await makeFixture(
+      [
+        readyTicket('T-blocked', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      happyHandlers(),
+    )
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(out).toContain('ticket T-blocked blocked by T-9 (not complete)')
+      const tick = out.find((line) => line.startsWith('tick: '))
+      expect(tick).toContain('dependencyBlocked=1')
+      // The counts line survives the array field rather than throwing or
+      // rendering `dependencyDiagnostics=[object Object]`.
+      expect(tick).not.toContain('dependencyDiagnostics')
+      // The blocked ticket built nothing. (This fixture sets no readyState, so
+      // T-9 is itself a candidate and does dispatch — which is exactly why the
+      // gate must be per-ticket rather than per-tick.)
+      const builds = await fx.store.listBuilds()
+      expect(builds.map((b) => b.ticket?.id)).toEqual(['T-9'])
     } finally {
       await fx.cleanup()
     }
