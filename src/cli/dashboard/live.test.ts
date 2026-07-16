@@ -3,7 +3,7 @@
  * escape traffic itself is the assertion.
  */
 import { describe, expect, test } from 'bun:test'
-import { LiveRegion } from './live'
+import { LiveRegion, paintableRows } from './live'
 import type { TerminalOut } from '../terminal'
 
 function fakeTerm(): TerminalOut & { writes: string[]; all: () => string } {
@@ -22,6 +22,46 @@ function fakeTerm(): TerminalOut & { writes: string[]; all: () => string } {
 
 const CURSOR_UP = (n: number): string => `\x1b[${n}A`
 const CLEAR_TO_END = '\x1b[0J'
+
+describe('paintableRows: the frame needs one row fewer than the screen', () => {
+  // f_c9449563 — `update` terminates EVERY line with `\n`, the last one
+  // included, so after painting N lines the cursor rests on a fresh row BELOW
+  // the frame, and that row has to exist. At N === rows the final newline
+  // scrolls the frame's top line away before erase() ever runs, and CURSOR_UP
+  // then clamps at the top margin: the header is gone and a copy lands in
+  // scrollback on every repaint.
+  //
+  // This file's fake CANNOT observe that — it appends to an array, so nothing
+  // ever scrolls. Neither can render.test.ts, which counts lines and knows
+  // nothing of the trailing newline. So the rule is asserted as a rule here,
+  // next to the newline that causes it, and the end-to-end consequence is
+  // asserted at the dispatch seam that owns both (dispatch.test.ts).
+
+  test('one fewer than the screen', () => {
+    expect(paintableRows(24)).toBe(23)
+    expect(paintableRows(50)).toBe(49)
+    expect(paintableRows(2)).toBe(1)
+  })
+
+  test('a 1-row screen has NO paintable height — the honest answer is nothing', () => {
+    // A single line there would scroll itself off behind its own newline.
+    expect(paintableRows(1)).toBe(0)
+  })
+
+  test('never negative, whatever the terminal claims', () => {
+    expect(paintableRows(0)).toBe(0)
+    expect(paintableRows(-5)).toBe(0)
+  })
+
+  test('update() really does terminate every line — the reason for the -1', () => {
+    // Pin the convention the rule depends on: if this ever stops being true,
+    // `paintableRows` is wrong and this test says so.
+    const term = fakeTerm()
+    new LiveRegion(term).update(['a', 'b', 'c'])
+    const painted = term.writes.find((w) => w.includes('a'))
+    expect(painted).toBe('a\nb\nc\n') // trailing newline on the LAST line too
+  })
+})
 
 describe('LiveRegion: the region does not accumulate', () => {
   test('a changed frame erases the previous one before repainting', () => {

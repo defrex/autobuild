@@ -30,7 +30,7 @@ import { randomIds, type IdSource } from '../ids'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { buildDashboard } from './dashboard/model'
 import { renderDashboard } from './dashboard/render'
-import { LiveRegion } from './dashboard/live'
+import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
@@ -356,7 +356,10 @@ class DispatchLoop {
       renderDashboard(model, {
         color: true,
         width: terminal.columns,
-        height: terminal.rows,
+        // NOT `terminal.rows` — the region's trailing newline needs a row of
+        // its own, so a frame of exactly `rows` scrolls its own header off.
+        // See `paintableRows`.
+        height: paintableRows(terminal.rows),
       }),
     )
   }

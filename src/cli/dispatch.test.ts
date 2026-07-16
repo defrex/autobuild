@@ -420,16 +420,27 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('the frame never exceeds the terminal HEIGHT — rows are wired through', async () => {
-    // f_d2e4b3ee: the region repaints by cursoring up over the rows it painted,
-    // so a frame taller than the screen is unpaintable, not merely ugly. The
-    // seam is only real if `terminal.rows` actually reaches `renderDashboard`.
-    // rows: 3 is deliberately tighter than this fixture's natural frame
-    // (header + blank + build header + progress = 4). A looser value proves
-    // nothing — the frame would fit anyway and the assertion would pass with
-    // `height` never wired through at all.
+  test('the frame is STRICTLY shorter than the terminal — rows are wired through', async () => {
+    // f_d2e4b3ee + f_c9449563. Two bugs, one assertion:
+    //
+    //   `<= rows` is the off-by-one (round 3): the region terminates every
+    //   line with \n, so an N-line frame occupies N rows and leaves the cursor
+    //   on an N+1th. At N === rows the header scrolls off and lands in
+    //   scrollback on every repaint — f_d2e4b3ee's exact failure, surviving at
+    //   the boundary its fix aimed for.
+    //
+    //   no clamp at all is the original bug.
+    //
+    // This is the seam that owns the invariant: render.ts counts lines and
+    // cannot see the trailing newline; live.test.ts's fake collects strings and
+    // cannot see scrolling. Only here do a real frame and a real row count meet.
+    //
+    // rows: 5 is deliberately tight — this fixture's natural frame is 5 lines,
+    // so an unclamped or off-by-one frame lands exactly on the failing value.
+    // A looser rows would fit anyway and prove nothing.
     const fx = await makeFixture(readyTicket('T-rows'), happyHandlers())
-    const term = fakeTerminal(true, { columns: 80, rows: 3 })
+    const rows = 5
+    const term = fakeTerminal(true, { columns: 80, rows })
     try {
       await abDispatch({
         targetRepo: fx.origin,
@@ -443,9 +454,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
       expect(fx.cliErrors).toEqual([])
       expect(tallestFrame(term)).toBeGreaterThan(0) // it really did paint
-      expect(tallestFrame(term)).toBeLessThanOrEqual(3)
-      // The header survives the clamp.
-      expect(term.all()).toContain('ab dispatch')
+      expect(tallestFrame(term)).toBeLessThan(rows) // STRICTLY — see above
+      expect(term.all()).toContain('ab dispatch') // the header survives
     } finally {
       await fx.cleanup()
     }

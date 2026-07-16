@@ -249,17 +249,20 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
   })
 })
 
-describe('renderDashboard: the frame fits the SCREEN (one frame = one screenful)', () => {
-  // f_d2e4b3ee — the width invariant's twin, on the other axis, and never
-  // stated anywhere. `LiveRegion.erase()` cursors UP over the lines it
-  // painted, which only works while they are still on screen; a taller frame
-  // scrolls its own top away, CUU clamps at the top margin, and the header —
-  // the line AC 19 names — is the first thing lost, while each repaint pushes
-  // partial snapshots into scrollback (AC 18, read literally).
+describe('renderDashboard: `height` caps the LINE count', () => {
+  // f_d2e4b3ee — the width invariant's twin, on the other axis. `erase()`
+  // cursors UP over the lines it painted, which only works while they are
+  // still on screen; a taller frame scrolls its own top away, CUU clamps at
+  // the top margin, and the header — the line AC 19 names — is the first thing
+  // lost, while each repaint pushes snapshots into scrollback (AC 18).
   //
-  // `live.test.ts` cannot catch this: its fake appends to an array, so a frame
-  // is never taller than anything. Height is only decidable here, where the
-  // line count is known before anything is painted.
+  // What this file can and cannot prove (f_c9449563): `height` here is a cap
+  // on LINES, and these tests only pin `lines.length <= height`. They say
+  // NOTHING about what a caller should pass — round 3 passed `terminal.rows`,
+  // which is off by one because the region's trailing newline needs a row of
+  // its own, and the sweep below happily passed on the broken output. That
+  // invariant (`frame.length < term.rows`) is not visible from here; it lives
+  // at the dispatch seam, and `paintableRows` owns the rule.
   const blocked = (i: number): DashboardBuild =>
     build({
       slug: `interactive-build-dashboard-for-ab-${i}`,
@@ -288,14 +291,15 @@ describe('renderDashboard: the frame fits the SCREEN (one frame = one screenful)
     expect(unbounded.length).toBeGreaterThan(24)
   })
 
-  test('…and the same frame clamped to 24 rows fits in 24 rows', () => {
+  test('…and the same frame clamped is within the cap it was given', () => {
+    // NB: `height: 24` is not "fits a 24-row screen" — see the note above.
     const lines = renderDashboard(model(many(5)), { color: false, width: 80, height: 24 })
     expect(lines.length).toBeLessThanOrEqual(24)
   })
 
   test('never exceeds the height, over a sweep of heights and build counts', () => {
     for (const n of [0, 1, 2, 3, 5, 8, 20]) {
-      for (let height = 1; height <= 40; height += 1) {
+      for (let height = 0; height <= 40; height += 1) {
         for (const color of [false, true]) {
           const lines = renderDashboard(model(many(n)), { color, width: 80, height })
           expect(lines.length).toBeLessThanOrEqual(height)
@@ -345,8 +349,17 @@ describe('renderDashboard: the frame fits the SCREEN (one frame = one screenful)
     expect(renderDashboard(model(many(5)), { color: false, width: 80 }).length).toBeGreaterThan(24)
   })
 
-  test('an empty dashboard still fits a 1-row screen', () => {
+  test('a cap of 1 leaves the header and nothing else', () => {
     expect(renderDashboard(model([]), { color: false, width: 80, height: 1 })).toHaveLength(1)
+    expect(renderDashboard(model(many(3)), { color: false, width: 80, height: 1 })).toHaveLength(1)
+  })
+
+  test('a cap of 0 paints NOTHING — not a header that would scroll itself off', () => {
+    // What `paintableRows(1)` hands us on a 1-row screen. A single line there
+    // would scroll away behind its own trailing newline and land in scrollback
+    // on every repaint, which is worse than an empty region.
+    expect(renderDashboard(model([]), { color: false, width: 80, height: 0 })).toEqual([])
+    expect(renderDashboard(model(many(3)), { color: false, width: 80, height: 0 })).toEqual([])
   })
 })
 

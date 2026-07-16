@@ -21,6 +21,30 @@ const CLEAR_TO_END = '\x1b[0J'
 const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
 
+/**
+ * How many lines a region may paint on a `rows`-row screen: **one fewer than
+ * the screen has**.
+ *
+ * `update` terminates EVERY line with `\n`, the last one included, so after
+ * painting N lines the cursor rests on a fresh row BELOW the frame — and that
+ * row has to exist. At N === rows the final newline scrolls the frame's top
+ * line away before `erase()` ever runs; `CURSOR_UP(N)` then clamps at the top
+ * margin, so the header is gone and a copy lands in scrollback on every
+ * repaint. N === rows is the one height that cannot be painted.
+ *
+ * This lives here, next to the newline that causes it, because no other seam
+ * can see it: `render.ts` counts lines and knows nothing of the trailing
+ * newline, and a fake `TerminalOut` collects strings and knows nothing of
+ * scrolling. The invariant is `frame.length < term.rows`, and it is only
+ * observable where a real region meets a real screen.
+ *
+ * 0 for a 1-row screen: there is no paintable height, and the honest answer is
+ * to paint nothing rather than a header that scrolls itself off.
+ */
+export function paintableRows(rows: number): number {
+  return Math.max(0, rows - 1)
+}
+
 export class LiveRegion {
   /** The frame currently painted — `[]` when the region is empty. Also the
    * identical-frame check's comparand. */

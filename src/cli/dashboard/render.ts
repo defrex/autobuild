@@ -36,6 +36,11 @@ export interface RenderOpts {
    * scrolls its own top away, so the cursor-up clamps at the top margin and
    * the header — the line the ACs name — is the first thing lost.
    *
+   * This is a cap on LINES, and it is NOT the screen's row count: the region
+   * needs a row for the cursor to rest on, so a caller painting a terminal
+   * must pass `paintableRows(rows)`, not `rows`. This module cannot enforce
+   * that — it counts lines and knows nothing of the region's trailing newline.
+   *
    * Absent ⇒ unbounded, for callers that are not painting a screen.
    */
   height?: number
@@ -255,9 +260,14 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     width,
   )
 
-  // A screen with room for nothing but the header gets the header: it is the
-  // line the ACs name, and it carries the active COUNT, so it still tells the
-  // operator the builds exist.
+  // No paintable height at all (a 1-row screen — see `paintableRows`): paint
+  // nothing. A single line would scroll itself off and land in scrollback on
+  // every repaint, which is worse than an empty region.
+  if (height !== undefined && height <= 0) return []
+
+  // Room for nothing but the header gets the header: it is the line the ACs
+  // name, and it carries the active COUNT, so it still tells the operator the
+  // builds exist.
   if (height !== undefined && height <= 1) return [header]
 
   if (model.builds.length === 0) {
