@@ -31,6 +31,7 @@ import { decideNext } from '../kernel/engine'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
 import type {
+  DependencyState,
   Forge,
   Ticket,
   TicketSource,
@@ -95,6 +96,98 @@ export function specConformance(body: string): SpecConformance {
   return { conforms: missing.length === 0, missing }
 }
 
+// ── Ticket dependency gate (SPEC §13) ────────────────────────────────────────
+//
+// Division of labor: the TicketSource answers FACTS (does this blocker exist,
+// is it resolved by my native lifecycle, what does it declare as its own
+// blockers); the dispatcher decides POLICY (an unresolved blocker means don't
+// dispatch; a broken graph means skip this ticket, not the tick). Keeping the
+// decision here means one tested implementation instead of one per adapter,
+// and no adapter's state taxonomy leaks upward.
+
+export interface DependencyVerdict {
+  /** Unresolved blocker ids — nonempty means DO NOT dispatch. */
+  unresolved: string[]
+  /** Actionable lines naming the affected ticket and the dependency. */
+  diagnostics: string[]
+}
+
+/**
+ * Walks back from `from` looking for a node already on `path`; returns the
+ * cycle (first repeated node → … → itself) or null. `explored` prunes nodes
+ * proven acyclic on an earlier branch, so a wide graph cannot blow up.
+ */
+function findCycle(
+  from: string,
+  path: string[],
+  nodes: Map<string, DependencyState>,
+  explored: Set<string>,
+): string[] | null {
+  for (const next of nodes.get(from)?.blockedBy ?? []) {
+    const seen = path.indexOf(next)
+    if (seen !== -1) return [...path.slice(seen), next]
+    if (explored.has(next)) continue
+    const cycle = findCycle(next, [...path, next], nodes, explored)
+    if (cycle) return cycle
+    explored.add(next)
+  }
+  return null
+}
+
+/**
+ * Whether `ticketId` may be dispatched, given the dependency graph `nodes`
+ * (which must be closed over the ticket's reachable blockers — see
+ * `loadDependencyGraph`). Pure and total: a node the walk cannot find is
+ * treated as already-reported-missing rather than throwing. Exported for
+ * testing, like `specConformance`.
+ */
+export function analyzeDependencies(
+  ticketId: string,
+  nodes: Map<string, DependencyState>,
+): DependencyVerdict {
+  const blockedBy = nodes.get(ticketId)?.blockedBy ?? []
+  const unresolved: string[] = []
+  const diagnostics: string[] = []
+
+  for (const blockerId of blockedBy) {
+    if (blockerId === ticketId) {
+      unresolved.push(blockerId)
+      diagnostics.push(`ticket ${ticketId} depends on itself`)
+      continue
+    }
+    const node = nodes.get(blockerId)
+    if (!node || !node.exists) {
+      unresolved.push(blockerId)
+      diagnostics.push(
+        `ticket ${ticketId} blocked by ${blockerId}, which does not exist in ` +
+          'this ticket source',
+      )
+      continue
+    }
+    // A resolved blocker imposes nothing, and its own history is irrelevant —
+    // never walked, so a cycle *behind* completed work is not a diagnostic.
+    if (node.resolved) continue
+
+    unresolved.push(blockerId)
+    // Gating never needs the transitive walk (an unresolved blocker already
+    // holds the ticket); the walk exists only to NAME a cycle, which direct
+    // blockers alone cannot express.
+    const cycle = findCycle(
+      blockerId,
+      [ticketId, blockerId],
+      nodes,
+      new Set<string>(),
+    )
+    diagnostics.push(
+      cycle
+        ? `ticket ${ticketId}: dependency cycle ${cycle.join(' → ')}`
+        : `ticket ${ticketId} blocked by ${blockerId} (not complete)`,
+    )
+  }
+
+  return { unresolved, diagnostics }
+}
+
 /** `Add rate limiting!` → `add-rate-limiting` (build slugs, branch names). */
 export function kebab(title: string): string {
   const slug = title
@@ -107,7 +200,10 @@ export function kebab(title: string): string {
 // ── Tick report ──────────────────────────────────────────────────────────────
 
 /** Counts per action, for observability and tests. An idempotent re-run of
- * `tick()` over unchanged state reports all zeroes. */
+ * `tick()` over unchanged state reports all zeroes — except the dependency
+ * fields, which are a standing queue report rather than a record of action: a
+ * still-blocked ticket re-reports every tick by design, because that is the
+ * only place its blockers are visible without provider inspection. */
 export interface TickReport {
   /** Janitor (§15.7): builds completed as merged. */
   merged: number
@@ -129,6 +225,11 @@ export interface TickReport {
   bounced: number
   /** Claim-before-launch (§12): claims lost to another dispatcher. */
   claimRaces: number
+  /** Dependency gate (§13): ready tickets held back by unresolved blockers. */
+  dependencyBlocked: number
+  /** One line per held ticket naming its unresolved blockers — the operator's
+   * only view of the dependency queue short of provider inspection. */
+  dependencyDiagnostics: string[]
 }
 
 export function emptyTickReport(): TickReport {
@@ -143,6 +244,8 @@ export function emptyTickReport(): TickReport {
     authored: 0,
     bounced: 0,
     claimRaces: 0,
+    dependencyBlocked: 0,
+    dependencyDiagnostics: [],
   }
 }
 
@@ -565,8 +668,45 @@ export class Dispatcher {
         ? { state: config.dispatcher.readyState }
         : {}),
     })
+    // One dependency-node cache per tick: blockers are commonly shared across
+    // the ready set, and a blocker's resolution must be re-read every tick
+    // (never cached across them) so a completion lands on the next pass.
+    const nodes = new Map<string, DependencyState>()
+
     for (const ticket of ready) {
       if (capacity <= 0) break
+
+      // The dependency gate runs FIRST — before the claim, before the spec
+      // gate. A blocked ticket must not be claimed, must not be bounced, must
+      // create no build or workspace, and must not spend capacity; it is
+      // simply not this tick's work. Note this sits *above* readyLabels /
+      // readyState in the pipeline: those criteria produced `ready`, and the
+      // gate subtracts from it — labels and state can make a ticket a
+      // candidate but can never override an unresolved blocker.
+      if ((ticket.blockedBy ?? []).length > 0) {
+        let verdict: DependencyVerdict
+        try {
+          await this.loadDependencyGraph(ticket, nodes)
+          verdict = analyzeDependencies(ticket.ref.id, nodes)
+        } catch (error) {
+          // A broken graph is this ticket's problem, not the tick's: skip it
+          // and let unrelated eligible tickets dispatch normally.
+          verdict = {
+            unresolved: [ticket.ref.id],
+            diagnostics: [
+              `ticket ${ticket.ref.id}: dependency check failed — ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ],
+          }
+        }
+        if (verdict.unresolved.length > 0) {
+          report.dependencyBlocked += 1
+          report.dependencyDiagnostics.push(...verdict.diagnostics)
+          continue
+        }
+      }
+
       // Claim-before-launch (§12): losing the claim means another dispatcher
       // (or an earlier tick) owns this ticket.
       if (!(await tickets.claim(ticket.ref.id))) {
@@ -652,6 +792,43 @@ export class Dispatcher {
       await this.launch(slug, launched)
       report.dispatched += 1
       capacity -= 1
+    }
+  }
+
+  /**
+   * Close `nodes` over everything reachable from `ticket`'s blockers, so the
+   * analyzer can both gate and name a cycle. Breadth-first, one port call per
+   * level, skipping ids already cached — the common case (a blocker or two,
+   * none of them blocked themselves) is a single call.
+   *
+   * The ticket's own node is seeded so a cycle can close back onto it. Its
+   * `resolved: false` is never read as a fact about the ticket: the analyzer
+   * only ever reads a node's `blockedBy` for the ticket itself.
+   */
+  private async loadDependencyGraph(
+    ticket: Ticket,
+    nodes: Map<string, DependencyState>,
+  ): Promise<void> {
+    nodes.set(ticket.ref.id, {
+      id: ticket.ref.id,
+      exists: true,
+      resolved: false,
+      blockedBy: [...(ticket.blockedBy ?? [])],
+    })
+    const seen = new Set<string>([ticket.ref.id])
+    let frontier = [...new Set(ticket.blockedBy ?? [])].filter(
+      (id) => !nodes.has(id),
+    )
+    while (frontier.length > 0) {
+      const states = await this.deps.tickets.dependencyStates(frontier)
+      for (const state of states) {
+        nodes.set(state.id, state)
+        seen.add(state.id)
+      }
+      // A provider-side cycle terminates here: every node is visited once.
+      frontier = [
+        ...new Set(states.flatMap((state) => state.blockedBy)),
+      ].filter((id) => !seen.has(id) && !nodes.has(id))
     }
   }
 

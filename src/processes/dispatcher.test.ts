@@ -16,11 +16,13 @@ import { textContent } from '../store/types'
 import { manualClock } from '../testing/fixed'
 import {
   Dispatcher,
+  analyzeDependencies,
   emptyTickReport,
   kebab,
   specConformance,
   type DispatcherOpts,
 } from './dispatcher'
+import type { DependencyState } from '../ports/types'
 
 const REPO = '/repos/origin'
 const BASE_SHA = 'base-sha-42'
@@ -47,6 +49,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
     labels: over.labels ?? ['autobuild'],
+    ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
 }
 
@@ -56,11 +59,14 @@ function harness(
     toml?: string
     authorSpec?: (ticket: Ticket) => Promise<string | null>
     opts?: DispatcherOpts
+    /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
+    wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
   } = {},
 ) {
   const clock = manualClock()
   const store = new MemoryBuildStore({ clock })
-  const tickets = new FakeTicketSource(opts.tickets ?? [])
+  const fakeTickets = new FakeTicketSource(opts.tickets ?? [])
+  const tickets = opts.wrapTickets ? opts.wrapTickets(fakeTickets) : fakeTickets
   const workspaces = new FakeWorkspaceProvider({ root: '/ws' })
   const forge = new FakeForge()
   const launches: string[] = []
@@ -213,6 +219,159 @@ describe('specConformance', () => {
   test('headings match case-insensitively and at deeper levels', () => {
     const body = 'Why.\n\n### ACCEPTANCE CRITERIA\n- one\n\n### Out Of Scope — explicit\n'
     expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+})
+
+describe('analyzeDependencies', () => {
+  /** `graph` reads as `id: [blockers]`; `done` lists the resolved ids and
+   * `missing` the ids that exist nowhere. Pure input — no adapter involved. */
+  function nodes(
+    graph: Record<string, string[]>,
+    opts: { done?: string[]; missing?: string[] } = {},
+  ): Map<string, DependencyState> {
+    const map = new Map<string, DependencyState>()
+    for (const [id, blockedBy] of Object.entries(graph)) {
+      if (opts.missing?.includes(id)) {
+        map.set(id, { id, exists: false, resolved: false, blockedBy: [] })
+        continue
+      }
+      map.set(id, {
+        id,
+        exists: true,
+        resolved: opts.done?.includes(id) ?? false,
+        blockedBy,
+      })
+    }
+    return map
+  }
+
+  test('no blockers: eligible, nothing to say', () => {
+    expect(analyzeDependencies('A', nodes({ A: [] }))).toEqual({
+      unresolved: [],
+      diagnostics: [],
+    })
+  })
+
+  test('a ticket absent from the graph is treated as dependency-free', () => {
+    expect(analyzeDependencies('A', new Map())).toEqual({
+      unresolved: [],
+      diagnostics: [],
+    })
+  })
+
+  test('one unresolved blocker: ineligible, diagnostic names ticket and blocker', () => {
+    const verdict = analyzeDependencies('A', nodes({ A: ['B'], B: [] }))
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics).toEqual(['ticket A blocked by B (not complete)'])
+  })
+
+  test('one resolved blocker: eligible', () => {
+    expect(
+      analyzeDependencies('A', nodes({ A: ['B'], B: [] }, { done: ['B'] })),
+    ).toEqual({ unresolved: [], diagnostics: [] })
+  })
+
+  test('multiple blockers: ineligible until the LAST one resolves', () => {
+    const graph = { A: ['B', 'C'], B: [], C: [] }
+
+    expect(analyzeDependencies('A', nodes(graph)).unresolved).toEqual(['B', 'C'])
+    expect(
+      analyzeDependencies('A', nodes(graph, { done: ['B'] })).unresolved,
+    ).toEqual(['C'])
+    expect(
+      analyzeDependencies('A', nodes(graph, { done: ['C'] })).unresolved,
+    ).toEqual(['B'])
+    expect(
+      analyzeDependencies('A', nodes(graph, { done: ['B', 'C'] })),
+    ).toEqual({ unresolved: [], diagnostics: [] })
+  })
+
+  test('a missing blocker: ineligible, diagnostic says it does not exist', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes({ A: ['B'], B: [] }, { missing: ['B'] }),
+    )
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics).toEqual([
+      'ticket A blocked by B, which does not exist in this ticket source',
+    ])
+  })
+
+  test('a blocker absent from the graph entirely reads as missing', () => {
+    const verdict = analyzeDependencies('A', nodes({ A: ['B'] }))
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics[0]).toContain('does not exist')
+  })
+
+  test('self-dependency: ineligible, named as such', () => {
+    const verdict = analyzeDependencies('A', nodes({ A: ['A'] }))
+
+    expect(verdict.unresolved).toEqual(['A'])
+    expect(verdict.diagnostics).toEqual(['ticket A depends on itself'])
+  })
+
+  test('a 2-cycle is named as a cycle, not as a plain incomplete blocker', () => {
+    const verdict = analyzeDependencies('A', nodes({ A: ['B'], B: ['A'] }))
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle A → B → A'])
+  })
+
+  test('a 3-cycle names the whole loop', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes({ A: ['B'], B: ['C'], C: ['A'] }),
+    )
+
+    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle A → B → C → A'])
+  })
+
+  test('a cycle reached through a chain, not involving the ticket itself', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes({ A: ['B'], B: ['C'], C: ['D'], D: ['C'] }),
+    )
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics).toEqual(['ticket A: dependency cycle C → D → C'])
+  })
+
+  test('a resolved blocker is never walked — a cycle behind done work is not a diagnostic', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes({ A: ['B'], B: ['C'], C: ['B'] }, { done: ['B'] }),
+    )
+
+    expect(verdict).toEqual({ unresolved: [], diagnostics: [] })
+  })
+
+  test('mixed: one resolved, one missing, one cycling — each reported once', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes(
+        { A: ['B', 'C', 'D'], B: [], C: [], D: ['A'] },
+        { done: ['B'], missing: ['C'] },
+      ),
+    )
+
+    expect(verdict.unresolved).toEqual(['C', 'D'])
+    expect(verdict.diagnostics).toEqual([
+      'ticket A blocked by C, which does not exist in this ticket source',
+      'ticket A: dependency cycle A → D → A',
+    ])
+  })
+
+  test('a diamond terminates and does not double-report', () => {
+    const verdict = analyzeDependencies(
+      'A',
+      nodes({ A: ['B'], B: ['C', 'D'], C: ['E'], D: ['E'], E: [] }),
+    )
+
+    expect(verdict.unresolved).toEqual(['B'])
+    expect(verdict.diagnostics).toEqual(['ticket A blocked by B (not complete)'])
   })
 })
 
@@ -451,6 +610,268 @@ describe('Dispatcher dispatch', () => {
 })
 
 // ── Janitor (§15.7, D1) ──────────────────────────────────────────────────────
+
+describe('Dispatcher dependency gate', () => {
+  /** readyState pins the candidate set to Ready tickets, so a blocker parked
+   * in another state is a dependency and not itself dispatchable work — the
+   * arrangement these tests are actually about. */
+  const CAPACITY_2 = [
+    '[dispatcher]',
+    'capacity = 2',
+    'readyState = "Ready"',
+  ].join('\n')
+
+  test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual([
+      'ticket T-1 blocked by T-9 (not complete)',
+    ])
+    // Never claimed (§12: the gate precedes claim-before-launch)…
+    expect(h.tickets.claims).not.toContain('T-1')
+    // …no build, no workspace, no projection outward.
+    expect((await h.store.listBuilds()).map((b) => b.slug)).not.toContain(
+      'blocked-work',
+    )
+    expect(h.workspaces.provisions.map((p) => p.branch)).not.toContain(
+      'ab/blocked-work',
+    )
+    expect(h.tickets.comments.map((c) => c.id)).not.toContain('T-1')
+    expect(h.launches).not.toContain('blocked-work')
+  })
+
+  /** The strongest test here: a blocked ticket must not spend a slot. With
+   * capacity 1 and the blocked ticket first in the ready list, the eligible
+   * one behind it still dispatches in the SAME tick. */
+  test('a blocked ticket consumes no capacity — the next eligible ticket still dispatches', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-2', { title: 'Free work' }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      toml: ['[dispatcher]', 'capacity = 1', 'readyState = "Ready"'].join('\n'),
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['free-work'])
+  })
+
+  test('the blocker completes: the NEXT tick dispatches, with no manual step', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
+
+    // Native lifecycle only: the blocker reaches the source's done state.
+    await h.tickets.transition('T-9', 'Done')
+
+    const second = await h.dispatcher.tick()
+    expect(second.dependencyBlocked).toBe(0)
+    expect(second.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
+  })
+
+  test('two blockers: ineligible until BOTH resolve', async () => {
+    const tickets = [
+      readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-8', 'T-9'] }),
+      readyTicket('T-8', { title: 'Blocker eight', state: 'In Progress' }),
+      readyTicket('T-9', { title: 'Blocker nine', state: 'In Progress' }),
+    ]
+    const h = harness({ tickets, toml: CAPACITY_2 })
+
+    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
+
+    await h.tickets.transition('T-8', 'Done')
+    const second = await h.dispatcher.tick()
+    expect(second.dependencyBlocked).toBe(1)
+    expect(second.dispatched).toBe(0)
+    expect(second.dependencyDiagnostics).toEqual([
+      'ticket T-1 blocked by T-9 (not complete)',
+    ])
+
+    await h.tickets.transition('T-9', 'Done')
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+  })
+
+  test('a missing blocker keeps the ticket undispatched with an actionable diagnostic', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-404'] })],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual([
+      'ticket T-1 blocked by T-404, which does not exist in this ticket source',
+    ])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
+  test('a dependency cycle keeps every affected ticket undispatched and names the loop', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'First', blockedBy: ['T-2'] }),
+        readyTicket('T-2', { title: 'Second', blockedBy: ['T-1'] }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(2)
+    expect(report.dispatched).toBe(0)
+    expect(report.dependencyDiagnostics).toEqual([
+      'ticket T-1: dependency cycle T-1 → T-2 → T-1',
+      'ticket T-2: dependency cycle T-2 → T-1 → T-2',
+    ])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
+  test('a self-dependency keeps the ticket undispatched', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { title: 'Ouroboros', blockedBy: ['T-1'] })],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual(['ticket T-1 depends on itself'])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
+  /** An invalid graph is one ticket's problem: the tick must not throw, and
+   * unrelated eligible tickets must still dispatch. */
+  test('a dependencyStates failure skips that ticket only — the tick survives', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-2', { title: 'Free work' }),
+      ],
+      toml: CAPACITY_2,
+      wrapTickets: (source) =>
+        Object.assign(source, {
+          dependencyStates: () => Promise.reject(new Error('provider exploded')),
+        }),
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual([
+      'ticket T-1: dependency check failed — provider exploded',
+    ])
+    expect(report.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['free-work'])
+  })
+
+  /** Gate order: the dependency check runs BEFORE the spec gate, so a blocked
+   * ticket is held, not bounced — its body is not this tick's business. */
+  test('a blocked ticket with a nonconforming body is held, not bounced', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', {
+          title: 'Blocked work',
+          body: 'thin',
+          blockedBy: ['T-9'],
+        }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.bounced).toBe(0)
+    expect(h.tickets.transitions).toEqual([])
+  })
+
+  /** The unchanged-behavior criterion, mechanically enforced: a ticket with
+   * no dependencies never touches the dependency port at all. */
+  test('a dependency-free ticket dispatches with ZERO dependencyStates calls', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')], toml: CAPACITY_2 })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dispatched).toBe(1)
+    expect(h.tickets.dependencyQueries).toEqual([])
+  })
+
+  test('a resolved blocker dispatches normally and reports nothing', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Unblocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-9', { title: 'The blocker', state: 'Done' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(0)
+    expect(report.dependencyDiagnostics).toEqual([])
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain(
+      'unblocked-work',
+    )
+  })
+
+  /** A shared blocker is fetched once per tick, not once per dependent. */
+  test('the per-tick node cache fetches a shared blocker only once', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'First', blockedBy: ['T-9'] }),
+        readyTicket('T-2', { title: 'Second', blockedBy: ['T-9'] }),
+        readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dependencyBlocked).toBe(2)
+    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
+  })
+
+  test('a transitive chain is closed lazily: A → B → C, only A is dispatchable-checked', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'First', blockedBy: ['T-2'] }),
+        readyTicket('T-2', { title: 'Second', state: 'In Progress', blockedBy: ['T-3'] }),
+        readyTicket('T-3', { title: 'Third', state: 'In Progress' }),
+      ],
+      toml: CAPACITY_2,
+    })
+
+    const report = await h.dispatcher.tick()
+
+    // T-1's DIRECT blocker T-2 is incomplete, which alone holds it — the
+    // deeper walk exists only so a cycle could be named.
+    expect(report.dependencyDiagnostics).toContain(
+      'ticket T-1 blocked by T-2 (not complete)',
+    )
+    expect(h.tickets.dependencyQueries).toEqual([['T-2'], ['T-3']])
+  })
+})
 
 describe('Dispatcher janitor', () => {
   test('merged PR: pr.merged once, release, Done transition, completed{merged}; second tick no-ops', async () => {
