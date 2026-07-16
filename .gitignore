@@ -1,4 +1,9 @@
 node_modules/
-# kickoff runtime scratch (pid lock, select logs, select results)
-build/kickoff/.kickoff/
-# per-build runtime artifacts live under build/<feature>/ at runtime
+# per-phase agent scratch — disposable by construction (SPEC §7)
+.ab/
+# local store default location when overridden into the repo for dev
+.autobuild/
+*.local.db
+
+# local secrets
+.env

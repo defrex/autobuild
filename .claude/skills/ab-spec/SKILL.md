@@ -1,5 +1,5 @@
 ---
-name: spec
+name: ab-spec
 description: Design a feature spec-first through conversation, or flesh out an existing ticket to the spec standard. The human-interactive surface of the spec standard; creates or updates the ticket when done.
 ---
 

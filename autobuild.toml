@@ -1,0 +1,81 @@
+# autobuild.toml — per-repo declarative configuration (SPEC §16.1, D9).
+# Read from the build's branch at workspace provision: every build sees one
+# consistent config, and changes to this file flow through the pipeline
+# itself. Declarative only — commands are plain shell strings, nothing here
+# is evaluated.
+
+[project]
+baseBranch = "main"
+
+# Deterministic verbs the kernel may run. `setup` runs after provision and
+# after a sandbox rehydrate (§15.6-C); the rest are referenced by name from
+# [verify.*] check steps.
+[commands]
+setup = "bun install"
+lint = "bun lint"
+typecheck = "bun tsc --noEmit"
+test = "bun test"
+
+# Dev-server lifecycle (§16.2, D10): config declares, the kernel owns.
+# Agents control it only through `ab server start|stop|restart|status|logs`.
+# Uncomment when the repo has a server to drive.
+#[server]
+#start = "bun dev"
+#url = "http://localhost:3000"   # readiness probe target
+#readyTimeout = 60               # seconds
+
+[verify]
+steps = ["types", "unit"]
+
+[verify.types]
+kind = "check"        # deterministic: command + pass/fail, never an agent
+command = "typecheck" # ref into [commands]
+
+[verify.unit]
+kind = "check"
+command = "test"
+
+# Agent-verify example — a skill run with a pass|fail verdict (§5):
+#[verify.e2e]
+#kind = "agent"
+#skill = "ab-verify-e2e"
+#needsServer = true
+
+# Optional post-steps; failure-tolerant — a failed step files an observation,
+# it never kills a green build (§5).
+[finalize]
+steps = []
+
+# Role → runner/model routing (§9). Mixing models across roles is
+# intentional — a different reviewer catches more.
+[roles]
+plan = { runner = "claude" }
+plan-review = { runner = "claude" }
+implement = { runner = "claude" }
+code-review = { runner = "claude" }
+
+[policy]
+stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
+maxVerifyAttempts = 3
+maxReconcileAttempts = 3
+maxReviewRounds = 5
+
+[dispatcher]
+capacity = 1             # concurrent builds for this repo
+readyLabels = ["autobuild"] # labels that mark a ticket dispatchable ([] = no label gate)
+#readyState = "Ready"    # additionally require this workflow state (absent = any)
+
+# Ticket source the dispatcher drives (§3.2, §13). The Linear API key is a
+# secret — set the LINEAR_API_KEY environment variable (a local .env works),
+# never put it in this file.
+[tickets]
+source = "linear"
+teamKey = "AUT"                 # Linear team key ("Auto-build")
+claimedState = "In Progress"    # workflow state claim() moves an issue to
+#createState = "Triage"         # state new tickets are filed into (absent = provider default)
+# — or file-based: source = "file" with dir = "tickets"
+
+# Cron schedules for outer-loop processes (§12).
+#[outer]
+#"ingest:sentry" = { cron = "0 */4 * * *" }
+#harvest = { cron = "0 9 * * *" }

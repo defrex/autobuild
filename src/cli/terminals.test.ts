@@ -1,0 +1,899 @@
+/**
+ * Terminal-command tests (SPEC §8.4 D5, §8.5 D6, §8.6 D7): second-terminal
+ * discipline, per-phase preconditions, push-before-event ordering, verdict
+ * vocabulary, findings validation-as-feedback, and deposit atomicity — over
+ * a seeded MemoryBuildStore, FakeForge, and real throwaway git repos.
+ */
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { agentActor, KERNEL } from '../events/envelope'
+import { FakeForge } from '../ports/forge/fake'
+import type { Finding } from '../ontology'
+import type { MemoryBuildStore } from '../store/memory'
+import { textContent } from '../store/types'
+import { buildContext } from './context'
+import { done, escalate, verdict } from './terminals'
+import {
+  BRANCH,
+  BUILD,
+  commitFile,
+  initWorkspaceRepo,
+  makeDeps,
+  makeEnv,
+  runGit,
+  seedStore,
+  type TestDeps,
+} from './testkit'
+
+let tmp: string
+let filesDir: string
+let store: MemoryBuildStore
+
+beforeEach(async () => {
+  tmp = await mkdtemp(join(tmpdir(), 'ab-terminals-'))
+  filesDir = join(tmp, 'files')
+  await mkdir(filesDir)
+  store = await seedStore()
+})
+
+afterEach(async () => {
+  await rm(tmp, { recursive: true, force: true })
+  await store.close()
+})
+
+async function stash(name: string, content: string): Promise<string> {
+  const path = join(filesDir, name)
+  await writeFile(path, content)
+  return path
+}
+
+async function eventTypes(): Promise<string[]> {
+  return (await store.getEvents(BUILD)).map((event) => event.type)
+}
+
+function finding(id: string, persists: string[] = []): Finding {
+  return { id, severity: 'blocking', summary: `finding ${id}`, persists }
+}
+
+const agent = (role: string) => agentActor(role, 's_seed')
+
+// ── ab done — phase-kind and second-terminal discipline (D5) ─────────────────
+
+describe('ab done — discipline (D5)', () => {
+  test('done in a review phase is rejected naming the right terminal', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    await expect(done(deps)).rejects.toThrow(
+      /'ab done' is not code-review's terminal.*review phase.*use 'ab verdict'/s,
+    )
+  })
+
+  test('done in an agent-verify phase is rejected naming verdict', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e' }) })
+    await expect(done(deps)).rejects.toThrow(/use 'ab verdict'/)
+  })
+
+  test('done after done for the same round is rejected citing the existing event', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    await store.append(BUILD, {
+      actor: agent('plan'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(done(deps)).rejects.toThrow(
+      /second terminal call rejected \(D5\): plan\.completed for plan@1 already recorded at seq \d+/,
+    )
+  })
+
+  test('escalate after done for the same phase+round is rejected', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    await store.append(BUILD, {
+      actor: agent('plan'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(escalate(deps, { question: 'unsure about scope' })).rejects.toThrow(
+      /second terminal call rejected/,
+    )
+  })
+
+  test('done after this session escalated is rejected citing the escalation', async () => {
+    await store.append(BUILD, {
+      actor: agentActor('plan', 's_test'),
+      type: 'escalation.raised',
+      payload: { id: 'esc_9', phase: 'plan', round: 1, source: 'agent', question: 'stuck' },
+    })
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(done(deps)).rejects.toThrow(
+      /this session already escalated.*esc_9/s,
+    )
+  })
+
+  test("a different session's escalation does not block this session's terminal", async () => {
+    await store.append(BUILD, {
+      actor: agentActor('plan', 's_earlier'),
+      type: 'escalation.raised',
+      payload: { id: 'esc_1', phase: 'plan', round: 1, source: 'agent', question: 'was stuck' },
+    })
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const event = await done(deps)
+    expect(event.type).toBe('plan.completed')
+  })
+})
+
+// ── ab done — plan ───────────────────────────────────────────────────────────
+
+describe('ab done — plan', () => {
+  test('rejected without this round’s deposit, naming the fix', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(done(deps)).rejects.toThrow(
+      /requires this round's plan deposit.*found 0.*ab artifact put plan/s,
+    )
+  })
+
+  test('round 2 whose only revision was already cited by round 1 is rejected', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan v1\n' })
+    await store.append(BUILD, {
+      actor: agent('plan'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 2, session: 's_r2' }) })
+    await expect(done(deps)).rejects.toThrow(
+      /requires this round's plan deposit.*no plan revision newer than rev 0/s,
+    )
+  })
+
+  test('a stale plan cannot re-enter review: revision COUNT is no proxy for a fresh deposit (D5)', async () => {
+    // Round 1 self-corrects with TWO deposits and cites rev 1. Round 2 then
+    // calls done WITHOUT depositing — the old count check (revs ≥ round)
+    // passed here, re-submitting the identical, already-reviewed plan.
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan draft\n' })
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan self-corrected\n' })
+    await store.append(BUILD, {
+      actor: agent('plan'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 1 } },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 2, session: 's_r2' }) })
+    await expect(done(deps)).rejects.toThrow(
+      /requires this round's plan deposit.*no plan revision newer than rev 1.*already cited/s,
+    )
+
+    // Depositing this round's revision unblocks it, citing the NEW rev.
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan revised for r2\n' })
+    const event = await done(deps)
+    expect(event.payload).toEqual({ round: 2, artifact: { kind: 'plan', rev: 2 } })
+  })
+
+  test('with the deposit, emits plan.completed carrying the latest plan ref and agent actor', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan v1\n' })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const event = await done(deps)
+    expect(event.type).toBe('plan.completed')
+    expect(event.payload).toEqual({ round: 1, artifact: { kind: 'plan', rev: 0 } })
+    expect(event.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_test' })
+  })
+})
+
+// ── ab done — implement (real git; push-before-event D3/D7) ──────────────────
+
+describe('ab done — implement', () => {
+  let workspace: string
+
+  beforeEach(async () => {
+    workspace = join(tmp, 'ws')
+    await initWorkspaceRepo(workspace)
+    await commitFile(workspace, 'feature.ts', 'export const x = 1\n', 'feature work')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 1 },
+    })
+  })
+
+  function implementDeps(forge?: FakeForge): TestDeps {
+    return makeDeps({
+      store,
+      env: makeEnv({ phase: 'implement', round: 1 }),
+      workspacePath: workspace,
+      ...(forge !== undefined ? { forge } : {}),
+    })
+  }
+
+  test('--notes is required', async () => {
+    const deps = implementDeps()
+    await expect(done(deps)).rejects.toThrow(/--notes <file> is required/)
+  })
+
+  test('a dirty worktree is rejected, listing the offending files', async () => {
+    await writeFile(join(workspace, 'uncommitted.ts'), 'dirty\n')
+    const deps = implementDeps()
+    const notes = await stash('notes.md', 'did the thing\n')
+    await expect(done(deps, { notes })).rejects.toThrow(
+      /requires a clean worktree \(D5\)[\s\S]*uncommitted\.ts/,
+    )
+    // Precondition failure means no plumbing ran and no event was appended.
+    expect(deps.forge.pushes).toEqual([])
+    expect(await eventTypes()).not.toContain('implement.completed')
+  })
+
+  test('.ab/ scratch never dirties the worktree — ab context establishes the gitignore itself (§7, §8.3)', async () => {
+    // The fixture repo, like any real repo, does NOT gitignore .ab/ — the
+    // product must establish "the gitignored .ab/" (§7) on its own, or every
+    // implement/reconcile done wedges on `?? .ab/` (or coerces committing
+    // scratch). `ab context` writes a self-excluding .ab/.gitignore.
+    const deps = implementDeps()
+    await buildContext({ store, env: deps.env, workspacePath: workspace })
+    const notes = join(workspace, '.ab', 'implement-notes.md')
+    await writeFile(notes, 'notes live in scratch\n')
+
+    const event = await done(deps, { notes })
+    expect(event.type).toBe('implement.completed')
+    // The scratch dir is intact and invisible to git — not committed away.
+    expect(await runGit(['status', '--porcelain'], workspace)).toBe('')
+    expect(await runGit(['ls-files', '.ab'], workspace)).toBe('')
+  })
+
+  test('clean worktree: pushes the branch, then appends implement.completed atomically', async () => {
+    const deps = implementDeps()
+    const notes = await stash('notes.md', 'implemented rate limiting\n')
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    const base = await runGit(['rev-parse', 'main'], workspace)
+
+    const event = await done(deps, { notes })
+
+    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
+    expect(event.type).toBe('implement.completed')
+    expect(event.payload).toEqual({
+      round: 1,
+      commits: { base, head },
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    const deposited = await store.getArtifact(BUILD, 'implement-notes')
+    expect(textContent(deposited!)).toBe('implemented rate limiting\n')
+  })
+
+  test('push failure leaves NO event and NO notes artifact (push happens first)', async () => {
+    class ExplodingForge extends FakeForge {
+      override async pushBranch(): Promise<void> {
+        throw new Error('remote unreachable')
+      }
+    }
+    const deps = implementDeps(new ExplodingForge())
+    const notes = await stash('notes.md', 'notes\n')
+
+    await expect(done(deps, { notes })).rejects.toThrow(/remote unreachable/)
+    expect(await eventTypes()).not.toContain('implement.completed')
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+  })
+})
+
+// ── ab done — finalize (D7: the CLI call IS the kernel plumbing) ─────────────
+
+describe('ab done — finalize', () => {
+  let workspace: string
+
+  beforeEach(async () => {
+    workspace = join(tmp, 'ws-finalize')
+    await initWorkspaceRepo(workspace)
+    // A verdict history and verify results for the §7.5 summary comment.
+    await store.append(BUILD, {
+      actor: agent('code-review'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'revise',
+        findings: [finding('f_1'), finding('f_2')],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    await store.append(BUILD, {
+      actor: agent('code-review'),
+      type: 'code-review.verdict',
+      payload: { round: 2, verdict: 'approve', findings: [], artifact: { kind: 'code-review', rev: 1 } },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'types', attempt: 1, pass: true },
+    })
+  })
+
+  test('rejected without a pr-description artifact', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
+    await expect(done(deps)).rejects.toThrow(
+      /requires a deposited pr-description artifact.*ab artifact put pr-description/s,
+    )
+    expect(deps.forge.opened).toEqual([])
+  })
+
+  test('opens the PR (title = first line sans #, body = rest), appends kernel-actor event, posts the summary', async () => {
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nCloses ENG-42.\nDetails inside.\n',
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
+
+    const event = await done(deps)
+
+    expect(deps.forge.opened).toEqual([
+      {
+        workspacePath: workspace,
+        head: BRANCH,
+        base: 'main',
+        title: 'Add auth rate limiting',
+        body: 'Closes ENG-42.\nDetails inside.\n',
+      },
+    ])
+    // §15.3: finalize.completed's actor is the KERNEL — the kernel opens the
+    // PR after the agent's `ab done` (D7).
+    expect(event.actor).toEqual({ kind: 'kernel' })
+    expect(event.type).toBe('finalize.completed')
+    expect(event.payload).toEqual({
+      pr: { number: 1, url: 'https://fake.forge/pr/1', headSha: 'sha-1' },
+    })
+
+    // §7.5: summary comment renders verdict history + verify results.
+    expect(deps.forge.comments).toHaveLength(1)
+    const comment = deps.forge.comments[0]!
+    expect(comment.number).toBe(1)
+    expect(comment.body).toContain('code-review r1: revise (2 findings)')
+    expect(comment.body).toContain('code-review r2: approve')
+    expect(comment.body).toContain('types (attempt 1): pass')
+    expect(comment.body).toContain(`build: ${BUILD}`)
+  })
+
+  test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    const forge = new FakeForge()
+    // The crashed first attempt opened the PR, but the store append failed
+    // (§8.7: store unreachable) — no finalize.completed in the log.
+    const crashed = await forge.openPr({
+      workspacePath: 'elsewhere',
+      head: BRANCH,
+      base: 'main',
+      title: 'Add auth rate limiting',
+      body: 'Body.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge,
+    })
+
+    const event = await done(deps)
+
+    // Adopted, not duplicated — and the event records the live PR.
+    expect(forge.opened).toHaveLength(1)
+    expect(event.type).toBe('finalize.completed')
+    expect(event.payload).toEqual({
+      pr: { number: crashed.number, url: crashed.url, headSha: crashed.headSha },
+    })
+  })
+
+  test('a comment failure AFTER the terminal committed does not fail ab done (§7.5 is best-effort)', async () => {
+    class NoCommentForge extends FakeForge {
+      override async commentOnPr(): Promise<void> {
+        throw new Error('comment API down')
+      }
+    }
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge: new NoCommentForge(),
+    })
+
+    // Were this to throw, the agent's retry would be rejected as a second
+    // terminal (D5) for an event that actually committed.
+    const event = await done(deps)
+    expect(event.type).toBe('finalize.completed')
+    expect(await eventTypes()).toContain('finalize.completed')
+  })
+
+  test('a pre-restart finalize.completed does not block the rebuilt pipeline’s finalize (§6.3)', async () => {
+    // A prior pipeline pass finalized; then an escalation was answered
+    // revise-spec and the build restarted from plan (§6.3). The engine
+    // resets finalize across the spec.revised boundary, so the CLI must too.
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 9, url: 'https://fake.forge/pr/9', headSha: 'sha-old' } },
+    })
+    await store.putArtifact(BUILD, { kind: 'spec', content: '# Spec rev 1\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1 },
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting (rebuilt)\n\nBody.\n',
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
+
+    const event = await done(deps)
+    expect(event.type).toBe('finalize.completed')
+    expect(deps.forge.opened).toHaveLength(1)
+  })
+})
+
+// ── ab done — reconcile (merge commit + regular push, D1) ────────────────────
+
+describe('ab done — reconcile', () => {
+  let workspace: string
+
+  beforeEach(async () => {
+    workspace = join(tmp, 'ws-reconcile')
+    await initWorkspaceRepo(workspace)
+    await commitFile(workspace, 'feature.ts', 'branch work\n', 'feature work')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-conflict' },
+    })
+  })
+
+  test('rejected when HEAD is not a merge commit', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'reconcile', round: 1 }), workspacePath: workspace })
+    const notes = await stash('rec.md', 'merged base\n')
+    await expect(done(deps, { notes })).rejects.toThrow(
+      /HEAD to be a merge commit \(2\+ parents\).*has 1 parent/s,
+    )
+    expect(deps.forge.pushes).toEqual([])
+  })
+
+  test('on a real merge commit: pushes (never force) and records the merge commit', async () => {
+    // Diverge main, then merge it into the branch — a genuine 2-parent HEAD.
+    await runGit(['checkout', '-q', 'main'], workspace)
+    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    await runGit([
+      '-c', 'user.email=ab@test.invalid', '-c', 'user.name=ab-test',
+      '-c', 'commit.gpgsign=false',
+      'merge', '--no-ff', '-m', 'merge main into branch', 'main',
+    ], workspace)
+    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
+
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'reconcile', round: 1 }), workspacePath: workspace })
+    const notes = await stash('rec.md', 'resolved conflicts against main\n')
+    const event = await done(deps, { notes })
+
+    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
+    expect(event.type).toBe('reconcile.completed')
+    expect(event.payload).toEqual({
+      mergeCommit: mergeSha,
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    })
+    const deposited = await store.getArtifact(BUILD, 'reconcile-notes')
+    expect(textContent(deposited!)).toBe('resolved conflicts against main\n')
+  })
+})
+
+// ── ab verdict — vocabulary (§8.2, both directions) ──────────────────────────
+
+describe('ab verdict — vocabulary enforcement (§8.2)', () => {
+  test('a review phase rejects pass, citing the exact rule and its own vocabulary', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    await expect(verdict(deps, { verdict: 'pass' })).rejects.toThrow(
+      /review phases accept approve\|revise\|escalate; agent-verify steps accept pass\|fail\. code-review accepts: approve\|revise\|escalate/,
+    )
+  })
+
+  test('an agent-verify phase rejects approve, citing pass|fail', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e' }) })
+    await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(
+      /verify:e2e accepts: pass\|fail/,
+    )
+  })
+
+  test('verdict in a producer phase is rejected naming done', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'implement' }) })
+    await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(
+      /producer phase; use 'ab done'/,
+    )
+  })
+})
+
+// ── ab verdict — review phases (D6) ──────────────────────────────────────────
+
+describe('ab verdict — review phases', () => {
+  test('--notes is required (deposited as the phase artifact)', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(
+      /requires --notes <file>.*code-review artifact/s,
+    )
+  })
+
+  test('approve: empty findings, notes deposited, one atomic event', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review', round: 1 }) })
+    const notes = await stash('review.md', 'LGTM — clean separation\n')
+    const events = await verdict(deps, { verdict: 'approve', notes })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]!.type).toBe('code-review.verdict')
+    expect(events[0]!.payload).toEqual({
+      round: 1,
+      verdict: 'approve',
+      findings: [],
+      artifact: { kind: 'code-review', rev: 0 },
+    })
+    const artifact = await store.getArtifact(BUILD, 'code-review')
+    expect(textContent(artifact!)).toBe('LGTM — clean separation\n')
+  })
+
+  test('revise without --findings is rejected with the schema shape', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    const notes = await stash('review.md', 'issues\n')
+    await expect(verdict(deps, { verdict: 'revise', notes })).rejects.toThrow(
+      /requires --findings <json file>[\s\S]*"severity": "blocking" \| "important" \| "minor"/,
+    )
+  })
+
+  test('malformed findings JSON returns the schema and the parse error (D6)', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    const notes = await stash('review.md', 'issues\n')
+    const findings = await stash('findings.json', '{ not json')
+    await expect(verdict(deps, { verdict: 'revise', notes, findings })).rejects.toThrow(
+      /is not valid JSON:[\s\S]*Expected shape \(D6\):[\s\S]*"persists"/,
+    )
+  })
+
+  test('schema-invalid findings return the zod issue and the shape (D6)', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
+    const notes = await stash('review.md', 'issues\n')
+    const findings = await stash(
+      'findings.json',
+      JSON.stringify([{ severity: 'catastrophic', summary: 'bad' }]),
+    )
+    await expect(verdict(deps, { verdict: 'revise', notes, findings })).rejects.toThrow(
+      /does not match the finding schema \(D6\):[\s\S]*0\.severity[\s\S]*Expected shape/,
+    )
+    // Validation failed before any deposit — atomic (D6).
+    expect(await store.getArtifact(BUILD, 'code-review')).toBeNull()
+  })
+
+  test('persists referencing an unknown id is rejected listing the known ids', async () => {
+    await store.append(BUILD, {
+      actor: agent('code-review'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'revise',
+        findings: [finding('f_prev1'), finding('f_prev2')],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review', round: 2 }) })
+    const notes = await stash('review.md', 'issues\n')
+    const findings = await stash(
+      'findings.json',
+      JSON.stringify([
+        { severity: 'blocking', summary: 'still broken', persists: ['f_bogus'] },
+      ]),
+    )
+    await expect(verdict(deps, { verdict: 'revise', notes, findings })).rejects.toThrow(
+      /persists id "f_bogus" does not exist in prior rounds' findings.*known ids: f_prev1, f_prev2/s,
+    )
+  })
+
+  test('revise stamps sequential ids and honors valid persists links', async () => {
+    await store.putArtifact(BUILD, { kind: 'code-review', content: 'round 1 notes\n' })
+    await store.append(BUILD, {
+      actor: agent('code-review'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'revise',
+        findings: [finding('f_prev1')],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review', round: 2 }) })
+    const notes = await stash('review.md', 'round 2 issues\n')
+    const findings = await stash(
+      'findings.json',
+      JSON.stringify([
+        { severity: 'blocking', summary: 'same disagreement', persists: ['f_prev1'] },
+        { severity: 'minor', summary: 'new nit' },
+      ]),
+    )
+    const events = await verdict(deps, { verdict: 'revise', notes, findings })
+
+    expect(events).toHaveLength(1)
+    const payload = events[0]!.payload as {
+      findings: Finding[]
+      artifact: { kind: string; rev: number }
+    }
+    // Ids are kernel-assigned at deposit (§15.4), in order: f_1, f_2.
+    expect(payload.findings.map((f) => f.id)).toEqual(['f_1', 'f_2'])
+    expect(payload.findings[0]!.persists).toEqual(['f_prev1'])
+    expect(payload.artifact).toEqual({ kind: 'code-review', rev: 1 })
+  })
+
+  test('revise atomicity: a forced validation failure leaves NEITHER artifact nor event', async () => {
+    // round 0 bypasses env resolution and fails the payload schema at append.
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review', round: 0 }) })
+    const notes = await stash('review.md', 'notes\n')
+    const findings = await stash(
+      'findings.json',
+      JSON.stringify([{ severity: 'minor', summary: 'nit' }]),
+    )
+    await expect(verdict(deps, { verdict: 'revise', notes, findings })).rejects.toThrow(
+      /invalid payload for "code-review\.verdict"/,
+    )
+    expect(await store.getArtifact(BUILD, 'code-review')).toBeNull()
+    expect(await eventTypes()).not.toContain('code-review.verdict')
+  })
+
+  test('escalate requires --reason', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan-review' }) })
+    const notes = await stash('review.md', 'notes\n')
+    await expect(verdict(deps, { verdict: 'escalate', notes })).rejects.toThrow(
+      /requires --reason <text>/,
+    )
+  })
+
+  test('escalate emits the verdict and escalation.raised pair (engine repairs the crash gap)', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan-review', round: 1 }) })
+    const notes = await stash('review.md', 'cannot approve without a decision\n')
+    const events = await verdict(deps, {
+      verdict: 'escalate',
+      notes,
+      reason: 'spec is ambiguous about burst limits',
+    })
+
+    expect(events.map((event) => event.type)).toEqual([
+      'plan-review.verdict',
+      'escalation.raised',
+    ])
+    expect(events[0]!.payload).toEqual({
+      round: 1,
+      verdict: 'escalate',
+      findings: [],
+      artifact: { kind: 'plan-review', rev: 0 },
+      reason: 'spec is ambiguous about burst limits',
+    })
+    expect(events[1]!.payload).toEqual({
+      id: 'esc_1',
+      phase: 'plan-review',
+      round: 1,
+      source: 'agent',
+      question: 'spec is ambiguous about burst limits',
+    })
+  })
+
+  test('verdict after verdict for the same round is rejected; the next round is not', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review', round: 1 }) })
+    const notes = await stash('review.md', 'notes\n')
+    await verdict(deps, { verdict: 'approve', notes })
+    await expect(verdict(deps, { verdict: 'approve', notes })).rejects.toThrow(
+      /second terminal call rejected \(D5\): code-review\.verdict for code-review@1/,
+    )
+
+    const round2 = makeDeps({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 2, session: 's_round2' }),
+    })
+    const events = await verdict(round2, { verdict: 'approve', notes })
+    expect(events[0]!.type).toBe('code-review.verdict')
+  })
+})
+
+// ── ab verdict — agent-verify phases ─────────────────────────────────────────
+
+describe('ab verdict — agent-verify', () => {
+  test('pass emits verify.completed with attempt = round from AB_PHASE', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 2 }) })
+    const events = await verdict(deps, { verdict: 'pass' })
+    expect(events).toHaveLength(1)
+    expect(events[0]!.type).toBe('verify.completed')
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, pass: true })
+    expect(events[0]!.actor).toEqual({
+      kind: 'agent',
+      role: 'verify:e2e',
+      session: 's_test',
+    })
+  })
+
+  test('pass with --notes deposits them as verify-report:<step> and refs them', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
+    const notes = await stash('report.md', 'all flows drove clean\n')
+    const events = await verdict(deps, { verdict: 'pass', notes })
+    expect(events[0]!.payload).toEqual({
+      step: 'e2e',
+      attempt: 1,
+      pass: true,
+      report: { kind: 'verify-report:e2e', rev: 0 },
+    })
+    const artifact = await store.getArtifact(BUILD, 'verify-report:e2e')
+    expect(textContent(artifact!)).toBe('all flows drove clean\n')
+  })
+
+  test('fail without --report is rejected naming the flag', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
+    await expect(verdict(deps, { verdict: 'fail' })).rejects.toThrow(
+      /'ab verdict fail' requires --report <file>.*verify-report:e2e/s,
+    )
+  })
+
+  test('fail deposits the report and emits pass:false with attempt = round', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 3 }) })
+    const report = await stash('report.md', 'login flow 500s\n')
+    const events = await verdict(deps, { verdict: 'fail', report })
+    expect(events[0]!.payload).toEqual({
+      step: 'e2e',
+      attempt: 3,
+      pass: false,
+      report: { kind: 'verify-report:e2e', rev: 0 },
+    })
+    const artifact = await store.getArtifact(BUILD, 'verify-report:e2e')
+    expect(textContent(artifact!)).toBe('login flow 500s\n')
+  })
+
+  test('a verdict for the same step+attempt is a second terminal; other steps/attempts are not', async () => {
+    await store.append(BUILD, {
+      actor: agentActor('verify:e2e', 's_prior'),
+      type: 'verify.completed',
+      payload: { step: 'e2e', attempt: 1, pass: true },
+    })
+    const same = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
+    await expect(verdict(same, { verdict: 'pass' })).rejects.toThrow(
+      /second terminal call rejected/,
+    )
+    // A later attempt of the same step is a fresh terminal.
+    const nextAttempt = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 2 }) })
+    const events = await verdict(nextAttempt, { verdict: 'pass' })
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, pass: true })
+  })
+
+  test('a pre-restart verify.completed does not shadow the rebuilt pipeline’s attempt (§6.3)', async () => {
+    // The engine resets verify attempts across a spec.revised restart
+    // (pre-restart results are ignored, engine rule 7), so the rebuilt
+    // pipeline legitimately reaches verify:e2e at attempt 1 AGAIN. The
+    // second-terminal check must honor the same boundary — matching over the
+    // full log wedges every agent-verify step after a restart.
+    await store.append(BUILD, {
+      actor: agentActor('verify:e2e', 's_prior'),
+      type: 'verify.completed',
+      payload: { step: 'e2e', attempt: 1, pass: true },
+    })
+    await store.putArtifact(BUILD, { kind: 'spec', content: '# Spec rev 1\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1 },
+    })
+
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
+    const events = await verdict(deps, { verdict: 'pass' })
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 1, pass: true })
+
+    // Within the SAME post-restart cycle, the duplicate is still rejected.
+    const dup = makeDeps({
+      store,
+      env: makeEnv({ phase: 'verify:e2e', round: 1, session: 's_dup' }),
+    })
+    await expect(verdict(dup, { verdict: 'pass' })).rejects.toThrow(
+      /second terminal call rejected/,
+    )
+  })
+})
+
+// ── Zombie sessions (D5: only the live retry may complete a round) ───────────
+
+describe('terminals — zombie sessions (D5)', () => {
+  test('a terminal from a session the log already ended is rejected', async () => {
+    // The runner ended s_test (no-terminal failure) and started a retry; the
+    // zombie's still-in-flight `ab done` must not land a terminal the runner
+    // would misattribute to the retry.
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_test', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session: 's_test',
+        transcript: { kind: 'transcript', rev: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
+      },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(done(deps)).rejects.toThrow(
+      /session "s_test" already ended.*only the live retry/s,
+    )
+    // The same guard covers verdict-shaped and escalate terminals.
+    await expect(escalate(deps, { question: 'zombie question' })).rejects.toThrow(
+      /already ended/,
+    )
+  })
+
+  test('a terminal after this session’s phase round failed is rejected; the retry’s own is not', async () => {
+    // s_test started, the runner recorded phase.failed for plan@1 (its
+    // session.ended never landed — the transcript deposit can fail §15.6-C),
+    // and retry s_retry started at the same round.
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_test', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'phase.failed',
+      payload: { phase: 'plan', round: 1, attempt: 1, error: 'no-terminal', willRetry: true },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_retry', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
+    })
+
+    const zombie = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    await expect(done(zombie)).rejects.toThrow(
+      /plan@1 already failed after this session started.*retry session owns this round/s,
+    )
+
+    // The retry (started AFTER the failure) completes the round normally.
+    const retry = makeDeps({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1, session: 's_retry' }),
+    })
+    const event = await done(retry)
+    expect(event.type).toBe('plan.completed')
+    expect(event.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_retry' })
+  })
+})
+
+// ── ab escalate ──────────────────────────────────────────────────────────────
+
+describe('ab escalate', () => {
+  test('parks the build: escalation.raised with stamped id, phase, round, refs', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'implement', round: 2 }) })
+    const event = await escalate(deps, {
+      question: 'spec conflicts with existing middleware — which wins?',
+      refs: ['src/auth.ts', 'ENG-42'],
+    })
+    expect(event.type).toBe('escalation.raised')
+    expect(event.payload).toEqual({
+      id: 'esc_1',
+      phase: 'implement',
+      round: 2,
+      source: 'agent',
+      question: 'spec conflicts with existing middleware — which wins?',
+      refs: ['src/auth.ts', 'ENG-42'],
+    })
+    expect(event.actor).toEqual({ kind: 'agent', role: 'implement', session: 's_test' })
+  })
+
+  test('a second escalate from the same session is rejected (D5)', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'implement', round: 1 }) })
+    await escalate(deps, { question: 'first question' })
+    await expect(escalate(deps, { question: 'second question' })).rejects.toThrow(
+      /this session already escalated/,
+    )
+  })
+
+  test('an empty question is rejected', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan' }) })
+    await expect(escalate(deps, { question: '   ' })).rejects.toThrow(/requires a question/)
+  })
+})
