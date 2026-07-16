@@ -102,6 +102,7 @@ describe('parseConfig — SPEC §16.1 example', () => {
         maxReviewRounds: 5,
       },
       dispatcher: { capacity: 3, readyLabels: ['autobuild'] },
+      tickets: { source: 'file' },
       outer: {
         'ingest:sentry': { cron: '0 */4 * * *' },
         harvest: { cron: '0 9 * * *' },
@@ -130,7 +131,8 @@ describe('parseConfig — defaults', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 5,
       },
-      dispatcher: { capacity: 1, readyLabels: ['autobuild'] },
+      dispatcher: { capacity: 1 },
+      tickets: { source: 'file' },
       outer: {},
     })
   })
@@ -227,8 +229,19 @@ describe('parseConfig — [tickets]', () => {
     expect(config.tickets).toEqual({ source: 'file', dir: 'tickets' })
   })
 
-  test('the table is optional — absent means no ticket source configured', () => {
-    expect(parseConfig('').tickets).toBeUndefined()
+  test('absent table means the local file tracker — a repo dispatches with no config', () => {
+    expect(parseConfig('').tickets).toEqual({ source: 'file' })
+  })
+
+  test('the default leaves dir undefined — the factory decides, and only it knows it was defaulted', () => {
+    expect(parseConfig('').tickets.dir).toBeUndefined()
+  })
+
+  test('a present-but-partial table is not clobbered by the default', () => {
+    expect(parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\n').tickets).toEqual({
+      source: 'linear',
+      teamKey: 'ENG',
+    })
   })
 
   test('linear without teamKey is an error with path and remedy', () => {
@@ -237,10 +250,10 @@ describe('parseConfig — [tickets]', () => {
     expect(error.message).toContain('requires teamKey')
   })
 
-  test('file without dir is an error', () => {
-    const error = parseError('[tickets]\nsource = "file"\n')
-    expect(error.message).toContain('tickets.dir')
-    expect(error.message).toContain('requires dir')
+  test('file without dir parses — dir is optional, defaulting to .autobuild/tickets', () => {
+    expect(parseConfig('[tickets]\nsource = "file"\n').tickets).toEqual({
+      source: 'file',
+    })
   })
 
   test('dir on a linear source is rejected', () => {
@@ -282,8 +295,15 @@ describe('parseConfig — [tickets]', () => {
 })
 
 describe('parseConfig — [dispatcher] readiness', () => {
-  test('readyState is optional and absent by default — labels alone decide', () => {
+  test('readyState is optional and absent by default', () => {
     expect(parseConfig('').dispatcher.readyState).toBeUndefined()
+  })
+
+  test('readyLabels is optional and absent by default — the source decides its own gate', () => {
+    // Not [] and not ['autobuild']: the schema records "unset" and readyCriteria
+    // (src/processes/dispatcher.ts) resolves it per source. A default here would
+    // label-gate the file tracker's ready/ directory.
+    expect(parseConfig('').dispatcher.readyLabels).toBeUndefined()
   })
 
   test('readyState parses alongside readyLabels', () => {

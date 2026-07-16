@@ -18,6 +18,7 @@ import {
   Dispatcher,
   emptyTickReport,
   kebab,
+  readyCriteria,
   specConformance,
   type DispatcherOpts,
 } from './dispatcher'
@@ -948,5 +949,51 @@ describe('Dispatcher tick idempotency', () => {
     expect(h.workspaces.releases).toEqual([])
     expect(h.tickets.comments).toEqual([])
     expect(h.tickets.transitions).toEqual([])
+  })
+})
+
+describe('readyCriteria — readiness is resolved against the ticket source (§3.3)', () => {
+  const criteria = (toml: string) => readyCriteria(parseConfig(toml))
+
+  const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
+
+  test('file source + empty [dispatcher]: the ready/ directory is the whole gate', () => {
+    // The headline claim: no config, no label — `mv` into ready/ dispatches.
+    expect(criteria('')).toEqual({ labels: [], state: 'Ready' })
+  })
+
+  test('linear + empty [dispatcher]: the historical "autobuild" label gate is intact', () => {
+    // Linear has no ready/ directory, so a label is the only possible gate —
+    // dropping this default would silently dispatch a whole Linear backlog.
+    expect(criteria(LINEAR)).toEqual({ labels: ['autobuild'] })
+  })
+
+  test('linear leaves state absent unless readyState is set — labels alone decide', () => {
+    expect(criteria(LINEAR).state).toBeUndefined()
+    expect(criteria(`${LINEAR}[dispatcher]\nreadyState = "Ready"\n`)).toEqual({
+      labels: ['autobuild'],
+      state: 'Ready',
+    })
+  })
+
+  test('an explicit readyLabels wins for either source — config is never ignored', () => {
+    expect(criteria('[dispatcher]\nreadyLabels = ["urgent"]\n')).toEqual({
+      labels: ['urgent'],
+      state: 'Ready',
+    })
+    expect(criteria(`${LINEAR}[dispatcher]\nreadyLabels = ["urgent"]\n`)).toEqual({
+      labels: ['urgent'],
+    })
+  })
+
+  test('an explicit empty readyLabels is honored, not treated as unset', () => {
+    expect(criteria(`${LINEAR}[dispatcher]\nreadyLabels = []\n`)).toEqual({ labels: [] })
+  })
+
+  test('an explicit readyState overrides the file source default of Ready', () => {
+    expect(criteria('[dispatcher]\nreadyState = "Triage"\n')).toEqual({
+      labels: [],
+      state: 'Triage',
+    })
   })
 })

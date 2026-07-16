@@ -138,8 +138,11 @@ export type PolicyConfig = z.infer<typeof policySchema>
 export const dispatcherSchema = z.strictObject({
   /** Concurrent builds for this repo (§16.1; global cap is OPEN — §18.4). */
   capacity: z.number().int().positive().default(1),
-  /** Ticket labels that mark a ticket ready for dispatch (§3.3). */
-  readyLabels: z.array(z.string().min(1)).default(['autobuild']),
+  /** Ticket labels that mark a ticket ready for dispatch (§3.3). Absent = the
+   * ticket source's default gate (linear: ["autobuild"]; file: none — the
+   * `ready/` directory is the gate). Resolved by readyCriteria in
+   * src/processes/dispatcher.ts. */
+  readyLabels: z.array(z.string().min(1)).optional(),
   /** Workflow state a ticket must additionally sit in to be dispatchable;
    * absent = any state (labels alone decide). */
   readyState: z.string().min(1).optional(),
@@ -148,9 +151,10 @@ export type DispatcherConfig = z.infer<typeof dispatcherSchema>
 
 // ── [tickets] ────────────────────────────────────────────────────────────────
 //
-// Optional table: which TicketSource the dispatcher drives (§3.2, §13).
-// Declarative only — the Linear API key is a secret and comes from the
-// LINEAR_API_KEY environment variable, never from this file.
+// Which TicketSource the dispatcher drives (§3.2, §13). Omitting the table
+// entirely gives the local file tracker at `.autobuild/tickets` — a repo
+// dispatches with no config and no secret. Declarative only: the Linear API
+// key comes from the LINEAR_API_KEY environment variable, never from this file.
 
 export const ticketsSchema = z.strictObject({
   source: z.enum(['linear', 'file']),
@@ -161,7 +165,11 @@ export const ticketsSchema = z.strictObject({
   /** State create() files new tickets into. Absent = the provider's default
    * (Linear: the team's default state, e.g. Backlog; file: Triage). */
   createState: z.string().min(1).optional(),
-  /** Directory of `<id>.md` ticket files — required when source = "file". */
+  /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
+   * ticket files; optional — defaults to `.autobuild/tickets`, resolved
+   * relative to the repo. Kept schema-optional (not `.default()`) so the
+   * linear-only cross-validation below stays meaningful and the factory can
+   * still tell a defaulted dir from an explicit one. */
   dir: z.string().min(1).optional(),
 })
 export type TicketsConfig = z.infer<typeof ticketsSchema>
@@ -186,7 +194,10 @@ const configTableSchema = z.strictObject({
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
   dispatcher: dispatcherSchema.prefault({}),
-  tickets: ticketsSchema.optional(),
+  // No [tickets] table ⇒ the local file tracker (§13). prefault feeds the
+  // literal THROUGH ticketsSchema, so the default is a parsed TicketsConfig
+  // and a present-but-partial table is untouched by it.
+  tickets: ticketsSchema.prefault({ source: 'file' }),
   outer: z.record(z.string().min(1), outerScheduleSchema).prefault({}),
 })
 
@@ -247,42 +258,33 @@ export const configSchema = configTableSchema.superRefine((config, ctx) => {
     }
   }
 
-  if (config.tickets !== undefined) {
-    const tickets = config.tickets
-    if (tickets.source === 'linear') {
-      if (tickets.teamKey === undefined) {
+  const tickets = config.tickets
+  if (tickets.source === 'linear') {
+    if (tickets.teamKey === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'teamKey'],
+        message:
+          '[tickets].source = "linear" requires teamKey — the Linear team key (e.g. "ENG")',
+      })
+    }
+    if (tickets.dir !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'dir'],
+        message:
+          '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
+      })
+    }
+  } else {
+    // dir is optional for the file source: absent = .autobuild/tickets.
+    for (const key of ['teamKey', 'claimedState'] as const) {
+      if (tickets[key] !== undefined) {
         ctx.addIssue({
           code: 'custom',
-          path: ['tickets', 'teamKey'],
-          message:
-            '[tickets].source = "linear" requires teamKey — the Linear team key (e.g. "ENG")',
+          path: ['tickets', key],
+          message: `[tickets].${key} applies only to source = "linear" — remove it or set source = "linear"`,
         })
-      }
-      if (tickets.dir !== undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['tickets', 'dir'],
-          message:
-            '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
-        })
-      }
-    } else {
-      if (tickets.dir === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['tickets', 'dir'],
-          message:
-            '[tickets].source = "file" requires dir — the directory holding <id>.md ticket files',
-        })
-      }
-      for (const key of ['teamKey', 'claimedState'] as const) {
-        if (tickets[key] !== undefined) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['tickets', key],
-            message: `[tickets].${key} applies only to source = "linear" — remove it or set source = "linear"`,
-          })
-        }
       }
     }
   }
