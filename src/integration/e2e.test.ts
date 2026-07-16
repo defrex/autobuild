@@ -10,7 +10,7 @@
  */
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -212,7 +212,15 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   // Janitor epilogue (§15.7, D1): merged → release → complete → ticket Done.
   h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
   const tick2 = await h.dispatcher.tick()
-  expect(tick2).toEqual({ ...emptyTickReport(), merged: 1, claimRaces: 1 })
+  // claimRaces is 0, where it was 1 before the file source became the default.
+  // This config has no [tickets] table, so readiness now resolves through the
+  // file source's gate — which supplies `state: "Ready"` (readyCriteria,
+  // src/processes/dispatcher.ts). The just-merged ticket is in Done, so the
+  // scan skips it outright. Previously the criteria were labels-only, so a
+  // ticket that had long since left Ready was re-listed and re-refused on
+  // EVERY tick, and the refusal was miscounted as a claim race. Not losing a
+  // race — never entering one.
+  expect(tick2).toEqual({ ...emptyTickReport(), merged: 1, claimRaces: 0 })
 
   const final = await h.events(SLUG)
   expect(typesOf(final)).toEqual([
@@ -606,13 +614,15 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
   try {
     const source = new FileTicketSource({ dir, createState: 'Ready' })
 
-    // The blocker: groomed and Ready, but not finished.
+    // The blocker: groomed and picked up, but not finished. `Doing` is the
+    // file source's in-flight state — its states are its directories, so this
+    // is a real `mv` into `doing/`, not a frontmatter field.
     const blocker = await source.create({
       title: 'Blocker work',
       body: CONFORMING_BODY,
       labels: ['autobuild'],
     })
-    await source.transition(blocker.ref.id, 'In Progress')
+    await source.transition(blocker.ref.id, 'Doing')
 
     // The dependent: filed with --blocked-by, exactly as `ab ticket create`
     // would record it — a native TOML `blockedBy` array.
@@ -622,26 +632,24 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
       labels: ['autobuild'],
       blockedBy: [blocker.ref.id],
     })
-    expect(await readFile(join(dir, `${dependent.ref.id}.md`), 'utf8')).toContain(
+    expect(await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')).toContain(
       `blockedBy = [ "${blocker.ref.id}" ]`,
     )
 
     const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
 
-    // Tick 1: the dependent is held; only the blocker itself dispatches.
+    // Tick 1: the dependent is held, and nothing builds — the blocker is in
+    // Doing, which readyCriteria's `Ready` gate excludes on its own.
     const first = await h.dispatcher.tick()
     expect(first.dependencyBlocked).toBe(1)
     expect(first.dependencyDiagnostics).toEqual([
       `ticket ${dependent.ref.id} blocked by ${blocker.ref.id} (not complete)`,
     ])
-    expect((await h.store.listBuilds()).map((b) => b.ticket?.id)).toEqual([
-      blocker.ref.id,
-    ])
-    // Held means untouched: not claimed, and no bounce/dispatch comment.
+    expect(await h.store.listBuilds()).toEqual([])
+    // Held means untouched — and since this source's claim IS a rename into
+    // doing/, "not claimed" is checkable by where the file still sits.
     expect((await source.get(dependent.ref.id))?.state).toBe('Ready')
-    expect(await readFile(join(dir, `${dependent.ref.id}.md`), 'utf8')).not.toContain(
-      'claimedBy',
-    )
+    expect(await readdir(join(dir, 'doing'))).toEqual([`${blocker.ref.id}.md`])
 
     // The blocker completes by the source's OWN lifecycle — nothing else.
     await source.transition(blocker.ref.id, 'Done')

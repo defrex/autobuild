@@ -38,6 +38,7 @@ points, declared per-repo in `autobuild.toml`.
 | `src/processes/` | build-runner, dispatcher (+ janitor duty) | §3.3, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
+| `skills/guide/` | `ab-guide` — the model-invocable reference covering the lifecycle, the complete `autobuild.toml` surface, and the other skills. Update it when the config surface changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
 | `templates/` | What `ab init` installs | §16.3 |
 

@@ -59,7 +59,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | Linear; later GitHub Issues, file-based |
+| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (the zero-config default); Linear; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -893,7 +893,8 @@ verification and must work identically local and sandboxed:
 
 This project ships the **canonical default skills** (`plan`, `plan-review`,
 `implement`, `code-review`, agent-verify steps, `finalize`, `reconcile`,
-`spec`, and the outer-loop skills). `ab init` installs into a repo:
+`spec`, `tickets`, `guide`, and the outer-loop skills). `ab init` installs into
+a repo:
 
 - Writes an `autobuild.toml` template.
 - **Copies** the default skills into the Agent Skills standard project
@@ -903,9 +904,19 @@ This project ships the **canonical default skills** (`plan`, `plan-review`,
   discovers the canonical copy directly; harness-specific discovery paths are
   symlinks to it, with `.claude/skills/ab-*` pointing to
   `.agents/skills/ab-*`.
-- Marks skills **non-agent-invocable** (`disable-model-invocation`) except
-  `ab-spec` — phase skills are invoked explicitly by the runner or a human,
-  never auto-triggered by a model pattern-matching a description.
+- Marks skills **non-agent-invocable** (`disable-model-invocation`) except the
+  **model-invocable set**: `ab-spec`, `ab-tickets`, and `ab-guide`. Phase skills
+  are invoked explicitly by the runner or a human, never auto-triggered by a
+  model pattern-matching a description — a model must not start a pipeline phase
+  by accident. Membership in the exception is decided by that criterion, not by
+  taste: a skill may be model-invocable only if it **drives no phase**.
+  `ab-spec` is the human-interactive entry point that runs before a build
+  exists; `ab-tickets` is the agent-facing surface on the local tracker, where a
+  conversational trigger ("move ticket X to ready") is the point; `ab-guide` is
+  read-only reference material about the system itself. None of them advances a
+  build, so none carries the risk the rule exists to prevent. The set is
+  deliberately small; a further candidate must be judged against the same
+  criterion.
 
 **Upgrades** are the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; `ab upgrade` three-way merges

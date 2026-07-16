@@ -7,7 +7,7 @@
  * (e.g. LINEAR_API_KEY via the binary's .env loader), never from config.
  */
 import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { TicketsConfig } from '../config/schema'
 import { createTicketSource } from '../ports/tickets/create'
@@ -29,6 +29,7 @@ export interface TicketCreateOpts {
   sourceFactory?: (
     config: TicketsConfig,
     env: Record<string, string | undefined>,
+    targetRepo: string,
   ) => TicketSource
 }
 
@@ -46,14 +47,6 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     }
     throw error
   }
-  if (config.tickets === undefined) {
-    throw new Error(
-      "autobuild.toml has no [tickets] table — 'ab ticket create' files to the " +
-        'configured TicketSource (SPEC §8.8); add [tickets] with ' +
-        'source = "linear" (teamKey = "…") or source = "file" (dir = "…")',
-    )
-  }
-
   let body: string
   try {
     body = await readFile(opts.bodyFile, 'utf8')
@@ -66,14 +59,8 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     throw error
   }
 
-  // A relative [tickets].dir is relative to the repo, not to whatever cwd
-  // this process happens to run from.
-  const tickets =
-    config.tickets.dir !== undefined
-      ? { ...config.tickets, dir: resolve(opts.targetRepo, config.tickets.dir) }
-      : config.tickets
   const factory = opts.sourceFactory ?? createTicketSource
-  const source = factory(tickets, opts.env)
+  const source = factory(config.tickets, opts.env, opts.targetRepo)
 
   // Validate blockers BEFORE creating: a ticket referencing a nonexistent
   // blocker would never dispatch, and failing here costs nothing, whereas
