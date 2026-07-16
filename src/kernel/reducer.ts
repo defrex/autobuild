@@ -88,14 +88,17 @@ export interface OpenSession {
 }
 
 /** One `verify.completed` fact. Results accumulate across attempts; the
- * current cycle is the entries with `attempt === verify.attempt` (§15.6-A:
- * a re-run after a failed verify restarts FROM THE FIRST STEP at attempt+1,
- * so earlier attempts' passes never count toward the current cycle). */
+ * current cycle is `results.filter(r => r.seq > verify.cycleSince)` — see
+ * `cycleSince`. (`attempt === verify.attempt` is NOT the cycle test: it is
+ * stale for the whole window between a verify failure and the next
+ * `verify.started`, where `verify.attempt` still names the failed cycle.) */
 export interface VerifyResult {
   step: string
   attempt: number
   pass: boolean
   report?: ArtifactRef
+  /** seq of the `verify.completed` event — what `cycleSince` is compared to. */
+  seq: number
 }
 
 /** PR lifecycle (§15.7): 'open' once `finalize.completed` records the PR;
@@ -143,15 +146,44 @@ export interface BuildState {
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
+  /** seq of the latest `finalize.completed`, else 0 — "has finalize run for
+   * the CURRENT spec". `prState` cannot answer that: it is the full-log PR
+   * fact and must stay so, because the janitor (dispatcher.ts:342,:367,:396)
+   * and the deliberately restart-orthogonal epilogue (engine.ts:161-162,:402)
+   * read it. Compare this against `restartSince`, exactly as engine.ts:707-708
+   * post-filters its own `finalizeCompleted`. */
+  finalizeCompletedSeq: number
+  /** `finalize.step-completed` facts after `restartSince`, in order (§5).
+   * Post-steps are failure-tolerant, so a completion counts whether `ok` is
+   * true or false. Post-restart only, matching engine.ts's `finalizeStepsDone`
+   * (engine.ts:710-712) — a spec revision re-runs the post-steps. */
+  finalizeSteps: { step: string; ok: boolean }[]
   lastEvent?: AbEvent
   /** 0 for an empty log; `runner.attached {resumedFromSeq}` cites this. */
   lastSeq: number
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
    * `spec.revised` bumps it (§6.3: rev N+1 restarts the build from plan). */
   specRev?: number
+  /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3).
+   * Rev N+1 restarts the build from plan, so every approval and result at or
+   * before this seq describes a spec that no longer exists. Mirrors
+   * engine.ts's `restartSeq` (engine.ts:126). */
+  restartSince: number
   /** `approved` ≡ the latest `plan-review.verdict` is 'approve' (§10);
-   * `artifactRev` is the latest deposited plan rev. */
-  plan: { round: number; approved: boolean; artifactRev?: number }
+   * `artifactRev` is the latest deposited plan rev.
+   *
+   * `approval` is the `plan-review.verdict` approve that currently STANDS —
+   * its event seq and round. Set only on an approve; cleared by any other
+   * verdict, so `approval !== undefined` ⇔ `approved`. A consumer asking "is
+   * the plan loop settled?" must check this against `restartSince` and
+   * `plan.round`, not `approved` alone — `approved` spans the full log and
+   * survives a restart, which re-runs the whole loop (engine.ts:466). */
+  plan: {
+    round: number
+    approved: boolean
+    artifactRev?: number
+    approval?: { seq: number; round: number }
+  }
   /** `round` tracks the latest `implement.started`/`.completed`; `commits`
    * and `artifactRev` come from the latest `implement.completed` only — so
    * mid-round they still point at the last pushed head, the cross-sandbox
@@ -159,14 +191,32 @@ export interface BuildState {
   implement: { round: number; commits?: CommitRange; artifactRev?: number }
   /** ≡ the latest `code-review.verdict` is 'approve'. */
   codeReviewApproved: boolean
+  /** The `code-review.verdict` approve that currently stands — its event seq
+   * and round. Same discipline as `plan.approval`: check it against
+   * `restartSince` and `implement.round`, AND against the verify cycle, which
+   * a failure reopens (§15.6-A) before any new implement round lands. */
+  codeReviewApproval?: { seq: number; round: number }
   /** Findings per round, in round order (index round-1); rounds that never
    * produced a verdict are empty. Stall detection walks `persists` chains
    * across these (§15.4); reviewers get all prior rounds as context (§8.3). */
   reviewFindings: { planReview: Finding[][]; codeReview: Finding[][] }
   /** `attempt` is the highest attempt seen; `results` accumulate across
-   * attempts (filter by `attempt` for the current cycle — see VerifyResult);
-   * `currentStep` is a `verify.started` without its `verify.completed`. */
-  verify: { attempt: number; results: VerifyResult[]; currentStep?: string }
+   * attempts (filter by `cycleSince` for the current cycle — see
+   * VerifyResult); `currentStep` is a `verify.started` without its
+   * `verify.completed`.
+   *
+   * `cycleSince` is the seq after which results describe the CURRENT code
+   * (§15.6-A): max(restartSince, latest code-review approve, latest
+   * `reconcile.completed`). Results at or before it describe code that no
+   * longer exists — implement or reconcile changed it, and a new cycle re-runs
+   * from the FIRST step. 0 before any boundary lands. This is the same filter
+   * engine.ts:275-276 applies over its post-restart index. */
+  verify: {
+    attempt: number
+    results: VerifyResult[]
+    currentStep?: string
+    cycleSince: number
+  }
   /** Highest `reconcile.started.attempt` — the kernel's own counter, so a
    * re-run of the same attempt after sandbox death does not double-count.
    * `policy.maxReconcileAttempts` gates on this (§15.7). */
@@ -194,12 +244,16 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   let pr: BuildState['pr']
   let prState: PrLifecycle | undefined
   let specRev: number | undefined
+  let restartSince = 0
+  let finalizeCompletedSeq = 0
+  let finalizeSteps: BuildState['finalizeSteps'] = []
   const plan: BuildState['plan'] = { round: 0, approved: false }
   const implement: BuildState['implement'] = { round: 0 }
   let codeReviewApproved = false
+  let codeReviewApproval: BuildState['codeReviewApproval']
   const planReviewFindings: Finding[][] = []
   const codeReviewFindings: Finding[][] = []
-  const verify: BuildState['verify'] = { attempt: 0, results: [] }
+  const verify: BuildState['verify'] = { attempt: 0, results: [], cycleSince: 0 }
   let reconcileAttempts = 0
   const observations: ObservationRecord[] = []
   const pending: Record<PendingCommand['command'], PendingCommand[]> = {
@@ -237,7 +291,6 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'build.created':
       case 'workspace.provisioned':
       case 'workspace.released':
-      case 'finalize.step-completed':
         break
 
       case 'build.completed':
@@ -296,8 +349,17 @@ export function reduceBuild(events: AbEvent[]): BuildState {
 
       case 'spec.imported':
       case 'spec.authored':
+        specRev = event.payload.artifact.rev
+        break
       case 'spec.revised':
         specRev = event.payload.artifact.rev
+        // §6.3: rev N+1 restarts the build from plan. The restart boundary
+        // invalidates every approval and result at or before it, so it is also
+        // a verify cycle boundary, and it re-runs the finalize post-steps
+        // (engine.ts:710-712).
+        restartSince = event.seq
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        finalizeSteps = []
         break
 
       case 'session.started':
@@ -333,6 +395,10 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'plan-review.verdict':
         round = event.payload.round
         plan.approved = event.payload.verdict === 'approve'
+        // Only an approve stands; any other verdict clears it, so
+        // `approval !== undefined` ⇔ `approved`.
+        if (plan.approved) plan.approval = { seq: event.seq, round }
+        else delete plan.approval
         setFindings(planReviewFindings, round, event.payload.findings)
         complete('plan-review', event.seq, { round })
         break
@@ -355,6 +421,13 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'code-review.verdict':
         round = event.payload.round
         codeReviewApproved = event.payload.verdict === 'approve'
+        codeReviewApproval = codeReviewApproved ? { seq: event.seq, round } : undefined
+        // §15.6-A: an approve means the code is settled and verifiable, so it
+        // opens a new verify cycle. This tracker is deliberately SEPARATE from
+        // `codeReviewApproval` — a later revise clears the approval but must
+        // NOT move the cycle boundary backwards (mirrors engine.ts:637, which
+        // never resets `latestApproveSeq`).
+        if (codeReviewApproved) verify.cycleSince = Math.max(verify.cycleSince, event.seq)
         setFindings(codeReviewFindings, round, event.payload.findings)
         complete('code-review', event.seq, { round })
         break
@@ -375,6 +448,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           attempt: event.payload.attempt,
           pass: event.payload.pass,
           report: event.payload.report,
+          seq: event.seq,
         })
         if (verify.currentStep === event.payload.step) {
           verify.currentStep = undefined
@@ -390,7 +464,14 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'finalize.completed':
         pr = event.payload.pr
         prState = 'open'
+        finalizeCompletedSeq = event.seq
         complete('finalize', event.seq)
+        break
+      case 'finalize.step-completed':
+        // §5: post-steps are independent and failure-tolerant — a completion
+        // counts whether `ok` is true or false. `spec.revised` clears the list
+        // above, matching engine.ts:710-712's post-restart scoping.
+        finalizeSteps.push({ step: event.payload.step, ok: event.payload.ok })
         break
 
       case 'pr.merged':
@@ -414,6 +495,9 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         // §15.7: conflicted until a reconcile.completed appears after the
         // pr.conflicted — the PR is open again while verify:* re-runs.
         if (prState === 'conflicted') prState = 'open'
+        // Reconciliation changed the code, so verify re-runs in full — a new
+        // cycle (§15.7, engine.ts:275).
+        verify.cycleSince = Math.max(verify.cycleSince, event.seq)
         complete('reconcile', event.seq)
         break
 
@@ -479,12 +563,16 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     answeredEscalations,
     pr,
     prState,
+    finalizeCompletedSeq,
+    finalizeSteps,
     lastEvent,
     lastSeq: lastEvent?.seq ?? 0,
     specRev,
+    restartSince,
     plan,
     implement,
     codeReviewApproved,
+    codeReviewApproval,
     reviewFindings: { planReview: planReviewFindings, codeReview: codeReviewFindings },
     verify,
     reconcileAttempts,

@@ -180,7 +180,11 @@ describe('reduceBuild: empty log', () => {
     expect(state.implement).toEqual({ round: 0 })
     expect(state.codeReviewApproved).toBe(false)
     expect(state.reviewFindings).toEqual({ planReview: [], codeReview: [] })
-    expect(state.verify).toEqual({ attempt: 0, results: [] })
+    expect(state.verify).toEqual({ attempt: 0, results: [], cycleSince: 0 })
+    expect(state.restartSince).toBe(0)
+    expect(state.finalizeCompletedSeq).toBe(0)
+    expect(state.finalizeSteps).toEqual([])
+    expect(state.codeReviewApproval).toBeUndefined()
     expect(state.reconcileAttempts).toBe(0)
     expect(state.openEscalations).toEqual([])
     expect(state.answeredEscalations).toEqual([])
@@ -303,7 +307,7 @@ describe('reduceBuild: §15.6 happy path', () => {
     expect(duringUnit.round).toBe(1) // verify does not reset the loop round
     expect(duringUnit.verify.currentStep).toBe('unit')
     expect(duringUnit.verify.results).toEqual([
-      { step: 'types', attempt: 1, pass: true, report: undefined },
+      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 17 },
     ])
 
     const allDone = stateAfter(log, 'verify.completed', 3)
@@ -365,8 +369,8 @@ describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)',
   test('the failed step records its report and closes the verify phase', () => {
     const failed = stateAfter(log, 'verify.completed', 2)
     expect(failed.verify.results).toEqual([
-      { step: 'types', attempt: 1, pass: true, report: undefined },
-      { step: 'e2e', attempt: 1, pass: false, report },
+      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 14 },
+      { step: 'e2e', attempt: 1, pass: false, report, seq: 16 },
     ])
     expect(failed.verify.currentStep).toBeUndefined()
     expect(failed.currentPhase).toBeUndefined()
@@ -392,7 +396,9 @@ describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)',
 
     const final = reduceBuild(log)
     expect(final.verify.attempt).toBe(2)
-    const currentCycle = final.verify.results.filter((r) => r.attempt === 2)
+    // The current cycle is seq-based, not attempt-based (§15.6-A): the round-2
+    // code-review approve moved `cycleSince` past attempt 1's results.
+    const currentCycle = final.verify.results.filter((r) => r.seq > final.verify.cycleSince)
     expect(currentCycle.map((r) => [r.step, r.pass])).toEqual([
       ['types', true],
       ['e2e', true],
@@ -820,7 +826,12 @@ describe('reduceBuild: review approval tracks the latest verdict', () => {
     expect(afterRevise.reviewFindings.planReview).toEqual([[finding('f_1')]])
 
     const afterApprove = reduceBuild(log)
-    expect(afterApprove.plan).toEqual({ round: 2, approved: true, artifactRev: 1 })
+    expect(afterApprove.plan).toEqual({
+      round: 2,
+      approved: true,
+      artifactRev: 1,
+      approval: { seq: 12, round: 2 },
+    })
     expect(afterApprove.reviewFindings.planReview).toEqual([[finding('f_1')], []])
   })
 
@@ -877,5 +888,247 @@ describe('reduceBuild: phase.failed tally (§8.4 retry policy input)', () => {
     const state = stateAfter(log, 'phase.failed', 2)
     expect(state.currentPhase).toEqual({ phase: 'plan', round: 1, seq: 5 })
     expect(state.status).toBe('running')
+  })
+})
+
+// ── The dashboard's read model (step 1: the seven additive projections) ───────
+//
+// These fields exist so a display can ask "will the engine re-run this?" and
+// get the same answer the engine gives. The full-log booleans beside them
+// (`plan.approved`, `codeReviewApproved`, `prState`) stay exactly as they were
+// — the engine and the janitor route on them.
+
+describe('reduceBuild: restartSince', () => {
+  test('0 with no spec.revised; the latest spec.revised seq otherwise', () => {
+    expect(reduceBuild(toLog(prelude())).restartSince).toBe(0)
+
+    const log = toLog([
+      ...prelude(),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'code-review',
+        source: 'policy',
+        question: 'stuck',
+      }),
+      ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.restartSince).toBe(7)
+    expect(state.specRev).toBe(1)
+  })
+})
+
+describe('reduceBuild: standing approvals carry seq and round', () => {
+  test('plan.approval and codeReviewApproval mirror their booleans in both directions', () => {
+    const log = toLog([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1'), ...codeReview(1, 'approve')])
+
+    const planned = stateAfter(log, 'plan-review.verdict')
+    expect(planned.plan.approved).toBe(true)
+    expect(planned.plan.approval).toEqual({ seq: 8, round: 1 })
+
+    const reviewed = reduceBuild(log)
+    expect(reviewed.codeReviewApproved).toBe(true)
+    expect(reviewed.codeReviewApproval).toEqual({ seq: 12, round: 1 })
+  })
+
+  test('a revise verdict clears the standing approval — approval !== undefined ⇔ approved', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'revise', [finding('f_1')]),
+    ])
+    const state = reduceBuild(log)
+    expect(state.codeReviewApproved).toBe(false)
+    expect(state.codeReviewApproval).toBeUndefined()
+  })
+
+  test('an escalate verdict clears the standing approval too', () => {
+    const log = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
+      ev('plan-review.started', { round: 1 }),
+      ev('plan-review.verdict', {
+        round: 1,
+        verdict: 'escalate',
+        findings: [],
+        reason: 'spec is ambiguous',
+        artifact: { kind: 'plan-review', rev: 0 },
+      }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.plan.approved).toBe(false)
+    expect(state.plan.approval).toBeUndefined()
+  })
+})
+
+describe('reduceBuild: finalize projections', () => {
+  const finalize = (): EventWrite[] => [
+    ev('finalize.started', {}),
+    ev('finalize.completed', {
+      pr: { number: 7, url: 'https://github.com/defrex/app/pull/7', headSha: 'sha-r1' },
+    }),
+  ]
+
+  test('finalizeCompletedSeq is 0 without one, the event seq otherwise', () => {
+    expect(reduceBuild(toLog(prelude())).finalizeCompletedSeq).toBe(0)
+    const log = toLog([...prelude(), ...finalize()])
+    const state = reduceBuild(log)
+    expect(state.finalizeCompletedSeq).toBe(6)
+  })
+
+  test('prState is UNCHANGED by the addition — it stays the full-log PR fact', () => {
+    // f_03d0f6d4's constraint: the janitor (dispatcher.ts:342,:367,:396) and
+    // the restart-orthogonal epilogue (engine.ts:402) read prState, so the fix
+    // had to be a new seq BESIDE it, never a re-scoping of it.
+    const log = toLog([
+      ...prelude(),
+      ...finalize(),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'finalize',
+        source: 'policy',
+        question: 'stuck',
+      }),
+      ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 7 }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.prState).toBe('open') // survives the restart, by design
+    expect(state.pr?.number).toBe(7)
+    // …while the restart-scoped fact correctly says finalize has NOT run for
+    // the current spec.
+    expect(state.finalizeCompletedSeq).toBeLessThan(state.restartSince)
+  })
+
+  test('finalize.step-completed projects with ok true and false; absent ⇒ []', () => {
+    expect(reduceBuild(toLog(prelude())).finalizeSteps).toEqual([])
+    const log = toLog([
+      ...prelude(),
+      ...finalize(),
+      ev('finalize.step-completed', { step: 'changelog', ok: true }),
+      ev('finalize.step-completed', { step: 'notify', ok: false, note: 'slack down' }),
+    ])
+    expect(reduceBuild(log).finalizeSteps).toEqual([
+      { step: 'changelog', ok: true },
+      { step: 'notify', ok: false },
+    ])
+  })
+
+  test('a completion before spec.revised is excluded — a restart re-runs the post-steps', () => {
+    const log = toLog([
+      ...prelude(),
+      ...finalize(),
+      ev('finalize.step-completed', { step: 'changelog', ok: true }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'finalize',
+        source: 'policy',
+        question: 'stuck',
+      }),
+      ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 8 }),
+    ])
+    expect(reduceBuild(log).finalizeSteps).toEqual([])
+  })
+})
+
+describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
+  test('verify.results carry the verify.completed seq', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+    ])
+    const state = reduceBuild(log)
+    expect(state.verify.results).toEqual([
+      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 14 },
+    ])
+  })
+
+  test('cycleSince is 0 before any boundary, then moves to the code-review approve', () => {
+    const base = [...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1')]
+    expect(reduceBuild(toLog(base)).verify.cycleSince).toBe(0)
+
+    const log = toLog([...base, ...codeReview(1, 'approve'), ...verifyRun('types', 1, true)])
+    const approved = stateAfter(log, 'code-review.verdict')
+    expect(approved.verify.cycleSince).toBe(12)
+    expect(approved.verify.results.filter((r) => r.seq > approved.verify.cycleSince)).toEqual([])
+
+    // The result that lands after the boundary IS the current cycle.
+    const verified = reduceBuild(log)
+    expect(
+      verified.verify.results.filter((r) => r.seq > verified.verify.cycleSince),
+    ).toHaveLength(1)
+  })
+
+  test('cycleSince moves to a later reconcile.completed — reconciliation changed the code', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+      ev('finalize.started', {}),
+      ev('finalize.completed', {
+        pr: { number: 7, url: 'https://github.com/defrex/app/pull/7', headSha: 'sha-r1' },
+      }),
+      ev('pr.conflicted', { baseSha: 'sha-base-2' }),
+      ev('reconcile.started', { attempt: 1, baseSha: 'sha-base-2' }),
+      ev('reconcile.completed', {
+        mergeCommit: 'sha-merge',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.verify.cycleSince).toBe(19)
+    expect(state.verify.results.filter((r) => r.seq > state.verify.cycleSince)).toEqual([])
+  })
+
+  test('cycleSince moves to a spec.revised seq', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'verify:types',
+        source: 'policy',
+        question: 'stuck',
+      }),
+      ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 15 }),
+    ])
+    const state = reduceBuild(log)
+    expect(state.verify.cycleSince).toBe(17)
+    expect(state.restartSince).toBe(17)
+    expect(state.verify.results.filter((r) => r.seq > state.verify.cycleSince)).toEqual([])
+  })
+
+  test('cycleSince does NOT retreat when a later code-review revise lands', () => {
+    // The step 1(d) warning, pinned: `cycleSince` answers "when did the code
+    // last become approved-and-verifiable" (never cleared — engine.ts:637),
+    // NOT "does an approval currently stand" (`codeReviewApproval`, cleared).
+    // Conflating them silently moves the boundary backwards.
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, false, { kind: 'verify-report:types', rev: 0 }),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'revise', [finding('f_1')]),
+    ])
+    const state = reduceBuild(log)
+    expect(state.codeReviewApproval).toBeUndefined() // the approval is gone…
+    expect(state.verify.cycleSince).toBe(12) // …but the boundary held
   })
 })
