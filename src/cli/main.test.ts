@@ -183,6 +183,33 @@ describe('runCli — builds / build status routing', () => {
     expect(d.err.join('\n')).toContain('--store requires a value')
   })
 
+  // Without the flag-shaped-value guard this exits 0: --json is swallowed as
+  // the store REF, a local store is created on demand in a directory named
+  // "--json", and the caller who asked for JSON gets human text and a
+  // plausible-looking empty list. A wrong answer beats an error only if you
+  // never notice it.
+  test('--store followed by another flag is an error, not a store named --json', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['builds', '--store', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--store requires a value')
+    expect(d.err.join('\n')).toContain('--json')
+    expect(d.out).toEqual([])
+  })
+
+  test('--store followed by another flag is an error on build status too', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--store', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--store requires a value')
+    expect(d.out).toEqual([])
+  })
+
+  test('--events followed by another flag is an error', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--events', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--events requires a positive integer')
+    expect(d.out).toEqual([])
+  })
+
   test('an unknown flag on either command exits 1', async () => {
     const d1 = sessionlessDeps()
     expect(await runCli(['builds', '--frobnicate'], d1)).toBe(1)

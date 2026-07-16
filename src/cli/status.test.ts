@@ -234,10 +234,36 @@ describe('detail', () => {
       type: 'verify.started',
       payload: { step: 'unit', attempt: 2 },
     })
+    const inFlight = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(inFlight.verify.attempt).toBe(2)
+    // Attempt 1's pass must NOT read as current progress — the cycle restarted.
+    expect(inFlight.verify.steps).toEqual([])
+    expect(inFlight.verify.currentStep).toBe('unit')
+
+    // The positive half: once attempt 2 completes a step, THAT one surfaces —
+    // without this, an implementation returning a constant [] would pass.
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 2, pass: true },
+    })
     const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
-    expect(d.verify.attempt).toBe(2)
-    expect(d.verify.steps).toEqual([])
-    expect(d.verify.currentStep).toBe('unit')
+    expect(d.verify.steps).toEqual([{ step: 'unit', pass: true }])
+    expect(d.verify.currentStep).toBeUndefined()
+  })
+
+  test('a failed step in the current attempt surfaces as a failure', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'e2e', attempt: 1, pass: false },
+    })
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.verify.steps).toEqual([{ step: 'e2e', pass: false }])
+    // Rendered in words, since color is not available to lean on.
+    expect(renderDetail(d, NOW).join('\n')).toContain('FAIL  e2e')
   })
 
   test('open escalations, open sessions, and lastEvent', async () => {
@@ -330,6 +356,49 @@ describe('renderers', () => {
       NOW,
     )
     expect(renderSummaries([held], NOW, 'none').join('\n')).toContain('held')
+  })
+
+  // The AC enumerates what a summary identifies: ticket id AND title, PR state
+  // AND link. The JSON carries them either way; these pin the HUMAN render,
+  // which is what an operator running `ab builds` actually sees.
+  test('a summary row carries the ticket id and title, and the PR state and link', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 7, url: 'https://github.com/acme/app/pull/7', headSha: 'abc' },
+      },
+    })
+    const r = record({
+      slug: 'b1',
+      ticket: { source: 'linear', id: 'ENG-42', title: 'Auth rate limiting' },
+    })
+    const text = renderSummaries(
+      [summarize(r, await store.getEvents('b1'), NOW)],
+      NOW,
+      'none',
+    ).join('\n')
+    expect(text).toContain('ENG-42')
+    expect(text).toContain('Auth rate limiting')
+    expect(text).toContain('#7 open')
+    expect(text).toContain('https://github.com/acme/app/pull/7')
+  })
+
+  test('a long ticket title is truncated rather than blowing out the row', () => {
+    const r = record({
+      ticket: { source: 'linear', id: 'ENG-1', title: 'x'.repeat(120) },
+    })
+    const text = renderSummaries([summarize(r, [], NOW)], NOW, 'none').join('\n')
+    expect(text).toContain('…')
+    expect(text).not.toContain('x'.repeat(60))
+  })
+
+  test('a build with no ticket and no PR renders placeholders, not undefined', () => {
+    const text = renderSummaries([summarize(record(), [], NOW)], NOW, 'none').join('\n')
+    expect(text).not.toContain('undefined')
+    expect(text).toContain('—')
   })
 
   test('a missing lease renders as no-lease, a distinct word from expired', () => {
@@ -465,6 +534,24 @@ describe('abBuilds', () => {
     const text = (await run(store)).join('\n')
     expect(text).toContain('no active builds')
     expect(text).toContain('--queued or --all')
+  })
+
+  // The hint must suggest only flags that would actually widen what was asked
+  // for — "try --queued" to someone who passed --queued reads as a bug.
+  test('the empty hint under --queued suggests --all, not --queued again', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'is-done', status: 'done' })
+    const text = (await run(store, { queued: true })).join('\n')
+    expect(text).toContain('no active or queued builds')
+    expect(text).toContain('--all')
+    expect(text).not.toContain('--queued')
+  })
+
+  test('the empty hint under --all suggests nothing — there is nothing wider', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const text = (await run(store, { all: true })).join('\n')
+    expect(text).toContain('no builds for')
+    expect(text).not.toContain('try')
   })
 
   test('--json parses, matches the projection, and carries no ANSI', async () => {

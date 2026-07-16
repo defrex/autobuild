@@ -181,6 +181,27 @@ function parseArgs(args: string[]): ParsedArgs {
   return { positionals, flags }
 }
 
+/**
+ * The value after a value-taking flag in a hand-rolled parser — present, and
+ * not itself a flag.
+ *
+ * The second check is the one that matters: without it `--store --json`
+ * consumes `--json` as the store REFERENCE, and a local ref is created on
+ * demand (openLocalStore mkdirs it), so the command silently builds a store in
+ * a directory named `--json`, prints human text to a caller that asked for
+ * JSON, and exits 0. A plausible-looking wrong answer, which is exactly what
+ * the "invalid argument produces an actionable error and a nonzero exit code"
+ * rule exists to prevent.
+ */
+function flagValue(value: string | undefined, name: string, usage: string): string {
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(
+      `--${name} requires a value${value !== undefined ? `, got "${value}"` : ''} — ${usage}`,
+    )
+  }
+  return value
+}
+
 function stringFlag(parsed: ParsedArgs, name: string): string | undefined {
   const value = parsed.flags.get(name)
   return typeof value === 'string' ? value : undefined
@@ -378,8 +399,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         } else if (arg === '--json') {
           json = true
         } else if (arg === '--store') {
-          storeRef = rest[(i += 1)]
-          if (storeRef === undefined) throw new Error(`--store requires a value — ${usage}`)
+          storeRef = flagValue(rest[(i += 1)], 'store', usage)
         } else {
           throw new Error(`unknown argument "${arg}" — ${usage}`)
         }
@@ -427,8 +447,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           }
           events = count
         } else if (arg === '--store') {
-          storeRef = more[(i += 1)]
-          if (storeRef === undefined) throw new Error(`--store requires a value — ${usage}`)
+          storeRef = flagValue(more[(i += 1)], 'store', usage)
         } else if (arg.startsWith('--')) {
           throw new Error(`unknown argument "${arg}" — ${usage}`)
         } else if (slug === undefined) {

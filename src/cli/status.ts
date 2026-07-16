@@ -220,9 +220,24 @@ function phaseCell(summary: BuildSummary): string {
   return summary.phase
 }
 
+/** `#7 open https://…` — state AND link, per the summary's required fields. */
 function prCell(summary: BuildSummary): string {
   if (summary.pr === undefined) return '—'
-  return `#${summary.pr.number}${summary.pr.state !== undefined ? ` ${summary.pr.state}` : ''}`
+  const state = summary.pr.state !== undefined ? ` ${summary.pr.state}` : ''
+  return `#${summary.pr.number}${state} ${summary.pr.url}`
+}
+
+/** Long enough to recognize the ticket, short enough to keep rows scannable. */
+const TITLE_WIDTH = 40
+
+/** `AUT-6 Interactive build dashboard…` — id AND title, per the same list. */
+function ticketCell(summary: BuildSummary): string {
+  const ticket = summary.ticket
+  if (ticket === undefined) return '—'
+  if (ticket.title === undefined || ticket.title === '') return ticket.id
+  const title =
+    ticket.title.length > TITLE_WIDTH ? `${ticket.title.slice(0, TITLE_WIDTH - 1)}…` : ticket.title
+  return `${ticket.id} ${title}`
 }
 
 /** Coarse relative age — a status read wants "how stale", not a timestamp. */
@@ -265,16 +280,18 @@ export function renderSummaries(
   emptyNote: string,
 ): string[] {
   if (summaries.length === 0) return [emptyNote]
-  const rows: string[][] = [['BUILD', 'STATUS', 'PHASE', 'LEASE', 'PR', 'UPDATED', 'TICKET']]
+  // The two free-text columns (ticket title, PR link) go last, where their
+  // width costs no alignment on the scannable columns to their left.
+  const rows: string[][] = [['BUILD', 'STATUS', 'PHASE', 'LEASE', 'UPDATED', 'TICKET', 'PR']]
   for (const summary of summaries) {
     rows.push([
       summary.slug,
       summary.status,
       phaseCell(summary),
       healthWord(summary.lease.health),
-      prCell(summary),
       relativeTime(summary.updatedAt, now),
-      summary.ticket?.id ?? '—',
+      ticketCell(summary),
+      prCell(summary),
     ])
   }
   return padColumns(rows)
@@ -382,10 +399,14 @@ export function statusFilter(all?: boolean, queued?: boolean): BuildStatus[] {
 
 /**
  * Store precedence: `--store` > `AB_STORE` > the local default, with
- * `AB_TOKEN` passed through for remote refs — the same resolution
- * `defaultWire` does in dispatch.ts.
+ * `AB_TOKEN` passed through for remote refs. Reference handling itself is
+ * `resolveStore` — the same path-vs-URL behavior `ab dispatch` gets.
  *
- * The `AB_STORE` middle term matters for this feature's primary audience:
+ * The `AB_STORE` middle term is a DELIBERATE divergence from dispatch, not a
+ * copy of it: `defaultWire` in dispatch.ts is `opts.storeRef ??
+ * DEFAULT_LOCAL_ROOT` and never consults `AB_STORE`. That fits a dispatcher,
+ * which is told which store to serve. It does not fit these commands, whose
+ * primary audience is an agent inside a session:
  * `bin/ab.ts` passes `processEnv: process.env` in its sessionless branch, so
  * an agent running `ab builds` inside a session sees the `AB_STORE` its own
  * build lives in (dispatch's `storeRef` is literally what becomes a session's
@@ -458,9 +479,13 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
       opts.stdout(JSON.stringify(summaries, null, 2))
       return
     }
+    // The empty line names the filter that matched nothing and suggests only
+    // the flags that would actually widen it — telling a caller who passed
+    // --queued to "try --queued" reads as a broken command.
     const scope =
       opts.all === true ? 'builds' : opts.queued === true ? 'active or queued builds' : 'active builds'
-    const hint = opts.all === true ? '' : ' — try --queued or --all'
+    const hint =
+      opts.all === true ? '' : opts.queued === true ? ' — try --all' : ' — try --queued or --all'
     for (const line of renderSummaries(summaries, now, `no ${scope} for ${repo}${hint}`)) {
       opts.stdout(line)
     }
