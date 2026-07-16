@@ -59,7 +59,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets | Linear; later GitHub Issues, file-based |
+| `TicketSource` | list/claim/comment/transition/create tickets | file-based (the zero-config default); Linear; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -863,7 +863,7 @@ verification and must work identically local and sandboxed:
 
 This project ships the **canonical default skills** (`plan`, `plan-review`,
 `implement`, `code-review`, agent-verify steps, `finalize`, `reconcile`,
-`spec`, and the outer-loop skills). `ab init` installs into a repo:
+`spec`, `tickets`, and the outer-loop skills). `ab init` installs into a repo:
 
 - Writes an `autobuild.toml` template.
 - **Copies** the default skills into the repo's skill directory, namespaced
@@ -871,8 +871,10 @@ This project ships the **canonical default skills** (`plan`, `plan-review`,
   per-repo customization is the point: this repo's code-review standards,
   this repo's e2e driving instructions, live in the vendored skill.
 - Marks skills **non-agent-invocable** (`disable-model-invocation`) except
-  `ab-spec` — phase skills are invoked explicitly by the runner or a human,
-  never auto-triggered by a model pattern-matching a description.
+  `ab-spec` and `ab-tickets` — phase skills are invoked explicitly by the
+  runner or a human, never auto-triggered by a model pattern-matching a
+  description. The exceptions are the human/agent-facing surfaces, where a
+  conversational trigger ("move ticket X to ready") is the point.
 
 **Upgrades** are the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; `ab upgrade` three-way merges

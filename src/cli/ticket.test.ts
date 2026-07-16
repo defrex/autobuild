@@ -32,11 +32,17 @@ async function writeRepo(configToml: string): Promise<void> {
 function fakeFactory(created: {
   config?: TicketsConfig
   env?: Record<string, string | undefined>
+  targetRepo?: string
   draft?: TicketDraft
 }) {
-  return (config: TicketsConfig, env: Record<string, string | undefined>): TicketSource => {
+  return (
+    config: TicketsConfig,
+    env: Record<string, string | undefined>,
+    targetRepo: string,
+  ): TicketSource => {
     created.config = config
     created.env = env
+    created.targetRepo = targetRepo
     return {
       name: 'fake',
       listReady: () => Promise.resolve([]),
@@ -76,7 +82,10 @@ describe('abTicketCreate', () => {
       sourceFactory: fakeFactory(created),
     })
 
-    expect(created.config).toEqual({ source: 'file', dir: join(tmp, 'tickets') })
+    // The CLI hands the factory the config verbatim plus the repo: resolving a
+    // relative dir (and deciding it was defaulted) is the factory's job now.
+    expect(created.config).toEqual({ source: 'file', dir: 'tickets' })
+    expect(created.targetRepo).toBe(tmp)
     expect(created.env).toEqual({ LINEAR_API_KEY: 'k' })
     expect(created.draft).toEqual({
       title: 'Add rate limiting',
@@ -122,19 +131,26 @@ describe('abTicketCreate', () => {
     ).rejects.toThrow(/autobuild\.toml: not found/)
   })
 
-  test('a config without [tickets] is an error naming what would be accepted', async () => {
+  test('a config without [tickets] files to the local tracker — no config, no secret', async () => {
+    // The inverse of the old rejection test: this used to be the error path.
+    // Deliberately runs the REAL factory (no sourceFactory), so it proves the
+    // whole zero-config seam from autobuild.toml to bytes on disk.
     await writeRepo('[project]\nbaseBranch = "main"\n')
     const bodyFile = join(tmp, 'spec.md')
-    await writeFile(bodyFile, 'body\n')
-    expect(
-      abTicketCreate({
-        targetRepo: tmp,
-        title: 't',
-        bodyFile,
-        env: {},
-        stdout: () => {},
-      }),
-    ).rejects.toThrow(/no \[tickets\] table.*source = "linear".*source = "file"/)
+    await writeFile(bodyFile, '## What and why\n\nBecause.\n')
+    const lines: string[] = []
+
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Rate-limit auth',
+      bodyFile,
+      env: {},
+      stdout: (line) => lines.push(line),
+    })
+
+    const path = join(tmp, '.autobuild', 'tickets', 'triage', 'file-1.md')
+    expect(await readFile(path, 'utf8')).toContain('title = "Rate-limit auth"')
+    expect(lines).toEqual(['ticket created: file:file-1 (Triage)'])
   })
 
   test('a missing body file is an error naming the path', async () => {

@@ -34,6 +34,7 @@ const SKILL_NAMES = [
   'plan-review',
   'reconcile',
   'spec',
+  'tickets',
   'verify-e2e',
 ]
 
@@ -57,7 +58,7 @@ function splitFrontmatter(content: string): { front: string[]; body: string } {
 }
 
 describe('abInit — fresh install', () => {
-  test('installs all 8 skills namespaced ab-*, with pristine copies byte-identical', async () => {
+  test('installs all 9 skills namespaced ab-*, with pristine copies byte-identical', async () => {
     const report = await abInit({ targetRepo: target })
 
     expect(report.config).toBe('written')
@@ -71,14 +72,16 @@ describe('abInit — fresh install', () => {
     }
   })
 
-  test('frontmatter: name rewritten; disable-model-invocation everywhere EXCEPT ab-spec', async () => {
+  test('frontmatter: name rewritten; disable-model-invocation everywhere EXCEPT ab-spec and ab-tickets', async () => {
     await abInit({ targetRepo: target })
     for (const name of SKILL_NAMES) {
       const installed = await readFile(installedSkillPath(target, `ab-${name}`), 'utf8')
       const { front } = splitFrontmatter(installed)
       expect(front).toContain(`name: ab-${name}`)
-      if (name === 'spec') {
-        // The one model-invocable skill: a human conversation surface (§16.3).
+      if (name === 'spec' || name === 'tickets') {
+        // The model-invocable skills: the human/agent-facing surfaces (§16.3).
+        // "Move ticket X to ready" is a conversational trigger — auto-invocation
+        // is the point, where for a phase skill it would be a bug.
         expect(front.some((l) => l.startsWith('disable-model-invocation:'))).toBe(false)
       } else {
         expect(front).toContain('disable-model-invocation: true')
