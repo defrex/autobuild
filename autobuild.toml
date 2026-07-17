@@ -63,7 +63,10 @@ maxReviewRounds = 5
 [dispatcher]
 capacity = 3             # concurrent builds for this repo
 readyLabels = [] # labels that mark a ticket dispatchable ([] = no label gate)
-#readyState = "Ready"    # additionally require this workflow state (absent = any)
+# Required: the sole dispatch gate for this repo (readyLabels is empty). The AUT
+# team's Linear workflow has no "Ready" state — "Todo" is the column tickets sit
+# in before claim() moves them to "In Progress". Matched case-sensitively.
+readyState = "Todo"
 
 # Ticket source the dispatcher drives (§3.2, §13). The Linear API key is a
 # secret — set the LINEAR_API_KEY environment variable (a local .env works),

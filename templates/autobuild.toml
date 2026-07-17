@@ -67,7 +67,12 @@ capacity = 1             # concurrent builds for this repo
 # ON TOP of that — with the file tracker, setting it here means `mv`ing a ticket
 # into ready/ is no longer enough to dispatch it.
 #readyLabels = ["autobuild"]
-#readyState = "Ready"    # workflow state a ticket must sit in (file: default "Ready")
+# Required: the single workflow state a ticket must sit in to be dispatched.
+# Without it every ticket from the source would be eligible in any state,
+# including completed ones. The file tracker maps this to a state directory
+# (`ready` → `ready/`); Linear users must name their own ready workflow state
+# exactly (it is matched case-sensitively).
+readyState = "ready"
 
 # Ticket source the dispatcher drives (§3.2, §13).
 #

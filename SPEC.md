@@ -864,6 +864,7 @@ maxReconcileAttempts = 3
 [dispatcher]
 capacity = 3                    # concurrent builds for this repo
 readyLabels = ["autobuild"]
+readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
 [outer]                         # cron schedules for outer-loop processes
 "ingest:sentry" = { cron = "0 */4 * * *" }
