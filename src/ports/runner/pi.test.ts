@@ -1,56 +1,72 @@
 /**
- * PiAgentRunner tests run entirely against an injected fake PiQueryFn — the pi
- * SDK is never loaded. The default queryFn (the non-literal dynamic import) is
- * deliberately untested: it is the adapter's single cast point and contains no
- * logic beyond the import.
+ * PiAgentRunner tests run entirely against an injected fake PiCreateSessionFn —
+ * the pi SDK is never loaded. The default factory (`piSdkCreateSession`, the
+ * cast point that dynamically imports `@earendil-works/pi-coding-agent`, builds
+ * a ModelRuntime, and wraps a real AgentSession) is deliberately untested: it
+ * is pure interop with no logic beyond the SDK calls.
  */
 import { describe, expect, test } from 'bun:test'
 import type { AgentStartOpts } from '../types'
-import {
-  PiAgentRunner,
-  type PiAssistantMessage,
-  type PiMessage,
-  type PiQueryFn,
-  type PiResultMessage,
-} from './pi'
+import { PiAgentRunner, type PiCreateSessionFn, type PiModelRef, type PiTurn } from './pi'
 
-function assistant(...texts: string[]): PiAssistantMessage {
-  return {
-    type: 'assistant',
-    message: { content: texts.map((text) => ({ type: 'text', text })) },
-  }
+/** One scripted turn's output for the fake session. */
+interface ScriptedTurn {
+  text: string
+  inputTokens: number
+  outputTokens: number
 }
 
-function piResult(sessionId: string, inputTokens: number, outputTokens: number): PiResultMessage {
-  return {
-    type: 'result',
-    session_id: sessionId,
-    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-  }
+interface RecordedCreate {
+  cwd: string
+  model?: PiModelRef
+  tools: readonly string[]
 }
 
-interface RecordedCall {
-  prompt: string
-  options: {
-    cwd: string
-    env: Record<string, string>
-    model?: string
-    resume?: string
-    permissionMode: 'bypassPermissions'
-    allowDangerouslySkipPermissions: true
-  }
+interface RecordedPrompt {
+  text: string
+  env: Record<string, string>
 }
 
-function fakeQuery(streams: PiMessage[][]): { calls: RecordedCall[]; queryFn: PiQueryFn } {
-  const calls: RecordedCall[] = []
-  const queryFn: PiQueryFn = (opts) => {
-    calls.push(opts)
-    const messages = streams[calls.length - 1] ?? []
-    return (async function* () {
-      yield* messages
-    })()
+/**
+ * A fake createSessionFn: each `createSessionFn` call yields a session that
+ * plays the next scripted stream of turns in order, recording every create and
+ * every prompt. `sessionId` is fixed per session so the handle/id assertions
+ * stay legible.
+ */
+function fakeSessions(
+  sessions: Array<{ sessionId: string; turns: ScriptedTurn[] }>,
+): {
+  creates: RecordedCreate[]
+  prompts: RecordedPrompt[]
+  disposed: string[]
+  createSessionFn: PiCreateSessionFn
+} {
+  const creates: RecordedCreate[] = []
+  const prompts: RecordedPrompt[] = []
+  const disposed: string[] = []
+  const createSessionFn: PiCreateSessionFn = async (opts) => {
+    creates.push({ cwd: opts.cwd, model: opts.model, tools: opts.tools })
+    const script = sessions[creates.length - 1] ?? { sessionId: `s-${creates.length}`, turns: [] }
+    let turn = 0
+    return {
+      sessionId: script.sessionId,
+      async prompt(text, env): Promise<PiTurn> {
+        prompts.push({ text, env })
+        const scripted = script.turns[turn++]
+        if (scripted === undefined) {
+          throw new Error(`fake session "${script.sessionId}": no scripted turn ${turn}`)
+        }
+        return {
+          text: scripted.text,
+          usage: { inputTokens: scripted.inputTokens, outputTokens: scripted.outputTokens },
+        }
+      },
+      dispose() {
+        disposed.push(script.sessionId)
+      },
+    }
   }
-  return { calls, queryFn }
+  return { creates, prompts, disposed, createSessionFn }
 }
 
 function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
@@ -65,89 +81,136 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
 
 describe('PiAgentRunner.start', () => {
   test('formats the prompt as /{skill} {buildSlug} and flows the model from config (§4, §9)', async () => {
-    const { calls, queryFn } = fakeQuery([[piResult('pi-1', 1, 1)]])
-    const runner = new PiAgentRunner({ queryFn })
-    const { session } = await runner.start(startOpts({ model: 'kimi-k3' }))
-    expect(calls[0]?.prompt).toBe('/ab-plan auth-rate-limit')
-    expect(calls[0]?.options.cwd).toBe('/ws/auth-rate-limit')
-    // Model id is taken from opts (config), never hardcoded.
-    expect(calls[0]?.options.model).toBe('kimi-k3')
-    expect(session.model).toBe('kimi-k3')
+    const { creates, prompts, createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+    const { session } = await runner.start(startOpts({ model: 'openai/gpt-5.6-sol' }))
+
+    expect(prompts[0]?.text).toBe('/ab-plan auth-rate-limit')
+    expect(creates[0]?.cwd).toBe('/ws/auth-rate-limit')
+    // Provider-qualified model id is parsed into (provider, id), from config.
+    expect(creates[0]?.model).toEqual({ provider: 'openai', id: 'gpt-5.6-sol' })
+    // The handle carries the raw config id.
+    expect(session.model).toBe('openai/gpt-5.6-sol')
     expect(session.runner).toBe('pi')
   })
 
-  test('captures the SDK session_id as the handle id', async () => {
-    const { queryFn } = fakeQuery([[piResult('pi-session-42', 1, 1)]])
-    const runner = new PiAgentRunner({ queryFn })
+  test('parses a slashy provider id (cloudflare) keeping the full model id', async () => {
+    const { creates, createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+    await runner.start(startOpts({ model: 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6' }))
+    expect(creates[0]?.model).toEqual({
+      provider: 'cloudflare-workers-ai',
+      id: '@cf/moonshotai/kimi-k2.6',
+    })
+  })
+
+  test('rejects a model id that is not provider-qualified', async () => {
+    const { createSessionFn } = fakeSessions([])
+    const runner = new PiAgentRunner({ createSessionFn })
+    await expect(runner.start(startOpts({ model: 'kimi-k3' }))).rejects.toThrow(
+      'not provider-qualified',
+    )
+  })
+
+  test('enables bash among the tool set (the agent invokes ab through it)', async () => {
+    const { creates, createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+    await runner.start(startOpts())
+    expect(creates[0]?.tools).toContain('bash')
+  })
+
+  test('captures the SDK session id as the handle id', async () => {
+    const { createSessionFn } = fakeSessions([
+      { sessionId: 'pi-session-42', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
     const { session } = await runner.start(startOpts())
     expect(session).toEqual({ id: 'pi-session-42', runner: 'pi' })
   })
 
-  test('bypasses interactive permissions for unattended sessions', async () => {
-    const { calls, queryFn } = fakeQuery([[piResult('pi-1', 1, 1)]])
-    const runner = new PiAgentRunner({ queryFn })
-    await runner.start(startOpts())
-    expect(calls[0]?.options.permissionMode).toBe('bypassPermissions')
-    expect(calls[0]?.options.allowDangerouslySkipPermissions).toBe(true)
-    expect(calls[0]?.options.resume).toBeUndefined()
-  })
-
-  test('accumulates assistant text; captures usage; ignores other messages', async () => {
-    const { queryFn } = fakeQuery([
-      [{ type: 'system' }, assistant('first'), assistant('second'), piResult('pi-1', 10, 5)],
+  test('returns the turn text and per-turn usage as integers', async () => {
+    const { createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'the plan', inputTokens: 10, outputTokens: 5 }] },
     ])
-    const runner = new PiAgentRunner({ queryFn })
+    const runner = new PiAgentRunner({ createSessionFn })
     const { result } = await runner.start(startOpts())
-    expect(result.text).toBe('first\nsecond')
+    expect(result.text).toBe('the plan')
     expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, turns: 1 })
   })
 
-  test('throws when the stream ends without a result message', async () => {
-    const { queryFn } = fakeQuery([[assistant('no terminal')]])
-    const runner = new PiAgentRunner({ queryFn })
-    await expect(runner.start(startOpts())).rejects.toThrow(
-      'stream ended without a result message',
-    )
+  test('passes the ambient process env through, with scoped AB_* winning the merge (D8)', async () => {
+    process.env['AB_TEST_AMBIENT'] = 'from-process'
+    process.env['AB_TEST_OVERRIDE'] = 'ambient-loses'
+    try {
+      const { prompts, createSessionFn } = fakeSessions([
+        { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+      ])
+      const runner = new PiAgentRunner({ createSessionFn })
+      await runner.start(
+        startOpts({ env: { AB_TEST_OVERRIDE: 'scoped-wins', AB_TOKEN: 'tok' } }),
+      )
+      const env = prompts[0]?.env
+      expect(env?.['AB_TEST_AMBIENT']).toBe('from-process')
+      expect(env?.['AB_TEST_OVERRIDE']).toBe('scoped-wins')
+      expect(env?.['AB_TOKEN']).toBe('tok')
+    } finally {
+      delete process.env['AB_TEST_AMBIENT']
+      delete process.env['AB_TEST_OVERRIDE']
+    }
   })
 })
 
 describe('PiAgentRunner.continue', () => {
-  test('resumes with the captured session id as the resume token (§9)', async () => {
-    const { calls, queryFn } = fakeQuery([
-      [piResult('pi-1', 10, 5)],
-      [assistant('revised'), piResult('pi-1', 7, 3)],
+  test('drives the same live session with the raw message and per-turn usage', async () => {
+    const { prompts, createSessionFn } = fakeSessions([
+      {
+        sessionId: 'pi-1',
+        turns: [
+          { text: 'the plan', inputTokens: 10, outputTokens: 5 },
+          { text: 'revised', inputTokens: 7, outputTokens: 3 },
+        ],
+      },
     ])
-    const runner = new PiAgentRunner({ queryFn })
-    const { session } = await runner.start(startOpts({ model: 'kimi-k3' }))
+    const runner = new PiAgentRunner({ createSessionFn })
+    const { session } = await runner.start(startOpts({ model: 'moonshotai/kimi-k3' }))
     const result = await runner.continue(session, 'address findings f_1, f_2')
 
-    expect(calls[1]?.prompt).toBe('address findings f_1, f_2')
-    expect(calls[1]?.options.resume).toBe('pi-1')
-    expect(calls[1]?.options.model).toBe('kimi-k3')
+    expect(prompts[1]?.text).toBe('address findings f_1, f_2')
     expect(result).toEqual({ text: 'revised', usage: { inputTokens: 7, outputTokens: 3, turns: 1 } })
   })
 
   test('re-issued ambient env merges over the start env for the continued turn (§10, D8)', async () => {
-    const { calls, queryFn } = fakeQuery([
-      [piResult('pi-1', 10, 5)],
-      [assistant('revised'), piResult('pi-1', 7, 3)],
+    const { prompts, createSessionFn } = fakeSessions([
+      {
+        sessionId: 'pi-1',
+        turns: [
+          { text: 'the plan', inputTokens: 10, outputTokens: 5 },
+          { text: 'revised', inputTokens: 7, outputTokens: 3 },
+        ],
+      },
     ])
-    const runner = new PiAgentRunner({ queryFn })
+    const runner = new PiAgentRunner({ createSessionFn })
     const { session } = await runner.start(
       startOpts({ env: { AB_BUILD: 'auth-rate-limit', AB_PHASE: 'implement@1', AB_SESSION: 's_3' } }),
     )
-    await runner.continue(session, 'fix', {
-      env: { AB_PHASE: 'implement@2', AB_SESSION: 's_5' },
-    })
-    const env = calls[1]?.options.env
+    await runner.continue(session, 'fix', { env: { AB_PHASE: 'implement@2', AB_SESSION: 's_5' } })
+
+    const env = prompts[1]?.env
     expect(env?.['AB_PHASE']).toBe('implement@2')
     expect(env?.['AB_SESSION']).toBe('s_5')
+    // A start-only key survives the per-turn refresh.
     expect(env?.['AB_BUILD']).toBe('auth-rate-limit')
   })
 
   test('throws on an unknown session', async () => {
-    const { queryFn } = fakeQuery([])
-    const runner = new PiAgentRunner({ queryFn })
+    const { createSessionFn } = fakeSessions([])
+    const runner = new PiAgentRunner({ createSessionFn })
     await expect(runner.continue({ id: 'nope', runner: 'pi' }, 'hi')).rejects.toThrow(
       'unknown session "nope"',
     )
@@ -156,18 +219,23 @@ describe('PiAgentRunner.continue', () => {
 
 describe('PiAgentRunner.end', () => {
   test('returns a Transcript with runner "pi", the model, summed usage, and both turns', async () => {
-    const { queryFn } = fakeQuery([
-      [assistant('the plan'), piResult('pi-1', 10, 5)],
-      [assistant('the revision'), piResult('pi-1', 7, 3)],
+    const { disposed, createSessionFn } = fakeSessions([
+      {
+        sessionId: 'pi-1',
+        turns: [
+          { text: 'the plan', inputTokens: 10, outputTokens: 5 },
+          { text: 'the revision', inputTokens: 7, outputTokens: 3 },
+        ],
+      },
     ])
-    const runner = new PiAgentRunner({ queryFn })
-    const { session } = await runner.start(startOpts({ model: 'kimi-k3' }))
+    const runner = new PiAgentRunner({ createSessionFn })
+    const { session } = await runner.start(startOpts({ model: 'moonshotai/kimi-k3' }))
     await runner.continue(session, 'revise please')
     const transcript = await runner.end(session)
 
     expect(transcript.metadata).toEqual({
       runner: 'pi',
-      model: 'kimi-k3',
+      model: 'moonshotai/kimi-k3',
       usage: { inputTokens: 17, outputTokens: 8, turns: 2 },
     })
     const content = JSON.parse(transcript.content)
@@ -175,11 +243,15 @@ describe('PiAgentRunner.end', () => {
     expect(content.buildSlug).toBe('auth-rate-limit')
     expect(content.turns).toHaveLength(2)
     expect(content.turns[0]).toMatchObject({ turn: 1, prompt: '/ab-plan auth-rate-limit' })
+    // end() disposes the live session.
+    expect(disposed).toEqual(['pi-1'])
   })
 
   test('a session started with no model yields a transcript with no model', async () => {
-    const { queryFn } = fakeQuery([[piResult('pi-1', 1, 1)]])
-    const runner = new PiAgentRunner({ queryFn })
+    const { createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
     const { session } = await runner.start(startOpts())
     const transcript = await runner.end(session)
     expect(transcript.metadata.model).toBeUndefined()
@@ -187,8 +259,10 @@ describe('PiAgentRunner.end', () => {
   })
 
   test('throws on an unknown session, and on a second end', async () => {
-    const { queryFn } = fakeQuery([[piResult('pi-1', 1, 1)]])
-    const runner = new PiAgentRunner({ queryFn })
+    const { createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
     await expect(runner.end({ id: 'nope', runner: 'pi' })).rejects.toThrow('unknown session "nope"')
     const { session } = await runner.start(startOpts())
     await runner.end(session)

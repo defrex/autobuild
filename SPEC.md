@@ -871,8 +871,8 @@ steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 runtime = "claude"              # no model ⇒ the runtime's own default
 
 [roles]                         # per-step OVERRIDES, most-specific-first (§9)
-plan = { model = "gpt-5.6-sol" }               # model only ⇒ routes to pi (serves GPT)
-code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime+model pair
+plan = { model = "openai/gpt-5.6-sol" }              # model only ⇒ routes to pi (serves openai/)
+code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }  # exactly this runtime+model pair
 
 [policy]
 stallRounds = 3

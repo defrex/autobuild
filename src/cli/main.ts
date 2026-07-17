@@ -21,6 +21,7 @@ import { abDispatch } from './dispatch'
 import type { TerminalOut } from './terminal'
 import type { CliEnv } from './env'
 import { abInit } from './init'
+import { abModels } from './models'
 import { observe } from './observe'
 import { ServerControl } from './server-control'
 import { abBuilds, abBuildStatus } from './status'
@@ -46,6 +47,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'dispatch',
   'builds',
   'build',
+  'models',
   'help',
   '--help',
   '-h',
@@ -138,6 +140,7 @@ const HELP = [
   '                                         (e.g. AUT-8 for linear, file-1 for file); dispatch waits for all of them.',
   '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
+  '  ab models [query] [--available]        list Pi\'s model catalog (filtered by query) to find a provider-qualified id for autobuild.toml (§9; runs outside sessions)',
   '                                         an interactive terminal gets a live build dashboard; --plain forces line-oriented output (the default when stdout is not a TTY)',
   '  ab builds [--queued] [--all] [--json] [--store <ref>]',
   '                                         list this repo\'s builds — default: running, paused, blocked; --queued adds queued;',
@@ -385,6 +388,30 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
         ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
+      })
+      return 0
+    }
+
+    // models runs OUTSIDE build sessions (§9): it lists Pi's model catalog so a
+    // human can find the provider-qualified id to paste into autobuild.toml. No
+    // store/env needed — only the Pi SDK (behind an injectable seam).
+    case 'models': {
+      const usage = 'usage: ab models [query] [--available] (§9)'
+      let availableOnly = false
+      const positionals: string[] = []
+      for (const arg of rest) {
+        if (arg === '--available') {
+          availableOnly = true
+        } else if (arg.startsWith('--')) {
+          throw new Error(`unknown flag ${arg} — ${usage}`)
+        } else {
+          positionals.push(arg)
+        }
+      }
+      await abModels({
+        ...(positionals.length > 0 ? { query: positionals.join(' ') } : {}),
+        availableOnly,
+        stdout,
       })
       return 0
     }

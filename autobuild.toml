@@ -53,19 +53,19 @@ steps = []
 # ship today (claude, pi), and a config naming an unregistered one fails
 # loudly before any build launches.
 [agent]
-runtime = "pi"          # repo-wide default runtime
-model = "gpt-5.6-sol"   # repo-wide default model (pi serves GPT/OpenAI)
+runtime = "pi"                  # repo-wide default runtime
+model = "openai/gpt-5.6-sol"    # repo-wide default model, provider-qualified (`ab models` looks ids up)
 
 # Per-step overrides, most-specific-first: `runtime + model` pins the pair;
 # `runtime` alone uses that runtime's default model; `model` alone routes to a
 # runtime that serves it (the default runtime wins when it qualifies); neither
 # ⇒ the [agent] default. Mixing models across roles is intentional — a
 # different reviewer catches more. plan and implement inherit the [agent]
-# default (pi + gpt-5.6-sol); the two review roles run on Kimi K3 so a
+# default (pi + openai/gpt-5.6-sol); the two review roles run on Kimi K3 so a
 # different model checks the work.
 [roles]
-plan-review = { runtime = "pi", model = "kimi-k3" }
-code-review = { runtime = "pi", model = "kimi-k3" }
+plan-review = { runtime = "pi", model = "moonshotai/kimi-k3" }
+code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)

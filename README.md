@@ -212,8 +212,8 @@ default in `[agent]`, override per step in `[roles]`:
 runtime = "claude"                                   # no model ⇒ the runtime's own default
 
 [roles]
-code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime + model
-plan        = { model = "gpt-5.6-sol" }              # model only ⇒ routes to pi (it serves GPT)
+code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }  # exactly this runtime + model
+plan        = { model = "openai/gpt-5.6-sol" }                 # model only ⇒ routes to pi (serves openai/)
 ```
 
 Overrides resolve **most-specific-first**: `runtime + model` pins the pair

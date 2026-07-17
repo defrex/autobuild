@@ -58,8 +58,8 @@ runtime = "claude"   # no model ⇒ the runtime's own default
 # neither). Mixing models across roles is intentional — a different reviewer
 # catches more. Uncomment and edit to experiment:
 #[roles]
-#code-review = { runtime = "pi", model = "kimi-k3" }   # exactly this pair
-#plan = { model = "gpt-5.6-sol" }                      # model only ⇒ routes to pi
+#code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }  # exactly this pair
+#plan = { model = "openai/gpt-5.6-sol" }                         # model only ⇒ routes to pi
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
