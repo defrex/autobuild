@@ -1,12 +1,12 @@
-# auto-build
+# Autobuild
 
-auto-build takes a groomed ticket to an open pull request. It plans the work,
+Autobuild takes a groomed ticket to an open pull request. It plans the work,
 implements it, reviews its own code, runs your verification steps, opens the
 PR, and reconciles conflicts against your base branch — as a sequence of agent
 sessions driven by deterministic code. Once the PR lands, it records the merge
 and closes the build out.
 
-**auto-build never bypasses your merge gates.** It opens PRs and watches them.
+**Autobuild never bypasses your merge gates.** It opens PRs and watches them.
 You can land one yourself or press `m` in the dispatch dashboard to request
 GitHub-native squash auto-merge; required checks still decide when it lands,
 and `m` cancels the request. The last word on what enters your base branch
@@ -19,14 +19,14 @@ type them.
 **What it addresses:** the gap between "an agent can write this code" and "this
 change is planned, reviewed, verified, and on the record, ready for me to
 land." Coding agents are good at the middle of that sentence and bad at the
-ends. auto-build owns the ends: state lives in a typed, append-only event log,
+ends. Autobuild owns the ends: state lives in a typed, append-only event log,
 phase transitions are code and not model judgment, and every build leaves a
 queryable paper trail.
 
 **What stays yours:** three things.
 
 1. **Grooming** a ticket to [the spec standard](docs/spec-standard.md) — what
-   and why, acceptance criteria, out of scope. auto-build never grooms its own
+   and why, acceptance criteria, out of scope. Autobuild never grooms its own
    work: a ticket becomes dispatchable only when it passes your ready gate —
    moved into `ready/` with the file tracker, or labelled `autobuild` on Linear
    — and that act is a human one.
@@ -92,9 +92,9 @@ an early adopter.
 - [Bun](https://bun.sh) — the runtime.
 - `git`.
 - The [`gh` CLI](https://cli.github.com), installed and authenticated
-  (`gh auth login`). auto-build shells out to it for every forge operation and
+  (`gh auth login`). Autobuild shells out to it for every forge operation and
   uses whatever credentials `gh` resolves.
-- Credentials for the Claude Agent SDK. auto-build passes your environment
+- Credentials for the Claude Agent SDK. Autobuild passes your environment
   through to the SDK and does not read any API key itself, so the SDK's own
   authentication applies — see the
   [Claude Agent SDK docs](https://docs.claude.com/en/api/agent-sdk/overview).
@@ -124,7 +124,7 @@ an early adopter.
 
 ## Installation
 
-> **Status: unresolved.** There is no supported way to install auto-build yet.
+> **Status: unresolved.** There is no supported way to install autobuild yet.
 > The package is private and unpublished, and choosing a distribution mechanism
 > is an open decision. This section will name a real command when there is one.
 
@@ -288,7 +288,7 @@ title = "Throttle repeated failed logins"
 it. Claiming a ticket renames it into `doing/`.
 
 To put the tracker somewhere else — note that an **explicit `dir` is your
-directory**, so auto-build does not gitignore it for you:
+directory**, so autobuild does not gitignore it for you:
 
 ```toml
 [tickets]
@@ -311,7 +311,7 @@ triageState = "Backlog"        # optional; absent = "Backlog" — must name a st
 
 The API key comes from `LINEAR_API_KEY`, in your environment or a local `.env`.
 
-**GitHub** auth is whatever `gh` resolves. There is no auto-build environment
+**GitHub** auth is whatever `gh` resolves. There is no autobuild environment
 variable for it.
 
 ### 4. Validate
@@ -569,7 +569,7 @@ Under `~/.autobuild` by default:
 - `.ab/` — per-phase agent scratch, disposable by construction
 - `.autobuild/` — the default file tracker at `.autobuild/tickets` writes its
   own self-excluding `.gitignore`, so it stays out of git without your help.
-  (An explicit `[tickets].dir` is *your* directory — auto-build does not
+  (An explicit `[tickets].dir` is *your* directory — autobuild does not
   gitignore it.) Also covers the store, if you point it into the repo for
   local dev.
 - `*.local.db`

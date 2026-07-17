@@ -1,11 +1,11 @@
 ---
 name: guide
-description: Authoritative reference for the auto-build system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how auto-build works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when setting up the dev server; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions auto-build, autobuild.toml, or the `ab` CLI.
+description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when setting up the dev server; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions autobuild, autobuild.toml, or the `ab` CLI.
 ---
 
-# auto-build system guide
+# Autobuild system guide
 
-Reference material for an agent working on a repository that uses auto-build.
+Reference material for an agent working on a repository that uses autobuild.
 This skill describes the *system*. It drives no phase and changes no files.
 
 ## How to use this skill
@@ -71,7 +71,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
-auto-build by configuring verify and finalize steps, never by inventing stages.
+autobuild by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
