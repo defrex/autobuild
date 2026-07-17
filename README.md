@@ -181,7 +181,7 @@ is an error, so a typo cannot silently disable a verifier.
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
 | `[roles]` | Role → `{ runner, model? }`. Only `claude` is registered as a runner. | — |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `5` |
-| `[dispatcher]` | `capacity`, optional `readyLabels`, optional `readyState` | `1`; ready gate defaults to the ticket source's own (see below) |
+| `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
 | `[tickets]` | Optional. Which ticket source to drive — see below | absent = the local file tracker at `.autobuild/tickets` |
 | `[outer]` | Map of outer-loop process name → `{ cron = "…" }` | — |
@@ -352,21 +352,31 @@ Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
 still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
 present, and `readyState`) → **claim-before-launch** → the **spec gate**.
 
-> **The ready gate defaults to the ticket source's own.** Leaving `readyLabels`
-> unset does not mean "no gate" — it means "the gate that source already has":
+> **`readyState` is required — it names the single workflow state a ticket must
+> sit in to be dispatched.** There is no default and no "any state" mode:
+> omitting it (or leaving it blank) is a config error, because without it every
+> ticket from the source would be eligible in *any* state — including completed
+> ones — which is exactly how a finished ticket could be built a second time.
+> Both sources apply it:
 >
-> - **File tracker** — no label is required, and `readyState` defaults to
->   `Ready`. The `ready/` **directory is the gate**: `mv triage/x.md ready/` is
->   the act that says "build this."
-> - **Linear** — `readyLabels` defaults to `["autobuild"]`, with no state gate
->   unless you set `readyState`. *Any* ticket carrying the label is
->   dispatchable no matter what state it sits in, including Triage. Applying
->   the label is the act that says "build this."
+> - **File tracker** — the state is a directory: `readyState = "ready"` gates on
+>   the `ready/` directory, so `mv triage/x.md ready/` is the act that says
+>   "build this." The name is canonicalized (`ready` → `ready/`).
+> - **Linear** — name your own ready workflow state (matched **exactly and
+>   case-sensitively**), e.g. `readyState = "Todo"`. A ticket is dispatchable
+>   only while it sits in that state; `readyLabels` defaults to `["autobuild"]`,
+>   so a ticket must carry the label **and** sit in `readyState`.
 >
-> Set `readyLabels` only to require labels **on top of** that default. With the
-> file tracker, setting it means moving a ticket into `ready/` is no longer
-> enough on its own. Getting this wrong is quiet rather than loud: the config
-> stays valid, nothing matches, and every tick just reports `tick: idle`.
+> `readyLabels` remains optional and narrows **on top of** `readyState`. With
+> the file tracker, setting it means moving a ticket into `ready/` is no longer
+> enough on its own. A wrong `readyState` fails quietly, not loudly: the config
+> stays valid, nothing matches, and every tick just reports `tick: idle` — so
+> for Linear, confirm the value is a real workflow-state name.
+>
+> **Rerunning a ticket:** a merged ticket leaves `readyState` (it moves to e.g.
+> `Done` or the `done/` directory), so it stops being eligible. To build it
+> again, move it back into the configured ready state — prior builds never
+> permanently suppress it; the gate is the ticket's *current* state.
 
 Each tick prints a report of its nonzero counters:
 
@@ -550,16 +560,15 @@ You are not at the repo root. `ab dispatch` and `ab ticket create` read
 `tick: idle` means no ticket passed the dispatch gates. There is no error,
 because nothing failed — the gates just didn't match. Work down the gates:
 
-- **The ready gate** — unset `readyLabels` means the ticket source's own gate,
-  not "no gate". With the **file tracker**, the ticket must be in `ready/`
-  (`readyState` defaults to `Ready`) — a ticket sitting in `triage/` will never
-  dispatch. With **Linear**, the `autobuild` label must be present
-  (`readyLabels` defaults to `["autobuild"]`).
-- **`readyLabels`, if you set it** — every listed label must *also* be present.
-  With the file tracker this is an extra gate on top of `ready/`, so a ticket in
-  `ready/` without the label stays put.
-- **`readyState`** — if you set it, the ticket's state must match exactly (for
-  the file tracker, the state is its directory).
+- **`readyState`** (required) — the ticket's state must match it. With the
+  **file tracker** the state is its directory, so `readyState = "ready"` means a
+  ticket in `triage/` never dispatches until you `mv` it into `ready/`. With
+  **Linear** the match is exact and case-sensitive, so a value that isn't a real
+  workflow-state name silently matches nothing — confirm it against your team's
+  workflow.
+- **`readyLabels`** — unset means the ticket source's own default (Linear:
+  `["autobuild"]`; file: none). If you set it, every listed label must *also* be
+  present, on top of `readyState`.
 - **`capacity`** — blocked and paused builds still hold their slots. At
   `capacity = 1`, one escalated build stalls all new dispatch.
 - **The spec gate** — a ticket missing `## Acceptance criteria` (with a list
