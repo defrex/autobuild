@@ -65,7 +65,7 @@ Interfaces to the world, each with swappable adapters:
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
 | `TelemetrySource` | production signals | Sentry; later log streams |
-| `BuildStore` | events, artifacts, transcripts (see §7) | local; remote HTTP |
+| `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
 
 ### 3.3 Processes
 
@@ -79,14 +79,19 @@ Small, independently runnable, crash-safe:
   immutable build slug, provisions a workspace, and launches build-runners up
   to a capacity limit. On process startup it also attempts every current build
   for its repo, so re-running `ab dispatch` resumes durable work rather than
-  only looking for new tickets. Cron-friendly.
-- **ingesters** — outer-loop processes turning signals into proposals (§12).
+  only looking for new tickets. Each tick also owns observation back-pressure:
+  it resumes an unfinished repository harvest, or starts one when the configured
+  count threshold is reached. Cron-friendly.
+- **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
+  review → file`) under a repository lease; not a build and not a phase.
+- **ingesters** — other outer-loop processes turning signals into proposals (§12).
 - **operator** — UI process(es); see §14.
 
 ### 3.4 The event log spine
 
-Every process appends typed events to a per-build append-only log in the
-BuildStore. Consequences, by design:
+Build processes append typed events to per-build logs; repository-scoped outer
+workflows append to a separate repository journal in the same BuildStore.
+Consequences, by design:
 
 - **State is a reduction of events.** Any state snapshot is a cache, never
   the source of truth. Resumability falls out.
@@ -108,7 +113,8 @@ One name, used everywhere. Every noun lives in exactly one layer.
 | **Proposal** | A synthesized candidate ticket sitting in Triage, awaiting grooming |
 | **Ticket** | A groomed, dispatchable unit of work in the TicketSource |
 | **Build** | One pipeline execution for one ticket; has a slug; the unit the operator sees |
-| **Phase** | A named stage of the pipeline grammar (§5) |
+| **Harvest run** | One repository-scoped claimed observation snapshot and staged proposal workflow; never a build |
+| **Phase** | A named stage of the build pipeline grammar (§5) |
 | **Round** | One iteration inside a review loop |
 | **Artifact** | A durable, versioned output: spec, plan, review, report, transcript |
 | **Verdict** | Structured outcome of a review/verification: `approve` \| `revise(findings)` \| `escalate(reason)` |
@@ -247,6 +253,9 @@ builds       id/slug, ticket ref, repo, branch, status (derived), created/update
              lease + heartbeat (mutable liveness columns — §15.2.6, never events)
 events       build_id, seq, timestamp, actor, type, payload (JSON)   — append-only
 artifacts    build_id, kind, revision, blobRef, metadata
+repo_streams repo, created/updated, lease + heartbeat
+repo_events  repo, seq, timestamp, actor, type, payload (JSON) — append-only
+repo_artifacts repo, kind, revision, blobRef, metadata
 ```
 
 Schema requirements (the exact DDL is not design-critical): simple,
@@ -266,9 +275,11 @@ query rather than a project.
 
 ### 7.2 Interface and adapters
 
-Deliberately narrow: runners need `append(event)`, `putArtifact`,
-`getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`,
-`subscribe`.
+Deliberately narrow: build runners need `append(event)`, `putArtifact`,
+`getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`, `subscribe`.
+The same contract has repository-scoped `ensureRepo`, event/artifact deposit and
+read methods, plus a repository lease. Build methods and reducers remain
+unchanged for build callers.
 
 1. **Local** — SQLite + blob directory under `~/.autobuild/`. Zero setup,
    offline, v1-parity for solo use. The repo never sees build metadata.
@@ -331,11 +342,13 @@ AB_SESSION   # session id
 AB_TOKEN     # scoped token (remote store)
 ```
 
-The skill still takes the build slug as its one argument (prompt clarity,
-human invocability), but the CLI resolves everything from the environment —
-and **the token is scoped to this build and session**: an agent physically
-cannot append to another build's log or read another build's artifacts.
-Least privilege comes from the runner, not from prompt instructions.
+A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE` of
+`synthesize@N` or `review@N`. The AgentRunner invocation argument is opaque: a
+build skill receives its slug; a harvest skill receives its run id. The CLI
+resolves identity from ambient auth, and remote tokens distinguish build from
+repository resources as well as session attribution. A leaked harvest token
+cannot read a build stream and vice versa. Least privilege comes from the
+runner, not prompt instructions.
 
 ### 8.2 Command surface
 
@@ -449,13 +462,20 @@ implementer:  ab context   (findings.json now materialized) → …
 - *Store unreachable* → CLI retries with backoff; a phase that cannot
   deposit cannot complete → `phase.failed`, runner-level policy takes over.
 
-### 8.8 Outer-loop namespace (deferred)
+### 8.8 Outer-loop namespace
 
-Pre-build surfaces need a small separate namespace: `ab ticket create`
-(the `/spec` skill filing a groomed ticket) and `ab ticket propose`
-(ingesters filing to Triage), plus ledger operations for ingesters. Same
-binary, same ambient-auth model, different scope — detailed design belongs
-to the outer-loop/ingester thread, not here.
+Human/pre-build ticket creation remains `ab ticket create`. Observation harvest
+uses a typed, repository-scoped namespace:
+
+| Command | Scope | Purpose |
+|---|---|---|
+| `ab harvest context` | harvest session | rebuild `.ab/` with claimed observations, reconciled ledger, proposals, prior findings |
+| `ab harvest submit <json>` | synthesize terminal | validate exact occurrence coverage and deposit a proposal artifact/event |
+| `ab harvest verdict <approve\|revise\|escalate> …` | review terminal | deposit notes, stamped findings, and structured verdict |
+| `ab harvest status [--events N] [--json] [--store …]` | operator/read-only | reduce and display the latest repository run |
+
+Agents never receive TicketSource credentials. Only the deterministic file step
+creates/adopts approved proposals and commits ledger facts.
 
 ## 9. AgentRunner
 
@@ -463,7 +483,7 @@ Session-based, because review loops need memory:
 
 ```ts
 interface AgentRunner {
-  start(opts: { skill, buildSlug, workspace, model, … }): Session
+  start(opts: { skill, invocation, workspace, model, … }): Session
   continue(session, message): Result    // review-loop rounds
   end(session): Transcript              // → store, always
 }
@@ -504,7 +524,8 @@ deterministic naming fallback (§6.3).
 
 ## 10. The review loop (`converge`)
 
-One generic primitive, used for both the plan loop and the code loop:
+One generic primitive, used for the plan loop, code loop, and harvest's
+synthesize/review loop:
 
 ```ts
 converge<A>(
@@ -554,16 +575,43 @@ signals (telemetry, observations)
    → build → PR → merge
 ```
 
-- **One ingester pattern**, per-source differences live in the source
-  adapter: `ingest:sentry` filters by frequency/users/recency/deploy
-  staleness; `harvest` clusters and dedups observations. Both cite the spec
-  standard so proposals are born as spec-like as their evidence allows.
-- **Observations are structured events** emitted mid-build via `ab observe`
-  (`followup | refactor | latent-bug`, with file/ticket refs). `harvest`
-  clusters records, not prose; dedup is cheap.
-- v1's load-bearing mechanics carry forward: the dedup ledger (a processed
-  signal never re-files), claim-before-launch (no double-dispatch),
-  single-writer ingester discipline.
+Other ingesters such as `ingest:sentry` remain schedule-driven through
+`[outer]`. Observation harvest is different: the already-running dispatcher
+counts structured `observation.recorded` envelopes across this repository on
+each tick. Below `[harvest].threshold` it does nothing. At or above the
+threshold it selects the whole current accumulation and starts one staged run;
+a started run atomically claims its immutable occurrence snapshot, and
+observations arriving later wait for the next threshold.
+
+Occurrence identity is `{build slug, event seq}` — never payload id or a scalar
+high-water mark, because event sequences are per build. The repository journal
+is separate from build streams and reduces to run/step state, claims, review
+history, filing facts, and the authoritative committed disposition ledger.
+A repository lease plus dispatch's serialized operation queue enforces one
+harvest at a time.
+
+The fixed workflow is:
+
+1. **scan (deterministic)** — subtract all claimed occurrences, reconcile prior
+   proposal tickets through TicketSource lifecycle facts (including
+   resolved/missing tombstones), and atomically store the scan packet with
+   `harvest.started`.
+2. **synthesize ⇄ review (judgment through `converge`)** — the continuing
+   producer clusters same-problem records and authors typed create/join/suppress
+   proposals; a fresh reviewer checks exact coverage, semantic dedup, spec
+   quality, and evidence. `revise` findings feed the next producer round;
+   `maxReviewRounds` and `stallRounds` bound the loop. Only approval advances.
+3. **file (deterministic)** — render creates to the spec standard, target the
+   configured Triage state explicitly, and create/adopt through a stable
+   cluster idempotency key. Per-proposal filing facts close the external-create
+   crash window; one terminal event commits every occurrence disposition.
+
+The harvester only proposes: it never claims, readies, grooms, or dispatches a
+proposal. A terminal escalation consumes its claimed snapshot so watch ticks do
+not hot-loop. Completed/cancelled/missing proposal refs remain dedup tombstones.
+Every step brackets start/result events and agent sessions/transcripts, and the
+latest run appears as a visibly literal, nonselectable `HARVEST` row in the
+dispatch dashboard. Humans still own Triage → Ready.
 
 ## 13. Ticket source policy
 
@@ -589,6 +637,12 @@ ticket stays queued source work rather than becoming a blocked build: the
 runtime `blocked` status is for builds awaiting a human, not for work that
 has not started.
 
+`create(draft, {state?, idempotencyKey?})` supports deterministic outer-loop
+filing. A state override lets harvest target Triage even when ordinary user
+creation has another default. An idempotency key must adopt the same ticket on
+retry across process restarts: the file adapter persists it in frontmatter;
+Linear uses a deterministic caller-supplied issue UUID and adopt-on-conflict.
+
 ## 14. Operator UI
 
 The UI layer is defined by the seam, not any implementation: **subscribe to
@@ -606,7 +660,11 @@ vocabulary *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
   remains line-oriented and reads no keyboard input.
 - Selection survives repaint/re-sort by tracking the build slug. Drain belongs
   only to one running dispatcher: while on it skips new ticket claims but keeps
-  janitor, stale-runner, and in-flight work running; restart defaults it off.
+  janitor, stale-runner, harvest, and in-flight work running; restart defaults
+  it off.
+- The latest repository harvest is projected with the same `PipelineStep`
+  representation as builds, but carries a literal `HARVEST` marker and is not
+  selectable. Every keyboard action continues to enumerate build slugs only.
 - Later: web UI and others — same adapter pattern against the same store.
 - The operator's job across many concurrent builds: see status at a glance,
   act on a selected build, find blocked builds, answer escalations, and inspect
@@ -637,7 +695,10 @@ Every event shares:
 
 `actor.kind ∈ kernel | agent | human | dispatcher | ingester`. Agents carry
 `role` and `session`; humans carry `user`. The store assigns `seq` and `ts`
-so producers can't fake ordering.
+so producers can't fake ordering. Repository-journal events use the same shape
+with `repo` in place of `build`, and their own per-repository sequence. They are
+validated by a separate harvest catalog so build reducers cannot accidentally
+interpret outer-loop state.
 
 ### 15.2 Conventions
 
@@ -742,6 +803,20 @@ janitor, `reconcile.*` by a re-attached build-runner)
 | `escalation.raised` | agent, kernel | `{id, phase, round?, source: agent \| stall \| policy, question, refs?}` |
 | `escalation.answered` | human; dispatcher for policy retry | `{id, answer, resolution: guidance \| dismiss-finding \| revise-spec \| abort \| retry}` |
 | `phase.failed` | kernel | `{phase, round?, attempt, error, willRetry}` (infra failure — distinct from verdicts) |
+
+**Repository observation harvest** (separate journal)
+
+| Type | Actor | Payload |
+|---|---|---|
+| `harvest.started` | kernel/dispatcher | `{run, observations: [{build, seq}], scan: artifact}` — atomically claims the snapshot |
+| `harvest.step.started` / `harvest.step.completed` | kernel | `{run, step: scan \| synthesize \| review \| file, round?, outcome?, artifact?}` |
+| `harvest.session.started` / `harvest.session.ended` | kernel | run/session/role/round and transcript/usage facts |
+| `harvest.proposals.submitted` | agent | `{run, round, artifact}` |
+| `harvest.review.verdict` | agent | `{run, round, verdict, findings, artifact, reason?}` |
+| `harvest.proposal.filed` | kernel | `{run, proposalKey, ticket}` — external-create retry boundary |
+| `harvest.completed` | kernel | `{run, dispositions, report}` — authoritative committed ledger facts |
+| `harvest.escalated` | kernel/agent | `{run, source, reason, round?, observations}` |
+| `harvest.failed` | kernel | `{run, step, round?, attempt, error, willRetry}` |
 
 ### 15.4 Finding schema and stall mechanics [D4]
 
@@ -931,6 +1006,8 @@ runtime = "claude"              # no model ⇒ the runtime's own default; no ext
 slug = { model = "openai/gpt-5.6-sol" }  # optional pre-build naming override
 plan = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }  # model + pi extensions
 code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }  # pinned pair + web grounding
+harvest = { model = "openai/gpt-5.6-sol" }          # optional producer override
+harvest-review = { model = "moonshotai/kimi-k3" }   # optional fresh-reviewer override
 
 [policy]
 stallRounds = 3
@@ -942,9 +1019,11 @@ capacity = 3                    # concurrent builds for this repo
 readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
-[outer]                         # cron schedules for outer-loop processes
+[harvest]                       # observation-count back-pressure in dispatch
+threshold = 10
+
+[outer]                         # cron schedules for OTHER ingesters
 "ingest:sentry" = { cron = "0 */4 * * *" }
-harvest = { cron = "0 9 * * *" }
 ```
 
 Declarative (TOML), not executable config: the kernel, dispatcher, CLI, and
@@ -1014,10 +1093,12 @@ upgrades; divergence is visible instead of silent.
 
 ## 18. Open threads
 
-1. **[OPEN] Event payload schemas** — §15 decisions confirmed; remaining:
-   freeze payloads as versioned JSON Schema at implementation time.
-2. **[OPEN] Outer-loop detail** — the ingester thread: the `ab ticket`
-   namespace (§8.8), ledger operations, per-source filter design.
+1. **Event payload schemas (decided)** — build payloads are frozen in
+   `src/events/payloads.ts`; repository harvest payloads are frozen separately
+   in `src/events/harvest.ts`. Every adapter validates before append.
+2. **[OPEN] Other-ingester detail** — observation harvest and its typed CLI,
+   repository journal, ledger, trigger, and review loop are decided in §8.8 and
+   §12. Per-source filter design for scheduled `ingest:*` sources remains open.
 3. **[OPEN] Retention/archival policy** — the v1 archival gap, now a store
    config concern rather than a repo problem. Needs a default (e.g. prune
    blobs for merged builds after N months, keep events).

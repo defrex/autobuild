@@ -61,8 +61,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 6. **epilogue** — with the PR open, the dispatcher watches it. A conflicted PR
    routes to `reconcile` and re-verifies; the build ends `merged` or `closed`.
 
-The grammar is fixed. Only `verify:*` and `finalize:*` are configurable, and
-they are declared per-repo in `autobuild.toml`. Verify steps come in two kinds:
+The build grammar is fixed. Only `verify:*` and `finalize:*` are configurable,
+and they are declared per-repo in `autobuild.toml`. Observation harvest is a
+separate repository-scoped outer workflow owned by dispatch, not a build phase:
+`scan → synthesize ⇄ review → file`. Verify steps come in two kinds:
 
 - **`check`** — a deterministic shell command; pass/fail is its exit code.
 - **`agent`** — a skill that runs and returns a `pass` or `fail` verdict.
@@ -190,7 +192,8 @@ is an error, so a typo cannot silently disable a verifier.
 | `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
 | `[tickets]` | Optional. Which ticket source to drive — see below | absent = the local file tracker at `.autobuild/tickets` |
-| `[outer]` | Map of outer-loop process name → `{ cron = "…" }` | — |
+| `[harvest]` | Observation-count back-pressure for the staged harvester: positive `threshold` | `threshold = 10` |
+| `[outer]` | Map of other scheduled ingesters → `{ cron = "…" }`; the exact `harvest` key is rejected | — |
 
 The generated template ships a working `[verify]` pair:
 
@@ -262,8 +265,9 @@ it sits in**:
 dispatches it. The defaulted directory writes a self-excluding `.gitignore`, so
 it stays out of git on its own.
 
-Tickets are `<id>.md` files with `+++`-fenced TOML frontmatter — exactly `id`,
-`title`, and optional `labels` — followed by the body. There is **no `state`
+Tickets are `<id>.md` files with `+++`-fenced TOML frontmatter — `id`,
+`title`, optional `labels`/`blockedBy`, and an internal harvest idempotency key
+when applicable — followed by the body. There is **no `state`
 field**: the directory is the state. The frontmatter is strict, so an unknown
 key is a parse error. A dispatchable ticket at `.autobuild/tickets/ready/file-1.md`:
 
@@ -405,6 +409,18 @@ Each tick runs in this order:
 3. **lease sweep** — re-attaches runners to builds whose lease went stale.
 4. **dispatch** — claims and launches new work (skipped while the interactive
    dispatcher is drained).
+5. **harvest** — independently of build capacity and drain, count newly
+   unclaimed structured observations. Below `[harvest].threshold`, do nothing.
+   At the threshold, claim the accumulation and run one journaled
+   scan/synthesize/review/file workflow. Approved proposals are created directly
+   in Triage and are never dispatched by the harvester.
+
+The dashboard renders the latest run as a literal `HARVEST` step row with
+elapsed times. It is not selectable, so `p` and `m` still target build slugs
+only. Use `ab harvest status --events 20` for its event-level paper trail.
+Optional runtime/model overrides are `[roles].harvest` and
+`[roles].harvest-review`; the producer continues across revision rounds and
+each reviewer is fresh.
 
 Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
 still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
@@ -452,7 +468,8 @@ tick: idle          # every counter zero
 ```
 
 Counters are `merged`, `closed`, `conflicted`, `abandoned`, `resumed`, `swept`,
-`dispatched`, `authored`, `bounced`, and `claimRaces`.
+`dispatched`, `authored`, `bounced`, `claimRaces`, `harvestStarted`,
+`harvestResumed`, `harvestCompleted`, `harvestEscalated`, and `harvestFailed`.
 
 ---
 
@@ -468,6 +485,9 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b]` | File a ticket to the configured `[tickets]` source. |
 | `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. |
+| `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
+| `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
+| `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the latest repository harvest run, including steps, verdicts, filing, and failures. Read-only. |
 | `ab help` | Print the command surface. |
 
 ### Agent build-session commands
@@ -547,7 +567,7 @@ Under `~/.autobuild` by default:
 | Path | Contents |
 |---|---|
 | `~/.autobuild/autobuild.sqlite` | Events and build records |
-| `~/.autobuild/blobs/` | Content-addressed artifact blobs |
+| `~/.autobuild/blobs/` | Content-addressed build and repository-journal artifact blobs |
 | `~/.autobuild/worktrees/ab-<slug>/` | One git worktree per build. The branch is `ab/<slug>`; the directory name flattens it — every run of characters outside `[A-Za-z0-9._-]` becomes a `-`, so branch `ab/add-rate-limiting` lives at `worktrees/ab-add-rate-limiting/`. |
 
 `ab dispatch --store <ref>` moves the store — a local path, or an
@@ -607,7 +627,8 @@ autobuild.toml: invalid config
 Each line is `  <path>: <message>`. Common causes:
 
 - **Unknown table** — the message appends `— known tables: project, commands,
-  server, verify, finalize, roles, policy, dispatcher, tickets, outer`. Check
+  server, verify, finalize, agent, roles, policy, dispatcher, tickets, harvest,
+  outer`. Check
   for a typo; the file is strict on purpose.
 - **A step with no table** — `verify step "<s>" is listed in verify.steps but
   has no [verify.<s>] table…`. Add the table, or drop the step.
@@ -681,8 +702,9 @@ AB_STORE is not set — expected the store URL or local path. The runner sets
 ambient auth for every session (D8, SPEC §8.1).
 ```
 
-You ran an agent build-session command by hand. Only `ab init`, `ab upgrade`,
-`ab ticket`, `ab dispatch`, and `ab help` work outside a build session; the rest
+You ran an agent build-session command by hand. `ab init`, `ab upgrade`,
+`ab ticket`, `ab dispatch`, `ab builds`, `ab build status`, `ab harvest status`,
+and `ab help` work outside a build or harvest session; the rest
 resolve their identity from the `AB_*` variables the runner sets. Don't set them
 yourself — there is nothing an operator needs from those commands.
 

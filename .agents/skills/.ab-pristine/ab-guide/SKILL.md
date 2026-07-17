@@ -48,8 +48,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   tickets; a human grooms them to the spec standard (`docs/spec-standard.md`:
   what and why but never how, verifiable acceptance criteria, explicit
   out-of-scope, evidence) and dispatches. Generated work cannot leave Triage
-  un-groomed. The dispatcher claims tickets that pass the `[dispatcher]` gate
-  and starts builds up to `capacity`.
+  un-groomed. The dispatcher claims tickets that pass the `[dispatcher]` gate,
+  chooses a short immutable slug from the final conforming spec, and starts
+  builds up to `capacity`.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
@@ -73,19 +74,37 @@ points. There are no custom phases, no DAGs, no reordering — a repo extends
 auto-build by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
+**Observation harvest is not a build phase.** On each dispatch tick, once
+`[harvest].threshold` new structured observations have accumulated, dispatch
+runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
+⇄ fresh adversarial `review`, then deterministic `file`. Only approved
+spec-standard proposals are created directly in Triage. A repository journal,
+artifact stream, dedup ledger, and lease make every step queryable and
+crash-safe without polluting `ab builds` or the fixed phase grammar. Already
+claimed observations never trigger again; idle ticks launch no harvest agent.
+
+**Slug naming is not a phase.** For each new build, a tool-free one-shot call
+proposes a lowercase kebab base of at most three meaningful spec-derived words.
+The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
+`-3`, … collision suffixes. Absence or any failure falls back to the first
+three words of the kebab-cased title, so naming never blocks dispatch. The slug
+and `ab/<slug>` branch are chosen once; existing builds are never renamed.
+Naming follows `[agent]` and can be overridden with `[roles].slug`.
+
 ## Who does what
 
 The distinctions that change an administrator's answer:
 
-- **Agents supply judgment** — planning, reviewing, implementing, verifying.
-  Nothing else. An agent never decides a transition.
+- **Agents supply judgment** — planning, reviewing, implementing, verifying,
+  and narrow pre-build proposals such as slug naming. An agent never decides a
+  transition or whether a naming proposal is valid.
 - **The kernel owns determinism** — phase transitions, gating, deduplication,
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
-- **The BuildStore is an append-only event log.** Status is *reduced* from
-  events (`src/kernel/reducer.ts`); snapshots are never authoritative. This is
-  what makes builds resumable after a crash. Events record facts, never derived
-  state.
+- **The BuildStore is append-only event logs.** Build status is reduced from
+  each build stream (`src/kernel/reducer.ts`); harvest state and its dedup ledger
+  are reduced from the repository journal (`src/kernel/harvest.ts`). Snapshots
+  are never authoritative. Events record facts, never derived state.
 - **Workspaces** are provisioned per build. Config is read from **the build's
   branch** at provision — so a config change flows through the pipeline like
   any other change, and every phase of one build sees one consistent config.
@@ -176,18 +195,48 @@ and repeats up to `[policy].maxVerifyAttempts`.
 |---|---|---|---|
 | `steps` | `[]` | array of nonempty step names | Post-steps that run after the PR is opened. **Failure-tolerant**: a failed step files an observation and never fails a green build. |
 
-### `[roles]`
+### `[agent]`
 
-An **open map** of role name → `{ runner, model? }`. The roles the pipeline
-routes are `plan`, `plan-review`, `implement`, and `code-review`.
+The repo-wide **default** on the configuration axes: the `runtime` that
+executes an agent session, the `model` it runs on, and (pi only) the
+`extensions` it may use. All optional. Absent entirely ⇒ the built-in fallback
+runtime (`claude`) with its own default model, and no extensions — today's
+behavior, unchanged. Two runtimes ship: **`claude`** (Claude models) and
+**`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models, provider-qualified ids
+like `openai-codex/gpt-5.6-sol` — `ab models [query]` looks them up).
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runner` | — | **required**, nonempty string | Which AgentRunner adapter executes this role's sessions (e.g. `"claude"`). |
-| `model` | — | optional, nonempty string | Model override for this role. Absent = the runner's default. |
+| `runtime` | — | optional, nonempty string | The default runtime for every session. Must name a registered runtime, else `ab dispatch` fails loudly before any build. |
+| `model` | — | optional, nonempty string | The default model. Absent ⇒ the runtime's own default model. |
+| `extensions` | — | optional, array of nonempty strings | Default Pi extensions/packages a session may use (e.g. `["subagents", "web-access"]`). Absent ⇒ **hermetic** (no internet / sub-agents / MCP). Entries match installed package sources case-insensitively; `claude` ignores this axis. |
 
-Mixing models across roles is **intentional**, not an inconsistency to clean
-up: a reviewer that differs from the implementer catches more.
+### `[roles]`
+
+An **open map** of role name → per-step **override** `{ runtime?, model?,
+extensions? }` on the same axes. The roles the pipeline routes are `plan`,
+`plan-review`, `implement`, and `code-review` (plus each verify/finalize step by
+name); the repository workflow routes `harvest` and `harvest-review`. The
+pre-build `slug` role uses the same runtime/model resolver for
+optional one-shot naming; it is not a pipeline phase, its extension allowlist
+is not enabled, and it always remains tool-free.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `runtime` | — | optional, nonempty string | Runtime override for this role. Absent ⇒ resolved from `model` or the `[agent]` default. |
+| `model` | — | optional, nonempty string | Model override for this role. Absent ⇒ the resolved runtime's default. |
+| `extensions` | — | optional, array of nonempty strings | Per-role extension allowlist. Absent ⇒ inherit the `[agent]` default (hermetic when that too is unset). Lets internet/sub-agent access be granted to plan/review while implement/verify stay hermetic. |
+
+Runtime/model resolve **most-specific-first**: `runtime + model` pins exactly
+that pair (a runtime that can't serve the model is a config error); `runtime`
+alone uses that runtime's default model; `model` alone routes to a runtime that
+serves it (the default runtime wins when it qualifies, otherwise the single
+supporter — zero, or several non-default supporters, is a loud error); neither
+inherits the `[agent]` default pair (a role added only to set `extensions`
+keeps the default model). `extensions` resolves independently: the role's list
+overrides the `[agent]` default, absent ⇒ that default. Mixing models across
+roles is **intentional**, not an inconsistency to clean up: a reviewer that
+differs from the implementer catches more.
 
 ### `[policy]`
 
@@ -260,14 +309,26 @@ through `ab-tickets` rather than running `mv` by hand.
 variable (a local `.env` works). If a user asks you to put an API key in
 `autobuild.toml`, use the environment variable instead and say why.
 
-### `[outer]`
+### `[harvest]`
 
-An **open map** of outer-loop process name → schedule. Keys are user-chosen
-(e.g. `"ingest:sentry"`, `harvest`).
+Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
+wall clock. The table is prefaulted, so omitting it enables the sensible
+default. Harvest remains independent of build capacity and of the dashboard's
+drain toggle.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `cron` | — | **required**, nonempty string | Cron schedule for that outer-loop process. |
+| `threshold` | `10` | positive integer | Number of newly unclaimed `observation.recorded` occurrences required to start one harvest run. The run claims the whole current accumulation. |
+
+### `[outer]`
+
+An **open map** of scheduled outer-loop ingester name → schedule (for example
+`"ingest:sentry"`). The exact key `harvest` is rejected with an error directing
+the user to `[harvest].threshold`; other scheduled ingesters are unaffected.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `cron` | — | **required**, nonempty string | Cron schedule for that non-harvest outer-loop process. |
 
 ## Setup and upgrades
 
@@ -286,7 +347,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
-  set (`ab-spec`, `ab-guide`).
+  set (`ab-spec`, `ab-tickets`, `ab-guide`).
 
 Per-skill outcomes: `installed` (new), `unchanged` (byte-identical to the
 default), `kept` (locally edited — **init never clobbers an edit**), or
@@ -346,6 +407,15 @@ restarted, not that verify never ran.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
+**`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
+latest repository harvest run from the same journal the runner resumes. It
+shows the claimed observation count, each scan/synthesize/review/file
+occurrence and outcome, review rounds, filed ticket refs, and any escalation or
+infrastructure failure. It is read-only and also reports an idle repository
+that has never harvested. The dispatch dashboard shows the latest run as a
+literal, non-color-only `HARVEST` step row; it is not selectable and build
+pause/auto-merge controls can never target it.
+
 ### Lease health is not build status
 
 These are **two independent axes**, and reading one as the other is the mistake
@@ -378,6 +448,8 @@ default, when you need to know what this repo's version says).
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
 | `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invocable.** |
+| `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
+| `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
 | `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |

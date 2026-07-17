@@ -26,6 +26,7 @@ import {
   agentDefaultsSchema,
   dispatcherSchema,
   finalizeSchema,
+  harvestSchema,
   outerScheduleSchema,
   policySchema,
   projectSchema,
@@ -73,6 +74,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   policy: Object.keys(policySchema.shape),
   dispatcher: Object.keys(dispatcherSchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
+  harvest: Object.keys(harvestSchema.shape),
   outer: Object.keys(outerScheduleSchema.shape),
 }
 
