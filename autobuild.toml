@@ -92,7 +92,7 @@ readyState = "Todo"
 source = "linear"
 teamKey = "AUT"                 # Linear team key ("Auto-build")
 claimedState = "In Progress"    # workflow state claim() moves an issue to
-createState = "Todo"         # state new tickets are filed into (absent = provider default)
+createState = "Backlog"         # state new tickets are filed into (absent = provider default)
 triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with dir = "tickets"
 
