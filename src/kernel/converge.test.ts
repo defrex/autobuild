@@ -379,7 +379,7 @@ interface LoopTrace {
 
 // decideNext's policy knobs come from config defaults: stallRounds 3,
 // maxReviewRounds 5 (§16.1). converge gets the same numbers below.
-const diffConfig = parseConfig('')
+const diffConfig = parseConfig('[dispatcher]\nreadyState = "ready"\n')
 const DIFF_POLICY = {
   maxRounds: diffConfig.policy.maxReviewRounds,
   stallRounds: diffConfig.policy.stallRounds,

@@ -1,8 +1,10 @@
 /**
  * The zero-config claim, end to end (SPEC §3.3, §13): a real Dispatcher tick
  * driving a REAL FileTicketSource over a real directory — no fake ticket
- * source — with a config that has no [tickets] table and no [dispatcher]
- * readiness keys at all.
+ * source — with a config that has no [tickets] table. The only required
+ * dispatcher key is `readyState` (AUT-11), which the harness injects as
+ * `"ready"`; the file source canonicalizes it to the `ready/` directory, so the
+ * gate stays "the directory a ticket sits in."
  *
  * This is the spec's headline: `mv` a ticket into `ready/` and the next tick
  * dispatches it. The pieces are unit-tested apart (file.test.ts owns the
@@ -64,10 +66,25 @@ afterEach(async () => {
 /** The tracker the factory picks when autobuild.toml says nothing about tickets. */
 const trackerDir = () => join(repoDir, '.autobuild', 'tickets')
 
+/**
+ * `[dispatcher].readyState` is required now (AUT-11). The file tracker's ready
+ * gate IS the `ready/` directory, and `stateDir` canonicalizes `"ready"` to it,
+ * so every fixture here gets `readyState = "ready"` unless it sets its own —
+ * appended into an existing `[dispatcher]` header (TOML forbids the table
+ * twice) or prepended as its own table.
+ */
+function withReadyState(toml: string): string {
+  if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
+  if (/(^|\n)\[dispatcher\]/.test(toml)) {
+    return toml.replace(/(^|\n)(\[dispatcher\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
+  }
+  return `[dispatcher]\nreadyState = "ready"\n${toml}`
+}
+
 function harness(toml = '') {
   const clock = manualClock()
   const store = new MemoryBuildStore({ clock })
-  const config = parseConfig(toml)
+  const config = parseConfig(withReadyState(toml))
   // The real seam: config → factory → adapter, exactly as defaultWire does it.
   const tickets = createTicketSource(config.tickets, {}, repoDir)
   const launches: string[] = []

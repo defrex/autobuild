@@ -64,6 +64,10 @@ stallRounds = 3
 [dispatcher]
 capacity = 1
 readyLabels = ["autobuild"]
+# These tests inject a FakeTicketSource (exact, case-sensitive state match) whose
+# tickets default to state "Ready", so the gate names that state verbatim — the
+# file source's canonicalization is exercised in dispatcher-file-tickets.test.ts.
+readyState = "Ready"
 
 [tickets]
 source = "file"
@@ -225,7 +229,7 @@ describe('abDispatch guards', () => {
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\n',
+        '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\nreadyState = "ready"\n',
       )
       let wired: Config | undefined
       const store = new MemoryBuildStore({ clock: systemClock })
@@ -341,9 +345,9 @@ describe('abDispatch --once', () => {
       expect(tick).not.toContain('dependencyDiagnostics')
       // The blocked ticket built nothing, while the unrelated eligible ticket
       // in the same ready list dispatched — the gate is per-ticket, not a
-      // per-tick abort. (T-9 never appears: this config's source is `file`,
-      // whose readyState defaults to `Ready`, so an In-Progress ticket is not
-      // a candidate in the first place — see readyCriteria.)
+      // per-tick abort. (T-9 never appears: `readyState = "Ready"` gates the
+      // scan, so an In-Progress ticket is not a candidate in the first place —
+      // see readyCriteria.)
       const builds = await fx.store.listBuilds()
       expect(builds.map((b) => b.ticket?.id)).toEqual(['T-free'])
     } finally {

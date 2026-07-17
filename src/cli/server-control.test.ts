@@ -40,6 +40,8 @@ function writeToml(workspacePath: string, port: number, opts: { readyTimeout?: n
   writeFileSync(
     join(workspacePath, 'autobuild.toml'),
     [
+      '[dispatcher]',
+      'readyState = "ready"',
       '[server]',
       `start = ${JSON.stringify(start)}`,
       `url = ${JSON.stringify(urlFor(port))}`,
@@ -143,7 +145,10 @@ describe('ServerControl — refusals (§16.2, §8.2)', () => {
 
   test('an autobuild.toml without [server] is refused', async () => {
     const ws = makeWorkspace()
-    writeFileSync(join(ws, 'autobuild.toml'), '[project]\nbaseBranch = "main"\n')
+    writeFileSync(
+      join(ws, 'autobuild.toml'),
+      '[project]\nbaseBranch = "main"\n[dispatcher]\nreadyState = "ready"\n',
+    )
     await expect(makeControl(ws).start()).rejects.toThrow(
       /no \[server\] table.*refuses without one/s,
     )

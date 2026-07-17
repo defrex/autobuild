@@ -30,6 +30,9 @@ const BUILD = 'auth-rate-limit'
 // Policy defaults apply: stallRounds 3, maxVerifyAttempts 3,
 // maxReconcileAttempts 3, maxReviewRounds 5 (§16.1).
 const config = parseConfig(`
+[dispatcher]
+readyState = "ready"
+
 [commands]
 typecheck = "bun tsc --noEmit"
 test = "bun test"
@@ -1089,7 +1092,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   })
 
   test('no verify steps configured → straight to finalize', () => {
-    const bare = parseConfig('')
+    const bare = parseConfig('[dispatcher]\nreadyState = "ready"\n')
     expect(
       decideNext(
         toLog([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1'), ...codeReview(1, 'approve')]),
@@ -1119,7 +1122,9 @@ describe('decideNext: rule 8 — finalize', () => {
   })
 
   test('post-steps run in config order after finalize.completed', () => {
-    const twoSteps = parseConfig('[finalize]\nsteps = ["release-notes", "screenshots"]\n')
+    const twoSteps = parseConfig(
+      '[dispatcher]\nreadyState = "ready"\n[finalize]\nsteps = ["release-notes", "screenshots"]\n',
+    )
     const done = [
       ...prelude(),
       ...planApproved(),
@@ -1145,7 +1150,7 @@ describe('decideNext: rule 8 — finalize', () => {
   })
 
   test('no post-steps configured → straight to awaiting-pr', () => {
-    const bare = parseConfig('')
+    const bare = parseConfig('[dispatcher]\nreadyState = "ready"\n')
     expect(
       decideNext(
         toLog([

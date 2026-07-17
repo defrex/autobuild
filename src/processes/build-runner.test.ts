@@ -37,6 +37,9 @@ const TICKET = { source: 'linear', id: 'ENG-42', title: 'Auth rate limiting' }
 // Mirrors §16.1: two check steps (types, unit) + one agent step (e2e,
 // needsServer), one finalize post-step, one routed role with a model.
 const CONFIG_TOML = `
+[dispatcher]
+readyState = "ready"
+
 [commands]
 typecheck = "bun tsc --noEmit"
 test = "bun test"

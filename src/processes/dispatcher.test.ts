@@ -55,6 +55,22 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   }
 }
 
+/**
+ * `[dispatcher].readyState` is required now (AUT-11). These harness tests seed
+ * `readyTicket`s that default to state "Ready", so a fixture that doesn't care
+ * about the state gate gets a `readyState = "Ready"` injected: appended into an
+ * existing `[dispatcher]` header (TOML forbids declaring the table twice) or
+ * prepended as its own table. A fixture that sets its own readyState is left
+ * untouched.
+ */
+function withReadyState(toml: string): string {
+  if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
+  if (/(^|\n)\[dispatcher\]/.test(toml)) {
+    return toml.replace(/(^|\n)(\[dispatcher\][^\n]*\n)/, `$1$2readyState = "Ready"\n`)
+  }
+  return `[dispatcher]\nreadyState = "Ready"\n${toml}`
+}
+
 function harness(
   opts: {
     tickets?: Ticket[]
@@ -82,7 +98,7 @@ function harness(
     tickets,
     workspaces,
     forge,
-    config: parseConfig(opts.toml ?? ''),
+    config: parseConfig(withReadyState(opts.toml ?? '')),
     repo: REPO,
     exec,
     launchRunner: async (slug) => {
@@ -452,6 +468,62 @@ describe('Dispatcher dispatch', () => {
     expect(report.dispatched).toBe(1)
     const builds = await h.store.listBuilds()
     expect(builds.map((b) => b.slug)).toEqual(['add-rate-limiting'])
+  })
+
+  test('a completed ticket still carrying the ready label is NOT dispatched — the AUT-10 regression guard (AC 3, 4)', async () => {
+    // AUT-10: a ticket that had moved to Done but still carried the `autobuild`
+    // label was dispatched a second time because no state gate constrained the
+    // scan. With readyState required, the completed ticket is never a candidate,
+    // no matter its labels — the label alone can no longer make it eligible.
+    const done = readyTicket('T-done', {
+      title: 'Already shipped',
+      state: 'Done',
+      labels: ['autobuild'],
+    })
+    const fresh = readyTicket('T-ready', {
+      title: 'Fresh work',
+      state: 'Ready',
+      labels: ['autobuild'],
+    })
+    const h = harness({
+      tickets: [done, fresh],
+      toml: [
+        '[dispatcher]',
+        'capacity = 2', // room for BOTH — so a skip is a real gate, not a cap
+        'readyLabels = ["autobuild"]',
+        'readyState = "Ready"',
+      ].join('\n'),
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dispatched).toBe(1)
+    const builds = await h.store.listBuilds()
+    expect(builds.map((b) => b.ticket?.id)).toEqual(['T-ready'])
+    // The completed ticket is never even claimed — the gate precedes claim (§12).
+    expect(h.tickets.claims).not.toContain('T-done')
+  })
+
+  test('a prior completed build does not suppress re-dispatch when the ticket is Ready again (AC 6)', async () => {
+    // AC 6: reruns work by moving a ticket back into the configured ready state.
+    // The dispatcher gates on the ticket's CURRENT state, never on build
+    // history, so an already-merged earlier build for the same ticket id must
+    // not permanently hold it back.
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    const prior = await seedBuild(h, { slug: 'prior-run', ticketId: 'T-1' })
+    await h.store.append(prior, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+
+    const report = await h.dispatcher.tick()
+
+    expect(report.dispatched).toBe(1)
+    const builds = await h.store.listBuilds()
+    // A second, distinct build was created for the same ticket — no suppression.
+    expect(builds.map((b) => b.slug).sort()).toEqual(['add-rate-limiting', 'prior-run'])
+    expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
   test('claim race: lost claim skips the ticket without building', async () => {
@@ -865,21 +937,24 @@ describe('Dispatcher dependency gate', () => {
    * already-gated ticket then skipped the port call and read the fabricated
    * value — held forever, told its complete blocker was incomplete.
    *
-   * readyState is what hid this: it kept every ready ticket genuinely
-   * unresolved, making the seed accidentally truthful. It is optional, and
-   * this repo ships it commented out, so the gate must be correct WITHOUT it.
-   * Hence no readyState here — the whole point.
+   * The reproduction needs the intermediate blocker (T-2) to be *processed in
+   * the ready loop before* its dependent (T-3) so its cache node is seeded, and
+   * to be genuinely resolved so the FIXED gate lets T-3 through. Since the fake
+   * treats only its `doneState` ("Done") as resolved, the shared ready state
+   * that keeps all three in one ready list is "Done" — readyState is required
+   * now, so it must be set, and setting it to "Done" preserves both the ordering
+   * and the resolution the scenario depends on.
    */
-  test('no readyState: a done blocker gated earlier in the tick does not hold its dependent', async () => {
+  test('a done blocker gated earlier in the tick does not hold its dependent', async () => {
     const h = harness({
       tickets: [
         // Ready-list order is the natural one: blockers first (file-<n> ids
         // list this way), so T-2 is gated — and cached — before T-3 needs it.
         readyTicket('T-1', { title: 'First', state: 'Done' }),
         readyTicket('T-2', { title: 'Second', state: 'Done', blockedBy: ['T-1'] }),
-        readyTicket('T-3', { title: 'Third', blockedBy: ['T-2'] }),
+        readyTicket('T-3', { title: 'Third', state: 'Done', blockedBy: ['T-2'] }),
       ],
-      toml: ['[dispatcher]', 'capacity = 5'].join('\n'), // no readyState
+      toml: ['[dispatcher]', 'capacity = 5', 'readyState = "Done"'].join('\n'),
     })
 
     const report = await h.dispatcher.tick()
@@ -1414,44 +1489,55 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
   const criteria = (toml: string) => readyCriteria(parseConfig(toml))
 
   const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
+  // readyState is required, so every parseable config carries one.
+  const STATE = '[dispatcher]\nreadyState = "Ready"\n'
 
-  test('file source + empty [dispatcher]: the ready/ directory is the whole gate', () => {
-    // The headline claim: no config, no label — `mv` into ready/ dispatches.
-    expect(criteria('')).toEqual({ labels: [], state: 'Ready' })
+  test('file source: the configured state is the gate, no label gate by default', () => {
+    // The headline claim: no label — `mv` into the readyState directory dispatches.
+    expect(criteria(STATE)).toEqual({ labels: [], state: 'Ready' })
   })
 
-  test('linear + empty [dispatcher]: the historical "autobuild" label gate is intact', () => {
+  test('linear source: the historical "autobuild" label gate is intact, alongside the state', () => {
     // Linear has no ready/ directory, so a label is the only possible gate —
     // dropping this default would silently dispatch a whole Linear backlog.
-    expect(criteria(LINEAR)).toEqual({ labels: ['autobuild'] })
+    expect(criteria(`${LINEAR}${STATE}`)).toEqual({ labels: ['autobuild'], state: 'Ready' })
   })
 
-  test('linear leaves state absent unless readyState is set — labels alone decide', () => {
-    expect(criteria(LINEAR).state).toBeUndefined()
-    expect(criteria(`${LINEAR}[dispatcher]\nreadyState = "Ready"\n`)).toEqual({
+  test('the state gate is ALWAYS emitted — the removed "linear leaves state unset" branch was the AUT-10 hole', () => {
+    // Neither source can express "no state filter" any more: that branch is what
+    // let a completed, still-labelled ticket re-dispatch. Both carry the state.
+    expect(criteria(`${LINEAR}[dispatcher]\nreadyState = "Todo"\n`)).toEqual({
       labels: ['autobuild'],
-      state: 'Ready',
+      state: 'Todo',
+    })
+    expect(criteria('[dispatcher]\nreadyState = "Todo"\n')).toEqual({
+      labels: [],
+      state: 'Todo',
     })
   })
 
   test('an explicit readyLabels wins for either source — config is never ignored', () => {
-    expect(criteria('[dispatcher]\nreadyLabels = ["urgent"]\n')).toEqual({
+    expect(criteria(`[dispatcher]\nreadyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
       labels: ['urgent'],
       state: 'Ready',
     })
-    expect(criteria(`${LINEAR}[dispatcher]\nreadyLabels = ["urgent"]\n`)).toEqual({
+    expect(
+      criteria(`${LINEAR}[dispatcher]\nreadyLabels = ["urgent"]\nreadyState = "Ready"\n`),
+    ).toEqual({
       labels: ['urgent'],
+      state: 'Ready',
     })
   })
 
   test('an explicit empty readyLabels is honored, not treated as unset', () => {
-    expect(criteria(`${LINEAR}[dispatcher]\nreadyLabels = []\n`)).toEqual({ labels: [] })
+    expect(criteria(`${LINEAR}[dispatcher]\nreadyLabels = []\nreadyState = "Ready"\n`)).toEqual({
+      labels: [],
+      state: 'Ready',
+    })
   })
 
-  test('an explicit readyState overrides the file source default of Ready', () => {
-    expect(criteria('[dispatcher]\nreadyState = "Triage"\n')).toEqual({
-      labels: [],
-      state: 'Triage',
-    })
+  test('a config with no readyState cannot produce criteria — it fails at parse', () => {
+    expect(() => criteria(LINEAR)).toThrow('readyState')
+    expect(() => criteria('')).toThrow('readyState')
   })
 })

@@ -73,6 +73,7 @@ stallRounds = 3
 [dispatcher]
 capacity = 2
 readyLabels = ["autobuild"]
+readyState = "Ready"
 `
 
 /** Conforming per the dispatcher's exported heuristic (§6.3,

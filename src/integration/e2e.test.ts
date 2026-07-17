@@ -212,14 +212,13 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   // Janitor epilogue (§15.7, D1): merged → release → complete → ticket Done.
   h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
   const tick2 = await h.dispatcher.tick()
-  // claimRaces is 0, where it was 1 before the file source became the default.
-  // This config has no [tickets] table, so readiness now resolves through the
-  // file source's gate — which supplies `state: "Ready"` (readyCriteria,
-  // src/processes/dispatcher.ts). The just-merged ticket is in Done, so the
-  // scan skips it outright. Previously the criteria were labels-only, so a
-  // ticket that had long since left Ready was re-listed and re-refused on
-  // EVERY tick, and the refusal was miscounted as a claim race. Not losing a
-  // race — never entering one.
+  // claimRaces is 0, where it was 1 before the ready state gated the scan.
+  // The config's required `readyState = "Ready"` (readyCriteria,
+  // src/processes/dispatcher.ts) means the scan only lists Ready tickets. The
+  // just-merged ticket is in Done, so the scan skips it outright. Previously,
+  // when a state gate could be absent, a ticket that had long since left Ready
+  // was re-listed and re-refused on EVERY tick, and the refusal was miscounted
+  // as a claim race. Not losing a race — never entering one.
   expect(tick2).toEqual({ ...emptyTickReport(), merged: 1, claimRaces: 0 })
 
   const final = await h.events(SLUG)

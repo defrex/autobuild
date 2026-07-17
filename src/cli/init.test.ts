@@ -33,6 +33,7 @@ import {
   rewriteSkillSource,
 } from './init'
 import { runCli, type SessionlessCliDeps } from './main'
+import { parseConfig } from '../config/load'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 
@@ -128,6 +129,16 @@ describe('abInit — fresh install', () => {
     await abInit({ targetRepo: target })
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(template)
+  })
+
+  test('the generated autobuild.toml parses and ships readyState = "ready" (AC 2)', async () => {
+    // A fresh project must be dispatchable out of the box: the required
+    // readyState is present, non-blank, and set to the file tracker's `ready/`
+    // directory — never omitted, which would fail to parse (AC 1) or, worse,
+    // reintroduce provider-dependent all-states eligibility (AUT-10).
+    await abInit({ targetRepo: target })
+    const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.dispatcher.readyState).toBe('ready')
   })
 
   test('distRoot defaults relative to the module — identical to an explicit distRoot', async () => {

@@ -24,8 +24,22 @@ afterEach(async () => {
 
 const FILE_TICKETS_TOML = ['[tickets]', 'source = "file"', 'dir = "tickets"', ''].join('\n')
 
+/**
+ * `[dispatcher].readyState` is required now (AUT-11), and every config these
+ * tests write goes through `parseConfig`. Inject `readyState = "ready"` unless
+ * the fixture sets its own — appended into an existing `[dispatcher]` header
+ * (TOML forbids the table twice) or prepended as its own table.
+ */
+function withReadyState(toml: string): string {
+  if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
+  if (/(^|\n)\[dispatcher\]/.test(toml)) {
+    return toml.replace(/(^|\n)(\[dispatcher\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
+  }
+  return `[dispatcher]\nreadyState = "ready"\n${toml}`
+}
+
 async function writeRepo(configToml: string): Promise<void> {
-  await writeFile(join(tmp, 'autobuild.toml'), configToml)
+  await writeFile(join(tmp, 'autobuild.toml'), withReadyState(configToml))
 }
 
 /**

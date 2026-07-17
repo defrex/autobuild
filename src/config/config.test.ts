@@ -44,6 +44,7 @@ maxReconcileAttempts = 3
 [dispatcher]
 capacity = 3                    # concurrent builds for this repo
 readyLabels = ["autobuild"]
+readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
 [outer]                         # cron schedules for outer-loop processes
 "ingest:sentry" = { cron = "0 */4 * * *" }
@@ -59,6 +60,15 @@ const SPEC_EXAMPLE_WITH_UNIT = SPEC_EXAMPLE.replace(
   '[verify.types]',
   '[verify.unit]\nkind = "check"\ncommand = "test"\n\n[verify.types]',
 )
+
+/**
+ * `[dispatcher].readyState` is required and non-blank (AUT-11), so every config
+ * that isn't itself exercising the dispatcher must still supply one for parse to
+ * reach the table under test — a missing readyState fails at the base object
+ * schema, before the cross-validation superRefine even runs. Appended to the
+ * focused fixtures below; TOML table order is irrelevant.
+ */
+const READY = '[dispatcher]\nreadyState = "ready"\n'
 
 function parseError(toml: string, source?: string): ConfigError {
   try {
@@ -101,7 +111,7 @@ describe('parseConfig — SPEC §16.1 example', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 5,
       },
-      dispatcher: { capacity: 3, readyLabels: ['autobuild'] },
+      dispatcher: { capacity: 3, readyLabels: ['autobuild'], readyState: 'ready' },
       tickets: { source: 'file' },
       outer: {
         'ingest:sentry': { cron: '0 */4 * * *' },
@@ -118,8 +128,14 @@ describe('parseConfig — SPEC §16.1 example', () => {
 })
 
 describe('parseConfig — defaults', () => {
-  test('empty file yields all defaults', () => {
-    expect(parseConfig('')).toEqual({
+  test('an empty file now fails — readyState has no default (AUT-11)', () => {
+    const error = parseError('')
+    expect(error.message).toContain('dispatcher.readyState')
+    expect(error.message).toContain('is required')
+  })
+
+  test('a minimal valid [dispatcher] yields every other table default', () => {
+    expect(parseConfig(READY)).toEqual({
       project: { baseBranch: 'main' },
       commands: {},
       verify: { steps: [], stepConfigs: {} },
@@ -131,14 +147,16 @@ describe('parseConfig — defaults', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 5,
       },
-      dispatcher: { capacity: 1 },
+      dispatcher: { capacity: 1, readyState: 'ready' },
       tickets: { source: 'file' },
       outer: {},
     })
   })
 
   test('server.readyTimeout defaults to 60 seconds', () => {
-    const config = parseConfig('[server]\nstart = "bun dev"\nurl = "http://localhost:3000"\n')
+    const config = parseConfig(
+      `${READY}[server]\nstart = "bun dev"\nurl = "http://localhost:3000"\n`,
+    )
     expect(config.server).toEqual({
       start: 'bun dev',
       url: 'http://localhost:3000',
@@ -148,7 +166,7 @@ describe('parseConfig — defaults', () => {
 
   test('agent step needsServer defaults to false (and then needs no [server])', () => {
     const config = parseConfig(
-      '[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\n',
+      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\n`,
     )
     expect(config.verify.stepConfigs['e2e']).toEqual({
       kind: 'agent',
@@ -158,7 +176,7 @@ describe('parseConfig — defaults', () => {
   })
 
   test('partial [policy] keeps per-key defaults, including implicit maxReviewRounds', () => {
-    const config = parseConfig('[policy]\nstallRounds = 7\n')
+    const config = parseConfig(`${READY}[policy]\nstallRounds = 7\n`)
     expect(config.policy).toEqual({
       stallRounds: 7,
       maxVerifyAttempts: 3,
@@ -170,7 +188,7 @@ describe('parseConfig — defaults', () => {
 
 describe('parseConfig — cross-validation', () => {
   test('a steps entry without a [verify.<step>] table is an error with path and remedy', () => {
-    const error = parseError('[verify]\nsteps = ["types"]\n')
+    const error = parseError(`${READY}[verify]\nsteps = ["types"]\n`)
     expect(error.message).toContain('verify.steps[0]')
     expect(error.message).toContain('has no [verify.types] table')
     expect(error.message).toContain('kind = "check"')
@@ -179,7 +197,7 @@ describe('parseConfig — cross-validation', () => {
 
   test('an orphaned [verify.<step>] table is an error too', () => {
     const error = parseError(
-      '[commands]\ntypecheck = "tsc"\n\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n',
+      `${READY}[commands]\ntypecheck = "tsc"\n\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`,
     )
     expect(error.message).toContain('verify.types')
     expect(error.message).toContain('"types" is not listed in verify.steps')
@@ -188,7 +206,7 @@ describe('parseConfig — cross-validation', () => {
 
   test('a check step whose command is not in [commands] is an error naming the known commands', () => {
     const error = parseError(
-      '[commands]\nlint = "bun lint"\n\n[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n',
+      `${READY}[commands]\nlint = "bun lint"\n\n[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`,
     )
     expect(error.message).toContain('verify.types.command')
     expect(error.message).toContain('"typecheck" does not name a key in [commands]')
@@ -197,7 +215,7 @@ describe('parseConfig — cross-validation', () => {
 
   test('a dangling command ref with no [commands] at all says so', () => {
     const error = parseError(
-      '[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n',
+      `${READY}[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`,
     )
     expect(error.message).toContain('verify.types.command')
     expect(error.message).toContain('[commands] has no entries')
@@ -205,14 +223,14 @@ describe('parseConfig — cross-validation', () => {
 
   test('needsServer = true without a [server] table is an error', () => {
     const error = parseError(
-      '[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\n',
+      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\n`,
     )
     expect(error.message).toContain('verify.e2e.needsServer')
     expect(error.message).toContain('requires a [server] table (start, url)')
   })
 
   test('an empty finalize.steps entry is an error at its index', () => {
-    const error = parseError('[finalize]\nsteps = ["release-notes", ""]\n')
+    const error = parseError(`${READY}[finalize]\nsteps = ["release-notes", ""]\n`)
     expect(error.message).toContain('finalize.steps[1]')
     expect(error.message).toContain('nonempty')
   })
@@ -220,45 +238,47 @@ describe('parseConfig — cross-validation', () => {
 
 describe('parseConfig — [tickets]', () => {
   test('a valid linear source parses, claimedState optional', () => {
-    const config = parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\n')
+    const config = parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`)
     expect(config.tickets).toEqual({ source: 'linear', teamKey: 'ENG' })
   })
 
   test('a valid file source parses', () => {
-    const config = parseConfig('[tickets]\nsource = "file"\ndir = "tickets"\n')
+    const config = parseConfig(`${READY}[tickets]\nsource = "file"\ndir = "tickets"\n`)
     expect(config.tickets).toEqual({ source: 'file', dir: 'tickets' })
   })
 
-  test('absent table means the local file tracker — a repo dispatches with no config', () => {
-    expect(parseConfig('').tickets).toEqual({ source: 'file' })
+  test('absent table means the local file tracker — a repo dispatches with a minimal config', () => {
+    expect(parseConfig(READY).tickets).toEqual({ source: 'file' })
   })
 
   test('the default leaves dir undefined — the factory decides, and only it knows it was defaulted', () => {
-    expect(parseConfig('').tickets.dir).toBeUndefined()
+    expect(parseConfig(READY).tickets.dir).toBeUndefined()
   })
 
   test('a present-but-partial table is not clobbered by the default', () => {
-    expect(parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\n').tickets).toEqual({
+    expect(
+      parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`).tickets,
+    ).toEqual({
       source: 'linear',
       teamKey: 'ENG',
     })
   })
 
   test('linear without teamKey is an error with path and remedy', () => {
-    const error = parseError('[tickets]\nsource = "linear"\n')
+    const error = parseError(`${READY}[tickets]\nsource = "linear"\n`)
     expect(error.message).toContain('tickets.teamKey')
     expect(error.message).toContain('requires teamKey')
   })
 
   test('file without dir parses — dir is optional, defaulting to .autobuild/tickets', () => {
-    expect(parseConfig('[tickets]\nsource = "file"\n').tickets).toEqual({
+    expect(parseConfig(`${READY}[tickets]\nsource = "file"\n`).tickets).toEqual({
       source: 'file',
     })
   })
 
   test('dir on a linear source is rejected', () => {
     const error = parseError(
-      '[tickets]\nsource = "linear"\nteamKey = "ENG"\ndir = "tickets"\n',
+      `${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\ndir = "tickets"\n`,
     )
     expect(error.message).toContain('tickets.dir')
     expect(error.message).toContain('applies only to source = "file"')
@@ -266,7 +286,7 @@ describe('parseConfig — [tickets]', () => {
 
   test('teamKey and claimedState on a file source are rejected', () => {
     const error = parseError(
-      '[tickets]\nsource = "file"\ndir = "tickets"\nteamKey = "ENG"\nclaimedState = "Doing"\n',
+      `${READY}[tickets]\nsource = "file"\ndir = "tickets"\nteamKey = "ENG"\nclaimedState = "Doing"\n`,
     )
     expect(error.message).toContain('tickets.teamKey')
     expect(error.message).toContain('tickets.claimedState')
@@ -274,39 +294,57 @@ describe('parseConfig — [tickets]', () => {
   })
 
   test('an unknown source is rejected', () => {
-    const error = parseError('[tickets]\nsource = "jira"\n')
+    const error = parseError(`${READY}[tickets]\nsource = "jira"\n`)
     expect(error.message).toContain('tickets.source')
   })
 
   test('createState is accepted on both sources — absent means provider default', () => {
     const linear = parseConfig(
-      '[tickets]\nsource = "linear"\nteamKey = "ENG"\ncreateState = "Triage"\n',
+      `${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\ncreateState = "Triage"\n`,
     )
     expect(linear.tickets?.createState).toBe('Triage')
     const file = parseConfig(
-      '[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "Backlog"\n',
+      `${READY}[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "Backlog"\n`,
     )
     expect(file.tickets?.createState).toBe('Backlog')
     expect(
-      parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\n').tickets
+      parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`).tickets
         ?.createState,
     ).toBeUndefined()
   })
 })
 
 describe('parseConfig — [dispatcher] readiness', () => {
-  test('readyState is optional and absent by default', () => {
-    expect(parseConfig('').dispatcher.readyState).toBeUndefined()
+  test('readyState is required — omitting it (or the whole table) is an actionable error', () => {
+    for (const toml of ['', '[dispatcher]\ncapacity = 2\n']) {
+      const error = parseError(toml)
+      expect(error.message).toContain('dispatcher.readyState')
+      expect(error.message).toContain('is required')
+      // The actionable message names what to set and why omission is dangerous.
+      expect(error.message).toContain('every ticket from the source eligible')
+    }
+  })
+
+  test('an empty readyState is rejected as blank, not accepted', () => {
+    const error = parseError('[dispatcher]\nreadyState = ""\n')
+    expect(error.message).toContain('dispatcher.readyState')
+    expect(error.message).toContain('must not be blank')
+  })
+
+  test('a whitespace-only readyState is rejected as blank', () => {
+    const error = parseError('[dispatcher]\nreadyState = "   "\n')
+    expect(error.message).toContain('dispatcher.readyState')
+    expect(error.message).toContain('must not be blank')
   })
 
   test('readyLabels is optional and absent by default — the source decides its own gate', () => {
     // Not [] and not ['autobuild']: the schema records "unset" and readyCriteria
     // (src/processes/dispatcher.ts) resolves it per source. A default here would
     // label-gate the file tracker's ready/ directory.
-    expect(parseConfig('').dispatcher.readyLabels).toBeUndefined()
+    expect(parseConfig(READY).dispatcher.readyLabels).toBeUndefined()
   })
 
-  test('readyState parses alongside readyLabels', () => {
+  test('a set readyState parses alongside readyLabels', () => {
     const config = parseConfig(
       '[dispatcher]\nreadyLabels = []\nreadyState = "Ready"\n',
     )
@@ -367,7 +405,7 @@ describe('loadConfig', () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-config-test-'))
     try {
       const good = join(dir, 'autobuild.toml')
-      await writeFile(good, '[project]\nbaseBranch = "trunk"\n')
+      await writeFile(good, `${READY}[project]\nbaseBranch = "trunk"\n`)
       const config = await loadConfig(good)
       expect(config.project.baseBranch).toBe('trunk')
 
