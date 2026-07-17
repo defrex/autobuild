@@ -43,28 +43,28 @@ import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/type
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
 
 /**
- * What "ready for dispatch" means, resolved against the ticket source — the
- * two trackers gate readiness differently and neither default can be global.
+ * What "ready for dispatch" means, resolved against the ticket source.
  *
- * Linear has no `ready/` directory, so a label is the only thing that can mark
- * a ticket dispatchable: the historical `["autobuild"]` default is restored
- * here, unchanged. The file tracker's gate IS the directory — `mv` into
- * `ready/` is the whole grooming action — so it defaults to no label gate and
- * the `Ready` state.
+ * The state gate is no longer source-defaulted: `readyState` is a required,
+ * non-blank config value (src/config/schema.ts), so both sources gate on the
+ * exact configured state and always return one. The removed branch — where the
+ * linear source left `state` unset when `readyState` was absent — was the
+ * AUT-10 hole: with no state filter, every labelled ticket was eligible in any
+ * workflow state, so a completed ticket still carrying the label got dispatched
+ * again. That branch is now unrepresentable.
  *
- * An explicit `readyLabels` wins for either source: labels remain a supported
- * optional frontmatter field, and silently ignoring config is worse than an
- * odd-looking one.
+ * The only per-source difference left is the *label* default. Linear has no
+ * `ready/` directory, so a label is the only thing that can mark a ticket
+ * dispatchable: the historical `["autobuild"]` default. The file tracker's gate
+ * is otherwise the directory, so it defaults to no label gate. An explicit
+ * `readyLabels` wins for either source.
  */
-export function readyCriteria(config: Config): { labels: string[]; state?: string } {
+export function readyCriteria(config: Config): { labels: string[]; state: string } {
   const { readyLabels, readyState } = config.dispatcher
   if (config.tickets.source === 'linear') {
-    return {
-      labels: readyLabels ?? ['autobuild'],
-      ...(readyState !== undefined ? { state: readyState } : {}),
-    }
+    return { labels: readyLabels ?? ['autobuild'], state: readyState }
   }
-  return { labels: readyLabels ?? [], state: readyState ?? 'Ready' }
+  return { labels: readyLabels ?? [], state: readyState }
 }
 
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────

@@ -143,9 +143,24 @@ export const dispatcherSchema = z.strictObject({
    * `ready/` directory is the gate). Resolved by readyCriteria in
    * src/processes/dispatcher.ts. */
   readyLabels: z.array(z.string().min(1)).optional(),
-  /** Workflow state a ticket must additionally sit in to be dispatchable;
-   * absent = any state (labels alone decide). */
-  readyState: z.string().min(1).optional(),
+  /**
+   * The single workflow state a ticket must sit in to be dispatchable — the
+   * mandatory dispatch gate (§3.3). Required and non-blank: without it every
+   * ticket from the source would be eligible in any state, including completed
+   * ones (the AUT-10 mis-gating). Applied by readyCriteria in
+   * src/processes/dispatcher.ts, on top of any label gate. Matched exactly and
+   * case-sensitively by the Linear source (name your ready workflow state);
+   * the file source canonicalizes it to a state directory (`ready` → `ready/`).
+   */
+  readyState: z
+    .string({
+      error:
+        '[dispatcher].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready"). Omitting it would make every ticket from the source eligible, including completed ones.',
+    })
+    .refine(
+      (s) => s.trim().length > 0,
+      '[dispatcher].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
+    ),
 })
 export type DispatcherConfig = z.infer<typeof dispatcherSchema>
 
@@ -193,7 +208,13 @@ const configTableSchema = z.strictObject({
   finalize: finalizeSchema.prefault({}),
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
-  dispatcher: dispatcherSchema.prefault({}),
+  // An absent [dispatcher] table must NOT silently default: prefault feeds `{}`
+  // through the schema, which now fails on the missing required `readyState`
+  // (AC 5 — a config with no ready state fails clearly, at path
+  // `dispatcher.readyState`). The cast only satisfies prefault's input type,
+  // whose `readyState` is required; at runtime `{}` is what flows through, and
+  // it is meant to be rejected.
+  dispatcher: dispatcherSchema.prefault({} as z.input<typeof dispatcherSchema>),
   // No [tickets] table ⇒ the local file tracker (§13). prefault feeds the
   // literal THROUGH ticketsSchema, so the default is a parsed TicketsConfig
   // and a present-but-partial table is untouched by it.
