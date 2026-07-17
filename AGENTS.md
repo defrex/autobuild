@@ -1,6 +1,6 @@
-# auto-build v2
+# Autobuild v2
 
-`auto-build` is an agent-driven software-development lifecycle system that takes a groomed ticket through planning, implementation, review, verification, PR creation, conflict reconciliation, and merge. Humans are involved only for grooming and escalations.
+`Autobuild` is an agent-driven software-development lifecycle system that takes a groomed ticket through planning, implementation, review, verification, PR creation, conflict reconciliation, and merge. Humans are involved only for grooming and escalations.
 
 ## Start here
 

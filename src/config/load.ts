@@ -41,6 +41,11 @@ function formatPath(path: ReadonlyArray<PropertyKey>): string {
 function describeIssue(issue: z.core.$ZodIssue): string {
   let message = issue.message
   if (issue.code === 'unrecognized_keys' && issue.path.length === 0) {
+    if (issue.keys.includes('agent')) {
+      message +=
+        ' — [agent] was removed; move those fields to [roles.default] ' +
+        '(the default entry in [roles])'
+    }
     message += ` — known tables: ${TOP_LEVEL_TABLES.join(', ')}`
   }
   return `  ${formatPath(issue.path)}: ${message}`

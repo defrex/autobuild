@@ -36,7 +36,7 @@ export { SKILL_NAMESPACE }
 /** Agent Skills standard project directory for vendored skills. */
 export const AGENTS_SKILLS_DIR = join('.agents', 'skills')
 
-/** The unsupported project path used by earlier auto-build releases. */
+/** The unsupported project path used by earlier autobuild releases. */
 export const LEGACY_AGENT_SKILLS_DIR = join('.agent', 'skills')
 
 /** Claude-compatible discovery links point at the canonical skills. */

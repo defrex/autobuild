@@ -32,12 +32,15 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 
-[agent]                         # repo-wide default pair on the two axes (§9)
+[roles.default]                 # reserved repo-wide inheritance base (§9)
 runtime = "claude"
 
-[roles]                         # role → runtime/model override (§9)
-plan = { runtime = "claude" }
-code-review = { runtime = "pi", model = "…" }
+[roles.plan]                    # phase role → per-field override (§9)
+runtime = "claude"
+
+[roles.code-review]
+runtime = "pi"
+model = "…"
 
 [policy]
 stallRounds = 3
@@ -105,8 +108,8 @@ describe('parseConfig — SPEC §16.1 example', () => {
         },
       },
       finalize: { steps: ['release-notes'] },
-      agent: { runtime: 'claude' },
       roles: {
+        default: { runtime: 'claude' },
         plan: { runtime: 'claude' },
         'code-review': { runtime: 'pi', model: '…' },
       },
@@ -461,24 +464,41 @@ describe('parseConfig — strictness (a typo must not silently disable a verifie
     expect(error.message).toContain('"runner"')
   })
 
-  test('unknown key inside [agent] is rejected', () => {
-    const error = parseError(`${READY}[agent]\nruntime = "claude"\nmdel = "x"\n`)
-    expect(error.message).toContain('agent')
+  test('unknown key inside [roles.default] is rejected', () => {
+    const error = parseError(
+      `${READY}[roles.default]\nruntime = "claude"\nmdel = "x"\n`,
+    )
+    expect(error.message).toContain('roles.default')
     expect(error.message).toContain('"mdel"')
   })
 })
 
-describe('parseConfig — [agent] defaults + [roles] two-axis (§9)', () => {
-  test('[agent] parses each shape: runtime-only, model-only, both, absent', () => {
-    expect(parseConfig(`${READY}[agent]\nruntime = "pi"\n`).agent).toEqual({ runtime: 'pi' })
-    expect(parseConfig(`${READY}[agent]\nmodel = "kimi-k3"\n`).agent).toEqual({
+describe('parseConfig — [roles.default] + phase roles (§9)', () => {
+  test('[roles.default] accepts all three role fields', () => {
+    const config = parseConfig(
+      `${READY}[roles.default]\n` +
+        `runtime = "pi"\n` +
+        `model = "kimi-k3"\n` +
+        `extensions = ["subagents", "web-access"]\n`,
+    )
+    expect(config.roles.default).toEqual({
+      runtime: 'pi',
       model: 'kimi-k3',
+      extensions: ['subagents', 'web-access'],
     })
-    expect(
-      parseConfig(`${READY}[agent]\nruntime = "pi"\nmodel = "kimi-k3"\n`).agent,
-    ).toEqual({ runtime: 'pi', model: 'kimi-k3' })
-    // Absent is meaningful (⇒ built-in fallback): the key is not present at all.
-    expect(parseConfig(READY).agent).toBeUndefined()
+  })
+
+  test('[roles.default] is optional and may be explicitly empty', () => {
+    expect(parseConfig(READY).roles).toEqual({})
+    expect(parseConfig(`${READY}[roles.default]\n`).roles).toEqual({ default: {} })
+  })
+
+  test('legacy [agent] is rejected with its [roles.default] replacement', () => {
+    const error = parseError(`${READY}[agent]\nruntime = "pi"\n`)
+    expect(error.message).toContain('[agent]')
+    expect(error.message).toContain('removed')
+    expect(error.message).toContain('[roles.default]')
+    expect(error.message).toContain('default entry in [roles]')
   })
 
   test('[roles] entries accept runtime, model, both, or neither', () => {

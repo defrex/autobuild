@@ -46,34 +46,38 @@ command = "test"
 [finalize]
 steps = []
 
-# Runtime/model/extensions configuration (§9). Three independent axes — the
-# `runtime` that executes a session, the `model` it runs on, and the pi
-# `extensions` it may use — are set once here as the repo-wide default and
-# overridden per step in [roles]. Adding a runtime touches only the adapter
-# registry, never the kernel; two runtimes ship today (claude, pi), and a
-# config naming an unregistered one fails loudly before any build launches.
-[agent]
+# Runtime/model/extensions configuration (§9) is one open map of roles. The
+# reserved `default` entry is the repo-wide inheritance base and is never
+# dispatched as a phase. Each phase role overrides it independently per field.
+# Adding a runtime touches only the adapter registry; two ship today (claude,
+# pi), and an unregistered or incompatible merged pair fails before launch.
+[roles.default]
 runtime = "pi"                          # repo-wide default runtime
 model = "openai-codex/gpt-5.6-sol"      # repo-wide default model, provider-qualified (`ab models` looks ids up)
 # extensions unset ⇒ hermetic by default (no internet / sub-agents / MCP).
 
-# Per-step overrides, most-specific-first: `runtime + model` pins the pair;
-# `runtime` alone uses that runtime's default model; `model` alone routes to a
-# runtime that serves it (the default runtime wins when it qualifies); neither
-# ⇒ the [agent] default. Mixing models across roles is intentional — a
-# different reviewer catches more. The two review roles run on Kimi K3 so a
-# different model checks the work.
-#
-# `extensions` is the third axis — named Pi packages a phase may use (matched
-# as substrings of installed package sources; MCP is off unless named). The
-# boundary is deliberate: plan/plan-review/code-review get web-access to ground
-# on real docs, plan/implement get sub-agents, and implement/verify/finalize
-# stay HERMETIC (no internet) so nothing external flows into committed code.
-[roles]
-plan        = { extensions = ["subagents", "web-access"] }
-implement   = { extensions = ["subagents"] }
-plan-review = { runtime = "pi", model = "kimi-coding/k3", extensions = ["web-access"] }
-code-review = { runtime = "pi", model = "kimi-coding/k3", extensions = ["web-access"] }
+# A role's runtime, model, and extensions each inherit independently from
+# `default`; a set extensions list replaces rather than unions. The exact
+# merged runtime/model pair must be compatible — no model-driven runtime search
+# and no substitution of a runtime-local default for an incompatible model.
+# Mixing models across roles is intentional: both reviewers use Kimi K3.
+# Extension package names match installed Pi package sources as substrings; MCP
+# remains off unless named. Internet access stays outside implementation.
+[roles.plan]
+extensions = ["subagents", "web-access"]
+
+[roles.implement]
+extensions = ["subagents"]
+
+[roles.plan-review]
+runtime = "pi"
+model = "kimi-coding/k3"
+extensions = ["web-access"]
+
+[roles.code-review]
+runtime = "pi"
+model = "kimi-coding/k3"
+extensions = ["web-access"]
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)

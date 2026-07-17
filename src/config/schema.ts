@@ -107,39 +107,20 @@ export const finalizeSchema = z.strictObject({
 })
 export type FinalizeConfig = z.infer<typeof finalizeSchema>
 
-// ── [agent] ──────────────────────────────────────────────────────────────────
-//
-// The repo-wide DEFAULT pair on the two configuration axes (SPEC §9, §16.1):
-// `runtime` (which adapter executes the session) and `model` (which model it
-// runs on). Both optional, so all four override shapes are expressible here as
-// well as per-role. Absent entirely ⇒ the built-in fallback runtime with its
-// own default model, i.e. today's behavior is unchanged. Resolution against the
-// runtime registry (capability checks, model-only routing) happens in the
-// resolver, not here — config load never sees the registry.
-export const agentDefaultsSchema = z.strictObject({
-  runtime: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  // Optional THIRD axis (runtime-specific): named Pi extensions/packages a
-  // session may use (e.g. "subagents", "web-access"). Absent ⇒ none, i.e. a
-  // hermetic session. Entries are matched (case-insensitive substring) against
-  // installed Pi package sources; runtimes without an extension model ignore it.
-  extensions: z.array(z.string().min(1)).optional(),
-})
-export type AgentDefaultsConfig = z.infer<typeof agentDefaultsSchema>
-
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
-// Open map: role → per-step OVERRIDE on the two axes (SPEC §9, §16.1). Both
-// keys optional, so a step may pin `runtime`, `model`, both, or neither
-// (neither ⇒ the [agent] default pair). Mixing models across roles is
-// intentional — a different reviewer catches more.
+// Open map: role → fields on the runtime, model, and extensions axes (SPEC §9,
+// §16.1). The reserved optional `default` entry is the raw inheritance base;
+// every other role overrides it independently per field. Registry-dependent
+// compatibility validation happens in the eager runtime resolver, because the
+// config loader does not know the injected runtime registry.
 
 export const roleSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
-  // Per-step extension allowlist (SPEC §9). Absent ⇒ inherit the [agent]
-  // default (which is itself hermetic when unset). Lets internet/sub-agent
-  // access be granted to plan/review while implement/verify stay hermetic.
+  // Per-role extension allowlist (SPEC §9). Absent ⇒ inherit
+  // [roles.default].extensions; absent there too ⇒ hermetic. A set list,
+  // including [], replaces the default wholesale rather than unioning with it.
   extensions: z.array(z.string().min(1)).optional(),
 })
 export type RoleConfig = z.infer<typeof roleSchema>
@@ -262,10 +243,9 @@ const configTableSchema = z.strictObject({
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
   finalize: finalizeSchema.prefault({}),
-  // The repo-wide default pair (§9). Optional and NOT prefaulted — absence is
-  // meaningful (⇒ built-in fallback runtime + its default model), and a
-  // prefaulted `{}` would be indistinguishable from an explicit empty table.
-  agent: agentDefaultsSchema.optional(),
+  // `default` is a reserved optional entry inside this open map (§9). An
+  // absent [roles.default] is an empty base; the resolver then uses its wiring
+  // fallback runtime and that runtime's own default model.
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
   dispatcher: dispatcherSchema.prefault({}),
