@@ -169,7 +169,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(h.forge.comments).toHaveLength(1)
   const summary = h.forge.comments[0]!
   expect(summary.number).toBe(1)
-  expect(summary.body).toContain(`## auto-build: ${SLUG}`)
+  expect(summary.body).toContain(`## Autobuild: ${SLUG}`)
   expect(summary.body).toContain('- plan-review r1: approve')
   expect(summary.body).toContain('- code-review r1: approve')
   expect(summary.body).toContain('- unit (attempt 1): pass')

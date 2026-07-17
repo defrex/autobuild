@@ -1,4 +1,4 @@
-# auto-build v2 — Specification
+# Autobuild v2 — Specification
 
 An agent-driven software development lifecycle system: it takes work from
 *"something should be done"* to a merged PR, with a human in the loop only
