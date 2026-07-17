@@ -619,6 +619,36 @@ describe('Dispatcher dispatch', () => {
     expect(comment?.body).toContain("an '## Out of scope' heading")
   })
 
+  test('bounce targets Backlog by default for a linear ticket source', async () => {
+    // Linear teams only have a "Triage" state when the triage feature is
+    // enabled — Backlog is the hand-back state every team has.
+    const h = harness({
+      tickets: [readyTicket('T-1', { body: 'make it faster' })],
+      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\n',
+    })
+
+    const report = await h.dispatcher.tick()
+    expect(report).toEqual({ ...emptyTickReport(), bounced: 1 })
+    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
+  })
+
+  test('triageState: [tickets] config beats the source default, opts beat config', async () => {
+    const configured = harness({
+      tickets: [readyTicket('T-1', { body: 'make it faster' })],
+      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
+    })
+    await configured.dispatcher.tick()
+    expect(configured.tickets.transitions).toEqual([{ id: 'T-1', state: 'Todo' }])
+
+    const opted = harness({
+      tickets: [readyTicket('T-1', { body: 'make it faster' })],
+      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Todo"\n',
+      opts: { triageState: 'Backlog' },
+    })
+    await opted.dispatcher.tick()
+    expect(opted.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
+  })
+
   test('authorSpec success: spec.authored with agent actor and session id', async () => {
     const h = harness({
       tickets: [readyTicket('T-1', { body: 'thin but groomed' })],

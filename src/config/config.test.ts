@@ -312,6 +312,22 @@ describe('parseConfig — [tickets]', () => {
         ?.createState,
     ).toBeUndefined()
   })
+
+  test('triageState is accepted on both sources — absent means provider default', () => {
+    const linear = parseConfig(
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\ntriageState = "Backlog"\n[dispatcher]\nreadyState = "Ready"\n',
+    )
+    expect(linear.tickets?.triageState).toBe('Backlog')
+    const file = parseConfig(
+      '[tickets]\nsource = "file"\ntriageState = "Triage"\n[dispatcher]\nreadyState = "Ready"\n',
+    )
+    expect(file.tickets?.triageState).toBe('Triage')
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "linear"\nteamKey = "ENG"\n[dispatcher]\nreadyState = "Ready"\n',
+      ).tickets?.triageState,
+    ).toBeUndefined()
+  })
 })
 
 describe('parseConfig — [dispatcher] readiness', () => {

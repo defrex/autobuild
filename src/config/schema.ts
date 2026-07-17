@@ -180,6 +180,11 @@ export const ticketsSchema = z.strictObject({
   /** State create() files new tickets into. Absent = the provider's default
    * (Linear: the team's default state, e.g. Backlog; file: Triage). */
   createState: z.string().min(1).optional(),
+  /** State the dispatcher hands tickets back to for human triage — spec-gate
+   * bounces (§6.3), aborted builds, closed-unmerged PRs. Absent = the
+   * provider's default (Linear: Backlog; file: Triage) — resolved by
+   * defaultTriageState in src/processes/dispatcher.ts. */
+  triageState: z.string().min(1).optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
