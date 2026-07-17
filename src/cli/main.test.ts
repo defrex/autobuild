@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { KERNEL } from '../events/envelope'
 import type { MemoryBuildStore } from '../store/memory'
-import { runCli } from './main'
+import { runCli, SESSIONLESS_COMMANDS } from './main'
 import {
   BRANCH,
   BUILD,
@@ -57,6 +57,15 @@ describe('runCli — routing and exit codes', () => {
     }
   })
 
+  test('help documents the status commands, their defaults, and their flags', async () => {
+    const d = deps()
+    expect(await runCli(['help'], d)).toBe(0)
+    const help = d.out.join('\n')
+    expect(help).toContain('ab builds [--queued] [--all] [--json] [--store <ref>]')
+    expect(help).toContain('ab build status <slug> [--events <n>] [--json] [--store <ref>]')
+    expect(help).toContain('running, paused, blocked')
+  })
+
   test('an unknown command prints the help and exits 1', async () => {
     const d = deps()
     expect(await runCli(['frobnicate'], d)).toBe(1)
@@ -80,6 +89,164 @@ describe('runCli — routing and exit codes', () => {
     const d = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
     expect(await runCli(['verdict'], d)).toBe(1)
     expect(d.err.join('\n')).toContain('usage: ab verdict <approve|revise|escalate|pass|fail>')
+  })
+})
+
+describe('SESSIONLESS_COMMANDS', () => {
+  // bin/ab.ts routes on this set; a command missing from it goes through
+  // resolveCliEnv and exits 1 on absent AB_* before routing. runCli tests
+  // cannot see that failure — they never traverse the binary — so the set
+  // itself is asserted here, and the binary is smoke-tested in bin-ab.test.ts.
+  test('contains the status commands', () => {
+    expect(SESSIONLESS_COMMANDS.has('builds')).toBe(true)
+    expect(SESSIONLESS_COMMANDS.has('build')).toBe(true)
+  })
+
+  test('every literal formerly hardcoded in bin/ab.ts survives the lift', () => {
+    for (const command of ['init', 'upgrade', 'ticket', 'dispatch', 'help', '--help', '-h']) {
+      expect(SESSIONLESS_COMMANDS.has(command)).toBe(true)
+    }
+  })
+
+  test('session commands are absent — they require AB_* and must not route sessionless', () => {
+    for (const command of ['context', 'done', 'verdict', 'escalate', 'observe', 'artifact', 'server']) {
+      expect(SESSIONLESS_COMMANDS.has(command)).toBe(false)
+    }
+  })
+})
+
+describe('runCli — builds / build status routing', () => {
+  /** Sessionless deps: no store, no env, no forge — exactly what bin/ab.ts's
+   * sessionless branch passes. If these commands ever reach requireSession,
+   * these tests fail with its AB_* error. */
+  function sessionlessDeps(): {
+    workspacePath: string
+    stdout: (line: string) => void
+    stderr: (line: string) => void
+    exec: TestDeps['exec']
+    processEnv: Record<string, string | undefined>
+    out: string[]
+    err: string[]
+  } {
+    const out: string[] = []
+    const err: string[] = []
+    return {
+      workspacePath: tmp,
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+      exec: async () => ({ stdout: '', stderr: 'not a git repo', exitCode: 128 }),
+      processEnv: { AB_STORE: join(tmp, 'store') },
+      out,
+      err,
+    }
+  }
+
+  test('ab builds routes with NO AB_* env — it never hits requireSession', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['builds'], d)).toBe(0)
+    expect(d.err.join('\n')).not.toContain('runs inside a build session')
+    // An empty store for this repo: the honest empty line, naming the filter.
+    expect(d.out.join('\n')).toContain('no active builds')
+  })
+
+  test('ab builds --all reports the widened filter in its empty line', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['builds', '--all'], d)).toBe(0)
+    expect(d.out.join('\n')).toContain('no builds for')
+  })
+
+  test('an unknown slug exits 1 and names the slug and how to list builds', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'no-such-build'], d)).toBe(1)
+    const err = d.err.join('\n')
+    expect(err).toContain('no-such-build')
+    expect(err).toContain('ab builds --all')
+  })
+
+  test('a non-positive or non-numeric --events count is an actionable error', async () => {
+    for (const value of ['0', '-1', 'abc', '1.5']) {
+      const d = sessionlessDeps()
+      expect(await runCli(['build', 'status', 'b1', '--events', value], d)).toBe(1)
+      expect(d.err.join('\n')).toContain('--events requires a positive integer')
+    }
+  })
+
+  test('--events with no value is a usage error', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--events'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--events requires a positive integer')
+  })
+
+  test('--store with no value is a usage error', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['builds', '--store'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--store requires a value')
+  })
+
+  // Without the flag-shaped-value guard this exits 0: --json is swallowed as
+  // the store REF, a local store is created on demand in a directory named
+  // "--json", and the caller who asked for JSON gets human text and a
+  // plausible-looking empty list. A wrong answer beats an error only if you
+  // never notice it.
+  test('--store followed by another flag is an error, not a store named --json', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['builds', '--store', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--store requires a value')
+    expect(d.err.join('\n')).toContain('--json')
+    expect(d.out).toEqual([])
+  })
+
+  test('--store followed by another flag is an error on build status too', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--store', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--store requires a value')
+    expect(d.out).toEqual([])
+  })
+
+  test('--events followed by another flag is an error', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--events', '--json'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('--events requires a positive integer')
+    expect(d.out).toEqual([])
+  })
+
+  test('an unknown flag on either command exits 1', async () => {
+    const d1 = sessionlessDeps()
+    expect(await runCli(['builds', '--frobnicate'], d1)).toBe(1)
+    expect(d1.err.join('\n')).toContain('unknown argument "--frobnicate"')
+
+    const d2 = sessionlessDeps()
+    expect(await runCli(['build', 'status', 'b1', '--frobnicate'], d2)).toBe(1)
+    expect(d2.err.join('\n')).toContain('unknown argument "--frobnicate"')
+  })
+
+  test('ab build with no or unknown subcommand prints usage', async () => {
+    const d1 = sessionlessDeps()
+    expect(await runCli(['build'], d1)).toBe(1)
+    expect(d1.err.join('\n')).toContain('usage: ab build status <slug>')
+
+    const d2 = sessionlessDeps()
+    expect(await runCli(['build', 'frobnicate'], d2)).toBe(1)
+    expect(d2.err.join('\n')).toContain('usage: ab build status <slug>')
+  })
+
+  test('ab build status with no slug prints usage', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['build', 'status'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('usage: ab build status <slug>')
+  })
+
+  // The flag-set leakage guard: --store/--events are parsed locally by these
+  // commands, so they must NOT have become legal on session commands via
+  // main's module-global VALUE_FLAGS.
+  test('the new flags did not leak into the session commands\' flag sets', async () => {
+    const d1 = deps()
+    expect(await runCli(['done', '--store', '/tmp/x'], d1)).toBe(1)
+    expect(d1.err.join('\n')).toContain('unknown flag --store')
+
+    const d2 = deps()
+    expect(await runCli(['observe', '--kind', 'followup', '--events', '3', 'x'], d2)).toBe(1)
+    expect(d2.err.join('\n')).toContain('unknown flag --events')
   })
 })
 

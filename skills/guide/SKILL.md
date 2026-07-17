@@ -309,6 +309,63 @@ Outcomes:
 Local customization survives upgrades; divergence is made visible instead of
 silent.
 
+## Checking build status
+
+Two read-only commands answer "what is happening?" without inspecting SQLite,
+worktrees, or OS processes. Both run *outside* build sessions, need no `AB_*`
+environment, and never mutate a build — they append no events, take no leases,
+and are safe to run at any time.
+
+**`ab builds`** summarizes this repository's builds, one row each. It reports
+**active** builds by default — `running`, `paused`, `blocked` — because those
+are the ones something can still be done about.
+
+| Flag | Effect |
+|---|---|
+| `--queued` | Also include `queued` builds — dispatched but not yet attached to a runner. |
+| `--all` | Every status, including `queued`, `done`, and `aborted`. Subsumes `--queued`. |
+| `--json` | The projection as JSON: no ANSI, no prose. Use this when scripting or parsing. |
+| `--store <ref>` | Read a different store — a path or an `http(s)` URL, same reference behavior `ab dispatch` takes. |
+
+An empty result names the filter in effect, so "no active builds" means the
+filter matched nothing, not that the command failed. Widen it with `--queued`
+or `--all` before concluding a build doesn't exist.
+
+**`ab build status <slug>`** details one build: unresolved escalations, open
+sessions, verify progress for the current cycle, PR lifecycle, latest event,
+heartbeat, and lease. `--events <n>` appends the newest `n` event envelopes in
+chronological order — the fastest way to see what a build actually just did.
+
+Verify progress covers the **current cycle** — the results since the latest
+code-review approve or reconcile. Implement and reconcile change the code, so a
+new cycle re-runs from the first step and earlier results describe code that no
+longer exists. An empty step list next to `attempt 1` therefore means the cycle
+restarted, not that verify never ran.
+`--json` and `--store <ref>` work the same here.
+
+Use `ab builds` to find the build; use `ab build status` to understand it.
+
+### Lease health is not build status
+
+These are **two independent axes**, and reading one as the other is the mistake
+worth avoiding.
+
+**Status** is reduced from the event log (§15.5) — authoritative, and the same
+projection the engine itself routes on. **Lease health** comes from the mutable
+lease columns (§15.2.6), because liveness is not an event: nothing appends when
+a sandbox dies, so a build whose runner is gone still reduces to `running`
+forever. That gap is exactly why the lease column is reported separately.
+
+| Lease | Meaning |
+|---|---|
+| `held` | A live runner holds an unexpired lease. Work is genuinely in flight. |
+| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. The dispatcher's lease sweep is what re-attaches it. |
+| `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with `updated`, not alone. |
+
+So `running` + `held` is healthy; `running` + `expired` means wait for the
+sweep, not that the build is progressing; and `no-lease` on a build updated
+seconds ago is almost certainly a runner still starting up.
+
 ## The installed skills
 
 Each is invoked as `ab-<name>`, with its editable copy at

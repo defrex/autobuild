@@ -6,7 +6,7 @@
  * http(s) URL), the GitHub forge, real exec, wall clock, random ids.
  */
 import { join } from 'node:path'
-import { runCli } from '../src/cli/main'
+import { runCli, SESSIONLESS_COMMANDS } from '../src/cli/main'
 import { loadDotEnv } from '../src/cli/dotenv'
 import { resolveCliEnv } from '../src/cli/env'
 import { resolveStore } from '../src/cli/store-ref'
@@ -25,13 +25,11 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2)
   const command = argv[0]
 
-  // init/upgrade/ticket/dispatch/help run OUTSIDE build sessions (SPEC §16.3,
-  // §8.8, §3.3): they take a repo path, not a build, so they must work with no
-  // AB_* environment set.
-  if (
-    command === undefined ||
-    ['init', 'upgrade', 'ticket', 'dispatch', 'help', '--help', '-h'].includes(command)
-  ) {
+  // Sessionless commands take a repo path, not a build, so they must work with
+  // no AB_* environment set. The list lives in src/cli/main.ts beside the
+  // switch that implements them (SESSIONLESS_COMMANDS) — this file only routes
+  // on it.
+  if (command === undefined || SESSIONLESS_COMMANDS.has(command)) {
     // The dispatch watch loop runs until SIGINT; abort the signal so it exits
     // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
     // a future dispatch re-attaches).
