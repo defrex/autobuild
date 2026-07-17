@@ -31,6 +31,7 @@ function build(overrides: Partial<DashboardBuild> = {}): DashboardBuild {
     steps: [
       { label: 'plan', state: 'done', timing: { accumulatedMs: 252_000 } }, // 4m12s
       { label: 'implement', state: 'current', count: 2, timing: { accumulatedMs: 38_000 } },
+      { label: 'code-review', state: 'provisional' },
       { label: 'verify:test', state: 'pending' },
     ],
     blockers: [],
@@ -108,9 +109,10 @@ describe('renderDashboard: never color-only', () => {
       ]),
       WIDE,
     ).join('\n')
-    // Steps: done / current / pending, all distinguishable with color stripped.
+    // All four step states remain distinguishable with color stripped.
     expect(out).toContain('[x] plan(4m12s)')
     expect(out).toContain('[>] implement(38s/2)')
+    expect(out).toContain('[~] code-review')
     expect(out).toContain('[ ] verify:test')
     // Statuses: words, not hues.
     expect(out).toContain('BLOCKED')
@@ -122,6 +124,9 @@ describe('renderDashboard: never color-only', () => {
     const out = rd(model([build({ status: 'blocked' })]), { color: true, width: 200 })
     const plain = stripAnsi(out.join('\n'))
     expect(plain).toContain('[x] plan')
+    expect(plain).toContain('[>] implement')
+    expect(plain).toContain('[~] code-review')
+    expect(plain).toContain('[ ] verify:test')
     expect(plain).toContain('BLOCKED')
   })
 })
@@ -130,9 +135,10 @@ describe('renderDashboard: emphasis', () => {
   const colored = (b: DashboardBuild): string =>
     rd(model([b]), { color: true, width: 200 }).join('\n')
 
-  test('blocked is red; paused is yellow', () => {
+  test('blocked is red; paused and provisional output are yellow', () => {
     expect(colored(build({ status: 'blocked' }))).toContain('\x1b[31m')
     expect(colored(build({ status: 'paused' }))).toContain('\x1b[33m')
+    expect(colored(build())).toContain('\x1b[33m[~] code-review\x1b[0m')
   })
 
   test('a blocked+paused build shows BLOCKED in red AND keeps the pause visible', () => {
@@ -250,7 +256,8 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
 
   test('a line that fits is left exactly alone', () => {
     const lines = rd(model([build()]), WIDE)
-    expect(lines.some((l) => l.includes('~'))).toBe(false)
+    // `[~]` is a state marker; any other tilde would be truncate()'s ellipsis.
+    expect(lines.some((l) => l.replaceAll('[~]', '').includes('~'))).toBe(false)
   })
 })
 

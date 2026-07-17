@@ -5,8 +5,8 @@
  * Two constraints shape every choice here:
  *
  * **Never color-only.** Color is additive emphasis and nothing else: every
- * state also carries a glyph (`[x]` `[>]` `[ ]`) and every status its literal
- * word (`RUNNING` / `PAUSED` / `BLOCKED`). Strip the escapes — as `--plain`
+ * state also carries a glyph (`[x]` `[>]` `[~]` `[ ]`) and every status its
+ * literal word (`RUNNING` / `PAUSED` / `BLOCKED`). Strip the escapes — as `--plain`
  * and every pipe do — and no information is lost.
  *
  * **ASCII only.** There is no string-width dependency in this repo and none
@@ -179,12 +179,14 @@ function packLines(tokens: string[], width: number, indent: string): string[] {
 const GLYPH: Record<PipelineStep['state'], string> = {
   done: '[x]',
   current: '[>]',
+  provisional: '[~]',
   pending: '[ ]',
 }
 
 const STEP_COLOR: Record<PipelineStep['state'], ColorName> = {
   done: 'green',
   current: 'cyan',
+  provisional: 'yellow',
   pending: 'dim',
 }
 

@@ -253,8 +253,9 @@ function project(log: AbEvent[], config: Config = CONFIG): DashboardBuild {
 }
 
 /**
- * **Guard A — no `done` after a `pending`**, plus the structural pair (at most
- * one `current`; nothing both `done` and `current`).
+ * **Guard A — no `done` after an unsettled step**, plus at most one `current`.
+ * Both `pending` and `provisional` are unsettled: the latter proves output was
+ * produced, not that the engine has stopped re-running the step.
  *
  * Skipped once the build has reconciled: §15.7 deliberately loops verify back
  * BEHIND a completed finalize, so `verify:test [ ] … finalize [x]` is correct
@@ -273,9 +274,9 @@ function guardA(log: AbEvent[], build: DashboardBuild): void {
   // `merge` is never done and sits past the epilogue rows; the core pipeline is
   // what must read linearly.
   const core = build.steps.filter((s) => s.label !== 'merge' && s.label !== 'reconcile')
-  const firstPending = core.findIndex((s) => s.state === 'pending')
-  if (firstPending === -1) return
-  expect(core.slice(firstPending).filter((s) => s.state === 'done')).toEqual([])
+  const firstUnsettled = core.findIndex((s) => s.state !== 'done')
+  if (firstUnsettled === -1) return
+  expect(core.slice(firstUnsettled).filter((s) => s.state === 'done')).toEqual([])
 }
 
 /**
@@ -479,11 +480,31 @@ describe('projectBuild: the plan loop', () => {
   test('a fresh build is all pending, with plan current', () => {
     const build = project(toLog([...prelude(), ev('plan.started', { round: 1 })]))
     expect(stateOf(build, 'plan')).toBe('current')
+    expect(stateOf(build, 'plan-review')).toBe('pending')
     expect(build.steps.filter((s) => s.state === 'done')).toEqual([])
     expect(build.ticketId).toBe('ENG-42')
   })
 
-  test('a revise re-opens the loop: neither step done, both counted round 2', () => {
+  test('a completed producer is provisional while its reviewer is current', () => {
+    const build = project(
+      toLog([
+        ...prelude(),
+        ev('plan.started', { round: 1 }),
+        ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
+        ev('plan-review.started', { round: 1 }),
+      ]),
+    )
+    expect(stateOf(build, 'plan')).toBe('provisional')
+    expect(stateOf(build, 'plan-review')).toBe('current')
+  })
+
+  test('a revise verdict leaves both current-round outputs provisional', () => {
+    const build = project(toLog([...prelude(), ...planRound(1, 'revise')]))
+    expect(stateOf(build, 'plan')).toBe('provisional')
+    expect(stateOf(build, 'plan-review')).toBe('provisional')
+  })
+
+  test('the next producer round drops prior-round output and carries round 2', () => {
     const build = project(
       toLog([...prelude(), ...planRound(1, 'revise'), ev('plan.started', { round: 2 })]),
     )
@@ -494,8 +515,9 @@ describe('projectBuild: the plan loop', () => {
   })
 
   test('the zero-current window between plan.completed r2 and plan-review.started r2 is INTENTIONAL', () => {
-    // The pair is not durably settled until approved, and no phase is running.
-    // Do not patch this into a phantom `current`.
+    // The producer has output, but the pair is not durably settled until
+    // approved and no phase is running. Do not patch this into a phantom
+    // `current`; `provisional` is the display-only distinction.
     const build = project(
       toLog([
         ...prelude(),
@@ -504,9 +526,58 @@ describe('projectBuild: the plan loop', () => {
         ev('plan.completed', { round: 2, artifact: { kind: 'plan', rev: 1 } }),
       ]),
     )
-    expect(stateOf(build, 'plan')).toBe('pending')
+    expect(stateOf(build, 'plan')).toBe('provisional')
     expect(stateOf(build, 'plan-review')).toBe('pending')
     expect(build.steps.filter((s) => s.state === 'current')).toEqual([])
+  })
+
+  test('approval keeps both rows durably done', () => {
+    const build = project(toLog([...prelude(), ...planRound(1, 'approve')]))
+    expect(stateOf(build, 'plan')).toBe('done')
+    expect(stateOf(build, 'plan-review')).toBe('done')
+  })
+})
+
+describe('projectBuild: provisional code-loop output', () => {
+  test('a completed implement is provisional while code-review is current', () => {
+    const build = project(
+      toLog([
+        ...prelude(),
+        ...planRound(1, 'approve'),
+        ev('implement.started', { round: 1 }),
+        ev('implement.completed', {
+          round: 1,
+          commits: { base: 'sha-base', head: 'sha-r1' },
+          artifact: { kind: 'implement-notes', rev: 0 },
+        }),
+        ev('code-review.started', { round: 1 }),
+      ]),
+    )
+    expect(stateOf(build, 'implement')).toBe('provisional')
+    expect(stateOf(build, 'code-review')).toBe('current')
+  })
+
+  test('a revise verdict leaves both current-round outputs provisional', () => {
+    const build = project(
+      toLog([...prelude(), ...planRound(1, 'approve'), ...codeRound(1, 'revise')]),
+    )
+    expect(stateOf(build, 'implement')).toBe('provisional')
+    expect(stateOf(build, 'code-review')).toBe('provisional')
+  })
+
+  test('current wins over a matching provisional output fact', () => {
+    // A repeated start is the smallest validated raw-log fixture that makes
+    // both facts true at once. Bypass the engine-oracle wrapper: this case
+    // pins the projection helper's precedence, not a legal engine transition.
+    const log = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
+      ev('plan.started', { round: 1 }),
+    ])
+    const build = projectBuild(RECORD, reduceBuild(log), CONFIG, log)
+    expect(build).not.toBeNull()
+    expect(stateOf(build!, 'plan')).toBe('current')
   })
 })
 
@@ -529,8 +600,8 @@ describe('f_9ce5ba8d: a verify failure reopens the code loop THE MOMENT it lands
 
   test('implement and code-review are NOT done before any implement.started r2', () => {
     const build = project(failedCycle)
-    expect(stateOf(build, 'implement')).toBe('pending')
-    expect(stateOf(build, 'code-review')).toBe('pending')
+    expect(stateOf(build, 'implement')).toBe('provisional')
+    expect(stateOf(build, 'code-review')).toBe('provisional')
     // The engine has ALREADY decided to rewrite the code…
     expect(decideNext(failedCycle, CONFIG)).toMatchObject({
       kind: 'run-phase',
@@ -602,8 +673,8 @@ maxVerifyAttempts = 1
     expect(build.blockers).toEqual([
       'maxVerifyAttempts (1) exhausted: verify:test is still failing',
     ])
-    expect(stateOf(build, 'implement')).toBe('pending')
-    expect(stateOf(build, 'code-review')).toBe('pending')
+    expect(stateOf(build, 'implement')).toBe('provisional')
+    expect(stateOf(build, 'code-review')).toBe('provisional')
   })
 })
 
@@ -614,10 +685,10 @@ function failedCycleWrites(): EventWrite[] {
 describe('f_23e76d34: the verify cycle boundary', () => {
   test('mid-window — an earlier PASS in a failed cycle is not done', () => {
     const build = project(toLog(failedCycleWrites()))
-    expect(stateOf(build, 'verify:lint')).toBe('pending')
+    expect(stateOf(build, 'verify:lint')).toBe('provisional')
     expect(stepFor(build, 'verify:lint')?.qualifier).toBeUndefined()
     // The failing step keeps the information without claiming to be settled.
-    expect(stateOf(build, 'verify:test')).toBe('pending')
+    expect(stateOf(build, 'verify:test')).toBe('provisional')
     expect(stepFor(build, 'verify:test')?.qualifier).toBe('failed')
   })
 
@@ -766,6 +837,8 @@ describe('an unlanded revise-spec answer parks the WHOLE pipeline (instance #8)'
 
     const build = project(log)
     expect(build.steps.filter((s) => s.state === 'done')).toEqual([])
+    // The effective restart boundary suppresses old terminal outputs too.
+    expect(build.steps.filter((s) => s.state === 'provisional')).toEqual([])
     expect(stateOf(build, 'merge')).toBe('pending')
     expect(stateOf(build, 'finalize')).toBe('pending')
   })

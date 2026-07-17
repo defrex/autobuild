@@ -16,7 +16,12 @@
  * ALSO routes on — a seq or a round — never a full-log "latest wins" boolean.
  * `plan.approved`, `codeReviewApproved` and `prState !== undefined` all look
  * like the right answer and all lie across a restart, because `spec.revised`
- * never touches them. The rules this file mirrors, and the code that owns them:
+ * never touches them.
+ *
+ * `provisional` is a separate, display-only fact: this occurrence produced a
+ * terminal output in the current round/cycle, but the engine may still re-run
+ * it. It never participates in routing and never changes the `done` rule. The
+ * rules this file mirrors, and the code that owns them:
  *
  *   engine.ts:275     the verify cycle boundary (§15.6-A)
  *   engine.ts:347-355 a verify failure reopens the CODE loop
@@ -40,7 +45,7 @@ import type { BuildRecord } from '../../store/types'
  * filtered out entirely (they are not active work). */
 export type EffectiveStatus = 'running' | 'paused' | 'blocked'
 
-export type StepState = 'done' | 'current' | 'pending'
+export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 
 /**
  * A step's wall-clock timing, now-INDEPENDENT so the model can be cached and
@@ -115,11 +120,14 @@ function isActive(status: BuildState['status']): status is EffectiveStatus {
 
 /**
  * One step, built through one helper so the precedence rule cannot be applied
- * inconsistently: **`current` wins when both `done` and `current` hold**. This
- * makes "no step is both done and current" true by construction rather than an
- * invariant every row has to remember.
+ * inconsistently: **`current > done > provisional > pending`**. In particular,
+ * an active occurrence stays current even when an earlier terminal output for
+ * that same occurrence exists. `producedOutput` is display-only and means a
+ * terminal event exists in the current round/cycle — never merely a start or
+ * an open timing interval.
  */
 interface StepExtra {
+  producedOutput?: boolean
   qualifier?: 'failed' | 'waiting'
   count?: number
   timing?: StepTiming
@@ -128,7 +136,13 @@ interface StepExtra {
 function step(label: string, done: boolean, current: boolean, extra: StepExtra = {}): PipelineStep {
   return {
     label,
-    state: current ? 'current' : done ? 'done' : 'pending',
+    state: current
+      ? 'current'
+      : done
+        ? 'done'
+        : extra.producedOutput === true
+          ? 'provisional'
+          : 'pending',
     ...(extra.qualifier !== undefined ? { qualifier: extra.qualifier } : {}),
     ...(extra.count !== undefined ? { count: extra.count } : {}),
     ...(extra.timing !== undefined ? { timing: extra.timing } : {}),
@@ -364,6 +378,36 @@ export function projectBuild(
   // and under default policy that start may never come (see below).
   const codeDone = loopDone(state.codeReviewApproval, state.implement.round) && !cycleFailed
 
+  // A loop row is provisional only when ITS terminal output belongs to the
+  // reducer's currently tracked round and landed after the effective restart
+  // boundary. Starts and timing intervals are deliberately insufficient: a
+  // crashed phase has run, but has produced no output. Matching the round also
+  // drops a review verdict as soon as the next producer round starts.
+  const planProduced = events.some(
+    (ev) =>
+      ev.seq > restartSince &&
+      ev.type === 'plan.completed' &&
+      ev.payload.round === state.plan.round,
+  )
+  const planReviewProduced = events.some(
+    (ev) =>
+      ev.seq > restartSince &&
+      ev.type === 'plan-review.verdict' &&
+      ev.payload.round === state.plan.round,
+  )
+  const implementProduced = events.some(
+    (ev) =>
+      ev.seq > restartSince &&
+      ev.type === 'implement.completed' &&
+      ev.payload.round === state.implement.round,
+  )
+  const codeReviewProduced = events.some(
+    (ev) =>
+      ev.seq > restartSince &&
+      ev.type === 'code-review.verdict' &&
+      ev.payload.round === state.implement.round,
+  )
+
   // Finalize ran for the CURRENT spec — NOT `prState !== undefined`, which a
   // spec restart never resets while the engine re-runs finalize from scratch.
   const finalizeDone = state.finalizeCompletedSeq > restartSince
@@ -377,18 +421,22 @@ export function projectBuild(
 
   const steps: PipelineStep[] = [
     step('plan', planDone, at('plan'), {
+      producedOutput: planProduced,
       count: planCount,
       timing: timingFor(intervals, 'plan', restartSince, frozenNow),
     }),
     step('plan-review', planDone, at('plan-review'), {
+      producedOutput: planReviewProduced,
       count: planCount,
       timing: timingFor(intervals, 'plan-review', restartSince, frozenNow),
     }),
     step('implement', codeDone, at('implement'), {
+      producedOutput: implementProduced,
       count: codeCount,
       timing: timingFor(intervals, 'implement', restartSince, frozenNow),
     }),
     step('code-review', codeDone, at('code-review'), {
+      producedOutput: codeReviewProduced,
       count: codeCount,
       timing: timingFor(intervals, 'code-review', restartSince, frozenNow),
     }),
@@ -414,10 +462,11 @@ export function projectBuild(
     // `!cycleFailed &&`: §15.6-A re-runs the cycle FROM THE FIRST STEP, so
     // once any step in the cycle has failed, an earlier step's pass in that
     // same cycle is not durably done either. The failing step keeps a `failed`
-    // qualifier so the operator does not lose the information; its STATE is
-    // pending because it is genuinely going to re-run.
+    // qualifier so the operator does not lose the information; completed rows
+    // are provisional because they produced output but will genuinely re-run.
     steps.push(
       step(phase, !cycleFailed && verifyPassed(s), current, {
+        producedOutput: stepResults.length > 0,
         qualifier: stepResults.some((r) => !r.pass) ? 'failed' : undefined,
         count,
         timing: timingFor(intervals, phase, cycleSince, frozenNow),
