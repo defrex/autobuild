@@ -6,9 +6,11 @@ PR, and reconciles conflicts against your base branch — as a sequence of agent
 sessions driven by deterministic code. Once the PR lands, it records the merge
 and closes the build out.
 
-**auto-build does not merge your PRs.** It opens them and watches them; the
-merge is yours (or your auto-merge rules'). The last word on what enters your
-base branch stays with you.
+**auto-build never bypasses your merge gates.** It opens PRs and watches them.
+You can land one yourself or press `m` in the dispatch dashboard to request
+GitHub-native squash auto-merge; required checks still decide when it lands,
+and `m` cancels the request. The last word on what enters your base branch
+stays with you.
 
 **Who it's for:** maintainers of a repository who have a backlog of
 well-understood, self-contained work and would rather review outcomes than
@@ -30,7 +32,8 @@ queryable paper trail.
    — and that act is a human one.
 2. **Answering escalations** — the questions a build parks on rather than
    deciding alone.
-3. **Reviewing and merging the PR.** auto-build opens it; you land it.
+3. **Reviewing and choosing when to land the PR.** Merge it yourself, or opt a
+   selected build into GitHub-native auto-merge from the dashboard.
 
 ---
 
@@ -99,8 +102,9 @@ an early adopter.
 
 **Limitations.** Each of these is current behavior, not a roadmap note:
 
-- **auto-build never merges a PR.** It opens PRs and polls their state; a build
-  reaches `merged` only after *you* (or an auto-merge rule) land it.
+- **No direct/admin merges.** The dashboard can request GitHub-native
+  `--auto --squash`, but never uses `--admin` and never bypasses required
+  checks. A build reaches `merged` only after GitHub reports that it landed.
 - **One dispatcher per repository.** Ticket claiming is read-check-write; it is
   safe only under that rule.
 - **Capacity is per-repo.** `[dispatcher].capacity` defaults to 1. There is no
@@ -364,16 +368,33 @@ when the source provides one.
 ab dispatch --once      # one pass, drain in-flight runners, exit
 ab dispatch             # watch; default interval 10s, Ctrl-C to stop
 ab dispatch --interval 30
+ab dispatch --plain     # force line-oriented output, even on a TTY
 ```
+
+On a TTY the dispatch dashboard is interactive and always shows its key legend:
+
+| Key | Action |
+|---|---|
+| Up / Down | Move the slug-based build selection. Repaints and re-sorts keep the same build selected. |
+| `m` | Toggle GitHub-native squash auto-merge for the selected build. Pre-PR intent is remembered; required checks are never bypassed. |
+| `p` | Request pause, or resume an authoritatively paused build. The current agent step finishes before pause takes effect. |
+| `d` | Toggle drain for this dispatcher process: stop claiming new tickets while janitor, stale-runner, and in-flight work continue. Restart resets drain off. |
+| Ctrl-C | Stop and restore terminal input/cursor state. |
+
+Rows show `auto off`, `auto requested`, `auto enabled`, or `auto cancelling`,
+and the header shows `intake ON` or `intake DRAINED`. Pipes, redirects, and
+`--plain` remain non-interactive and emit no terminal escapes.
 
 Each tick runs in this order:
 
-1. **janitor** — polls open PRs; completes merged/closed builds, routes
-   conflicted ones to `reconcile`, cleans up aborted builds.
+1. **janitor** — polls open PRs; applies outstanding native auto-merge intent,
+   completes merged/closed builds, routes conflicted ones to `reconcile`, and
+   cleans up aborted builds.
 2. **startup resume** — first tick of an invocation only; attempts every
    current build. Later ticks preserve deliberate policy parks.
 3. **lease sweep** — re-attaches runners to builds whose lease went stale.
-4. **dispatch** — claims and launches new work.
+4. **dispatch** — claims and launches new work (skipped while the interactive
+   dispatcher is drained).
 
 Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
 still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
@@ -428,7 +449,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b]` | File a ticket to the configured `[tickets]` source. |
-| `ab dispatch [--once] [--interval <s>] [--store <ref>]` | Run the outer loop for this repo. |
+| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. |
 | `ab help` | Print the command surface. |
 
 ### Agent build-session commands

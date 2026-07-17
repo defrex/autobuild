@@ -569,13 +569,23 @@ has not started.
 The UI layer is defined by the seam, not any implementation: **subscribe to
 events, render, send commands** — commands being events in the same log
 (§15.2.7): `escalation.answered`, `build.pause-requested`,
-`build.resume-requested`, `build.abort-requested`. The event vocabulary
-*is* the UI API.
+`build.resume-requested`, `build.abort-requested`,
+`build.auto-merge-requested`, and `build.auto-merge-cancelled`. The event
+vocabulary *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 
 - v2.0 front end: terminal, with herdr as the multiplexer.
+- `ab dispatch` on a TTY is an interactive fleet dashboard. Its bottom legend
+  is the authoritative key map: Up/Down select a build by slug identity, `p`
+  requests pause/resume, `m` toggles GitHub-native auto-merge, `d` toggles
+  in-memory dispatcher drain, and Ctrl-C exits. `--plain` (and non-TTY output)
+  remains line-oriented and reads no keyboard input.
+- Selection survives repaint/re-sort by tracking the build slug. Drain belongs
+  only to one running dispatcher: while on it skips new ticket claims but keeps
+  janitor, stale-runner, and in-flight work running; restart defaults it off.
 - Later: web UI and others — same adapter pattern against the same store.
 - The operator's job across many concurrent builds: see status at a glance,
-  find blocked builds, answer escalations, inspect any build's trail.
+  act on a selected build, find blocked builds, answer escalations, and inspect
+  any build's trail.
 
 ## 15. Event vocabulary
 
@@ -620,10 +630,13 @@ so producers can't fake ordering.
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
 7. **[D2] Operator commands are events in the same log.** Humans append
-   `*-requested` events; the kernel acknowledges with fact events. The store
-   is the *only* coordination surface — no side channel — and polling covers
-   commands exactly the way it covers `subscribe`. A runner that is dead
-   still receives its commands on resume.
+   `*-requested`/`*-cancelled` events; kernel or dispatcher plumbing
+   acknowledges their effects with fact events. The store is the *only*
+   coordination surface — no side channel — and polling covers commands
+   exactly the way it covers `subscribe`. A runner that is dead still receives
+   pause/resume/abort commands on resume. Auto-merge commands carry desired
+   state until PR plumbing applies them, including when the command predates
+   PR creation.
 
 ### 15.3 Catalog
 
@@ -642,6 +655,7 @@ so producers can't fake ordering.
 | Type | Actor | Payload |
 |---|---|---|
 | `build.pause-requested` / `build.resume-requested` / `build.abort-requested` | human | `{reason?}` |
+| `build.auto-merge-requested` / `build.auto-merge-cancelled` | human | `{}` |
 | `build.paused` / `build.resumed` / `build.aborted` | kernel | `{}` (acknowledgements) |
 
 **Spec**
@@ -688,6 +702,7 @@ janitor, `reconcile.*` by a re-attached build-runner)
 
 | Type | Actor | Payload |
 |---|---|---|
+| `pr.auto-merge-enabled` / `pr.auto-merge-disabled` | kernel, dispatcher | `{commandSeq}` (correlated application fact) |
 | `pr.merged` | dispatcher | `{sha}` |
 | `pr.closed` | dispatcher | `{}` |
 | `pr.conflicted` | dispatcher | `{baseSha}` |
@@ -727,10 +742,14 @@ chain survives `policy.stallRounds` rounds.
 ### 15.5 Derived state (the reducer)
 
 `status ∈ queued | running | paused | blocked | done | aborted`, plus
-`{phase, round, openEscalations[], pr?, lastEvent}`. `blocked` ≡ an
+`{phase, round, openEscalations[], pr?, autoMerge, lastEvent}`. `blocked` ≡ an
 `escalation.raised` without a matching `escalation.answered`; `paused` ≡ a
-`build.paused` without a later `build.resumed`. The operator UI's build
-list is exactly this reduction over every build in the store.
+`build.paused` without a later `build.resumed`. `autoMerge` retains the latest
+human desired value and command seq separately from the latest applied
+`{enabled, commandSeq}` fact. The desired command is settled only when both
+fields match, so a stale acknowledgement cannot erase newer intent. The
+operator UI's build list is exactly this reduction over every build in the
+store.
 
 ### 15.6 Walkthroughs
 
@@ -793,7 +812,11 @@ builds. A merged-PR fixup request is a *new ticket*, never a reopened build.
 - **PR → main: squash merge.** Main stays linear, one commit per build —
   which keeps reverts (one commit → one new ticket), release notes, and
   history archaeology clean. `pr.merged {sha}` records the squash commit as
-  the build's landing point.
+  the build's landing point. An operator may toggle GitHub-native auto-merge:
+  enabling uses `gh pr merge --auto --squash`, never `--admin` or a direct
+  merge, so GitHub's required checks remain the gate. If checks are already
+  green GitHub may merge immediately; the janitor still observes that result
+  on its next ordinary poll before completing the build.
 - **main → feature branch: merge commit.** A stale branch is refreshed by
   merging base *into* it, resolving conflicts once against current main.
 - **Rebase is banned**, for two reasons. Operationally: at this system's
@@ -805,6 +828,15 @@ builds. A merged-PR fixup request is a *new ticket*, never a reopened build.
   recorded in `implement.completed` events [D3]. Squash-at-merge is safe on
   both counts — it creates a new commit on main without rewriting the
   branch, so mid-build provenance is untouched.
+
+Auto-merge desired state is durable across PR creation. Finalize re-reads the
+log after opening/adopting the PR and applies any unmatched command before
+committing `finalize.completed`; later commands are applied by the janitor on
+open PRs. The setter is idempotent and every application fact cites the human
+command seq. Thus a crash after the forge call but before the fact append
+retries safely, while a newer cancellation remains distinguishable from a
+stale enable acknowledgement. Cancellation disables native auto-merge on an
+existing PR or clears the pre-PR desired flag.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted {baseSha}` and re-attaches

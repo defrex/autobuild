@@ -35,13 +35,21 @@ points, declared per-repo in `autobuild.toml`.
 | `src/kernel/` | Phase table, reducer, converge, stall detection, engine, server lifecycle | §5, §10, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Two-axis runtime/model routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), and the `claude.ts` / `pi.ts` adapters | §3.2, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
-| `src/cli/dashboard/` | `ab dispatch`'s live build dashboard — a read-only projection of the reducer; plain-by-default, interactive only on a TTY | §14, §15.5 |
+| `src/cli/dashboard/` | `ab dispatch`'s live build dashboard — pure reducer projection/rendering plus slug selection; TTY-interactive, with plain output for pipes/`--plain` | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty) | §3.3, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
 | `skills/guide/` | `ab-guide` — the model-invocable reference covering the lifecycle, the complete `autobuild.toml` surface, and the other skills. Update it when the config surface changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
 | `templates/` | What `ab init` installs | §16.3 |
+
+The dashboard is an operator command producer, not forge plumbing. Its `p` and
+`m` handlers append human-actor events through the BuildStore; build-runner and
+dispatcher code acknowledge pause/resume and reconcile native auto-merge via
+the `Forge` port. `d` is the sole exception because drain is intentionally
+process-local: it gates only the current dispatcher's ticket-claim stage and is
+reset by restart. Raw input and live-region output have separate adapters so
+keypresses cannot write into or tear a rendered frame.
 
 ## Development
 

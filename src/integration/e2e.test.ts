@@ -242,6 +242,47 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(reduced.outcome).toBe('merged')
 }, 30_000)
 
+test('auto-merge requested before finalize is applied as native squash and completes on the next poll', async () => {
+  const h = await track(
+    makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }),
+  )
+
+  await h.dispatcher.tick()
+  const command = await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  const parked = await h.runLatest()
+  expect(parked.prState).toBe('open')
+  expect(h.forge.autoMergeCalls).toHaveLength(1)
+  expect(h.forge.autoMergeCalls[0]).toMatchObject({
+    number: 1,
+    enabled: true,
+    changed: true,
+  })
+  expect(h.forge.autoMergeCalls[0]!.workspacePath).toContain(
+    `/worktrees/${BRANCH.replace('/', '-')}`,
+  )
+  expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+
+  const applied = ofType(await h.events(SLUG), 'pr.auto-merge-enabled')[0]!
+  expect(applied.actor).toEqual({ kind: 'kernel' })
+  expect(applied.payload).toEqual({ commandSeq: command.seq })
+
+  // Native auto-merge never produces completion facts directly. GitHub's
+  // result is observed through the ordinary janitor path on the next poll.
+  h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+  const final = await h.events(SLUG)
+  expect(typesOf(final).slice(-3)).toEqual([
+    'pr.merged',
+    'workspace.released',
+    'build.completed',
+  ])
+  expect(reduceBuild(final).outcome).toBe('merged')
+}, 30_000)
+
 // ── b. Verify failure round-trip (§15.6-A) ───────────────────────────────────
 
 test('b. verify failure routes back to implement with the report, then re-verifies (§15.6-A)', async () => {
