@@ -32,9 +32,12 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 
-[roles]                         # role → runner/model routing (v1 harnessMap, generalized)
-plan = { runner = "claude" }
-code-review = { runner = "pi", model = "…" }
+[agent]                         # repo-wide default pair on the two axes (§9)
+runtime = "claude"
+
+[roles]                         # role → runtime/model override (§9)
+plan = { runtime = "claude" }
+code-review = { runtime = "pi", model = "…" }
 
 [policy]
 stallRounds = 3
@@ -101,9 +104,10 @@ describe('parseConfig — SPEC §16.1 example', () => {
         },
       },
       finalize: { steps: ['release-notes'] },
+      agent: { runtime: 'claude' },
       roles: {
-        plan: { runner: 'claude' },
-        'code-review': { runner: 'pi', model: '…' },
+        plan: { runtime: 'claude' },
+        'code-review': { runtime: 'pi', model: '…' },
       },
       policy: {
         stallRounds: 3,
@@ -400,6 +404,48 @@ describe('parseConfig — strictness (a typo must not silently disable a verifie
       '[verify]\nsteps = ["x"]\n[verify.x]\nkind = "chek"\ncommand = "y"\n',
     )
     expect(error.message).toContain('verify.x')
+  })
+
+  test('the old [roles] `runner` key is now an unknown-key error (re-keyed to runtime)', () => {
+    const error = parseError(`${READY}[roles]\nplan = { runner = "claude" }\n`)
+    expect(error.message).toContain('roles')
+    expect(error.message).toContain('"runner"')
+  })
+
+  test('unknown key inside [agent] is rejected', () => {
+    const error = parseError(`${READY}[agent]\nruntime = "claude"\nmdel = "x"\n`)
+    expect(error.message).toContain('agent')
+    expect(error.message).toContain('"mdel"')
+  })
+})
+
+describe('parseConfig — [agent] defaults + [roles] two-axis (§9)', () => {
+  test('[agent] parses each shape: runtime-only, model-only, both, absent', () => {
+    expect(parseConfig(`${READY}[agent]\nruntime = "pi"\n`).agent).toEqual({ runtime: 'pi' })
+    expect(parseConfig(`${READY}[agent]\nmodel = "kimi-k3"\n`).agent).toEqual({
+      model: 'kimi-k3',
+    })
+    expect(
+      parseConfig(`${READY}[agent]\nruntime = "pi"\nmodel = "kimi-k3"\n`).agent,
+    ).toEqual({ runtime: 'pi', model: 'kimi-k3' })
+    // Absent is meaningful (⇒ built-in fallback): the key is not present at all.
+    expect(parseConfig(READY).agent).toBeUndefined()
+  })
+
+  test('[roles] entries accept runtime, model, both, or neither', () => {
+    const config = parseConfig(
+      `${READY}[roles]\n` +
+        `plan = { model = "gpt-5.6-sol" }\n` +
+        `code-review = { runtime = "claude", model = "claude-opus-4-5" }\n` +
+        `implement = { runtime = "pi" }\n` +
+        `finalize = {}\n`,
+    )
+    expect(config.roles).toEqual({
+      plan: { model: 'gpt-5.6-sol' },
+      'code-review': { runtime: 'claude', model: 'claude-opus-4-5' },
+      implement: { runtime: 'pi' },
+      finalize: {},
+    })
   })
 })
 

@@ -107,12 +107,30 @@ export const finalizeSchema = z.strictObject({
 })
 export type FinalizeConfig = z.infer<typeof finalizeSchema>
 
+// ── [agent] ──────────────────────────────────────────────────────────────────
+//
+// The repo-wide DEFAULT pair on the two configuration axes (SPEC §9, §16.1):
+// `runtime` (which adapter executes the session) and `model` (which model it
+// runs on). Both optional, so all four override shapes are expressible here as
+// well as per-role. Absent entirely ⇒ the built-in fallback runtime with its
+// own default model, i.e. today's behavior is unchanged. Resolution against the
+// runtime registry (capability checks, model-only routing) happens in the
+// resolver, not here — config load never sees the registry.
+export const agentDefaultsSchema = z.strictObject({
+  runtime: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+})
+export type AgentDefaultsConfig = z.infer<typeof agentDefaultsSchema>
+
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
-// Open map: role → runner/model routing (v1 harnessMap, generalized — §16.1).
+// Open map: role → per-step OVERRIDE on the two axes (SPEC §9, §16.1). Both
+// keys optional, so a step may pin `runtime`, `model`, both, or neither
+// (neither ⇒ the [agent] default pair). Mixing models across roles is
+// intentional — a different reviewer catches more.
 
 export const roleSchema = z.strictObject({
-  runner: z.string().min(1),
+  runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
 })
 export type RoleConfig = z.infer<typeof roleSchema>
@@ -211,6 +229,10 @@ const configTableSchema = z.strictObject({
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
   finalize: finalizeSchema.prefault({}),
+  // The repo-wide default pair (§9). Optional and NOT prefaulted — absence is
+  // meaningful (⇒ built-in fallback runtime + its default model), and a
+  // prefaulted `{}` would be indistinguishable from an explicit empty table.
+  agent: agentDefaultsSchema.optional(),
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
   // An absent [dispatcher] table must NOT silently default: prefault feeds `{}`
