@@ -107,6 +107,19 @@ export interface VerifyResult {
  * PR to 'open' while verify re-runs in full. */
 export type PrLifecycle = 'open' | 'merged' | 'closed' | 'conflicted'
 
+/** Durable desired state for GitHub native auto-merge plus the latest forge
+ * application fact. The command seq correlates the two sides of the
+ * non-transactional forge/event boundary: consumers treat the command as
+ * settled only when both `enabled` and `commandSeq` match. */
+export interface AutoMergeProjection {
+  /** Latest human command. False with no commandSeq means the default: off. */
+  requested: boolean
+  commandSeq?: number
+  /** Latest recorded external application. It may acknowledge an older
+   * command; such a stale fact never changes `requested`/`commandSeq`. */
+  applied?: { enabled: boolean; commandSeq: number }
+}
+
 export type ObservationRecord = EventPayload<'observation.recorded'>
 
 export interface BuildState {
@@ -146,6 +159,8 @@ export interface BuildState {
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
+  /** Human auto-merge intent and its correlated forge application fact. */
+  autoMerge: AutoMergeProjection
   /** seq of the latest `finalize.completed`, else 0 — "has finalize run for
    * the CURRENT spec". `prState` cannot answer that: it is the full-log PR
    * fact and must stay so, because the janitor (dispatcher.ts:342,:367,:396)
@@ -243,6 +258,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   const answeredEscalations: AnsweredEscalation[] = []
   let pr: BuildState['pr']
   let prState: PrLifecycle | undefined
+  const autoMerge: AutoMergeProjection = { requested: false }
   let specRev: number | undefined
   let restartSince = 0
   let finalizeCompletedSeq = 0
@@ -333,6 +349,14 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           reason: event.payload.reason,
           actor: event.actor,
         })
+        break
+      case 'build.auto-merge-requested':
+        autoMerge.requested = true
+        autoMerge.commandSeq = event.seq
+        break
+      case 'build.auto-merge-cancelled':
+        autoMerge.requested = false
+        autoMerge.commandSeq = event.seq
         break
       case 'build.paused':
         pausedFlag = true
@@ -474,6 +498,12 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         finalizeSteps.push({ step: event.payload.step, ok: event.payload.ok })
         break
 
+      case 'pr.auto-merge-enabled':
+        autoMerge.applied = { enabled: true, commandSeq: event.payload.commandSeq }
+        break
+      case 'pr.auto-merge-disabled':
+        autoMerge.applied = { enabled: false, commandSeq: event.payload.commandSeq }
+        break
       case 'pr.merged':
         prState = 'merged'
         break
@@ -563,6 +593,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     answeredEscalations,
     pr,
     prState,
+    autoMerge,
     finalizeCompletedSeq,
     finalizeSteps,
     lastEvent,

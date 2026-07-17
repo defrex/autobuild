@@ -628,6 +628,73 @@ describe('reduceBuild: pause/resume and the paused+blocked overlap (§15.5)', ()
   })
 })
 
+describe('reduceBuild: native auto-merge intent and application facts', () => {
+  const log = toLog([
+    ...prelude(),
+    ev('build.auto-merge-requested', {}), // seq 5
+    ev('pr.auto-merge-enabled', { commandSeq: 5 }), // seq 6
+    ev('build.auto-merge-cancelled', {}), // seq 7
+    // A late acknowledgement of the superseded enable must not rewrite the
+    // latest human intent. It remains visibly stale until disable lands.
+    ev('pr.auto-merge-enabled', { commandSeq: 5 }), // seq 8
+    ev('pr.auto-merge-disabled', { commandSeq: 7 }), // seq 9
+    ev('build.auto-merge-requested', {}), // seq 10 — latest command wins
+  ])
+
+  test('request and cancellation retain desired state and their command seq', () => {
+    expect(stateAfter(log, 'build.auto-merge-requested').autoMerge).toEqual({
+      requested: true,
+      commandSeq: 5,
+    })
+    expect(stateAfter(log, 'build.auto-merge-cancelled').autoMerge).toEqual({
+      requested: false,
+      commandSeq: 7,
+      applied: { enabled: true, commandSeq: 5 },
+    })
+  })
+
+  test('matching enable/disable facts acknowledge exactly one command', () => {
+    expect(stateAfter(log, 'pr.auto-merge-enabled').autoMerge).toEqual({
+      requested: true,
+      commandSeq: 5,
+      applied: { enabled: true, commandSeq: 5 },
+    })
+    expect(stateAfter(log, 'pr.auto-merge-disabled').autoMerge).toEqual({
+      requested: false,
+      commandSeq: 7,
+      applied: { enabled: false, commandSeq: 7 },
+    })
+  })
+
+  test('a stale application fact never erases a newer command', () => {
+    const stale = stateAfter(log, 'pr.auto-merge-enabled', 2).autoMerge
+    expect(stale.requested).toBe(false)
+    expect(stale.commandSeq).toBe(7)
+    expect(stale.applied).toEqual({ enabled: true, commandSeq: 5 })
+  })
+
+  test('latest human command wins without fabricating a forge acknowledgement', () => {
+    expect(reduceBuild(log).autoMerge).toEqual({
+      requested: true,
+      commandSeq: 10,
+      applied: { enabled: false, commandSeq: 7 },
+    })
+  })
+
+  test('commands are human-only and application commandSeq is positive', () => {
+    expect(() =>
+      validateEventWrite({ actor: KERNEL, type: 'build.auto-merge-requested', payload: {} }),
+    ).toThrow(/actor kind "kernel" may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'pr.auto-merge-enabled',
+        payload: { commandSeq: 0 },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+})
+
 describe('reduceBuild: abort — requested vs acknowledged (D2)', () => {
   const log = toLog([
     ...prelude(),

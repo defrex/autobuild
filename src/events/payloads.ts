@@ -64,6 +64,8 @@ export const eventPayloadSchemas = {
   'build.pause-requested': reasonOnly,
   'build.resume-requested': reasonOnly,
   'build.abort-requested': reasonOnly,
+  'build.auto-merge-requested': empty,
+  'build.auto-merge-cancelled': empty,
   'build.paused': empty,
   'build.resumed': empty,
   'build.aborted': empty,
@@ -149,6 +151,14 @@ export const eventPayloadSchemas = {
   }),
 
   // ── Post-PR (D1: janitor duty of the dispatcher — SPEC §15.7) ─────────────
+  'pr.auto-merge-enabled': z.strictObject({
+    /** seq of the human auto-merge command this forge mutation applied. */
+    commandSeq: z.number().int().positive(),
+  }),
+  'pr.auto-merge-disabled': z.strictObject({
+    /** seq of the human auto-merge command this forge mutation applied. */
+    commandSeq: z.number().int().positive(),
+  }),
   'pr.merged': z.strictObject({ sha: z.string().min(1) }),
   'pr.closed': empty,
   'pr.conflicted': z.strictObject({ baseSha: z.string().min(1) }),

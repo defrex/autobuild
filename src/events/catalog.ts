@@ -48,6 +48,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.pause-requested': ['human'],
   'build.resume-requested': ['human'],
   'build.abort-requested': ['human'],
+  'build.auto-merge-requested': ['human'],
+  'build.auto-merge-cancelled': ['human'],
   'build.paused': ['kernel'],
   'build.resumed': ['kernel'],
   'build.aborted': ['kernel'],
@@ -74,6 +76,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'finalize.completed': ['kernel'],
   'finalize.step-completed': ['agent'],
 
+  'pr.auto-merge-enabled': ['kernel', 'dispatcher'],
+  'pr.auto-merge-disabled': ['kernel', 'dispatcher'],
   'pr.merged': ['dispatcher'],
   'pr.closed': ['dispatcher'],
   'pr.conflicted': ['dispatcher'],
