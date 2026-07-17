@@ -48,6 +48,13 @@ export interface DependencyState {
   blockedBy: string[]
 }
 
+export interface TicketCreateOptions {
+  /** Explicit workflow state for this create (harvest always targets Triage). */
+  state?: string
+  /** Stable source-level adoption key for crash-safe external creation. */
+  idempotencyKey?: string
+}
+
 export interface TicketSource {
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3). */
@@ -57,7 +64,7 @@ export interface TicketSource {
   claim(id: string): Promise<boolean>
   comment(id: string, body: string): Promise<void>
   transition(id: string, state: string): Promise<void>
-  create(draft: TicketDraft): Promise<Ticket>
+  create(draft: TicketDraft, opts?: TicketCreateOptions): Promise<Ticket>
   /**
    * Dependency-graph nodes for `ids`. The result covers EVERY requested id, in
    * request order; a missing id comes back `{exists: false, resolved: false,
@@ -162,9 +169,12 @@ export interface Transcript {
 }
 
 export interface AgentStartOpts {
-  /** Installed skill to invoke, e.g. `ab-plan`; the runner formats `/{skill} {buildSlug}`. */
+  /** Installed skill to invoke, e.g. `ab-plan`. */
   skill: string
-  buildSlug: string
+  /** Opaque argument passed to the skill (build slug or harvest run id). */
+  invocation?: string
+  /** Backward-compatible build name; new callers should also set invocation. */
+  buildSlug?: string
   workspacePath: string
   model?: string
   /** Named extensions this session may use (§9, third axis). Empty/absent ⇒
@@ -179,6 +189,14 @@ export interface AgentStartOpts {
  * re-issues ambient auth for the turn (D8) — merged over the start env. A
  * turn left on round 1's env would have the CLI resolve the stale round and
  * reject the continued round's terminal as a D5 second call (§8.4). */
+export function agentInvocation(opts: AgentStartOpts): string {
+  const invocation = opts.invocation ?? opts.buildSlug
+  if (invocation === undefined || invocation === '') {
+    throw new Error('AgentStartOpts requires a non-empty invocation')
+  }
+  return invocation
+}
+
 export interface AgentContinueOpts {
   env?: Record<string, string>
 }

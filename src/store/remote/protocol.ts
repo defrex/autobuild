@@ -27,7 +27,7 @@
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
 import { ticketRefSchema } from '../../ontology'
-import type { ArtifactMeta } from '../types'
+import type { ArtifactMeta, RepositoryArtifactMeta } from '../types'
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
@@ -92,6 +92,50 @@ export const eventEnvelopeWireSchema = z.object({
   payload: z.unknown(),
 })
 export const eventListSchema = z.array(eventEnvelopeWireSchema)
+
+// ── Repository journals / harvest ───────────────────────────────────────────
+
+export const ensureRepoBodySchema = z.object({ repo: z.string().min(1) })
+export const repositoryRecordWireSchema = z.object({
+  repo: z.string().min(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lease: z.object({ holder: z.string(), expiresAt: z.string() }).optional(),
+  heartbeatAt: z.string().optional(),
+})
+
+export const harvestEventEnvelopeWireSchema = z.object({
+  repo: z.string(),
+  seq: z.number().int().positive(),
+  ts: z.string(),
+  actor: actorSchema,
+  type: z.string(),
+  payload: z.unknown(),
+})
+export const harvestEventListSchema = z.array(harvestEventEnvelopeWireSchema)
+
+export const repositoryArtifactMetaWireSchema = z.object({
+  repo: z.string(),
+  kind: z.string(),
+  revision: z.number().int().nonnegative(),
+  blobRef: z.string(),
+  metadata: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+})
+export const repositoryArtifactMetaListSchema = z.array(
+  repositoryArtifactMetaWireSchema,
+)
+export const repositoryArtifactGetResponseSchema = z.union([
+  z.null(),
+  z.object({
+    meta: repositoryArtifactMetaWireSchema,
+    contentBase64: z.string(),
+  }),
+])
+export const repoDepositsResponseSchema = z.object({
+  event: harvestEventEnvelopeWireSchema,
+  artifacts: repositoryArtifactMetaListSchema,
+})
 
 // ── Artifacts ────────────────────────────────────────────────────────────────
 
@@ -180,7 +224,7 @@ function isPlaceholderRef(value: unknown): value is { kind: string; rev: number 
  */
 export function substitutePlaceholderRefs(
   value: unknown,
-  deposited: ArtifactMeta[],
+  deposited: Array<ArtifactMeta | RepositoryArtifactMeta>,
 ): unknown {
   if (isPlaceholderRef(value)) {
     const meta = deposited[-value.rev - 1]

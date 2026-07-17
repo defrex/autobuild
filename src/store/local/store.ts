@@ -23,6 +23,13 @@ import {
   type EventWrite,
 } from '../../events/catalog'
 import type { EventType } from '../../events/payloads'
+import {
+  validateHarvestEventWrite,
+  type HarvestEvent,
+  type HarvestEventEnvelope,
+  type HarvestEventType,
+  type HarvestEventWrite,
+} from '../../events/harvest'
 import { pollingSubscribe } from '../subscribe'
 import {
   contentHash,
@@ -36,11 +43,21 @@ import {
   type BuildStore,
   type Clock,
   type NewBuildInput,
+  type RepositoryArtifact,
+  type RepositoryArtifactMeta,
+  type RepositoryRecord,
   type SubscribeOptions,
   type Unsubscribe,
 } from '../types'
 import { DirBlobStore } from './blobs'
-import { artifacts, builds, events } from './schema'
+import {
+  artifacts,
+  builds,
+  events,
+  repoArtifacts,
+  repoEvents,
+  repoStreams,
+} from './schema'
 
 /**
  * Bootstrap DDL, applied idempotently at open. MUST match `schema.ts` —
@@ -78,9 +95,37 @@ const BOOTSTRAP_DDL = [
     created_at TEXT NOT NULL,
     PRIMARY KEY (build, kind, revision)
   )`,
+  `CREATE TABLE IF NOT EXISTS repo_streams (
+    repo TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    lease_holder TEXT,
+    lease_expires_at TEXT,
+    lease_ttl_ms INTEGER,
+    heartbeat_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS repo_events (
+    repo TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (repo, seq)
+  )`,
+  `CREATE TABLE IF NOT EXISTS repo_artifacts (
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    blob_ref TEXT NOT NULL,
+    metadata TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (repo, kind, revision)
+  )`,
 ] as const
 
 type BuildRow = typeof builds.$inferSelect
+type RepoRow = typeof repoStreams.$inferSelect
 
 interface PreparedArtifact {
   kind: string
@@ -140,6 +185,32 @@ export class SqliteBuildStore implements BuildStore {
     const row = this.buildRow(slug)
     if (!row) throw new Error(`unknown build "${slug}"`)
     return row
+  }
+
+  private repoRow(repo: string): RepoRow | undefined {
+    return this.db
+      .select()
+      .from(repoStreams)
+      .where(eq(repoStreams.repo, repo))
+      .get()
+  }
+
+  private requireRepo(repo: string): RepoRow {
+    const row = this.repoRow(repo)
+    if (!row) throw new Error(`unknown repo "${repo}"`)
+    return row
+  }
+
+  private toRepoRecord(row: RepoRow): RepositoryRecord {
+    return {
+      repo: row.repo,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      ...(row.heartbeatAt ? { heartbeatAt: row.heartbeatAt } : {}),
+      ...(row.leaseHolder && row.leaseExpiresAt
+        ? { lease: { holder: row.leaseHolder, expiresAt: row.leaseExpiresAt } }
+        : {}),
+    }
   }
 
   private toRecord(row: BuildRow): BuildRecord {
@@ -438,6 +509,299 @@ export class SqliteBuildStore implements BuildStore {
           updatedAt: this.now(),
         })
         .where(eq(builds.slug, slug))
+        .run()
+    })
+  }
+
+  async ensureRepo(repo: string): Promise<RepositoryRecord> {
+    if (!repo) throw new Error('repo is required')
+    return this.writeTx(() => {
+      const existing = this.repoRow(repo)
+      if (existing) return this.toRepoRecord(existing)
+      const ts = this.now()
+      this.db
+        .insert(repoStreams)
+        .values({ repo, createdAt: ts, updatedAt: ts })
+        .run()
+      return this.toRepoRecord(this.requireRepo(repo))
+    })
+  }
+
+  async getRepo(repo: string): Promise<RepositoryRecord | null> {
+    const row = this.repoRow(repo)
+    return row ? this.toRepoRecord(row) : null
+  }
+
+  private appendRepoInTx(
+    repo: string,
+    validated: HarvestEventWrite,
+  ): HarvestEventEnvelope {
+    this.requireRepo(repo)
+    const ts = this.now()
+    const row = this.db
+      .select({ max: sql<number | null>`max(${repoEvents.seq})` })
+      .from(repoEvents)
+      .where(eq(repoEvents.repo, repo))
+      .get()
+    const seq = (row?.max ?? 0) + 1
+    this.db
+      .insert(repoEvents)
+      .values({
+        repo,
+        seq,
+        ts,
+        actor: validated.actor,
+        type: validated.type,
+        payload: validated.payload,
+      })
+      .run()
+    this.db
+      .update(repoStreams)
+      .set({ updatedAt: ts })
+      .where(eq(repoStreams.repo, repo))
+      .run()
+    return {
+      repo,
+      seq,
+      ts,
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    }
+  }
+
+  async appendRepo<T extends HarvestEventType>(
+    repo: string,
+    event: HarvestEventWrite<T>,
+  ): Promise<HarvestEventEnvelope<T>> {
+    const validated = validateHarvestEventWrite(event)
+    return this.writeTx(
+      () => this.appendRepoInTx(repo, validated),
+    ) as HarvestEventEnvelope<T>
+  }
+
+  private depositRepoInTx(
+    repo: string,
+    prepared: PreparedArtifact,
+  ): RepositoryArtifactMeta {
+    this.requireRepo(repo)
+    const createdAt = this.now()
+    const row = this.db
+      .select({ max: sql<number | null>`max(${repoArtifacts.revision})` })
+      .from(repoArtifacts)
+      .where(
+        and(
+          eq(repoArtifacts.repo, repo),
+          eq(repoArtifacts.kind, prepared.kind),
+        ),
+      )
+      .get()
+    const revision = (row?.max ?? -1) + 1
+    this.db
+      .insert(repoArtifacts)
+      .values({
+        repo,
+        kind: prepared.kind,
+        revision,
+        blobRef: prepared.blobRef,
+        metadata: prepared.metadata,
+        createdAt,
+      })
+      .run()
+    this.db
+      .update(repoStreams)
+      .set({ updatedAt: createdAt })
+      .where(eq(repoStreams.repo, repo))
+      .run()
+    return {
+      repo,
+      kind: prepared.kind,
+      revision,
+      blobRef: prepared.blobRef,
+      metadata: prepared.metadata,
+      createdAt,
+    }
+  }
+
+  async appendRepoWithArtifacts<T extends HarvestEventType>(
+    repo: string,
+    artifactInputs: ArtifactInput[],
+    makeEvent: (
+      deposited: RepositoryArtifactMeta[],
+    ) => HarvestEventWrite<T>,
+  ): Promise<{
+    event: HarvestEventEnvelope<T>
+    artifacts: RepositoryArtifactMeta[]
+  }> {
+    const prepared: PreparedArtifact[] = []
+    for (const input of artifactInputs) {
+      prepared.push(await this.prepareArtifact(input))
+    }
+    return this.writeTx(() => {
+      const deposited = prepared.map((item) =>
+        this.depositRepoInTx(repo, item),
+      )
+      const validated = validateHarvestEventWrite(makeEvent(deposited))
+      const event = this.appendRepoInTx(
+        repo,
+        validated,
+      ) as HarvestEventEnvelope<T>
+      return { event, artifacts: deposited }
+    })
+  }
+
+  async getRepoEvents(repo: string, sinceSeq = 0): Promise<HarvestEvent[]> {
+    this.requireRepo(repo)
+    const rows = this.db
+      .select()
+      .from(repoEvents)
+      .where(and(eq(repoEvents.repo, repo), gt(repoEvents.seq, sinceSeq)))
+      .orderBy(asc(repoEvents.seq))
+      .all()
+    return rows.map(
+      (row) =>
+        ({
+          repo: row.repo,
+          seq: row.seq,
+          ts: row.ts,
+          actor: row.actor,
+          type: row.type,
+          payload: row.payload,
+        }) as HarvestEvent,
+    )
+  }
+
+  async putRepoArtifact(
+    repo: string,
+    artifact: ArtifactInput,
+  ): Promise<RepositoryArtifactMeta> {
+    const prepared = await this.prepareArtifact(artifact)
+    return this.writeTx(() => this.depositRepoInTx(repo, prepared))
+  }
+
+  private toRepoMeta(
+    row: typeof repoArtifacts.$inferSelect,
+  ): RepositoryArtifactMeta {
+    return {
+      repo: row.repo,
+      kind: row.kind,
+      revision: row.revision,
+      blobRef: row.blobRef,
+      metadata: row.metadata,
+      createdAt: row.createdAt,
+    }
+  }
+
+  async getRepoArtifact(
+    repo: string,
+    kind: string,
+    rev?: number,
+  ): Promise<RepositoryArtifact | null> {
+    this.requireRepo(repo)
+    const scoped = and(
+      eq(repoArtifacts.repo, repo),
+      eq(repoArtifacts.kind, kind),
+    )
+    const row =
+      rev === undefined
+        ? this.db
+            .select()
+            .from(repoArtifacts)
+            .where(scoped)
+            .orderBy(desc(repoArtifacts.revision))
+            .limit(1)
+            .get()
+        : this.db
+            .select()
+            .from(repoArtifacts)
+            .where(and(scoped, eq(repoArtifacts.revision, rev)))
+            .get()
+    if (!row) return null
+    const content = await this.blobs.get(row.blobRef)
+    return content ? { meta: this.toRepoMeta(row), content } : null
+  }
+
+  async listRepoArtifacts(
+    repo: string,
+    kind?: string,
+  ): Promise<RepositoryArtifactMeta[]> {
+    this.requireRepo(repo)
+    const where = kind
+      ? and(eq(repoArtifacts.repo, repo), eq(repoArtifacts.kind, kind))
+      : eq(repoArtifacts.repo, repo)
+    return this.db
+      .select()
+      .from(repoArtifacts)
+      .where(where)
+      .orderBy(asc(repoArtifacts.kind), asc(repoArtifacts.revision))
+      .all()
+      .map((row) => this.toRepoMeta(row))
+  }
+
+  async claimRepoLease(
+    repo: string,
+    holder: string,
+    ttlMs: number,
+  ): Promise<boolean> {
+    return this.writeTx(() => {
+      const row = this.requireRepo(repo)
+      const now = this.clock().getTime()
+      const heldByOther =
+        row.leaseHolder !== null &&
+        row.leaseHolder !== holder &&
+        row.leaseExpiresAt !== null &&
+        Date.parse(row.leaseExpiresAt) > now
+      if (heldByOther) return false
+      this.db
+        .update(repoStreams)
+        .set({
+          leaseHolder: holder,
+          leaseExpiresAt: new Date(now + ttlMs).toISOString(),
+          leaseTtlMs: ttlMs,
+          updatedAt: new Date(now).toISOString(),
+        })
+        .where(eq(repoStreams.repo, repo))
+        .run()
+      return true
+    })
+  }
+
+  async heartbeatRepo(repo: string, holder: string): Promise<boolean> {
+    return this.writeTx(() => {
+      const row = this.requireRepo(repo)
+      const now = this.clock().getTime()
+      const holds =
+        row.leaseHolder === holder &&
+        row.leaseExpiresAt !== null &&
+        Date.parse(row.leaseExpiresAt) > now
+      if (!holds) return false
+      const nowIso = new Date(now).toISOString()
+      this.db
+        .update(repoStreams)
+        .set({
+          leaseExpiresAt: new Date(now + (row.leaseTtlMs ?? 0)).toISOString(),
+          heartbeatAt: nowIso,
+          updatedAt: nowIso,
+        })
+        .where(eq(repoStreams.repo, repo))
+        .run()
+      return true
+    })
+  }
+
+  async releaseRepoLease(repo: string, holder: string): Promise<void> {
+    this.writeTx(() => {
+      const row = this.requireRepo(repo)
+      if (row.leaseHolder !== holder) return
+      this.db
+        .update(repoStreams)
+        .set({
+          leaseHolder: null,
+          leaseExpiresAt: null,
+          leaseTtlMs: null,
+          updatedAt: this.now(),
+        })
+        .where(eq(repoStreams.repo, repo))
         .run()
     })
   }

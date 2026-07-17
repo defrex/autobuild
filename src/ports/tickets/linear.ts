@@ -8,9 +8,11 @@
  * called mid-build; comments and transitions flow outward, and the build
  * never reads Linear again after dispatch imports the spec.
  */
+import { createHash } from 'node:crypto'
 import type {
   DependencyState,
   Ticket,
+  TicketCreateOptions,
   TicketDraft,
   TicketSource,
 } from '../types'
@@ -131,6 +133,17 @@ const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body
 const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id ${ISSUE_FIELDS} } } }`
 const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: "blocks" }) { success } }`
 
+/** Linear IssueCreateInput accepts a caller-supplied UUID. Derive one from the
+ * stable harvest key so a retry can query/adopt the same issue after a crash. */
+export function linearIdempotencyUuid(key: string): string {
+  const bytes = Buffer.from(createHash('sha256').update(key).digest().subarray(0, 16))
+  // RFC 4122 variant + version 5-shaped deterministic UUID.
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
 
@@ -234,7 +247,10 @@ export class LinearTicketSource implements TicketSource {
     await this.updateState('transition', issueId, state)
   }
 
-  async create(draft: TicketDraft): Promise<Ticket> {
+  async create(
+    draft: TicketDraft,
+    opts: TicketCreateOptions = {},
+  ): Promise<Ticket> {
     const team = await this.getTeamInfo('create')
     const labelIds = (draft.labels ?? []).map((label) => {
       const labelId = team.labelIds.get(label)
@@ -252,20 +268,42 @@ export class LinearTicketSource implements TicketSource {
       description: draft.body,
       labelIds,
     }
-    if (this.createState !== undefined) {
-      const stateId = team.stateIds.get(this.createState)
+    const createState = opts.state ?? this.createState
+    if (createState !== undefined) {
+      const stateId = team.stateIds.get(createState)
       if (!stateId) {
         throw new Error(
-          `linear create: no workflow state "${this.createState}" in team ` +
+          `linear create: no workflow state "${createState}" in team ` +
             `${this.teamKey} (known: ${[...team.stateIds.keys()].join(', ')})`,
         )
       }
       input['stateId'] = stateId
     }
-    const data = await this.gql<{
-      issueCreate: { success: boolean; issue: GqlIssue | null }
-    }>('create', CREATE_ISSUE_MUTATION, { input })
+    const deterministicId =
+      opts.idempotencyKey === undefined
+        ? undefined
+        : linearIdempotencyUuid(opts.idempotencyKey)
+    if (deterministicId !== undefined) input['id'] = deterministicId
+
+    let data: { issueCreate: { success: boolean; issue: GqlIssue | null } }
+    try {
+      data = await this.gql<{
+        issueCreate: { success: boolean; issue: GqlIssue | null }
+      }>('create', CREATE_ISSUE_MUTATION, { input })
+    } catch (error) {
+      if (deterministicId === undefined) throw error
+      // The create may have committed before the caller/store crashed. Query
+      // the deterministic UUID and adopt it; if it is absent, preserve the
+      // original error rather than hiding a real outage.
+      const adopted = await this.adoptCreatedIssue(deterministicId)
+      if (adopted !== null) return adopted
+      throw error
+    }
     if (!data.issueCreate.success || !data.issueCreate.issue) {
+      if (deterministicId !== undefined) {
+        const adopted = await this.adoptCreatedIssue(deterministicId)
+        if (adopted !== null) return adopted
+      }
       throw new Error(`linear create: issueCreate failed for "${draft.title}"`)
     }
     const issue = data.issueCreate.issue
@@ -345,6 +383,21 @@ export class LinearTicketSource implements TicketSource {
   }
 
   // ── Plumbing ───────────────────────────────────────────────────────────────
+
+  private async adoptCreatedIssue(id: string): Promise<Ticket | null> {
+    try {
+      const adopted = await this.gql<{ issue: GqlIssue | null }>(
+        'create-adopt',
+        GET_ISSUE_QUERY,
+        { id },
+      )
+      return adopted.issue ? this.toTicket(adopted.issue) : null
+    } catch {
+      // Preserve the original create failure; an adoption probe is recovery,
+      // not a reason to hide the operation that actually failed.
+      return null
+    }
+  }
 
   private async gql<T>(
     operation: string,

@@ -20,6 +20,12 @@ import {
   type EventWrite,
 } from '../../events/catalog'
 import type { EventType } from '../../events/payloads'
+import type {
+  HarvestEvent,
+  HarvestEventEnvelope,
+  HarvestEventType,
+  HarvestEventWrite,
+} from '../../events/harvest'
 import { pollingSubscribe } from '../subscribe'
 import {
   toBytes,
@@ -29,6 +35,9 @@ import {
   type BuildRecord,
   type BuildStore,
   type NewBuildInput,
+  type RepositoryArtifact,
+  type RepositoryArtifactMeta,
+  type RepositoryRecord,
   type SubscribeOptions,
   type Unsubscribe,
 } from '../types'
@@ -44,8 +53,15 @@ import {
   errorBodySchema,
   eventEnvelopeWireSchema,
   eventListSchema,
+  harvestEventEnvelopeWireSchema,
+  harvestEventListSchema,
   okResponseSchema,
   placeholderRev,
+  repoDepositsResponseSchema,
+  repositoryArtifactGetResponseSchema,
+  repositoryArtifactMetaListSchema,
+  repositoryArtifactMetaWireSchema,
+  repositoryRecordWireSchema,
 } from './protocol'
 
 /** A scoped-token rejection (D8): 401 (missing/expired) or 403 (wrong build). */
@@ -78,6 +94,10 @@ export class RemoteBuildStore implements BuildStore {
 
   private buildPath(slug: string): string {
     return `/builds/${encodeURIComponent(slug)}`
+  }
+
+  private repoPath(repo: string): string {
+    return `/repos/${encodeURIComponent(repo)}`
   }
 
   private async raw(
@@ -270,6 +290,166 @@ export class RemoteBuildStore implements BuildStore {
     await this.requestJson(
       'POST',
       `${this.buildPath(slug)}/lease/release`,
+      okResponseSchema,
+      { holder },
+    )
+  }
+
+  async ensureRepo(repo: string): Promise<RepositoryRecord> {
+    return this.requestJson(
+      'POST',
+      '/repos',
+      repositoryRecordWireSchema,
+      { repo },
+    )
+  }
+
+  async getRepo(repo: string): Promise<RepositoryRecord | null> {
+    const response = await this.raw('GET', this.repoPath(repo))
+    if (response.status === 404) return null
+    if (!response.ok) throw await this.toError(response)
+    return repositoryRecordWireSchema.parse(await response.json())
+  }
+
+  async appendRepo<T extends HarvestEventType>(
+    repo: string,
+    event: HarvestEventWrite<T>,
+  ): Promise<HarvestEventEnvelope<T>> {
+    const envelope = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/events`,
+      harvestEventEnvelopeWireSchema,
+      { actor: event.actor, type: event.type, payload: event.payload },
+    )
+    return envelope as unknown as HarvestEventEnvelope<T>
+  }
+
+  async appendRepoWithArtifacts<T extends HarvestEventType>(
+    repo: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (
+      deposited: RepositoryArtifactMeta[],
+    ) => HarvestEventWrite<T>,
+  ): Promise<{
+    event: HarvestEventEnvelope<T>
+    artifacts: RepositoryArtifactMeta[]
+  }> {
+    const sentinels: RepositoryArtifactMeta[] = artifacts.map(
+      (artifact, index) => ({
+        repo,
+        kind: artifact.kind,
+        revision: placeholderRev(index),
+        blobRef: '',
+        metadata: structuredClone(artifact.metadata ?? {}),
+        createdAt: '',
+      }),
+    )
+    const write = makeEvent(sentinels)
+    const result = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/deposits`,
+      repoDepositsResponseSchema,
+      {
+        artifacts: artifacts.map((artifact) => ({
+          kind: artifact.kind,
+          contentBase64: encodeBase64(toBytes(artifact.content)),
+          ...(artifact.metadata !== undefined
+            ? { metadata: artifact.metadata }
+            : {}),
+        })),
+        event: { actor: write.actor, type: write.type, payload: write.payload },
+      },
+    )
+    return {
+      event: result.event as unknown as HarvestEventEnvelope<T>,
+      artifacts: result.artifacts,
+    }
+  }
+
+  async getRepoEvents(repo: string, sinceSeq = 0): Promise<HarvestEvent[]> {
+    const events = await this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/events?since=${sinceSeq}`,
+      harvestEventListSchema,
+    )
+    return events as unknown as HarvestEvent[]
+  }
+
+  async putRepoArtifact(
+    repo: string,
+    artifact: ArtifactInput,
+  ): Promise<RepositoryArtifactMeta> {
+    return this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/artifacts`,
+      repositoryArtifactMetaWireSchema,
+      {
+        kind: artifact.kind,
+        contentBase64: encodeBase64(toBytes(artifact.content)),
+        ...(artifact.metadata !== undefined
+          ? { metadata: artifact.metadata }
+          : {}),
+      },
+    )
+  }
+
+  async getRepoArtifact(
+    repo: string,
+    kind: string,
+    rev?: number,
+  ): Promise<RepositoryArtifact | null> {
+    const params = new URLSearchParams({ kind })
+    if (rev !== undefined) params.set('rev', String(rev))
+    const result = await this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/artifacts?${params}`,
+      repositoryArtifactGetResponseSchema,
+    )
+    return result === null
+      ? null
+      : { meta: result.meta, content: decodeBase64(result.contentBase64) }
+  }
+
+  async listRepoArtifacts(
+    repo: string,
+    kind?: string,
+  ): Promise<RepositoryArtifactMeta[]> {
+    const query = kind !== undefined ? `?kind=${encodeURIComponent(kind)}` : ''
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/artifact-list${query}`,
+      repositoryArtifactMetaListSchema,
+    )
+  }
+
+  async claimRepoLease(
+    repo: string,
+    holder: string,
+    ttlMs: number,
+  ): Promise<boolean> {
+    const result = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/lease/claim`,
+      okResponseSchema,
+      { holder, ttlMs },
+    )
+    return result.ok
+  }
+
+  async heartbeatRepo(repo: string, holder: string): Promise<boolean> {
+    const result = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/lease/heartbeat`,
+      okResponseSchema,
+      { holder },
+    )
+    return result.ok
+  }
+
+  async releaseRepoLease(repo: string, holder: string): Promise<void> {
+    await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/lease/release`,
       okResponseSchema,
       { holder },
     )

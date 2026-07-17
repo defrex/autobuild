@@ -222,6 +222,64 @@ describe('D8 scope enforcement over the wire', () => {
     })
   })
 
+  test('a repo/session token can use only its harvest journal and cannot read builds', async () => {
+    await withSecureStore(async ({ url, admin, backing }) => {
+      await admin.createBuild(sampleBuildInput('build-a'))
+      await admin.ensureRepo('acme/repo')
+      await admin.appendRepoWithArtifacts(
+        'acme/repo',
+        [{ kind: 'harvest-scan', content: '{}' }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'h_1',
+            observations: [{ build: 'build-a', seq: 1 }],
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      const client = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/repo' },
+          session: 'hs_one',
+          exp: EXP,
+        }),
+      })
+      await client.appendRepoWithArtifacts(
+        'acme/repo',
+        [{ kind: 'harvest-proposals', content: '{}' }],
+        (deposited) => ({
+          actor: agentActor('harvest', 'hs_one'),
+          type: 'harvest.proposals.submitted',
+          payload: {
+            run: 'h_1',
+            round: 1,
+            artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      expect(await client.getRepoEvents('acme/repo')).toHaveLength(2)
+      const wrongSession = await client
+        .appendRepo('acme/repo', {
+          actor: agentActor('harvest', 'hs_two'),
+          type: 'harvest.proposals.submitted',
+          payload: {
+            run: 'h_1',
+            round: 2,
+            artifact: { kind: 'harvest-proposals', rev: 0 },
+          },
+        })
+        .catch((error: unknown) => error)
+      expect(wrongSession).toBeInstanceOf(AuthError)
+      expect(await backing.getRepoEvents('acme/repo')).toHaveLength(2)
+      expect(await client.getEvents('build-a').catch((error: unknown) => error)).toBeInstanceOf(
+        AuthError,
+      )
+    })
+  })
+
   test('an expired token → 401 AuthError', async () => {
     await withSecureStore(async ({ url, admin, clock }) => {
       await admin.createBuild(sampleBuildInput('build-a'))

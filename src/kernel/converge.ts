@@ -51,12 +51,19 @@ export async function converge<A>(opts: {
   policy: ConvergePolicy
   /** Chains a human already resolved via dismiss-finding (§15.6-B). */
   dismissedIds?: ReadonlySet<string>
+  /** Durable callers may resume after prior revise rounds. Defaults preserve
+   * the ordinary in-memory loop (round 1, no history). */
+  startRound?: number
+  priorRounds?: Finding[][]
+  initialFeedback?: Feedback | null
 }): Promise<ConvergeOutcome<A>> {
   const { produce, review, policy, dismissedIds } = opts
-  const roundFindings: Finding[][] = []
-  let feedback: Feedback | null = null
+  const roundFindings: Finding[][] = (opts.priorRounds ?? []).map((round) => [
+    ...round,
+  ])
+  let feedback: Feedback | null = opts.initialFeedback ?? null
 
-  for (let round = 1; ; round += 1) {
+  for (let round = opts.startRound ?? 1; ; round += 1) {
     if (round > policy.maxRounds) {
       return {
         outcome: 'escalated',

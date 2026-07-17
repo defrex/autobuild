@@ -5,13 +5,14 @@
  * exact session traffic — and `end()` produces a Transcript like any real
  * adapter, because transcripts come back through the interface, guaranteed.
  */
-import type {
-  AgentContinueOpts,
-  AgentRunner,
-  AgentSessionHandle,
-  AgentStartOpts,
-  AgentTurnResult,
-  Transcript,
+import {
+  agentInvocation,
+  type AgentContinueOpts,
+  type AgentRunner,
+  type AgentSessionHandle,
+  type AgentStartOpts,
+  type AgentTurnResult,
+  type Transcript,
 } from '../types'
 
 /** What the script sees on each invocation — one call per turn. */
@@ -139,7 +140,10 @@ export class ScriptedAgentRunner implements AgentRunner {
         {
           session: journal.session.id,
           skill: journal.opts.skill,
-          buildSlug: journal.opts.buildSlug,
+          invocation: agentInvocation(journal.opts),
+          ...(journal.opts.buildSlug !== undefined
+            ? { buildSlug: journal.opts.buildSlug }
+            : {}),
           turns: journal.turns,
         },
         null,

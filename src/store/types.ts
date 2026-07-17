@@ -16,6 +16,12 @@ import type {
   EventWrite,
 } from '../events/catalog'
 import type { EventType } from '../events/payloads'
+import type {
+  HarvestEvent,
+  HarvestEventEnvelope,
+  HarvestEventType,
+  HarvestEventWrite,
+} from '../events/harvest'
 import type { TicketRef } from '../ontology'
 
 /** Injectable time source — adapters take one so tests are deterministic. */
@@ -51,6 +57,29 @@ export interface ArtifactMeta {
   blobRef: string
   metadata: Record<string, unknown>
   createdAt: string
+}
+
+export interface RepositoryRecord {
+  repo: string
+  createdAt: string
+  updatedAt: string
+  /** Repository workflow lease (harvest single-flight), separate from builds. */
+  lease?: { holder: string; expiresAt: string }
+  heartbeatAt?: string
+}
+
+export interface RepositoryArtifactMeta {
+  repo: string
+  kind: string
+  revision: number
+  blobRef: string
+  metadata: Record<string, unknown>
+  createdAt: string
+}
+
+export interface RepositoryArtifact {
+  meta: RepositoryArtifactMeta
+  content: Uint8Array
 }
 
 export interface ArtifactInput {
@@ -140,6 +169,39 @@ export interface BuildStore {
     opts: SubscribeOptions,
     onEvent: (event: AbEvent) => void,
   ): Unsubscribe
+
+  // ── Repository journal (outer-loop workflows) ────────────────────────────
+  // Kept alongside, not inside, build streams: a harvest run is not a build.
+  ensureRepo(repo: string): Promise<RepositoryRecord>
+  getRepo(repo: string): Promise<RepositoryRecord | null>
+  appendRepo<T extends HarvestEventType>(
+    repo: string,
+    event: HarvestEventWrite<T>,
+  ): Promise<HarvestEventEnvelope<T>>
+  appendRepoWithArtifacts<T extends HarvestEventType>(
+    repo: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (
+      deposited: RepositoryArtifactMeta[],
+    ) => HarvestEventWrite<T>,
+  ): Promise<{
+    event: HarvestEventEnvelope<T>
+    artifacts: RepositoryArtifactMeta[]
+  }>
+  getRepoEvents(repo: string, sinceSeq?: number): Promise<HarvestEvent[]>
+  putRepoArtifact(
+    repo: string,
+    artifact: ArtifactInput,
+  ): Promise<RepositoryArtifactMeta>
+  getRepoArtifact(
+    repo: string,
+    kind: string,
+    rev?: number,
+  ): Promise<RepositoryArtifact | null>
+  listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>
+  claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean>
+  heartbeatRepo(repo: string, holder: string): Promise<boolean>
+  releaseRepoLease(repo: string, holder: string): Promise<void>
 
   close(): Promise<void>
 }

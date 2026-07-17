@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
+import {
+  LINEAR_API_URL,
+  LinearTicketSource,
+  linearIdempotencyUuid,
+  type LinearFetch,
+} from './linear'
 
 interface RecordedCall {
   url: string
@@ -84,6 +89,17 @@ const TEAM_INFO_RESPONSE = {
 }
 
 describe('LinearTicketSource', () => {
+  test('idempotency keys derive stable, distinct RFC-shaped issue UUIDs', () => {
+    expect(linearIdempotencyUuid('cluster-a')).toBe(
+      linearIdempotencyUuid('cluster-a'),
+    )
+    expect(linearIdempotencyUuid('cluster-a')).not.toBe(
+      linearIdempotencyUuid('cluster-b'),
+    )
+    expect(linearIdempotencyUuid('cluster-a')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+  })
   test('listReady sends team + state + and-of-label filters and maps issues to Tickets', async () => {
     const { fetchFn, calls } = fakeLinear([
       { body: { data: { issues: { nodes: [gqlIssue()] } } } },
@@ -318,6 +334,55 @@ describe('LinearTicketSource', () => {
         labelIds: [],
         stateId: 'st-ready',
       },
+    })
+  })
+
+  test('per-create state and idempotency key override adapter defaults', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: { issueCreate: { success: true, issue: gqlIssue() } },
+        },
+      },
+    ])
+    const source = new LinearTicketSource({
+      apiKey: 'lin_api_test',
+      teamKey: 'ENG',
+      fetchFn,
+      createState: 'Ready',
+    })
+    await source.create(
+      { title: 'X', body: 'y' },
+      { state: 'Done', idempotencyKey: 'cluster-x' },
+    )
+    const input = (calls[1]?.variables as { input: Record<string, unknown> }).input
+    expect(input['stateId']).toBe('st-done')
+    expect(input['id']).toBe(linearIdempotencyUuid('cluster-x'))
+  })
+
+  test('a duplicate idempotent create adopts the deterministic issue', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [
+            {
+              message: 'Issue id already exists',
+              extensions: { code: 'INPUT_ERROR' },
+            },
+          ],
+        },
+      },
+      { body: { data: { issue: gqlIssue({ identifier: 'ENG-88' }) } } },
+    ])
+    const adopted = await makeSource(fetchFn).create(
+      { title: 'X', body: 'y' },
+      { idempotencyKey: 'cluster-retry' },
+    )
+    expect(adopted.ref.id).toBe('ENG-88')
+    expect(calls[2]?.variables).toEqual({
+      id: linearIdempotencyUuid('cluster-retry'),
     })
   })
 

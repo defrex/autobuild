@@ -13,6 +13,7 @@ import {
   type EventWrite,
 } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
+import type { HarvestEventWrite } from '../events/harvest'
 import { manualClock } from '../testing/fixed'
 import {
   contentHash,
@@ -76,6 +77,21 @@ export function sampleEventWrite(
     actor: agentActor('implement', 's_test'),
     type: 'observation.recorded',
     payload: { id: 'o_1', kind: 'followup', summary },
+  }
+}
+
+export function harvestStartedWrite(
+  run = 'h_1',
+  rev = 0,
+): HarvestEventWrite<'harvest.started'> {
+  return {
+    actor: KERNEL,
+    type: 'harvest.started',
+    payload: {
+      run,
+      observations: [{ build: 'build-a', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev },
+    },
   }
 }
 
@@ -171,6 +187,94 @@ export function describeBuildStoreContract(
           await store.createBuild(sampleBuildInput('list-b'))
           const slugs = (await store.listBuilds()).map((b) => b.slug).sort()
           expect(slugs).toEqual(['list-a', 'list-b'])
+        })
+      })
+    })
+
+    describe('repository journal (harvest paper trail)', () => {
+      test('ensureRepo is idempotent and repo event seq is independent', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const first = await store.ensureRepo('acme/a')
+          expect(first).toEqual({
+            repo: 'acme/a',
+            createdAt: CONTRACT_T0,
+            updatedAt: CONTRACT_T0,
+          })
+          expect(await store.ensureRepo('acme/a')).toEqual(first)
+          await store.ensureRepo('acme/b')
+          const a1 = await store.appendRepo('acme/a', harvestStartedWrite('ha'))
+          const b1 = await store.appendRepo('acme/b', harvestStartedWrite('hb'))
+          expect([a1.seq, b1.seq]).toEqual([1, 1])
+          expect((await store.getRepoEvents('acme/a'))[0]?.repo).toBe('acme/a')
+        })
+      })
+
+      test('harvest event validation is strict and actor-aware', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/a')
+          const err = await store
+            .appendRepo('acme/a', {
+              actor: agentActor('harvest', 'hs_1'),
+              type: 'harvest.started',
+              payload: harvestStartedWrite().payload,
+            })
+            .catch((error: unknown) => error)
+          expect(err).toBeInstanceOf(EventValidationError)
+          expect(await store.getRepoEvents('acme/a')).toEqual([])
+        })
+      })
+
+      test('repository artifacts are versioned and deposit atomically with events', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/a')
+          const result = await store.appendRepoWithArtifacts(
+            'acme/a',
+            [{ kind: 'harvest-scan', content: '{"observations":[]}' }],
+            (deposited) =>
+              harvestStartedWrite('h_atomic', deposited[0]!.revision),
+          )
+          expect(result.artifacts[0]?.revision).toBe(0)
+          expect(result.event.payload.scan).toEqual({
+            kind: 'harvest-scan',
+            rev: 0,
+          })
+          const artifact = await store.getRepoArtifact(
+            'acme/a',
+            'harvest-scan',
+          )
+          expect(new TextDecoder().decode(artifact?.content)).toBe(
+            '{"observations":[]}',
+          )
+
+          const error = await store
+            .appendRepoWithArtifacts(
+              'acme/a',
+              [{ kind: 'harvest-scan', content: 'bad' }],
+              () => ({ ...harvestStartedWrite('bad'), actor: agentActor('x', 's') }),
+            )
+            .catch((caught: unknown) => caught)
+          expect(error).toBeInstanceOf(EventValidationError)
+          expect(
+            (await store.listRepoArtifacts('acme/a', 'harvest-scan')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([0])
+        })
+      })
+
+      test('repository lease is exclusive, expires, heartbeats, and releases', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.ensureRepo('acme/a')
+          expect(await store.claimRepoLease('acme/a', 'one', 1000)).toBe(true)
+          expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(false)
+          clock.advance(500)
+          expect(await store.heartbeatRepo('acme/a', 'one')).toBe(true)
+          clock.advance(900)
+          expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(false)
+          await store.releaseRepoLease('acme/a', 'one')
+          expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(true)
         })
       })
     })
