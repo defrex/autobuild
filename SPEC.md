@@ -33,9 +33,10 @@ Principles carried from v1 — these are non-negotiable and every design
 decision below answers to them:
 
 1. **Judgment in skills, determinism in code.** Agents never decide phase
-   transitions, signal identity, or state. Skills own the fuzzy parts
-   (planning, reviewing, clustering); plain tested code owns the state
-   machine, dedup, gating, and plumbing.
+   transitions, signal identity, or state. Agent surfaces own the fuzzy parts
+   (primarily skills, plus narrow pre-build seams such as naming); plain tested
+   code owns the state machine, validation, fallback, dedup, gating, and
+   plumbing.
 2. **Resumability is not a feature.** Re-running a build resumes it. There is
    no separate resume path; every phase is a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated moves past
@@ -74,10 +75,11 @@ Small, independently runnable, crash-safe:
   Per-build processes are deliberate: crash isolation, and the natural shape
   once builds run in remote sandboxes.
 - **dispatcher** — watches the TicketSource for Ready tickets (label/state
-  conditions), claims, provisions a workspace, launches build-runners up to a
-  capacity limit. On process startup it also attempts every current build for
-  its repo, so re-running `ab dispatch` resumes durable work rather than only
-  looking for new tickets. Cron-friendly.
+  conditions), claims, establishes the final conforming spec, chooses a short
+  immutable build slug, provisions a workspace, and launches build-runners up
+  to a capacity limit. On process startup it also attempts every current build
+  for its repo, so re-running `ab dispatch` resumes durable work rather than
+  only looking for new tickets. Cron-friendly.
 - **ingesters** — outer-loop processes turning signals into proposals (§12).
 - **operator** — UI process(es); see §14.
 
@@ -202,6 +204,23 @@ artifact: human-led via `/spec`, dispatch-authored, ingester-shaped.
 conforming spec, dispatch bounces it back to Triage with a comment citing
 the standard — moving failure to the cheapest point instead of launching a
 build that will thrash and escalate.
+
+**Build identity at dispatch:** once the final conforming spec is in hand
+(including a successfully authored replacement), dispatch asks the selected
+runtime for a one-shot name derived from the substance of that full spec. The
+base is one to three lowercase ASCII kebab tokens. The dispatcher validates the
+proposal without repairing it, then checks the whole BuildStore for collisions;
+`-2`, `-3`, and so on are appended after validation and do not count against the
+three-token base. The slug and `ab/<slug>` branch are recorded once and never
+renamed, so existing and in-flight builds are untouched.
+
+Naming is optional judgment, not a pipeline phase. It uses the `[agent]`
+default pair unless the open `[roles]` map supplies a `slug` override. The
+runtime capability is one-turn and tool-free. Absence, invalid output,
+rejection, or a fixed dispatcher-owned deadline all take the deterministic
+first-three-tokens-of-kebab(title) fallback (`build` for an empty normalized
+title); naming failure never prevents build creation. Validation, timeout,
+fallback, and uniqueness remain deterministic dispatcher policy.
 
 **Immutability:** the spec cannot change during a build. Every downstream
 reviewer approves conformance *to it*; a drifting spec silently converts
@@ -450,6 +469,12 @@ interface AgentRunner {
 }
 ```
 
+Pre-build naming does not widen this session/skill contract. A runtime may
+separately register an optional one-shot completion capability
+(`{prompt, cwd, env, model?, signal?} → {text}`), used without tools and without
+entering the resumable session map. A runtime without it is valid and causes the
+deterministic naming fallback (§6.3).
+
 - **Adapters:** Claude Agent SDK (subscription billing) for Claude models;
   **pi in SDK mode** for all other models (Kimi/Moonshot, GPT/OpenAI). Both
   registered runtimes behind the interface — preferences may change per project
@@ -525,7 +550,7 @@ signals (telemetry, observations)
    → Triage (proposals)
    → groom                     (the human gate — named in the ontology, no skill)
    → Ready
-   → dispatch                  (claim → workspace → spec import/author → launch build-runner)
+   → dispatch                  (claim → spec import/author → name → workspace → launch build-runner)
    → build → PR → merge
 ```
 
@@ -871,6 +896,7 @@ steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 runtime = "claude"              # no model ⇒ the runtime's own default
 
 [roles]                         # per-step OVERRIDES, most-specific-first (§9)
+slug = { model = "gpt-5.6-sol" }               # optional pre-build naming override
 plan = { model = "gpt-5.6-sol" }               # model only ⇒ routes to pi (serves GPT)
 code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime+model pair
 

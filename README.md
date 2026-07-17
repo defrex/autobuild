@@ -42,8 +42,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 ```
 
 1. **spec** — the dispatcher claims a ready ticket (one that passes your ready
-   gate) and imports its body as the build's spec. The spec is the
-   contract for everything downstream.
+   gate), establishes the final conforming spec, and chooses the build's short
+   immutable slug from it. The spec is the contract for everything downstream.
 2. **plan ⇄ plan-review** — a planner writes an implementation plan; a
    reviewer approves it or sends it back with findings. The loop runs until
    approval or a policy limit.
@@ -181,7 +181,7 @@ is an error, so a typo cannot silently disable a verifier.
 | `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer` | `needsServer = false` |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
 | `[agent]` | Repo-wide **default** on the two axes: `runtime` (which runtime executes the session) and `model` (which model it runs on). Both optional. | absent ⇒ the built-in fallback runtime + its own default model |
-| `[roles]` | Role → per-step **override** `{ runtime?, model? }`, most-specific-first (see below). Registered runtimes: `claude` (Claude models), `pi` (Kimi/GPT). | — |
+| `[roles]` | Role → per-step **override** `{ runtime?, model? }`, most-specific-first (see below), including the optional pre-build `slug` naming role. Registered runtimes: `claude` (Claude models), `pi` (Kimi/GPT). | — |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `5` |
 | `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
@@ -212,6 +212,7 @@ default in `[agent]`, override per step in `[roles]`:
 runtime = "claude"                                   # no model ⇒ the runtime's own default
 
 [roles]
+slug        = { model = "gpt-5.6-sol" }              # optional pre-build naming override
 code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime + model
 plan        = { model = "gpt-5.6-sol" }              # model only ⇒ routes to pi (it serves GPT)
 ```
@@ -224,7 +225,10 @@ zero or several non-default supporters is a loud error); neither falls back to
 the `[agent]` default. Two runtimes ship today: **`claude`** (Claude models)
 and **`pi`** (Kimi/Moonshot and GPT/OpenAI models). The whole config is
 resolved **before any build launches**, so a typo'd runtime fails loudly at
-`ab dispatch`, never mid-build.
+`ab dispatch`, never mid-build. Slug naming follows the `[agent]` default unless
+`[roles].slug` overrides it. It is a tool-free one-shot completion, not a
+pipeline phase or resumable session; a runtime without that capability simply
+uses the deterministic title fallback.
 
 ### 3. Point at a ticket source and set up auth
 
@@ -379,6 +383,14 @@ Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
 still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
 present, and `readyState`) → **claim-before-launch** → the **spec gate**.
 
+After the final spec passes that gate, the selected runtime proposes one to
+three meaningful lowercase kebab words from the whole spec. The dispatcher
+strictly validates that base and checks every build in the store for collisions,
+appending `-2`, `-3`, and so on outside the three-word limit. If naming is
+unavailable, invalid, errors, or times out, dispatch still succeeds with the
+first three words of the kebab-cased title (`build` when none remain). The slug
+and branch `ab/<slug>` are chosen once; existing builds are never renamed.
+
 > **`readyState` is required — it names the single workflow state a ticket must
 > sit in to be dispatched.** There is no default and no "any state" mode:
 > omitting it (or leaving it blank) is a config error, because without it every
@@ -492,6 +504,14 @@ make the file match either side in full.
 ---
 
 ## State, paths, and environment
+
+### Build slugs
+
+New builds get a one-to-three-word base chosen from the final spec, for example
+`login-rate-limit`; a store collision becomes `login-rate-limit-2`. This short
+slug is the stable identifier used by the dashboard, `ab` commands, runner
+instances, worktree names, and the branch `ab/<slug>`. Builds created before
+this rule retain their existing slugs and branches.
 
 ### Local state lives outside your repo
 

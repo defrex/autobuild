@@ -48,8 +48,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   tickets; a human grooms them to the spec standard (`docs/spec-standard.md`:
   what and why but never how, verifiable acceptance criteria, explicit
   out-of-scope, evidence) and dispatches. Generated work cannot leave Triage
-  un-groomed. The dispatcher claims tickets that pass the `[dispatcher]` gate
-  and starts builds up to `capacity`.
+  un-groomed. The dispatcher claims tickets that pass the `[dispatcher]` gate,
+  chooses a short immutable slug from the final conforming spec, and starts
+  builds up to `capacity`.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
@@ -73,12 +74,21 @@ points. There are no custom phases, no DAGs, no reordering — a repo extends
 auto-build by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
+**Slug naming is not a phase.** For each new build, a tool-free one-shot call
+proposes a lowercase kebab base of at most three meaningful spec-derived words.
+The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
+`-3`, … collision suffixes. Absence or any failure falls back to the first
+three words of the kebab-cased title, so naming never blocks dispatch. The slug
+and `ab/<slug>` branch are chosen once; existing builds are never renamed.
+Naming follows `[agent]` and can be overridden with `[roles].slug`.
+
 ## Who does what
 
 The distinctions that change an administrator's answer:
 
-- **Agents supply judgment** — planning, reviewing, implementing, verifying.
-  Nothing else. An agent never decides a transition.
+- **Agents supply judgment** — planning, reviewing, implementing, verifying,
+  and narrow pre-build proposals such as slug naming. An agent never decides a
+  transition or whether a naming proposal is valid.
 - **The kernel owns determinism** — phase transitions, gating, deduplication,
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
@@ -193,7 +203,9 @@ and **`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models).
 
 An **open map** of role name → per-step **override** `{ runtime?, model? }` on
 the same two axes. The roles the pipeline routes are `plan`, `plan-review`,
-`implement`, and `code-review` (plus each verify/finalize step by name).
+`implement`, and `code-review` (plus each verify/finalize step by name). The
+pre-build `slug` role uses the same resolver for optional one-shot naming; it is
+not a pipeline phase.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
