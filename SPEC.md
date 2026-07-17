@@ -451,11 +451,26 @@ interface AgentRunner {
 ```
 
 - **Adapters:** Claude Agent SDK (subscription billing) for Claude models;
-  **pi in SDK mode** for all other models. Both behind the interface —
-  preferences may change per project and over time.
-- **Routing:** a role → runner/model map in per-project config, generalizing
-  v1's `harnessMap`. Mixing models across roles is intentional — a different
-  reviewer catches more.
+  **pi in SDK mode** for all other models (Kimi/Moonshot, GPT/OpenAI). Both
+  registered runtimes behind the interface — preferences may change per project
+  and over time. A future Claude Code print-mode access path registers as a
+  *distinct runtime name*, never a mode flag on an existing one.
+- **Routing — two independent axes (§16.1):** the *runtime* that executes a
+  session and the *model* it runs on. Both are set once as a repo-wide default
+  (`[agent]`) and overridden per step (`[roles]`), generalizing v1's
+  `harnessMap`. Overrides resolve **most-specific-first**: `runtime + model`
+  pins exactly that pair (a runtime that cannot serve the model is a config
+  error); `runtime` alone uses that runtime's own default model; `model` alone
+  routes to a runtime that serves it — the default runtime when it qualifies,
+  else the single supporter (zero, or several non-default supporters, is a loud
+  config error); `neither` is the default pair. Each runtime declares the model
+  families it serves, so the whole config resolves **eagerly, before any
+  session launches** — an unregistered runtime never silently falls back.
+  Adding a runtime touches only the adapter registry, never the kernel. Mixing
+  models across roles is intentional — a different reviewer catches more. The
+  resolved runtime and model are recorded on every `session.started` (the
+  frozen `runner` field carries the resolved runtime name), so an experiment's
+  outcome is attributable to the configuration that produced it.
 - **Transcripts come back through the interface**, not scraped from disk, so
   every adapter must produce one: the corpus is guaranteed complete.
 - Adapters without native session resumption (and post-sandbox-death
@@ -852,9 +867,12 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 
-[roles]                         # role → runner/model routing (v1 harnessMap, generalized)
-plan = { runner = "claude" }
-code-review = { runner = "pi", model = "…" }
+[agent]                         # repo-wide DEFAULT on the two axes (§9)
+runtime = "claude"              # no model ⇒ the runtime's own default
+
+[roles]                         # per-step OVERRIDES, most-specific-first (§9)
+plan = { model = "gpt-5.6-sol" }               # model only ⇒ routes to pi (serves GPT)
+code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime+model pair
 
 [policy]
 stallRounds = 3

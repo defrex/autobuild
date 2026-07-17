@@ -33,7 +33,7 @@ points, declared per-repo in `autobuild.toml`.
 | `src/events/` | Envelope, payload schemas (frozen), catalog + validation | §15 |
 | `src/store/` | BuildStore interface, contract suite, memory + SQLite/blob adapters | §7 |
 | `src/kernel/` | Phase table, reducer, converge, stall detection, engine, server lifecycle | §5, §10, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes | §3.2, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Two-axis runtime/model routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), and the `claude.ts` / `pi.ts` adapters | §3.2, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
 | `src/cli/dashboard/` | `ab dispatch`'s live build dashboard — a read-only projection of the reducer; plain-by-default, interactive only on a TTY | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty) | §3.3, §15.7 |

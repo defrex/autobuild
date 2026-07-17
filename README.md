@@ -80,7 +80,7 @@ an early adopter.
 |---|---|
 | Forge | **GitHub only**, through the `gh` CLI |
 | Ticket source | **`linear` and `file` only** (no GitHub Issues) |
-| Agent runner | **`claude` only** (`@anthropic-ai/claude-agent-sdk`) |
+| Agent runtimes | **`claude`** (`@anthropic-ai/claude-agent-sdk`, Claude models) and **`pi`** (SDK mode, Kimi/Moonshot + GPT/OpenAI models) |
 | Workspaces | git worktrees only |
 | Store | local SQLite + blob directory; a remote HTTP store is wired through the `ab` binary |
 
@@ -180,7 +180,8 @@ is an error, so a typo cannot silently disable a verifier.
 | `[verify]` | `steps = [...]` — the ordered verify phases | `[]` |
 | `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer` | `needsServer = false` |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
-| `[roles]` | Role → `{ runner, model? }`. Only `claude` is registered as a runner. | — |
+| `[agent]` | Repo-wide **default** on the two axes: `runtime` (which runtime executes the session) and `model` (which model it runs on). Both optional. | absent ⇒ the built-in fallback runtime + its own default model |
+| `[roles]` | Role → per-step **override** `{ runtime?, model? }`, most-specific-first (see below). Registered runtimes: `claude` (Claude models), `pi` (Kimi/GPT). | — |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `5` |
 | `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
@@ -201,6 +202,29 @@ command = "typecheck"   # a key in [commands]
 kind = "check"
 command = "test"
 ```
+
+**Runtime and model — two axes, one line each.** Every agent session runs on a
+`runtime` (the adapter that executes it) and a `model`. Set the repo-wide
+default in `[agent]`, override per step in `[roles]`:
+
+```toml
+[agent]
+runtime = "claude"                                   # no model ⇒ the runtime's own default
+
+[roles]
+code-review = { runtime = "pi", model = "kimi-k3" }  # exactly this runtime + model
+plan        = { model = "gpt-5.6-sol" }              # model only ⇒ routes to pi (it serves GPT)
+```
+
+Overrides resolve **most-specific-first**: `runtime + model` pins the pair
+(a runtime that can't serve the model is a config error); `runtime` alone uses
+that runtime's default model; `model` alone routes to a runtime that serves it
+(the default runtime wins when it qualifies, otherwise the single supporter —
+zero or several non-default supporters is a loud error); neither falls back to
+the `[agent]` default. Two runtimes ship today: **`claude`** (Claude models)
+and **`pi`** (Kimi/Moonshot and GPT/OpenAI models). The whole config is
+resolved **before any build launches**, so a typo'd runtime fails loudly at
+`ab dispatch`, never mid-build.
 
 ### 3. Point at a ticket source and set up auth
 

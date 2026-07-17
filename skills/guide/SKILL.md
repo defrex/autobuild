@@ -176,18 +176,38 @@ and repeats up to `[policy].maxVerifyAttempts`.
 |---|---|---|---|
 | `steps` | `[]` | array of nonempty step names | Post-steps that run after the PR is opened. **Failure-tolerant**: a failed step files an observation and never fails a green build. |
 
-### `[roles]`
+### `[agent]`
 
-An **open map** of role name → `{ runner, model? }`. The roles the pipeline
-routes are `plan`, `plan-review`, `implement`, and `code-review`.
+The repo-wide **default** on the two configuration axes: the `runtime` that
+executes an agent session and the `model` it runs on. Both optional. Absent
+entirely ⇒ the built-in fallback runtime (`claude`) with its own default model
+— today's behavior, unchanged. Two runtimes ship: **`claude`** (Claude models)
+and **`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models).
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runner` | — | **required**, nonempty string | Which AgentRunner adapter executes this role's sessions (e.g. `"claude"`). |
-| `model` | — | optional, nonempty string | Model override for this role. Absent = the runner's default. |
+| `runtime` | — | optional, nonempty string | The default runtime for every session. Must name a registered runtime, else `ab dispatch` fails loudly before any build. |
+| `model` | — | optional, nonempty string | The default model. Absent ⇒ the runtime's own default model. |
 
-Mixing models across roles is **intentional**, not an inconsistency to clean
-up: a reviewer that differs from the implementer catches more.
+### `[roles]`
+
+An **open map** of role name → per-step **override** `{ runtime?, model? }` on
+the same two axes. The roles the pipeline routes are `plan`, `plan-review`,
+`implement`, and `code-review` (plus each verify/finalize step by name).
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `runtime` | — | optional, nonempty string | Runtime override for this role. Absent ⇒ resolved from `model` or the `[agent]` default. |
+| `model` | — | optional, nonempty string | Model override for this role. Absent ⇒ the resolved runtime's default. |
+
+Overrides resolve **most-specific-first**: `runtime + model` pins exactly that
+pair (a runtime that can't serve the model is a config error); `runtime` alone
+uses that runtime's default model; `model` alone routes to a runtime that
+serves it (the default runtime wins when it qualifies, otherwise the single
+supporter — zero, or several non-default supporters, is a loud error); neither
+falls back to the `[agent]` default pair. Mixing models across roles is
+**intentional**, not an inconsistency to clean up: a reviewer that differs from
+the implementer catches more.
 
 ### `[policy]`
 

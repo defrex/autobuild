@@ -46,13 +46,20 @@ command = "test"
 [finalize]
 steps = []
 
-# Role → runner/model routing (§9). Mixing models across roles is
-# intentional — a different reviewer catches more.
-[roles]
-plan = { runner = "claude" }
-plan-review = { runner = "claude" }
-implement = { runner = "claude" }
-code-review = { runner = "claude" }
+# Two-axis runtime/model configuration (§9): the `runtime` that executes a
+# session and the `model` it runs on. Set the repo-wide default in [agent],
+# override per step in [roles]. Registered runtimes: `claude` (Claude models)
+# and `pi` (Kimi/Moonshot + GPT/OpenAI). Adding a runtime touches only the
+# adapter registry, never the kernel.
+[agent]
+runtime = "claude"   # no model ⇒ the runtime's own default
+
+# Per-step overrides, most-specific-first (runtime+model / runtime / model /
+# neither). Mixing models across roles is intentional — a different reviewer
+# catches more. Uncomment and edit to experiment:
+#[roles]
+#code-review = { runtime = "pi", model = "kimi-k3" }   # exactly this pair
+#plan = { model = "gpt-5.6-sol" }                      # model only ⇒ routes to pi
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
