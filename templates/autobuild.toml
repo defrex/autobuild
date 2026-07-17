@@ -46,24 +46,29 @@ command = "test"
 [finalize]
 steps = []
 
-# Runtime/model/extensions configuration (§9): the `runtime` that executes a
-# session, the `model` it runs on, and (pi only) the `extensions` it may use.
-# Set the repo-wide default in [agent], override per step in [roles]. Registered
-# runtimes: `claude` (Claude models) and `pi` (provider-qualified ids like
-# `openai/gpt-5.6-sol`; `ab models [query]` looks them up). Adding a runtime
-# touches only the adapter registry, never the kernel.
-[agent]
-runtime = "claude"   # no model ⇒ the runtime's own default
+# Runtime/model/extensions configuration (§9) is one open map of roles. The
+# reserved optional `default` role is the raw inheritance base for every other
+# role; it is never dispatched as a phase. Removing it uses the wiring-fallback
+# runtime and that runtime's own default model.
+[roles.default]
+runtime = "claude"   # no configured model ⇒ this runtime's own default
 # extensions unset ⇒ hermetic (no internet / sub-agents / MCP).
 
-# Per-step overrides, most-specific-first (runtime+model / runtime / model /
-# neither). Mixing models across roles is intentional — a different reviewer
-# catches more. `extensions` is a separate per-role allowlist of Pi packages
-# (e.g. "web-access", "subagents"); grant it to plan/review, keep implement and
-# verify hermetic. Uncomment and edit to experiment:
-#[roles]
-#code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }
-#plan = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }
+# Each role field independently overrides or inherits `default`; an extensions
+# list replaces the default list wholesale. The exact merged runtime/model pair
+# must be compatible — a model-only override stays on its inherited runtime and
+# never silently reroutes. Registered runtimes: `claude` (Claude models) and
+# `pi` (provider-qualified ids like `openai/gpt-5.6-sol`; `ab models [query]`
+# looks them up). Mixing models across roles is intentional. Uncomment and edit:
+#[roles.code-review]
+#runtime = "pi"
+#model = "moonshotai/kimi-k3"
+#extensions = ["web-access"]
+#
+#[roles.plan]
+#runtime = "pi"
+#model = "openai/gpt-5.6-sol"
+#extensions = ["subagents", "web-access"]
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)

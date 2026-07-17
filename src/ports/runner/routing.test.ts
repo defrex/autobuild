@@ -7,9 +7,6 @@ function runner(): ScriptedAgentRunner {
   return new ScriptedAgentRunner({ script: () => defaultTurnResult() })
 }
 
-// A registry with three runtimes: claude (Claude models, no default model —
-// its SDK default), pi (Kimi + GPT, default kimi-k3), and gemini (a second
-// GPT-serving runtime, to force model-only ambiguity).
 const claude = runner()
 const pi = runner()
 const gemini = runner()
@@ -19,148 +16,154 @@ const registry: RuntimeRegistry = {
   gemini: { runner: gemini, servesModels: ['gpt-'] },
 }
 
-/** Build a resolver over `registry` and resolve one role's spec. */
-function resolveRole(
-  role: string,
-  spec: RuntimeSpec,
-  agent: RuntimeSpec | undefined = undefined,
+function resolver(
+  roles: Record<string, RuntimeSpec> = {},
   fallback = 'claude',
-): { runner: unknown; runtime: string; model?: string } {
-  const resolver = createRuntimeResolver(registry, agent, fallback, { [role]: spec })
-  return resolver.resolve(role)
+) {
+  return createRuntimeResolver(registry, roles, fallback)
 }
 
-describe('resolveSpec — role overrides, most-specific-first', () => {
-  test('runtime + model → exactly that pair', () => {
-    const r = resolveRole('code-review', { runtime: 'pi', model: 'kimi-k3' })
-    expect(r.runtime).toBe('pi')
-    expect(r.runner).toBe(pi)
-    expect(r.model).toBe('kimi-k3')
-  })
-
-  test('runtime only → that runtime with its own default model', () => {
-    const r = resolveRole('plan', { runtime: 'pi' })
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('kimi-k3')
-  })
-
-  test('runtime only with no declared default model → model undefined', () => {
-    const r = resolveRole('plan', { runtime: 'claude' })
-    expect(r.runtime).toBe('claude')
-    expect(r.model).toBeUndefined()
-  })
-
-  test('model only → the default runtime wins when it qualifies, even if others also do', () => {
-    // gpt-* is served by both pi and gemini; with default = pi, pi wins.
-    const r = resolveRole('plan', { model: 'gpt-5.6-sol' }, { runtime: 'pi' })
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('gpt-5.6-sol')
-  })
-
-  test('model only → the single supporter when the default does not qualify', () => {
-    // default = claude (serves only claude-); kimi-* has exactly one supporter, pi.
-    const r = resolveRole('plan', { model: 'kimi-k3' })
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('kimi-k3')
-  })
-
-  test('neither → the default pair', () => {
-    const r = resolveRole('finalize', {}, { runtime: 'pi', model: 'kimi-k3' })
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('kimi-k3')
-  })
-
-  test('neither → inherits the [agent] MODEL, not the runtime registry default', () => {
-    // Regression: a role added only to set another axis (e.g. extensions) must
-    // NOT swap its model to pi's registry defaultModel (kimi-k3).
-    const resolver = createRuntimeResolver(
-      registry,
-      { runtime: 'pi', model: 'gpt-5.6-sol' },
-      'claude',
-      { implement: {} },
-    )
-    const r = resolver.resolve('implement')
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('gpt-5.6-sol')
-  })
-})
-
-describe('resolveSpec — the extensions axis', () => {
-  test('a role list overrides the [agent] default; runtime/model still inherit', () => {
-    const resolver = createRuntimeResolver(
-      registry,
-      { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['subagents'] },
-      'claude',
-      { plan: { extensions: ['subagents', 'web-access'] } },
-    )
-    const r = resolver.resolve('plan')
-    expect(r.model).toBe('gpt-5.6-sol')
-    expect(r.extensions).toEqual(['subagents', 'web-access'])
-  })
-
-  test('a role without its own list inherits the [agent] default extensions', () => {
-    const resolver = createRuntimeResolver(
-      registry,
-      { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['web-access'] },
-      'claude',
-      { implement: { model: 'kimi-k3' } },
-    )
-    expect(resolver.resolve('implement').extensions).toEqual(['web-access'])
-  })
-
-  test('no [agent] extensions and none on the role ⇒ hermetic (empty)', () => {
-    const resolver = createRuntimeResolver(registry, { runtime: 'pi' }, 'claude', {
-      'code-review': { model: 'kimi-k3' },
+describe('createRuntimeResolver — raw per-field inheritance', () => {
+  test('an absent default uses the wiring fallback and its built-in model', () => {
+    const claudeFallback = resolver()
+    expect(claudeFallback.resolve('plan')).toMatchObject({
+      runner: claude,
+      runtime: 'claude',
+      extensions: [],
     })
-    expect(resolver.resolve('code-review').extensions).toEqual([])
-    // A role absent from the map falls back to the default pair, also hermetic.
-    expect(resolver.resolve('plan').extensions).toEqual([])
+    expect(claudeFallback.resolve('plan').model).toBeUndefined()
+
+    const piFallback = resolver({}, 'pi')
+    expect(piFallback.resolve('plan')).toMatchObject({
+      runner: pi,
+      runtime: 'pi',
+      model: 'kimi-k3',
+      extensions: [],
+    })
+  })
+
+  test('an absent phase role inherits the explicit default pair', () => {
+    const r = resolver({
+      default: { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['web-access'] },
+      plan: { model: 'kimi-k3' },
+    })
+
+    expect(r.resolve('implement')).toMatchObject({
+      runner: pi,
+      runtime: 'pi',
+      model: 'gpt-5.6-sol',
+      extensions: ['web-access'],
+    })
+    expect(r.resolve('plan').model).toBe('kimi-k3')
+  })
+
+  test('each configured field overrides or inherits independently', () => {
+    const r = resolver({
+      default: {
+        runtime: 'pi',
+        model: 'gpt-5.6-sol',
+        extensions: ['web-access'],
+      },
+      plan: { model: 'kimi-k3' },
+      'code-review': { runtime: 'gemini' },
+      implement: { extensions: ['subagents'] },
+    })
+
+    expect(r.resolve('plan')).toMatchObject({
+      runtime: 'pi',
+      model: 'kimi-k3',
+      extensions: ['web-access'],
+    })
+    expect(r.resolve('code-review')).toMatchObject({
+      runtime: 'gemini',
+      model: 'gpt-5.6-sol',
+      extensions: ['web-access'],
+    })
+    expect(r.resolve('implement')).toMatchObject({
+      runtime: 'pi',
+      model: 'gpt-5.6-sol',
+      extensions: ['subagents'],
+    })
+  })
+
+  test('a runtime gets its own default only when no configured model exists anywhere', () => {
+    const r = resolver({
+      // This resolves to pi×kimi-k3, but kimi-k3 remains implicit rather than
+      // becoming a raw model inherited by children.
+      default: { runtime: 'pi' },
+      plan: { runtime: 'claude' },
+      implement: { runtime: 'pi' },
+    })
+
+    expect(r.resolve('default')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
+    expect(r.resolve('plan').runtime).toBe('claude')
+    expect(r.resolve('plan').model).toBeUndefined()
+    expect(r.resolve('implement').model).toBe('kimi-k3')
+  })
+
+  test('extensions replace wholesale, including an explicit empty list', () => {
+    const r = resolver({
+      default: { runtime: 'pi', extensions: ['subagents', 'web-access'] },
+      plan: { extensions: ['web-access'] },
+      implement: { extensions: [] },
+      'code-review': {},
+    })
+
+    expect(r.resolve('plan').extensions).toEqual(['web-access'])
+    expect(r.resolve('implement').extensions).toEqual([])
+    expect(r.resolve('code-review').extensions).toEqual(['subagents', 'web-access'])
   })
 })
 
-describe('resolveSpec — loud errors', () => {
-  test('runtime + model the runtime cannot serve', () => {
+describe('createRuntimeResolver — exact compatibility', () => {
+  test('an explicit runtime/model pair resolves exactly', () => {
+    expect(
+      resolver({ 'code-review': { runtime: 'pi', model: 'kimi-k3' } }).resolve(
+        'code-review',
+      ),
+    ).toMatchObject({ runner: pi, runtime: 'pi', model: 'kimi-k3' })
+  })
+
+  test('an inherited incompatible model fails instead of being substituted', () => {
     expect(() =>
-      createRuntimeResolver(registry, undefined, 'claude', {
-        'code-review': { runtime: 'claude', model: 'kimi-k3' },
+      resolver({
+        default: { runtime: 'pi', model: 'gpt-5.6-sol' },
+        'code-review': { runtime: 'claude' },
       }),
-    ).toThrow(/pins runtime "claude" with model "kimi-k3", but "claude" serves only \[claude-\]/)
+    ).toThrow(
+      /\[roles\.code-review\] resolves runtime "claude" with model "gpt-5\.6-sol", but "claude" serves only \[claude-\]/,
+    )
   })
 
-  test('a role naming an unregistered runtime', () => {
+  test('a model-only role stays on the inherited runtime instead of hunting a supporter', () => {
+    // pi serves kimi-k3, but the inherited/fallback runtime is claude. The
+    // configured pair is therefore invalid; routing must not jump to pi.
+    expect(() => resolver({ plan: { model: 'kimi-k3' } })).toThrow(
+      /\[roles\.plan\] resolves runtime "claude" with model "kimi-k3"/,
+    )
+  })
+
+  test('the default role itself must be compatible', () => {
     expect(() =>
-      createRuntimeResolver(registry, undefined, 'claude', {
-        plan: { runtime: 'ghost' },
-      }),
-    ).toThrow(/\[roles\].plan names runtime "ghost", which is not registered/)
+      resolver({ default: { runtime: 'claude', model: 'kimi-k3' } }),
+    ).toThrow(
+      /\[roles\.default\] resolves runtime "claude" with model "kimi-k3".*serves only \[claude-\]/,
+    )
   })
 
-  test('model only with zero supporters', () => {
-    expect(() =>
-      createRuntimeResolver(registry, undefined, 'claude', {
-        plan: { model: 'llama-3' },
-      }),
-    ).toThrow(/requests model "llama-3", but no registered runtime serves it/)
+  test('unknown runtimes name the offending role and registered choices', () => {
+    expect(() => resolver({ plan: { runtime: 'ghost' } })).toThrow(
+      /\[roles\.plan\] resolves to runtime "ghost", which is not registered \(registered runtimes: claude, pi, gemini\)/,
+    )
+    expect(() => resolver({ default: { runtime: 'ghost' } })).toThrow(
+      /\[roles\.default\] resolves to runtime "ghost"/,
+    )
   })
 
-  test('model only with multiple non-default supporters names the ambiguity', () => {
-    // default = claude; gpt-* is served by pi AND gemini, neither the default.
-    expect(() =>
-      createRuntimeResolver(registry, undefined, 'claude', {
-        plan: { model: 'gpt-5.6-sol' },
-      }),
-    ).toThrow(/served by multiple runtimes \(pi, gemini\) and none is the default/)
-  })
-
-  test('an unregistered runtime in the [agent] default fails', () => {
-    expect(() =>
-      createRuntimeResolver(registry, { runtime: 'ghost' }, 'claude', {}),
-    ).toThrow(/\[agent\] default names runtime "ghost", which is not registered/)
-  })
-
-  test('aggregates every problem into one error naming both bad roles', () => {
+  test('all bad roles are aggregated into one eager failure', () => {
     try {
-      createRuntimeResolver(registry, undefined, 'claude', {
+      resolver({
+        default: { runtime: 'pi' },
         plan: { runtime: 'ghost' },
         'code-review': { runtime: 'claude', model: 'kimi-k3' },
       })
@@ -169,43 +172,37 @@ describe('resolveSpec — loud errors', () => {
       expect(error).toBeInstanceOf(RuntimeConfigError)
       const e = error as RuntimeConfigError
       expect(e.problems).toHaveLength(2)
-      expect(e.message).toContain('[roles].plan')
-      expect(e.message).toContain('[roles].code-review')
+      expect(e.message).toContain('[roles.plan]')
+      expect(e.message).toContain('[roles.code-review]')
     }
   })
-})
 
-describe('default pair', () => {
-  test('[agent] absent ⇒ the fallback runtime with its own default model', () => {
-    // fallback = pi (defaultModel kimi-k3).
-    const resolver = createRuntimeResolver(registry, undefined, 'pi', {})
-    const r = resolver.resolve('anything')
-    expect(r.runtime).toBe('pi')
-    expect(r.model).toBe('kimi-k3')
+  test('an invalid default does not hide independent child-role problems', () => {
+    try {
+      resolver({
+        default: { runtime: 'claude', model: 'kimi-k3' },
+        plan: { runtime: 'ghost', model: 'unknown' },
+        'code-review': { runtime: 'pi' },
+      })
+      throw new Error('expected a RuntimeConfigError')
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeConfigError)
+      const e = error as RuntimeConfigError
+      expect(e.problems).toHaveLength(2)
+      expect(e.message).toContain('[roles.default]')
+      expect(e.message).toContain('[roles.plan]')
+      // code-review overrides the runtime and validly inherits kimi-k3.
+      expect(e.message).not.toContain('[roles.code-review]')
+    }
   })
 
-  test('[agent] absent with a fallback that has no default model ⇒ no model (today’s behavior)', () => {
-    const resolver = createRuntimeResolver(registry, undefined, 'claude', {})
-    const r = resolver.resolve('anything')
-    expect(r.runtime).toBe('claude')
-    expect(r.model).toBeUndefined()
-  })
-
-  test('a role absent from config resolves to the default pair', () => {
-    const resolver = createRuntimeResolver(registry, { runtime: 'pi' }, 'claude', {
-      plan: { runtime: 'claude' },
-    })
-    // 'implement' was never declared → default pair (pi).
-    expect(resolver.resolve('implement').runtime).toBe('pi')
-    expect(resolver.resolve('plan').runtime).toBe('claude')
-  })
-
-  test('roles resolve model-only against the default pair’s runtime, not the fallback', () => {
-    // default pair = pi; a role model-only for gpt-* prefers pi (the default),
-    // resolving the pi/gemini ambiguity that the fallback (claude) would not.
-    const resolver = createRuntimeResolver(registry, { runtime: 'pi' }, 'claude', {
-      plan: { model: 'gpt-5.6-sol' },
-    })
-    expect(resolver.resolve('plan').runtime).toBe('pi')
+  test('the reserved default entry is validated once, not cached as a phase role', () => {
+    try {
+      resolver({ default: { runtime: 'claude', model: 'kimi-k3' } })
+      throw new Error('expected a RuntimeConfigError')
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeConfigError)
+      expect((error as RuntimeConfigError).problems).toHaveLength(1)
+    }
   })
 })

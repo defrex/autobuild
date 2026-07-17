@@ -256,7 +256,7 @@ export async function makeHarness(opts: {
   ticketSource?: TicketSource
   /** The committed autobuild.toml (§16.1) driving this build. Default
    * CONFIG_TOML, so every existing scenario is untouched; a scenario proving
-   * two-axis routing (§9) supplies its own `[agent]`/`[roles]`. */
+   * two-axis routing (§9) supplies its own `[roles.default]`/phase roles. */
   configToml?: string
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
@@ -343,10 +343,9 @@ export async function makeHarness(opts: {
         config,
         // Two-axis registry (§9): every runtime is backed by the SAME scripted
         // runner instance, so the `s_1…s_N` session numbering scenarios rely on
-        // is preserved regardless of which runtime a role routes to. `scripted`
-        // is the default (serves nothing ⇒ model-only routing never lands on
-        // it); `pi` serves the Kimi family, so `{ runtime = "pi", model =
-        // "kimi-k3" }` and model-only `kimi-*` route there.
+        // is preserved regardless of which runtime a role selects. `scripted`
+        // is the fallback and runs only with its un-named built-in model; `pi`
+        // serves the Kimi family for exact configured-pair validation.
         runtimes: {
           scripted: { runner: agents, servesModels: [] },
           claude: { runner: agents, servesModels: ['claude-'] },

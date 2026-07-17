@@ -282,7 +282,7 @@ describe('abDispatch guards', () => {
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        '[dispatcher]\nreadyState = "ready"\n[agent]\nruntime = "ghost"\n',
+        '[dispatcher]\nreadyState = "ready"\n[roles.default]\nruntime = "ghost"\n',
       )
       const store = new MemoryBuildStore({ clock: systemClock })
       await expect(
@@ -362,11 +362,12 @@ describe('abDispatch --once', () => {
 
   test('routes the slug role to a one-shot capability with the full spec and configured model', async () => {
     const toml = `${DISPATCH_CONFIG_TOML}
-[agent]
+[roles.default]
 runtime = "scripted"
 
-[roles]
-slug = { runtime = "namer", model = "gpt-slug-name" }
+[roles.slug]
+runtime = "namer"
+model = "gpt-slug-name"
 `
     const fx = await makeFixture(
       readyTicket('T-named', {

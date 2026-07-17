@@ -795,8 +795,8 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
 
 // ── g. Two-axis runtime/model routing (§9, AC "an integration scenario") ─────
 //
-// The config sets the repo-wide default runtime (`[agent]`) and routes ONE
-// agent phase (code-review) to a second runtime with a model
+// The config sets the repo-wide default runtime (`[roles.default]`) and routes
+// ONE agent phase (code-review) to a second runtime with a model
 // (`{ runtime = "pi", model = "kimi-k3" }`). The build runs to PR, and its
 // stored `session.started` events + transcripts show code-review on pi×kimi-k3
 // while every other phase stays on the default runtime. Both runtimes are
@@ -804,11 +804,12 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
 // the other scenarios rely on is unchanged.
 
 const TWO_AXIS_TOML = `${CONFIG_TOML}
-[agent]
+[roles.default]
 runtime = "scripted"
 
-[roles]
-code-review = { runtime = "pi", model = "kimi-k3" }
+[roles.code-review]
+runtime = "pi"
+model = "kimi-k3"
 `
 
 test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default runtime (§9)', async () => {

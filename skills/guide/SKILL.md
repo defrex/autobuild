@@ -80,7 +80,7 @@ The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
 `-3`, … collision suffixes. Absence or any failure falls back to the first
 three words of the kebab-cased title, so naming never blocks dispatch. The slug
 and `ab/<slug>` branch are chosen once; existing builds are never renamed.
-Naming follows `[agent]` and can be overridden with `[roles].slug`.
+Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
 ## Who does what
 
@@ -186,47 +186,42 @@ and repeats up to `[policy].maxVerifyAttempts`.
 |---|---|---|---|
 | `steps` | `[]` | array of nonempty step names | Post-steps that run after the PR is opened. **Failure-tolerant**: a failed step files an observation and never fails a green build. |
 
-### `[agent]`
-
-The repo-wide **default** on the configuration axes: the `runtime` that
-executes an agent session, the `model` it runs on, and (pi only) the
-`extensions` it may use. All optional. Absent entirely ⇒ the built-in fallback
-runtime (`claude`) with its own default model, and no extensions — today's
-behavior, unchanged. Two runtimes ship: **`claude`** (Claude models) and
-**`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models, provider-qualified ids
-like `openai-codex/gpt-5.6-sol` — `ab models [query]` looks them up).
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `runtime` | — | optional, nonempty string | The default runtime for every session. Must name a registered runtime, else `ab dispatch` fails loudly before any build. |
-| `model` | — | optional, nonempty string | The default model. Absent ⇒ the runtime's own default model. |
-| `extensions` | — | optional, array of nonempty strings | Default Pi extensions/packages a session may use (e.g. `["subagents", "web-access"]`). Absent ⇒ **hermetic** (no internet / sub-agents / MCP). Entries match installed package sources case-insensitively; `claude` ignores this axis. |
-
 ### `[roles]`
 
-An **open map** of role name → per-step **override** `{ runtime?, model?,
-extensions? }` on the same axes. The roles the pipeline routes are `plan`,
-`plan-review`, `implement`, and `code-review` (plus each verify/finalize step by
-name). The pre-build `slug` role uses the same runtime/model resolver for
-optional one-shot naming; it is not a pipeline phase, its extension allowlist
-is not enabled, and it always remains tool-free.
+An **open map** of role name → `{ runtime?, model?, extensions? }` on the three
+agent configuration axes. The reserved optional `default` role is the raw
+inheritance base for every other role and is **never dispatched as a phase**.
+With no `[roles.default]`, the base is empty: sessions use the wiring-fallback
+runtime (`claude`) and that runtime's built-in default model, with no
+extensions. Two runtimes ship: **`claude`** (Claude models) and **`pi`** (SDK
+mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
+[query]` looks them up).
+
+The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
+plus each verify/finalize step by name. The pre-build `slug` role uses the same
+runtime/model resolution for optional one-shot naming; it is not a pipeline
+phase, its extension allowlist is not enabled, and it remains tool-free.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runtime` | — | optional, nonempty string | Runtime override for this role. Absent ⇒ resolved from `model` or the `[agent]` default. |
-| `model` | — | optional, nonempty string | Model override for this role. Absent ⇒ the resolved runtime's default. |
-| `extensions` | — | optional, array of nonempty strings | Per-role extension allowlist. Absent ⇒ inherit the `[agent]` default (hermetic when that too is unset). Lets internet/sub-agent access be granted to plan/review while implement/verify stay hermetic. |
+| `runtime` | — | optional, nonempty string | Runtime for this role. A phase role that omits it inherits `[roles.default].runtime`; absent there too ⇒ the wiring fallback. Must name a registered runtime. |
+| `model` | — | optional, nonempty string | Model for this role. A phase role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
+| `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
 
-Runtime/model resolve **most-specific-first**: `runtime + model` pins exactly
-that pair (a runtime that can't serve the model is a config error); `runtime`
-alone uses that runtime's default model; `model` alone routes to a runtime that
-serves it (the default runtime wins when it qualifies, otherwise the single
-supporter — zero, or several non-default supporters, is a loud error); neither
-inherits the `[agent]` default pair (a role added only to set `extensions`
-keeps the default model). `extensions` resolves independently: the role's list
-overrides the `[agent]` default, absent ⇒ that default. Mixing models across
-roles is **intentional**, not an inconsistency to clean up: a reviewer that
-differs from the implementer catches more.
+Inheritance is mechanical and **independent per field**: merge each phase role
+over the raw `default` entry, then validate the exact merged runtime/model pair.
+The named runtime must serve the named model. A model-only role never searches
+for another runtime, and an incompatible inherited model is never replaced by
+the selected runtime's default. The one implicit fill-in is benign: if neither
+the phase role nor `default` names a model, the merged runtime uses its own
+default model. Compatibility failures name the role, runtime, model, and served
+model families; all problems in `default` and every declared role are
+aggregated into one eager load-time failure before any build launches.
+
+Mixing models across roles is **intentional**, not an inconsistency to clean
+up: a reviewer that differs from the implementer catches more. The removed
+legacy `[agent]` table is not an alias: config loading rejects it and directs
+users to move its fields to `[roles.default]`.
 
 ### `[policy]`
 

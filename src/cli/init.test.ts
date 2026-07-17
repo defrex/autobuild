@@ -131,14 +131,15 @@ describe('abInit — fresh install', () => {
     expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(template)
   })
 
-  test('the generated autobuild.toml parses and ships readyState = "ready" (AC 2)', async () => {
+  test('the generated autobuild.toml parses with its dispatch and role defaults', async () => {
     // A fresh project must be dispatchable out of the box: the required
     // readyState is present, non-blank, and set to the file tracker's `ready/`
-    // directory — never omitted, which would fail to parse (AC 1) or, worse,
-    // reintroduce provider-dependent all-states eligibility (AUT-10).
+    // directory. Its agent base is the reserved role entry, never a second
+    // top-level config concept.
     await abInit({ targetRepo: target })
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.dispatcher.readyState).toBe('ready')
+    expect(config.roles.default).toEqual({ runtime: 'claude' })
   })
 
   test('distRoot defaults relative to the module — identical to an explicit distRoot', async () => {

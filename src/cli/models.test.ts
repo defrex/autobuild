@@ -34,7 +34,9 @@ describe('abModels', () => {
     expect(lines).toContain('cerebras/zai-glm-4.7')
     expect(lines).toContain('openrouter/z-ai/glm-5.2')
     expect(lines).not.toContain('openai/gpt-5.6-sol')
-    expect(lines.at(-1)).toContain('2 model(s)')
+    expect(lines.at(-1)).toBe(
+      '2 model(s) — paste a provider-qualified id into autobuild.toml [roles.default] or a concrete [roles.<name>] entry.',
+    )
   })
 
   test('lists everything (sorted) when no query is given', async () => {
