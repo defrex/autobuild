@@ -30,6 +30,7 @@
  * Both are derivations over facts the reducer already retains; neither the
  * reducer nor the engine is touched.
  */
+import type { AbEvent } from '../../events/catalog'
 import type { Config } from '../../config/schema'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import { verifyPhase } from '../../ontology'
@@ -41,12 +42,32 @@ export type EffectiveStatus = 'running' | 'paused' | 'blocked'
 
 export type StepState = 'done' | 'current' | 'pending'
 
+/**
+ * A step's wall-clock timing, now-INDEPENDENT so the model can be cached and
+ * repainted against a moving clock (the elapsed ticks in the renderer, not
+ * here). `accumulatedMs` is the cumulative duration of every CLOSED occurrence
+ * in scope; `runningSince` is the start epoch-ms of an open occurrence — the
+ * renderer adds `now - runningSince` on top of `accumulatedMs`. A frozen build
+ * (paused/blocked) has its open occurrence closed into `accumulatedMs`, so
+ * `runningSince` is absent and its timer never advances (AC 10).
+ */
+export interface StepTiming {
+  accumulatedMs: number
+  runningSince?: number
+}
+
 export interface PipelineStep {
   label: string
   state: StepState
-  /** Short qualifier: `r2` (loop round), `a2` (verify attempt), `failed`,
-   * `waiting`. Never load-bearing — always redundant with `state`. */
-  note?: string
+  /** A non-load-bearing word — always redundant with `state`. `failed` on a
+   * verify/finalize step, `waiting` on merge. Rendered inside the `(…)` note. */
+  qualifier?: 'failed' | 'waiting'
+  /** Round (plan/implement loops) or attempt (verify/reconcile). Rendered as
+   * `/n` riding the elapsed time when > 1 — supersedes the old `r2`/`a2`. */
+  count?: number
+  /** Absent ⇒ the step has never run in the current spec scope ⇒ no time is
+   * shown (AC 6). The renderer composes the elapsed segment from this. */
+  timing?: StepTiming
 }
 
 export interface DashboardBuild {
@@ -57,7 +78,6 @@ export interface DashboardBuild {
    * information is lost. */
   alsoPaused: boolean
   ticketId?: string
-  phase?: string
   steps: PipelineStep[]
   /** Every unresolved blocker's question. Resolved ones drop out by
    * construction — the reducer moves them to answeredEscalations. */
@@ -99,12 +119,148 @@ function isActive(status: BuildState['status']): status is EffectiveStatus {
  * makes "no step is both done and current" true by construction rather than an
  * invariant every row has to remember.
  */
-function step(label: string, done: boolean, current: boolean, note?: string): PipelineStep {
+interface StepExtra {
+  qualifier?: 'failed' | 'waiting'
+  count?: number
+  timing?: StepTiming
+}
+
+function step(label: string, done: boolean, current: boolean, extra: StepExtra = {}): PipelineStep {
   return {
     label,
     state: current ? 'current' : done ? 'done' : 'pending',
-    ...(note !== undefined ? { note } : {}),
+    ...(extra.qualifier !== undefined ? { qualifier: extra.qualifier } : {}),
+    ...(extra.count !== undefined ? { count: extra.count } : {}),
+    ...(extra.timing !== undefined ? { timing: extra.timing } : {}),
   }
+}
+
+/** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
+ * seq of the `*.started` event, so callers can scope by the same seq
+ * boundaries (`restartSince`/`cycleSince`) the step STATES already use. */
+interface PhaseInterval {
+  start: number
+  end: number
+  startSeq: number
+}
+interface PhaseTiming {
+  closed: PhaseInterval[]
+  open?: { start: number; startSeq: number }
+}
+
+/**
+ * Walk the raw event log into per-phase `[start, end]` intervals in epoch-ms
+ * (`Date.parse(ev.ts)`), the durations the reducer collapses away. Each
+ * `*.started` opens an interval for its phase key and its terminal event
+ * (`.completed`/`.verdict`) closes it. A second `*.started` while one is still
+ * open REPLACES the open start — a §15.6-C cross-sandbox re-run starts the
+ * phase afresh, so the crashed attempt contributes nothing. Finalize post-steps
+ * (`finalize.step-completed`) have no `.started` and so no interval.
+ */
+function phaseIntervals(events: AbEvent[]): Map<string, PhaseTiming> {
+  const timings = new Map<string, PhaseTiming>()
+  const get = (key: string): PhaseTiming => {
+    let t = timings.get(key)
+    if (t === undefined) {
+      t = { closed: [] }
+      timings.set(key, t)
+    }
+    return t
+  }
+  for (const ev of events) {
+    const ms = Date.parse(ev.ts)
+    const open = (key: string): void => {
+      get(key).open = { start: ms, startSeq: ev.seq }
+    }
+    const close = (key: string): void => {
+      const t = get(key)
+      if (t.open === undefined) return
+      t.closed.push({ start: t.open.start, end: ms, startSeq: t.open.startSeq })
+      t.open = undefined
+    }
+    switch (ev.type) {
+      case 'plan.started':
+        open('plan')
+        break
+      case 'plan.completed':
+        close('plan')
+        break
+      case 'plan-review.started':
+        open('plan-review')
+        break
+      case 'plan-review.verdict':
+        close('plan-review')
+        break
+      case 'implement.started':
+        open('implement')
+        break
+      case 'implement.completed':
+        close('implement')
+        break
+      case 'code-review.started':
+        open('code-review')
+        break
+      case 'code-review.verdict':
+        close('code-review')
+        break
+      case 'verify.started':
+        open(verifyPhase(ev.payload.step))
+        break
+      case 'verify.completed':
+        close(verifyPhase(ev.payload.step))
+        break
+      case 'finalize.started':
+        open('finalize')
+        break
+      case 'finalize.completed':
+        close('finalize')
+        break
+      case 'reconcile.started':
+        open('reconcile')
+        break
+      case 'reconcile.completed':
+        close('reconcile')
+        break
+      default:
+        break
+    }
+  }
+  return timings
+}
+
+/**
+ * Sum the in-scope occurrences of one phase into a `StepTiming`, or `undefined`
+ * when the phase never ran in scope (the step shows no time, AC 6). Scope is
+ * `startSeq > sinceSeq` — the SAME boundary the step's `done`/`current` state
+ * uses, so durations restart in lockstep with states (AC 12). The open
+ * occurrence stays open (`runningSince`) only when the build is running; a
+ * frozen build (`frozenNow` given) closes it at that instant so its timer does
+ * not advance (AC 10).
+ */
+function timingFor(
+  intervals: Map<string, PhaseTiming>,
+  key: string,
+  sinceSeq: number,
+  frozenNow: number | undefined,
+): StepTiming | undefined {
+  const t = intervals.get(key)
+  if (t === undefined) return undefined
+  let accumulatedMs = 0
+  let inScope = false
+  for (const iv of t.closed) {
+    if (iv.startSeq > sinceSeq) {
+      accumulatedMs += iv.end - iv.start
+      inScope = true
+    }
+  }
+  let runningSince: number | undefined
+  if (t.open !== undefined && t.open.startSeq > sinceSeq) {
+    inScope = true
+    if (frozenNow !== undefined) accumulatedMs += Math.max(0, frozenNow - t.open.start)
+    else runningSince = t.open.start
+  }
+  if (!inScope) return undefined
+  return { accumulatedMs, ...(runningSince !== undefined ? { runningSince } : {}) }
 }
 
 /**
@@ -115,6 +271,7 @@ export function projectBuild(
   record: BuildRecord,
   state: BuildState,
   config: Config,
+  events: AbEvent[],
 ): DashboardBuild | null {
   const status = effectiveStatus(state)
   if (!isActive(status)) return null
@@ -141,12 +298,12 @@ export function projectBuild(
   const finalizeSteps = pendingRestart ? [] : state.finalizeSteps
 
   /**
-   * The phase contexts, scoped to the current spec.
+   * The current phase, scoped to the current spec.
    *
-   * `currentPhase` and `lastCompletedPhase` are latest-wins over the FULL log
-   * — the same shape as `plan.approved` and `prState`, and stale for the same
-   * reason. `start()` sets `currentPhase` and only that phase's OWN terminal
-   * event clears it (`reducer.ts`); `escalation.raised` deliberately does not
+   * `currentPhase` is latest-wins over the FULL log — the same shape as
+   * `plan.approved` and `prState`, and stale for the same reason. `start()`
+   * sets `currentPhase` and only that phase's OWN terminal event clears it
+   * (`reducer.ts`); `escalation.raised` deliberately does not
    * (the phase still needs re-running), and `spec.revised` resets
    * `restartSince`, `cycleSince` and `finalizeSteps` but not these. So a phase
    * that was in flight when a restart landed still reads as running.
@@ -168,7 +325,22 @@ export function projectBuild(
   const scoped = (ctx: PhaseContext | undefined): PhaseContext | undefined =>
     ctx !== undefined && ctx.seq > restartSince ? ctx : undefined
   const activePhase = scoped(state.currentPhase)
-  const lastPhase = scoped(state.lastCompletedPhase)
+
+  // ── Timing ────────────────────────────────────────────────────────────────
+  // Per-occurrence durations from the raw log — the reducer collapses them
+  // away, so they are derived here (display-only, at the one call site that
+  // already has the log in hand). A running build keeps its open interval live
+  // (the renderer ticks it against `now`); a paused/blocked build freezes every
+  // open interval at the log's last-event ts, so its timers do not advance
+  // (AC 10). Each step scopes by the SAME seq boundary its state uses, so
+  // durations and states restart in lockstep (AC 12).
+  const intervals = phaseIntervals(events)
+  const frozenNow =
+    status === 'running'
+      ? undefined
+      : state.lastEvent !== undefined
+        ? Date.parse(state.lastEvent.ts)
+        : undefined
 
   // ── Shared derivations ────────────────────────────────────────────────────
   // ORDER MATTERS: `cycleFailed` must be defined before `codeDone` reads it.
@@ -200,42 +372,70 @@ export function projectBuild(
   )
 
   const at = (phase: string): boolean => activePhase?.phase === phase
-  const planNote = state.plan.round > 1 ? `r${state.plan.round}` : undefined
-  const codeNote = state.implement.round > 1 ? `r${state.implement.round}` : undefined
+  const planCount = state.plan.round > 1 ? state.plan.round : undefined
+  const codeCount = state.implement.round > 1 ? state.implement.round : undefined
 
   const steps: PipelineStep[] = [
-    step('plan', planDone, at('plan'), planNote),
-    step('plan-review', planDone, at('plan-review'), planNote),
-    step('implement', codeDone, at('implement'), codeNote),
-    step('code-review', codeDone, at('code-review'), codeNote),
+    step('plan', planDone, at('plan'), {
+      count: planCount,
+      timing: timingFor(intervals, 'plan', restartSince, frozenNow),
+    }),
+    step('plan-review', planDone, at('plan-review'), {
+      count: planCount,
+      timing: timingFor(intervals, 'plan-review', restartSince, frozenNow),
+    }),
+    step('implement', codeDone, at('implement'), {
+      count: codeCount,
+      timing: timingFor(intervals, 'implement', restartSince, frozenNow),
+    }),
+    step('code-review', codeDone, at('code-review'), {
+      count: codeCount,
+      timing: timingFor(intervals, 'code-review', restartSince, frozenNow),
+    }),
   ]
 
   for (const s of config.verify.steps) {
     const phase = verifyPhase(s)
     const current = at(phase)
-    // The attempt note comes from `currentPhase.attempt` — the attempt
-    // ACTUALLY running (`verify.started` populates it directly), never
-    // `verify.attempt`, which is the max attempt SEEN and names the previous
-    // cycle in the window after a boundary move. Rendered only on the running
-    // step, so it can never be stale.
-    const attempt = activePhase?.attempt
-    const note = cycle.some((r) => r.step === s && !r.pass)
-      ? 'failed'
-      : current && attempt !== undefined && attempt > 1
-        ? `a${attempt}`
-        : undefined
+    const stepResults = cycle.filter((r) => r.step === s)
+    // The attempt COUNT comes from `currentPhase.attempt` for the running step
+    // — the attempt ACTUALLY running (`verify.started` populates it directly),
+    // never `verify.attempt`, which is the max attempt SEEN and names the
+    // previous cycle in the window after a boundary move. A non-running step
+    // takes the max attempt among its results IN THE CURRENT CYCLE, so a past
+    // cycle's attempt can never leak. Rendered as `/n` only when > 1.
+    const maxAttempt =
+      current && activePhase?.attempt !== undefined
+        ? activePhase.attempt
+        : stepResults.length > 0
+          ? Math.max(...stepResults.map((r) => r.attempt))
+          : undefined
+    const count = maxAttempt !== undefined && maxAttempt > 1 ? maxAttempt : undefined
     // `!cycleFailed &&`: §15.6-A re-runs the cycle FROM THE FIRST STEP, so
     // once any step in the cycle has failed, an earlier step's pass in that
     // same cycle is not durably done either. The failing step keeps a `failed`
-    // note so the operator does not lose the information; its STATE is pending
-    // because it is genuinely going to re-run.
-    steps.push(step(phase, !cycleFailed && verifyPassed(s), current, note))
+    // qualifier so the operator does not lose the information; its STATE is
+    // pending because it is genuinely going to re-run.
+    steps.push(
+      step(phase, !cycleFailed && verifyPassed(s), current, {
+        qualifier: stepResults.some((r) => !r.pass) ? 'failed' : undefined,
+        count,
+        timing: timingFor(intervals, phase, cycleSince, frozenNow),
+      }),
+    )
   }
 
-  steps.push(step('finalize', finalizeDone, at('finalize')))
+  steps.push(
+    step('finalize', finalizeDone, at('finalize'), {
+      timing: timingFor(intervals, 'finalize', restartSince, frozenNow),
+    }),
+  )
   for (const s of config.finalize.steps) {
+    // Post-steps have no `.started` event, so they carry no timing.
     const done = finalizeSteps.find((f) => f.step === s)
-    steps.push(step(s, done !== undefined, false, done?.ok === false ? 'failed' : undefined))
+    steps.push(
+      step(s, done !== undefined, false, { qualifier: done?.ok === false ? 'failed' : undefined }),
+    )
   }
 
   // Conditional (§15.7): the epilogue is not guaranteed future work, so the
@@ -249,7 +449,12 @@ export function projectBuild(
         'reconcile',
         state.reconcileAttempts > 0 && state.prState !== 'conflicted',
         at('reconcile'),
-        state.reconcileAttempts > 1 ? `a${state.reconcileAttempts}` : undefined,
+        {
+          count: state.reconcileAttempts > 1 ? state.reconcileAttempts : undefined,
+          // Full-log scope (sinceSeq 0), matching reconcile's full-log
+          // done/current predicate: the epilogue is restart-orthogonal.
+          timing: timingFor(intervals, 'reconcile', 0, frozenNow),
+        },
       ),
     )
   }
@@ -260,30 +465,29 @@ export function projectBuild(
   // drained. `prState === 'open'` alone is not enough — it is set at
   // `finalize.completed` AND again at `reconcile.completed`, both with real
   // work outstanding.
-  steps.push(
-    step(
-      'merge',
-      false,
-      finalizeDone &&
-        state.prState === 'open' &&
-        verifyDrained &&
-        postStepsDrained &&
-        activePhase === undefined,
-      'waiting',
-    ),
-  )
-
-  // `state.phase` is `currentPhase ?? lastCompletedPhase` — both full-log, so
-  // it is scoped here rather than read directly: after a restart the header
-  // must not name a phase that belongs to a spec that no longer exists.
-  const phase = activePhase?.phase ?? lastPhase?.phase
+  const mergeCurrent =
+    finalizeDone &&
+    state.prState === 'open' &&
+    verifyDrained &&
+    postStepsDrained &&
+    activePhase === undefined
+  // Merge-ready start = the log's last-event ts: once the build drains the
+  // engine parks on `wait{awaiting-pr}` and appends nothing, so `lastEvent.ts`
+  // is exactly when it became merge-ready, ticking like a running phase (AC 9).
+  // Frozen at that same ts when the build is not running.
+  const lastMs = state.lastEvent !== undefined ? Date.parse(state.lastEvent.ts) : 0
+  const mergeTiming: StepTiming | undefined = !mergeCurrent
+    ? undefined
+    : frozenNow !== undefined
+      ? { accumulatedMs: Math.max(0, frozenNow - lastMs) }
+      : { accumulatedMs: 0, runningSince: lastMs }
+  steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
 
   return {
     slug: record.slug,
     status,
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
-    ...(phase !== undefined ? { phase } : {}),
     steps,
     blockers: state.openEscalations.map((e) => e.question),
     ...(state.pr !== undefined && state.prState !== undefined
@@ -295,12 +499,12 @@ export function projectBuild(
 /** Every active build, sorted by slug — a stable frame, so a redraw never
  * reorders rows under the operator's eyes. */
 export function buildDashboard(
-  entries: { record: BuildRecord; state: BuildState }[],
+  entries: { record: BuildRecord; state: BuildState; events: AbEvent[] }[],
   config: Config,
   header: { repo: string; mode: 'watch' | 'once'; capacity: number },
 ): DashboardModel {
   const builds = entries
-    .map(({ record, state }) => projectBuild(record, state, config))
+    .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug))
   return { ...header, builds }
