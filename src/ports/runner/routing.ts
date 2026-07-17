@@ -23,13 +23,17 @@ export interface ResolvedRuntime {
   runtime: string
   /** Absent ⇒ the adapter's built-in default model. */
   model?: string
+  /** Named extensions this session may use (§9, third axis). Empty ⇒ hermetic.
+   * Runtime-specific — runtimes without an extension model ignore it. */
+  extensions?: readonly string[]
 }
 
 /** One axis override as it arrives from config (`[agent]` or a `[roles]`
- * entry): both keys optional. */
+ * entry): all keys optional. */
 export interface RuntimeSpec {
   runtime?: string
   model?: string
+  extensions?: readonly string[]
 }
 
 /**
@@ -190,15 +194,32 @@ export function createRuntimeResolver(
   // preference). If the default pair itself failed, roles still resolve so we
   // surface all their problems too — fall back to the wiring default name.
   const defaultRuntimeName = defaultPair?.runtime ?? fallbackRuntime
+  // The extension axis resolves independently of runtime/model, most-specific
+  // -first: a role's list overrides the [agent] default; absent ⇒ the default;
+  // absent there ⇒ hermetic. Not a capability the registry validates (which
+  // extensions exist is machine-local), so it never contributes a problem.
+  const defaultExtensions = agentDefaults?.extensions ?? []
   const resolvedRoles: Record<string, ResolvedRuntime> = {}
   for (const [role, spec] of Object.entries(roles)) {
+    const extensions = spec.extensions ?? defaultExtensions
+    // A role that overrides NEITHER runtime nor model inherits the resolved
+    // [agent] default PAIR (its model included) — identical to a role absent
+    // from the map, and matching the documented "neither ⇒ the [agent] default
+    // pair" rule. Re-resolving via resolveSpec here would instead fall to the
+    // runtime's registry defaultModel, so a role added purely to set
+    // `extensions` would silently swap its model. Only resolveSpec when an axis
+    // is actually pinned.
+    if (spec.runtime === undefined && spec.model === undefined) {
+      if (defaultPair !== undefined) resolvedRoles[role] = { ...defaultPair, extensions }
+      continue
+    }
     const resolved = resolveSpec(spec, defaultRuntimeName, registry, `[roles].${role}`, problems)
-    if (resolved !== undefined) resolvedRoles[role] = resolved
+    if (resolved !== undefined) resolvedRoles[role] = { ...resolved, extensions }
   }
 
   if (problems.length > 0) throw new RuntimeConfigError(problems)
   // defaultPair is defined here: a failed default pair pushes a problem.
-  const fallback = defaultPair!
+  const fallback: ResolvedRuntime = { ...defaultPair!, extensions: defaultExtensions }
 
   return {
     resolve(role: string): ResolvedRuntime {

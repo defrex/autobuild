@@ -46,26 +46,34 @@ command = "test"
 [finalize]
 steps = []
 
-# Two-axis runtime/model configuration (§9). Two independent axes — the
-# `runtime` that executes a session and the `model` it runs on — are set once
-# here as the repo-wide default and overridden per step in [roles]. Adding a
-# runtime touches only the adapter registry, never the kernel; two runtimes
-# ship today (claude, pi), and a config naming an unregistered one fails
-# loudly before any build launches.
+# Runtime/model/extensions configuration (§9). Three independent axes — the
+# `runtime` that executes a session, the `model` it runs on, and the pi
+# `extensions` it may use — are set once here as the repo-wide default and
+# overridden per step in [roles]. Adding a runtime touches only the adapter
+# registry, never the kernel; two runtimes ship today (claude, pi), and a
+# config naming an unregistered one fails loudly before any build launches.
 [agent]
 runtime = "pi"                          # repo-wide default runtime
 model = "openai-codex/gpt-5.6-sol"      # repo-wide default model, provider-qualified (`ab models` looks ids up)
+# extensions unset ⇒ hermetic by default (no internet / sub-agents / MCP).
 
 # Per-step overrides, most-specific-first: `runtime + model` pins the pair;
 # `runtime` alone uses that runtime's default model; `model` alone routes to a
 # runtime that serves it (the default runtime wins when it qualifies); neither
 # ⇒ the [agent] default. Mixing models across roles is intentional — a
-# different reviewer catches more. plan and implement inherit the [agent]
-# default (pi + openai-codex/gpt-5.6-sol); the two review roles run on Kimi K3
-# so a different model checks the work.
+# different reviewer catches more. The two review roles run on Kimi K3 so a
+# different model checks the work.
+#
+# `extensions` is the third axis — named Pi packages a phase may use (matched
+# as substrings of installed package sources; MCP is off unless named). The
+# boundary is deliberate: plan/plan-review/code-review get web-access to ground
+# on real docs, plan/implement get sub-agents, and implement/verify/finalize
+# stay HERMETIC (no internet) so nothing external flows into committed code.
 [roles]
-plan-review = { runtime = "pi", model = "kimi-coding/k3" }
-code-review = { runtime = "pi", model = "kimi-coding/k3" }
+plan        = { extensions = ["subagents", "web-access"] }
+implement   = { extensions = ["subagents"] }
+plan-review = { runtime = "pi", model = "kimi-coding/k3", extensions = ["web-access"] }
+code-review = { runtime = "pi", model = "kimi-coding/k3", extensions = ["web-access"] }
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)

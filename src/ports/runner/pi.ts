@@ -105,7 +105,12 @@ export interface PiSession {
 export type PiCreateSessionFn = (opts: {
   cwd: string
   model?: PiModelRef
+  /** Built-in tools to activate. */
   tools: readonly string[]
+  /** Named Pi extensions/packages this phase may use (§9). Matched
+   * case-insensitively as substrings of installed package sources; their tools
+   * are activated alongside `tools`. Empty ⇒ hermetic (builtins only). */
+  extensions: readonly string[]
 }) => Promise<PiSession>
 
 // ── The single cast point (untested) ────────────────────────────────────────
@@ -167,17 +172,31 @@ const piSdkCreateSession: PiCreateSessionFn = async (opts) => {
     Parameters<typeof createAgentSession>[0]
   >['customTools']
 
+  // No `tools` allowlist here: an allowlist would suppress the user's installed
+  // Pi packages (subagents, web-access, …). Instead we let the default path
+  // discover packages, then activate exactly the base tools + the tools of the
+  // allowlisted extensions (below). Our custom bash (same name) still shadows
+  // the builtin so its spawnHook is what runs.
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     modelRuntime,
     ...(model !== undefined ? { model } : {}),
-    // Allowlist the tools we want; our custom bash (same name) shadows the
-    // builtin in the tool registry so its spawnHook is what runs.
-    tools: [...opts.tools],
     customTools,
     // In-memory: no session files written into the (git) build workspace.
     sessionManager: SessionManager.inMemory(opts.cwd),
   })
+
+  // Activate the base tools plus the tools registered by allowlisted extension
+  // packages; everything else (disallowed packages, MCP when not named) stays
+  // inactive, so those capabilities are denied even though the package loaded.
+  const allowed = opts.extensions.map((e) => e.toLowerCase())
+  const extensionTools = session.getAllTools().filter((tool) => {
+    const info = tool as { source?: { origin?: string; source?: string } }
+    if (info.source?.origin !== 'package') return false
+    const src = (info.source.source ?? '').toLowerCase()
+    return allowed.some((name) => src.includes(name))
+  })
+  session.setActiveToolsByName([...opts.tools, ...extensionTools.map((t) => t.name)])
 
   // Assistant text streams as `text_delta`s; buffer per turn.
   let turnTexts: string[] = []
@@ -250,6 +269,7 @@ export class PiAgentRunner implements AgentRunner {
       cwd: opts.workspacePath,
       ...(model !== undefined ? { model } : {}),
       tools: PI_TOOLS,
+      extensions: opts.extensions ?? [],
     })
 
     // Every phase skill takes only the build slug (§4).

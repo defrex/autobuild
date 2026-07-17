@@ -203,18 +203,24 @@ kind = "check"
 command = "test"
 ```
 
-**Runtime and model — two axes, one line each.** Every agent session runs on a
-`runtime` (the adapter that executes it) and a `model`. Set the repo-wide
-default in `[agent]`, override per step in `[roles]`:
+**Runtime, model, and extensions — set once, override per step.** Every agent
+session runs on a `runtime` (the adapter that executes it), a `model`, and — for
+the `pi` runtime — an optional `extensions` allowlist of installed Pi packages
+(e.g. `web-access`, `subagents`). Set the repo-wide default in `[agent]`,
+override per step in `[roles]`. Extensions are **off by default** (hermetic):
 
 ```toml
 [agent]
 runtime = "claude"                                   # no model ⇒ the runtime's own default
 
 [roles]
-code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }  # exactly this runtime + model
-plan        = { model = "openai/gpt-5.6-sol" }                 # model only ⇒ routes to pi (serves openai/)
+code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }  # pinned pair + web grounding
+plan        = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }     # model only ⇒ pi; plus extensions
 ```
+
+Grant `web-access`/`subagents` to plan and review so they can ground on real
+docs and fan out sub-agents; leave `implement` and `verify` hermetic so nothing
+external flows into committed code. `ab models [query]` looks up provider-qualified model ids.
 
 Overrides resolve **most-specific-first**: `runtime + model` pins the pair
 (a runtime that can't serve the model is a config error); `runtime` alone uses

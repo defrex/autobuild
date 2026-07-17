@@ -20,6 +20,7 @@ interface RecordedCreate {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
+  extensions: readonly string[]
 }
 
 interface RecordedPrompt {
@@ -45,7 +46,12 @@ function fakeSessions(
   const prompts: RecordedPrompt[] = []
   const disposed: string[] = []
   const createSessionFn: PiCreateSessionFn = async (opts) => {
-    creates.push({ cwd: opts.cwd, model: opts.model, tools: opts.tools })
+    creates.push({
+      cwd: opts.cwd,
+      model: opts.model,
+      tools: opts.tools,
+      extensions: opts.extensions,
+    })
     const script = sessions[creates.length - 1] ?? { sessionId: `s-${creates.length}`, turns: [] }
     let turn = 0
     return {
@@ -123,6 +129,19 @@ describe('PiAgentRunner.start', () => {
     const runner = new PiAgentRunner({ createSessionFn })
     await runner.start(startOpts())
     expect(creates[0]?.tools).toContain('bash')
+  })
+
+  test('forwards the per-phase extension allowlist; absent ⇒ hermetic (empty)', async () => {
+    const { creates, createSessionFn } = fakeSessions([
+      { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+      { sessionId: 'pi-2', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+    await runner.start(startOpts({ extensions: ['subagents', 'web-access'] }))
+    expect(creates[0]?.extensions).toEqual(['subagents', 'web-access'])
+    // Absent ⇒ hermetic: the adapter passes an empty allowlist, not undefined.
+    await runner.start(startOpts())
+    expect(creates[1]?.extensions).toEqual([])
   })
 
   test('captures the SDK session id as the handle id', async () => {

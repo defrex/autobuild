@@ -69,6 +69,53 @@ describe('resolveSpec — role overrides, most-specific-first', () => {
     expect(r.runtime).toBe('pi')
     expect(r.model).toBe('kimi-k3')
   })
+
+  test('neither → inherits the [agent] MODEL, not the runtime registry default', () => {
+    // Regression: a role added only to set another axis (e.g. extensions) must
+    // NOT swap its model to pi's registry defaultModel (kimi-k3).
+    const resolver = createRuntimeResolver(
+      registry,
+      { runtime: 'pi', model: 'gpt-5.6-sol' },
+      'claude',
+      { implement: {} },
+    )
+    const r = resolver.resolve('implement')
+    expect(r.runtime).toBe('pi')
+    expect(r.model).toBe('gpt-5.6-sol')
+  })
+})
+
+describe('resolveSpec — the extensions axis', () => {
+  test('a role list overrides the [agent] default; runtime/model still inherit', () => {
+    const resolver = createRuntimeResolver(
+      registry,
+      { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['subagents'] },
+      'claude',
+      { plan: { extensions: ['subagents', 'web-access'] } },
+    )
+    const r = resolver.resolve('plan')
+    expect(r.model).toBe('gpt-5.6-sol')
+    expect(r.extensions).toEqual(['subagents', 'web-access'])
+  })
+
+  test('a role without its own list inherits the [agent] default extensions', () => {
+    const resolver = createRuntimeResolver(
+      registry,
+      { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['web-access'] },
+      'claude',
+      { implement: { model: 'kimi-k3' } },
+    )
+    expect(resolver.resolve('implement').extensions).toEqual(['web-access'])
+  })
+
+  test('no [agent] extensions and none on the role ⇒ hermetic (empty)', () => {
+    const resolver = createRuntimeResolver(registry, { runtime: 'pi' }, 'claude', {
+      'code-review': { model: 'kimi-k3' },
+    })
+    expect(resolver.resolve('code-review').extensions).toEqual([])
+    // A role absent from the map falls back to the default pair, also hermetic.
+    expect(resolver.resolve('plan').extensions).toEqual([])
+  })
 })
 
 describe('resolveSpec — loud errors', () => {

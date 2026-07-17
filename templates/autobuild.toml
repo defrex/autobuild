@@ -46,20 +46,24 @@ command = "test"
 [finalize]
 steps = []
 
-# Two-axis runtime/model configuration (§9): the `runtime` that executes a
-# session and the `model` it runs on. Set the repo-wide default in [agent],
-# override per step in [roles]. Registered runtimes: `claude` (Claude models)
-# and `pi` (Kimi/Moonshot + GPT/OpenAI). Adding a runtime touches only the
-# adapter registry, never the kernel.
+# Runtime/model/extensions configuration (§9): the `runtime` that executes a
+# session, the `model` it runs on, and (pi only) the `extensions` it may use.
+# Set the repo-wide default in [agent], override per step in [roles]. Registered
+# runtimes: `claude` (Claude models) and `pi` (provider-qualified ids like
+# `openai/gpt-5.6-sol`; `ab models [query]` looks them up). Adding a runtime
+# touches only the adapter registry, never the kernel.
 [agent]
 runtime = "claude"   # no model ⇒ the runtime's own default
+# extensions unset ⇒ hermetic (no internet / sub-agents / MCP).
 
 # Per-step overrides, most-specific-first (runtime+model / runtime / model /
 # neither). Mixing models across roles is intentional — a different reviewer
-# catches more. Uncomment and edit to experiment:
+# catches more. `extensions` is a separate per-role allowlist of Pi packages
+# (e.g. "web-access", "subagents"); grant it to plan/review, keep implement and
+# verify hermetic. Uncomment and edit to experiment:
 #[roles]
-#code-review = { runtime = "pi", model = "moonshotai/kimi-k3" }  # exactly this pair
-#plan = { model = "openai/gpt-5.6-sol" }                         # model only ⇒ routes to pi
+#code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }
+#plan = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
