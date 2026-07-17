@@ -36,6 +36,9 @@ interface RecordedCall {
     env: Record<string, string>
     model?: string
     resume?: string
+    abortController?: AbortController
+    maxTurns?: number
+    tools?: string[]
     permissionMode: 'bypassPermissions'
     allowDangerouslySkipPermissions: true
   }
@@ -90,6 +93,9 @@ describe('PiAgentRunner.start', () => {
     expect(calls[0]?.options.permissionMode).toBe('bypassPermissions')
     expect(calls[0]?.options.allowDangerouslySkipPermissions).toBe(true)
     expect(calls[0]?.options.resume).toBeUndefined()
+    expect(calls[0]?.options.maxTurns).toBeUndefined()
+    expect(calls[0]?.options.tools).toBeUndefined()
+    expect(calls[0]?.options.abortController).toBeUndefined()
   })
 
   test('accumulates assistant text; captures usage; ignores other messages', async () => {
@@ -107,6 +113,39 @@ describe('PiAgentRunner.start', () => {
     const runner = new PiAgentRunner({ queryFn })
     await expect(runner.start(startOpts())).rejects.toThrow(
       'stream ended without a result message',
+    )
+  })
+})
+
+describe('PiAgentRunner.complete', () => {
+  test('runs a verbatim, bounded, tool-free prompt and returns text without opening a session', async () => {
+    const { calls, queryFn } = fakeQuery([
+      [assistant('login-rate-limit'), piResult('one-shot-id', 4, 2)],
+    ])
+    const runner = new PiAgentRunner({ queryFn })
+    const controller = new AbortController()
+    controller.abort('deadline')
+
+    const result = await runner.complete({
+      prompt: 'name this spec verbatim',
+      cwd: '/repos/app',
+      env: { NAMING_TOKEN: 'secret' },
+      model: 'kimi-k3',
+      signal: controller.signal,
+    })
+
+    expect(result).toEqual({ text: 'login-rate-limit' })
+    expect(calls[0]?.prompt).toBe('name this spec verbatim')
+    expect(calls[0]?.options.cwd).toBe('/repos/app')
+    expect(calls[0]?.options.env['NAMING_TOKEN']).toBe('secret')
+    expect(calls[0]?.options.model).toBe('kimi-k3')
+    expect(calls[0]?.options.resume).toBeUndefined()
+    expect(calls[0]?.options.maxTurns).toBe(1)
+    expect(calls[0]?.options.tools).toEqual([])
+    expect(calls[0]?.options.abortController?.signal.aborted).toBe(true)
+    expect(calls[0]?.options.permissionMode).toBe('bypassPermissions')
+    await expect(runner.end({ id: 'one-shot-id', runner: 'pi' })).rejects.toThrow(
+      'unknown session "one-shot-id"',
     )
   })
 })

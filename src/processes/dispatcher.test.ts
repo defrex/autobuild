@@ -18,9 +18,11 @@ import {
   Dispatcher,
   analyzeDependencies,
   emptyTickReport,
+  fallbackSlug,
   kebab,
   readyCriteria,
   specConformance,
+  validateSlugCandidate,
   type DependencyVerdict,
   type DispatcherOpts,
 } from './dispatcher'
@@ -76,6 +78,7 @@ function harness(
     tickets?: Ticket[]
     toml?: string
     authorSpec?: (ticket: Ticket) => Promise<string | null>
+    nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
     opts?: DispatcherOpts
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
@@ -105,6 +108,7 @@ function harness(
       launches.push(slug)
     },
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
+    ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
     ids: sequentialIds(),
     clock,
     ...(opts.opts ? { opts: opts.opts } : {}),
@@ -448,11 +452,42 @@ describe('analyzeDependencies', () => {
   })
 })
 
-describe('kebab', () => {
-  test('lowercases, strips punctuation, collapses separators', () => {
+describe('build slug helpers', () => {
+  test('kebab lowercases, strips punctuation, and collapses separators', () => {
     expect(kebab('Add rate limiting!')).toBe('add-rate-limiting')
     expect(kebab('  Fix: OAuth2 / SSO  ')).toBe('fix-oauth2-sso')
     expect(kebab('!!!')).toBe('build')
+  })
+
+  test('fallbackSlug keeps only the first three normalized title tokens', () => {
+    expect(fallbackSlug('Please add support for login throttling')).toBe(
+      'please-add-support',
+    )
+    expect(fallbackSlug('Fix OAuth2 / SSO now')).toBe('fix-oauth2-sso')
+    expect(fallbackSlug('!!!')).toBe('build')
+  })
+
+  test('validateSlugCandidate accepts only one-to-three lowercase kebab tokens', () => {
+    expect(validateSlugCandidate('auth')).toBe('auth')
+    expect(validateSlugCandidate('auth-limit')).toBe('auth-limit')
+    expect(validateSlugCandidate('  login-rate-limit\n')).toBe('login-rate-limit')
+
+    for (const invalid of [
+      '',
+      '   ',
+      'Login-rate-limit',
+      'login rate limit',
+      'login/rate-limit',
+      '-login-rate',
+      'login-rate-',
+      'login--rate',
+      'login-rate-limit-now',
+      'slug: login-rate',
+      '"login-rate"',
+    ]) {
+      expect(validateSlugCandidate(invalid)).toBeNull()
+    }
+    expect(validateSlugCandidate(null)).toBeNull()
   })
 })
 
@@ -507,6 +542,28 @@ describe('Dispatcher dispatch', () => {
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
+  test('spec-aware naming sees the exact final spec and can surface a buried subject', async () => {
+    let receivedSpec: string | undefined
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', {
+          title: 'Please add support for throttling repeated login attempts',
+        }),
+      ],
+      nameSlug: async (spec) => {
+        receivedSpec = spec
+        return 'login-rate-limit'
+      },
+    })
+
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(receivedSpec).toBe(CONFORMING_BODY)
+    expect((await h.store.listBuilds()).map((build) => build.slug)).toEqual([
+      'login-rate-limit',
+    ])
+    expect(h.workspaces.provisions[0]?.branch).toBe('ab/login-rate-limit')
+  })
+
   test('h1-headed conforming body dispatches: imported as spec, not bounced (AUT-12)', async () => {
     const h1Body = [
       'Login attempts are currently unlimited; throttle repeated failures.',
@@ -531,6 +588,62 @@ describe('Dispatcher dispatch', () => {
 
     const spec = await h.store.getArtifact('add-rate-limiting', 'spec')
     expect(spec ? textContent(spec) : null).toBe(h1Body)
+  })
+
+  test('absent, null, rejected, and invalid naming all take the exact title fallback', async () => {
+    const title = 'Please add support for login throttling'
+    const scenarios: Array<{
+      name: string
+      nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
+    }> = [
+      { name: 'absent' },
+      { name: 'null', nameSlug: async () => null },
+      {
+        name: 'rejected',
+        nameSlug: async () => {
+          throw new Error('naming service unavailable')
+        },
+      },
+      { name: 'invalid prose', nameSlug: async () => 'Slug: login-rate-limit' },
+    ]
+
+    for (const scenario of scenarios) {
+      const h = harness({
+        tickets: [readyTicket(`T-${scenario.name}`, { title })],
+        ...(scenario.nameSlug !== undefined ? { nameSlug: scenario.nameSlug } : {}),
+      })
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched, scenario.name).toBe(1)
+      expect((await h.store.listBuilds())[0]?.slug, scenario.name).toBe(
+        'please-add-support',
+      )
+    }
+  })
+
+  test('a timed-out namer is aborted and cannot block dispatch', async () => {
+    let namingSignal: AbortSignal | undefined
+    const h = harness({
+      tickets: [
+        readyTicket('T-timeout', {
+          title: 'Please add support for login throttling',
+        }),
+      ],
+      nameSlug: (_spec, signal) => {
+        namingSignal = signal
+        return new Promise<string | null>(() => {})
+      },
+      opts: { slugNamingTimeoutMs: 5 },
+    })
+
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(namingSignal?.aborted).toBe(true)
+    expect((await h.store.listBuilds())[0]?.slug).toBe('please-add-support')
+  })
+
+  test('punctuation-only titles still dispatch as build', async () => {
+    const h = harness({ tickets: [readyTicket('T-punctuation', { title: '!!!' })] })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect((await h.store.listBuilds())[0]?.slug).toBe('build')
   })
 
   test('readyState narrows the scan: only tickets in that state dispatch', async () => {
@@ -727,16 +840,21 @@ describe('Dispatcher dispatch', () => {
     expect(opted.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
   })
 
-  test('authorSpec success: spec.authored with agent actor and session id', async () => {
+  test('authorSpec success: authored body is recorded and then supplied to naming', async () => {
+    let namedSpec: string | undefined
     const h = harness({
       tickets: [readyTicket('T-1', { body: 'thin but groomed' })],
       authorSpec: async () => CONFORMING_BODY,
+      nameSlug: async (spec) => {
+        namedSpec = spec
+        return 'login-rate-limit'
+      },
     })
 
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), dispatched: 1, authored: 1 })
 
-    const events = await h.store.getEvents('add-rate-limiting')
+    const events = await h.store.getEvents('login-rate-limit')
     expect(events.map((e) => e.type)).toEqual([
       'build.created',
       'workspace.provisioned',
@@ -747,10 +865,12 @@ describe('Dispatcher dispatch', () => {
       artifact: { kind: 'spec', rev: 0 },
       session: 's_1',
     })
-    // The authored body, not the thin ticket body, is the spec (§6.3).
-    const spec = await h.store.getArtifact('add-rate-limiting', 'spec')
+    // The authored body, not the thin ticket body, is both the contract and
+    // the naming input (§6.3).
+    const spec = await h.store.getArtifact('login-rate-limit', 'spec')
     expect(spec ? textContent(spec) : null).toBe(CONFORMING_BODY)
-    expect(h.launches).toEqual(['add-rate-limiting'])
+    expect(namedSpec).toBe(CONFORMING_BODY)
+    expect(h.launches).toEqual(['login-rate-limit'])
   })
 
   test('authorSpec returning nonconforming or null bounces', async () => {
@@ -773,24 +893,53 @@ describe('Dispatcher dispatch', () => {
     ])
   })
 
-  test('slug collision dedupes with -2 suffix', async () => {
+  test('equal meaningful candidates dedupe with a suffix outside the word budget', async () => {
     const h = harness({
       tickets: [readyTicket('T-1'), readyTicket('T-2')],
       toml: '[dispatcher]\ncapacity = 2\n',
+      nameSlug: async () => 'login-rate-limit',
     })
 
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), dispatched: 2 })
     const builds = await h.store.listBuilds()
     expect(builds.map((b) => b.slug)).toEqual([
-      'add-rate-limiting',
-      'add-rate-limiting-2',
+      'login-rate-limit',
+      'login-rate-limit-2',
     ])
     expect(builds.map((b) => b.branch)).toEqual([
-      'ab/add-rate-limiting',
-      'ab/add-rate-limiting-2',
+      'ab/login-rate-limit',
+      'ab/login-rate-limit-2',
     ])
-    expect(h.launches).toEqual(['add-rate-limiting', 'add-rate-limiting-2'])
+    expect(h.launches).toEqual(['login-rate-limit', 'login-rate-limit-2'])
+  })
+
+  test('uniqueness skips later occupied suffixes and never changes an existing long slug', async () => {
+    const oldSlug = 'existing-build-with-a-long-historical-slug'
+    const h = harness({
+      tickets: [readyTicket('T-new')],
+      toml: '[dispatcher]\ncapacity = 4\n',
+      nameSlug: async () => 'login-rate-limit',
+    })
+    await h.store.createBuild({
+      slug: oldSlug,
+      repo: REPO,
+      branch: `ab/${oldSlug}`,
+    })
+    await h.store.createBuild({
+      slug: 'login-rate-limit',
+      repo: REPO,
+      branch: 'ab/login-rate-limit',
+    })
+    await h.store.createBuild({
+      slug: 'login-rate-limit-2',
+      repo: REPO,
+      branch: 'ab/login-rate-limit-2',
+    })
+
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(await h.store.getBuild('login-rate-limit-3')).not.toBeNull()
+    expect((await h.store.getBuild(oldSlug))?.branch).toBe(`ab/${oldSlug}`)
   })
 })
 

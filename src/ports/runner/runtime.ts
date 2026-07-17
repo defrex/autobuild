@@ -1,8 +1,8 @@
 /**
  * The runtime registry (SPEC §9): the "adapter registry" the spec says adding
  * a runtime should touch — and ONLY it. Each registration pairs an AgentRunner
- * adapter with the routing capabilities the resolver needs: the model families
- * it can serve and its own default model. Keeping capabilities HERE, in a
+ * adapter with its capabilities: model families/default for routing, plus an
+ * optional pre-build one-shot completion. Keeping capabilities HERE, in a
  * wrapper around the adapter, is deliberate: the `AgentRunner` port itself is
  * frozen (spec "out of scope" — no renaming/extending it), so capability data
  * lives beside the registry rather than inside the port. The kernel never
@@ -15,10 +15,17 @@
  * `AgentSessionHandle.runner`.
  */
 import type { AgentRunner } from '../types'
+import type { OneShotCompletion } from './one-shot'
 
 export interface RuntimeRegistration {
   /** The adapter behind this runtime (§9). */
   runner: AgentRunner
+  /**
+   * Optional pre-build, non-resumable completion capability. Its absence is a
+   * normal capability boundary, not a configuration error: deterministic
+   * callers must fall back locally rather than failing dispatch.
+   */
+  oneShot?: OneShotCompletion
   /**
    * Model-id PREFIXES this runtime can serve, e.g. `['kimi-', 'gpt-']`. Prefix
    * families — not an exhaustive id list — because the model landscape moves

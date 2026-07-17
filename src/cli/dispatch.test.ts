@@ -22,6 +22,7 @@ import type { TerminalOut } from './terminal'
 import type { Config } from '../config/schema'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
+import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import {
   defaultTurnResult,
   ScriptedAgentRunner,
@@ -339,6 +340,10 @@ describe('abDispatch --once', () => {
       const builds = await fx.store.listBuilds()
       expect(builds).toHaveLength(1)
       const slug = builds[0]!.slug
+      // This injected runtime has no optional one-shot capability, so the CLI
+      // still completes through the deterministic title fallback.
+      expect(slug).toBe('add-rate-limiting')
+      expect(builds[0]!.branch).toBe('ab/add-rate-limiting')
       expect(builds[0]!.ticket?.id).toBe('T-1')
 
       // launchRunner actually RAN the build in-process (drain-on-once): the
@@ -350,6 +355,72 @@ describe('abDispatch --once', () => {
 
       // The operator saw the build park.
       expect(out.some((line) => line.includes(`build ${slug} parked`))).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('routes the slug role to a one-shot capability with the full spec and configured model', async () => {
+    const toml = `${DISPATCH_CONFIG_TOML}
+[agent]
+runtime = "scripted"
+
+[roles]
+slug = { runtime = "namer", model = "gpt-slug-name" }
+`
+    const fx = await makeFixture(
+      readyTicket('T-named', {
+        title: 'Please add support for throttling repeated login attempts',
+      }),
+      happyHandlers(),
+      toml,
+    )
+    const calls: OneShotCompletionInput[] = []
+    const baseWire = fx.wire
+    const wire = (): DispatchWiring => {
+      const wiring = baseWire()
+      const oneShot = {
+        complete: async (input: OneShotCompletionInput) => {
+          calls.push(input)
+          return { text: 'login-rate-limit' }
+        },
+      }
+      return {
+        ...wiring,
+        runtimes: {
+          ...wiring.runtimes,
+          namer: {
+            runner: wiring.runtimes['scripted']!.runner,
+            oneShot,
+            servesModels: ['gpt-'],
+          },
+        },
+      }
+    }
+
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { NAMING_API_KEY: 'secret' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire,
+      })
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.prompt).toContain(CONFORMING_BODY)
+      expect(calls[0]?.prompt).toContain('one to three meaningful words')
+      expect(calls[0]?.cwd).toBe(fx.origin)
+      expect(calls[0]?.env['NAMING_API_KEY']).toBe('secret')
+      expect(calls[0]?.model).toBe('gpt-slug-name')
+      expect(calls[0]?.signal).toBeInstanceOf(AbortSignal)
+
+      const [build] = await fx.store.listBuilds()
+      expect(build?.slug).toBe('login-rate-limit')
+      expect(build?.branch).toBe('ab/login-rate-limit')
+      expect(fx.cliErrors).toEqual([])
     } finally {
       await fx.cleanup()
     }

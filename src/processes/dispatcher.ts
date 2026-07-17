@@ -18,10 +18,12 @@
  * one (per-tick launch dedupe); a build dispatched in step (d) is not swept
  * in the same tick because the sweep already ran.
  *
- * The dispatcher itself never runs agents (§15.7) — conflicted PRs and
+ * The dispatcher never runs pipeline agents (§15.7) — conflicted PRs and
  * stale leases both resolve by re-attaching a build-runner via
- * `launchRunner`. The runner claims the build's lease itself; the
- * dispatcher only ever reads lease expiry.
+ * `launchRunner`. Optional pre-build judgment (spec authoring and short slug
+ * naming) lives behind bounded seams before a build exists; deterministic
+ * validation and fallback remain here. The runner claims the build's lease
+ * itself; the dispatcher only ever reads lease expiry.
  */
 import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor } from '../events/envelope'
@@ -250,13 +252,30 @@ export function analyzeDependencies(
   return { unresolved, diagnostics }
 }
 
-/** `Add rate limiting!` → `add-rate-limiting` (build slugs, branch names). */
+/** `Add rate limiting!` → `add-rate-limiting` (general title normalizer). */
 export function kebab(title: string): string {
   const slug = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return slug || 'build'
+}
+
+/** Deterministic naming fallback: the first three normalized title tokens. */
+export function fallbackSlug(title: string): string {
+  return kebab(title).split('-').slice(0, 3).join('-')
+}
+
+/**
+ * Validate a judgment-produced slug base without repairing model prose. Outer
+ * whitespace is harmless; everything else must already be one-to-three
+ * lowercase ASCII kebab tokens. Collision suffixes are appended later and are
+ * intentionally outside this budget.
+ */
+export function validateSlugCandidate(candidate: string | null | undefined): string | null {
+  if (candidate === null || candidate === undefined) return null
+  const trimmed = candidate.trim()
+  return /^[a-z0-9]+(?:-[a-z0-9]+){0,2}$/.test(trimmed) ? trimmed : null
 }
 
 // ── Tick report ──────────────────────────────────────────────────────────────
@@ -313,6 +332,8 @@ export function emptyTickReport(): TickReport {
 
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
+const DEFAULT_SLUG_NAMING_TIMEOUT_MS = 10_000
+
 export interface DispatcherOpts {
   /**
    * Grace for builds with NO lease at all: the sweep treats an absent lease
@@ -333,6 +354,9 @@ export interface DispatcherOpts {
   triageState?: string
   /** Ticket state for merged builds. Default 'Done'. */
   doneState?: string
+  /** Internal deadline for the optional pre-build naming seam. Production is
+   * fixed; injection exists only so timeout behavior is deterministic in tests. */
+  slugNamingTimeoutMs?: number
 }
 
 export interface TickOpts {
@@ -356,7 +380,7 @@ export interface DispatcherDeps {
   repo: string
   exec: Exec
   /** Launch (or re-attach — §15.6-C, §15.7) a build-runner for `slug`. The
-   * dispatcher never runs agents itself. */
+   * dispatcher never runs pipeline agents itself. */
   launchRunner: (slug: string) => Promise<void>
   /**
    * Non-interactive spec authoring for thin-but-groomed tickets (§6.3):
@@ -367,6 +391,10 @@ export interface DispatcherDeps {
    * return session metadata the fake would have to invent.
    */
   authorSpec?: (ticket: Ticket) => Promise<string | null>
+  /** Optional one-shot judgment over the final conforming spec. The dispatcher
+   * supplies cancellation and treats every absence/failure/invalid result as a
+   * local deterministic fallback, so naming can never prevent build creation. */
+  nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
   ids: IdSource
   clock: Clock
   opts?: DispatcherOpts
@@ -405,11 +433,14 @@ export class Dispatcher {
   private readonly leaseTtlMs: number
   private readonly triageState: string
   private readonly doneState: string
+  private readonly slugNamingTimeoutMs: number
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
     this.triageState = deps.opts?.triageState ?? defaultTriageState(deps.config)
     this.doneState = deps.opts?.doneState ?? 'Done'
+    this.slugNamingTimeoutMs =
+      deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
   }
 
   /**
@@ -798,7 +829,8 @@ export class Dispatcher {
         continue
       }
 
-      const slug = await this.uniqueSlug(ticket.title)
+      const baseSlug = await this.chooseSlugBase(ticket.title, body)
+      const slug = await this.uniqueSlug(baseSlug)
       const branch = `ab/${slug}`
       const baseBranch = config.project.baseBranch
       await store.createBuild({
@@ -903,9 +935,40 @@ export class Dispatcher {
     )
   }
 
-  /** kebab(title), deduped against existing builds with -2/-3/… suffixes. */
-  private async uniqueSlug(title: string): Promise<string> {
-    const base = kebab(title)
+  /**
+   * Ask for a spec-aware base behind a hard deadline. Every failure mode is
+   * deliberately indistinguishable here: naming is optional judgment, while
+   * successful dispatch is deterministic policy.
+   */
+  private async chooseSlugBase(title: string, spec: string): Promise<string> {
+    const fallback = fallbackSlug(title)
+    const nameSlug = this.deps.nameSlug
+    if (nameSlug === undefined) return fallback
+
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error('build slug naming deadline exceeded'))
+      }, Math.max(0, this.slugNamingTimeoutMs))
+    })
+
+    try {
+      const candidate = await Promise.race([
+        nameSlug(spec, controller.signal),
+        deadline,
+      ])
+      return validateSlugCandidate(candidate) ?? fallback
+    } catch {
+      return fallback
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /** Valid bounded base, deduped store-wide with -2/-3/… suffixes. */
+  private async uniqueSlug(base: string): Promise<string> {
     let slug = base
     for (let n = 2; (await this.deps.store.getBuild(slug)) !== null; n += 1) {
       slug = `${base}-${n}`

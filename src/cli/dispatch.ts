@@ -35,7 +35,7 @@ import type { TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
 import { PiAgentRunner } from '../ports/runner/pi'
-import { createRuntimeResolver } from '../ports/runner/routing'
+import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
@@ -50,6 +50,29 @@ import { systemClock, type BuildStore, type Clock } from '../store/types'
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
 const DEFAULT_INTERVAL_MS = 10_000
+
+/** The pre-build naming prompt. Its output is only a proposal: dispatcher.ts
+ * owns strict validation, timeout/failure fallback, and store-wide uniqueness. */
+export function slugNamingPrompt(spec: string): string {
+  return [
+    'Choose a short identifier for this software build.',
+    'Return exactly one lowercase ASCII kebab-case identifier containing one to three meaningful words.',
+    'Choose distinguishing subject/action words from the substance of the entire spec, not generic title lead-ins such as add, update, or please.',
+    'Return no quotes, Markdown, explanation, or numeric collision suffix; collision handling is done separately.',
+    '',
+    '<build-spec>',
+    spec,
+    '</build-spec>',
+  ].join('\n')
+}
+
+function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const defined: Record<string, string> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) defined[key] = value
+  }
+  return defined
+}
 
 /** Dashboard redraw cadence. `listBuilds` is not subscribable, so polling the
  * list is the honest mechanism; the identical-frame check in `live.ts` makes a
@@ -150,7 +173,7 @@ function openWorkspaceRef(events: AbEvent[]): string | null {
 }
 
 /** Production wiring: the local (or remote) store, the configured
- * TicketSource, the GitHub forge, git worktrees, and the Claude runner. */
+ * TicketSource, the GitHub forge, git worktrees, and shipped runtimes. */
 async function defaultWire(config: Config, opts: DispatchOpts): Promise<DispatchWiring> {
   const storeRef = opts.storeRef ?? DEFAULT_LOCAL_ROOT
   const token = opts.env['AB_TOKEN']
@@ -160,6 +183,10 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
   })
 
   const tickets = createTicketSource(config.tickets, opts.env, opts.targetRepo)
+  // One adapter instance carries both capabilities. A one-shot completion is
+  // pre-build judgment, not a second phase runner or a resumable session.
+  const claude = new ClaudeAgentRunner()
+  const pi = new PiAgentRunner()
 
   return {
     store,
@@ -171,9 +198,10 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     // default model ⇒ no `defaultModel`), pi serves the rest (Kimi/GPT), with
     // kimi-k3 as its default model. Model ids stay in config, not here.
     runtimes: {
-      claude: { runner: new ClaudeAgentRunner(), servesModels: ['claude-'] },
+      claude: { runner: claude, oneShot: claude, servesModels: ['claude-'] },
       pi: {
-        runner: new PiAgentRunner(),
+        runner: pi,
+        oneShot: pi,
         servesModels: ['kimi-', 'gpt-'],
         defaultModel: 'kimi-k3',
       },
@@ -217,10 +245,31 @@ class DispatchLoop {
     private readonly config: Config,
     private readonly wiring: DispatchWiring,
     private readonly opts: DispatchOpts,
+    resolver: RuntimeResolver,
   ) {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.region =
       this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
+
+    // `slug` is an internal pre-build role on the same two-axis resolver. A
+    // runtime without the optional capability is normal: omit the seam and let
+    // the dispatcher take its deterministic title fallback.
+    const resolvedSlug = resolver.resolve('slug')
+    const oneShot = wiring.runtimes[resolvedSlug.runtime]?.oneShot
+    const nameSlug =
+      oneShot === undefined
+        ? undefined
+        : async (spec: string, signal: AbortSignal): Promise<string> => {
+            const result = await oneShot.complete({
+              prompt: slugNamingPrompt(spec),
+              cwd: opts.targetRepo,
+              env: definedEnv(opts.env),
+              signal,
+              ...(resolvedSlug.model !== undefined ? { model: resolvedSlug.model } : {}),
+            })
+            return result.text
+          }
+
     this.dispatcher = new Dispatcher({
       store: wiring.store,
       tickets: wiring.tickets,
@@ -230,6 +279,7 @@ class DispatchLoop {
       repo: opts.targetRepo,
       exec: opts.exec,
       launchRunner: (slug) => this.launchRunner(slug),
+      ...(nameSlug !== undefined ? { nameSlug } : {}),
       ids: wiring.ids,
       clock: wiring.clock,
     })
@@ -535,7 +585,12 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // or an ambiguous model-only route fails `ab dispatch` loudly here, before
   // any build launches, never as a silent per-build fallback. The per-build
   // BuildRunner re-resolves too (its own construction is the second guard).
-  createRuntimeResolver(wiring.runtimes, config.agent, wiring.defaultRuntime, config.roles)
-  const loop = new DispatchLoop(config, wiring, opts)
+  const resolver = createRuntimeResolver(
+    wiring.runtimes,
+    config.agent,
+    wiring.defaultRuntime,
+    config.roles,
+  )
+  const loop = new DispatchLoop(config, wiring, opts, resolver)
   await loop.run()
 }

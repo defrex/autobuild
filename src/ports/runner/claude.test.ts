@@ -40,6 +40,9 @@ interface RecordedCall {
     env: Record<string, string>
     model?: string
     resume?: string
+    abortController?: AbortController
+    maxTurns?: number
+    tools?: string[]
     permissionMode: 'bypassPermissions'
     allowDangerouslySkipPermissions: true
   }
@@ -94,6 +97,9 @@ describe('ClaudeAgentRunner.start', () => {
     expect(calls[0]?.options.cwd).toBe('/ws/auth-rate-limit')
     expect(calls[0]?.options.model).toBe('claude-opus-4')
     expect(calls[0]?.options.resume).toBeUndefined()
+    expect(calls[0]?.options.maxTurns).toBeUndefined()
+    expect(calls[0]?.options.tools).toBeUndefined()
+    expect(calls[0]?.options.abortController).toBeUndefined()
     expect(session.model).toBe('claude-opus-4')
   })
 
@@ -154,6 +160,39 @@ describe('ClaudeAgentRunner.start', () => {
     await expect(runner.start(startOpts())).rejects.toThrow(
       'stream ended without a result message',
     )
+  })
+})
+
+describe('ClaudeAgentRunner.complete', () => {
+  test('runs a verbatim, bounded, tool-free prompt and returns text without opening a session', async () => {
+    const { calls, queryFn } = fakeQuery([
+      [assistant('login-rate-limit'), sdkResult('one-shot-id', 4, 2)],
+    ])
+    const runner = new ClaudeAgentRunner({ queryFn })
+    const controller = new AbortController()
+    controller.abort('deadline')
+
+    const result = await runner.complete({
+      prompt: 'name this spec verbatim',
+      cwd: '/repos/app',
+      env: { NAMING_TOKEN: 'secret' },
+      model: 'claude-haiku-4',
+      signal: controller.signal,
+    })
+
+    expect(result).toEqual({ text: 'login-rate-limit' })
+    expect(calls[0]?.prompt).toBe('name this spec verbatim')
+    expect(calls[0]?.options.cwd).toBe('/repos/app')
+    expect(calls[0]?.options.env['NAMING_TOKEN']).toBe('secret')
+    expect(calls[0]?.options.model).toBe('claude-haiku-4')
+    expect(calls[0]?.options.resume).toBeUndefined()
+    expect(calls[0]?.options.maxTurns).toBe(1)
+    expect(calls[0]?.options.tools).toEqual([])
+    expect(calls[0]?.options.abortController?.signal.aborted).toBe(true)
+    expect(calls[0]?.options.permissionMode).toBe('bypassPermissions')
+    await expect(
+      runner.end({ id: 'one-shot-id', runner: 'claude' }),
+    ).rejects.toThrow('unknown session "one-shot-id"')
   })
 })
 

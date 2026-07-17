@@ -24,6 +24,11 @@ import type {
   AgentTurnResult,
   Transcript,
 } from '../types'
+import type {
+  OneShotCompletion,
+  OneShotCompletionInput,
+  OneShotCompletionResult,
+} from './one-shot'
 
 // ── Structural SDK types ─────────────────────────────────────────────────────
 //
@@ -59,6 +64,9 @@ export type PiQueryFn = (opts: {
     env: Record<string, string>
     model?: string
     resume?: string
+    abortController?: AbortController
+    maxTurns?: number
+    tools?: string[]
     permissionMode: 'bypassPermissions'
     allowDangerouslySkipPermissions: true
   }
@@ -100,7 +108,7 @@ interface SessionState {
   turns: TurnRecord[]
 }
 
-export class PiAgentRunner implements AgentRunner {
+export class PiAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'pi'
 
   private readonly queryFn: PiQueryFn
@@ -108,6 +116,29 @@ export class PiAgentRunner implements AgentRunner {
 
   constructor(opts: { queryFn?: PiQueryFn } = {}) {
     this.queryFn = opts.queryFn ?? piSdkQueryFn
+  }
+
+  /** Pre-build judgment: one verbatim prompt, one model turn, and no tools.
+   * It deliberately creates no resumable AgentRunner session state. */
+  async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
+    const cancellation = linkAbortSignal(input.signal)
+    try {
+      const turn = await this.runPrompt(input.prompt, {
+        cwd: input.cwd,
+        env: { ...ambientEnv(), ...input.env },
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 1,
+        tools: [],
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(cancellation.abortController !== undefined
+          ? { abortController: cancellation.abortController }
+          : {}),
+      })
+      return { text: turn.text }
+    } finally {
+      cancellation.dispose()
+    }
   }
 
   async start(
@@ -192,9 +223,8 @@ export class PiAgentRunner implements AgentRunner {
     return state
   }
 
-  /** Run one prompt through the SDK stream; accumulate text, capture usage and
-   * session id from the terminal result message. */
-  private async runTurn(
+  /** Build-session wrapper around the shared stream consumer. */
+  private runTurn(
     prompt: string,
     opts: AgentStartOpts,
     resume?: string,
@@ -203,29 +233,35 @@ export class PiAgentRunner implements AgentRunner {
     usage: { inputTokens: number; outputTokens: number }
     sessionId: string
   }> {
-    const stream = this.queryFn({
-      prompt,
-      options: {
-        cwd: opts.workspacePath,
-        // Ambient auth (D8): AB_* scoped vars merged over process.env.
-        env: { ...ambientEnv(), ...opts.env },
-        // Headless: no user to answer permission prompts (matches claude).
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        // Model id from config, never hardcoded (§9).
-        ...(opts.model !== undefined ? { model: opts.model } : {}),
-        ...(resume !== undefined ? { resume } : {}),
-      },
+    return this.runPrompt(prompt, {
+      cwd: opts.workspacePath,
+      // Ambient auth (D8): AB_* scoped vars merged over process.env.
+      env: { ...ambientEnv(), ...opts.env },
+      // Headless: no user to answer permission prompts (matches claude).
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      // Model id from config, never hardcoded (§9).
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(resume !== undefined ? { resume } : {}),
     })
+  }
 
+  /** Consume one SDK stream for both phase sessions and one-shot prompts. */
+  private async runPrompt(
+    prompt: string,
+    options: Parameters<PiQueryFn>[0]['options'],
+  ): Promise<{
+    text: string
+    usage: { inputTokens: number; outputTokens: number }
+    sessionId: string
+  }> {
+    const stream = this.queryFn({ prompt, options })
     const texts: string[] = []
     let result: PiResultMessage | undefined
     for await (const message of stream) {
       if (isAssistant(message)) {
         for (const block of message.message.content) {
-          if (block.type === 'text' && block.text !== undefined) {
-            texts.push(block.text)
-          }
+          if (block.type === 'text' && block.text !== undefined) texts.push(block.text)
         }
       } else if (isResult(message)) {
         result = message
@@ -251,6 +287,21 @@ export class PiAgentRunner implements AgentRunner {
     usage: { inputTokens: number; outputTokens: number }
   }): AgentTurnResult {
     return { text: turn.text, usage: { ...turn.usage, turns: 1 } }
+  }
+}
+
+function linkAbortSignal(signal?: AbortSignal): {
+  abortController?: AbortController
+  dispose: () => void
+} {
+  if (signal === undefined) return { dispose: () => {} }
+  const abortController = new AbortController()
+  const abort = (): void => abortController.abort(signal.reason)
+  if (signal.aborted) abort()
+  else signal.addEventListener('abort', abort, { once: true })
+  return {
+    abortController,
+    dispose: () => signal.removeEventListener('abort', abort),
   }
 }
 
