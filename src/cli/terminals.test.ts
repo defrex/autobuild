@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { agentActor, KERNEL } from '../events/envelope'
+import { agentActor, humanActor, KERNEL } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import type { Finding } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
@@ -347,6 +347,109 @@ describe('ab done — finalize', () => {
     expect(comment.body).toContain('code-review r2: approve')
     expect(comment.body).toContain('types (attempt 1): pass')
     expect(comment.body).toContain(`build: ${BUILD}`)
+  })
+
+  test('a pre-PR auto-merge request is applied natively and acknowledged', async () => {
+    const request = await store.append(BUILD, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    await done(deps)
+
+    expect(deps.forge.autoMergeCalls).toEqual([
+      {
+        workspacePath: workspace,
+        number: 1,
+        enabled: true,
+        changed: true,
+      },
+    ])
+    const events = await store.getEvents(BUILD)
+    const applied = events.find((event) => event.type === 'pr.auto-merge-enabled')
+    expect(applied?.actor).toEqual(KERNEL)
+    expect(applied?.payload).toEqual({ commandSeq: request.seq })
+    expect(events.map((event) => event.type)).toContain('finalize.completed')
+    expect(events.map((event) => event.type)).toContain('pr.auto-merge-enabled')
+  })
+
+  test('re-reads intent after openPr, so a command landing during finalize is not missed', async () => {
+    const request = await store.append(BUILD, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    class CancellingForge extends FakeForge {
+      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
+        const pr = await super.openPr(opts)
+        await store.append(BUILD, {
+          actor: humanActor('operator'),
+          type: 'build.auto-merge-cancelled',
+          payload: {},
+        })
+        return pr
+      }
+    }
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    const forge = new CancellingForge()
+    await done(
+      makeDeps({
+        store,
+        env: makeEnv({ phase: 'finalize' }),
+        workspacePath: workspace,
+        forge,
+      }),
+    )
+
+    expect(forge.autoMergeCalls).toHaveLength(1)
+    expect(forge.autoMergeCalls[0]).toMatchObject({ enabled: false })
+    const events = await store.getEvents(BUILD)
+    const cancellation = events.find((event) => event.type === 'build.auto-merge-cancelled')
+    const applied = events.find((event) => event.type === 'pr.auto-merge-disabled')
+    expect(cancellation?.seq).toBeGreaterThan(request.seq)
+    expect(cancellation).toBeDefined()
+    expect(applied?.payload).toEqual({ commandSeq: cancellation!.seq })
+  })
+
+  test('auto-merge forge failure leaves finalize uncommitted and retryable', async () => {
+    class RejectingAutoMergeForge extends FakeForge {
+      override async setAutoMerge(): Promise<void> {
+        throw new Error('repository policy disables auto-merge')
+      }
+    }
+    await store.append(BUILD, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    await expect(
+      done(
+        makeDeps({
+          store,
+          env: makeEnv({ phase: 'finalize' }),
+          workspacePath: workspace,
+          forge: new RejectingAutoMergeForge(),
+        }),
+      ),
+    ).rejects.toThrow('repository policy disables auto-merge')
+    expect(await eventTypes()).not.toContain('finalize.completed')
   })
 
   test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {

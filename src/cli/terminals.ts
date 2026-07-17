@@ -19,6 +19,10 @@ import { z } from 'zod'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
+import {
+  autoMergeApplicationType,
+  pendingAutoMerge,
+} from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { reduceBuild } from '../kernel/reducer'
 import {
@@ -336,11 +340,43 @@ export async function done(
         title: firstLine,
         body,
       })
+
+      // A dashboard command may land while finalize is running. Re-read after
+      // openPr so the latest human intent is applied at the first instant a PR
+      // exists. The setter is idempotent: if the forge call succeeds but this
+      // process dies before either event append, retry adopts the PR and safely
+      // applies the same desired state again.
+      const latest = await store.getEvents(env.build)
+      const autoMerge = pendingAutoMerge(reduceBuild(latest))
+      if (autoMerge !== undefined) {
+        await deps.forge.setAutoMerge(
+          deps.workspacePath,
+          pr.number,
+          autoMerge.enabled,
+        )
+      }
+
       const event = await store.append(env.build, {
         actor: KERNEL,
         type: 'finalize.completed',
         payload: { pr },
       })
+
+      // The PR terminal is the D5 commit point. Its secondary correlated fact
+      // is best-effort after that point: if this append fails, the janitor sees
+      // the still-unmatched command and retries the idempotent forge operation.
+      if (autoMerge !== undefined) {
+        try {
+          await store.append(env.build, {
+            actor: KERNEL,
+            type: autoMergeApplicationType(autoMerge.enabled),
+            payload: { commandSeq: autoMerge.commandSeq },
+          })
+        } catch {
+          // Recoverable by Dispatcher.checkPr on its next open-PR poll.
+        }
+      }
+
       // §7.5: the PR gets a summary comment — verdict history, verification
       // results, store refs. Best-effort AFTER the terminal committed: the
       // comment is a projection, not the record, and a comment failure must

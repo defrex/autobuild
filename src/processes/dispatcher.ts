@@ -27,6 +27,10 @@ import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { IdSource } from '../ids'
+import {
+  autoMergeApplicationType,
+  pendingAutoMerge,
+} from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
@@ -343,6 +347,12 @@ export interface TickOpts {
    * reset of the per-phase failure budget on every watch tick.
    */
   resumeCurrent?: boolean
+  /**
+   * In-memory drain gate for one dispatcher process. False skips only the
+   * ready-ticket list/claim/dispatch stage; janitor, startup resume, lease
+   * sweep, and in-flight runners continue. Absent defaults to true.
+   */
+  acceptNewWork?: boolean
 }
 
 export interface DispatcherDeps {
@@ -425,7 +435,7 @@ export class Dispatcher {
     await this.janitor(report, launched)
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
     await this.leaseSweep(report, launched)
-    await this.dispatch(report, launched)
+    if (opts.acceptNewWork !== false) await this.dispatch(report, launched)
     return report
   }
 
@@ -501,6 +511,22 @@ export class Dispatcher {
     // the build completes); fall back to the repo itself for odd logs.
     const workspacePath = openWorkspace(events)?.ref ?? this.deps.repo
     const prState = await forge.getPrState(workspacePath, pr.number)
+
+    // Auto-merge intent is independent of merged/closed/conflicted lifecycle
+    // observation. Reconcile it only while the PR is still open; enabling may
+    // immediately merge an already-green PR, but the ordinary NEXT poll remains
+    // the sole source of the pr.merged/build.completed facts.
+    if (prState.state === 'open') {
+      const autoMerge = pendingAutoMerge(state)
+      if (autoMerge !== undefined) {
+        await forge.setAutoMerge(workspacePath, pr.number, autoMerge.enabled)
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: autoMergeApplicationType(autoMerge.enabled),
+          payload: { commandSeq: autoMerge.commandSeq },
+        })
+      }
+    }
 
     switch (prState.state) {
       case 'merged': {
