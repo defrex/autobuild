@@ -112,6 +112,38 @@ describe('FakeForge', () => {
     ])
   })
 
+  test('setAutoMerge tracks native state and journals idempotent retries', async () => {
+    const forge = new FakeForge()
+    const { number } = await forge.openPr(prOpts())
+    expect(forge.isAutoMergeEnabled(number)).toBe(false)
+
+    await forge.setAutoMerge('/ws/a', number, true)
+    await forge.setAutoMerge('/ws/a', number, true)
+    await forge.setAutoMerge('/ws/a', number, false)
+
+    expect(forge.isAutoMergeEnabled(number)).toBe(false)
+    expect(forge.autoMergeCalls).toEqual([
+      { workspacePath: '/ws/a', number, enabled: true, changed: true },
+      { workspacePath: '/ws/a', number, enabled: true, changed: false },
+      { workspacePath: '/ws/a', number, enabled: false, changed: true },
+    ])
+  })
+
+  test('seeded PRs carry independently seedable auto-merge state', async () => {
+    const forge = new FakeForge()
+    forge.setPrState(99, { state: 'open', mergeable: true })
+    forge.setAutoMergeState(99, true)
+    expect(forge.isAutoMergeEnabled(99)).toBe(true)
+    await forge.setAutoMerge('/repo', 99, false)
+    expect(forge.isAutoMergeEnabled(99)).toBe(false)
+  })
+
+  test('setAutoMerge rejects an unknown PR without journaling', async () => {
+    const forge = new FakeForge()
+    await expect(forge.setAutoMerge('/ws/a', 7, true)).rejects.toThrow('unknown PR #7')
+    expect(forge.autoMergeCalls).toEqual([])
+  })
+
   test('commentOnPr journals comments in order', async () => {
     const forge = new FakeForge()
     const { number } = await forge.openPr(prOpts())

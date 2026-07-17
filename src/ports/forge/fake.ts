@@ -25,6 +25,14 @@ export interface CommentRecord {
   body: string
 }
 
+export interface AutoMergeRecord {
+  workspacePath: string
+  number: number
+  enabled: boolean
+  /** False on an idempotent retry whose desired state was already applied. */
+  changed: boolean
+}
+
 /** Constant sha, or derived from the assigned PR number. */
 export type HeadSha = string | ((number: number) => string)
 
@@ -35,10 +43,12 @@ export class FakeForge implements Forge {
   readonly pushes: PushRecord[] = []
   readonly opened: OpenPrRecord[] = []
   readonly comments: CommentRecord[] = []
+  readonly autoMergeCalls: AutoMergeRecord[] = []
 
   private nextNumber = 1
   private headSha: HeadSha
   private readonly prs = new Map<number, PrState>()
+  private readonly autoMerge = new Map<number, boolean>()
 
   constructor(opts: { headSha?: HeadSha } = {}) {
     this.headSha = opts.headSha ?? ((n) => `sha-${n}`)
@@ -55,6 +65,25 @@ export class FakeForge implements Forge {
    */
   setPrState(number: number, state: PrState): void {
     this.prs.set(number, state)
+    // Seeded/adopted PRs participate in auto-merge exactly like PRs opened by
+    // the fake. Do not overwrite an explicitly seeded native state.
+    if (!this.autoMerge.has(number)) this.autoMerge.set(number, false)
+  }
+
+  /** Seed native state without journaling a forge call. */
+  setAutoMergeState(number: number, enabled: boolean): void {
+    if (!this.prs.has(number)) {
+      throw new Error(`FakeForge: unknown PR #${number}`)
+    }
+    this.autoMerge.set(number, enabled)
+  }
+
+  /** Inspect native state in seam/integration assertions. */
+  isAutoMergeEnabled(number: number): boolean {
+    if (!this.prs.has(number)) {
+      throw new Error(`FakeForge: unknown PR #${number}`)
+    }
+    return this.autoMerge.get(number) ?? false
   }
 
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
@@ -84,6 +113,7 @@ export class FakeForge implements Forge {
     this.opened.push({ ...opts })
     // A just-opened PR is open with mergeability not yet computed.
     this.prs.set(number, { state: 'open', mergeable: null })
+    this.autoMerge.set(number, false)
     const headSha =
       typeof this.headSha === 'string' ? this.headSha : this.headSha(number)
     return { number, url: `https://fake.forge/pr/${number}`, headSha }
@@ -93,6 +123,19 @@ export class FakeForge implements Forge {
     const state = this.prs.get(number)
     if (!state) throw new Error(`FakeForge: unknown PR #${number}`)
     return state
+  }
+
+  async setAutoMerge(
+    workspacePath: string,
+    number: number,
+    enabled: boolean,
+  ): Promise<void> {
+    if (!this.prs.has(number)) {
+      throw new Error(`FakeForge: unknown PR #${number}`)
+    }
+    const changed = (this.autoMerge.get(number) ?? false) !== enabled
+    this.autoMerge.set(number, enabled)
+    this.autoMergeCalls.push({ workspacePath, number, enabled, changed })
   }
 
   async commentOnPr(

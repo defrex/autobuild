@@ -66,6 +66,13 @@ const prStateJson = z.strictObject({
   mergeCommit: z.strictObject({ oid: z.string().min(1) }).nullable(),
 })
 
+// GitHub returns a nullable object whose inner fields are not needed here: the
+// presence of the request is the native auto-merge state. Keeping the value
+// `unknown` avoids coupling the port to GitHub's actor/merge-method projection.
+const autoMergeJson = z.strictObject({
+  autoMergeRequest: z.unknown().nullable(),
+})
+
 /** §15.7: mergeable false is what makes the janitor emit `pr.conflicted`. */
 const MERGEABLE_MAP = {
   MERGEABLE: true,
@@ -209,6 +216,41 @@ export class GitHubForge implements Forge {
       case 'OPEN':
         return { state: 'open', mergeable: MERGEABLE_MAP[view.mergeable] }
     }
+  }
+
+  /**
+   * Native auto-merge setter. Inspect first so retries are harmless: the forge
+   * call may have succeeded before its correlated application event landed.
+   * `--auto --squash` preserves required-check gating and the repository's D1
+   * merge standard; there is deliberately no `--admin` fallback.
+   */
+  async setAutoMerge(
+    workspacePath: string,
+    number: number,
+    enabled: boolean,
+  ): Promise<void> {
+    const viewCmd = [
+      'gh',
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      'autoMergeRequest',
+    ]
+    const view = this.parseJson(
+      autoMergeJson,
+      await this.run(viewCmd, workspacePath),
+      viewCmd,
+    )
+    const currentlyEnabled = view.autoMergeRequest !== null
+    if (currentlyEnabled === enabled) return
+
+    await this.run(
+      enabled
+        ? ['gh', 'pr', 'merge', String(number), '--auto', '--squash']
+        : ['gh', 'pr', 'merge', String(number), '--disable-auto'],
+      workspacePath,
+    )
   }
 
   /** The build's summary comment (SPEC §7.5) — links into the store. */

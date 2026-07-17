@@ -274,6 +274,79 @@ describe('GitHubForge.getPrState', () => {
   })
 })
 
+describe('GitHubForge.setAutoMerge', () => {
+  test('enables GitHub-native auto-merge with squash and no check-bypassing flags', async () => {
+    const { forge, calls } = makeForge([
+      { stdout: JSON.stringify({ autoMergeRequest: null }) },
+      {},
+    ])
+    await forge.setAutoMerge('/ws/build-1', 42, true)
+    expect(calls).toEqual([
+      {
+        cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
+        cwd: '/ws/build-1',
+      },
+      {
+        cmd: ['gh', 'pr', 'merge', '42', '--auto', '--squash'],
+        cwd: '/ws/build-1',
+      },
+    ])
+    expect(calls.flatMap((call) => call.cmd)).not.toContain('--admin')
+  })
+
+  test('disables native auto-merge with exact argv', async () => {
+    const { forge, calls } = makeForge([
+      { stdout: JSON.stringify({ autoMergeRequest: { mergeMethod: 'SQUASH' } }) },
+      {},
+    ])
+    await forge.setAutoMerge('/ws/build-1', 42, false)
+    expect(calls.at(-1)).toEqual({
+      cmd: ['gh', 'pr', 'merge', '42', '--disable-auto'],
+      cwd: '/ws/build-1',
+    })
+  })
+
+  test('an idempotent retry only inspects state and performs no mutation', async () => {
+    for (const [enabled, autoMergeRequest] of [
+      [true, { mergeMethod: 'SQUASH' }],
+      [false, null],
+    ] as const) {
+      const { forge, calls } = makeForge([
+        { stdout: JSON.stringify({ autoMergeRequest }) },
+      ])
+      await forge.setAutoMerge('/ws/build-1', 42, enabled)
+      expect(calls).toEqual([
+        {
+          cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
+          cwd: '/ws/build-1',
+        },
+      ])
+    }
+  })
+
+  test('inspection and mutation failures propagate with their exact command', async () => {
+    const inspect = makeForge([{ exitCode: 1, stderr: 'not found' }])
+    await expect(inspect.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'gh pr view 42 --json autoMergeRequest',
+    )
+
+    const mutate = makeForge([
+      { stdout: JSON.stringify({ autoMergeRequest: null }) },
+      { exitCode: 1, stderr: 'auto-merge is not allowed' },
+    ])
+    await expect(mutate.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'gh pr merge 42 --auto --squash',
+    )
+  })
+
+  test('malformed state is rejected rather than guessing', async () => {
+    const { forge } = makeForge([{ stdout: '{}' }])
+    await expect(forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'unexpected output',
+    )
+  })
+})
+
 describe('GitHubForge.commentOnPr', () => {
   test('comments via --body-file with exact argv and delivers the body', async () => {
     const { forge, calls, bodies } = makeForge()

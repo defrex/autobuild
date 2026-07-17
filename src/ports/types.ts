@@ -118,6 +118,17 @@ export interface Forge {
   }): Promise<PrRef>
   /** Janitor poll (§15.7): merged/closed/mergeability for one PR. */
   getPrState(workspacePath: string, number: number): Promise<PrState>
+  /**
+   * Set GitHub-native auto-merge desired state. Enabling uses the repository's
+   * squash merge standard and leaves required checks as GitHub's gate; it is
+   * never an admin/direct merge. The operation is idempotent and safe to retry
+   * across the forge-call/event-append crash window.
+   */
+  setAutoMerge(
+    workspacePath: string,
+    number: number,
+    enabled: boolean,
+  ): Promise<void>
   /** Post the build's summary comment (§7.5). */
   commentOnPr(workspacePath: string, number: number, body: string): Promise<void>
 }
