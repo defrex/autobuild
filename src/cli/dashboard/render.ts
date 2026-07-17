@@ -229,7 +229,13 @@ const STATUS_COLOR: Record<DashboardBuild['status'], ColorName> = {
   blocked: 'red',
 }
 
-function renderBuild(build: DashboardBuild, opts: RenderOpts, widths: Widths): string[] {
+function renderBuild(
+  build: DashboardBuild,
+  opts: RenderOpts,
+  widths: Widths,
+  selected: boolean,
+  selecting: boolean,
+): string[] {
   const { color, width, now } = opts
 
   // ── The slug line: TICKET-ID  slug  …  <right cluster> ──────────────────────
@@ -242,14 +248,28 @@ function renderBuild(build: DashboardBuild, opts: RenderOpts, widths: Widths): s
 
   // Left column: ticket id, padded frame-wide so slugs align even for a build
   // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
+  const marker = selecting
+    ? selected
+      ? paint('> ', 'cyan', color)
+      : '  '
+    : ''
   const ticketCol =
     widths.ticket > 0 ? paint((build.ticketId ?? '').padEnd(widths.ticket), 'blue', color) : ''
-  const leftPrefix = ticketCol === '' ? '' : `${ticketCol}  `
+  const leftPrefix = `${marker}${ticketCol === '' ? '' : `${ticketCol}  `}`
 
   // Right cluster, rightmost last: [PR] [(paused)] STATUS. `padStart`
   // right-justifies the status word so it is never truncated and always ends at
   // the frame's right edge (AC 3, AC 5).
   const rightTokens: string[] = []
+  const autoColor: ColorName =
+    build.autoMerge === 'enabled'
+      ? 'green'
+      : build.autoMerge === 'requested'
+        ? 'cyan'
+        : build.autoMerge === 'cancelling'
+          ? 'yellow'
+          : 'dim'
+  rightTokens.push(paint(`auto ${build.autoMerge}`, autoColor, color))
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // Blocked overrides paused visually, but the pause is still a fact the
   // operator needs — so it rides along rather than being overwritten.
@@ -304,8 +324,18 @@ function frameWidths(builds: DashboardBuild[]): Widths {
 
 // ── The frame ────────────────────────────────────────────────────────────────
 
+export const DASHBOARD_LEGEND =
+  'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit'
+
+function overflowNotice(text: string, color: boolean, width: number): string {
+  return truncate(paint(`  ... ${text}`, 'dim', color), width)
+}
+
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
   const { color, width, height } = opts
+  const intake = model.drained
+    ? paint('intake DRAINED', 'yellow', color)
+    : paint('intake ON', 'green', color)
   const header = truncate(
     [
       paint('ab dispatch', 'bold', color),
@@ -315,48 +345,115 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
         'dim',
         color,
       ),
+      intake,
     ].join('  '),
     width,
   )
+  const legend = truncate(paint(DASHBOARD_LEGEND, 'dim', color), width)
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
   // nothing. A single line would scroll itself off and land in scrollback on
   // every repaint, which is worse than an empty region.
   if (height !== undefined && height <= 0) return []
 
-  // Room for nothing but the header gets the header: it is the line the ACs
-  // name, and it carries the active COUNT, so it still tells the operator the
-  // builds exist.
+  // A one-line physical impossibility keeps the long-standing header priority;
+  // from two lines onward the legend always owns the final line.
   if (height !== undefined && height <= 1) return [header]
+  if (height !== undefined && height === 2) return [header, legend]
 
   if (model.builds.length === 0) {
-    return [header, truncate(paint('  no active builds', 'dim', color), width)]
+    const body = truncate(paint('  no active builds', 'dim', color), width)
+    return height === undefined || height >= 3
+      ? [header, body, legend]
+      : [header, legend]
   }
 
   // Build blocks first — each is its blank separator plus its lines — so the
-  // frame's height is known before anything is painted.
+  // viewport can choose a contiguous window around the selected SLUG.
   const widths = frameWidths(model.builds)
-  const blocks = model.builds.map((build) => ['', ...renderBuild(build, opts, widths)])
-
-  const total = blocks.reduce((n, block) => n + block.length, 1)
-  if (height === undefined || total <= height) return [header, ...blocks.flat()]
-
-  // Overflow: keep whole builds from the top (they are slug-sorted, so the
-  // set stays stable across frames) and spend one line saying what was
-  // dropped. Silent truncation would read as "these are all the builds", which
-  // is worse than the scrolling it replaces.
-  const budget = height - 2 // the header, and the overflow notice
-  let used = 0
-  let shown = 0
-  for (const block of blocks) {
-    if (used + block.length > budget) break
-    used += block.length
-    shown += 1
+  const selecting = model.selectedSlug !== undefined
+  const rendered = model.builds.map((build) =>
+    renderBuild(build, opts, widths, build.slug === model.selectedSlug, selecting),
+  )
+  const blocks = rendered.map((lines) => ['', ...lines])
+  const bodyTotal = blocks.reduce((n, block) => n + block.length, 0)
+  if (height === undefined || bodyTotal + 2 <= height) {
+    return [header, ...blocks.flat(), legend]
   }
-  const dropped = blocks.length - shown
-  return [
-    header,
-    ...blocks.slice(0, shown).flat(),
-    truncate(paint(`  ... and ${dropped} more`, 'dim', color), width),
-  ]
+
+  const bodyBudget = Math.max(0, height - 2) // header + reserved legend
+  if (bodyBudget === 0) return [header, legend]
+  const selectedIndex = Math.max(
+    0,
+    model.builds.findIndex((build) => build.slug === model.selectedSlug),
+  )
+  const prefix = [0]
+  for (const block of blocks) prefix.push(prefix.at(-1)! + block.length)
+
+  // Brute force is intentional and tiny (dashboard build counts are bounded by
+  // operator workload): choose the largest contiguous whole-build window that
+  // contains selection and includes explicit above/below omission notices.
+  let best: { start: number; end: number; count: number; used: number } | undefined
+  for (let start = 0; start <= selectedIndex; start += 1) {
+    for (let end = selectedIndex; end < blocks.length; end += 1) {
+      const blockLines = prefix[end + 1]! - prefix[start]!
+      const notices = (start > 0 ? 1 : 0) + (end < blocks.length - 1 ? 1 : 0)
+      const used = blockLines + notices
+      if (used > bodyBudget) continue
+      const count = end - start + 1
+      if (
+        best === undefined ||
+        count > best.count ||
+        (count === best.count && used > best.used)
+      ) {
+        best = { start, end, count, used }
+      }
+    }
+  }
+
+  if (best !== undefined) {
+    const body: string[] = []
+    if (best.start > 0) {
+      body.push(overflowNotice(`${best.start} more above`, color, width))
+    }
+    body.push(...blocks.slice(best.start, best.end + 1).flat())
+    const below = blocks.length - best.end - 1
+    if (below > 0) {
+      body.push(overflowNotice(`and ${below} more below`, color, width))
+    }
+    return [header, ...body, legend]
+  }
+
+  // A detailed selected block itself cannot fit. Keep its selectable slug row
+  // visible, then spend remaining rows on detail and omission direction.
+  const selectedLines = rendered[selectedIndex]!
+  const above = selectedIndex
+  const below = blocks.length - selectedIndex - 1
+  let noticeLines = 0
+  if (bodyBudget > 1 && (above > 0 || below > 0)) {
+    noticeLines = bodyBudget > 2 && above > 0 && below > 0 ? 2 : 1
+  }
+  const detailCapacity = Math.max(1, bodyBudget - noticeLines)
+  const details = selectedLines.slice(0, detailCapacity)
+  const body: string[] = []
+  if (noticeLines === 2 && above > 0) {
+    body.push(overflowNotice(`${above} more above`, color, width))
+  }
+  body.push(...details)
+  if (noticeLines === 2 && below > 0) {
+    body.push(overflowNotice(`and ${below} more below`, color, width))
+  } else if (noticeLines === 1) {
+    body.push(
+      overflowNotice(
+        above > 0 && below > 0
+          ? `${above} above, ${below} below`
+          : above > 0
+            ? `${above} more above`
+            : `and ${below} more below`,
+        color,
+        width,
+      ),
+    )
+  }
+  return [header, ...body.slice(0, bodyBudget), legend]
 }

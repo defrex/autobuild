@@ -26,12 +26,17 @@ import { join } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
+import { humanActor } from '../events/envelope'
 import { randomIds, type IdSource } from '../ids'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { buildDashboard, type DashboardModel } from './dashboard/model'
 import { renderDashboard } from './dashboard/render'
+import {
+  moveSelection,
+  reconcileSelection,
+} from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
-import type { TerminalOut } from './terminal'
+import type { DashboardKey, TerminalInput, TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
 import { PiAgentRunner } from '../ports/runner/pi'
@@ -119,22 +124,29 @@ export interface DispatchOpts {
    * constructs the real one over `process.stdout`.
    */
   terminal?: TerminalOut
+  /** Injectable normalized key source; the binary wraps process.stdin. */
+  input?: TerminalInput
 }
 
-/** setTimeout that also resolves the moment `signal` aborts, so Ctrl-C
- * doesn't wait out the whole interval. */
-function interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
+/** setTimeout that also resolves the moment ANY stop signal aborts, so OS
+ * SIGINT and raw-mode Ctrl-C share the same watch-loop boundary. */
+function interruptibleSleep(
+  ms: number,
+  signals: readonly (AbortSignal | undefined)[],
+): Promise<void> {
   return new Promise<void>((resolveSleep) => {
-    if (signal?.aborted === true) return resolveSleep()
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolveSleep()
-    }, ms)
-    const onAbort = (): void => {
+    const live = signals.filter((signal): signal is AbortSignal => signal !== undefined)
+    if (live.some((signal) => signal.aborted)) return resolveSleep()
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
+      for (const signal of live) signal.removeEventListener('abort', finish)
       resolveSleep()
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    const timer = setTimeout(finish, ms)
+    for (const signal of live) signal.addEventListener('abort', finish, { once: true })
   })
 }
 
@@ -212,6 +224,15 @@ class DispatchLoop {
    * Read from the store by `renderOnce`; timing is now-independent so the same
    * model ticks without a re-read. */
   private model: DashboardModel | undefined
+  /** Ephemeral per-process controls — deliberately absent from durable state. */
+  private selectedSlug: string | undefined
+  private drained = false
+  /** One queue defines order between ticks and mutating keys. */
+  private operationTail: Promise<void> = Promise.resolve()
+  private acceptingKeys = false
+  private cleanupInput: (() => void) | undefined
+  /** Raw Ctrl-C does not raise SIGINT; this wakes the same watch loop. */
+  private readonly inputStop = new AbortController()
 
   constructor(
     private readonly config: Config,
@@ -233,6 +254,156 @@ class DispatchLoop {
       ids: wiring.ids,
       clock: wiring.clock,
     })
+  }
+
+  /** Append one operation after every previously observed tick/key action. */
+  private serialize<T>(operation: () => Promise<T> | T): Promise<T> {
+    const result = this.operationTail.then(operation)
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
+    return this.serialize(() =>
+      this.dispatcher.tick({
+        resumeCurrent,
+        acceptNewWork: !this.drained,
+      }),
+    )
+  }
+
+  private dashboardUser(): string {
+    for (const name of ['USER', 'USERNAME']) {
+      const value = this.opts.env[name]?.trim()
+      if (value !== undefined && value !== '') return value
+    }
+    return 'dashboard'
+  }
+
+  /** Remove a stale optional selectedSlug while retaining current drain. */
+  private syncModelControls(): void {
+    if (this.model === undefined) return
+    const { selectedSlug: _old, ...base } = this.model
+    this.model = {
+      ...base,
+      drained: this.drained,
+      ...(this.selectedSlug !== undefined
+        ? { selectedSlug: this.selectedSlug }
+        : {}),
+    }
+  }
+
+  private moveSelection(delta: number): void {
+    const slugs = this.model?.builds.map((build) => build.slug) ?? []
+    this.selectedSlug = moveSelection(slugs, this.selectedSlug, delta)
+    this.syncModelControls()
+    this.paint()
+  }
+
+  private async selectedBuild(): Promise<
+    { slug: string; state: BuildState } | undefined
+  > {
+    const slug = this.selectedSlug
+    if (slug === undefined) {
+      this.warn('dashboard action ignored: no active build is selected')
+      return undefined
+    }
+    const record = await this.wiring.store.getBuild(slug)
+    if (record === null || record.repo !== this.opts.targetRepo) {
+      this.warn(`dashboard action ignored: selected build ${slug} disappeared`)
+      await this.renderOnce()
+      return undefined
+    }
+    const state = reduceBuild(await this.wiring.store.getEvents(slug))
+    if (!['running', 'paused', 'blocked'].includes(state.status)) {
+      this.warn(`dashboard action ignored: selected build ${slug} is no longer active`)
+      await this.renderOnce()
+      return undefined
+    }
+    return { slug, state }
+  }
+
+  private async togglePause(): Promise<void> {
+    const selected = await this.selectedBuild()
+    if (selected === undefined) return
+    const resume = selected.state.status === 'paused'
+    await this.wiring.store.append(selected.slug, {
+      actor: humanActor(this.dashboardUser()),
+      type: resume ? 'build.resume-requested' : 'build.pause-requested',
+      payload: {},
+    })
+    this.say(`build ${selected.slug}: ${resume ? 'resume' : 'pause'} requested`)
+    await this.renderOnce()
+  }
+
+  private async toggleAutoMerge(): Promise<void> {
+    const selected = await this.selectedBuild()
+    if (selected === undefined) return
+    const cancel = selected.state.autoMerge.requested
+    await this.wiring.store.append(selected.slug, {
+      actor: humanActor(this.dashboardUser()),
+      type: cancel
+        ? 'build.auto-merge-cancelled'
+        : 'build.auto-merge-requested',
+      payload: {},
+    })
+    this.say(
+      `build ${selected.slug}: auto-merge ${cancel ? 'cancelled' : 'requested'}`,
+    )
+    await this.renderOnce()
+  }
+
+  private async handleKey(key: Exclude<DashboardKey, 'interrupt'>): Promise<void> {
+    switch (key) {
+      case 'up':
+        this.moveSelection(-1)
+        return
+      case 'down':
+        this.moveSelection(1)
+        return
+      case 'drain':
+        this.drained = !this.drained
+        this.syncModelControls()
+        this.paint()
+        this.say(`dispatcher drain ${this.drained ? 'on' : 'off'}`)
+        return
+      case 'pause':
+        await this.togglePause()
+        return
+      case 'auto-merge':
+        await this.toggleAutoMerge()
+        return
+    }
+  }
+
+  private onKey(key: DashboardKey): void {
+    if (!this.acceptingKeys) return
+    if (key === 'interrupt') {
+      this.acceptingKeys = false
+      this.inputStop.abort()
+      return
+    }
+    void this.serialize(() => this.handleKey(key)).catch((error: unknown) => {
+      this.warn(
+        `dashboard ${key} action failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+  }
+
+  private startInput(): void {
+    if (!this.dashboard || this.opts.input === undefined) return
+    this.acceptingKeys = true
+    this.cleanupInput = this.opts.input.start((key) => this.onKey(key))
+  }
+
+  private stopInput(): void {
+    this.acceptingKeys = false
+    const cleanup = this.cleanupInput
+    this.cleanupInput = undefined
+    cleanup?.()
   }
 
   /**
@@ -298,7 +469,7 @@ class DispatchLoop {
   }
 
   private get stopped(): boolean {
-    return this.opts.signal?.aborted === true
+    return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
   }
 
   private async drainInFlight(): Promise<void> {
@@ -380,11 +551,25 @@ class DispatchLoop {
       const events = await this.wiring.store.getEvents(record.slug)
       entries.push({ record, state: reduceBuild(events), events })
     }
-    this.model = buildDashboard(entries, this.config, {
+    const previousSlugs = this.model?.builds.map((build) => build.slug) ?? []
+    const projected = buildDashboard(entries, this.config, {
       repo: this.opts.targetRepo,
       mode: this.opts.once === true ? 'once' : 'watch',
       capacity: this.config.dispatcher.capacity,
+      drained: this.drained,
     })
+    const nextSlugs = projected.builds.map((build) => build.slug)
+    this.selectedSlug = reconcileSelection(
+      previousSlugs,
+      nextSlugs,
+      this.selectedSlug,
+    )
+    this.model = {
+      ...projected,
+      ...(this.selectedSlug !== undefined
+        ? { selectedSlug: this.selectedSlug }
+        : {}),
+    }
     this.paint()
   }
 
@@ -452,13 +637,27 @@ class DispatchLoop {
    * without a cursor. */
   private async finishRendering(): Promise<void> {
     if (!this.dashboard) return
+    // No new keys or polls may begin once teardown starts. Already queued
+    // actions finish before the final truth is painted and raw mode/cursor are
+    // considered released.
+    try {
+      this.stopInput()
+    } catch (error) {
+      // Cursor restoration must not be skipped just because stdin restoration
+      // itself failed. Keep the failure visible above the final frame.
+      this.warn(
+        `dashboard input cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
     this.stopRendering()
+    await this.operationTail
     try {
       await this.renderOnce()
     } catch {
       // Best-effort: a failed final frame must not mask the run's outcome.
+    } finally {
+      this.region?.finish()
     }
-    this.region?.finish()
   }
 
   async run(): Promise<void> {
@@ -469,9 +668,10 @@ class DispatchLoop {
       // watches the initial pass's builds change state while they run. The
       // render loop only reads: `--once` still calls tick() exactly ONCE, so
       // it never claims a ticket that becomes Ready mid-drain.
-      this.startRendering()
       try {
-        this.printReport(await this.dispatcher.tick({ resumeCurrent: true }))
+        this.startInput()
+        this.startRendering()
+        this.printReport(await this.dispatcherTick(true))
         await this.drainInFlight()
       } finally {
         await this.finishRendering()
@@ -481,17 +681,20 @@ class DispatchLoop {
 
     const intervalMs = this.opts.intervalMs ?? DEFAULT_INTERVAL_MS
     const sleep =
-      this.opts.sleep ?? ((ms: number) => interruptibleSleep(ms, this.opts.signal))
+      this.opts.sleep ??
+      ((ms: number) =>
+        interruptibleSleep(ms, [this.opts.signal, this.inputStop.signal]))
     this.say(
       `ab dispatch — watching ${this.opts.targetRepo} (capacity ${capacity}, ` +
         `every ${Math.round(intervalMs / 1000)}s) — Ctrl-C to stop`,
     )
-    this.startRendering()
     try {
+      this.startInput()
+      this.startRendering()
       let startup = true
       while (!this.stopped) {
         try {
-          this.printReport(await this.dispatcher.tick({ resumeCurrent: startup }))
+          this.printReport(await this.dispatcherTick(startup))
           startup = false
         } catch (error) {
           this.warn(`tick failed: ${error instanceof Error ? error.message : String(error)}`)

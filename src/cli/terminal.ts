@@ -1,3 +1,5 @@
+import { emitKeypressEvents } from 'node:readline'
+
 /**
  * The output seam for interactive rendering (SPEC §14).
  *
@@ -12,6 +14,19 @@
  * today's behavior, and it means the dashboard can never be the reason a
  * scripted `ab dispatch` starts emitting escape sequences.
  */
+
+export type DashboardKey =
+  | 'up'
+  | 'down'
+  | 'auto-merge'
+  | 'pause'
+  | 'drain'
+  | 'interrupt'
+
+/** Injectable keyboard seam. Starting returns an idempotent cleanup. */
+export interface TerminalInput {
+  start(onKey: (key: DashboardKey) => void): () => void
+}
 
 export interface TerminalOut {
   /** Raw write — no newline appended (unlike the line-oriented stdout dep). */
@@ -67,5 +82,83 @@ export function processTerminal(stream: NodeJS.WriteStream = process.stdout): Te
       return dimension(stream.rows, FALLBACK_ROWS)
     },
     interactive: stream.isTTY === true,
+  }
+}
+
+interface Keypress {
+  name?: string
+  ctrl?: boolean
+  sequence?: string
+}
+
+function dashboardKey(text: string | undefined, key: Keypress): DashboardKey | undefined {
+  if ((key.ctrl === true && key.name === 'c') || key.sequence === '\u0003') {
+    return 'interrupt'
+  }
+  if (key.name === 'up') return 'up'
+  if (key.name === 'down') return 'down'
+  switch ((text ?? key.name ?? '').toLowerCase()) {
+    case 'm':
+      return 'auto-merge'
+    case 'p':
+      return 'pause'
+    case 'd':
+      return 'drain'
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Production raw-input adapter. It activates only for a TTY with raw-mode
+ * support, disables terminal echo through raw mode, and restores the stream's
+ * prior raw/flow state on every idempotent cleanup path.
+ */
+export function processTerminalInput(
+  stream: NodeJS.ReadStream = process.stdin,
+): TerminalInput {
+  return {
+    start(onKey): () => void {
+      if (stream.isTTY !== true || typeof stream.setRawMode !== 'function') {
+        return () => {}
+      }
+
+      const priorRaw = stream.isRaw === true
+      const priorFlowing = stream.readableFlowing
+      let cleaned = false
+      const listener = (text: string | undefined, key: Keypress = {}): void => {
+        const normalized = dashboardKey(text, key)
+        if (normalized !== undefined) onKey(normalized)
+      }
+
+      let listening = false
+      const cleanup = (): void => {
+        if (cleaned) return
+        cleaned = true
+        if (listening) stream.removeListener('keypress', listener)
+        try {
+          stream.setRawMode(priorRaw)
+        } finally {
+          if (priorFlowing === true) stream.resume()
+          else stream.pause()
+        }
+      }
+
+      try {
+        emitKeypressEvents(stream)
+        stream.on('keypress', listener)
+        listening = true
+        stream.setRawMode(true)
+        stream.resume()
+        return cleanup
+      } catch (error) {
+        try {
+          cleanup()
+        } catch {
+          // Preserve the activation error; cleanup was best-effort here.
+        }
+        throw error
+      }
+    },
   }
 }

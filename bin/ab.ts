@@ -10,7 +10,7 @@ import { runCli, SESSIONLESS_COMMANDS } from '../src/cli/main'
 import { loadDotEnv } from '../src/cli/dotenv'
 import { resolveCliEnv } from '../src/cli/env'
 import { resolveStore } from '../src/cli/store-ref'
-import { processTerminal } from '../src/cli/terminal'
+import { processTerminal, processTerminalInput } from '../src/cli/terminal'
 import { RemoteBuildStore } from '../src/store/remote/client'
 import { GitHubForge } from '../src/ports/forge/github'
 import { spawnExec } from '../src/ports/workspace/git-worktree'
@@ -45,6 +45,7 @@ async function main(): Promise<number> {
         // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
         // TTY, so a pipe or redirect silently gets plain output.
         terminal: processTerminal(process.stdout),
+        input: processTerminalInput(process.stdin),
         stdout: (line) => console.log(line),
         stderr: (line) => console.error(line),
       })

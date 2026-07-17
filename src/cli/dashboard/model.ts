@@ -42,6 +42,9 @@ export type EffectiveStatus = 'running' | 'paused' | 'blocked'
 
 export type StepState = 'done' | 'current' | 'pending'
 
+/** Human intent versus correlated forge application, rendered non-color-only. */
+export type AutoMergeDisplay = 'off' | 'requested' | 'enabled' | 'cancelling'
+
 /**
  * A step's wall-clock timing, now-INDEPENDENT so the model can be cached and
  * repainted against a moving clock (the elapsed ticks in the renderer, not
@@ -82,6 +85,8 @@ export interface DashboardBuild {
   /** Every unresolved blocker's question. Resolved ones drop out by
    * construction — the reducer moves them to answeredEscalations. */
   blockers: string[]
+  /** Native auto-merge desired/applied state. */
+  autoMerge: AutoMergeDisplay
   pr?: { url: string; state: PrLifecycle }
 }
 
@@ -89,6 +94,10 @@ export interface DashboardModel {
   repo: string
   mode: 'watch' | 'once'
   capacity: number
+  /** Ephemeral state owned by this `ab dispatch` process only. */
+  drained: boolean
+  /** Slug identity, never a row index. */
+  selectedSlug?: string
   builds: DashboardBuild[]
 }
 
@@ -111,6 +120,22 @@ export function effectiveStatus(state: BuildState): BuildState['status'] {
 
 function isActive(status: BuildState['status']): status is EffectiveStatus {
   return status === 'running' || status === 'paused' || status === 'blocked'
+}
+
+export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
+  const { requested, commandSeq, applied } = state.autoMerge
+  if (requested) {
+    return applied?.enabled === true && applied.commandSeq === commandSeq
+      ? 'enabled'
+      : 'requested'
+  }
+  if (commandSeq === undefined) return 'off'
+  if (applied?.enabled === false && applied.commandSeq === commandSeq) return 'off'
+  // Before a PR exists, cancellation clears the durable desired flag and there
+  // is no remote state to wait on. Once a PR (or prior enabled fact) exists,
+  // keep the pending disable visible until its correlated fact lands.
+  if (state.pr === undefined && applied?.enabled !== true) return 'off'
+  return 'cancelling'
 }
 
 /**
@@ -490,6 +515,7 @@ export function projectBuild(
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps,
     blockers: state.openEscalations.map((e) => e.question),
+    autoMerge: autoMergeDisplay(state),
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
@@ -501,11 +527,24 @@ export function projectBuild(
 export function buildDashboard(
   entries: { record: BuildRecord; state: BuildState; events: AbEvent[] }[],
   config: Config,
-  header: { repo: string; mode: 'watch' | 'once'; capacity: number },
+  header: {
+    repo: string
+    mode: 'watch' | 'once'
+    capacity: number
+    drained?: boolean
+    selectedSlug?: string
+  },
 ): DashboardModel {
   const builds = entries
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug))
-  return { ...header, builds }
+  return {
+    repo: header.repo,
+    mode: header.mode,
+    capacity: header.capacity,
+    drained: header.drained ?? false,
+    ...(header.selectedSlug !== undefined ? { selectedSlug: header.selectedSlug } : {}),
+    builds,
+  }
 }

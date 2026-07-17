@@ -18,7 +18,7 @@ import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchWiring } from './dispatch'
 import { stripAnsi } from './dashboard/render'
-import type { TerminalOut } from './terminal'
+import type { DashboardKey, TerminalInput, TerminalOut } from './terminal'
 import type { Config } from '../config/schema'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
@@ -466,6 +466,42 @@ describe('abDispatch --once', () => {
 })
 
 /** A TerminalOut that claims to be a TTY and records every raw write. */
+function fakeInput(initial: DashboardKey[] = []): TerminalInput & {
+  press: (key: DashboardKey) => void
+  starts: number
+  cleanups: number
+} {
+  let onKey: ((key: DashboardKey) => void) | undefined
+  const input = {
+    starts: 0,
+    cleanups: 0,
+    start(handler: (key: DashboardKey) => void): () => void {
+      input.starts += 1
+      onKey = handler
+      for (const key of initial) handler(key)
+      let cleaned = false
+      return () => {
+        if (cleaned) return
+        cleaned = true
+        input.cleanups += 1
+        onKey = undefined
+      }
+    },
+    press(key: DashboardKey): void {
+      onKey?.(key)
+    },
+  }
+  return input
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const end = Date.now() + timeoutMs
+  while (!(await predicate())) {
+    if (Date.now() >= end) throw new Error('timed out waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 function fakeTerminal(
   interactive = true,
   size: { columns?: number; rows?: number } = {},
@@ -825,6 +861,207 @@ describe('abDispatch --once with an interactive terminal', () => {
       // More than one distinct elapsed ⇒ the frame repainted with a moving clock
       // while the store held still.
       expect(waits.size).toBeGreaterThanOrEqual(2)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('abDispatch interactive keyboard controls', () => {
+  test('Down selects by slug; p/m target that build with human events; rapid m toggles in order', async () => {
+    const fx = await makeFixture(
+      [
+        readyTicket('T-alpha', { title: 'Alpha work' }),
+        readyTicket('T-beta', { title: 'Beta work' }),
+      ],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    try {
+      // First create two durable, merge-waiting builds. The second invocation
+      // is pure dashboard control over those rows.
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const records = (await fx.store.listBuilds()).sort((a, b) =>
+        a.slug.localeCompare(b.slug),
+      )
+      expect(records.map((record) => record.slug)).toEqual(['alpha-work', 'beta-work'])
+
+      const term = fakeTerminal()
+      const input = fakeInput()
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'dashboard-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => stripAnsi(term.all()).includes('alpha-work'))
+
+      input.press('down')
+      input.press('pause')
+      input.press('auto-merge')
+      input.press('auto-merge')
+      await waitFor(async () => {
+        const events = await fx.store.getEvents('beta-work')
+        return events.filter((event) =>
+          [
+            'build.pause-requested',
+            'build.auto-merge-requested',
+            'build.auto-merge-cancelled',
+          ].includes(event.type),
+        ).length === 3
+      })
+
+      // Removing the selected final row chooses its predecessor, not a stale
+      // row index. Let the polling projection reconcile, then p must target
+      // alpha rather than the now-done beta.
+      await fx.store.append('beta-work', {
+        actor: { kind: 'dispatcher' },
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      input.press('pause')
+      await waitFor(async () =>
+        (await fx.store.getEvents('alpha-work')).some(
+          (event) => event.type === 'build.pause-requested',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const alpha = await fx.store.getEvents('alpha-work')
+      expect(alpha.at(-1)?.type).toBe('build.pause-requested')
+      const commands = (await fx.store.getEvents('beta-work')).filter((event) =>
+        event.actor.kind === 'human',
+      )
+      expect(commands.map((event) => event.type).slice(-3)).toEqual([
+        'build.pause-requested',
+        'build.auto-merge-requested',
+        'build.auto-merge-cancelled',
+      ])
+      expect(commands.slice(-3).every((event) =>
+        event.actor.kind === 'human' && event.actor.user === 'dashboard-op'
+      )).toBe(true)
+      expect(input.starts).toBe(1)
+      expect(input.cleanups).toBe(1)
+      expect(term.all()).toContain('\x1b[?25h')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('p on an authoritatively paused build writes resume-requested', async () => {
+    const fx = await makeFixture(readyTicket('T-paused', { title: 'Paused work' }), happyHandlers())
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('paused-work', {
+        actor: { kind: 'kernel' },
+        type: 'build.paused',
+        payload: {},
+      })
+
+      const input = fakeInput()
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: {}, // stable nonempty fallback actor
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: fakeTerminal(),
+        input,
+      })
+      await waitFor(() => input.starts === 1)
+      // Let the initial projection establish selection.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      input.press('pause')
+      await waitFor(async () =>
+        (await fx.store.getEvents('paused-work')).some(
+          (event) => event.type === 'build.resume-requested',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const resume = (await fx.store.getEvents('paused-work')).find(
+        (event) => event.type === 'build.resume-requested',
+      )
+      expect(resume?.actor).toEqual({ kind: 'human', user: 'dashboard' })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('d gates only this invocation and a fresh invocation accepts work again', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-drained', { body: 'not a conforming spec' }),
+      {},
+    )
+    try {
+      const input = fakeInput(['drain'])
+      let sleeps = 0
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            expect(fx.tickets.claims).toEqual([])
+            input.press('drain')
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          } else {
+            input.press('interrupt')
+          }
+        },
+        wire: fx.wire,
+        terminal: fakeTerminal(),
+        input,
+      })
+      expect(fx.tickets.claims).toEqual(['T-drained'])
+
+      // A new DispatchLoop starts undrained. A newly ready ticket is claimed on
+      // its first tick without an operator toggling drain off again.
+      fx.tickets.add(readyTicket('T-fresh', { body: 'still nonconforming' }))
+      const freshInput = fakeInput()
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        sleep: async () => freshInput.press('interrupt'),
+        wire: fx.wire,
+        terminal: fakeTerminal(),
+        input: freshInput,
+      })
+      expect(fx.tickets.claims).toEqual(['T-drained', 'T-fresh'])
     } finally {
       await fx.cleanup()
     }

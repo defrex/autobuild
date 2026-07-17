@@ -387,6 +387,60 @@ describe('projectBuild: the active-build filter', () => {
   })
 })
 
+describe('projectBuild: native auto-merge display state', () => {
+  test('distinguishes off, requested, enabled, and pending cancellation', () => {
+    const off = toLog(prelude())
+    expect(project(off).autoMerge).toBe('off')
+
+    const requested = toLog([
+      ...prelude(),
+      ev('build.auto-merge-requested', {}), // seq 5
+    ])
+    expect(project(requested).autoMerge).toBe('requested')
+
+    const enabled = toLog([
+      ...prelude(),
+      ev('build.auto-merge-requested', {}), // seq 5
+      ev('pr.auto-merge-enabled', { commandSeq: 5 }),
+    ])
+    expect(project(enabled).autoMerge).toBe('enabled')
+
+    const clearedBeforePr = toLog([
+      ...prelude(),
+      ev('build.auto-merge-requested', {}),
+      ev('build.auto-merge-cancelled', {}),
+    ])
+    expect(project(clearedBeforePr).autoMerge).toBe('off')
+
+    const cancelling = toLog([
+      ...prelude(),
+      ev('finalize.completed', {
+        pr: { number: 7, url: 'https://github.com/acme/app/pull/7', headSha: 'head' },
+      }), // seq 5
+      ev('build.auto-merge-requested', {}), // seq 6
+      ev('pr.auto-merge-enabled', { commandSeq: 6 }),
+      ev('build.auto-merge-cancelled', {}), // seq 8
+    ])
+    expect(projectBuild(RECORD, reduceBuild(cancelling), CONFIG, cancelling)?.autoMerge).toBe(
+      'cancelling',
+    )
+
+    const disabled = toLog([
+      ...prelude(),
+      ev('finalize.completed', {
+        pr: { number: 7, url: 'https://github.com/acme/app/pull/7', headSha: 'head' },
+      }),
+      ev('build.auto-merge-requested', {}),
+      ev('pr.auto-merge-enabled', { commandSeq: 6 }),
+      ev('build.auto-merge-cancelled', {}),
+      ev('pr.auto-merge-disabled', { commandSeq: 8 }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(disabled), CONFIG, disabled)?.autoMerge).toBe(
+      'off',
+    )
+  })
+})
+
 describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)', () => {
   const blockedAndPaused = toLog([
     ...prelude(),

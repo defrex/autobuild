@@ -18,7 +18,7 @@ import type { IdSource } from '../ids'
 import { artifactGet, artifactPut } from './artifact'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
-import type { TerminalOut } from './terminal'
+import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv } from './env'
 import { abInit } from './init'
 import { observe } from './observe'
@@ -86,6 +86,8 @@ export interface SessionlessCliDeps {
   /** Interactive output seam for `ab dispatch`'s dashboard (§14). Absent ⇒
    * non-interactive ⇒ plain, line-oriented output. */
   terminal?: TerminalOut
+  /** Raw keyboard seam for the interactive dispatch dashboard. */
+  input?: TerminalInput
   store?: BuildStore
   env?: CliEnv
   forge?: Forge
@@ -138,7 +140,8 @@ const HELP = [
   '                                         (e.g. AUT-8 for linear, file-1 for file); dispatch waits for all of them.',
   '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
-  '                                         an interactive terminal gets a live build dashboard; --plain forces line-oriented output (the default when stdout is not a TTY)',
+  '                                         TTY controls: Up/Down select, m toggles native squash auto-merge, p pauses/resumes, d drains new claims, Ctrl-C stops',
+  '                                         the bottom legend lists every key; --plain forces non-interactive line output (also automatic when stdout is not a TTY)',
   '  ab builds [--queued] [--all] [--json] [--store <ref>]',
   '                                         list this repo\'s builds — default: running, paused, blocked; --queued adds queued;',
   '                                         --all every status (§15.5; read-only, runs outside sessions)',
@@ -385,6 +388,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
         ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
+        ...(deps.input !== undefined ? { input: deps.input } : {}),
       })
       return 0
     }

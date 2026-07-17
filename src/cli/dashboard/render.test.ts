@@ -36,6 +36,7 @@ function build(overrides: Partial<DashboardBuild> = {}): DashboardBuild {
     blockers: [],
     pr: { url: 'https://github.com/defrex/app/pull/7', state: 'open' },
     ...overrides,
+    autoMerge: overrides.autoMerge ?? 'off',
   }
 }
 
@@ -51,7 +52,7 @@ function unclosedLinks(line: string): number {
 }
 
 function model(builds: DashboardBuild[]): DashboardModel {
-  return { repo: '/repos/app', mode: 'watch', capacity: 2, builds }
+  return { repo: '/repos/app', mode: 'watch', capacity: 2, drained: false, builds }
 }
 
 const WIDE = { color: false, width: 200 }
@@ -73,6 +74,18 @@ describe('renderDashboard: the header', () => {
   test('mode reads `once` for a single pass', () => {
     const [header] = rd({ ...model([]), mode: 'once' }, WIDE)
     expect(header).toContain('once')
+  })
+
+  test('drain state is explicit and resets to intake ON in a fresh model', () => {
+    expect(rd({ ...model([]), drained: true }, WIDE)[0]).toContain('intake DRAINED')
+    expect(rd(model([]), WIDE)[0]).toContain('intake ON')
+  })
+
+  test('the complete key legend is the final line', () => {
+    const lines = rd(model([build()]), WIDE)
+    expect(lines.at(-1)).toBe(
+      'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit',
+    )
   })
 })
 
@@ -123,6 +136,21 @@ describe('renderDashboard: never color-only', () => {
     const plain = stripAnsi(out.join('\n'))
     expect(plain).toContain('[x] plan')
     expect(plain).toContain('BLOCKED')
+  })
+
+  test('every auto-merge state has a literal row label', () => {
+    const out = rd(
+      model([
+        build({ slug: 'off', autoMerge: 'off' }),
+        build({ slug: 'requested', autoMerge: 'requested' }),
+        build({ slug: 'enabled', autoMerge: 'enabled' }),
+        build({ slug: 'cancelling', autoMerge: 'cancelling' }),
+      ]),
+      WIDE,
+    ).join('\n')
+    for (const state of ['off', 'requested', 'enabled', 'cancelling']) {
+      expect(out).toContain(`auto ${state}`)
+    }
   })
 })
 
@@ -179,6 +207,13 @@ describe('renderDashboard: layout', () => {
   test('builds are separated by a blank line', () => {
     const lines = rd(model([build({ slug: 'a' }), build({ slug: 'b' })]), WIDE)
     expect(lines.filter((l) => l === '')).toHaveLength(2)
+  })
+
+  test('selection is an ASCII marker on exactly the selected slug row', () => {
+    const selected = { ...model([build({ slug: 'a' }), build({ slug: 'b' })]), selectedSlug: 'b' }
+    const lines = rd(selected, WIDE).map(stripAnsi)
+    expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
+    expect(lines.find((line) => line.startsWith('> '))).toContain('b')
   })
 })
 
@@ -326,8 +361,8 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     // Silent truncation would read as "these are all the builds", which is a
     // worse answer than the scrolling it replaces.
     const lines = rd(model(many(8)), { color: false, width: 80, height: 24 })
-    const notice = lines.at(-1)
-    expect(notice).toContain('more')
+    const notice = lines.find((line) => line.includes('more'))
+    expect(notice).toBeDefined()
     const shown = lines.filter((l) => l.includes('BLOCKED')).length
     expect(notice).toContain(`and ${8 - shown} more`)
     expect(shown).toBeGreaterThan(0)
@@ -340,6 +375,18 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     const headers = lines.filter((l) => l.includes('BLOCKED')).length
     const blockerLines = lines.filter((l) => l.trimStart().startsWith('!')).length
     expect(blockerLines).toBe(headers)
+  })
+
+  test('an overflowed viewport always contains the selected slug while it moves', () => {
+    for (const selected of [1, 4, 7]) {
+      const m = {
+        ...model(many(8)),
+        selectedSlug: `interactive-build-dashboard-for-ab-${selected}`,
+      }
+      const lines = rd(m, { color: false, width: 80, height: 12 })
+      expect(lines.some((line) => line.startsWith(`> AB-${selected}`))).toBe(true)
+      expect(lines.at(-1)).toContain('Up/Down')
+    }
   })
 
   test('a frame that fits is not clamped and gets no notice', () => {

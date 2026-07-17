@@ -8,7 +8,8 @@
  * up over rows that have to still be on screen.
  */
 import { describe, expect, test } from 'bun:test'
-import { processTerminal } from './terminal'
+import { PassThrough } from 'node:stream'
+import { processTerminal, processTerminalInput } from './terminal'
 
 function stream(props: { isTTY?: boolean; columns?: number; rows?: number }): NodeJS.WriteStream {
   const writes: string[] = []
@@ -92,5 +93,90 @@ describe('processTerminal: write', () => {
     const s = stream({ isTTY: true, columns: 80 })
     processTerminal(s).write('frame')
     expect((s as unknown as { writes: string[] }).writes).toEqual(['frame'])
+  })
+})
+
+function inputStream(opts: { tty?: boolean; raw?: boolean; flowing?: boolean } = {}) {
+  const stream = new PassThrough() as PassThrough & NodeJS.ReadStream & {
+    rawCalls: boolean[]
+  }
+  stream.isTTY = opts.tty ?? true
+  stream.isRaw = opts.raw ?? false
+  stream.rawCalls = []
+  stream.setRawMode = (raw: boolean) => {
+    stream.rawCalls.push(raw)
+    stream.isRaw = raw
+    return stream
+  }
+  if (opts.flowing === true) stream.resume()
+  else stream.pause()
+  return stream
+}
+
+describe('processTerminalInput', () => {
+  test('normalizes arrows, action keys, and raw-mode Ctrl-C', () => {
+    const stream = inputStream()
+    const keys: string[] = []
+    const cleanup = processTerminalInput(stream).start((key) => keys.push(key))
+
+    stream.emit('keypress', undefined, { name: 'up' })
+    stream.emit('keypress', undefined, { name: 'down' })
+    stream.emit('keypress', 'm', { name: 'm' })
+    stream.emit('keypress', 'P', { name: 'p' })
+    stream.emit('keypress', 'd', { name: 'd' })
+    stream.emit('keypress', undefined, { name: 'c', ctrl: true, sequence: '\u0003' })
+    stream.emit('keypress', 'x', { name: 'x' })
+
+    expect(keys).toEqual(['up', 'down', 'auto-merge', 'pause', 'drain', 'interrupt'])
+    cleanup()
+  })
+
+  test('enters raw mode and idempotently restores prior raw and flow state', () => {
+    const stream = inputStream({ raw: false, flowing: false })
+    const cleanup = processTerminalInput(stream).start(() => {})
+    expect(stream.rawCalls).toEqual([true])
+    expect(stream.readableFlowing).toBe(true)
+
+    cleanup()
+    cleanup()
+    expect(stream.rawCalls).toEqual([true, false])
+    expect(stream.readableFlowing).toBe(false)
+    expect(stream.listenerCount('keypress')).toBe(0)
+  })
+
+  test('preserves an already-raw, flowing stream', () => {
+    const stream = inputStream({ raw: true, flowing: true })
+    const cleanup = processTerminalInput(stream).start(() => {})
+    cleanup()
+    expect(stream.rawCalls).toEqual([true, true])
+    expect(stream.readableFlowing).toBe(true)
+  })
+
+  test('activation failure still removes listeners and restores flow', () => {
+    const stream = inputStream({ flowing: false })
+    const original = stream.setRawMode.bind(stream)
+    let first = true
+    stream.setRawMode = (raw: boolean) => {
+      if (first) {
+        first = false
+        stream.rawCalls.push(raw)
+        throw new Error('raw mode unavailable')
+      }
+      return original(raw)
+    }
+    expect(() => processTerminalInput(stream).start(() => {})).toThrow(
+      'raw mode unavailable',
+    )
+    expect(stream.rawCalls).toEqual([true, false])
+    expect(stream.listenerCount('keypress')).toBe(0)
+    expect(stream.readableFlowing).toBe(false)
+  })
+
+  test('a non-TTY is untouched', () => {
+    const stream = inputStream({ tty: false })
+    const cleanup = processTerminalInput(stream).start(() => {})
+    cleanup()
+    expect(stream.rawCalls).toEqual([])
+    expect(stream.listenerCount('keypress')).toBe(0)
   })
 })
