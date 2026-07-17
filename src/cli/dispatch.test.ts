@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchWiring } from './dispatch'
+import { stripAnsi } from './dashboard/render'
 import type { TerminalOut } from './terminal'
 import type { Config } from '../config/schema'
 import { sequentialIds } from '../ids'
@@ -775,6 +776,55 @@ describe('abDispatch --once with an interactive terminal', () => {
       // …and the pass still built only the ticket its ONE tick selected.
       const builds = await fx.store.listBuilds()
       expect(builds.map((b) => b.ticket?.id)).toEqual(['T-first'])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('watch: the merge-waiting elapsed advances on the tick timer, with the store unchanged (AC 8)', async () => {
+    // The decoupled paint (DASHBOARD_TICK_MS) is what makes a running elapsed
+    // tick between store reads. Drain a build to PR-open in a first pass, then
+    // WATCH it: the dispatcher tick interval is 10 s (so it does nothing during
+    // the window and the store never changes), yet the merge `(waiting, …)`
+    // elapsed still advances across repaints, driven purely by the render clock.
+    const fx = await makeFixture(readyTicket('T-tick'), happyHandlers())
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: fakeTerminal(),
+      })
+      expect(fx.forge.opened).toHaveLength(1) // parked at merge-waiting
+
+      const term = fakeTerminal()
+      const controller = new AbortController()
+      // ~1.3 s guarantees at least one whole-second boundary crossing, so the
+      // formatted elapsed changes at least once regardless of sub-second phase.
+      setTimeout(() => controller.abort(), 1_300).unref?.()
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: false,
+        intervalMs: 10_000,
+        signal: controller.signal,
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      const waits = new Set(
+        [...stripAnsi(term.all()).matchAll(/merge\(waiting, ([^)]+)\)/g)].map((m) => m[1]),
+      )
+      // More than one distinct elapsed ⇒ the frame repainted with a moving clock
+      // while the store held still.
+      expect(waits.size).toBeGreaterThanOrEqual(2)
     } finally {
       await fx.cleanup()
     }

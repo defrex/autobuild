@@ -28,6 +28,13 @@ export interface RenderOpts {
   /** Hard cap per line; one rendered line must be one physical row. */
   width: number
   /**
+   * The render-time clock (epoch ms). A running step's elapsed is
+   * `timing.accumulatedMs + (now - timing.runningSince)`, so painting the same
+   * cached model against a moving `now` is what makes the elapsed tick without
+   * recomputing the model (AC 8). Steps with no open interval ignore it.
+   */
+  now: number
+  /**
    * Hard cap on the NUMBER of lines — the screen's rows.
    *
    * Same invariant as `width`, on the other axis, and for a sharper reason:
@@ -181,8 +188,34 @@ const STEP_COLOR: Record<PipelineStep['state'], ColorName> = {
   pending: 'dim',
 }
 
-function renderStep(step: PipelineStep, color: boolean): string {
-  const note = step.note !== undefined ? `(${step.note})` : ''
+/**
+ * Elapsed duration, ASCII only: `Xs` under a minute, `MmSSs` under an hour,
+ * `HhMMm` above — seconds/minutes zero-padded when a larger unit precedes, so
+ * the field width is stable as it ticks (`38s`, `4m12s`, `1h04m`).
+ */
+export function formatDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000))
+  if (totalSec < 60) return `${totalSec}s`
+  const totalMin = Math.floor(totalSec / 60)
+  if (totalMin < 60) return `${totalMin}m${String(totalSec % 60).padStart(2, '0')}s`
+  return `${Math.floor(totalMin / 60)}h${String(totalMin % 60).padStart(2, '0')}m`
+}
+
+function renderStep(step: PipelineStep, color: boolean, now: number): string {
+  const parts: string[] = []
+  if (step.qualifier !== undefined) parts.push(step.qualifier)
+  // The elapsed segment can only be composed here — it depends on the
+  // render-time clock. A running step's open interval grows with `now`; a
+  // frozen or done step has none, so its elapsed is stable across repaints.
+  // `count` rides the time as `/n` (AC 7); with no time in scope it is not
+  // shown (a fresh/restarted step should not carry a stale round).
+  if (step.timing !== undefined) {
+    const { accumulatedMs, runningSince } = step.timing
+    const elapsedMs = accumulatedMs + (runningSince !== undefined ? Math.max(0, now - runningSince) : 0)
+    const count = step.count !== undefined && step.count > 1 ? `/${step.count}` : ''
+    parts.push(`${formatDuration(elapsedMs)}${count}`)
+  }
+  const note = parts.length > 0 ? `(${parts.join(', ')})` : ''
   const text = `${GLYPH[step.state]} ${step.label}${note}`
   const painted = paint(text, STEP_COLOR[step.state], color)
   return step.state === 'current' ? paint(painted, 'bold', color) : painted
@@ -197,25 +230,50 @@ const STATUS_COLOR: Record<DashboardBuild['status'], ColorName> = {
 }
 
 function renderBuild(build: DashboardBuild, opts: RenderOpts, widths: Widths): string[] {
-  const { color, width } = opts
-  const slug = build.slug.padEnd(widths.slug)
-  // The literal word, not a symbol — the status must survive `| cat`.
-  const badge = paint(build.status.toUpperCase().padEnd(widths.status), STATUS_COLOR[build.status], color)
+  const { color, width, now } = opts
 
-  const bits: string[] = [paint(slug, 'bold', color), badge]
+  // ── The slug line: TICKET-ID  slug  …  <right cluster> ──────────────────────
+  //
+  // Explicit left / flexible / right layout, NOT "join then truncate the whole
+  // line" — the latter eats the rightmost token (the status, the PR link) first,
+  // exactly what this change moves away from. Ticket id is the left column, the
+  // slug is the sole flexible/truncatable element, and the right cluster hugs
+  // `width` so the status word ends at the same column on every row (AC 1).
+
+  // Left column: ticket id, padded frame-wide so slugs align even for a build
+  // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
+  const ticketCol =
+    widths.ticket > 0 ? paint((build.ticketId ?? '').padEnd(widths.ticket), 'blue', color) : ''
+  const leftPrefix = ticketCol === '' ? '' : `${ticketCol}  `
+
+  // Right cluster, rightmost last: [PR] [(paused)] STATUS. `padStart`
+  // right-justifies the status word so it is never truncated and always ends at
+  // the frame's right edge (AC 3, AC 5).
+  const rightTokens: string[] = []
+  if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // Blocked overrides paused visually, but the pause is still a fact the
   // operator needs — so it rides along rather than being overwritten.
-  if (build.alsoPaused) bits.push(paint('(paused)', 'yellow', color))
-  if (build.ticketId !== undefined) bits.push(paint(build.ticketId, 'blue', color))
-  if (build.phase !== undefined) bits.push(paint(build.phase, 'dim', color))
-  if (build.pr !== undefined) {
-    bits.push(link(build.pr.url, `PR ${build.pr.state}`, color))
-  }
+  if (build.alsoPaused) rightTokens.push(paint('(paused)', 'yellow', color))
+  rightTokens.push(
+    paint(build.status.toUpperCase().padStart(widths.status), STATUS_COLOR[build.status], color),
+  )
+  const rightStr = rightTokens.join('  ')
 
-  const lines = [truncate(bits.join('  '), width)]
+  // The slug is the only element that truncates; ticket id and status never do.
+  const slugBudget = width - visibleLength(leftPrefix) - visibleLength(rightStr) - 2
+  const slug = paint(truncate(build.slug, Math.max(0, slugBudget)), 'bold', color)
+  // Pad the gap so the right cluster hugs the edge; `visibleLength`, never
+  // `.length`, so colored/linked tokens don't miscount the gap.
+  const used = visibleLength(leftPrefix) + visibleLength(slug)
+  const gap = ' '.repeat(Math.max(1, width - used - visibleLength(rightStr)))
+  // Final safety for widths narrower than the fixed parts: keeps the one-row
+  // invariant and closes any hyperlink the cut crosses. Under normal widths the
+  // line is exactly `width` with no `~`, so status/ticket/PR are intact.
+  const lines = [truncate(`${leftPrefix}${slug}${gap}${rightStr}`, width)]
+
   // The progress row wraps rather than truncating: the tail is `finalize` and
   // `merge waiting`, which the ACs require and the operator is waiting on.
-  lines.push(...packLines(build.steps.map((s) => renderStep(s, color)), width, '  '))
+  lines.push(...packLines(build.steps.map((s) => renderStep(s, color, now)), width, '  '))
   // Blockers wrap too — "every unresolved blocker message is displayed" is not
   // satisfied by its first 80 characters, and a policy escalation's question
   // is routinely longer than that. Wrap the words, then paint each line, so no
@@ -230,15 +288,16 @@ function renderBuild(build: DashboardBuild, opts: RenderOpts, widths: Widths): s
 }
 
 interface Widths {
-  slug: number
+  ticket: number
   status: number
 }
 
-/** Pad slug and status to the widest in the FRAME, so columns line up down the
- * whole dashboard rather than per-build. */
+/** Pad ticket id and status to the widest in the FRAME, so columns line up down
+ * the whole dashboard rather than per-build. `ticket` is 0 when no build in the
+ * frame has a ticket id — then there is no ticket column at all. */
 function frameWidths(builds: DashboardBuild[]): Widths {
   return {
-    slug: Math.max(0, ...builds.map((b) => b.slug.length)),
+    ticket: Math.max(0, ...builds.map((b) => (b.ticketId ?? '').length)),
     status: Math.max(0, ...builds.map((b) => b.status.length)),
   }
 }

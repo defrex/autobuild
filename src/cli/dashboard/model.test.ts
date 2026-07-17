@@ -245,7 +245,7 @@ function stateOf(build: DashboardBuild, label: string): PipelineStep['state'] | 
  * this file goes through here — that is the point of the guards.
  */
 function project(log: AbEvent[], config: Config = CONFIG): DashboardBuild {
-  const build = projectBuild(RECORD, reduceBuild(log), config)
+  const build = projectBuild(RECORD, reduceBuild(log), config, log)
   if (build === null) throw new Error('projectBuild returned null — the build is not active')
   guardA(log, build)
   guardB(log, build, config)
@@ -353,29 +353,31 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
 describe('projectBuild: the active-build filter', () => {
   test('queued, done and aborted are excluded; running/paused/blocked are listed', () => {
     const queued = toLog(prelude().slice(0, 3)) // no runner.attached
-    expect(projectBuild(RECORD, reduceBuild(queued), CONFIG)).toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(queued), CONFIG, queued)).toBeNull()
 
     const running = toLog(prelude())
-    expect(projectBuild(RECORD, reduceBuild(running), CONFIG)).not.toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(running), CONFIG, running)).not.toBeNull()
 
     const done = toLog([...prelude(), ev('build.completed', { outcome: 'merged' })])
-    expect(projectBuild(RECORD, reduceBuild(done), CONFIG)).toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(done), CONFIG, done)).toBeNull()
 
     const aborted = toLog([...prelude(), ev('build.aborted', {})])
-    expect(projectBuild(RECORD, reduceBuild(aborted), CONFIG)).toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(aborted), CONFIG, aborted)).toBeNull()
 
     const paused = toLog([...prelude(), ev('build.paused', {})])
-    expect(projectBuild(RECORD, reduceBuild(paused), CONFIG)?.status).toBe('paused')
+    expect(projectBuild(RECORD, reduceBuild(paused), CONFIG, paused)?.status).toBe('paused')
   })
 
   test('buildDashboard drops nulls and sorts by slug for a stable frame', () => {
-    const active = reduceBuild(toLog(prelude()))
-    const gone = reduceBuild(toLog([...prelude(), ev('build.completed', { outcome: 'merged' })]))
+    const activeLog = toLog(prelude())
+    const goneLog = toLog([...prelude(), ev('build.completed', { outcome: 'merged' })])
+    const active = reduceBuild(activeLog)
+    const gone = reduceBuild(goneLog)
     const model = buildDashboard(
       [
-        { record: { ...RECORD, slug: 'zebra' }, state: active },
-        { record: { ...RECORD, slug: 'gone' }, state: gone },
-        { record: { ...RECORD, slug: 'alpha' }, state: active },
+        { record: { ...RECORD, slug: 'zebra' }, state: active, events: activeLog },
+        { record: { ...RECORD, slug: 'gone' }, state: gone, events: goneLog },
+        { record: { ...RECORD, slug: 'alpha' }, state: active, events: activeLog },
       ],
       CONFIG,
       { repo: '/repos/app', mode: 'watch', capacity: 2 },
@@ -478,18 +480,17 @@ describe('projectBuild: the plan loop', () => {
     const build = project(toLog([...prelude(), ev('plan.started', { round: 1 })]))
     expect(stateOf(build, 'plan')).toBe('current')
     expect(build.steps.filter((s) => s.state === 'done')).toEqual([])
-    expect(build.phase).toBe('plan')
     expect(build.ticketId).toBe('ENG-42')
   })
 
-  test('a revise re-opens the loop: neither step done, both noted r2', () => {
+  test('a revise re-opens the loop: neither step done, both counted round 2', () => {
     const build = project(
       toLog([...prelude(), ...planRound(1, 'revise'), ev('plan.started', { round: 2 })]),
     )
     expect(stateOf(build, 'plan')).toBe('current')
     expect(stateOf(build, 'plan-review')).toBe('pending')
-    expect(stepFor(build, 'plan')?.note).toBe('r2')
-    expect(stepFor(build, 'plan-review')?.note).toBe('r2')
+    expect(stepFor(build, 'plan')?.count).toBe(2)
+    expect(stepFor(build, 'plan-review')?.count).toBe(2)
   })
 
   test('the zero-current window between plan.completed r2 and plan-review.started r2 is INTENTIONAL', () => {
@@ -614,10 +615,10 @@ describe('f_23e76d34: the verify cycle boundary', () => {
   test('mid-window — an earlier PASS in a failed cycle is not done', () => {
     const build = project(toLog(failedCycleWrites()))
     expect(stateOf(build, 'verify:lint')).toBe('pending')
-    expect(stepFor(build, 'verify:lint')?.note).toBeUndefined()
+    expect(stepFor(build, 'verify:lint')?.qualifier).toBeUndefined()
     // The failing step keeps the information without claiming to be settled.
     expect(stateOf(build, 'verify:test')).toBe('pending')
-    expect(stepFor(build, 'verify:test')?.note).toBe('failed')
+    expect(stepFor(build, 'verify:test')?.qualifier).toBe('failed')
   })
 
   test('post-approve — the boundary moved, so attempt 1 stops reading as done', () => {
@@ -638,22 +639,24 @@ describe('f_23e76d34: the verify cycle boundary', () => {
   })
 })
 
-describe('f_89defd3e: the attempt note names the attempt ACTUALLY running', () => {
+describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () => {
   const postApprove = [...failedCycleWrites(), ...codeRound(2, 'approve')]
 
-  test('no a{n} note in the window after a boundary move, before the fresh cycle starts', () => {
-    // `verify.attempt` is still 1 here and would name the PREVIOUS cycle.
+  test('no attempt count on the verify steps after a boundary move, before the fresh cycle starts', () => {
+    // `verify.attempt` is still 1 here and would name the PREVIOUS cycle; the
+    // current cycle is empty, so the verify steps carry no count.
     const build = project(toLog(postApprove))
     expect(reduceBuild(toLog(postApprove)).verify.attempt).toBe(1)
-    expect(build.steps.filter((s) => s.note?.startsWith('a') === true)).toEqual([])
+    expect(stepFor(build, 'verify:lint')?.count).toBeUndefined()
+    expect(stepFor(build, 'verify:test')?.count).toBeUndefined()
   })
 
-  test('a2 appears on the running step once verify.started a2 lands', () => {
+  test('count 2 appears on the running step once verify.started a2 lands', () => {
     const build = project(toLog([...postApprove, ev('verify.started', { step: 'lint', attempt: 2 })]))
     expect(stateOf(build, 'verify:lint')).toBe('current')
-    expect(stepFor(build, 'verify:lint')?.note).toBe('a2')
+    expect(stepFor(build, 'verify:lint')?.count).toBe(2)
     // …and only on the running step.
-    expect(stepFor(build, 'verify:test')?.note).toBeUndefined()
+    expect(stepFor(build, 'verify:test')?.count).toBeUndefined()
   })
 })
 
@@ -835,7 +838,6 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
     expect(build.status).toBe('running')
     expect(build.blockers).toEqual([])
     expect(build.steps.filter((s) => s.state === 'current')).toEqual([])
-    expect(build.phase).toBeUndefined()
   })
 
   test('window B — restart landed: the engine runs plan r2, so implement is not current', () => {
@@ -848,20 +850,19 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
     const build = project(log)
     expect(stateOf(build, 'implement')).toBe('pending')
     expect(build.steps.filter((s) => s.state === 'current')).toEqual([])
-    expect(build.phase).toBeUndefined()
   })
 
   test('…and plan goes current once the post-restart plan.started lands', () => {
     const build = project(toLog([...restartLanded, ev('plan.started', { round: 2 })]))
     expect(stateOf(build, 'plan')).toBe('current')
     expect(stateOf(build, 'implement')).toBe('pending')
-    expect(build.phase).toBe('plan')
   })
 
-  test('the header phase is scoped too — lastCompletedPhase is full-log as well', () => {
-    // `state.phase` is `currentPhase ?? lastCompletedPhase`; both survive a
-    // restart. Here the pre-restart phase COMPLETED, so only the
-    // lastCompletedPhase path is left to lie.
+  test('a completed pre-restart phase leaves nothing current either (lastCompletedPhase is full-log)', () => {
+    // `currentPhase` and `lastCompletedPhase` both survive a restart. Here the
+    // pre-restart phase COMPLETED, so `currentPhase` is clear and only
+    // `lastCompletedPhase` carries the stale context — but the scoped `current`
+    // predicate keys off `currentPhase` only, so nothing reads as running.
     const log = toLog([
       ...prelude(),
       ...planRound(1, 'approve'),
@@ -869,13 +870,12 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
       ...reviseSpec(13, 'code-review'),
     ])
     expect(reduceBuild(log).phase).toBe('code-review')
-    expect(project(log).phase).toBeUndefined()
+    expect(project(log).steps.filter((s) => s.state === 'current')).toEqual([])
   })
 
-  test('no restart ⇒ current and phase behave exactly as before', () => {
+  test('no restart ⇒ current behaves exactly as before', () => {
     const build = project(toLog([...prelude(), ...planRound(1, 'approve'), ev('implement.started', { round: 1 })]))
     expect(stateOf(build, 'implement')).toBe('current')
-    expect(build.phase).toBe('implement')
   })
 })
 
@@ -892,7 +892,7 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
     const build = project(log)
     expect(stateOf(build, 'merge')).toBe('current')
-    expect(stepFor(build, 'merge')?.note).toBe('waiting')
+    expect(stepFor(build, 'merge')?.qualifier).toBe('waiting')
     expect(build.pr).toEqual({ url: 'https://github.com/defrex/app/pull/7', state: 'open' })
   })
 
@@ -913,7 +913,7 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
       CONFIG_POST_STEPS,
     )
     expect(stateOf(build, 'changelog')).toBe('done')
-    expect(stepFor(build, 'changelog')?.note).toBe('failed')
+    expect(stepFor(build, 'changelog')?.qualifier).toBe('failed')
     expect(stateOf(build, 'merge')).toBe('current')
   })
 
@@ -978,5 +978,95 @@ describe('f_8cd6c173: reconcile is conditional, and stays done behind the verify
       ]),
     )
     expect(stateOf(build, 'reconcile')).toBe('done')
+  })
+})
+
+// ── Durations (the new derivation) ────────────────────────────────────────────
+//
+// `toLog` stamps each event 1 s after the last (steppingClock, stepMs 1000), so
+// every interval below is an exact multiple of 1000 ms and the assertions can be
+// on precise durations rather than ranges. The timing is derived from the raw
+// log the way the reducer never keeps it, so these run over real reduced state.
+
+function tsMsOf(log: AbEvent[], seq: number): number {
+  const ev = log.find((e) => e.seq === seq)
+  if (ev === undefined) throw new Error(`no event at seq ${seq}`)
+  return Date.parse(ev.ts)
+}
+
+describe('durations: accumulation and scope', () => {
+  test('a done loop step sums its wall-clock across all rounds in scope (AC 11)', () => {
+    // plan runs twice (revise then approve); each `.started`→`.completed` pair
+    // is one 1 s step, so the cumulative plan time is exactly 2 s.
+    const log = toLog([...prelude(), ...planRound(1, 'revise'), ...planRound(2, 'approve')])
+    const build = project(log)
+    expect(stateOf(build, 'plan')).toBe('done')
+    expect(stepFor(build, 'plan')?.timing?.accumulatedMs).toBe(2000)
+    expect(stepFor(build, 'plan')?.timing?.runningSince).toBeUndefined()
+    expect(stepFor(build, 'plan')?.count).toBe(2)
+  })
+
+  test('a running step reports runningSince and an empty accumulator', () => {
+    const log = toLog([...prelude(), ev('plan.started', { round: 1 })])
+    const build = project(log)
+    expect(build.status).toBe('running')
+    const timing = stepFor(build, 'plan')?.timing
+    expect(timing?.accumulatedMs).toBe(0)
+    // The open interval stays open — the renderer ticks it against `now`.
+    expect(timing?.runningSince).toBe(tsMsOf(log, 5)) // the plan.started seq
+  })
+
+  test('a paused build freezes its open timer at the last event (AC 10)', () => {
+    // plan.started, then build.paused one step later: the open interval is
+    // closed at the pause, so the accumulator holds that 1 s and there is no
+    // live `runningSince` to advance.
+    const log = toLog([...prelude(), ev('plan.started', { round: 1 }), ev('build.paused', {})])
+    const build = project(log)
+    expect(build.status).toBe('paused')
+    const timing = stepFor(build, 'plan')?.timing
+    expect(timing?.runningSince).toBeUndefined()
+    expect(timing?.accumulatedMs).toBe(1000)
+  })
+
+  test('never-run steps carry no timing (AC 6)', () => {
+    const build = project(toLog([...prelude(), ev('plan.started', { round: 1 })]))
+    // implement has not started — no interval, no time shown.
+    expect(stepFor(build, 'implement')?.timing).toBeUndefined()
+  })
+
+  test('a verify pass shows only its CURRENT-cycle time, none pre-restart (AC 12)', () => {
+    // verify:lint passes once, the spec is revised (restart), then the whole
+    // pipeline re-runs and verify:lint passes again. Only the post-restart
+    // occurrence is in scope, so its time is a single 1 s step — the pre-restart
+    // attempt is excluded exactly as its DONE state is.
+    const log = toLog([
+      ...throughCodeReview(),
+      ...verifyRun('lint', 1, true),
+      ...verifyRun('test', 1, true),
+      ...finalized(),
+      ...reviseSpec(19, 'finalize'),
+      ...planRound(2, 'approve'),
+      ...codeRound(2, 'approve'),
+      ...verifyRun('lint', 2, true),
+    ])
+    const build = project(log)
+    expect(stateOf(build, 'verify:lint')).toBe('done')
+    expect(stepFor(build, 'verify:lint')?.timing?.accumulatedMs).toBe(1000) // NOT 2000
+    expect(stepFor(build, 'verify:lint')?.count).toBe(2)
+  })
+
+  test('merge waiting ticks from the drain (lastEvent) ts (AC 9)', () => {
+    const log = toLog([
+      ...throughCodeReview(),
+      ...verifyRun('lint', 1, true),
+      ...verifyRun('test', 1, true),
+      ...finalized(),
+    ])
+    const build = project(log)
+    expect(stateOf(build, 'merge')).toBe('current')
+    const timing = stepFor(build, 'merge')?.timing
+    // finalize.completed is the last event, and merge-ready starts there.
+    expect(timing?.accumulatedMs).toBe(0)
+    expect(timing?.runningSince).toBe(tsMsOf(log, reduceBuild(log).lastSeq))
   })
 })

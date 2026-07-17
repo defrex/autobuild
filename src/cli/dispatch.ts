@@ -28,7 +28,7 @@ import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { randomIds, type IdSource } from '../ids'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
-import { buildDashboard } from './dashboard/model'
+import { buildDashboard, type DashboardModel } from './dashboard/model'
 import { renderDashboard } from './dashboard/render'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalOut } from './terminal'
@@ -57,6 +57,15 @@ const DEFAULT_INTERVAL_MS = 10_000
  * DEFAULT_POLL_MS (store/subscribe.ts:10) — a pure knob: raise it if a
  * RemoteBuildStore makes each frame's HTTP calls bite. */
 const DASHBOARD_POLL_MS = 500
+
+/** Dashboard repaint (not re-read) cadence in watch mode. A running step's
+ * elapsed must advance ~1×/s even if the store poll is raised for a slow remote
+ * store, so paint is decoupled from the store read and driven from this cheaper
+ * timer. A knob: the identical-frame check in `live.ts` collapses a repaint to
+ * zero writes until a displayed second actually changes, so a sub-second cadence
+ * costs nothing. `--once` runs no tick timer — it renders one snapshot per
+ * state (AC 8). */
+const DASHBOARD_TICK_MS = 250
 
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
@@ -196,6 +205,13 @@ class DispatchLoop {
   /** Guard against overlapping polls, exactly as pollingSubscribe does. */
   private rendering = false
   private timer: ReturnType<typeof setInterval> | undefined
+  /** Watch-mode paint timer (AC 8): repaints the CACHED model against a fresh
+   * clock so running elapsed ticks between store reads. Absent in `--once`. */
+  private tickTimer: ReturnType<typeof setInterval> | undefined
+  /** The last projected model, repainted by `paint()` against a moving clock.
+   * Read from the store by `renderOnce`; timing is now-independent so the same
+   * model ticks without a re-read. */
+  private model: DashboardModel | undefined
 
   constructor(
     private readonly config: Config,
@@ -347,8 +363,10 @@ class DispatchLoop {
   // ── The live region ───────────────────────────────────────────────────────
 
   /**
-   * One frame: read every build this repo owns, reduce each, project, render,
-   * repaint. Read-only — it appends nothing and decides nothing.
+   * The store READ half of a frame: read every build this repo owns, reduce
+   * each, project into a cached model, then paint it. Read-only — it appends
+   * nothing and decides nothing. Paint is split out so the watch-mode tick timer
+   * can repaint the cached model against a moving clock without re-reading.
    */
   private async renderOnce(): Promise<void> {
     const { terminal } = this.opts
@@ -359,21 +377,35 @@ class DispatchLoop {
       // §12 scoping, mirroring the dispatcher: a shared store holds other
       // repos' builds, and aggregating across repos is out of scope.
       if (record.repo !== this.opts.targetRepo) continue
-      entries.push({ record, state: reduceBuild(await this.wiring.store.getEvents(record.slug)) })
+      const events = await this.wiring.store.getEvents(record.slug)
+      entries.push({ record, state: reduceBuild(events), events })
     }
-    const model = buildDashboard(entries, this.config, {
+    this.model = buildDashboard(entries, this.config, {
       repo: this.opts.targetRepo,
       mode: this.opts.once === true ? 'once' : 'watch',
       capacity: this.config.dispatcher.capacity,
     })
+    this.paint()
+  }
+
+  /**
+   * The PAINT half: render the cached model against the CURRENT clock and
+   * repaint. `now` is what makes a running step's elapsed advance (AC 8); the
+   * identical-frame check in `LiveRegion.update` collapses a repaint whose
+   * displayed second is unchanged to zero writes. No store I/O.
+   */
+  private paint(): void {
+    const { terminal } = this.opts
+    if (this.region === undefined || terminal === undefined || this.model === undefined) return
     this.region.update(
-      renderDashboard(model, {
+      renderDashboard(this.model, {
         color: true,
         width: terminal.columns,
         // NOT `terminal.rows` — the region's trailing newline needs a row of
         // its own, so a frame of exactly `rows` scrolls its own header off.
         // See `paintableRows`.
         height: paintableRows(terminal.rows),
+        now: this.wiring.clock().getTime(),
       }),
     )
   }
@@ -398,12 +430,21 @@ class DispatchLoop {
     this.timer = setInterval(tick, DASHBOARD_POLL_MS)
     // Never hold the process open for a redraw.
     this.timer.unref?.()
+    // Watch mode only: a second, cheap timer repaints the cached model so a
+    // running step's elapsed advances ~1×/s decoupled from the store poll
+    // (AC 8). `--once` renders a single snapshot per state, so it gets no ticker.
+    if (this.opts.once !== true) {
+      this.tickTimer = setInterval(() => this.paint(), DASHBOARD_TICK_MS)
+      this.tickTimer.unref?.()
+    }
     tick()
   }
 
   private stopRendering(): void {
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
+    if (this.tickTimer !== undefined) clearInterval(this.tickTimer)
+    this.tickTimer = undefined
   }
 
   /** Stop polling, paint the truth one last time, release the region. Every

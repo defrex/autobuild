@@ -3,8 +3,19 @@
  * the operator can SEE is assertable here without a terminal.
  */
 import { describe, expect, test } from 'bun:test'
-import { renderDashboard, stripAnsi } from './render'
-import type { DashboardBuild, DashboardModel } from './model'
+import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
+import type { DashboardBuild, DashboardModel, PipelineStep } from './model'
+
+/** A fixed render clock. Most tests carry no running timing, so the value is
+ * irrelevant to them; the ticking tests pass `now` explicitly. */
+const NOW = 1_700_000_000_000
+
+/** `renderDashboard` with a default `now`, so the many layout/plain/height tests
+ * need not thread a clock they don't exercise. Pass `now` in `opts` to override
+ * (the ticking/freezing tests do). */
+function rd(m: DashboardModel, opts: Omit<RenderOpts, 'now'> & { now?: number }): string[] {
+  return renderDashboard(m, { now: NOW, ...opts })
+}
 
 /**
  * The default fixture carries a `pr` on purpose. Without one, no test ever
@@ -17,10 +28,9 @@ function build(overrides: Partial<DashboardBuild> = {}): DashboardBuild {
     status: 'running',
     alsoPaused: false,
     ticketId: 'ENG-42',
-    phase: 'implement',
     steps: [
-      { label: 'plan', state: 'done' },
-      { label: 'implement', state: 'current', note: 'r2' },
+      { label: 'plan', state: 'done', timing: { accumulatedMs: 252_000 } }, // 4m12s
+      { label: 'implement', state: 'current', count: 2, timing: { accumulatedMs: 38_000 } },
       { label: 'verify:test', state: 'pending' },
     ],
     blockers: [],
@@ -48,7 +58,7 @@ const WIDE = { color: false, width: 200 }
 
 describe('renderDashboard: the header', () => {
   test('names the repo, the mode and the capacity', () => {
-    const [header] = renderDashboard(model([build()]), WIDE)
+    const [header] = rd(model([build()]), WIDE)
     expect(header).toContain('app') // the repo basename
     expect(header).toContain('watch')
     expect(header).toContain('capacity 2')
@@ -56,19 +66,19 @@ describe('renderDashboard: the header', () => {
   })
 
   test('an empty dashboard says so', () => {
-    const lines = renderDashboard(model([]), WIDE)
+    const lines = rd(model([]), WIDE)
     expect(lines.join('\n')).toContain('no active builds')
   })
 
   test('mode reads `once` for a single pass', () => {
-    const [header] = renderDashboard({ ...model([]), mode: 'once' }, WIDE)
+    const [header] = rd({ ...model([]), mode: 'once' }, WIDE)
     expect(header).toContain('once')
   })
 })
 
 describe('renderDashboard: plain mode (the --plain AC)', () => {
   test('color: false emits NOT ONE escape byte', () => {
-    const out = renderDashboard(
+    const out = rd(
       model([
         build({ status: 'blocked', blockers: ['which algorithm?'] }),
         build({ slug: 'other', status: 'paused', alsoPaused: false, pr: { url: 'https://x/1', state: 'open' } }),
@@ -79,7 +89,7 @@ describe('renderDashboard: plain mode (the --plain AC)', () => {
   })
 
   test('the PR URL is bare in plain mode — terminals linkify it themselves', () => {
-    const out = renderDashboard(
+    const out = rd(
       model([build({ pr: { url: 'https://github.com/defrex/app/pull/7', state: 'open' } })]),
       WIDE,
     ).join('\n')
@@ -90,7 +100,7 @@ describe('renderDashboard: plain mode (the --plain AC)', () => {
 
 describe('renderDashboard: never color-only', () => {
   test('every step state carries a glyph, and every status its literal word', () => {
-    const out = renderDashboard(
+    const out = rd(
       model([
         build({ status: 'blocked' }),
         build({ slug: 'b', status: 'paused' }),
@@ -99,8 +109,8 @@ describe('renderDashboard: never color-only', () => {
       WIDE,
     ).join('\n')
     // Steps: done / current / pending, all distinguishable with color stripped.
-    expect(out).toContain('[x] plan')
-    expect(out).toContain('[>] implement(r2)')
+    expect(out).toContain('[x] plan(4m12s)')
+    expect(out).toContain('[>] implement(38s/2)')
     expect(out).toContain('[ ] verify:test')
     // Statuses: words, not hues.
     expect(out).toContain('BLOCKED')
@@ -109,7 +119,7 @@ describe('renderDashboard: never color-only', () => {
   })
 
   test('the same glyphs and words survive WITH color on', () => {
-    const out = renderDashboard(model([build({ status: 'blocked' })]), { color: true, width: 200 })
+    const out = rd(model([build({ status: 'blocked' })]), { color: true, width: 200 })
     const plain = stripAnsi(out.join('\n'))
     expect(plain).toContain('[x] plan')
     expect(plain).toContain('BLOCKED')
@@ -118,7 +128,7 @@ describe('renderDashboard: never color-only', () => {
 
 describe('renderDashboard: emphasis', () => {
   const colored = (b: DashboardBuild): string =>
-    renderDashboard(model([b]), { color: true, width: 200 }).join('\n')
+    rd(model([b]), { color: true, width: 200 }).join('\n')
 
   test('blocked is red; paused is yellow', () => {
     expect(colored(build({ status: 'blocked' }))).toContain('\x1b[31m')
@@ -134,7 +144,7 @@ describe('renderDashboard: emphasis', () => {
   })
 
   test('every unresolved blocker gets its own line', () => {
-    const out = renderDashboard(
+    const out = rd(
       model([build({ status: 'blocked', blockers: ['first question', 'second question'] })]),
       WIDE,
     )
@@ -150,7 +160,7 @@ describe('renderDashboard: emphasis', () => {
 
 describe('renderDashboard: layout', () => {
   test('columns align across builds of differing slug length', () => {
-    const lines = renderDashboard(
+    const lines = rd(
       model([
         build({ slug: 'a', status: 'running' }),
         build({ slug: 'a-much-longer-slug', status: 'blocked' }),
@@ -167,7 +177,7 @@ describe('renderDashboard: layout', () => {
   })
 
   test('builds are separated by a blank line', () => {
-    const lines = renderDashboard(model([build({ slug: 'a' }), build({ slug: 'b' })]), WIDE)
+    const lines = rd(model([build({ slug: 'a' }), build({ slug: 'b' })]), WIDE)
     expect(lines.filter((l) => l === '')).toHaveLength(2)
   })
 })
@@ -183,13 +193,13 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
       blockers: ['a blocker message that is far too long to fit on one line'.repeat(3)],
     })
     for (const color of [false, true]) {
-      const lines = renderDashboard(model([long]), { color, width: 40 })
+      const lines = rd(model([long]), { color, width: 40 })
       for (const line of lines) expect(stripAnsi(line).length).toBeLessThanOrEqual(40)
     }
   })
 
   test('truncation never splits an escape sequence or leaks color', () => {
-    const lines = renderDashboard(
+    const lines = rd(
       model([build({ status: 'blocked', blockers: ['x'.repeat(200)] })]),
       { color: true, width: 30 },
     )
@@ -214,37 +224,32 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     // slug is what this repo's own builds are named: the ordinary case.
     const real = build({
       slug: 'interactive-build-dashboard-for-ab-dispatch',
-      ticketId: 'AB-123',
-      phase: 'verify:test',
-    })
+      ticketId: 'AB-123',    })
     // Sweep the widths so the cut lands in every part of the link — before it,
     // inside its text, and past it.
     for (let width = 10; width <= 120; width += 1) {
-      const lines = renderDashboard(model([real, build({ slug: 'b' })]), { color: true, width })
+      const lines = rd(model([real, build({ slug: 'b' })]), { color: true, width })
       for (const line of lines) expect(unclosedLinks(line)).toBe(0)
     }
   })
 
-  test('a link cut exactly inside its TEXT still closes — the regression window', () => {
-    // Width 80 with the real slug lands the cut inside "PR open".
-    const line = renderDashboard(
-      model([
-        build({
-          slug: 'interactive-build-dashboard-for-ab-dispatch',
-          ticketId: 'AB-123',
-          phase: 'verify:test',
-        }),
-      ]),
-      { color: true, width: 80 },
-    ).find((l) => l.includes('\x1b]8;;'))
-    expect(line).toBeDefined()
-    expect(line).toContain('~') // it really was cut mid-link…
-    expect(line).toContain('\x1b]8;;https://github.com/defrex/app/pull/7\x07') // …after opening it
-    expect(unclosedLinks(line!)).toBe(0)
+  test('the slug is the sole element that truncates — ticket id and status survive (AC 5)', () => {
+    // The new layout makes the slug the only flexible/truncatable element. At a
+    // width that cannot fit the whole slug line, the slug gets the `~` while the
+    // ticket id (left column) and the status (right-pinned) are both intact.
+    const line = rd(
+      model([build({ slug: 'interactive-build-dashboard-for-ab-dispatch', ticketId: 'AB-123' })]),
+      { color: true, width: 40 },
+    ).find((l) => stripAnsi(l).includes('AB-123'))!
+    const plain = stripAnsi(line)
+    expect(plain).toContain('AB-123') // ticket id survives
+    expect(plain).toContain('RUNNING') // status survives, right-pinned
+    expect(plain).toContain('~') // the slug is what got cut
+    expect(plain.length).toBeLessThanOrEqual(40)
   })
 
   test('a line that fits is left exactly alone', () => {
-    const lines = renderDashboard(model([build()]), WIDE)
+    const lines = rd(model([build()]), WIDE)
     expect(lines.some((l) => l.includes('~'))).toBe(false)
   })
 })
@@ -267,17 +272,15 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     build({
       slug: `interactive-build-dashboard-for-ab-${i}`,
       status: 'blocked',
-      ticketId: `AB-${i}`,
-      phase: 'verify:test',
-      steps: [
+      ticketId: `AB-${i}`,      steps: [
         { label: 'plan', state: 'done' },
         { label: 'plan-review', state: 'done' },
         { label: 'implement', state: 'pending' },
         { label: 'code-review', state: 'pending' },
         { label: 'verify:lint', state: 'pending' },
-        { label: 'verify:test', state: 'pending', note: 'failed' },
+        { label: 'verify:test', state: 'pending', qualifier: 'failed' },
         { label: 'finalize', state: 'pending' },
-        { label: 'merge', state: 'pending', note: 'waiting' },
+        { label: 'merge', state: 'pending', qualifier: 'waiting' },
       ],
       blockers: ['maxVerifyAttempts (3) exhausted: verify:test is still failing'],
     })
@@ -287,13 +290,13 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     // Only the RUNNING half of the listed set is bounded by capacity; blocked
     // builds accumulate until a human answers, which is the very condition the
     // dashboard exists to surface. Five is not a large backlog.
-    const unbounded = renderDashboard(model(many(5)), { color: false, width: 80 })
+    const unbounded = rd(model(many(5)), { color: false, width: 80 })
     expect(unbounded.length).toBeGreaterThan(24)
   })
 
   test('…and the same frame clamped is within the cap it was given', () => {
     // NB: `height: 24` is not "fits a 24-row screen" — see the note above.
-    const lines = renderDashboard(model(many(5)), { color: false, width: 80, height: 24 })
+    const lines = rd(model(many(5)), { color: false, width: 80, height: 24 })
     expect(lines.length).toBeLessThanOrEqual(24)
   })
 
@@ -301,7 +304,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     for (const n of [0, 1, 2, 3, 5, 8, 20]) {
       for (let height = 0; height <= 40; height += 1) {
         for (const color of [false, true]) {
-          const lines = renderDashboard(model(many(n)), { color, width: 80, height })
+          const lines = rd(model(many(n)), { color, width: 80, height })
           expect(lines.length).toBeLessThanOrEqual(height)
         }
       }
@@ -310,7 +313,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
 
   test('the header survives the clamp — it is the line the ACs name', () => {
     for (let height = 1; height <= 12; height += 1) {
-      const [header] = renderDashboard(model(many(8)), { color: false, width: 80, height })
+      const [header] = rd(model(many(8)), { color: false, width: 80, height })
       expect(header).toContain('ab dispatch')
       expect(header).toContain('capacity 2')
       // The count is on the header, so it still reports every build even when
@@ -322,7 +325,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   test('the overflow is VISIBLE, not silent — `... and N more`', () => {
     // Silent truncation would read as "these are all the builds", which is a
     // worse answer than the scrolling it replaces.
-    const lines = renderDashboard(model(many(8)), { color: false, width: 80, height: 24 })
+    const lines = rd(model(many(8)), { color: false, width: 80, height: 24 })
     const notice = lines.at(-1)
     expect(notice).toContain('more')
     const shown = lines.filter((l) => l.includes('BLOCKED')).length
@@ -331,7 +334,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   })
 
   test('builds are dropped WHOLE — never a half-rendered build', () => {
-    const lines = renderDashboard(model(many(8)), { color: false, width: 80, height: 24 })
+    const lines = rd(model(many(8)), { color: false, width: 80, height: 24 })
     // Every rendered build brings its header, its progress rows and its
     // blocker; a build's blocker line never appears without its header.
     const headers = lines.filter((l) => l.includes('BLOCKED')).length
@@ -340,26 +343,26 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   })
 
   test('a frame that fits is not clamped and gets no notice', () => {
-    const lines = renderDashboard(model(many(2)), { color: false, width: 80, height: 24 })
+    const lines = rd(model(many(2)), { color: false, width: 80, height: 24 })
     expect(lines.some((l) => l.includes('more'))).toBe(false)
     expect(lines.filter((l) => l.includes('BLOCKED'))).toHaveLength(2)
   })
 
   test('height is optional — absent ⇒ unbounded, for callers not painting a screen', () => {
-    expect(renderDashboard(model(many(5)), { color: false, width: 80 }).length).toBeGreaterThan(24)
+    expect(rd(model(many(5)), { color: false, width: 80 }).length).toBeGreaterThan(24)
   })
 
   test('a cap of 1 leaves the header and nothing else', () => {
-    expect(renderDashboard(model([]), { color: false, width: 80, height: 1 })).toHaveLength(1)
-    expect(renderDashboard(model(many(3)), { color: false, width: 80, height: 1 })).toHaveLength(1)
+    expect(rd(model([]), { color: false, width: 80, height: 1 })).toHaveLength(1)
+    expect(rd(model(many(3)), { color: false, width: 80, height: 1 })).toHaveLength(1)
   })
 
   test('a cap of 0 paints NOTHING — not a header that would scroll itself off', () => {
     // What `paintableRows(1)` hands us on a 1-row screen. A single line there
     // would scroll away behind its own trailing newline and land in scrollback
     // on every repaint, which is worse than an empty region.
-    expect(renderDashboard(model([]), { color: false, width: 80, height: 0 })).toEqual([])
-    expect(renderDashboard(model(many(3)), { color: false, width: 80, height: 0 })).toEqual([])
+    expect(rd(model([]), { color: false, width: 80, height: 0 })).toEqual([])
+    expect(rd(model(many(3)), { color: false, width: 80, height: 0 })).toEqual([])
   })
 })
 
@@ -372,22 +375,23 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
   // the row count stays honest AND nothing is lost.
   const full = build({
     steps: [
-      { label: 'plan', state: 'done' },
-      { label: 'plan-review', state: 'done' },
-      { label: 'implement', state: 'done', note: 'r2' },
-      { label: 'code-review', state: 'done', note: 'r2' },
-      { label: 'verify:lint', state: 'done' },
-      { label: 'verify:test', state: 'current', note: 'a2' },
+      { label: 'plan', state: 'done', timing: { accumulatedMs: 252_000 } },
+      { label: 'plan-review', state: 'done', timing: { accumulatedMs: 5_000 } },
+      { label: 'implement', state: 'done', count: 2, timing: { accumulatedMs: 432_000 } }, // 7m12s
+      { label: 'code-review', state: 'done', count: 2, timing: { accumulatedMs: 12_000 } },
+      { label: 'verify:lint', state: 'done', timing: { accumulatedMs: 3_000 } },
+      { label: 'verify:test', state: 'current', count: 2, timing: { accumulatedMs: 41_000 } },
       { label: 'finalize', state: 'pending' },
-      { label: 'merge', state: 'pending', note: 'waiting' },
+      { label: 'merge', state: 'pending', qualifier: 'waiting' },
     ],
   })
 
   test('every step survives at a width the row cannot fit on one line', () => {
-    const progress = renderDashboard(model([full]), { color: false, width: 60 })
+    const progress = rd(model([full]), { color: false, width: 60 })
       .filter((l) => l.startsWith('  ['))
       .join('\n')
-    for (const label of ['plan', 'implement(r2)', 'verify:test(a2)', 'finalize', 'merge(waiting)']) {
+    // count rides the elapsed as `/n` (AC 7), superseding the old r2/a2 notes.
+    for (const label of ['plan', 'implement(7m12s/2)', 'verify:test(41s/2)', 'finalize', 'merge(waiting)']) {
       expect(progress).toContain(label)
     }
     expect(progress).not.toContain('~') // no step was truncated away
@@ -396,7 +400,7 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
   test('…and the width guarantee still holds on every wrapped line', () => {
     for (const width of [30, 44, 60, 100]) {
       for (const color of [false, true]) {
-        const lines = renderDashboard(model([full]), { color, width })
+        const lines = rd(model([full]), { color, width })
         for (const line of lines) expect(stripAnsi(line).length).toBeLessThanOrEqual(width)
       }
     }
@@ -409,7 +413,7 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
     const blocker =
       'maxVerifyAttempts (3) exhausted: verify:test is still failing after three ' +
       'attempts and the implementer keeps reintroducing the same regression'
-    const lines = renderDashboard(
+    const lines = rd(
       model([build({ status: 'blocked', blockers: [blocker] })]),
       { color: false, width: 50 },
     )
@@ -422,5 +426,122 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
       .replace('! ', '')
       .trim()
     expect(text).toBe(blocker)
+  })
+})
+
+describe('renderDashboard: the ticket-first, status-right slug line', () => {
+  /** The one slug line in a frame (the row carrying the status word). */
+  const slugLine = (lines: string[], status = 'RUNNING'): string =>
+    lines.find((l) => stripAnsi(l).includes(status) && !l.startsWith('  '))!
+
+  test('the ticket id is the first token, the slug follows it (AC 1)', () => {
+    const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), WIDE)))
+    expect(line.startsWith('ENG-42')).toBe(true)
+    expect(line.indexOf('auth-rate-limit')).toBeGreaterThan(line.indexOf('ENG-42'))
+  })
+
+  test('the status is right-aligned: the line ends with it, flush to the width (AC 1)', () => {
+    const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), { color: false, width: 60 })))
+    expect(line.length).toBe(60)
+    expect(line.endsWith('RUNNING')).toBe(true)
+  })
+
+  test('the current phase word no longer appears on the slug line (AC 4)', () => {
+    // `implement` is the current phase; it lives on the progress row's `[>]`
+    // marker now, never as a word on the slug line.
+    const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), WIDE)))
+    expect(line).not.toContain('implement')
+  })
+
+  test('the PR link and (paused) ride the slug line, adjacent to the status (AC 3)', () => {
+    const line = stripAnsi(
+      slugLine(rd(model([build({ status: 'blocked', alsoPaused: true })]), WIDE), 'BLOCKED'),
+    )
+    // order on the right cluster: PR … (paused) … STATUS
+    expect(line.indexOf('PR open')).toBeLessThan(line.indexOf('(paused)'))
+    expect(line.indexOf('(paused)')).toBeLessThan(line.indexOf('BLOCKED'))
+  })
+
+  test('a build with no ticket keeps its slug at the same column as a ticketed one (AC 2)', () => {
+    const lines = rd(
+      model([
+        build({ slug: 'has-ticket', ticketId: 'ENG-42', pr: undefined }),
+        build({ slug: 'no-ticket', ticketId: undefined, pr: undefined }),
+      ]),
+      WIDE,
+    )
+    const withT = lines.find((l) => l.includes('has-ticket'))!
+    const without = lines.find((l) => l.includes('no-ticket'))!
+    expect(withT.indexOf('has-ticket')).toBe(without.indexOf('no-ticket'))
+  })
+
+  test('with no ticketed build in the frame there is no ticket column at all', () => {
+    const line = stripAnsi(
+      slugLine(rd(model([build({ slug: 'solo', ticketId: undefined, pr: undefined })]), WIDE)),
+    )
+    expect(line.startsWith('solo')).toBe(true) // no left padding for an absent column
+  })
+})
+
+describe('formatDuration', () => {
+  test('the unit table — ASCII, zero-padded under a leading unit', () => {
+    expect(formatDuration(0)).toBe('0s')
+    expect(formatDuration(38_000)).toBe('38s')
+    expect(formatDuration(38_999)).toBe('38s') // sub-second floors — stable field
+    expect(formatDuration(59_000)).toBe('59s')
+    expect(formatDuration(60_000)).toBe('1m00s')
+    expect(formatDuration(252_000)).toBe('4m12s')
+    expect(formatDuration(3_599_000)).toBe('59m59s')
+    expect(formatDuration(3_600_000)).toBe('1h00m')
+    expect(formatDuration(3_840_000)).toBe('1h04m')
+    expect(formatDuration(-5)).toBe('0s') // never negative
+  })
+})
+
+describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () => {
+  const progressOf = (b: DashboardBuild, now: number, color = false): string =>
+    rd(model([b]), { color, width: 120, now }).find((l) => l.startsWith('  ['))!
+
+  const withStep = (over: Partial<PipelineStep> & { label: string }): DashboardBuild =>
+    build({ pr: undefined, steps: [{ state: 'current', ...over }] })
+
+  test('a running step advances as now moves forward (AC 8)', () => {
+    const b = withStep({ label: 'implement', timing: { accumulatedMs: 2_000, runningSince: 1_000_000 } })
+    expect(progressOf(b, 1_000_000 + 3_000)).toContain('implement(5s)') // 2s + 3s
+    expect(progressOf(b, 1_000_000 + 10_000)).toContain('implement(12s)') // 2s + 10s
+  })
+
+  test('a step with no open interval is frozen — now does not move it (AC 10)', () => {
+    const b = build({ pr: undefined, steps: [{ label: 'plan', state: 'done', timing: { accumulatedMs: 65_000 } }] })
+    const early = progressOf(b, 1)
+    const late = progressOf(b, 5_000_000)
+    expect(early).toContain('plan(1m05s)')
+    expect(early).toBe(late)
+  })
+
+  test('the count rides the elapsed as /n (AC 7)', () => {
+    const b = withStep({ label: 'implement', count: 3, timing: { accumulatedMs: 0, runningSince: 100 } })
+    expect(progressOf(b, 100 + 432_000)).toContain('implement(7m12s/3)')
+  })
+
+  test('merge waiting ticks from its runningSince (AC 9)', () => {
+    const b = build({
+      pr: { url: 'https://x/1', state: 'open' },
+      steps: [{ label: 'merge', state: 'current', qualifier: 'waiting', timing: { accumulatedMs: 0, runningSince: 500 } }],
+    })
+    expect(progressOf(b, 500 + 192_000)).toContain('merge(waiting, 3m12s)')
+  })
+
+  test('a never-run step shows no time even as now advances (AC 6)', () => {
+    const b = build({ pr: undefined, steps: [{ label: 'verify:lint', state: 'pending' }] })
+    expect(progressOf(b, 9_999_999)).toContain('[ ] verify:lint')
+    expect(progressOf(b, 9_999_999)).not.toContain('verify:lint(')
+  })
+
+  test('--plain keeps durations intact and emits no escapes (AC 13)', () => {
+    const b = withStep({ label: 'implement', count: 2, timing: { accumulatedMs: 0, runningSince: 0 } })
+    const out = rd(model([b]), { color: false, width: 200, now: 41_000 }).join('\n')
+    expect(out).not.toContain('\x1b')
+    expect(out).toContain('implement(41s/2)')
   })
 })
