@@ -156,8 +156,8 @@ async function makeFixture(
     tickets,
     forge,
     workspaces,
-    runners: { scripted: agents },
-    defaultRunner: 'scripted',
+    runtimes: { scripted: { runner: agents, servesModels: [] } },
+    defaultRuntime: 'scripted',
     storeRef: 'memory', // unused: the scripted CLI writes the shared store by ref
     ids,
     clock: systemClock,
@@ -248,8 +248,17 @@ describe('abDispatch guards', () => {
             tickets: new FakeTicketSource([]),
             forge: new FakeForge(),
             workspaces: new GitWorktreeProvider({ root: join(tmp, 'worktrees') }),
-            runners: {},
-            defaultRunner: 'claude',
+            // A valid single-runtime registry: the resolver runs at startup
+            // (§9), so an empty registry here would throw before the wire's
+            // config reaches the assertion below. The loud-failure path is
+            // covered by its own test.
+            runtimes: {
+              claude: {
+                runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+                servesModels: ['claude-'],
+              },
+            },
+            defaultRuntime: 'claude',
             storeRef: join(tmp, 'store'),
             ids: sequentialIds(),
             clock: systemClock,
@@ -260,6 +269,46 @@ describe('abDispatch guards', () => {
       // Reaching the wire at all IS the assertion: the guard used to throw
       // before this point.
       expect(wired?.tickets).toEqual({ source: 'file' })
+      await store.close()
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('a config naming an unregistered runtime fails loudly at startup, before any build (§9)', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
+    try {
+      await writeFile(
+        join(tmp, 'autobuild.toml'),
+        '[dispatcher]\nreadyState = "ready"\n[agent]\nruntime = "ghost"\n',
+      )
+      const store = new MemoryBuildStore({ clock: systemClock })
+      await expect(
+        abDispatch({
+          targetRepo: tmp,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => ({
+            store,
+            tickets: new FakeTicketSource([]),
+            forge: new FakeForge(),
+            workspaces: new GitWorktreeProvider({ root: join(tmp, 'worktrees') }),
+            runtimes: {
+              claude: {
+                runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+                servesModels: ['claude-'],
+              },
+            },
+            defaultRuntime: 'claude',
+            storeRef: join(tmp, 'store'),
+            ids: sequentialIds(),
+            clock: systemClock,
+          }),
+        }),
+      ).rejects.toThrow(/runtime "ghost", which is not registered/)
       await store.close()
     } finally {
       await rm(tmp, { recursive: true, force: true })

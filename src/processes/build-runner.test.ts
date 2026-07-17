@@ -68,7 +68,7 @@ needsServer = true
 steps = ["release-notes"]
 
 [roles]
-plan = { runner = "scripted", model = "m-plan" }
+plan = { runtime = "scripted", model = "m-plan" }
 `
 const config = parseConfig(CONFIG_TOML)
 
@@ -324,8 +324,15 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const br = new BuildRunner({
     store,
     config: options.configToml !== undefined ? parseConfig(options.configToml) : config,
-    runners: { scripted: runner },
-    defaultRunner: 'scripted',
+    runtimes: {
+      // `scripted` (the default runtime) serves the `m-` family so the routed
+      // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
+      // pi/claude entries prove a second runtime is selectable.
+      scripted: { runner, servesModels: ['m-'] },
+      claude: { runner, servesModels: ['claude-'] },
+      pi: { runner, servesModels: ['kimi-'] },
+    },
+    defaultRuntime: 'scripted',
     workspacePath: handle.path,
     branch: BRANCH,
     slug: SLUG,

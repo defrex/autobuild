@@ -25,6 +25,7 @@ import { steppingClock } from '../testing/fixed'
 import {
   agentSession,
   commitAll,
+  CONFIG_TOML,
   CONFORMING_BODY,
   git,
   happyHandlers,
@@ -749,4 +750,63 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
   } finally {
     await rm(tmp, { recursive: true, force: true })
   }
+}, 30_000)
+
+// ── g. Two-axis runtime/model routing (§9, AC "an integration scenario") ─────
+//
+// The config sets the repo-wide default runtime (`[agent]`) and routes ONE
+// agent phase (code-review) to a second runtime with a model
+// (`{ runtime = "pi", model = "kimi-k3" }`). The build runs to PR, and its
+// stored `session.started` events + transcripts show code-review on pi×kimi-k3
+// while every other phase stays on the default runtime. Both runtimes are
+// backed by the same scripted runner in the harness, so the session numbering
+// the other scenarios rely on is unchanged.
+
+const TWO_AXIS_TOML = `${CONFIG_TOML}
+[agent]
+runtime = "scripted"
+
+[roles]
+code-review = { runtime = "pi", model = "kimi-k3" }
+`
+
+test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default runtime (§9)', async () => {
+  const h = await track(
+    makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-1')],
+      configToml: TWO_AXIS_TOML,
+    }),
+  )
+
+  const tick1 = await h.dispatcher.tick()
+  expect(tick1).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  const state = await h.runLatest()
+  expect(h.cliErrors).toEqual([])
+  expect(state.prState).toBe('open')
+
+  const events = await h.events(SLUG)
+  const started = ofType(events, 'session.started')
+
+  // The routed phase: code-review resolves to runtime "pi" with model "kimi-k3".
+  const codeReview = started.find((e) => e.payload.role === 'code-review')!
+  expect(codeReview.payload.runner).toBe('pi')
+  expect(codeReview.payload.model).toBe('kimi-k3')
+
+  // Every other phase stays on the default runtime with no model.
+  for (const role of ['plan', 'plan-review', 'implement', 'finalize']) {
+    const s = started.find((e) => e.payload.role === role)!
+    expect(s.payload.runner).toBe('scripted')
+    expect(s.payload.model).toBeUndefined()
+  }
+
+  // The stored transcripts record the resolved runtime + model, so any
+  // experiment's outcome is attributable to the config that produced it.
+  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
+  const crTranscript = transcripts.find((m) => m.metadata['phase'] === 'code-review')!
+  expect(crTranscript.metadata['runner']).toBe('pi')
+  expect(crTranscript.metadata['model']).toBe('kimi-k3')
+  const planTranscript = transcripts.find((m) => m.metadata['phase'] === 'plan')!
+  expect(planTranscript.metadata['runner']).toBe('scripted')
+  expect(planTranscript.metadata['model']).toBeUndefined()
 }, 30_000)

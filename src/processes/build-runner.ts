@@ -54,7 +54,8 @@ import {
   type Feedback,
   type Phase,
 } from '../ontology'
-import { resolveRole } from '../ports/runner/routing'
+import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { installedSkillName } from '../skills'
 import type {
   AgentRunner,
@@ -105,9 +106,12 @@ export interface BuildRunnerOpts {
 export interface BuildRunnerDeps {
   store: BuildStore
   config: Config
-  /** Runner registry: name → adapter; `config.roles` routes into it (§9). */
-  runners: Record<string, AgentRunner>
-  defaultRunner: string
+  /** Runtime registry: name → adapter + capabilities (§9). The resolver routes
+   * `config.agent`/`config.roles` into it. */
+  runtimes: RuntimeRegistry
+  /** Wiring fallback runtime (e.g. `claude`): the default when `[agent]` names
+   * neither axis, and the model-only preference for the default pair (§9). */
+  defaultRuntime: string
   workspacePath: string
   branch: string
   slug: string
@@ -224,11 +228,21 @@ export class BuildRunner {
   /** §10 producer session memory — in-memory by design: a new sandbox resumes
    * with fresh sessions rehydrated from the store (§7.4, §9). */
   private readonly producerSessions = new Map<CorePhase, ProducerSession>()
+  /** The two-axis resolver (§9), built EAGERLY: a bad config (unregistered
+   * runtime, un-servable pair, ambiguous model-only route) throws here — the
+   * per-build loud-failure site — before any session launches. */
+  private readonly resolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
+    this.resolver = createRuntimeResolver(
+      deps.runtimes,
+      deps.config.agent,
+      deps.defaultRuntime,
+      deps.config.roles,
+    )
   }
 
   /**
@@ -580,12 +594,10 @@ export class BuildRunner {
    * (§15.3); pragmatism, documented. Never fails the build.
    */
   private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
-    const { store, slug, ids, config, runners, defaultRunner, workspacePath } =
-      this.deps
+    const { store, slug, ids, workspacePath } = this.deps
     const { step } = decision
     const session = ids('s')
-    const runnerName = config.roles[step]?.runner ?? defaultRunner
-    const { runner, model } = resolveRole(step, config.roles, runners, defaultRunner)
+    const { runner, runtime: runnerName, model } = this.resolver.resolve(step)
 
     await store.append(slug, {
       actor: KERNEL,
@@ -660,16 +672,9 @@ export class BuildRunner {
    * start fresh (fresh skeptic).
    */
   private async executeSession(spec: SessionSpec): Promise<void> {
-    const { store, slug, ids, config, runners, defaultRunner, workspacePath } =
-      this.deps
+    const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const runnerName = config.roles[spec.role]?.runner ?? defaultRunner
-    const { runner, model } = resolveRole(
-      spec.role,
-      config.roles,
-      runners,
-      defaultRunner,
-    )
+    const { runner, runtime: runnerName, model } = this.resolver.resolve(spec.role)
 
     const startedEnvelope = await store.append(slug, {
       actor: KERNEL,
