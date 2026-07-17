@@ -249,14 +249,26 @@ describe('specConformance', () => {
     expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
   })
 
-  test('an h1 section terminates at a following h2 subheading and later h1 is found', () => {
+  test('an h1 section spans an h2 subheading; a later h1 still ends it', () => {
     const body =
       'Why.\n\n# Acceptance criteria\n- one\n\n## Details\n\nprose\n\n# Out of scope\n'
     expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
   })
 
-  test('h1 acceptance heading with its list item under an h2 subheading terminates before it (flat heuristic)', () => {
+  test('a list item under a subsection of the acceptance criteria counts (AUT-15)', () => {
     const body = 'Why.\n\n# Acceptance criteria\n\n## Details\n- one\n\n# Out of scope\n'
+    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+
+  test('criteria grouped under h3 subsections of an h2 section count (AUT-15 shape)', () => {
+    const body =
+      'Why.\n\n## Acceptance criteria\n\n### Legend & selection\n\n1. one\n2. two\n\n### Drain\n\n3. three\n\n## Out of scope\n'
+    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+
+  test('a list item under a sibling section does not count for acceptance criteria', () => {
+    const body =
+      'Why.\n\n## Acceptance criteria\n\nnone yet\n\n## Details\n- one\n\n## Out of scope\n'
     expect(specConformance(body)).toEqual({
       conforms: false,
       missing: ["at least one list item under '## Acceptance criteria'"],

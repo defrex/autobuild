@@ -91,16 +91,21 @@ export interface SpecConformance {
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/
-const HEADING = /^#{1,6}\s*(.+?)\s*$/
+const HEADING = /^(#{1,6})\s*(.+?)\s*$/
 
 /** Lines of the section under the first heading whose text starts with
- * `name` (case-insensitive), up to the next heading of any level. */
+ * `name` (case-insensitive). The section runs to the next heading at the
+ * same or a shallower level: deeper subheadings (an h3 under an h2 section)
+ * and their content are part of the section, not its end — criteria grouped
+ * under subheadings still count (the AUT-15 mis-bounce). */
 function sectionUnder(lines: string[], name: string): string[] | null {
   let start = -1
+  let level = 0
   for (let i = 0; i < lines.length; i += 1) {
     const match = lines[i]?.match(HEADING)
-    if (match?.[1]?.toLowerCase().startsWith(name)) {
+    if (match?.[2]?.toLowerCase().startsWith(name)) {
       start = i + 1
+      level = match[1]?.length ?? 0
       break
     }
   }
@@ -108,7 +113,9 @@ function sectionUnder(lines: string[], name: string): string[] | null {
   const section: string[] = []
   for (let i = start; i < lines.length; i += 1) {
     const line = lines[i]
-    if (line === undefined || HEADING.test(line)) break
+    if (line === undefined) break
+    const heading = line.match(HEADING)
+    if (heading !== null && (heading[1]?.length ?? 0) <= level) break
     section.push(line)
   }
   return section
@@ -117,9 +124,9 @@ function sectionUnder(lines: string[], name: string): string[] | null {
 /**
  * The spec standard's checkable core (docs/spec-standard.md): nonempty body,
  * a case-insensitive '## Acceptance criteria' heading with at least one list
- * item, and an '## Out of scope' heading. Any heading level h1–h6 is accepted
- * (the '##' in these names is illustrative, not required) — do not re-narrow
- * the HEADING regex. A heuristic by design — full conformance is judgment and
+ * item (items grouped under deeper subheadings count), and an '## Out of
+ * scope' heading. Any heading level h1–h6 is accepted (the '##' in these
+ * names is illustrative, not required) — do not re-narrow the HEADING regex. A heuristic by design — full conformance is judgment and
  * lives in the skills; this gate only catches tickets that would certainly
  * thrash (§6.3). Exported for testing.
  */
