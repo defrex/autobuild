@@ -63,7 +63,7 @@ maxReviewRounds = 5
 [dispatcher]
 capacity = 3             # concurrent builds for this repo
 readyLabels = [] # labels that mark a ticket dispatchable ([] = no label gate)
-#readyState = "Ready"    # additionally require this workflow state (absent = any)
+readyState = "Todo"    # additionally require this workflow state (absent = any)
 
 # Ticket source the dispatcher drives (§3.2, §13). The Linear API key is a
 # secret — set the LINEAR_API_KEY environment variable (a local .env works),
@@ -73,6 +73,7 @@ source = "linear"
 teamKey = "AUT"                 # Linear team key ("Auto-build")
 claimedState = "In Progress"    # workflow state claim() moves an issue to
 #createState = "Triage"         # state new tickets are filed into (absent = provider default)
+triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with dir = "tickets"
 
 # Cron schedules for outer-loop processes (§12).

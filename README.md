@@ -108,10 +108,11 @@ an early adopter.
 - **`ab dispatch` must run from the repo root** — it reads `./autobuild.toml`.
 - **Merged builds are terminal.** A fixup on merged work is a new ticket, never
   a reopened build.
-- **Tickets that fail the spec gate are bounced to Triage**, commented with
-  what was missing. No build is created.
-- **The dispatcher's `Triage`/`Done` state names are not configurable** via
-  `autobuild.toml`.
+- **Tickets that fail the spec gate are bounced back for human triage**,
+  commented with what was missing. No build is created.
+- **The dispatcher's `Done` state name is not configurable** via
+  `autobuild.toml`. The triage hand-back state is — `[tickets].triageState`
+  (default `Backlog` for Linear, `Triage` for the file tracker).
 - **Worktrees always live under `~/.autobuild/worktrees`**, even when `--store`
   points somewhere else.
 
@@ -256,6 +257,7 @@ directory**, so auto-build does not gitignore it for you:
 source = "file"
 dir = "tickets"          # optional; default ".autobuild/tickets"
 createState = "Triage"   # optional; "Triage" is the default
+triageState = "Triage"   # optional; "Triage" is the default
 ```
 
 **Linear:**
@@ -266,6 +268,7 @@ source = "linear"
 teamKey = "ENG"                # required
 claimedState = "In Progress"   # optional; this is the adapter's default
 createState = "Triage"         # optional; absent = the team's default state
+triageState = "Backlog"        # optional; absent = "Backlog" — must name a state the team has
 ```
 
 The API key comes from `LINEAR_API_KEY`, in your environment or a local `.env`.

@@ -235,6 +235,7 @@ So `config.tickets` is always present; never write code or advice that treats
 | `teamKey` | — | `source = "linear"` **only, required there**; nonempty string | The Linear team key (e.g. `"ENG"`). |
 | `claimedState` | — | `source = "linear"` only; optional, nonempty string | Workflow state `claim()` moves an issue to when a build starts. |
 | `createState` | — | optional, nonempty string | State new tickets are filed into. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
+| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = the provider's default (Linear: Backlog; file: Triage). Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `dir` | `.autobuild/tickets` | `source = "file"` **only**; optional, nonempty string | Root holding the state directories. Resolved relative to the repo. |
 
 Cross-field rules, each an **error**:

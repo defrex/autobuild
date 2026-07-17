@@ -67,6 +67,20 @@ export function readyCriteria(config: Config): { labels: string[]; state?: strin
   return { labels: readyLabels ?? [], state: readyState ?? 'Ready' }
 }
 
+/**
+ * Where the dispatcher hands work back to a human — spec-gate bounces (§6.3),
+ * aborted builds, closed-unmerged PRs. Source-dependent for the same reason
+ * readiness is: the file tracker's grooming area IS the `triage/` directory,
+ * while a Linear team only has a "Triage" workflow state when the team's
+ * triage feature is enabled — Backlog is the state every Linear team has.
+ */
+export function defaultTriageState(config: Config): string {
+  return (
+    config.tickets.triageState ??
+    (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
+  )
+}
+
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
 
 export interface SpecConformance {
@@ -303,7 +317,9 @@ export interface DispatcherOpts {
    * Ticket state that hands work back to a human. Aborted work and
    * closed-unmerged PRs go back here rather than to a done-state — an abort
    * or close is a human decision that the ticket needs human re-triage, not
-   * silent completion. Bounced tickets (§6.3) land here too. Default 'Triage'.
+   * silent completion. Bounced tickets (§6.3) land here too. Absent =
+   * defaultTriageState(config): [tickets].triageState, else 'Backlog'
+   * (linear) / 'Triage' (file).
    */
   triageState?: string
   /** Ticket state for merged builds. Default 'Done'. */
@@ -383,7 +399,7 @@ export class Dispatcher {
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
-    this.triageState = deps.opts?.triageState ?? 'Triage'
+    this.triageState = deps.opts?.triageState ?? defaultTriageState(deps.config)
     this.doneState = deps.opts?.doneState ?? 'Done'
   }
 
