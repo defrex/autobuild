@@ -60,6 +60,14 @@ export class FakeTicketSource implements TicketSource {
     this.doneState = opts.doneState ?? 'Done'
   }
 
+  /** Seed a ticket after construction — lets a test make one become Ready
+   * mid-run, which is how "a single pass does not claim tickets that arrive
+   * after its initial selection" (§12) gets a real oracle rather than a
+   * vacuous one. */
+  add(ticket: Ticket): void {
+    this.tickets.set(ticket.ref.id, cloneTicket(ticket))
+  }
+
   async listReady(criteria: {
     labels?: string[]
     state?: string

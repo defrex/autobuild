@@ -266,3 +266,31 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
     expect(d.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
   })
 })
+
+describe('runCli — ab dispatch flag parsing (§3.3)', () => {
+  // `dispatch` routes before any store/env requirement and does its own heavy
+  // wiring, so these assertions stop at the argv boundary: a flag either
+  // parses (and the command proceeds to fail on the missing autobuild.toml) or
+  // it does not (and the usage string comes back).
+
+  test('--plain parses', async () => {
+    const d = deps()
+    expect(await runCli(['dispatch', '--once', '--plain'], { ...d, workspacePath: tmp })).toBe(1)
+    expect(d.err.join('\n')).toContain('autobuild.toml: not found')
+    expect(d.err.join('\n')).not.toContain('unknown argument')
+  })
+
+  test('an unknown dispatch flag still errors with the usage string', async () => {
+    const d = deps()
+    expect(await runCli(['dispatch', '--dashboard'], { ...d, workspacePath: tmp })).toBe(1)
+    const err = d.err.join('\n')
+    expect(err).toContain('unknown argument "--dashboard"')
+    expect(err).toContain('[--plain]')
+  })
+
+  test('the help advertises --plain', async () => {
+    const d = deps()
+    await runCli(['help'], d)
+    expect(d.out.join('\n')).toContain('ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]')
+  })
+})

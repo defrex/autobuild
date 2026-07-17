@@ -18,6 +18,7 @@ import type { IdSource } from '../ids'
 import { artifactGet, artifactPut } from './artifact'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
+import type { TerminalOut } from './terminal'
 import type { CliEnv } from './env'
 import { abInit } from './init'
 import { observe } from './observe'
@@ -58,6 +59,9 @@ export interface SessionlessCliDeps {
   /** Stop signal for long-running sessionless commands (`ab dispatch`'s watch
    * loop); the binary aborts it on SIGINT. */
   signal?: AbortSignal
+  /** Interactive output seam for `ab dispatch`'s dashboard (§14). Absent ⇒
+   * non-interactive ⇒ plain, line-oriented output. */
+  terminal?: TerminalOut
   store?: BuildStore
   env?: CliEnv
   forge?: Forge
@@ -108,8 +112,9 @@ const HELP = [
   '                                         file a ticket to the configured [tickets] source (§8.8; runs outside sessions).',
   '                                         --blocked-by takes comma-separated ticket ids from that same source',
   '                                         (e.g. AUT-8 for linear, file-1 for file); dispatch waits for all of them.',
-  '  ab dispatch [--once] [--interval <s>] [--store <ref>]',
+  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
+  '                                         an interactive terminal gets a live build dashboard; --plain forces line-oriented output (the default when stdout is not a TTY)',
   '',
   'Every phase ends with exactly one terminal command (D5).',
 ].join('\n')
@@ -288,14 +293,18 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // a build, so it routes before any store/env requirement and does its own
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
-      const usage = 'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] (§3.3)'
+      const usage =
+        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] (§3.3)'
       let once = false
+      let plain = false
       let intervalMs: number | undefined
       let storeRef: string | undefined
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i]!
         if (arg === '--once') {
           once = true
+        } else if (arg === '--plain') {
+          plain = true
         } else if (arg === '--interval') {
           const value = rest[(i += 1)]
           const seconds = value === undefined ? NaN : Number(value)
@@ -320,9 +329,11 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stdout,
         stderr,
         once,
+        plain,
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+        ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
       })
       return 0
     }

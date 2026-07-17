@@ -27,7 +27,11 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { randomIds, type IdSource } from '../ids'
-import type { BuildState } from '../kernel/reducer'
+import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { buildDashboard } from './dashboard/model'
+import { renderDashboard } from './dashboard/render'
+import { LiveRegion, paintableRows } from './dashboard/live'
+import type { TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
 import { createTicketSource } from '../ports/tickets/create'
@@ -48,6 +52,13 @@ import { systemClock, type BuildStore, type Clock } from '../store/types'
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
 const DEFAULT_INTERVAL_MS = 10_000
+
+/** Dashboard redraw cadence. `listBuilds` is not subscribable, so polling the
+ * list is the honest mechanism; the identical-frame check in `live.ts` makes a
+ * poll that finds nothing new cost zero writes. Near subscribe's
+ * DEFAULT_POLL_MS (store/subscribe.ts:10) — a pure knob: raise it if a
+ * RemoteBuildStore makes each frame's HTTP calls bite. */
+const DASHBOARD_POLL_MS = 500
 
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
@@ -91,6 +102,16 @@ export interface DispatchOpts {
   wire?: (config: Config, opts: DispatchOpts) => Promise<DispatchWiring> | DispatchWiring
   /** Injectable sleep (watch loop); default a real timer. Tests use `once`. */
   sleep?: (ms: number) => Promise<void>
+  /** Force line-oriented output with no terminal control sequences (`--plain`),
+   * whatever the terminal says. */
+  plain?: boolean
+  /**
+   * The interactive output seam. ABSENT ⇒ non-interactive ⇒ plain — which is
+   * exactly today's behavior, so the dashboard can never be the reason a
+   * scripted or piped `ab dispatch` starts emitting escapes. `bin/ab.ts`
+   * constructs the real one over `process.stdout`.
+   */
+  terminal?: TerminalOut
 }
 
 /** setTimeout that also resolves the moment `signal` aborts, so Ctrl-C
@@ -156,12 +177,26 @@ class DispatchLoop {
   /** In-flight runner runs (fire-and-forget) — awaited before a `--once`
    * exit so builds actually reach a park point. */
   private readonly inFlight = new Set<Promise<void>>()
+  /**
+   * Interactive dashboard on. `opts.terminal?.interactive === true` — an
+   * absent terminal yields `undefined === true` ⇒ false ⇒ today's exact
+   * behavior, which is what keeps every existing dispatch test passing
+   * untouched and makes plain the default rather than a mode.
+   */
+  private readonly dashboard: boolean
+  private readonly region: LiveRegion | undefined
+  /** Guard against overlapping polls, exactly as pollingSubscribe does. */
+  private rendering = false
+  private timer: ReturnType<typeof setInterval> | undefined
 
   constructor(
     private readonly config: Config,
     private readonly wiring: DispatchWiring,
     private readonly opts: DispatchOpts,
   ) {
+    this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
+    this.region =
+      this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
     this.dispatcher = new Dispatcher({
       store: wiring.store,
       tickets: wiring.tickets,
@@ -220,14 +255,14 @@ class DispatchLoop {
       .run()
       .then(
         (state: BuildState) => {
-          this.opts.stdout(`build ${slug} parked (${state.status})`)
+          this.say(`build ${slug} parked (${state.status})`)
         },
         (error: unknown) => {
           if (error instanceof LeaseHeldError) {
-            this.opts.stdout(`build ${slug} already held by another runner — skipped`)
+            this.say(`build ${slug} already held by another runner — skipped`)
             return
           }
-          this.opts.stderr(
+          this.warn(
             `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`,
           )
         },
@@ -248,6 +283,31 @@ class DispatchLoop {
     }
   }
 
+  // ── Message routing (dashboard mode) ──────────────────────────────────────
+  //
+  // ONE rule: the dashboard is a SUPPLEMENT to the line output, never a
+  // replacement. The only line it suppresses is a literal no-op `tick: idle`.
+  // Every other line still prints, on the stream it uses today — routed
+  // through the region so it scrolls above the frame instead of being eaten by
+  // the next repaint. A parked-`done` build is filtered OUT of the dashboard
+  // by construction, and TickReport carries bounced/claimRaces/merged/abandoned
+  // counts no row ever shows, so suppressing these would be an information
+  // regression — worst in the interactive `--once` an operator runs by hand.
+  //
+  // Net effect: interactive `ab dispatch` prints strictly MORE than plain.
+
+  /** A line on stdout, above the frame. */
+  private say(line: string): void {
+    if (this.region !== undefined) this.region.log(line, this.opts.stdout)
+    else this.opts.stdout(line)
+  }
+
+  /** A line on stderr, above the frame — the stream is never rewritten. */
+  private warn(line: string): void {
+    if (this.region !== undefined) this.region.log(line, this.opts.stderr)
+    else this.opts.stderr(line)
+  }
+
   /**
    * Dependency diagnostics print as their own lines above the counts — this
    * is the operator's only view of why a ready ticket is sitting still, and
@@ -255,47 +315,146 @@ class DispatchLoop {
    * database inspection. The counts map guards on `typeof count === 'number'`
    * because a non-numeric TickReport field would otherwise be dropped here
    * silently (`count > 0` is false for an array, with no type error).
+   *
+   * The diagnostics route through `say()` rather than `opts.stdout` for the
+   * reason given above: on a TTY a raw write would land inside the frame the
+   * region is about to repaint. `say()` is the identity in plain mode, so
+   * their line-oriented behavior is unchanged.
    */
   private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>): void {
     const { dependencyDiagnostics, ...counts } = report
-    for (const line of dependencyDiagnostics) this.opts.stdout(line)
+    for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
       .filter(([, count]) => typeof count === 'number' && count > 0)
       .map(([name, count]) => `${name}=${count}`)
-    this.opts.stdout(parts.length > 0 ? `tick: ${parts.join(' ')}` : 'tick: idle')
+    if (parts.length > 0) {
+      this.say(`tick: ${parts.join(' ')}`)
+      return
+    }
+    // A tick that did something is worth a scroll line; a tick that did
+    // nothing is the every-10s noise the dashboard replaces.
+    if (!this.dashboard) this.opts.stdout('tick: idle')
+  }
+
+  // ── The live region ───────────────────────────────────────────────────────
+
+  /**
+   * One frame: read every build this repo owns, reduce each, project, render,
+   * repaint. Read-only — it appends nothing and decides nothing.
+   */
+  private async renderOnce(): Promise<void> {
+    const { terminal } = this.opts
+    if (this.region === undefined || terminal === undefined) return
+    const records = await this.wiring.store.listBuilds()
+    const entries = []
+    for (const record of records) {
+      // §12 scoping, mirroring the dispatcher: a shared store holds other
+      // repos' builds, and aggregating across repos is out of scope.
+      if (record.repo !== this.opts.targetRepo) continue
+      entries.push({ record, state: reduceBuild(await this.wiring.store.getEvents(record.slug)) })
+    }
+    const model = buildDashboard(entries, this.config, {
+      repo: this.opts.targetRepo,
+      mode: this.opts.once === true ? 'once' : 'watch',
+      capacity: this.config.dispatcher.capacity,
+    })
+    this.region.update(
+      renderDashboard(model, {
+        color: true,
+        width: terminal.columns,
+        // NOT `terminal.rows` — the region's trailing newline needs a row of
+        // its own, so a frame of exactly `rows` scrolls its own header off.
+        // See `paintableRows`.
+        height: paintableRows(terminal.rows),
+      }),
+    )
+  }
+
+  private startRendering(): void {
+    if (!this.dashboard || this.timer !== undefined) return
+    const tick = (): void => {
+      if (this.rendering) return // no overlapping polls
+      this.rendering = true
+      void this.renderOnce()
+        .catch((error: unknown) => {
+          // A transient store error must never kill dispatch — the dashboard
+          // is a view, and a view that throws is a bug in the view.
+          this.warn(
+            `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        })
+        .finally(() => {
+          this.rendering = false
+        })
+    }
+    this.timer = setInterval(tick, DASHBOARD_POLL_MS)
+    // Never hold the process open for a redraw.
+    this.timer.unref?.()
+    tick()
+  }
+
+  private stopRendering(): void {
+    if (this.timer !== undefined) clearInterval(this.timer)
+    this.timer = undefined
+  }
+
+  /** Stop polling, paint the truth one last time, release the region. Every
+   * exit path runs this — including SIGINT — or the operator's shell is left
+   * without a cursor. */
+  private async finishRendering(): Promise<void> {
+    if (!this.dashboard) return
+    this.stopRendering()
+    try {
+      await this.renderOnce()
+    } catch {
+      // Best-effort: a failed final frame must not mask the run's outcome.
+    }
+    this.region?.finish()
   }
 
   async run(): Promise<void> {
     const capacity = this.config.dispatcher.capacity
     if (this.opts.once) {
-      this.opts.stdout(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)
-      const report = await this.dispatcher.tick({ resumeCurrent: true })
-      this.printReport(report)
-      await this.drainInFlight()
+      this.say(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)
+      // Render BEFORE the tick and until the drain finishes, so the operator
+      // watches the initial pass's builds change state while they run. The
+      // render loop only reads: `--once` still calls tick() exactly ONCE, so
+      // it never claims a ticket that becomes Ready mid-drain.
+      this.startRendering()
+      try {
+        this.printReport(await this.dispatcher.tick({ resumeCurrent: true }))
+        await this.drainInFlight()
+      } finally {
+        await this.finishRendering()
+      }
       return
     }
 
     const intervalMs = this.opts.intervalMs ?? DEFAULT_INTERVAL_MS
     const sleep =
       this.opts.sleep ?? ((ms: number) => interruptibleSleep(ms, this.opts.signal))
-    this.opts.stdout(
+    this.say(
       `ab dispatch — watching ${this.opts.targetRepo} (capacity ${capacity}, ` +
         `every ${Math.round(intervalMs / 1000)}s) — Ctrl-C to stop`,
     )
-    let startup = true
-    while (!this.stopped) {
-      try {
-        this.printReport(await this.dispatcher.tick({ resumeCurrent: startup }))
-        startup = false
-      } catch (error) {
-        this.opts.stderr(
-          `tick failed: ${error instanceof Error ? error.message : String(error)}`,
-        )
+    this.startRendering()
+    try {
+      let startup = true
+      while (!this.stopped) {
+        try {
+          this.printReport(await this.dispatcher.tick({ resumeCurrent: startup }))
+          startup = false
+        } catch (error) {
+          this.warn(`tick failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        if (this.stopped) break
+        await sleep(intervalMs)
       }
-      if (this.stopped) break
-      await sleep(intervalMs)
+    } finally {
+      // SIGINT lands here too: without it the region keeps the cursor hidden.
+      await this.finishRendering()
     }
-    this.opts.stdout('ab dispatch stopped')
+    this.say('ab dispatch stopped')
   }
 }
 
