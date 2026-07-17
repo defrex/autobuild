@@ -34,13 +34,11 @@ import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
+import { PiAgentRunner } from '../ports/runner/pi'
+import { createRuntimeResolver } from '../ports/runner/routing'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
-import type {
-  AgentRunner,
-  Forge,
-  TicketSource,
-  WorkspaceProvider,
-} from '../ports/types'
+import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { GitWorktreeProvider, type Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError } from '../processes/build-runner'
 import { Dispatcher } from '../processes/dispatcher'
@@ -67,10 +65,10 @@ export interface DispatchWiring {
   tickets: TicketSource
   forge: Forge
   workspaces: WorkspaceProvider
-  /** Runner registry (§9): `[roles]` routes into it; `defaultRunner` is the
-   * fallback. */
-  runners: Record<string, AgentRunner>
-  defaultRunner: string
+  /** Runtime registry (§9): name → adapter + capabilities. The resolver routes
+   * `[agent]`/`[roles]` into it; `defaultRuntime` is the wiring fallback. */
+  runtimes: RuntimeRegistry
+  defaultRuntime: string
   /** The store reference sessions resolve as `AB_STORE` (D8) — MUST name the
    * same store as `store`, so an agent's `ab` commands write where the
    * dispatcher reads. */
@@ -160,8 +158,18 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     forge: new GitHubForge(),
     // Worktrees live under the autobuild home, never inside the repo tree.
     workspaces: new GitWorktreeProvider({ root: join(DEFAULT_LOCAL_ROOT, 'worktrees') }),
-    runners: { claude: new ClaudeAgentRunner() },
-    defaultRunner: 'claude',
+    // Two registered runtimes (§9): claude serves Claude models (its own SDK
+    // default model ⇒ no `defaultModel`), pi serves the rest (Kimi/GPT), with
+    // kimi-k3 as its default model. Model ids stay in config, not here.
+    runtimes: {
+      claude: { runner: new ClaudeAgentRunner(), servesModels: ['claude-'] },
+      pi: {
+        runner: new PiAgentRunner(),
+        servesModels: ['kimi-', 'gpt-'],
+        defaultModel: 'kimi-k3',
+      },
+    },
+    defaultRuntime: 'claude',
     storeRef,
     ...(token !== undefined && token !== '' ? { token } : {}),
     ids: randomIds(),
@@ -220,7 +228,7 @@ class DispatchLoop {
    * only noted.
    */
   private async launchRunner(slug: string): Promise<void> {
-    const { store, runners, defaultRunner, ids, clock, storeRef, token } = this.wiring
+    const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
     const record = await store.getBuild(slug)
     const wsRef = openWorkspaceRef(await store.getEvents(slug))
     if (record === null || wsRef === null) {
@@ -233,8 +241,8 @@ class DispatchLoop {
     const runner = new BuildRunner({
       store,
       config: this.config,
-      runners,
-      defaultRunner,
+      runtimes,
+      defaultRuntime,
       workspacePath: wsRef,
       branch: record.branch ?? `ab/${slug}`,
       slug,
@@ -481,6 +489,12 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   }
   const wire = opts.wire ?? defaultWire
   const wiring = await wire(config, opts)
+  // §9: resolve the whole config against the registry ONCE, at startup — a
+  // config naming an unregistered runtime, an un-servable runtime+model pair,
+  // or an ambiguous model-only route fails `ab dispatch` loudly here, before
+  // any build launches, never as a silent per-build fallback. The per-build
+  // BuildRunner re-resolves too (its own construction is the second guard).
+  createRuntimeResolver(wiring.runtimes, config.agent, wiring.defaultRuntime, config.roles)
   const loop = new DispatchLoop(config, wiring, opts)
   await loop.run()
 }

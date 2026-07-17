@@ -147,11 +147,11 @@ export async function writeFileIn(
   return path
 }
 
-async function initOrigin(dir: string): Promise<void> {
+async function initOrigin(dir: string, configToml: string): Promise<void> {
   await mkdir(dir, { recursive: true })
   await git(['init', '-q', '-b', 'main'], dir)
   // No `.ab/` ignore here — see commitAll: the product establishes it.
-  await writeFile(join(dir, 'autobuild.toml'), CONFIG_TOML)
+  await writeFile(join(dir, 'autobuild.toml'), configToml)
   await writeFile(join(dir, 'README.md'), 'e2e origin\n')
   await git(['add', '-A'], dir)
   await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir)
@@ -254,10 +254,15 @@ export async function makeHarness(opts: {
    * FileTicketSource, to prove the source's own dependency representation and
    * lifecycle end-to-end. `h.tickets` stays the (then unused) fake. */
   ticketSource?: TicketSource
+  /** The committed autobuild.toml (§16.1) driving this build. Default
+   * CONFIG_TOML, so every existing scenario is untouched; a scenario proving
+   * two-axis routing (§9) supplies its own `[agent]`/`[roles]`. */
+  configToml?: string
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   const origin = join(tmp, 'origin')
-  await initOrigin(origin)
+  const configToml = opts.configToml ?? CONFIG_TOML
+  await initOrigin(origin, configToml)
 
   const clock = steppingClock()
   const ids = sequentialIds()
@@ -266,7 +271,7 @@ export async function makeHarness(opts: {
   const tickets = new FakeTicketSource(opts.tickets ?? [])
   const ticketSource: TicketSource = opts.ticketSource ?? tickets
   const workspaces = new GitWorktreeProvider({ root: join(tmp, 'worktrees') })
-  const config = parseConfig(CONFIG_TOML, 'e2e autobuild.toml')
+  const config = parseConfig(configToml, 'e2e autobuild.toml')
 
   const launched: Array<{ slug: string; runner: BuildRunner }> = []
   const cliErrors: string[] = []
@@ -336,8 +341,18 @@ export async function makeHarness(opts: {
       runner: new BuildRunner({
         store,
         config,
-        runners: { scripted: agents },
-        defaultRunner: 'scripted',
+        // Two-axis registry (§9): every runtime is backed by the SAME scripted
+        // runner instance, so the `s_1…s_N` session numbering scenarios rely on
+        // is preserved regardless of which runtime a role routes to. `scripted`
+        // is the default (serves nothing ⇒ model-only routing never lands on
+        // it); `pi` serves the Kimi family, so `{ runtime = "pi", model =
+        // "kimi-k3" }` and model-only `kimi-*` route there.
+        runtimes: {
+          scripted: { runner: agents, servesModels: [] },
+          claude: { runner: agents, servesModels: ['claude-'] },
+          pi: { runner: agents, servesModels: ['kimi-'] },
+        },
+        defaultRuntime: 'scripted',
         workspacePath: wsRef,
         branch: record.branch ?? `ab/${slug}`,
         slug,
