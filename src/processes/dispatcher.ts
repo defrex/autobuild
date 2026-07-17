@@ -91,7 +91,7 @@ export interface SpecConformance {
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/
-const HEADING = /^#{2,6}\s*(.+?)\s*$/
+const HEADING = /^#{1,6}\s*(.+?)\s*$/
 
 /** Lines of the section under the first heading whose text starts with
  * `name` (case-insensitive), up to the next heading of any level. */
@@ -117,9 +117,11 @@ function sectionUnder(lines: string[], name: string): string[] | null {
 /**
  * The spec standard's checkable core (docs/spec-standard.md): nonempty body,
  * a case-insensitive '## Acceptance criteria' heading with at least one list
- * item, and an '## Out of scope' heading. A heuristic by design — full
- * conformance is judgment and lives in the skills; this gate only catches
- * tickets that would certainly thrash (§6.3). Exported for testing.
+ * item, and an '## Out of scope' heading. Any heading level h1–h6 is accepted
+ * (the '##' in these names is illustrative, not required) — do not re-narrow
+ * the HEADING regex. A heuristic by design — full conformance is judgment and
+ * lives in the skills; this gate only catches tickets that would certainly
+ * thrash (§6.3). Exported for testing.
  */
 export function specConformance(body: string): SpecConformance {
   const missing: string[] = []

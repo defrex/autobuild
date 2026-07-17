@@ -222,6 +222,46 @@ describe('specConformance', () => {
     const body = 'Why.\n\n### ACCEPTANCE CRITERIA\n- one\n\n### Out Of Scope — explicit\n'
     expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
   })
+
+  test('h1 headings conform (AUT-12)', () => {
+    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n# Out of scope\n'
+    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+
+  test('mixed heading levels conform', () => {
+    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n### Out of scope\n'
+    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+
+  test('an h1 section terminates at a following h2 subheading and later h1 is found', () => {
+    const body =
+      'Why.\n\n# Acceptance criteria\n- one\n\n## Details\n\nprose\n\n# Out of scope\n'
+    expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
+  })
+
+  test('h1 acceptance heading with its list item under an h2 subheading terminates before it (flat heuristic)', () => {
+    const body = 'Why.\n\n# Acceptance criteria\n\n## Details\n- one\n\n# Out of scope\n'
+    expect(specConformance(body)).toEqual({
+      conforms: false,
+      missing: ["at least one list item under '## Acceptance criteria'"],
+    })
+  })
+
+  test('h1 heading with no list item under it is nonconforming', () => {
+    const body = 'Why.\n\n# Acceptance criteria\n\nnone yet\n\n# Out of scope\n'
+    expect(specConformance(body)).toEqual({
+      conforms: false,
+      missing: ["at least one list item under '## Acceptance criteria'"],
+    })
+  })
+
+  test('h1 body missing the out-of-scope section still bounces accurately', () => {
+    const body = 'Why.\n\n# Acceptance criteria\n- one\n'
+    expect(specConformance(body)).toEqual({
+      conforms: false,
+      missing: ["an '## Out of scope' heading"],
+    })
+  })
 })
 
 describe('analyzeDependencies', () => {
@@ -437,6 +477,32 @@ describe('Dispatcher dispatch', () => {
       { id: 'T-1', body: 'build add-rate-limiting dispatched' },
     ])
     expect(h.launches).toEqual(['add-rate-limiting'])
+  })
+
+  test('h1-headed conforming body dispatches: imported as spec, not bounced (AUT-12)', async () => {
+    const h1Body = [
+      'Login attempts are currently unlimited; throttle repeated failures.',
+      '',
+      '# Acceptance criteria',
+      '',
+      '- a sixth failed login within five minutes returns 429',
+      '',
+      '# Out of scope',
+      '',
+      '- captcha',
+      '',
+    ].join('\n')
+    const ticket = readyTicket('T-1', { body: h1Body })
+    const h = harness({ tickets: [ticket] })
+
+    const report = await h.dispatcher.tick()
+    expect(report).toEqual({ ...emptyTickReport(), dispatched: 1 })
+
+    const events = await h.store.getEvents('add-rate-limiting')
+    expect(events.map((e) => e.type)).toContain('spec.imported')
+
+    const spec = await h.store.getArtifact('add-rate-limiting', 'spec')
+    expect(spec ? textContent(spec) : null).toBe(h1Body)
   })
 
   test('readyState narrows the scan: only tickets in that state dispatch', async () => {
