@@ -81,7 +81,7 @@ interface ProducerSession {
 }
 
 class SessionFailure extends Error {
-  constructor(readonly terminal: boolean, message: string) {
+  constructor(message: string) {
     super(message)
     this.name = 'HarvestSessionFailure'
   }
@@ -448,7 +448,7 @@ export class HarvestRunner {
         event.payload.round === spec.round,
     ).length
     if (failures >= this.maxSessionAttempts) {
-      throw new SessionFailure(true, `${spec.step}@${spec.round} exhausted retries`)
+      throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
     }
 
     const session = ids('hs')
@@ -583,7 +583,6 @@ export class HarvestRunner {
       },
     })
     throw new SessionFailure(
-      !willRetry,
       `${spec.step}@${spec.round} failed: ${
         turnError === undefined ? 'no-terminal' : errorMessage(turnError)
       }`,

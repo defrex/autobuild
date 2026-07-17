@@ -119,11 +119,6 @@ export interface DashboardModel {
   /** Latest run remains visible after terminal completion until a newer run
    * replaces it. It is display-only and never enters build selection. */
   harvest?: DashboardHarvest
-  /** Discriminated shared-row projection for consumers that render both. */
-  items?: Array<
-    | ({ kind: 'build' } & DashboardBuild)
-    | DashboardHarvest
-  >
 }
 
 /**
@@ -637,6 +632,13 @@ export function projectHarvest(
       (occurrence) =>
         occurrence.step === name && occurrence.completedSeq !== undefined,
     )
+  const hasOutcome = (name: string, outcome: string): boolean =>
+    run.steps.some(
+      (occurrence) =>
+        occurrence.step === name && occurrence.outcome === outcome,
+    )
+  const failedAt = (name: string): boolean =>
+    run.status === 'failed' && run.failure?.step === name
   const rounds = Math.max(
     0,
     ...run.proposals.map((proposal) => proposal.round),
@@ -648,22 +650,36 @@ export function projectHarvest(
   const synthOutput = run.proposals.length > 0
   const reviewOutput = run.reviews.length > 0
   const steps: PipelineStep[] = [
-    step('scan', hasCompleted('scan'), current('scan'), {
+    step('scan', hasOutcome('scan', 'completed'), current('scan'), {
+      qualifier: failedAt('scan') ? 'failed' : undefined,
+      producedOutput: hasCompleted('scan'),
       timing: harvestStepTiming(run.steps, 'scan'),
     }),
-    step('synthesize', approved || terminal, current('synthesize'), {
-      producedOutput: synthOutput,
-      count,
-      timing: harvestStepTiming(run.steps, 'synthesize'),
-    }),
-    step('review', approved || terminal, current('review'), {
-      producedOutput: reviewOutput,
-      count,
-      timing: harvestStepTiming(run.steps, 'review'),
-    }),
+    step(
+      'synthesize',
+      synthOutput && (approved || terminal) && !failedAt('synthesize'),
+      current('synthesize'),
+      {
+        producedOutput: synthOutput || hasCompleted('synthesize'),
+        qualifier: failedAt('synthesize') ? 'failed' : undefined,
+        count,
+        timing: harvestStepTiming(run.steps, 'synthesize'),
+      },
+    ),
+    step(
+      'review',
+      reviewOutput && (approved || terminal) && !failedAt('review'),
+      current('review'),
+      {
+        producedOutput: reviewOutput || hasCompleted('review'),
+        qualifier: failedAt('review') ? 'failed' : undefined,
+        count,
+        timing: harvestStepTiming(run.steps, 'review'),
+      },
+    ),
     step('file', run.status === 'completed', current('file'), {
       producedOutput: hasCompleted('file'),
-      qualifier: run.status === 'failed' ? 'failed' : undefined,
+      qualifier: failedAt('file') ? 'failed' : undefined,
       timing: harvestStepTiming(run.steps, 'file'),
     }),
   ]
@@ -709,9 +725,5 @@ export function buildDashboard(
     ...(header.selectedSlug !== undefined ? { selectedSlug: header.selectedSlug } : {}),
     builds,
     ...(harvest !== undefined ? { harvest } : {}),
-    items: [
-      ...(harvest !== undefined ? [harvest] : []),
-      ...builds.map((build) => ({ kind: 'build' as const, ...build })),
-    ],
   }
 }

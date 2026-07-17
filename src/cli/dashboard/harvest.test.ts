@@ -5,6 +5,73 @@ import { projectHarvest } from './model'
 import { renderDashboard, stripAnsi } from './render'
 
 describe('dashboard harvest row', () => {
+  test('a terminal synthesize failure marks only synthesize failed and leaves later steps pending', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-scan', content: '{}' }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_failed',
+          observations: [{ build: 'a', seq: 1 }],
+          scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.step.started',
+      payload: { run: 'h_failed', step: 'scan' },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.step.completed',
+      payload: { run: 'h_failed', step: 'scan', outcome: 'completed' },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.step.started',
+      payload: { run: 'h_failed', step: 'synthesize', round: 1 },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_failed',
+        step: 'synthesize',
+        round: 1,
+        attempt: 2,
+        error: 'no-terminal',
+        willRetry: false,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.step.completed',
+      payload: {
+        run: 'h_failed',
+        step: 'synthesize',
+        round: 1,
+        outcome: 'failed',
+      },
+    })
+
+    const projected = projectHarvest(await store.getRepoEvents('/repo'))!
+    const byLabel = new Map(projected.steps.map((step) => [step.label, step]))
+    expect(byLabel.get('scan')?.state).toBe('done')
+    expect(byLabel.get('synthesize')).toMatchObject({
+      state: 'provisional',
+      qualifier: 'failed',
+    })
+    expect(byLabel.get('review')).toMatchObject({ state: 'pending' })
+    expect(byLabel.get('review')?.qualifier).toBeUndefined()
+    expect(byLabel.get('file')).toMatchObject({ state: 'pending' })
+    expect(byLabel.get('file')?.qualifier).toBeUndefined()
+  })
+
   test('projects the staged run, keeps terminal runs visible, and renders a literal nonselectable marker', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')
