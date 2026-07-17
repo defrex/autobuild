@@ -178,36 +178,43 @@ and repeats up to `[policy].maxVerifyAttempts`.
 
 ### `[agent]`
 
-The repo-wide **default** on the two configuration axes: the `runtime` that
-executes an agent session and the `model` it runs on. Both optional. Absent
-entirely ⇒ the built-in fallback runtime (`claude`) with its own default model
-— today's behavior, unchanged. Two runtimes ship: **`claude`** (Claude models)
-and **`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models).
+The repo-wide **default** on the configuration axes: the `runtime` that
+executes an agent session, the `model` it runs on, and (pi only) the
+`extensions` it may use. All optional. Absent entirely ⇒ the built-in fallback
+runtime (`claude`) with its own default model, and no extensions — today's
+behavior, unchanged. Two runtimes ship: **`claude`** (Claude models) and
+**`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models, provider-qualified ids
+like `openai-codex/gpt-5.6-sol` — `ab models [query]` looks them up).
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `runtime` | — | optional, nonempty string | The default runtime for every session. Must name a registered runtime, else `ab dispatch` fails loudly before any build. |
 | `model` | — | optional, nonempty string | The default model. Absent ⇒ the runtime's own default model. |
+| `extensions` | — | optional, array of nonempty strings | Default Pi extensions/packages a session may use (e.g. `["subagents", "web-access"]`). Absent ⇒ **hermetic** (no internet / sub-agents / MCP). Entries match installed package sources case-insensitively; `claude` ignores this axis. |
 
 ### `[roles]`
 
-An **open map** of role name → per-step **override** `{ runtime?, model? }` on
-the same two axes. The roles the pipeline routes are `plan`, `plan-review`,
-`implement`, and `code-review` (plus each verify/finalize step by name).
+An **open map** of role name → per-step **override** `{ runtime?, model?,
+extensions? }` on the same axes. The roles the pipeline routes are `plan`,
+`plan-review`, `implement`, and `code-review` (plus each verify/finalize step by
+name).
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `runtime` | — | optional, nonempty string | Runtime override for this role. Absent ⇒ resolved from `model` or the `[agent]` default. |
 | `model` | — | optional, nonempty string | Model override for this role. Absent ⇒ the resolved runtime's default. |
+| `extensions` | — | optional, array of nonempty strings | Per-role extension allowlist. Absent ⇒ inherit the `[agent]` default (hermetic when that too is unset). Lets internet/sub-agent access be granted to plan/review while implement/verify stay hermetic. |
 
-Overrides resolve **most-specific-first**: `runtime + model` pins exactly that
-pair (a runtime that can't serve the model is a config error); `runtime` alone
-uses that runtime's default model; `model` alone routes to a runtime that
+Runtime/model resolve **most-specific-first**: `runtime + model` pins exactly
+that pair (a runtime that can't serve the model is a config error); `runtime`
+alone uses that runtime's default model; `model` alone routes to a runtime that
 serves it (the default runtime wins when it qualifies, otherwise the single
 supporter — zero, or several non-default supporters, is a loud error); neither
-falls back to the `[agent]` default pair. Mixing models across roles is
-**intentional**, not an inconsistency to clean up: a reviewer that differs from
-the implementer catches more.
+inherits the `[agent]` default pair (a role added only to set `extensions`
+keeps the default model). `extensions` resolves independently: the role's list
+overrides the `[agent]` default, absent ⇒ that default. Mixing models across
+roles is **intentional**, not an inconsistency to clean up: a reviewer that
+differs from the implementer catches more.
 
 ### `[policy]`
 

@@ -597,7 +597,7 @@ export class BuildRunner {
     const { store, slug, ids, workspacePath } = this.deps
     const { step } = decision
     const session = ids('s')
-    const { runner, runtime: runnerName, model } = this.resolver.resolve(step)
+    const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
 
     await store.append(slug, {
       actor: KERNEL,
@@ -620,6 +620,7 @@ export class BuildRunner {
         buildSlug: slug,
         workspacePath,
         ...(model !== undefined ? { model } : {}),
+        ...(extensions !== undefined ? { extensions } : {}),
         env: this.sessionEnvFor('finalize@1', session),
       })
       handle = turn.session
@@ -674,7 +675,7 @@ export class BuildRunner {
   private async executeSession(spec: SessionSpec): Promise<void> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const { runner, runtime: runnerName, model } = this.resolver.resolve(spec.role)
+    const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(spec.role)
 
     const startedEnvelope = await store.append(slug, {
       actor: KERNEL,
@@ -716,6 +717,7 @@ export class BuildRunner {
           buildSlug: slug,
           workspacePath,
           ...(model !== undefined ? { model } : {}),
+          ...(extensions !== undefined ? { extensions } : {}),
           env: this.sessionEnvFor(spec.abPhase, session),
         })
         handle = turn.session

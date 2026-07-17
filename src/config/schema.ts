@@ -119,6 +119,11 @@ export type FinalizeConfig = z.infer<typeof finalizeSchema>
 export const agentDefaultsSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  // Optional THIRD axis (runtime-specific): named Pi extensions/packages a
+  // session may use (e.g. "subagents", "web-access"). Absent ⇒ none, i.e. a
+  // hermetic session. Entries are matched (case-insensitive substring) against
+  // installed Pi package sources; runtimes without an extension model ignore it.
+  extensions: z.array(z.string().min(1)).optional(),
 })
 export type AgentDefaultsConfig = z.infer<typeof agentDefaultsSchema>
 
@@ -132,6 +137,10 @@ export type AgentDefaultsConfig = z.infer<typeof agentDefaultsSchema>
 export const roleSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  // Per-step extension allowlist (SPEC §9). Absent ⇒ inherit the [agent]
+  // default (which is itself hermetic when unset). Lets internet/sub-agent
+  // access be granted to plan/review while implement/verify stay hermetic.
+  extensions: z.array(z.string().min(1)).optional(),
 })
 export type RoleConfig = z.infer<typeof roleSchema>
 

@@ -180,14 +180,27 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     // Worktrees live under the autobuild home, never inside the repo tree.
     workspaces: new GitWorktreeProvider({ root: join(DEFAULT_LOCAL_ROOT, 'worktrees') }),
     // Two registered runtimes (§9): claude serves Claude models (its own SDK
-    // default model ⇒ no `defaultModel`), pi serves the rest (Kimi/GPT), with
-    // kimi-k3 as its default model. Model ids stay in config, not here.
+    // default model ⇒ no `defaultModel`), pi serves everything else through its
+    // provider catalog. Pi model ids are provider-qualified (`<provider>/<id>`),
+    // so pi's prefixes are provider names — no overlap with claude's bare
+    // `claude-*`. Add a provider prefix here to route more of Pi's catalog;
+    // `ab models` lists the ids. Model ids stay in config, not here.
     runtimes: {
       claude: { runner: new ClaudeAgentRunner(), servesModels: ['claude-'] },
       pi: {
         runner: new PiAgentRunner(),
-        servesModels: ['kimi-', 'gpt-'],
-        defaultModel: 'kimi-k3',
+        servesModels: [
+          // OAuth coding providers (what `pi login` writes to auth.json).
+          'openai-codex/',
+          'kimi-coding/',
+          // API-key providers, for keys supplied via env/auth.json.
+          'openai/',
+          'moonshotai/',
+          'cloudflare-workers-ai/',
+          'anthropic/',
+          'openrouter/',
+        ],
+        defaultModel: 'kimi-coding/k3',
       },
     },
     defaultRuntime: 'claude',

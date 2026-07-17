@@ -167,6 +167,9 @@ export interface AgentStartOpts {
   buildSlug: string
   workspacePath: string
   model?: string
+  /** Named extensions this session may use (§9, third axis). Empty/absent ⇒
+   * hermetic. Runtime-specific: adapters without an extension model ignore it. */
+  extensions?: readonly string[]
   /** Ambient auth (D8): AB_STORE, AB_BUILD, AB_PHASE, AB_SESSION, AB_TOKEN. */
   env: Record<string, string>
 }
