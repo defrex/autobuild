@@ -20,7 +20,9 @@ import { abDispatch, type DispatchWiring } from './dispatch'
 import { stripAnsi } from './dashboard/render'
 import type { DashboardKey, TerminalInput, TerminalOut } from './terminal'
 import type { Config } from '../config/schema'
+import { KERNEL, agentActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
+import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
 import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import {
@@ -32,6 +34,7 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
+import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
 import { systemClock } from '../store/types'
 import {
   CONFORMING_BODY,
@@ -530,6 +533,125 @@ slug = { runtime = "namer", model = "gpt-slug-name" }
       expect(events.map((event) => event.type)).toContain('finalize.completed')
       expect(secondOut).toContain('tick: resumed=1')
       expect(planAttempts).toBe(3)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('resumes an open harvest on startup and a later --once tick does not re-file it', async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      `${DISPATCH_CONFIG_TOML}\n[harvest]\nthreshold = 1\n`,
+    )
+    const run = 'h_dispatch_resume'
+    const out: string[] = []
+    try {
+      await fx.store.createBuild({ slug: 'observation-source', repo: fx.origin })
+      await fx.store.append('observation-source', {
+        actor: agentActor('implement', 's_old'),
+        type: 'observation.recorded',
+        payload: {
+          id: 'obs-dispatch-resume',
+          kind: 'latent-bug',
+          summary: 'resume the repository workflow on dispatcher startup',
+        },
+      })
+      const scan = await scanUnclaimedObservations(fx.store, fx.origin)
+      const packet = await makeHarvestScanPacket({
+        store: fx.store,
+        tickets: fx.tickets,
+        repo: fx.origin,
+        run,
+        observations: scan.observations,
+        state: scan.state,
+      })
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run,
+            observations: scan.observations.map((item) => item.occurrence),
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      const proposals = {
+        proposals: [
+          {
+            action: 'create' as const,
+            title: 'Resume repository harvest safely',
+            whatWhy: 'A durable open workflow must resume after dispatch restarts.',
+            acceptanceCriteria: ['The existing proposal is filed exactly once.'],
+            outOfScope: ['Unrelated dispatcher behavior.'],
+            observations: scan.observations.map((item) => item.occurrence),
+          },
+        ],
+      }
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-proposals', content: JSON.stringify(proposals) }],
+        (deposited) => ({
+          actor: agentActor('harvest', 'hs_old'),
+          type: 'harvest.proposals.submitted',
+          payload: {
+            run,
+            round: 1,
+            artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-review', content: 'approved before restart\n' }],
+        (deposited) => ({
+          actor: agentActor('harvest-review', 'hr_old'),
+          type: 'harvest.review.verdict',
+          payload: {
+            run,
+            round: 1,
+            verdict: 'approve',
+            findings: [],
+            artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(reduceHarvest(await fx.store.getRepoEvents(fx.origin)).latest).toMatchObject({
+        run,
+        status: 'completed',
+      })
+      expect((await fx.tickets.get('fake-1'))?.state).toBe('Triage')
+      expect(await fx.tickets.get('fake-2')).toBeNull()
+      expect(out).toContain('tick: harvestResumed=1 harvestCompleted=1')
+
+      const eventCount = (await fx.store.getRepoEvents(fx.origin)).length
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      expect(await fx.tickets.get('fake-2')).toBeNull()
+      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(eventCount)
+      expect(fx.cliErrors).toEqual([])
+      expect(fx.err).toEqual([])
     } finally {
       await fx.cleanup()
     }

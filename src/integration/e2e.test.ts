@@ -14,11 +14,17 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { humanActor } from '../events/envelope'
+import { resolveHarvestCliEnv } from '../cli/env'
+import { runCli } from '../cli/main'
+import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import { decideNext } from '../kernel/engine'
+import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
+import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { FileTicketSource } from '../ports/tickets/file'
-import { emptyTickReport } from '../processes/dispatcher'
+import { Dispatcher, emptyTickReport } from '../processes/dispatcher'
+import { HarvestRunner } from '../processes/harvest-runner'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { textContent } from '../store/types'
 import { steppingClock } from '../testing/fixed'
@@ -850,4 +856,192 @@ test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default run
   const planTranscript = transcripts.find((m) => m.metadata['phase'] === 'plan')!
   expect(planTranscript.metadata['runner']).toBe('scripted')
   expect(planTranscript.metadata['model']).toBeUndefined()
+}, 30_000)
+
+// ── h. Observation harvest through dispatcher + real CLI (§12) ──────────────
+
+test('h. harvest e2e: threshold → revise → file once → wait for K new observations', async () => {
+  const h = await track(
+    makeHarness({
+      handlers: {},
+      tickets: [],
+      configToml: `${CONFIG_TOML}\n[harvest]\nthreshold = 2\n`,
+    }),
+  )
+  const cliErrors: string[] = []
+  let reviewTurns = 0
+
+  const harvestAgents = new ScriptedAgentRunner({
+    script: async (ctx) => {
+      const harvestEnv = resolveHarvestCliEnv(ctx.opts.env)
+      const run = async (argv: string[]): Promise<string[]> => {
+        const out: string[] = []
+        const err: string[] = []
+        const code = await runCli(argv, {
+          store: h.store,
+          harvestEnv,
+          workspacePath: h.origin,
+          ids: h.ids,
+          stdout: (line) => out.push(line),
+          stderr: (line) => err.push(line),
+        })
+        if (code !== 0) {
+          const message = `ab ${argv.join(' ')} exited ${code}: ${err.join('\n')}`
+          cliErrors.push(message)
+          throw new Error(message)
+        }
+        return out
+      }
+
+      await run(['harvest', 'context'])
+      if (ctx.opts.skill === 'ab-harvest') {
+        const observations = JSON.parse(
+          await readFile(join(h.origin, '.ab', 'observations.json'), 'utf8'),
+        ) as Array<{ occurrence: { build: string; seq: number } }>
+        if (ctx.turn === 2) {
+          const findings = JSON.parse(
+            await readFile(join(h.origin, '.ab', 'findings.json'), 'utf8'),
+          ) as unknown[]
+          expect(findings).toHaveLength(1)
+        }
+        const file = join(h.origin, '.ab', `e2e-proposals-${harvestEnv.run}-${ctx.turn}.json`)
+        await writeFile(
+          file,
+          JSON.stringify({
+            proposals: [
+              {
+                action: 'create',
+                title: `Harvest ${observations[0]!.occurrence.build}`,
+                whatWhy: 'The clustered observations expose one actionable defect.',
+                acceptanceCriteria: ['The clustered defect no longer occurs.'],
+                outOfScope: ['Unrelated cleanup.'],
+                observations: observations.map((item) => item.occurrence),
+              },
+            ],
+          }),
+        )
+        await run(['harvest', 'submit', file])
+      } else {
+        reviewTurns += 1
+        const notes = join(h.origin, '.ab', `e2e-review-${reviewTurns}.md`)
+        await writeFile(notes, reviewTurns === 1 ? 'revise once\n' : 'approved\n')
+        if (reviewTurns === 1) {
+          const findings = join(h.origin, '.ab', 'e2e-findings.json')
+          await writeFile(
+            findings,
+            JSON.stringify([
+              { severity: 'important', summary: 'Make the proposal more specific' },
+            ]),
+          )
+          await run([
+            'harvest',
+            'verdict',
+            'revise',
+            '--notes',
+            notes,
+            '--findings',
+            findings,
+          ])
+        } else {
+          await run(['harvest', 'verdict', 'approve', '--notes', notes])
+        }
+      }
+      return defaultTurnResult('harvest CLI terminal deposited')
+    },
+  })
+
+  let instances = 0
+  const runHarvest = async () => {
+    instances += 1
+    return new HarvestRunner({
+      store: h.store,
+      tickets: h.tickets,
+      config: h.config,
+      runtimes: { scripted: { runner: harvestAgents, servesModels: [] } },
+      defaultRuntime: 'scripted',
+      repo: h.origin,
+      workspacePath: h.origin,
+      ids: h.ids,
+      clock: h.clock,
+      instance: `harvest-e2e-${instances}`,
+      sessionEnv: { AB_STORE: 'memory' },
+      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+    }).run()
+  }
+  const dispatcher = new Dispatcher({
+    store: h.store,
+    tickets: h.tickets,
+    workspaces: h.workspaces,
+    forge: h.forge,
+    config: h.config,
+    repo: h.origin,
+    exec: spawnExec,
+    launchRunner: async (slug) => {
+      throw new Error(`unexpected build launch for ${slug}`)
+    },
+    runHarvest,
+    ids: h.ids,
+    clock: h.clock,
+  })
+
+  const seed = async (slug: string, summary: string): Promise<void> => {
+    const ticket = { source: 'fake', id: `source-${slug}`, title: slug }
+    await h.store.createBuild({ slug, repo: h.origin, ticket })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: h.origin, baseBranch: 'main' },
+    })
+    await h.store.append(slug, {
+      actor: agentActor('implement', `source-session-${slug}`),
+      type: 'observation.recorded',
+      payload: { id: `obs-${slug}`, kind: 'latent-bug', summary },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+  }
+
+  await seed('harvest-a', 'same defect in path A')
+  expect(await dispatcher.tick()).toEqual(emptyTickReport())
+
+  await seed('harvest-b', 'same defect in path B')
+  expect(await dispatcher.tick()).toEqual({
+    ...emptyTickReport(),
+    harvestStarted: 1,
+    harvestCompleted: 1,
+  })
+  expect(cliErrors).toEqual([])
+  expect(reviewTurns).toBe(2)
+  expect((await h.tickets.get('fake-1'))?.state).toBe('Triage')
+  expect(reduceHarvest(await h.store.getRepoEvents(h.origin))).toMatchObject({
+    latest: { status: 'completed' },
+    ledger: [{ action: 'filed' }, { action: 'filed' }],
+  })
+
+  const repoEventsAfterFirst = (await h.store.getRepoEvents(h.origin)).length
+  expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await h.store.getRepoEvents(h.origin)).toHaveLength(repoEventsAfterFirst)
+  expect(await h.tickets.get('fake-2')).toBeNull()
+
+  await seed('harvest-c', 'new defect occurrence C')
+  expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await h.tickets.get('fake-2')).toBeNull()
+
+  await seed('harvest-d', 'new defect occurrence D')
+  expect(await dispatcher.tick()).toEqual({
+    ...emptyTickReport(),
+    harvestStarted: 1,
+    harvestCompleted: 1,
+  })
+  expect((await h.tickets.get('fake-2'))?.state).toBe('Triage')
+  expect(cliErrors).toEqual([])
+
+  const sessions = [...harvestAgents.sessions.values()]
+  expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest')).toHaveLength(2)
+  expect(
+    sessions.filter((entry) => entry.opts.skill === 'ab-harvest-review'),
+  ).toHaveLength(3)
 }, 30_000)

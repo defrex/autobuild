@@ -82,6 +82,10 @@ function harness(
     opts?: DispatcherOpts
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
+    runHarvest?: () => Promise<{
+      outcome: 'idle' | 'held' | 'completed' | 'escalated' | 'failed'
+      launch?: 'started' | 'resumed'
+    }>
   } = {},
 ) {
   const clock = manualClock()
@@ -109,6 +113,7 @@ function harness(
     },
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
+    ...(opts.runHarvest ? { runHarvest: opts.runHarvest } : {}),
     ids: sequentialIds(),
     clock,
     ...(opts.opts ? { opts: opts.opts } : {}),
@@ -940,6 +945,52 @@ describe('Dispatcher dispatch', () => {
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(await h.store.getBuild('login-rate-limit-3')).not.toBeNull()
     expect((await h.store.getBuild(oldSlug))?.branch).toBe(`ab/${oldSlug}`)
+  })
+})
+
+// ── Harvest coordination (§12) ───────────────────────────────────────────────
+
+describe('Dispatcher harvest coordination', () => {
+  test('runs harvest after ready-ticket dispatch and projects its outcome', async () => {
+    let h!: Harness
+    h = harness({
+      tickets: [readyTicket('T-harvest', { title: 'Harvest ordering' })],
+      runHarvest: async () => {
+        expect(h.launches).toEqual(['harvest-ordering'])
+        return { outcome: 'completed', launch: 'started' }
+      },
+    })
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      dispatched: 1,
+      harvestStarted: 1,
+      harvestCompleted: 1,
+    })
+  })
+
+  test('harvest remains independent of drain and occupied build capacity', async () => {
+    const outcomes = [
+      { outcome: 'idle' as const },
+      { outcome: 'failed' as const, launch: 'resumed' as const },
+    ]
+    let calls = 0
+    const h = harness({
+      tickets: [readyTicket('T-blocked-by-capacity')],
+      runHarvest: async () => outcomes[calls++]!,
+    })
+    await seedBuild(h, { slug: 'capacity-holder' })
+    await h.store.claimLease('capacity-holder', 'live-runner', 3_600_000)
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      harvestResumed: 1,
+      harvestFailed: 1,
+    })
+    expect(calls).toBe(2)
+    expect(h.launches).toEqual([])
+    expect(h.tickets.claims).toEqual([])
   })
 })
 
