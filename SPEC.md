@@ -60,7 +60,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (the zero-config default); Linear; later GitHub Issues |
+| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (default directory); Linear; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -74,12 +74,13 @@ Small, independently runnable, crash-safe:
 - **build-runner** — one per build; owns one pipeline execution end to end.
   Per-build processes are deliberate: crash isolation, and the natural shape
   once builds run in remote sandboxes.
-- **dispatcher** — watches the TicketSource for Ready tickets (label/state
-  conditions), claims, establishes the final conforming spec, chooses a short
-  immutable build slug, provisions a workspace, and launches build-runners up
-  to a capacity limit. On process startup it also attempts every current build
-  for its repo, so re-running `ab dispatch` resumes durable work rather than
-  only looking for new tickets. Cron-friendly.
+- **dispatcher** — watches the TicketSource for tickets passing the required
+  `[tickets].readyState` gate and optional `[tickets].readyLabels` narrowing,
+  claims, establishes the final conforming spec, chooses a short immutable
+  build slug, provisions a workspace, and launches build-runners up to
+  `[dispatcher].capacity`. On process startup it also attempts every current
+  build for its repo, so re-running `ab dispatch` resumes durable work rather
+  than only looking for new tickets. Cron-friendly.
 - **ingesters** — outer-loop processes turning signals into proposals (§12).
 - **operator** — UI process(es); see §14.
 
@@ -939,6 +940,9 @@ maxReconcileAttempts = 3
 
 [dispatcher]
 capacity = 3                    # concurrent builds for this repo
+
+[tickets]
+source = "file"
 readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 

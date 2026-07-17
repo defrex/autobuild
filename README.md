@@ -27,9 +27,9 @@ queryable paper trail.
 
 1. **Grooming** a ticket to [the spec standard](docs/spec-standard.md) — what
    and why, acceptance criteria, out of scope. auto-build never grooms its own
-   work: a ticket becomes dispatchable only when it passes your ready gate —
-   moved into `ready/` with the file tracker, or labelled `autobuild` on Linear
-   — and that act is a human one.
+   work: a ticket becomes dispatchable only when it passes your configured
+   ready-state gate — moved into `ready/` with the file tracker, or placed in
+   the named Linear state with any required labels — and that act is human.
 2. **Answering escalations** — the questions a build parks on rather than
    deciding alone.
 3. **Reviewing and choosing when to land the PR.** Merge it yourself, or opt a
@@ -187,9 +187,9 @@ is an error, so a typo cannot silently disable a verifier.
 | `[agent]` | Repo-wide defaults for `runtime`, `model`, and the optional Pi `extensions` allowlist. | absent ⇒ the built-in fallback runtime + its own default model; extensions hermetic |
 | `[roles]` | Role → per-step override `{ runtime?, model?, extensions? }`, most-specific-first (see below), including the optional pre-build `slug` naming role. Registered runtimes: `claude` (Claude models), `pi` (provider-qualified Kimi/GPT models). | — |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `5` |
-| `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
+| `[dispatcher]` | `capacity` — concurrent builds for this repo | `1` |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
-| `[tickets]` | Optional. Which ticket source to drive — see below | absent = the local file tracker at `.autobuild/tickets` |
+| `[tickets]` | Required. Ticket source and lifecycle/readiness fields, including **required `readyState`** and optional `readyLabels` — see below | `readyState` has no default; file `dir` defaults to `.autobuild/tickets` |
 | `[outer]` | Map of outer-loop process name → `{ cron = "…" }` | — |
 
 The generated template ships a working `[verify]` pair:
@@ -242,13 +242,20 @@ runtime without that capability simply uses the deterministic title fallback.
 
 ### 3. Point at a ticket source and set up auth
 
-The `[tickets]` table is what the dispatcher watches. It is **optional**, and
-secrets never go in this file.
+The `[tickets]` table is what the dispatcher watches. It is **required** so
+that every repository explicitly names its dispatchable state; secrets never
+go in this file.
 
-**The local file tracker (the default — no table, no config, no secret).** Omit
-`[tickets]` entirely and you get a file tracker at `.autobuild/tickets`. That is
-the zero-config path: a repo dispatches without you configuring a ticket source
-at all.
+**The local file tracker (default directory, no secret).** The generated config
+uses a file tracker at `.autobuild/tickets`:
+
+```toml
+[tickets]
+source = "file"
+readyState = "ready"
+```
+
+`dir` remains optional; omitting it selects `.autobuild/tickets`.
 
 The tracker is four state directories, and **a ticket's state is the directory
 it sits in**:
@@ -293,6 +300,7 @@ directory**, so auto-build does not gitignore it for you:
 ```toml
 [tickets]
 source = "file"
+readyState = "ready"     # required; maps to the ready/ directory
 dir = "tickets"          # optional; default ".autobuild/tickets"
 createState = "Triage"   # optional; "Triage" is the default
 triageState = "Triage"   # optional; "Triage" is the default
@@ -304,6 +312,8 @@ triageState = "Triage"   # optional; "Triage" is the default
 [tickets]
 source = "linear"
 teamKey = "ENG"                # required
+readyState = "Todo"            # required; exact, case-sensitive workflow-state name
+#readyLabels = ["autobuild"]   # optional; absent uses this Linear default
 claimedState = "In Progress"   # optional; this is the adapter's default
 createState = "Triage"         # optional; absent = the team's default state
 triageState = "Backlog"        # optional; absent = "Backlog" — must name a state the team has
@@ -406,9 +416,10 @@ Each tick runs in this order:
 4. **dispatch** — claims and launches new work (skipped while the interactive
    dispatcher is drained).
 
-Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
-still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
-present, and `readyState`) → **claim-before-launch** → the **spec gate**.
+Dispatch gates a ticket in this order: **`[dispatcher].capacity`** (blocked and
+paused builds still hold a slot) → the **ready gate**
+(`[tickets].readyState`, plus every `[tickets].readyLabels` entry when set) →
+**claim-before-launch** → the **spec gate**.
 
 After the final spec passes that gate, the selected runtime proposes one to
 three meaningful lowercase kebab words from the whole spec. The dispatcher
@@ -418,8 +429,9 @@ unavailable, invalid, errors, or times out, dispatch still succeeds with the
 first three words of the kebab-cased title (`build` when none remain). The slug
 and branch `ab/<slug>` are chosen once; existing builds are never renamed.
 
-> **`readyState` is required — it names the single workflow state a ticket must
-> sit in to be dispatched.** There is no default and no "any state" mode:
+> **`[tickets].readyState` is required — it names the single workflow state a
+> ticket must sit in to be dispatched.** There is no default and no "any state"
+> mode:
 > omitting it (or leaving it blank) is a config error, because without it every
 > ticket from the source would be eligible in *any* state — including completed
 > ones — which is exactly how a finished ticket could be built a second time.
@@ -433,8 +445,9 @@ and branch `ab/<slug>` are chosen once; existing builds are never renamed.
 >   only while it sits in that state; `readyLabels` defaults to `["autobuild"]`,
 >   so a ticket must carry the label **and** sit in `readyState`.
 >
-> `readyLabels` remains optional and narrows **on top of** `readyState`. With
-> the file tracker, setting it means moving a ticket into `ready/` is no longer
+> `[tickets].readyLabels` remains optional and narrows **on top of**
+> `[tickets].readyState`. With the file tracker, setting it means moving a ticket
+> into `ready/` is no longer
 > enough on its own. A wrong `readyState` fails quietly, not loudly: the config
 > stays valid, nothing matches, and every tick just reports `tick: idle` — so
 > for Linear, confirm the value is a real workflow-state name.
@@ -617,11 +630,19 @@ Each line is `  <path>: <message>`. Common causes:
 - **`needsServer` with no server** — `[verify.<s>].needsServer = true requires a
   [server] table (start, url)…`. Add `[server]` or set `needsServer = false`.
 
-### I never configured `[tickets]` — where are my tickets going?
+### I omitted `[tickets]` — why does config validation fail?
 
-To `.autobuild/tickets`. Omitting `[tickets]` is not an error: it selects the
-local file tracker, which needs no config and no secret. Look for
-`triage/ ready/ doing/ done/` there, and see
+`[tickets].readyState` is mandatory, so omitting the table fails at
+`tickets.readyState` rather than making every ticket state eligible. For the
+local tracker with its default directory, add:
+
+```toml
+[tickets]
+source = "file"
+readyState = "ready"
+```
+
+Tickets then live under `.autobuild/tickets/triage/ ready/ doing/ done/`; see
 [Ticket source and authentication](#ticket-source-and-authentication).
 
 ### `<repo>/autobuild.toml: not found`
@@ -634,17 +655,17 @@ You are not at the repo root. `ab dispatch` and `ab ticket create` read
 `tick: idle` means no ticket passed the dispatch gates. There is no error,
 because nothing failed — the gates just didn't match. Work down the gates:
 
-- **`readyState`** (required) — the ticket's state must match it. With the
-  **file tracker** the state is its directory, so `readyState = "ready"` means a
+- **`[tickets].readyState`** (required) — the ticket's state must match it. With
+  the **file tracker** the state is its directory, so `readyState = "ready"` means a
   ticket in `triage/` never dispatches until you `mv` it into `ready/`. With
   **Linear** the match is exact and case-sensitive, so a value that isn't a real
   workflow-state name silently matches nothing — confirm it against your team's
   workflow.
-- **`readyLabels`** — unset means the ticket source's own default (Linear:
-  `["autobuild"]`; file: none). If you set it, every listed label must *also* be
+- **`[tickets].readyLabels`** — unset means the ticket source's own default
+  (Linear: `["autobuild"]`; file: none). If you set it, every listed label must *also* be
   present, on top of `readyState`.
-- **`capacity`** — blocked and paused builds still hold their slots. At
-  `capacity = 1`, one escalated build stalls all new dispatch.
+- **`[dispatcher].capacity`** — blocked and paused builds still hold their
+  slots. At `capacity = 1`, one escalated build stalls all new dispatch.
 - **The spec gate** — a ticket missing `## Acceptance criteria` (with a list
   item) or `## Out of scope` is bounced to Triage and commented; that shows up
   as `tick: bounced=1`, not `idle`.
