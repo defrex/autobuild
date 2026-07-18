@@ -1842,6 +1842,84 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.squashMergeCalls).toHaveLength(1)
   })
 
+  test('a pending cancellation disables native auto-merge before recording a new conflict', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const enable = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.auto-merge-enabled',
+      payload: { commandSeq: enable.seq },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setAutoMergeState(1, true)
+    const cancel = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      conflicted: 1,
+    })
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    expect(h.forge.autoMergeCalls).toEqual([
+      {
+        workspacePath: `/ws/ab/${slug}`,
+        number: 1,
+        enabled: false,
+        changed: true,
+      },
+    ])
+    const events = await h.store.getEvents(slug)
+    expect(events.map((event) => event.type).slice(-2)).toEqual([
+      'pr.auto-merge-disabled',
+      'pr.conflicted',
+    ])
+    expect(events.at(-2)?.payload).toEqual({ commandSeq: cancel.seq })
+  })
+
+  test('a cancellation arriving during an existing conflict is applied without waiting for reconcile', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const enable = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.auto-merge-enabled',
+      payload: { commandSeq: enable.seq },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+    h.forge.setAutoMergeState(1, true)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'base-old' },
+    })
+    const cancel = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    const events = await h.store.getEvents(slug)
+    expect(events.at(-1)?.type).toBe('pr.auto-merge-disabled')
+    expect(events.at(-1)?.payload).toEqual({ commandSeq: cancel.seq })
+    expect(events.filter((event) => event.type === 'pr.conflicted')).toHaveLength(1)
+  })
+
   test('a conflict is routed to reconcile before any native or direct auto-merge attempt', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)

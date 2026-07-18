@@ -71,11 +71,18 @@ const prStateJson = z.strictObject({
   mergeCommit: z.strictObject({ oid: z.string().min(1) }).nullable(),
 })
 
-// Native desired state and the two independent routing facts. `gh --json`
+// Disabling needs only native desired state. Keep this schema separate from
+// enable-only routing facts so a future mergeStateStatus cannot prevent an
+// operator from revoking consent.
+const nativeAutoMergeJson = z.strictObject({
+  autoMergeRequest: z.object({}).passthrough().nullable(),
+})
+
+// Enabling additionally needs the two independent routing facts. `gh --json`
 // returns exactly these requested fields, so an unknown merge-state enum or a
 // missing head/base is a hard parse failure rather than fallback eligibility.
 const autoMergeJson = z.strictObject({
-  autoMergeRequest: z.object({}).passthrough().nullable(),
+  ...nativeAutoMergeJson.shape,
   mergeStateStatus: z.enum(mergeStateStatuses),
   headRefOid: z.string().min(1),
   baseRefName: z.string().min(1),
@@ -511,6 +518,31 @@ export class GitHubForge implements Forge {
     number: number,
     enabled: boolean,
   ): Promise<AutoMergeResult> {
+    // Cancellation must remain usable when GitHub adds a merge-state enum:
+    // inspect only the one field disabling actually needs.
+    if (!enabled) {
+      const disableViewCmd = [
+        'gh',
+        'pr',
+        'view',
+        String(number),
+        '--json',
+        'autoMergeRequest',
+      ]
+      const disableView = this.parseJson(
+        nativeAutoMergeJson,
+        await this.run(disableViewCmd, workspacePath),
+        disableViewCmd,
+      )
+      if (disableView.autoMergeRequest !== null) {
+        await this.run(
+          ['gh', 'pr', 'merge', String(number), '--disable-auto'],
+          workspacePath,
+        )
+      }
+      return { kind: 'applied' }
+    }
+
     const viewCmd = [
       'gh',
       'pr',
@@ -524,20 +556,7 @@ export class GitHubForge implements Forge {
       await this.run(viewCmd, workspacePath),
       viewCmd,
     )
-    const currentlyEnabled = view.autoMergeRequest !== null
-
-    // Disabling never needs a gate probe. Both an idempotent match and a
-    // successful mutation are application facts correlated to the command.
-    if (!enabled) {
-      if (currentlyEnabled) {
-        await this.run(
-          ['gh', 'pr', 'merge', String(number), '--disable-auto'],
-          workspacePath,
-        )
-      }
-      return { kind: 'applied' }
-    }
-    if (currentlyEnabled) return { kind: 'applied' }
+    if (view.autoMergeRequest !== null) return { kind: 'applied' }
 
     const gate = await this.mergeGatePresence(workspacePath, view.baseRefName)
     const disposition = classifyAutoMergeEnable(view.mergeStateStatus, gate)

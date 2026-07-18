@@ -505,10 +505,29 @@ export class Dispatcher {
     // the build completes); fall back to the repo itself for odd logs.
     const workspacePath = openWorkspace(events)?.ref ?? this.deps.repo
     const prState = await forge.getPrState(workspacePath, pr.number)
+    const autoMerge =
+      prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
-    // A positive conflict always re-enters reconcile before auto-merge
-    // plumbing. In particular, an ungated fallback can never race ahead of the
-    // conflict event and its full post-reconcile verification cycle.
+    // Revoking consent takes priority even while the PR is conflicted. A live
+    // native request could otherwise merge immediately after reconcile pushes
+    // and checks pass, before the next janitor poll gets a chance to cancel it.
+    if (autoMerge?.enabled === false) {
+      const result = await forge.setAutoMerge(workspacePath, pr.number, false)
+      if (result.kind !== 'applied') {
+        throw new Error(
+          `forge returned ${result.kind} while disabling native auto-merge`,
+        )
+      }
+      await store.append(record.slug, {
+        actor: DISPATCHER,
+        type: autoMergeApplicationType(false),
+        payload: { commandSeq: autoMerge.commandSeq },
+      })
+    }
+
+    // A positive conflict re-enters reconcile before any enable attempt. In
+    // particular, an ungated fallback can never race ahead of the conflict
+    // event and its full post-reconcile verification cycle.
     if (prState.state === 'open' && prState.mergeable === false) {
       // Dedupe: a reduced prState of 'conflicted' means reconcile is already
       // pending (a `reconcile.completed` returns it to 'open').
@@ -526,45 +545,34 @@ export class Dispatcher {
       return
     }
 
-    // Native application and the ungated fallback both begin from the same
-    // durable intent predicate. Only `applied` acknowledges the command. A
-    // direct merge is owned solely by this janitor and only after the engine is
-    // parked at awaiting-pr (all verify/finalize work complete).
-    if (prState.state === 'open') {
-      const autoMerge = pendingAutoMerge(state)
-      if (autoMerge !== undefined) {
-        const result = await forge.setAutoMerge(
-          workspacePath,
-          pr.number,
-          autoMerge.enabled,
-        )
-        if (result.kind === 'applied') {
-          await store.append(record.slug, {
-            actor: DISPATCHER,
-            type: autoMergeApplicationType(autoMerge.enabled),
-            payload: { commandSeq: autoMerge.commandSeq },
-          })
-        } else if (
-          result.kind === 'ungated' &&
-          autoMerge.enabled &&
-          prState.mergeable === true
+    // Enabling and the ungated fallback begin from the same durable intent
+    // predicate. Only `applied` acknowledges native state. A direct merge is
+    // owned solely by this janitor and only after the engine is parked at
+    // awaiting-pr (all verify/finalize work complete).
+    if (prState.state === 'open' && autoMerge?.enabled === true) {
+      const result = await forge.setAutoMerge(workspacePath, pr.number, true)
+      if (result.kind === 'applied') {
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: autoMergeApplicationType(true),
+          payload: { commandSeq: autoMerge.commandSeq },
+        })
+      } else if (result.kind === 'ungated' && prState.mergeable === true) {
+        // Re-read at the last possible point. A cancellation, replacement
+        // command, newly due pipeline work, or application fact suppresses
+        // this attempt; the next tick reclassifies from fresh forge state.
+        const latestEvents = await store.getEvents(record.slug)
+        const latestState = reduceBuild(latestEvents)
+        const latestIntent = pendingAutoMerge(latestState)
+        const decision = decideNext(latestEvents, this.deps.config)
+        if (
+          latestState.pr?.number === pr.number &&
+          latestIntent?.enabled === true &&
+          latestIntent.commandSeq === autoMerge.commandSeq &&
+          decision.kind === 'wait' &&
+          decision.reason === 'awaiting-pr'
         ) {
-          // Re-read at the last possible point. A cancellation, replacement
-          // command, newly due pipeline work, or application fact suppresses
-          // this attempt; the next tick reclassifies from fresh forge state.
-          const latestEvents = await store.getEvents(record.slug)
-          const latestState = reduceBuild(latestEvents)
-          const latestIntent = pendingAutoMerge(latestState)
-          const decision = decideNext(latestEvents, this.deps.config)
-          if (
-            latestState.pr?.number === pr.number &&
-            latestIntent?.enabled === true &&
-            latestIntent.commandSeq === autoMerge.commandSeq &&
-            decision.kind === 'wait' &&
-            decision.reason === 'awaiting-pr'
-          ) {
-            await forge.squashMerge(workspacePath, pr.number, result.headSha)
-          }
+          await forge.squashMerge(workspacePath, pr.number, result.headSha)
         }
       }
     }

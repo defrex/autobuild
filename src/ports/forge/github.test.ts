@@ -459,13 +459,21 @@ describe('GitHubForge.setAutoMerge', () => {
     ])
   })
 
-  test('disabling native auto-merge never probes gates', async () => {
+  test('disabling inspects only native state, so future merge-state enums cannot block cancellation', async () => {
     const { forge, calls } = makeForge([
-      view('UNKNOWN', { mergeMethod: 'SQUASH' }),
+      {
+        stdout: JSON.stringify({
+          autoMergeRequest: { mergeMethod: 'SQUASH' },
+        }),
+      },
       {},
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({
       kind: 'applied',
+    })
+    expect(calls[0]).toEqual({
+      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
+      cwd: '/ws/build-1',
     })
     expect(calls.at(-1)).toEqual({
       cmd: ['gh', 'pr', 'merge', '42', '--disable-auto'],
@@ -475,11 +483,11 @@ describe('GitHubForge.setAutoMerge', () => {
   })
 
   test('idempotent desired state only inspects the PR', async () => {
-    for (const [enabled, autoMergeRequest] of [
-      [true, { mergeMethod: 'SQUASH' }],
-      [false, null],
+    for (const [enabled, response] of [
+      [true, view('UNKNOWN', { mergeMethod: 'SQUASH' })],
+      [false, { stdout: JSON.stringify({ autoMergeRequest: null }) }],
     ] as const) {
-      const { forge, calls } = makeForge([view('UNKNOWN', autoMergeRequest)])
+      const { forge, calls } = makeForge([response])
       expect(await forge.setAutoMerge('/ws/build-1', 42, enabled)).toEqual({
         kind: 'applied',
       })
