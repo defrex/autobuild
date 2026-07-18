@@ -81,9 +81,10 @@ Small, independently runnable, crash-safe:
   `[dispatcher].capacity`. On process startup it also attempts every current
   build for its repo, so re-running `ab dispatch` resumes durable work rather
   than only looking for new tickets. Each tick also owns observation
-  back-pressure: unless the durable repository harvest gate is paused, it
-  resumes an unfinished harvest or starts one when the configured count
-  threshold is reached. Cron-friendly.
+  back-pressure: unless the durable repository harvest gate is paused or the
+  latest run is parked on an infrastructure error, it resumes unfinished
+  harvest work or starts one when the configured count threshold is reached. A
+  pending operator resume makes either stop actionable. Cron-friendly.
 - **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
   review → file`) under a repository lease; not a build and not a phase.
 - **ingesters** — other outer-loop processes turning signals into proposals (§12).
@@ -554,9 +555,10 @@ quota, and billing evidence permanent. A failed `start` still returns an
 endable session handle, guaranteeing transcript deposition and
 `session.ended`; only failures with no completed SDK result/handle are thrown.
 Harvest uses the same result: a permanent failure records
-`harvest.failed {willRetry: false}`, whose reducer makes that repository run
-terminal. Failure-tolerant finalize post-steps record `ok: false` and their
-normal follow-up observation.
+`harvest.failed {willRetry: false}`, whose reducer parks that repository run in
+`failed` until an explicit operator resume. Ordinary dispatch ticks do not retry
+it. Failure-tolerant finalize post-steps record `ok: false` and their normal
+follow-up observation.
 
 Pre-build naming does not widen this session/skill contract. A runtime may
 separately register an optional one-shot completion capability
@@ -685,13 +687,26 @@ Harvest pause is a repository-wide durable gate, not a run status. A human
 `harvest.pause-requested` is acknowledged by the kernel as `harvest.paused` at
 the next safe unit boundary; no later step, review round, filing unit, or new
 scan starts while that fact stands. The open run, immutable observation claim,
-artifacts, and completed rounds remain unchanged. A human
-`harvest.resume-requested` is acknowledged as `harvest.resumed`; an open run
-continues from its reduced boundary, while an idle repository simply returns to
-normal threshold handling. Dispatch restart never clears the gate. Pending
-control commands remain actionable so a runner can acknowledge them under the
-repository lease; an acknowledged pause with no pending resume suppresses
-launch entirely.
+artifacts, and completed rounds remain unchanged.
+
+A non-retrying `harvest.failed` is a second durable stop: the latest run remains
+`failed`, owns its claimed snapshot, and is not launched again by ordinary
+watch ticks. A human `harvest.resume-requested` is actionable even when the gate
+was never paused. The kernel acknowledgement `harvest.resumed` opens the gate
+and, only when the latest run is failed, returns that same run to `running` and
+clears its current error projection. It preserves the run id, observation
+claim, scan/proposal/review artifacts, attempt history, reservations, and filed
+proposal facts. Completed and escalated runs remain terminal and are never
+reopened by this acknowledgement.
+
+The runner continues from the reduced boundary: an approved set goes directly
+to filing, and already filed proposal keys are skipped. Attempts remain
+monotonic; if the repaired boundary fails again, a new non-retrying
+`harvest.failed` parks the run again rather than creating a watch-tick retry
+loop. With no open run, resume simply restores normal threshold handling.
+Dispatch restart never clears either stop. Pending control commands remain
+actionable under the repository lease; an acknowledged pause or failed latest
+run with no pending resume suppresses launch entirely.
 
 The fixed workflow is:
 
@@ -710,12 +725,15 @@ The fixed workflow is:
    platform UUID v4 and durably reserve it for that proposal key; only then pass
    the reserved ID through the TicketSource adoption seam. A restart before
    create reuses the reservation, while a restart after create but before the
-   per-proposal filing fact resends the same ID and adopts the ticket. One
-   terminal event commits every occurrence disposition.
+   per-proposal filing fact resends the same ID and adopts the ticket. Error
+   resume also reads those filing facts before each create, so a partially filed
+   approved set creates only its missing tickets. One terminal event commits
+   every occurrence disposition.
 
 The harvester only proposes: it never claims, readies, grooms, or dispatches a
 proposal. A terminal escalation consumes its claimed snapshot so watch ticks do
-not hot-loop. Completed/cancelled/missing proposal refs remain dedup tombstones.
+not hot-loop, and harvest resume never reopens that deliberate human-in-the-loop
+outcome. Completed/cancelled/missing proposal refs remain dedup tombstones.
 Every step brackets start/result events and agent sessions/transcripts, and
 repository harvest appears as the selectable `Harvest` row in the dispatch
 dashboard whenever a latest run or acknowledged pause exists. Its internal run
@@ -797,13 +815,16 @@ or repository log (§15.2.7): `escalation.answered`,
 - Repository harvest is projected with the same `PipelineStep` representation
   and row grammar as builds. Its identity is `Harvest` (never its internal run
   id); its status is right-aligned and uses the shared status colors. An
-  acknowledged repository gate renders literal yellow `PAUSED`, suppresses any
-  old open occurrence from appearing current, and freezes its timer at the
-  acknowledgement. The latest run's steps, claim count, and detail remain
-  visible; a pause before the first run still has a row. `p` appends the human
-  request selected from authoritative reduced gate state and reports
-  `harvest: pause requested` / `harvest: resume requested` in the status slot.
-  `m` remains the build-only explanatory no-op.
+  acknowledged repository gate renders literal yellow `PAUSED`; an
+  infrastructure stop renders literal red `FAILED`, preserves completed steps,
+  and marks the exact failed step. Both suppress an old open occurrence from
+  appearing current and freeze its timer. The latest run's claim count and
+  failure detail remain visible; a pause before the first run still has a row.
+  `p` appends a resume request when the gate is paused **or** the latest run is
+  failed, and otherwise appends pause. Error recovery reports `harvest: error
+  resume requested`, distinct from ordinary `harvest: resume requested`.
+  Escalated runs are not error-resumable; `p` there retains repository-gate
+  semantics. `m` remains the build-only explanatory no-op.
 - Auto-merge intent uses GitHub-native auto-merge whenever a real merge gate
   exists; on a proved-ungated branch it consents to the guarded non-admin squash
   fallback defined in §15.7.
@@ -965,7 +986,7 @@ the matching started fact, never the older conflict snapshot.
 | Type | Actor | Payload |
 |---|---|---|
 | `harvest.pause-requested` / `harvest.resume-requested` | human | `{}` — durable repository commands |
-| `harvest.paused` / `harvest.resumed` | kernel | `{}` — safe-boundary acknowledgements |
+| `harvest.paused` / `harvest.resumed` | kernel | `{}` — safe-boundary acknowledgements; resume also clears a latest failed infrastructure stop |
 | `harvest.started` | kernel/dispatcher | `{run, observations: [{build, seq}], scan: artifact}` — atomically claims the snapshot |
 | `harvest.step.started` / `harvest.step.completed` | kernel | `{run, step: scan \| synthesize \| review \| file, round?, outcome?, artifact?}` |
 | `harvest.session.started` / `harvest.session.ended` | kernel | run/session/role/round and transcript/usage facts |
@@ -975,7 +996,7 @@ the matching started fact, never the older conflict snapshot.
 | `harvest.proposal.filed` | kernel | `{run, proposalKey, ticket}` — post-create adoption/filing boundary |
 | `harvest.completed` | kernel | `{run, dispositions, report}` — authoritative committed ledger facts |
 | `harvest.escalated` | kernel/agent | `{run, source, reason, round?, observations}` |
-| `harvest.failed` | kernel | `{run, step, round?, attempt, error, willRetry}` |
+| `harvest.failed` | kernel | `{run, step, round?, attempt, error, willRetry}` — `willRetry:false` parks the run for explicit resume |
 
 ### 15.4 Finding schema and stall mechanics [D4]
 
@@ -1018,8 +1039,12 @@ sequence/time, pending pause/resume commands, runs, claims, and the disposition
 ledger from repository events. `harvest.pause-requested` alone does not close or
 change a run; only `harvest.paused` closes the gate. While paused,
 `openHarvestRun` still returns the same running snapshot. Opposing requests
-expire older pending intent, acknowledgements clear requests of their kind, and
-`harvest.resumed` reopens the gate without changing run or claim state.
+expire older pending intent and acknowledgements clear requests of their kind.
+A non-retrying failure changes only the latest run to the parked `failed` state;
+it does not commit a terminal outcome or release its claim. `harvest.resumed`
+reopens the repository gate and changes that latest failed run back to running,
+clearing its current failure while preserving all workflow collections and
+historical attempts. It does not reopen completed or escalated runs.
 
 ### 15.6 Walkthroughs
 

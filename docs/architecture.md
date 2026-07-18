@@ -54,14 +54,19 @@ a separate repository journal, including human pause/resume requests, kernel
 boundary acknowledgements, claims, UUID-v4 reservation facts written before
 external creates, per-proposal filing facts, and the committed dedup ledger.
 Build reducers therefore never interpret a non-build workflow. The dispatcher
-suppresses launch only for an acknowledged pause with no pending resume; the
-runner settles commands under the repository lease and checks control between
-durable scan, synthesize, review, filing, and escalation units. Parking leaves
-the open run and claimed occurrence snapshot untouched, so resume skips every
-completed unit rather than rescanning. Typed session deposits live under
-`ab harvest context|submit|verdict`; `ab harvest status` and the selectable
-`Harvest` dashboard row read the same facts. The row omits the internal run id;
-that remains available through status and the repository journal.
+suppresses launch for either an acknowledged pause or a latest non-retrying
+`failed` run when no resume is pending. The runner settles commands under the
+repository lease and checks control between durable scan, synthesize, review,
+filing, and escalation units. `harvest.resumed` opens the gate and reopens only
+the latest failed run; completed and escalated runs remain terminal. Parking
+leaves the run id, claimed occurrence snapshot, artifacts, attempt history,
+reservations, and filing facts untouched, so resume skips every completed unit
+rather than rescanning or re-filing. A repeated problem writes another failed
+fact and parks again, preventing a watch-tick hot loop. Typed session deposits
+live under `ab harvest context|submit|verdict`; `ab harvest status` and the
+selectable `Harvest` dashboard row read the same facts. The row omits the
+internal run id; that remains available through status and the repository
+journal.
 
 ## Pre-build identity
 
@@ -111,8 +116,11 @@ deposits the transcript and `session.ended`, writes the provider message to
 `phase.failed`, and derives immediate policy escalation from durable
 `willRetry: false` before another session can start. A completed turn without a
 typed terminal remains the separate `no-terminal` case. `harvest-runner.ts`
-uses the same result contract; its reducer makes `harvest.failed
-{willRetry:false}` terminal, so a fresh dispatcher cannot retry that run.
+uses the same result contract; its reducer parks `harvest.failed
+{willRetry:false}` until a human resume acknowledgement clears the reduced
+error. Historical attempt counts remain monotonic, but that cleared boundary
+permits one actual session re-entry even when the old occurrence exhausted its
+ordinary budget. A new failure consumes the grant and parks again.
 
 ## Layout
 
@@ -143,9 +151,12 @@ tracks selection as `{kind: 'harvest'} | {kind: 'build', slug}` over the same
 ordered rows the renderer paints, so insertion/removal never retargets by row
 index. `m` narrows that identity to a build and remains explanatory on harvest.
 `p` branches by identity: builds append human events to their stream, while
-harvest appends `harvest.pause-requested` / `harvest.resume-requested` to the
-repository journal from authoritative reduced gate state. Build-runner and
-harvest-runner acknowledge pause/resume at their respective safe boundaries;
+harvest appends `harvest.resume-requested` when the reduced gate is paused or
+the latest run is failed, and otherwise appends `harvest.pause-requested`.
+`FAILED` stays distinct from `RUNNING`, marks the exact stopped step, and uses a
+distinct error-resume status message. An escalated run is never treated as this
+recoverable infrastructure state. Build-runner and harvest-runner acknowledge
+pause/resume at their respective safe boundaries;
 dispatcher code reconciles auto-merge via the `Forge` port. On a blocked build,
 `p` instead opens slug/escalation-bound process state: Enter
 appends one human `escalation.answered` per captured id (`retry` for blank

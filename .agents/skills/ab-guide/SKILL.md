@@ -81,7 +81,11 @@ runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 spec-standard proposals are created directly in Triage. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
 crash-safe without polluting `ab builds` or the fixed phase grammar. Already
-claimed observations never trigger again; idle ticks launch no harvest agent.
+claimed observations never trigger again; idle ticks launch no harvest agent. A
+non-retrying infrastructure failure parks the same run in `failed`: ordinary
+ticks do not retry it, but an explicit human resume reopens it at the durable
+boundary with its claim, artifacts, attempts, reservations, and filing facts
+intact. Completed and escalated runs remain terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
@@ -413,13 +417,16 @@ slug-sorted builds. Selection uses stable kind/slug identity, so repaint,
 re-sort, and harvest appearance or disappearance do not retarget it by row
 index. `Harvest` uses the same marker, right-aligned status column, and status
 colors as builds; its internal run id is not shown. On `Harvest`, `p` appends a
-human repository pause request, or a resume request when the reduced gate is
-already paused; the status slot names the requested action. The kernel
-acknowledges pause only at the next durable workflow boundary, then the row
-shows yellow `PAUSED`. No tick launches new harvest work while that durable gate
-stands, and resume continues the same open run and claimed snapshot rather than
-repeating completed units. The gate survives dispatch restart. `m` remains an
-explanatory build-only no-op; `d` remains repository/process-wide.
+resume request when the reduced gate is paused **or** the latest run is failed;
+otherwise it appends pause. Error recovery has the distinct status message
+`harvest: error resume requested`. The kernel acknowledges control only at a
+durable workflow boundary. Pause renders yellow `PAUSED`; an infrastructure
+stop renders red `FAILED` and marks the exact failed step. No tick launches
+while either stop stands. Resume continues the same claimed snapshot without
+repeating approved work or proposal keys already filed. Attempts stay
+monotonic, so an unresolved problem returns to `FAILED` rather than hot-looping.
+Completed and escalated runs are not reopened. `m` remains an explanatory
+build-only no-op; `d` remains repository/process-wide.
 
 ## Resuming blocked builds from the dashboard
 
@@ -482,8 +489,8 @@ restarted, not that verify never ran.
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
-durable repository pause gate and latest harvest run from the same journal the
-runner resumes. It shows the claimed observation count, each
+durable repository pause/error stops and latest harvest run from the same
+journal the runner resumes. It shows the claimed observation count, each
 scan/synthesize/review/file occurrence and outcome, review rounds, filed ticket
 refs, and any escalation or infrastructure failure. It is read-only and also
 reports an idle or paused repository with no run. The dispatch dashboard shows
