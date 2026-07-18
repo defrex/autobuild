@@ -168,6 +168,9 @@ interface SessionSpec {
 
 /** Longest tail of check output preserved in a verify report (§8.2). */
 const REPORT_TAIL_CHARS = 10_000
+/** Git object ids are 40 hex characters for SHA-1 repositories and 64 for
+ * SHA-256 repositories. `rev-parse <ref>^{commit}` supplies the type check. */
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -440,7 +443,26 @@ export class BuildRunner {
       return
     }
 
-    await store.append(slug, this.startedWrite(decision))
+    // A conflict's recorded baseSha is an observation-time snapshot. Resolve
+    // the build's frozen base branch again at the actual execution boundary,
+    // after the retry guard but before reconcile.started/the agent session.
+    // A crash re-enters this path at the same attempt and refreshes again.
+    let reconcileBaseSha: string | undefined
+    if (phase === 'reconcile') {
+      try {
+        reconcileBaseSha = await this.refreshReconcileBase(events)
+      } catch (error) {
+        await this.failPhase(
+          phase,
+          round,
+          failures.count,
+          `failed to refresh reconcile base: ${errorMessage(error)}`,
+        )
+        return
+      }
+    }
+
+    await store.append(slug, this.startedWrite(decision, reconcileBaseSha))
 
     const spec = PHASE_SPECS[phase]
     await this.executeSession({
@@ -455,6 +477,52 @@ export class BuildRunner {
       isTerminal: (event) =>
         event.type === spec.terminalEvent && roundMatches(event, round),
     })
+  }
+
+  /**
+   * Resolve the current remote tip of this build's immutable base branch.
+   *
+   * The fetch target is build-scoped and internal: concurrent worktrees share
+   * one Git common directory, so FETCH_HEAD or a shared remote-tracking ref
+   * would let another build overwrite the object this attempt resolves. The
+   * explicit ref also makes the fetched remote-only commit available locally.
+   */
+  private async refreshReconcileBase(events: AbEvent[]): Promise<string> {
+    const created = events.find((event) => event.type === 'build.created')
+    if (created === undefined || created.type !== 'build.created') {
+      throw new Error(
+        'this build has no build.created event — cannot resolve its frozen baseBranch (§15.3)',
+      )
+    }
+
+    const sourceRef = `refs/heads/${created.payload.baseBranch}`
+    const targetRef = `refs/autobuild/reconcile/${this.deps.slug}/base`
+    const fetchArgs = [
+      'git',
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      'origin',
+      `+${sourceRef}:${targetRef}`,
+    ]
+    const fetched = await this.deps.exec(fetchArgs, { cwd: this.deps.workspacePath })
+    if (fetched.exitCode !== 0) {
+      throw new Error(
+        `${fetchArgs.join(' ')} exited ${fetched.exitCode}: ` +
+          `${fetched.stderr.trim() || fetched.stdout.trim() || '(no output)'}`,
+      )
+    }
+
+    const resolveArgs = ['git', 'rev-parse', '--verify', `${targetRef}^{commit}`]
+    const resolved = await this.deps.exec(resolveArgs, { cwd: this.deps.workspacePath })
+    const sha = resolved.stdout.trim()
+    if (resolved.exitCode !== 0 || !GIT_OBJECT_ID.test(sha)) {
+      throw new Error(
+        `${resolveArgs.join(' ')} did not resolve a commit SHA: ` +
+          `${resolved.stderr.trim() || sha || '(no output)'}`,
+      )
+    }
+    return sha
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
@@ -1009,7 +1077,10 @@ export class BuildRunner {
   }
 
   /** The phase's started event, payload per the catalog (§15.3). */
-  private startedWrite(decision: RunPhaseDecision): EventWrite {
+  private startedWrite(
+    decision: RunPhaseDecision,
+    reconcileBaseSha?: string,
+  ): EventWrite {
     const { phase, round } = decision
     switch (phase) {
       case 'plan':
@@ -1054,15 +1125,17 @@ export class BuildRunner {
         } satisfies EventWrite<'finalize.started'>
       case 'reconcile': {
         const reconcile = decision.reconcile
-        if (reconcile === undefined) {
-          // The engine contract guarantees this (Decision: present iff
-          // phase === 'reconcile'); keep the runner total anyway.
-          throw new Error('run-phase reconcile decision without reconcile payload')
+        if (reconcile === undefined || reconcileBaseSha === undefined) {
+          // The engine supplies the attempt; runPhase resolves the current
+          // base before calling this helper. Keep the runner total anyway.
+          throw new Error(
+            'run-phase reconcile start requires an attempt and refreshed base SHA',
+          )
         }
         return {
           actor: KERNEL,
           type: 'reconcile.started',
-          payload: { attempt: reconcile.attempt, baseSha: reconcile.baseSha },
+          payload: { attempt: reconcile.attempt, baseSha: reconcileBaseSha },
         } satisfies EventWrite<'reconcile.started'>
       }
     }

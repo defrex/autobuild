@@ -50,8 +50,8 @@ export type Decision =
       phase: CorePhase
       round: number
       feedback?: Feedback
-      /** Present iff phase === 'reconcile' (§15.7). */
-      reconcile?: { attempt: number; baseSha: string }
+      /** Present iff phase === 'reconcile'; execution resolves its base (§15.7). */
+      reconcile?: { attempt: number }
     }
   | { kind: 'run-check'; step: string; command: string; attempt: number }
   | { kind: 'run-agent-verify'; step: string; skill: string; needsServer: boolean; attempt: number }
@@ -159,8 +159,9 @@ interface LogIndex {
    * post-steps are failure-tolerant (§5), so any completion counts. */
   finalizeStepsDone: Set<string>
   /** Latest `pr.conflicted` (full log — the epilogue is restart-orthogonal);
-   * the reducer projects prState but not the payload's baseSha or seq. */
-  lastConflict?: { seq: number; baseSha: string }
+   * only its seq is needed for policy/dedupe. Its baseSha is detection-time
+   * evidence, not the reconcile merge target (§15.7). */
+  lastConflict?: { seq: number }
   /** A `reconcile.started` after lastConflict without its completion — a
    * crashed reconcile re-runs the SAME attempt from its start (§15.6-C). */
   conflictReconcileStarted?: { attempt: number }
@@ -400,7 +401,6 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   // verify:*)* → merged | closed. The dispatcher's janitor emits pr.* and
   // completes the build; the engine only ever runs reconcile here.
   if (state.prState === 'conflicted' && log.lastConflict !== undefined) {
-    const baseSha = log.lastConflict.baseSha
     if (log.conflictReconcileStarted !== undefined) {
       // Crashed reconcile: re-run the SAME attempt from its start (§15.6-C) —
       // the reducer's reconcileAttempts is the kernel's own counter precisely
@@ -410,7 +410,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
         kind: 'run-phase',
         phase: 'reconcile',
         round: crashAttempt,
-        reconcile: { attempt: crashAttempt, baseSha },
+        reconcile: { attempt: crashAttempt },
       }
     }
     const nextAttempt = state.reconcileAttempts + 1
@@ -432,7 +432,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
       kind: 'run-phase',
       phase: 'reconcile',
       round: nextAttempt,
-      reconcile: { attempt: nextAttempt, baseSha },
+      reconcile: { attempt: nextAttempt },
     }
   }
   // open → the janitor is watching the PR; merged/closed → the janitor
@@ -599,7 +599,7 @@ function indexLog(events: AbEvent[]): LogIndex {
   let lastReconcileCompletedSeq = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
-  let lastConflict: { seq: number; baseSha: string } | undefined
+  let lastConflict: { seq: number } | undefined
   let conflictReconcileStarted: { attempt: number } | undefined
   let lastAbortedSeq = 0
 
@@ -712,7 +712,7 @@ function indexLog(events: AbEvent[]): LogIndex {
         break
 
       case 'pr.conflicted':
-        lastConflict = { seq: event.seq, baseSha: event.payload.baseSha }
+        lastConflict = { seq: event.seq }
         conflictReconcileStarted = undefined
         break
       case 'reconcile.started':
