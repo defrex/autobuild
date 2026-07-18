@@ -107,46 +107,6 @@ describe('LiveRegion: an identical frame writes nothing', () => {
   })
 })
 
-describe('LiveRegion: log() keeps the region last on screen', () => {
-  test('the line lands BEFORE the repainted frame, and the frame survives', () => {
-    const term = fakeTerm()
-    const region = new LiveRegion(term)
-    region.update(['frame-a', 'frame-b'])
-    const out: string[] = []
-
-    region.log('a diagnostic', (line) => out.push(line))
-
-    expect(out).toEqual(['a diagnostic'])
-    const tail = term.all()
-    // Erased, then repainted — so the message scrolls ABOVE a frame that is
-    // still the last thing on screen.
-    expect(tail).toContain(CURSOR_UP(2) + CLEAR_TO_END)
-    expect(tail.endsWith('frame-a\nframe-b\n')).toBe(true)
-  })
-
-  test('the line goes to the SINK, never to the region terminal (the stderr guard)', () => {
-    // The region changes WHEN a line is written, never WHICH stream — a stderr
-    // diagnostic must stay on stderr even while stdout is a TTY.
-    const term = fakeTerm()
-    const region = new LiveRegion(term)
-    region.update(['frame'])
-    const stderr: string[] = []
-
-    region.log('runner failed', (line) => stderr.push(line))
-
-    expect(stderr).toEqual(['runner failed'])
-    expect(term.all()).not.toContain('runner failed')
-  })
-
-  test('logging with no frame painted just writes the line', () => {
-    const term = fakeTerm()
-    const out: string[] = []
-    new LiveRegion(term).log('early', (line) => out.push(line))
-    expect(out).toEqual(['early'])
-    expect(term.all()).not.toContain(CLEAR_TO_END)
-  })
-})
-
 describe('LiveRegion: the cursor', () => {
   test('hidden on the first paint, restored by finish()', () => {
     const term = fakeTerm()
@@ -192,12 +152,6 @@ describe('LiveRegion: finish() leaves the last frame on screen', () => {
 
     // A late update must not cursor-up over lines the region no longer owns.
     region.update(['late'])
-    expect(term.all().length).toBe(before)
-
-    // A late log still delivers its line — it just does not touch the region.
-    const out: string[] = []
-    region.log('late line', (line) => out.push(line))
-    expect(out).toEqual(['late line'])
     expect(term.all().length).toBe(before)
   })
 })

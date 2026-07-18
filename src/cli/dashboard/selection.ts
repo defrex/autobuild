@@ -1,37 +1,64 @@
-/** Pure slug-based selection for the dispatch dashboard. */
+/** Pure stable-identity selection for every selectable dashboard row. */
+import type { DashboardModel, DashboardSelection } from './model'
 
-export function initialSelection(slugs: readonly string[]): string | undefined {
-  return slugs[0]
+/** Render order is selection order: optional repository harvest first, then
+ * the model's already slug-sorted builds. */
+export function dashboardSelections(
+  model: Pick<DashboardModel, 'harvest' | 'builds'>,
+): DashboardSelection[] {
+  return [
+    ...(model.harvest !== undefined ? [{ kind: 'harvest' } as const] : []),
+    ...model.builds.map((build) => ({ kind: 'build' as const, slug: build.slug })),
+  ]
+}
+
+export function sameSelection(
+  left: DashboardSelection | undefined,
+  right: DashboardSelection | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.kind === right.kind &&
+    (left.kind === 'harvest' ||
+      (right.kind === 'build' && left.slug === right.slug))
+}
+
+export function initialSelection(
+  rows: readonly DashboardSelection[],
+): DashboardSelection | undefined {
+  return rows[0]
 }
 
 /** Move by one (or any supplied delta) without wrapping. */
 export function moveSelection(
-  slugs: readonly string[],
-  selected: string | undefined,
+  rows: readonly DashboardSelection[],
+  selected: DashboardSelection | undefined,
   delta: number,
-): string | undefined {
-  if (slugs.length === 0) return undefined
-  const current = selected === undefined ? 0 : slugs.indexOf(selected)
+): DashboardSelection | undefined {
+  if (rows.length === 0) return undefined
+  const current = selected === undefined
+    ? 0
+    : rows.findIndex((row) => sameSelection(row, selected))
   const index = current === -1 ? 0 : current
-  const next = Math.max(0, Math.min(slugs.length - 1, index + delta))
-  return slugs[next]
+  const next = Math.max(0, Math.min(rows.length - 1, index + delta))
+  return rows[next]
 }
 
 /**
- * Preserve the selected BUILD across repaints, insertions, and re-sorts. If it
- * disappears, its old row index chooses the successor now occupying that row,
- * or the final predecessor when the old row was last. Only an empty list
- * clears selection.
+ * Preserve the selected ROW across repaints, harvest appearance, and build
+ * re-sorts. If it disappears, its old row index chooses the successor now
+ * occupying that row, or the final predecessor when the old row was last.
+ * Only an empty list clears selection.
  */
 export function reconcileSelection(
-  previousSlugs: readonly string[],
-  nextSlugs: readonly string[],
-  selected: string | undefined,
-): string | undefined {
-  if (nextSlugs.length === 0) return undefined
-  if (selected === undefined) return initialSelection(nextSlugs)
-  if (nextSlugs.includes(selected)) return selected
-  const oldIndex = previousSlugs.indexOf(selected)
-  if (oldIndex === -1) return initialSelection(nextSlugs)
-  return nextSlugs[Math.min(oldIndex, nextSlugs.length - 1)]
+  previousRows: readonly DashboardSelection[],
+  nextRows: readonly DashboardSelection[],
+  selected: DashboardSelection | undefined,
+): DashboardSelection | undefined {
+  if (nextRows.length === 0) return undefined
+  if (selected === undefined) return initialSelection(nextRows)
+  const retained = nextRows.find((row) => sameSelection(row, selected))
+  if (retained !== undefined) return retained
+  const oldIndex = previousRows.findIndex((row) => sameSelection(row, selected))
+  if (oldIndex === -1) return initialSelection(nextRows)
+  return nextRows[Math.min(oldIndex, nextRows.length - 1)]
 }

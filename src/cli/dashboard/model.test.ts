@@ -386,7 +386,12 @@ describe('projectBuild: the active-build filter', () => {
       { repo: '/repos/app', mode: 'watch', capacity: 2 },
     )
     expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'zebra'])
-    expect(model).toMatchObject({ repo: '/repos/app', mode: 'watch', capacity: 2 })
+    expect(model).toMatchObject({
+      repo: '/repos/app',
+      mode: 'watch',
+      capacity: 2,
+      statusLine: '',
+    })
   })
 })
 

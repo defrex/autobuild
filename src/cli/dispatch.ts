@@ -34,9 +34,14 @@ import {
   type UuidSource,
 } from '../ids'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
-import { buildDashboard, type DashboardModel } from './dashboard/model'
+import {
+  buildDashboard,
+  type DashboardModel,
+  type DashboardSelection,
+} from './dashboard/model'
 import { renderDashboard } from './dashboard/render'
 import {
+  dashboardSelections,
   moveSelection,
   reconcileSelection,
 } from './dashboard/selection'
@@ -307,7 +312,8 @@ class DispatchLoop {
    * model ticks without a re-read. */
   private model: DashboardModel | undefined
   /** Ephemeral per-process controls — deliberately absent from durable state. */
-  private selectedSlug: string | undefined
+  private selection: DashboardSelection | undefined
+  private statusLine = ''
   private drained = false
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
@@ -396,15 +402,17 @@ class DispatchLoop {
   private syncModelControls(): void {
     if (this.model === undefined) return
     const {
-      selectedSlug: _oldSelection,
+      selection: _oldSelection,
+      statusLine: _oldStatusLine,
       resumeInput: _oldResumeInput,
       ...base
     } = this.model
     this.model = {
       ...base,
       drained: this.drained,
-      ...(this.selectedSlug !== undefined
-        ? { selectedSlug: this.selectedSlug }
+      statusLine: this.statusLine,
+      ...(this.selection !== undefined
+        ? { selection: this.selection }
         : {}),
       ...(this.resumePrompt !== undefined
         ? {
@@ -418,20 +426,29 @@ class DispatchLoop {
   }
 
   private moveSelection(delta: number): void {
-    const slugs = this.model?.builds.map((build) => build.slug) ?? []
-    this.selectedSlug = moveSelection(slugs, this.selectedSlug, delta)
+    const rows = this.model === undefined ? [] : dashboardSelections(this.model)
+    this.selection = moveSelection(rows, this.selection, delta)
     this.syncModelControls()
     this.paint()
   }
 
-  private async selectedBuild(): Promise<
-    { slug: string; state: BuildState } | undefined
-  > {
-    const slug = this.selectedSlug
-    if (slug === undefined) {
-      this.warn('dashboard action ignored: no active build is selected')
+  private async selectedBuild(
+    action: 'auto-merge' | 'pause/resume',
+  ): Promise<{ slug: string; state: BuildState } | undefined> {
+    const selection = this.selection
+    if (selection === undefined) {
+      this.warn('dashboard action ignored: no active row is selected')
       return undefined
     }
+    if (selection.kind === 'harvest') {
+      this.say(
+        action === 'auto-merge'
+          ? 'Harvest auto-merge unavailable: select a build'
+          : 'Harvest pause/resume unavailable: harvest controls are not implemented',
+      )
+      return undefined
+    }
+    const slug = selection.slug
     const record = await this.wiring.store.getBuild(slug)
     if (record === null || record.repo !== this.opts.targetRepo) {
       this.warn(`dashboard action ignored: selected build ${slug} disappeared`)
@@ -448,7 +465,7 @@ class DispatchLoop {
   }
 
   private async togglePause(): Promise<void> {
-    const selected = await this.selectedBuild()
+    const selected = await this.selectedBuild('pause/resume')
     if (selected === undefined) return
 
     // A blocker is an escalation gate, not a pause state. It takes precedence
@@ -549,7 +566,7 @@ class DispatchLoop {
   }
 
   private async toggleAutoMerge(): Promise<void> {
-    const selected = await this.selectedBuild()
+    const selected = await this.selectedBuild('auto-merge')
     if (selected === undefined) return
     const cancel = selected.state.autoMerge.requested
     await this.wiring.store.append(selected.slug, {
@@ -850,43 +867,42 @@ class DispatchLoop {
     }
   }
 
-  // ── Message routing (dashboard mode) ──────────────────────────────────────
+  // ── Message routing ───────────────────────────────────────────────────────
   //
-  // ONE rule: the dashboard is a SUPPLEMENT to the line output, never a
-  // replacement. The only line it suppresses is a literal no-op `tick: idle`.
-  // Every other line still prints, on the stream it uses today — routed
-  // through the region so it scrolls above the frame instead of being eaten by
-  // the next repaint. A parked-`done` build is filtered OUT of the dashboard
-  // by construction, and TickReport carries bounced/claimRaces/merged/abandoned
-  // counts no row ever shows, so suppressing these would be an information
-  // regression — worst in the interactive `--once` an operator runs by hand.
-  //
-  // Net effect: interactive `ab dispatch` prints strictly MORE than plain.
+  // The interactive frame is the dashboard's ONLY output surface. Every
+  // dispatcher notice replaces one process-local status row and repaints the
+  // cached projection synchronously; a concurrent store poll overlays this
+  // value again before painting, so an older projection cannot erase it.
+  // Plain/non-interactive mode keeps the existing line sinks exactly.
 
-  /** A line on stdout, above the frame. */
+  private setStatus(line: string): void {
+    this.statusLine = line
+    this.syncModelControls()
+    this.paint()
+  }
+
   private say(line: string): void {
-    if (this.region !== undefined) this.region.log(line, this.opts.stdout)
+    if (this.dashboard) this.setStatus(line)
     else this.opts.stdout(line)
   }
 
-  /** A line on stderr, above the frame — the stream is never rewritten. */
   private warn(line: string): void {
-    if (this.region !== undefined) this.region.log(line, this.opts.stderr)
+    if (this.dashboard) this.setStatus(line)
     else this.opts.stderr(line)
   }
 
   /**
-   * Dependency diagnostics print as their own lines above the counts — this
-   * is the operator's only view of why a ready ticket is sitting still, and
-   * the acceptance criterion is that it needs no provider, filesystem, or
+   * Dependency diagnostics are independent notices (line-oriented in plain
+   * mode, successive replacements of the one dashboard status row on a TTY).
+   * This is the operator's only view of why a ready ticket is sitting still,
+   * and the acceptance criterion is that it needs no provider, filesystem, or
    * database inspection. The counts map guards on `typeof count === 'number'`
    * because a non-numeric TickReport field would otherwise be dropped here
    * silently (`count > 0` is false for an array, with no type error).
    *
-   * The diagnostics route through `say()` rather than `opts.stdout` for the
-   * reason given above: on a TTY a raw write would land inside the frame the
-   * region is about to repaint. `say()` is the identity in plain mode, so
-   * their line-oriented behavior is unchanged.
+   * `say()` is the plain stdout identity and the dashboard status overlay, so
+   * line-oriented behavior is unchanged while interactive output never leaves
+   * the frame.
    */
   private printReport(
     report: Awaited<ReturnType<Dispatcher['tick']>>,
@@ -901,8 +917,8 @@ class DispatchLoop {
       this.say(`tick: ${parts.join(' ')}`)
       return true
     }
-    // A tick that did something is worth a scroll line; a tick that did
-    // nothing is the every-10s noise the dashboard replaces.
+    // A tick that did something is worth a plain line or dashboard status;
+    // idle is the every-10s noise the interactive frame suppresses.
     if (!this.dashboard && printIdle) {
       this.opts.stdout('tick: idle')
       return true
@@ -948,7 +964,9 @@ class DispatchLoop {
       }
     }
 
-    const previousSlugs = this.model?.builds.map((build) => build.slug) ?? []
+    const previousRows = this.model === undefined
+      ? []
+      : dashboardSelections(this.model)
     const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
     const harvestEvents =
       repoRecord === null
@@ -965,11 +983,11 @@ class DispatchLoop {
       },
       harvestEvents,
     )
-    const nextSlugs = projected.builds.map((build) => build.slug)
-    this.selectedSlug = reconcileSelection(
-      previousSlugs,
-      nextSlugs,
-      this.selectedSlug,
+    const nextRows = dashboardSelections(projected)
+    this.selection = reconcileSelection(
+      previousRows,
+      nextRows,
+      this.selection,
     )
     this.model = projected
     this.syncModelControls()
@@ -1047,7 +1065,7 @@ class DispatchLoop {
       this.stopInput()
     } catch (error) {
       // Cursor restoration must not be skipped just because stdin restoration
-      // itself failed. Keep the failure visible above the final frame.
+      // itself failed. Keep the failure visible in the final status row.
       this.warn(
         `dashboard input cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
       )
@@ -1066,7 +1084,9 @@ class DispatchLoop {
   async run(): Promise<void> {
     const capacity = this.config.dispatcher.capacity
     if (this.opts.once) {
-      this.say(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)
+      if (!this.dashboard) {
+        this.say(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)
+      }
       // Render BEFORE the tick and until the drain finishes, so the operator
       // watches the initial pass's builds change state while they run. The
       // render loop only reads: `--once` still calls tick() exactly ONCE, so
@@ -1097,10 +1117,12 @@ class DispatchLoop {
       this.opts.sleep ??
       ((ms: number) =>
         interruptibleSleep(ms, [this.opts.signal, this.inputStop.signal]))
-    this.say(
-      `ab dispatch — watching ${this.opts.targetRepo} (capacity ${capacity}, ` +
-        `every ${Math.round(intervalMs / 1000)}s) — Ctrl-C to stop`,
-    )
+    if (!this.dashboard) {
+      this.say(
+        `ab dispatch — watching ${this.opts.targetRepo} (capacity ${capacity}, ` +
+          `every ${Math.round(intervalMs / 1000)}s) — Ctrl-C to stop`,
+      )
+    }
     try {
       this.startInput()
       this.startRendering()
@@ -1128,7 +1150,9 @@ class DispatchLoop {
       // SIGINT lands here too: without it the region keeps the cursor hidden.
       await this.finishRendering()
     }
-    this.say('ab dispatch stopped')
+    // The finished interactive frame stays on screen; never append a late line
+    // beneath it. Plain mode retains its historical shutdown line.
+    if (!this.dashboard) this.say('ab dispatch stopped')
   }
 }
 
