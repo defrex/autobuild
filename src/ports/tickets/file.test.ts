@@ -191,7 +191,7 @@ describe('FileTicketSource', () => {
     await seedTicket('file-1', { state: 'triage' })
     const tickets = source()
 
-    // `[dispatcher] readyState = "ready"` must mean the ready/ directory.
+    // `[tickets] readyState = "ready"` must mean the ready/ directory.
     await tickets.transition('file-1', 'ready')
     expect((await tickets.get('file-1'))?.state).toBe('Ready')
     expect((await tickets.listReady({ state: 'READY' })).map((t) => t.ref.id)).toEqual([
@@ -227,7 +227,7 @@ describe('FileTicketSource', () => {
   test('claim succeeds on a ticket in triage/ — readyState = "Triage" must not stall', async () => {
     // Regression guard, not an arbitrary edge case: claim refuses tickets
     // ALREADY in Doing/Done rather than requiring Ready. Tighten it back to
-    // "must be Ready" and a legal `[dispatcher] readyState = "Triage"` silently
+    // "must be Ready" and a legal `[tickets] readyState = "Triage"` silently
     // stalls forever — listReady yields triage/ tickets and every claim refuses.
     await seedTicket('file-1', { state: 'triage' })
     const tickets = source()

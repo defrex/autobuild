@@ -193,7 +193,7 @@ export class FileTicketSource implements TicketSource {
    * visibly removes it from ready/" true.
    *
    * The guard refuses a ticket ALREADY in Doing/Done rather than requiring one
-   * in Ready. That inversion is deliberate: a legal `[dispatcher] readyState =
+   * in Ready. That inversion is deliberate: a legal `[tickets] readyState =
    * "Triage"` would otherwise stall forever — listReady would yield triage/
    * tickets and every claim would refuse them. Refusing Doing/Done is
    * sufficient for both obligations: the ticket leaves ready/, and it cannot be

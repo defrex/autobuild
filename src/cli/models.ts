@@ -4,7 +4,7 @@
  * its ids are provider-native (`openai/gpt-5.6-sol`, `moonshotai/kimi-k3`), so
  * "I want GLM 5.2 for code-review" needs a way to find `.../glm-5.2` before
  * editing autobuild.toml. This lists Pi's catalog filtered by a substring so
- * the id can be pasted straight into `[agent]`/`[roles]`.
+ * the id can be pasted straight into `[roles.default]` or a concrete role.
  *
  * The SDK import sits behind an injectable seam (like PiAgentRunner's factory)
  * so the command is unit-testable offline.
@@ -74,6 +74,6 @@ export async function abModels(opts: AbModelsOptions): Promise<void> {
   }
   opts.stdout('')
   opts.stdout(
-    `${matched.length} model(s) — paste a provider-qualified id into autobuild.toml [agent] or [roles].`,
+    `${matched.length} model(s) — paste a provider-qualified id into autobuild.toml [roles.default] or a concrete [roles.<name>] entry.`,
   )
 }

@@ -1,18 +1,17 @@
 /**
- * The zero-config claim, end to end (SPEC §3.3, §13): a real Dispatcher tick
- * driving a REAL FileTicketSource over a real directory — no fake ticket
- * source — with a config that has no [tickets] table. The only required
- * dispatcher key is `readyState` (AUT-11), which the harness injects as
- * `"ready"`; the file source canonicalizes it to the `ready/` directory, so the
- * gate stays "the directory a ticket sits in."
+ * The minimal file-source setup, end to end (SPEC §3.3, §13): a real
+ * Dispatcher tick driving a REAL FileTicketSource over a real directory — no
+ * fake ticket source. The required `[tickets].readyState = "ready"` is explicit
+ * while `dir` is omitted, so this also covers the default
+ * `.autobuild/tickets` location. The file source canonicalizes the configured
+ * state to the `ready/` directory, keeping the gate "the directory a ticket
+ * sits in."
  *
- * This is the spec's headline: `mv` a ticket into `ready/` and the next tick
- * dispatches it. The pieces are unit-tested apart (file.test.ts owns the
- * adapter, the readyCriteria block in dispatcher.test.ts owns resolution);
- * what only this file can show is that they AGREE — that the directory
- * readyCriteria says to scan is the one claim() will take from. A tightening
- * of either side that silently stalls the dispatcher fails here and nowhere
- * else.
+ * The pieces are unit-tested apart (file.test.ts owns the adapter, the
+ * readyCriteria block in dispatcher.test.ts owns resolution); what only this
+ * file can show is that they AGREE — that the directory readyCriteria says to
+ * scan is the one claim() will take from. A tightening of either side that
+ * silently stalls the dispatcher fails here and nowhere else.
  *
  * Note it does NOT go through `ab dispatch`, and that is permanent, not a
  * workaround: abDispatch's defaultWire opens a real SQLite store and a real
@@ -56,29 +55,27 @@ const CONFORMING_BODY = [
 let repoDir: string
 
 beforeEach(async () => {
-  repoDir = await mkdtemp(join(tmpdir(), 'ab-zero-config-'))
+  repoDir = await mkdtemp(join(tmpdir(), 'ab-file-dispatch-'))
 })
 
 afterEach(async () => {
   await rm(repoDir, { recursive: true, force: true })
 })
 
-/** The tracker the factory picks when autobuild.toml says nothing about tickets. */
+/** The default tracker path selected when [tickets].dir is absent. */
 const trackerDir = () => join(repoDir, '.autobuild', 'tickets')
 
 /**
- * `[dispatcher].readyState` is required now (AUT-11). The file tracker's ready
- * gate IS the `ready/` directory, and `stateDir` canonicalizes `"ready"` to it,
- * so every fixture here gets `readyState = "ready"` unless it sets its own —
- * appended into an existing `[dispatcher]` header (TOML forbids the table
- * twice) or prepended as its own table.
+ * The file tracker's ready gate is the `ready/` directory. Fixtures receive
+ * `[tickets].readyState = "ready"` inside an existing tickets table or in a
+ * minimal file-source table when none exists.
  */
 function withReadyState(toml: string): string {
   if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
-  if (/(^|\n)\[dispatcher\]/.test(toml)) {
-    return toml.replace(/(^|\n)(\[dispatcher\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
+  if (/(^|\n)\[tickets\]/.test(toml)) {
+    return toml.replace(/(^|\n)(\[tickets\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
   }
-  return `[dispatcher]\nreadyState = "ready"\n${toml}`
+  return `[tickets]\nsource = "file"\nreadyState = "ready"\n${toml}`
 }
 
 function harness(toml = '') {
@@ -112,8 +109,8 @@ function harness(toml = '') {
 
 const ls = (state: string) => readdir(join(trackerDir(), state))
 
-describe('zero-config dispatch over the real file tracker', () => {
-  test('no [tickets] table, no labels: mv into ready/ is sufficient to dispatch', async () => {
+describe('minimal config dispatch over the real file tracker', () => {
+  test('default dir and no labels: mv into ready/ is sufficient to dispatch', async () => {
     const h = harness()
 
     // Create files to triage/, then groom it exactly the way a human or the
@@ -193,7 +190,7 @@ describe('zero-config dispatch over the real file tracker', () => {
 
   test('explicit [tickets] dir + readyLabels still gate the way they always did', async () => {
     const h = harness(
-      '[tickets]\nsource = "file"\ndir = "tickets"\n[dispatcher]\nreadyLabels = ["autobuild"]\n',
+      '[tickets]\nsource = "file"\ndir = "tickets"\nreadyLabels = ["autobuild"]\n',
     )
     const plain = await h.tickets.create({ title: 'Unlabelled', body: CONFORMING_BODY })
     const labelled = await h.tickets.create({

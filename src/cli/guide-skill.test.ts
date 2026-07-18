@@ -23,7 +23,6 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
-  agentDefaultsSchema,
   dispatcherSchema,
   finalizeSchema,
   harvestSchema,
@@ -69,7 +68,6 @@ const TABLE_FIELDS: Record<string, string[]> = {
     ...Object.keys(verifyAgentStepSchema.shape),
   ],
   finalize: Object.keys(finalizeSchema.shape),
-  agent: Object.keys(agentDefaultsSchema.shape),
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   dispatcher: Object.keys(dispatcherSchema.shape),

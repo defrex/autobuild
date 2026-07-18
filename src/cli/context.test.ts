@@ -437,7 +437,8 @@ describe('buildContext — code-review (§8.3: commit range, prior findings, dis
 
 describe('buildContext — verify:<step> (§8.3: spec, step config, commit range)', () => {
   const TOML = [
-    '[dispatcher]',
+    '[tickets]',
+    'source = "file"',
     'readyState = "ready"',
     '',
     '[commands]',

@@ -25,17 +25,16 @@ afterEach(async () => {
 const FILE_TICKETS_TOML = ['[tickets]', 'source = "file"', 'dir = "tickets"', ''].join('\n')
 
 /**
- * `[dispatcher].readyState` is required now (AUT-11), and every config these
- * tests write goes through `parseConfig`. Inject `readyState = "ready"` unless
- * the fixture sets its own — appended into an existing `[dispatcher]` header
- * (TOML forbids the table twice) or prepended as its own table.
+ * `[tickets].readyState` is required, and every normal fixture here goes
+ * through `parseConfig`. Inject it into an existing tickets table or prepend a
+ * minimal file-source table when the fixture is about another config section.
  */
 function withReadyState(toml: string): string {
   if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
-  if (/(^|\n)\[dispatcher\]/.test(toml)) {
-    return toml.replace(/(^|\n)(\[dispatcher\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
+  if (/(^|\n)\[tickets\]/.test(toml)) {
+    return toml.replace(/(^|\n)(\[tickets\][^\n]*\n)/, `$1$2readyState = "ready"\n`)
   }
-  return `[dispatcher]\nreadyState = "ready"\n${toml}`
+  return `[tickets]\nsource = "file"\nreadyState = "ready"\n${toml}`
 }
 
 async function writeRepo(configToml: string): Promise<void> {
@@ -115,7 +114,11 @@ describe('abTicketCreate', () => {
 
     // The CLI hands the factory the config verbatim plus the repo: resolving a
     // relative dir (and deciding it was defaulted) is the factory's job now.
-    expect(created.config).toEqual({ source: 'file', dir: 'tickets' })
+    expect(created.config).toEqual({
+      source: 'file',
+      readyState: 'ready',
+      dir: 'tickets',
+    })
     expect(created.targetRepo).toBe(tmp)
     expect(created.env).toEqual({ LINEAR_API_KEY: 'k' })
     expect(created.draft).toEqual({
@@ -165,11 +168,27 @@ describe('abTicketCreate', () => {
     ).rejects.toThrow(/autobuild\.toml: not found/)
   })
 
-  test('a config without [tickets] files to the local tracker — no config, no secret', async () => {
-    // The inverse of the old rejection test: this used to be the error path.
-    // Deliberately runs the REAL factory (no sourceFactory), so it proves the
-    // whole zero-config seam from autobuild.toml to bytes on disk.
-    await writeRepo('[project]\nbaseBranch = "main"\n')
+  test('a config without [tickets] fails at the mandatory ready-state path', async () => {
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      '[project]\nbaseBranch = "main"\n',
+    )
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, '## What and why\n\nBecause.\n')
+
+    await expect(
+      abTicketCreate({
+        targetRepo: tmp,
+        title: 'Rate-limit auth',
+        bodyFile,
+        env: {},
+        stdout: () => {},
+      }),
+    ).rejects.toThrow('tickets.readyState')
+  })
+
+  test('an explicit file source with no dir uses .autobuild/tickets', async () => {
+    await writeRepo('[tickets]\nsource = "file"\n')
     const bodyFile = join(tmp, 'spec.md')
     await writeFile(bodyFile, '## What and why\n\nBecause.\n')
     const lines: string[] = []

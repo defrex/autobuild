@@ -37,7 +37,8 @@ function config(
 ) {
   return parseConfig(
     [
-      '[dispatcher]',
+      '[tickets]',
+      'source = "file"',
       'readyState = "Ready"',
       '[harvest]',
       `threshold = ${threshold}`,

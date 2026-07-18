@@ -1,12 +1,12 @@
-# auto-build
+# Autobuild
 
-auto-build takes a groomed ticket to an open pull request. It plans the work,
+Autobuild takes a groomed ticket to an open pull request. It plans the work,
 implements it, reviews its own code, runs your verification steps, opens the
 PR, and reconciles conflicts against your base branch — as a sequence of agent
 sessions driven by deterministic code. Once the PR lands, it records the merge
 and closes the build out.
 
-**auto-build never bypasses your merge gates.** It opens PRs and watches them.
+**Autobuild never bypasses your merge gates.** It opens PRs and watches them.
 You can land one yourself or press `m` in the dispatch dashboard to request
 GitHub-native squash auto-merge; required checks still decide when it lands,
 and `m` cancels the request. The last word on what enters your base branch
@@ -19,17 +19,17 @@ type them.
 **What it addresses:** the gap between "an agent can write this code" and "this
 change is planned, reviewed, verified, and on the record, ready for me to
 land." Coding agents are good at the middle of that sentence and bad at the
-ends. auto-build owns the ends: state lives in a typed, append-only event log,
+ends. Autobuild owns the ends: state lives in a typed, append-only event log,
 phase transitions are code and not model judgment, and every build leaves a
 queryable paper trail.
 
 **What stays yours:** three things.
 
 1. **Grooming** a ticket to [the spec standard](docs/spec-standard.md) — what
-   and why, acceptance criteria, out of scope. auto-build never grooms its own
-   work: a ticket becomes dispatchable only when it passes your ready gate —
-   moved into `ready/` with the file tracker, or labelled `autobuild` on Linear
-   — and that act is a human one.
+   and why, acceptance criteria, out of scope. Autobuild never grooms its own
+   work: a ticket becomes dispatchable only when it passes your configured
+   ready-state gate — moved into `ready/` with the file tracker, or placed in
+   the named Linear state with any required labels — and that act is human.
 2. **Answering escalations** — the questions a build parks on rather than
    deciding alone.
 3. **Reviewing and choosing when to land the PR.** Merge it yourself, or opt a
@@ -94,9 +94,9 @@ an early adopter.
 - [Bun](https://bun.sh) — the runtime.
 - `git`.
 - The [`gh` CLI](https://cli.github.com), installed and authenticated
-  (`gh auth login`). auto-build shells out to it for every forge operation and
+  (`gh auth login`). Autobuild shells out to it for every forge operation and
   uses whatever credentials `gh` resolves.
-- Credentials for the Claude Agent SDK. auto-build passes your environment
+- Credentials for the Claude Agent SDK. Autobuild passes your environment
   through to the SDK and does not read any API key itself, so the SDK's own
   authentication applies — see the
   [Claude Agent SDK docs](https://docs.claude.com/en/api/agent-sdk/overview).
@@ -126,7 +126,7 @@ an early adopter.
 
 ## Installation
 
-> **Status: unresolved.** There is no supported way to install auto-build yet.
+> **Status: unresolved.** There is no supported way to install autobuild yet.
 > The package is private and unpublished, and choosing a distribution mechanism
 > is an open decision. This section will name a real command when there is one.
 
@@ -186,12 +186,11 @@ is an error, so a typo cannot silently disable a verifier.
 | `[verify]` | `steps = [...]` — the ordered verify phases | `[]` |
 | `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer` | `needsServer = false` |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
-| `[agent]` | Repo-wide defaults for `runtime`, `model`, and the optional Pi `extensions` allowlist. | absent ⇒ the built-in fallback runtime + its own default model; extensions hermetic |
-| `[roles]` | Role → per-step override `{ runtime?, model?, extensions? }`, most-specific-first (see below), including the optional pre-build `slug` naming role. Registered runtimes: `claude` (Claude models), `pi` (provider-qualified Kimi/GPT models). | — |
+| `[roles]` | Role → `{ runtime?, model?, extensions? }`. Reserved `default` is the optional inheritance base; concrete entries include pipeline roles and optional pre-build `slug` naming. | absent `default` ⇒ the wiring-fallback runtime + its own default model; extensions hermetic |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `5` |
-| `[dispatcher]` | `capacity`, optional `readyLabels`, **required `readyState`** | `1`; `readyState` names the single dispatchable state and has no default (see below) |
+| `[dispatcher]` | `capacity` — concurrent builds for this repo | `1` |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
-| `[tickets]` | Optional. Which ticket source to drive — see below | absent = the local file tracker at `.autobuild/tickets` |
+| `[tickets]` | Required. Ticket source and lifecycle/readiness fields, including **required `readyState`** and optional `readyLabels` — see below | `readyState` has no default; file `dir` defaults to `.autobuild/tickets` |
 | `[harvest]` | Observation-count back-pressure for the staged harvester: positive `threshold` | `threshold = 10` |
 | `[outer]` | Map of other scheduled ingesters → `{ cron = "…" }`; the exact `harvest` key is rejected | — |
 
@@ -210,48 +209,69 @@ kind = "check"
 command = "test"
 ```
 
-**Runtime, model, and extensions — set once, override per step.** Every agent
-session runs on a `runtime` (the adapter that executes it), a `model`, and — for
-the `pi` runtime — an optional `extensions` allowlist of installed Pi packages
-(e.g. `web-access`, `subagents`). Set the repo-wide default in `[agent]`,
-override per step in `[roles]`. Extensions are **off by default** (hermetic):
+**Runtime, model, and extensions — one role map with explicit inheritance.**
+Every agent session runs on a `runtime` (the adapter that executes it), a
+`model`, and — for `pi` — an optional `extensions` allowlist of installed Pi
+packages (e.g. `web-access`, `subagents`). The reserved optional
+`[roles.default]` entry is the repo-wide base; it is never a phase:
 
 ```toml
-[agent]
-runtime = "claude"                                   # no model ⇒ the runtime's own default
+[roles.default]
+runtime = "claude"                         # no model anywhere ⇒ this runtime's own default
 
-[roles]
-slug        = { model = "openai/gpt-5.6-sol" }                                      # optional pre-build naming override
-code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }  # pinned pair + web grounding
-plan        = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }     # model only ⇒ pi; plus extensions
+[roles.slug]
+runtime = "pi"
+model = "openai/gpt-5.6-sol"               # optional pre-build naming override
+
+[roles.code-review]
+runtime = "pi"
+model = "moonshotai/kimi-k3"
+extensions = ["web-access"]                # pinned pair + web grounding
+
+[roles.plan]
+runtime = "pi"
+model = "openai/gpt-5.6-sol"
+extensions = ["subagents", "web-access"]
 ```
 
-Grant `web-access`/`subagents` to plan and review so they can ground on real
-docs and fan out sub-agents; leave `implement` and `verify` hermetic so nothing
-external flows into committed code. `ab models [query]` looks up provider-qualified model ids.
+Each concrete role merges over `default` **independently per field**. A set
+`extensions` list, including `[]`, replaces the default list wholesale;
+omitting it inherits, and omitting it from both entries is hermetic. Grant
+`web-access`/`subagents` only where wanted. `ab models [query]` looks up
+provider-qualified model ids.
 
-Overrides resolve **most-specific-first**: `runtime + model` pins the pair
-(a runtime that can't serve the model is a config error); `runtime` alone uses
-that runtime's default model; `model` alone routes to a runtime that serves it
-(the default runtime wins when it qualifies, otherwise the single supporter —
-zero or several non-default supporters is a loud error); neither falls back to
-the `[agent]` default. Two runtimes ship today: **`claude`** (Claude models)
-and **`pi`** (Kimi/Moonshot and GPT/OpenAI models). The whole config is
-resolved **before any build launches**, so a typo'd runtime fails loudly at
-`ab dispatch`, never mid-build. Slug naming follows the `[agent]` default unless
-`[roles].slug` overrides it. Only its runtime/model selection applies: naming is
-a tool-free one-shot completion, not a pipeline phase or resumable session. A
-runtime without that capability simply uses the deterministic title fallback.
+After merging, the exact runtime/model pair must be compatible. A model-only
+override remains on its inherited runtime — the resolver never searches for a
+supporting runtime — and an incompatible inherited model is never replaced by
+a runtime-local default. Only when neither the concrete role nor `default`
+names a model does the selected runtime supply its own default. All bad roles
+are reported together **before any build launches**. Two runtimes ship today:
+**`claude`** (Claude models) and **`pi`** (Kimi/Moonshot and GPT/OpenAI
+models). Omitting `[roles.default]` preserves the wiring fallback plus its
+built-in model. The removed `[agent]` table fails with a message directing you
+to `[roles.default]`; it is not silently migrated.
+
+Slug naming inherits `default` unless `[roles.slug]` overrides it. Only its
+runtime/model selection applies: naming is a tool-free one-shot completion,
+not a pipeline phase or resumable session. A runtime without that capability
+uses the deterministic title fallback.
 
 ### 3. Point at a ticket source and set up auth
 
-The `[tickets]` table is what the dispatcher watches. It is **optional**, and
-secrets never go in this file.
+The `[tickets]` table is what the dispatcher watches. It is **required** so
+that every repository explicitly names its dispatchable state; secrets never
+go in this file.
 
-**The local file tracker (the default — no table, no config, no secret).** Omit
-`[tickets]` entirely and you get a file tracker at `.autobuild/tickets`. That is
-the zero-config path: a repo dispatches without you configuring a ticket source
-at all.
+**The local file tracker (default directory, no secret).** The generated config
+uses a file tracker at `.autobuild/tickets`:
+
+```toml
+[tickets]
+source = "file"
+readyState = "ready"
+```
+
+`dir` remains optional; omitting it selects `.autobuild/tickets`.
 
 The tracker is four state directories, and **a ticket's state is the directory
 it sits in**:
@@ -292,11 +312,12 @@ title = "Throttle repeated failed logins"
 it. Claiming a ticket renames it into `doing/`.
 
 To put the tracker somewhere else — note that an **explicit `dir` is your
-directory**, so auto-build does not gitignore it for you:
+directory**, so autobuild does not gitignore it for you:
 
 ```toml
 [tickets]
 source = "file"
+readyState = "ready"     # required; maps to the ready/ directory
 dir = "tickets"          # optional; default ".autobuild/tickets"
 createState = "Triage"   # optional; "Triage" is the default
 triageState = "Triage"   # optional; "Triage" is the default
@@ -308,6 +329,8 @@ triageState = "Triage"   # optional; "Triage" is the default
 [tickets]
 source = "linear"
 teamKey = "ENG"                # required
+readyState = "Todo"            # required; exact, case-sensitive workflow-state name
+#readyLabels = ["autobuild"]   # optional; absent uses this Linear default
 claimedState = "In Progress"   # optional; this is the adapter's default
 createState = "Triage"         # optional; absent = the team's default state
 triageState = "Backlog"        # optional; absent = "Backlog" — must name a state the team has
@@ -315,7 +338,7 @@ triageState = "Backlog"        # optional; absent = "Backlog" — must name a st
 
 The API key comes from `LINEAR_API_KEY`, in your environment or a local `.env`.
 
-**GitHub** auth is whatever `gh` resolves. There is no auto-build environment
+**GitHub** auth is whatever `gh` resolves. There is no autobuild environment
 variable for it.
 
 ### 4. Validate
@@ -420,13 +443,14 @@ Each tick runs in this order:
 The dashboard renders the latest run as a literal `HARVEST` step row with
 elapsed times. It is not selectable, so `p` and `m` still target build slugs
 only. Use `ab harvest status --events 20` for its event-level paper trail.
-Optional runtime/model overrides are `[roles].harvest` and
-`[roles].harvest-review`; the producer continues across revision rounds and
+Optional runtime/model overrides are `[roles.harvest]` and
+`[roles.harvest-review]`; the producer continues across revision rounds and
 each reviewer is fresh.
 
-Dispatch gates a ticket in this order: **capacity** (blocked and paused builds
-still hold a slot) → the **ready gate** (`readyLabels`, all of which must be
-present, and `readyState`) → **claim-before-launch** → the **spec gate**.
+Dispatch gates a ticket in this order: **`[dispatcher].capacity`** (blocked and
+paused builds still hold a slot) → the **ready gate**
+(`[tickets].readyState`, plus every `[tickets].readyLabels` entry when set) →
+**claim-before-launch** → the **spec gate**.
 
 After the final spec passes that gate, the selected runtime proposes one to
 three meaningful lowercase kebab words from the whole spec. The dispatcher
@@ -436,8 +460,9 @@ unavailable, invalid, errors, or times out, dispatch still succeeds with the
 first three words of the kebab-cased title (`build` when none remain). The slug
 and branch `ab/<slug>` are chosen once; existing builds are never renamed.
 
-> **`readyState` is required — it names the single workflow state a ticket must
-> sit in to be dispatched.** There is no default and no "any state" mode:
+> **`[tickets].readyState` is required — it names the single workflow state a
+> ticket must sit in to be dispatched.** There is no default and no "any state"
+> mode:
 > omitting it (or leaving it blank) is a config error, because without it every
 > ticket from the source would be eligible in *any* state — including completed
 > ones — which is exactly how a finished ticket could be built a second time.
@@ -451,8 +476,9 @@ and branch `ab/<slug>` are chosen once; existing builds are never renamed.
 >   only while it sits in that state; `readyLabels` defaults to `["autobuild"]`,
 >   so a ticket must carry the label **and** sit in `readyState`.
 >
-> `readyLabels` remains optional and narrows **on top of** `readyState`. With
-> the file tracker, setting it means moving a ticket into `ready/` is no longer
+> `[tickets].readyLabels` remains optional and narrows **on top of**
+> `[tickets].readyState`. With the file tracker, setting it means moving a ticket
+> into `ready/` is no longer
 > enough on its own. A wrong `readyState` fails quietly, not loudly: the config
 > stays valid, nothing matches, and every tick just reports `tick: idle` — so
 > for Linear, confirm the value is a real workflow-state name.
@@ -593,7 +619,7 @@ Under `~/.autobuild` by default:
 - `.ab/` — per-phase agent scratch, disposable by construction
 - `.autobuild/` — the default file tracker at `.autobuild/tickets` writes its
   own self-excluding `.gitignore`, so it stays out of git without your help.
-  (An explicit `[tickets].dir` is *your* directory — auto-build does not
+  (An explicit `[tickets].dir` is *your* directory — autobuild does not
   gitignore it.) Also covers the store, if you point it into the repo for
   local dev.
 - `*.local.db`
@@ -631,8 +657,8 @@ autobuild.toml: invalid config
 Each line is `  <path>: <message>`. Common causes:
 
 - **Unknown table** — the message appends `— known tables: project, commands,
-  server, verify, finalize, agent, roles, policy, dispatcher, tickets, harvest,
-  outer`. Check
+  server, verify, finalize, roles, policy, dispatcher, tickets, harvest, outer`.
+  Check
   for a typo; the file is strict on purpose.
 - **A step with no table** — `verify step "<s>" is listed in verify.steps but
   has no [verify.<s>] table…`. Add the table, or drop the step.
@@ -642,11 +668,19 @@ Each line is `  <path>: <message>`. Common causes:
 - **`needsServer` with no server** — `[verify.<s>].needsServer = true requires a
   [server] table (start, url)…`. Add `[server]` or set `needsServer = false`.
 
-### I never configured `[tickets]` — where are my tickets going?
+### I omitted `[tickets]` — why does config validation fail?
 
-To `.autobuild/tickets`. Omitting `[tickets]` is not an error: it selects the
-local file tracker, which needs no config and no secret. Look for
-`triage/ ready/ doing/ done/` there, and see
+`[tickets].readyState` is mandatory, so omitting the table fails at
+`tickets.readyState` rather than making every ticket state eligible. For the
+local tracker with its default directory, add:
+
+```toml
+[tickets]
+source = "file"
+readyState = "ready"
+```
+
+Tickets then live under `.autobuild/tickets/triage/ ready/ doing/ done/`; see
 [Ticket source and authentication](#ticket-source-and-authentication).
 
 ### `<repo>/autobuild.toml: not found`
@@ -659,17 +693,17 @@ You are not at the repo root. `ab dispatch` and `ab ticket create` read
 `tick: idle` means no ticket passed the dispatch gates. There is no error,
 because nothing failed — the gates just didn't match. Work down the gates:
 
-- **`readyState`** (required) — the ticket's state must match it. With the
-  **file tracker** the state is its directory, so `readyState = "ready"` means a
+- **`[tickets].readyState`** (required) — the ticket's state must match it. With
+  the **file tracker** the state is its directory, so `readyState = "ready"` means a
   ticket in `triage/` never dispatches until you `mv` it into `ready/`. With
   **Linear** the match is exact and case-sensitive, so a value that isn't a real
   workflow-state name silently matches nothing — confirm it against your team's
   workflow.
-- **`readyLabels`** — unset means the ticket source's own default (Linear:
-  `["autobuild"]`; file: none). If you set it, every listed label must *also* be
+- **`[tickets].readyLabels`** — unset means the ticket source's own default
+  (Linear: `["autobuild"]`; file: none). If you set it, every listed label must *also* be
   present, on top of `readyState`.
-- **`capacity`** — blocked and paused builds still hold their slots. At
-  `capacity = 1`, one escalated build stalls all new dispatch.
+- **`[dispatcher].capacity`** — blocked and paused builds still hold their
+  slots. At `capacity = 1`, one escalated build stalls all new dispatch.
 - **The spec gate** — a ticket missing `## Acceptance criteria` (with a list
   item) or `## Out of scope` is bounced to Triage and commented; that shows up
   as `tick: bounced=1`, not `idle`.

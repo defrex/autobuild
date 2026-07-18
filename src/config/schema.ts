@@ -107,39 +107,20 @@ export const finalizeSchema = z.strictObject({
 })
 export type FinalizeConfig = z.infer<typeof finalizeSchema>
 
-// ── [agent] ──────────────────────────────────────────────────────────────────
-//
-// The repo-wide DEFAULT pair on the two configuration axes (SPEC §9, §16.1):
-// `runtime` (which adapter executes the session) and `model` (which model it
-// runs on). Both optional, so all four override shapes are expressible here as
-// well as per-role. Absent entirely ⇒ the built-in fallback runtime with its
-// own default model, i.e. today's behavior is unchanged. Resolution against the
-// runtime registry (capability checks, model-only routing) happens in the
-// resolver, not here — config load never sees the registry.
-export const agentDefaultsSchema = z.strictObject({
-  runtime: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  // Optional THIRD axis (runtime-specific): named Pi extensions/packages a
-  // session may use (e.g. "subagents", "web-access"). Absent ⇒ none, i.e. a
-  // hermetic session. Entries are matched (case-insensitive substring) against
-  // installed Pi package sources; runtimes without an extension model ignore it.
-  extensions: z.array(z.string().min(1)).optional(),
-})
-export type AgentDefaultsConfig = z.infer<typeof agentDefaultsSchema>
-
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
-// Open map: role → per-step OVERRIDE on the two axes (SPEC §9, §16.1). Both
-// keys optional, so a step may pin `runtime`, `model`, both, or neither
-// (neither ⇒ the [agent] default pair). Mixing models across roles is
-// intentional — a different reviewer catches more.
+// Open map: role → fields on the runtime, model, and extensions axes (SPEC §9,
+// §16.1). The reserved optional `default` entry is the raw inheritance base;
+// every other role overrides it independently per field. Registry-dependent
+// compatibility validation happens in the eager runtime resolver, because the
+// config loader does not know the injected runtime registry.
 
 export const roleSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
-  // Per-step extension allowlist (SPEC §9). Absent ⇒ inherit the [agent]
-  // default (which is itself hermetic when unset). Lets internet/sub-agent
-  // access be granted to plan/review while implement/verify stay hermetic.
+  // Per-role extension allowlist (SPEC §9). Absent ⇒ inherit
+  // [roles.default].extensions; absent there too ⇒ hermetic. A set list,
+  // including [], replaces the default wholesale rather than unioning with it.
   extensions: z.array(z.string().min(1)).optional(),
 })
 export type RoleConfig = z.infer<typeof roleSchema>
@@ -162,44 +143,68 @@ export type PolicyConfig = z.infer<typeof policySchema>
 
 // ── [dispatcher] ─────────────────────────────────────────────────────────────
 
-export const dispatcherSchema = z.strictObject({
-  /** Concurrent builds for this repo (§16.1; global cap is OPEN — §18.4). */
-  capacity: z.number().int().positive().default(1),
-  /** Ticket labels that mark a ticket ready for dispatch (§3.3). Absent = the
-   * ticket source's default gate (linear: ["autobuild"]; file: none — the
-   * `ready/` directory is the gate). Resolved by readyCriteria in
-   * src/processes/dispatcher.ts. */
-  readyLabels: z.array(z.string().min(1)).optional(),
-  /**
-   * The single workflow state a ticket must sit in to be dispatchable — the
-   * mandatory dispatch gate (§3.3). Required and non-blank: without it every
-   * ticket from the source would be eligible in any state, including completed
-   * ones (the AUT-10 mis-gating). Applied by readyCriteria in
-   * src/processes/dispatcher.ts, on top of any label gate. Matched exactly and
-   * case-sensitively by the Linear source (name your ready workflow state);
-   * the file source canonicalizes it to a state directory (`ready` → `ready/`).
-   */
-  readyState: z
-    .string({
-      error:
-        '[dispatcher].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready"). Omitting it would make every ticket from the source eligible, including completed ones.',
-    })
-    .refine(
-      (s) => s.trim().length > 0,
-      '[dispatcher].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
-    ),
-})
+export const dispatcherSchema = z.strictObject(
+  {
+    /** Concurrent builds for this repo (§16.1; global cap is OPEN — §18.4). */
+    capacity: z.number().int().positive().default(1),
+  },
+  {
+    // This is a clean config move, not a compatibility shim: the old values
+    // remain unknown and are never consumed. Give the two known old keys a
+    // purpose-built remedy while preserving strict errors for every other typo.
+    error: (issue) => {
+      if (issue.code !== 'unrecognized_keys') return undefined
+      const moved = issue.keys.filter(
+        (key) => key === 'readyState' || key === 'readyLabels',
+      )
+      if (moved.length === 0) return undefined
+      const unknown = issue.keys.filter(
+        (key) => key !== 'readyState' && key !== 'readyLabels',
+      )
+      return [
+        ...moved.map(
+          (key) =>
+            `[dispatcher].${key} has moved to [tickets].${key} — move the field to its new table`,
+        ),
+        ...(unknown.length > 0
+          ? [`Unrecognized key${unknown.length === 1 ? '' : 's'}: ${unknown.map((key) => `"${key}"`).join(', ')}`]
+          : []),
+      ].join('; ')
+    },
+  },
+)
 export type DispatcherConfig = z.infer<typeof dispatcherSchema>
 
 // ── [tickets] ────────────────────────────────────────────────────────────────
 //
-// Which TicketSource the dispatcher drives (§3.2, §13). Omitting the table
-// entirely gives the local file tracker at `.autobuild/tickets` — a repo
-// dispatches with no config and no secret. Declarative only: the Linear API
-// key comes from the LINEAR_API_KEY environment variable, never from this file.
+// Which TicketSource the dispatcher drives and the source-vocabulary states
+// that govern its lifecycle (§3.2, §3.3, §13). Declarative only: the Linear
+// API key comes from the LINEAR_API_KEY environment variable, never from this
+// file.
 
 export const ticketsSchema = z.strictObject({
   source: z.enum(['linear', 'file']),
+  /** Ticket labels that additionally narrow the ready gate (§3.3). Absent =
+   * the ticket source's default (linear: ["autobuild"]; file: none). Resolved
+   * by readyCriteria in src/processes/dispatcher.ts. */
+  readyLabels: z.array(z.string().min(1)).optional(),
+  /**
+   * The single workflow state a ticket must sit in to be dispatchable — the
+   * mandatory ready gate (§3.3). Required and non-blank: without it every
+   * ticket from the source would be eligible in any state, including completed
+   * ones (the AUT-10 mis-gating). Applied by readyCriteria on top of any label
+   * gate. Linear matches exactly and case-sensitively; the file source
+   * canonicalizes it to a state directory (`ready` → `ready/`).
+   */
+  readyState: z
+    .string({
+      error:
+        '[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready"). Omitting it would make every ticket from the source eligible, including completed ones.',
+    })
+    .refine(
+      (s) => s.trim().length > 0,
+      '[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
+    ),
   /** Linear team key (e.g. "ENG") — required when source = "linear". */
   teamKey: z.string().min(1).optional(),
   /** Workflow state claim() moves an issue to (§12); Linear only. */
@@ -251,23 +256,20 @@ const configTableSchema = z.strictObject({
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
   finalize: finalizeSchema.prefault({}),
-  // The repo-wide default pair (§9). Optional and NOT prefaulted — absence is
-  // meaningful (⇒ built-in fallback runtime + its default model), and a
-  // prefaulted `{}` would be indistinguishable from an explicit empty table.
-  agent: agentDefaultsSchema.optional(),
+  // `default` is a reserved optional entry inside this open map (§9). An
+  // absent [roles.default] is an empty base; the resolver then uses its wiring
+  // fallback runtime and that runtime's own default model.
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
-  // An absent [dispatcher] table must NOT silently default: prefault feeds `{}`
-  // through the schema, which now fails on the missing required `readyState`
-  // (AC 5 — a config with no ready state fails clearly, at path
-  // `dispatcher.readyState`). The cast only satisfies prefault's input type,
-  // whose `readyState` is required; at runtime `{}` is what flows through, and
-  // it is meant to be rejected.
-  dispatcher: dispatcherSchema.prefault({} as z.input<typeof dispatcherSchema>),
-  // No [tickets] table ⇒ the local file tracker (§13). prefault feeds the
-  // literal THROUGH ticketsSchema, so the default is a parsed TicketsConfig
-  // and a present-but-partial table is untouched by it.
-  tickets: ticketsSchema.prefault({ source: 'file' }),
+  dispatcher: dispatcherSchema.prefault({}),
+  // An absent [tickets] table must NOT silently default past the mandatory
+  // ready gate. Prefault feeds the file-source identity through ticketsSchema,
+  // which deliberately fails on missing `readyState` at `tickets.readyState`.
+  // The cast only satisfies prefault's input type; `{ source: 'file' }` is
+  // intentionally invalid until the repository names its ready state.
+  tickets: ticketsSchema.prefault({
+    source: 'file',
+  } as z.input<typeof ticketsSchema>),
   harvest: harvestSchema.prefault({}),
   outer: z.record(z.string().min(1), outerScheduleSchema).prefault({}),
 })

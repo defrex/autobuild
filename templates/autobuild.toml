@@ -46,24 +46,29 @@ command = "test"
 [finalize]
 steps = []
 
-# Runtime/model/extensions configuration (§9): the `runtime` that executes a
-# session, the `model` it runs on, and (pi only) the `extensions` it may use.
-# Set the repo-wide default in [agent], override per step in [roles]. Registered
-# runtimes: `claude` (Claude models) and `pi` (provider-qualified ids like
-# `openai/gpt-5.6-sol`; `ab models [query]` looks them up). Adding a runtime
-# touches only the adapter registry, never the kernel.
-[agent]
-runtime = "claude"   # no model ⇒ the runtime's own default
+# Runtime/model/extensions configuration (§9) is one open map of roles. The
+# reserved optional `default` role is the raw inheritance base for every other
+# role; it is never dispatched as a phase. Removing it uses the wiring-fallback
+# runtime and that runtime's own default model.
+[roles.default]
+runtime = "claude"   # no configured model ⇒ this runtime's own default
 # extensions unset ⇒ hermetic (no internet / sub-agents / MCP).
 
-# Per-step overrides, most-specific-first (runtime+model / runtime / model /
-# neither). Mixing models across roles is intentional — a different reviewer
-# catches more. `extensions` is a separate per-role allowlist of Pi packages
-# (e.g. "web-access", "subagents"); grant it to plan/review, keep implement and
-# verify hermetic. Uncomment and edit to experiment:
-#[roles]
-#code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }
-#plan = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }
+# Each role field independently overrides or inherits `default`; an extensions
+# list replaces the default list wholesale. The exact merged runtime/model pair
+# must be compatible — a model-only override stays on its inherited runtime and
+# never silently reroutes. Registered runtimes: `claude` (Claude models) and
+# `pi` (provider-qualified ids like `openai/gpt-5.6-sol`; `ab models [query]`
+# looks them up). Mixing models across roles is intentional. Uncomment and edit:
+#[roles.code-review]
+#runtime = "pi"
+#model = "moonshotai/kimi-k3"
+#extensions = ["web-access"]
+#
+#[roles.plan]
+#runtime = "pi"
+#model = "openai/gpt-5.6-sol"
+#extensions = ["subagents", "web-access"]
 
 [policy]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
@@ -73,45 +78,36 @@ maxReviewRounds = 5
 
 [dispatcher]
 capacity = 1             # concurrent builds for this repo
-# Absent readyLabels = the ticket source's own gate: the file tracker's `ready/`
-# directory, or the "autobuild" label on Linear. Set it only to require labels
-# ON TOP of that — with the file tracker, setting it here means `mv`ing a ticket
-# into ready/ is no longer enough to dispatch it.
-#readyLabels = ["autobuild"]
-# Required: the single workflow state a ticket must sit in to be dispatched.
-# Without it every ticket from the source would be eligible in any state,
-# including completed ones. The file tracker maps this to a state directory
-# (`ready` → `ready/`); Linear users must name their own ready workflow state
-# exactly (it is matched case-sensitively).
-readyState = "ready"
 
-# Ticket source the dispatcher drives (§3.2, §13).
+# Ticket source, ready gate, and lifecycle states (§3.2, §3.3, §13).
+# This default is the local file tracker at `.autobuild/tickets/`: four state
+# directories (triage/ ready/ doing/ done/) of markdown tickets. No secret;
+# the default directory gitignores itself, `ls` is the UI, and moving a ticket
+# into ready/ dispatches it. `/ab-tickets` teaches an agent to drive it.
+[tickets]
+source = "file"
+# Required: the single workflow state a ticket must sit in to be dispatched.
+# The file tracker maps this to a state directory (`ready` → `ready/`); Linear
+# users must name their own ready workflow state exactly (case-sensitive).
+readyState = "ready"
+# Absent readyLabels uses the source's label default: none for file, or
+# ["autobuild"] for Linear. Setting it narrows readiness on top of readyState;
+# [] explicitly disables the label gate.
+#readyLabels = ["autobuild"]
+#dir = "tickets"                 # file only; optional, default ".autobuild/tickets"
+#createState = "Triage"          # optional; absent = provider default
+#triageState = "Triage"          # optional; absent = provider default
 #
-# Omit this table entirely and you get a local file tracker at
-# `.autobuild/tickets/` — four state directories (triage/ ready/ doing/ done/)
-# of markdown tickets, where a ticket's state is the directory it's in. No
-# secret, no config, gitignored (the tracker excludes itself), `ls` is the UI,
-# and `mv triage/x.md ready/` dispatches. `/ab-tickets` teaches an agent to
-# drive it.
-#
-# To use Linear instead — the API key is a secret, so set the LINEAR_API_KEY
-# environment variable (a local .env works), never put it in this file:
-#[tickets]
-#source = "linear"
-#teamKey = "ENG"                 # Linear team key
-#claimedState = "In Progress"    # workflow state claim() moves an issue to
-#createState = "Triage"          # state new tickets are filed into (absent = provider default)
-#
-# Or to put the file tracker somewhere other than the default:
-#[tickets]
-#source = "file"
-#dir = "tickets"                 # optional; default ".autobuild/tickets"
+# To use Linear, change source above and add the following. The API key is a
+# secret: set LINEAR_API_KEY in the environment (a local .env works), never here.
+#teamKey = "ENG"                 # Linear team key (required)
+#claimedState = "In Progress"    # Linear workflow state claim() moves into
 
 # Observation harvest is back-pressure driven by `ab dispatch`: no agent runs
 # while fewer than this many new structured observations are waiting. Once the
 # threshold is reached, scan -> synthesize <-> review -> file is journaled and
 # approved proposals are created in Triage only. Optional role overrides are
-# `[roles].harvest` and `[roles].harvest-review`.
+# `[roles.harvest]` and `[roles.harvest-review]`.
 [harvest]
 threshold = 10
 

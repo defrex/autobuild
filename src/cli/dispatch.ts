@@ -110,8 +110,8 @@ export interface DispatchWiring {
   tickets: TicketSource
   forge: Forge
   workspaces: WorkspaceProvider
-  /** Runtime registry (§9): name → adapter + capabilities. The resolver routes
-   * `[agent]`/`[roles]` into it; `defaultRuntime` is the wiring fallback. */
+  /** Runtime registry (§9): name → adapter + compatibility data. The resolver
+   * applies `[roles]`; `defaultRuntime` is the wiring fallback. */
   runtimes: RuntimeRegistry
   defaultRuntime: string
   /** The store reference sessions resolve as `AB_STORE` (D8) — MUST name the
@@ -215,11 +215,11 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     // Worktrees live under the autobuild home, never inside the repo tree.
     workspaces: new GitWorktreeProvider({ root: join(DEFAULT_LOCAL_ROOT, 'worktrees') }),
     // Two registered runtimes (§9): claude serves Claude models (its own SDK
-    // default model ⇒ no `defaultModel`), pi serves everything else through its
-    // provider catalog. Pi model ids are provider-qualified (`<provider>/<id>`),
-    // so pi's prefixes are provider names — no overlap with claude's bare
-    // `claude-*`. Add a provider prefix here to route more of Pi's catalog;
-    // `ab models` lists the ids. Model ids stay in config, not here.
+    // default model ⇒ no `defaultModel`); pi validates configured models against
+    // its provider catalog. Pi model ids are provider-qualified
+    // (`<provider>/<id>`), so pi's prefixes are provider names — no overlap with
+    // claude's bare `claude-*`. Add a provider prefix here to accept more of
+    // Pi's catalog; `ab models` lists the ids. Model ids stay in config, not here.
     runtimes: {
       claude: { runner: claude, oneShot: claude, servesModels: ['claude-'] },
       pi: {
@@ -911,11 +911,10 @@ class DispatchLoop {
 }
 
 /**
- * Entry point (§8.2). Loads the repo's config — whose [tickets] table selects
- * the TicketSource, defaulting to the local file tracker at
- * `.autobuild/tickets` when the table is absent (§13), so a repo with no
- * config still has a backlog to watch — wires the ports, and runs the loop
- * until a single pass finishes (`--once`) or `opts.signal` aborts (SIGINT).
+ * Entry point (§8.2). Loads the repo's config — whose required [tickets]
+ * table selects the TicketSource and names its ready state. A file source with
+ * no `dir` still defaults to `.autobuild/tickets` (§13). Then wires the ports
+ * and runs until one pass finishes (`--once`) or `opts.signal` aborts (SIGINT).
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const configPath = join(opts.targetRepo, 'autobuild.toml')
@@ -934,15 +933,14 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const wire = opts.wire ?? defaultWire
   const wiring = await wire(config, opts)
   // §9: resolve the whole config against the registry ONCE, at startup — a
-  // config naming an unregistered runtime, an un-servable runtime+model pair,
-  // or an ambiguous model-only route fails `ab dispatch` loudly here, before
-  // any build launches, never as a silent per-build fallback. The per-build
-  // BuildRunner re-resolves too (its own construction is the second guard).
+  // config naming an unregistered runtime or an incompatible merged
+  // runtime/model pair fails `ab dispatch` loudly here, before any build
+  // launches, never as a silent per-build fallback. The per-build BuildRunner
+  // re-resolves too (its own construction is the second guard).
   const resolver = createRuntimeResolver(
     wiring.runtimes,
-    config.agent,
-    wiring.defaultRuntime,
     config.roles,
+    wiring.defaultRuntime,
   )
   const loop = new DispatchLoop(config, wiring, opts, resolver)
   await loop.run()

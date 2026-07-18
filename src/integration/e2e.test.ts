@@ -178,7 +178,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(h.forge.comments).toHaveLength(1)
   const summary = h.forge.comments[0]!
   expect(summary.number).toBe(1)
-  expect(summary.body).toContain(`## auto-build: ${SLUG}`)
+  expect(summary.body).toContain(`## Autobuild: ${SLUG}`)
   expect(summary.body).toContain('- plan-review r1: approve')
   expect(summary.body).toContain('- code-review r1: approve')
   expect(summary.body).toContain('- unit (attempt 1): pass')
@@ -223,7 +223,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
   const tick2 = await h.dispatcher.tick()
   // claimRaces is 0, where it was 1 before the ready state gated the scan.
-  // The config's required `readyState = "Ready"` (readyCriteria,
+  // The config's required `[tickets].readyState = "Ready"` (readyCriteria,
   // src/processes/dispatcher.ts) means the scan only lists Ready tickets. The
   // just-merged ticket is in Done, so the scan skips it outright. Previously,
   // when a state gate could be absent, a ticket that had long since left Ready
@@ -804,8 +804,8 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
 
 // ── g. Two-axis runtime/model routing (§9, AC "an integration scenario") ─────
 //
-// The config sets the repo-wide default runtime (`[agent]`) and routes ONE
-// agent phase (code-review) to a second runtime with a model
+// The config sets the repo-wide default runtime (`[roles.default]`) and routes
+// ONE agent phase (code-review) to a second runtime with a model
 // (`{ runtime = "pi", model = "kimi-k3" }`). The build runs to PR, and its
 // stored `session.started` events + transcripts show code-review on pi×kimi-k3
 // while every other phase stays on the default runtime. Both runtimes are
@@ -813,11 +813,12 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
 // the other scenarios rely on is unchanged.
 
 const TWO_AXIS_TOML = `${CONFIG_TOML}
-[agent]
+[roles.default]
 runtime = "scripted"
 
-[roles]
-code-review = { runtime = "pi", model = "kimi-k3" }
+[roles.code-review]
+runtime = "pi"
+model = "kimi-k3"
 `
 
 test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default runtime (§9)', async () => {

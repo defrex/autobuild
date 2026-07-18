@@ -12,7 +12,12 @@ import { createTicketSource } from './create'
 import { FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
 
-const LINEAR_CONFIG = { source: 'linear' as const, teamKey: 'ENG' }
+const LINEAR_CONFIG = {
+  source: 'linear' as const,
+  teamKey: 'ENG',
+  readyState: 'Todo',
+}
+const FILE_CONFIG = { source: 'file' as const, readyState: 'ready' }
 const ENV = { LINEAR_API_KEY: 'lin_api_abc' }
 const REPO = '/repo'
 
@@ -46,9 +51,9 @@ describe('createTicketSource — linear', () => {
   })
 
   test('missing teamKey errors even with a key set (defense beyond config validation)', () => {
-    expect(() => createTicketSource({ source: 'linear' }, ENV, REPO)).toThrow(
-      /requires teamKey/,
-    )
+    expect(() =>
+      createTicketSource({ source: 'linear', readyState: 'Todo' }, ENV, REPO),
+    ).toThrow(/requires teamKey/)
   })
 })
 
@@ -64,13 +69,13 @@ describe('createTicketSource — file', () => {
   })
 
   test('constructs a FileTicketSource, no LINEAR_API_KEY needed', () => {
-    const source = createTicketSource({ source: 'file', dir: 'tickets' }, {}, repo)
+    const source = createTicketSource({ ...FILE_CONFIG, dir: 'tickets' }, {}, repo)
     expect(source).toBeInstanceOf(FileTicketSource)
     expect(source.name).toBe('file')
   })
 
   test('no dir: the tracker defaults to <repo>/.autobuild/tickets and gitignores itself', async () => {
-    const source = createTicketSource({ source: 'file' }, {}, repo)
+    const source = createTicketSource(FILE_CONFIG, {}, repo)
     await source.create({ title: 'T', body: 'b' })
 
     expect(await readdir(join(repo, '.autobuild', 'tickets', 'triage'))).toEqual([
@@ -80,7 +85,7 @@ describe('createTicketSource — file', () => {
   })
 
   test('an explicit relative dir resolves against the repo, not cwd — and is NOT gitignored', async () => {
-    const source = createTicketSource({ source: 'file', dir: 'tickets' }, {}, repo)
+    const source = createTicketSource({ ...FILE_CONFIG, dir: 'tickets' }, {}, repo)
     await source.create({ title: 'T', body: 'b' })
 
     expect(await readdir(join(repo, 'tickets', 'triage'))).toEqual(['file-1.md'])
@@ -91,7 +96,7 @@ describe('createTicketSource — file', () => {
 
   test('an absolute dir is used as given', async () => {
     const dir = join(repo, 'elsewhere')
-    const source = createTicketSource({ source: 'file', dir }, {}, repo)
+    const source = createTicketSource({ ...FILE_CONFIG, dir }, {}, repo)
     await source.create({ title: 'T', body: 'b' })
 
     expect(await readdir(join(dir, 'triage'))).toEqual(['file-1.md'])
@@ -99,7 +104,7 @@ describe('createTicketSource — file', () => {
 
   test('createState flows through to created tickets', async () => {
     const source = createTicketSource(
-      { source: 'file', dir: 'tickets', createState: 'Ready' },
+      { ...FILE_CONFIG, dir: 'tickets', createState: 'Ready' },
       {},
       repo,
     )

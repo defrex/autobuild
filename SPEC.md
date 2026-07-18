@@ -1,4 +1,4 @@
-# auto-build v2 — Specification
+# Autobuild v2 — Specification
 
 An agent-driven software development lifecycle system: it takes work from
 *"something should be done"* to a merged PR, with a human in the loop only
@@ -60,7 +60,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (the zero-config default); Linear; later GitHub Issues |
+| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (default directory); Linear; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -74,14 +74,15 @@ Small, independently runnable, crash-safe:
 - **build-runner** — one per build; owns one pipeline execution end to end.
   Per-build processes are deliberate: crash isolation, and the natural shape
   once builds run in remote sandboxes.
-- **dispatcher** — watches the TicketSource for Ready tickets (label/state
-  conditions), claims, establishes the final conforming spec, chooses a short
-  immutable build slug, provisions a workspace, and launches build-runners up
-  to a capacity limit. On process startup it also attempts every current build
-  for its repo, so re-running `ab dispatch` resumes durable work rather than
-  only looking for new tickets. Each tick also owns observation back-pressure:
-  it resumes an unfinished repository harvest, or starts one when the configured
-  count threshold is reached. Cron-friendly.
+- **dispatcher** — watches the TicketSource for tickets passing the required
+  `[tickets].readyState` gate and optional `[tickets].readyLabels` narrowing,
+  claims, establishes the final conforming spec, chooses a short immutable
+  build slug, provisions a workspace, and launches build-runners up to
+  `[dispatcher].capacity`. On process startup it also attempts every current
+  build for its repo, so re-running `ab dispatch` resumes durable work rather
+  than only looking for new tickets. Each tick also owns observation
+  back-pressure: it resumes an unfinished repository harvest, or starts one
+  when the configured count threshold is reached. Cron-friendly.
 - **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
   review → file`) under a repository lease; not a build and not a phase.
 - **ingesters** — other outer-loop processes turning signals into proposals (§12).
@@ -220,9 +221,10 @@ proposal without repairing it, then checks the whole BuildStore for collisions;
 three-token base. The slug and `ab/<slug>` branch are recorded once and never
 renamed, so existing and in-flight builds are untouched.
 
-Naming is optional judgment, not a pipeline phase. It uses the `[agent]`
-default pair unless the open `[roles]` map supplies a `slug` override. The
-runtime capability is one-turn and tool-free. Absence, invalid output,
+Naming is optional judgment, not a pipeline phase. The `slug` role inherits
+the reserved `[roles.default]` base unless it supplies overrides; the literal
+`default` entry is never dispatched as a role. The runtime capability is
+one-turn and tool-free. Absence, invalid output,
 rejection, or a fixed dispatcher-owned deadline all take the deterministic
 first-three-tokens-of-kebab(title) fallback (`build` for an empty normalized
 title); naming failure never prevents build creation. Validation, timeout,
@@ -500,22 +502,25 @@ deterministic naming fallback (§6.3).
   registered runtimes behind the interface — preferences may change per project
   and over time. A future Claude Code print-mode access path registers as a
   *distinct runtime name*, never a mode flag on an existing one.
-- **Routing — two independent axes (§16.1):** the *runtime* that executes a
-  session and the *model* it runs on. Both are set once as a repo-wide default
-  (`[agent]`) and overridden per step (`[roles]`), generalizing v1's
-  `harnessMap`. Overrides resolve **most-specific-first**: `runtime + model`
-  pins exactly that pair (a runtime that cannot serve the model is a config
-  error); `runtime` alone uses that runtime's own default model; `model` alone
-  routes to a runtime that serves it — the default runtime when it qualifies,
-  else the single supporter (zero, or several non-default supporters, is a loud
-  config error); `neither` is the default pair. Each runtime declares the model
-  families it serves, so the whole config resolves **eagerly, before any
-  session launches** — an unregistered runtime never silently falls back.
-  Adding a runtime touches only the adapter registry, never the kernel. Mixing
-  models across roles is intentional — a different reviewer catches more. The
-  resolved runtime and model are recorded on every `session.started` (the
-  frozen `runner` field carries the resolved runtime name), so an experiment's
-  outcome is attributable to the configuration that produced it.
+- **Routing — explicit role inheritance (§16.1):** the *runtime* that executes
+  a session and the *model* it runs on live in one open `[roles]` map, alongside
+  the independent `extensions` allowlist axis. Its reserved optional `default`
+  entry is the raw repo-wide base and is never itself dispatched. Every phase
+  role merges over it independently per field; a set extensions list replaces
+  rather than unions. With no default runtime, wiring supplies the fallback.
+  With no model on either the phase role or `default`, the merged runtime uses
+  its own built-in default — the sole implicit fill-in. Otherwise the exact
+  merged runtime/model pair must be compatible: model-only entries never search
+  for a supporting runtime, and incompatible inherited models are never
+  replaced with runtime-local defaults. Each runtime declares the model
+  families it serves for that compatibility check. The default and every role
+  resolve **eagerly, before any session launches**, with all problems aggregated
+  into one error naming each role, runtime, model, and served families. Adding a
+  runtime touches only the adapter registry, never the kernel. Mixing models
+  across roles is intentional — a different reviewer catches more. The resolved
+  runtime and model are recorded on every `session.started` (the frozen
+  `runner` field carries the resolved runtime name), so an experiment's outcome
+  is attributable to the configuration that produced it.
 - **Transcripts come back through the interface**, not scraped from disk, so
   every adapter must produce one: the corpus is guaranteed complete.
 - Adapters without native session resumption (and post-sandbox-death
@@ -1004,15 +1009,31 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 
-[agent]                         # repo-wide DEFAULT on the axes (§9)
-runtime = "claude"              # no model ⇒ the runtime's own default; no extensions ⇒ hermetic
+[roles.default]                 # reserved inheritance base, never a phase (§9)
+runtime = "claude"              # no configured model ⇒ this runtime's own default
+                                 # no extensions ⇒ hermetic
 
-[roles]                         # per-step OVERRIDES, most-specific-first (§9)
-slug = { model = "openai/gpt-5.6-sol" }  # optional pre-build naming override
-plan = { model = "openai/gpt-5.6-sol", extensions = ["subagents", "web-access"] }  # model + pi extensions
-code-review = { runtime = "pi", model = "moonshotai/kimi-k3", extensions = ["web-access"] }  # pinned pair + web grounding
-harvest = { model = "openai/gpt-5.6-sol" }          # optional producer override
-harvest-review = { model = "moonshotai/kimi-k3" }   # optional fresh-reviewer override
+[roles.slug]                    # optional pre-build naming override
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+
+[roles.plan]                    # fields override default independently
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+extensions = ["subagents", "web-access"]
+
+[roles.code-review]
+runtime = "pi"
+model = "moonshotai/kimi-k3"
+extensions = ["web-access"]
+
+[roles.harvest]                 # optional producer override
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+
+[roles.harvest-review]          # optional fresh-reviewer override
+runtime = "pi"
+model = "moonshotai/kimi-k3"
 
 [policy]
 stallRounds = 3
@@ -1021,6 +1042,9 @@ maxReconcileAttempts = 3
 
 [dispatcher]
 capacity = 3                    # concurrent builds for this repo
+
+[tickets]
+source = "file"
 readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
@@ -1033,7 +1057,9 @@ threshold = 10
 
 Declarative (TOML), not executable config: the kernel, dispatcher, CLI, and
 any future tooling parse it without evaluating anything; commands are plain
-shell strings.
+shell strings. The removed legacy `[agent]` table is rejected with an error
+that directs its fields to `[roles.default]`; it is not a parsing alias or an
+automatic migration.
 
 ### 16.2 Server lifecycle [D10]
 

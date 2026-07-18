@@ -1,7 +1,8 @@
 /**
  * The runtime registry (SPEC §9): the "adapter registry" the spec says adding
  * a runtime should touch — and ONLY it. Each registration pairs an AgentRunner
- * adapter with its capabilities: model families/default for routing, plus an
+ * adapter with its capabilities: model families/default for compatibility
+ * validation, plus an
  * optional pre-build one-shot completion. Keeping capabilities HERE, in a
  * wrapper around the adapter, is deliberate: the `AgentRunner` port itself is
  * frozen (spec "out of scope" — no renaming/extending it), so capability data
@@ -30,17 +31,17 @@ export interface RuntimeRegistration {
    * Model-id PREFIXES this runtime can serve, e.g. `['openai/',
    * 'kimi-coding/']`. Prefix families — not an exhaustive id list — because the
    * model landscape moves faster than the pipeline and the spec forbids
-   * hardcoding served ids: a new model from either provider routes here without
-   * editing this list. Keep families
-   * NARROW so two runtimes don't both claim a family (that surfaces as the
-   * resolver's "multiple non-default supporters" loud error, never a silent
-   * mis-route). `serves()` below is the matcher.
+   * hardcoding served ids: a new model from either provider validates without
+   * editing this list. These families are validation data only: role resolution
+   * never searches them to choose or substitute a runtime. `serves()` below is
+   * the matcher.
    */
   servesModels: string[]
   /**
    * This runtime's own default model, used when a step selects the runtime but
-   * names no model. `undefined` ⇒ the adapter's built-in default (e.g. Claude's
-   * subscription default) — the path that preserves today's no-model behavior.
+   * names no model. When set, it must match `servesModels` like any other
+   * resolved model. `undefined` ⇒ the adapter's un-named built-in default (e.g.
+   * Claude's subscription default) — the path that preserves no-model behavior.
    */
   defaultModel?: string
 }
@@ -51,9 +52,8 @@ export type RuntimeRegistry = Record<string, RuntimeRegistration>
 /**
  * Does this registration serve `model`? Prefix-family match:
  * `openai/gpt-5.6-sol` is served by a registration declaring `openai/`. Empty
- * `servesModels` serves
- * nothing (a runtime that only runs via an explicit `defaultModel`/built-in
- * default and never via model-only routing).
+ * `servesModels` serves nothing (a runtime that can run only with its adapter's
+ * un-named built-in default, never with a configured model id).
  */
 export function serves(reg: RuntimeRegistration, model: string): boolean {
   return reg.servesModels.some((prefix) => model.startsWith(prefix))

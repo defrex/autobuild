@@ -106,11 +106,11 @@ export interface BuildRunnerOpts {
 export interface BuildRunnerDeps {
   store: BuildStore
   config: Config
-  /** Runtime registry: name → adapter + capabilities (§9). The resolver routes
-   * `config.agent`/`config.roles` into it. */
+  /** Runtime registry: name → adapter + compatibility data (§9). The resolver
+   * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
-  /** Wiring fallback runtime (e.g. `claude`): the default when `[agent]` names
-   * neither axis, and the model-only preference for the default pair (§9). */
+  /** Wiring fallback runtime (e.g. `claude`) when neither a phase role nor
+   * `[roles.default]` names one (§9). */
   defaultRuntime: string
   workspacePath: string
   branch: string
@@ -228,9 +228,9 @@ export class BuildRunner {
   /** §10 producer session memory — in-memory by design: a new sandbox resumes
    * with fresh sessions rehydrated from the store (§7.4, §9). */
   private readonly producerSessions = new Map<CorePhase, ProducerSession>()
-  /** The two-axis resolver (§9), built EAGERLY: a bad config (unregistered
-   * runtime, un-servable pair, ambiguous model-only route) throws here — the
-   * per-build loud-failure site — before any session launches. */
+  /** The role resolver (§9), built EAGERLY: a bad config (unregistered runtime
+   * or an incompatible merged runtime/model pair) throws here — the per-build
+   * loud-failure site — before any session launches. */
   private readonly resolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
@@ -239,9 +239,8 @@ export class BuildRunner {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
     this.resolver = createRuntimeResolver(
       deps.runtimes,
-      deps.config.agent,
-      deps.defaultRuntime,
       deps.config.roles,
+      deps.defaultRuntime,
     )
   }
 

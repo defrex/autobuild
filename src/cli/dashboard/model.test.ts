@@ -39,7 +39,8 @@ const BUILD = 'auth-rate-limit'
  * defaults to `[]` — the DEFAULT config path, and the one the merge row's
  * vacuous-`every` window lives in. */
 const CONFIG = parseConfig(`
-[dispatcher]
+[tickets]
+source = "file"
 readyState = "ready"
 
 [commands]
@@ -60,7 +61,8 @@ command = "test"
 
 /** Same, with a finalize post-step. */
 const CONFIG_POST_STEPS = parseConfig(`
-[dispatcher]
+[tickets]
+source = "file"
 readyState = "ready"
 
 [commands]
@@ -689,7 +691,8 @@ describe('f_9ce5ba8d: a verify failure reopens the code loop THE MOMENT it lands
     // state that persists, in red, with the blocker text, on the exact screen
     // this feature exists to provide.
     const config = parseConfig(`
-[dispatcher]
+[tickets]
+source = "file"
 readyState = "ready"
 
 [commands]

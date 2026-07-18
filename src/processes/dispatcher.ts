@@ -69,7 +69,7 @@ export { specConformance, type SpecConformance } from '../spec-standard'
  * `readyLabels` wins for either source.
  */
 export function readyCriteria(config: Config): { labels: string[]; state: string } {
-  const { readyLabels, readyState } = config.dispatcher
+  const { readyLabels, readyState } = config.tickets
   if (config.tickets.source === 'linear') {
     return { labels: readyLabels ?? ['autobuild'], state: readyState }
   }
@@ -758,8 +758,8 @@ export class Dispatcher {
       // The dependency gate runs FIRST — before the claim, before the spec
       // gate. A blocked ticket must not be claimed, must not be bounced, must
       // create no build or workspace, and must not spend capacity; it is
-      // simply not this tick's work. Note this sits *above* readyLabels /
-      // readyState in the pipeline: those criteria produced `ready`, and the
+      // simply not this tick's work. Note this sits *above* [tickets]'s
+      // readyLabels / readyState gate: those criteria produced `ready`, and the
       // gate subtracts from it — labels and state can make a ticket a
       // candidate but can never override an unresolved blocker.
       if ((ticket.blockedBy ?? []).length > 0) {

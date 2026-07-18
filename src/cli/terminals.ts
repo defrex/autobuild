@@ -459,7 +459,7 @@ function renderPrSummary(env: CliEnv, events: AbEvent[]): string {
     }
   }
   return [
-    `## auto-build: ${env.build}`,
+    `## Autobuild: ${env.build}`,
     '',
     '### Verdict history',
     ...(verdicts.length > 0 ? verdicts : ['- (none)']),

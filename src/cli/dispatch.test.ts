@@ -45,10 +45,9 @@ import {
   type SkillHandlers,
 } from '../integration/harness'
 
-// The injected wire supplies a FakeTicketSource and ignores this table, so its
-// contents don't matter — it is here only to pin that an explicit [tickets]
-// table still parses and flows through. Omitting it would be equally valid now
-// (absent = the local file tracker); the zero-config path is covered below.
+// The injected wire supplies a FakeTicketSource and ignores adapter details,
+// but `[tickets]` is still required to name the mandatory ready state. This
+// fixture pins that the complete table parses and flows through.
 const DISPATCH_CONFIG_TOML = `
 [project]
 baseBranch = "main"
@@ -68,15 +67,15 @@ stallRounds = 3
 
 [dispatcher]
 capacity = 1
+
+[tickets]
+source = "file"
+dir = "tickets"
 readyLabels = ["autobuild"]
 # These tests inject a FakeTicketSource (exact, case-sensitive state match) whose
 # tickets default to state "Ready", so the gate names that state verbatim — the
 # file source's canonicalization is exercised in dispatcher-file-tickets.test.ts.
 readyState = "Ready"
-
-[tickets]
-source = "file"
-dir = "tickets"
 `
 
 async function initOrigin(dir: string, toml = DISPATCH_CONFIG_TOML): Promise<void> {
@@ -215,66 +214,30 @@ describe('abDispatch guards', () => {
     }
   })
 
-  test('a config with no [tickets] table is accepted and selects the file source (AC 1)', async () => {
-    // The inverse of the rejection this used to assert: no [tickets] table is
-    // the zero-config default now, not an error.
-    //
-    // It stops at the `wire` seam deliberately. Unlike ticket.test.ts — whose
-    // real factory only writes under tmp — abDispatch's defaultWire would open
-    // a real SQLite store and a real worktree provider under DEFAULT_LOCAL_ROOT
-    // (~/.autobuild), i.e. side effects in the user's actual autobuild home.
-    // The old test never reached defaultWire because the deleted guard threw
-    // first, so letting it through now would be a new hazard, not a fuller test.
-    // What abDispatch itself owns is: don't reject, and hand the resolved
-    // config to the wire. That the config then yields a FileTicketSource under
-    // the repo is proven against the real factory in
-    // ports/tickets/create.test.ts, and end-to-end through a real dispatcher
-    // tick in processes/dispatcher-file-tickets.test.ts.
+  test('a config with no [tickets] table fails at tickets.readyState before wiring', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\nreadyState = "ready"\n',
+        '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\n',
       )
-      let wired: Config | undefined
-      const store = new MemoryBuildStore({ clock: systemClock })
+      let wired = false
 
-      await abDispatch({
-        targetRepo: tmp,
-        env: {},
-        exec: spawnExec,
-        stdout: () => {},
-        stderr: () => {},
-        once: true,
-        wire: (config) => {
-          wired = config
-          return {
-            store,
-            tickets: new FakeTicketSource([]),
-            forge: new FakeForge(),
-            workspaces: new GitWorktreeProvider({ root: join(tmp, 'worktrees') }),
-            // A valid single-runtime registry: the resolver runs at startup
-            // (§9), so an empty registry here would throw before the wire's
-            // config reaches the assertion below. The loud-failure path is
-            // covered by its own test.
-            runtimes: {
-              claude: {
-                runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
-                servesModels: ['claude-'],
-              },
-            },
-            defaultRuntime: 'claude',
-            storeRef: join(tmp, 'store'),
-            ids: sequentialIds(),
-            clock: systemClock,
-          }
-        },
-      })
-
-      // Reaching the wire at all IS the assertion: the guard used to throw
-      // before this point.
-      expect(wired?.tickets).toEqual({ source: 'file' })
-      await store.close()
+      await expect(
+        abDispatch({
+          targetRepo: tmp,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => {
+            wired = true
+            throw new Error('wire must not run for invalid config')
+          },
+        }),
+      ).rejects.toThrow('tickets.readyState')
+      expect(wired).toBe(false)
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }
@@ -285,7 +248,7 @@ describe('abDispatch guards', () => {
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        '[dispatcher]\nreadyState = "ready"\n[agent]\nruntime = "ghost"\n',
+        '[tickets]\nsource = "file"\nreadyState = "ready"\n[roles.default]\nruntime = "ghost"\n',
       )
       const store = new MemoryBuildStore({ clock: systemClock })
       await expect(
@@ -365,11 +328,12 @@ describe('abDispatch --once', () => {
 
   test('routes the slug role to a one-shot capability with the full spec and configured model', async () => {
     const toml = `${DISPATCH_CONFIG_TOML}
-[agent]
+[roles.default]
 runtime = "scripted"
 
-[roles]
-slug = { runtime = "namer", model = "gpt-slug-name" }
+[roles.slug]
+runtime = "namer"
+model = "gpt-slug-name"
 `
     const fx = await makeFixture(
       readyTicket('T-named', {

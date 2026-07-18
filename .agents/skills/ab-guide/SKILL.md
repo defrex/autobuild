@@ -1,11 +1,11 @@
 ---
 name: ab-guide
-description: Authoritative reference for the auto-build system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how auto-build works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when setting up the dev server; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions auto-build, autobuild.toml, or the `ab` CLI.
+description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when setting up the dev server; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions autobuild, autobuild.toml, or the `ab` CLI.
 ---
 
-# auto-build system guide
+# Autobuild system guide
 
-Reference material for an agent working on a repository that uses auto-build.
+Reference material for an agent working on a repository that uses autobuild.
 This skill describes the *system*. It drives no phase and changes no files.
 
 ## How to use this skill
@@ -48,9 +48,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   tickets; a human grooms them to the spec standard (`docs/spec-standard.md`:
   what and why but never how, verifiable acceptance criteria, explicit
   out-of-scope, evidence) and dispatches. Generated work cannot leave Triage
-  un-groomed. The dispatcher claims tickets that pass the `[dispatcher]` gate,
-  chooses a short immutable slug from the final conforming spec, and starts
-  builds up to `capacity`.
+  un-groomed. The dispatcher claims tickets that pass the `[tickets]` ready
+  gate, chooses a short immutable slug from the final conforming spec, and
+  starts builds up to `[dispatcher].capacity`.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
@@ -71,7 +71,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
-auto-build by configuring verify and finalize steps, never by inventing stages.
+autobuild by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
 **Observation harvest is not a build phase.** On each dispatch tick, once
@@ -89,7 +89,7 @@ The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
 `-3`, … collision suffixes. Absence or any failure falls back to the first
 three words of the kebab-cased title, so naming never blocks dispatch. The slug
 and `ab/<slug>` branch are chosen once; existing builds are never renamed.
-Naming follows `[agent]` and can be overridden with `[roles].slug`.
+Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
 ## Who does what
 
@@ -195,48 +195,43 @@ and repeats up to `[policy].maxVerifyAttempts`.
 |---|---|---|---|
 | `steps` | `[]` | array of nonempty step names | Post-steps that run after the PR is opened. **Failure-tolerant**: a failed step files an observation and never fails a green build. |
 
-### `[agent]`
-
-The repo-wide **default** on the configuration axes: the `runtime` that
-executes an agent session, the `model` it runs on, and (pi only) the
-`extensions` it may use. All optional. Absent entirely ⇒ the built-in fallback
-runtime (`claude`) with its own default model, and no extensions — today's
-behavior, unchanged. Two runtimes ship: **`claude`** (Claude models) and
-**`pi`** (SDK mode; Kimi/Moonshot and GPT/OpenAI models, provider-qualified ids
-like `openai-codex/gpt-5.6-sol` — `ab models [query]` looks them up).
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `runtime` | — | optional, nonempty string | The default runtime for every session. Must name a registered runtime, else `ab dispatch` fails loudly before any build. |
-| `model` | — | optional, nonempty string | The default model. Absent ⇒ the runtime's own default model. |
-| `extensions` | — | optional, array of nonempty strings | Default Pi extensions/packages a session may use (e.g. `["subagents", "web-access"]`). Absent ⇒ **hermetic** (no internet / sub-agents / MCP). Entries match installed package sources case-insensitively; `claude` ignores this axis. |
-
 ### `[roles]`
 
-An **open map** of role name → per-step **override** `{ runtime?, model?,
-extensions? }` on the same axes. The roles the pipeline routes are `plan`,
-`plan-review`, `implement`, and `code-review` (plus each verify/finalize step by
-name); the repository workflow routes `harvest` and `harvest-review`. The
-pre-build `slug` role uses the same runtime/model resolver for
-optional one-shot naming; it is not a pipeline phase, its extension allowlist
-is not enabled, and it always remains tool-free.
+An **open map** of role name → `{ runtime?, model?, extensions? }` on the three
+agent configuration axes. The reserved optional `default` role is the raw
+inheritance base for every other role and is **never dispatched as a phase**.
+With no `[roles.default]`, the base is empty: sessions use the wiring-fallback
+runtime (`claude`) and that runtime's built-in default model, with no
+extensions. Two runtimes ship: **`claude`** (Claude models) and **`pi`** (SDK
+mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
+[query]` looks them up).
+
+The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
+plus each verify/finalize step by name. The repository workflow resolves
+`harvest` and `harvest-review`. The pre-build `slug` role uses the same
+runtime/model resolution for optional one-shot naming; it is not a pipeline
+phase, its extension allowlist is not enabled, and it remains tool-free.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runtime` | — | optional, nonempty string | Runtime override for this role. Absent ⇒ resolved from `model` or the `[agent]` default. |
-| `model` | — | optional, nonempty string | Model override for this role. Absent ⇒ the resolved runtime's default. |
-| `extensions` | — | optional, array of nonempty strings | Per-role extension allowlist. Absent ⇒ inherit the `[agent]` default (hermetic when that too is unset). Lets internet/sub-agent access be granted to plan/review while implement/verify stay hermetic. |
+| `runtime` | — | optional, nonempty string | Runtime for this role. A phase role that omits it inherits `[roles.default].runtime`; absent there too ⇒ the wiring fallback. Must name a registered runtime. |
+| `model` | — | optional, nonempty string | Model for this role. A phase role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
+| `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
 
-Runtime/model resolve **most-specific-first**: `runtime + model` pins exactly
-that pair (a runtime that can't serve the model is a config error); `runtime`
-alone uses that runtime's default model; `model` alone routes to a runtime that
-serves it (the default runtime wins when it qualifies, otherwise the single
-supporter — zero, or several non-default supporters, is a loud error); neither
-inherits the `[agent]` default pair (a role added only to set `extensions`
-keeps the default model). `extensions` resolves independently: the role's list
-overrides the `[agent]` default, absent ⇒ that default. Mixing models across
-roles is **intentional**, not an inconsistency to clean up: a reviewer that
-differs from the implementer catches more.
+Inheritance is mechanical and **independent per field**: merge each phase role
+over the raw `default` entry, then validate the exact merged runtime/model pair.
+The named runtime must serve the named model. A model-only role never searches
+for another runtime, and an incompatible inherited model is never replaced by
+the selected runtime's default. The one implicit fill-in is benign: if neither
+the phase role nor `default` names a model, the merged runtime uses its own
+default model. Compatibility failures name the role, runtime, model, and served
+model families; all problems in `default` and every declared role are
+aggregated into one eager load-time failure before any build launches.
+
+Mixing models across roles is **intentional**, not an inconsistency to clean
+up: a reviewer that differs from the implementer catches more. The removed
+legacy `[agent]` table is not an alias: config loading rejects it and directs
+users to move its fields to `[roles.default]`.
 
 ### `[policy]`
 
@@ -254,38 +249,37 @@ Every field is a **positive integer**.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `capacity` | `1` | positive integer | Concurrent builds for this repo. |
-| `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** one of these labels to be dispatchable (all, not any). `[]` = **no label gate**. Absent falls back to the source's default gate — see below. |
-| `readyState` | — (source-aware) | optional, nonempty string | Workflow state a ticket must *additionally* sit in. See below: absent means *any state* for `linear`, but `Ready` for `file`. |
 
-**Both defaults are source-aware**, resolved by `readyCriteria` in
-`src/processes/dispatcher.ts` — the schema's `undefined` is not the effective
-value, so read that function rather than the field type:
-
-| `[tickets].source` | `readyLabels` absent | `readyState` absent |
-|---|---|---|
-| `"linear"` | `["autobuild"]` — the label gate | any state (labels alone decide) |
-| `"file"` | `[]` — **no label gate** | `"Ready"` — the `ready/` directory *is* the gate |
-
-An explicit value always wins for either source.
+Readiness is expressed in the ticket source's vocabulary, so its fields live
+under `[tickets]`, not `[dispatcher]`.
 
 ### `[tickets]`
 
-Names the TicketSource the dispatcher drives. Declarative only.
-
-**Omitting the table entirely is a supported configuration, not an oversight**:
-it prefaults to `{ source = "file" }`, giving the local file tracker at
-`.autobuild/tickets` — a repo dispatches with no config edit and no secret.
-So `config.tickets` is always present; never write code or advice that treats
-"no `[tickets]` table" as a separate case.
+Names the TicketSource and owns its readiness/lifecycle state vocabulary.
+Declarative only. The table is required: `readyState` has no default, and an
+absent table fails clearly at `tickets.readyState` rather than making every
+state eligible.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `source` | `"file"` (via the table's prefault) | `"linear"` \| `"file"` | Which provider backs ticket reads, claims, and creation. |
+| `source` | — | **required**, `"linear"` \| `"file"` | Which provider backs ticket reads, claims, and creation. |
+| `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
+| `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file canonicalizes it to a state directory (`ready` → `ready/`). There is no any-state mode. |
 | `teamKey` | — | `source = "linear"` **only, required there**; nonempty string | The Linear team key (e.g. `"ENG"`). |
 | `claimedState` | — | `source = "linear"` only; optional, nonempty string | Workflow state `claim()` moves an issue to when a build starts. |
 | `createState` | — | optional, nonempty string | State new tickets are filed into. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = the provider's default (Linear: Backlog; file: Triage). Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `dir` | `.autobuild/tickets` | `source = "file"` **only**; optional, nonempty string | Root holding the state directories. Resolved relative to the repo. |
+
+`readyLabels` is the only source-aware readiness default, resolved by
+`readyCriteria` in `src/processes/dispatcher.ts`:
+
+| `[tickets].source` | `readyLabels` absent |
+|---|---|
+| `"linear"` | `["autobuild"]` — the historical label narrowing |
+| `"file"` | `[]` — no label narrowing; `readyState` selects the directory |
+
+An explicit `readyLabels` value always wins for either source.
 
 Cross-field rules, each an **error**:
 

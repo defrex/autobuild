@@ -135,9 +135,8 @@ export class HarvestRunner {
     this.maxSessionAttempts = deps.opts?.maxSessionAttempts ?? 2
     this.resolver = createRuntimeResolver(
       deps.runtimes,
-      deps.config.agent,
-      deps.defaultRuntime,
       deps.config.roles,
+      deps.defaultRuntime,
     )
   }
 

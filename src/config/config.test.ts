@@ -32,12 +32,15 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
 
-[agent]                         # repo-wide default pair on the two axes (§9)
+[roles.default]                 # reserved repo-wide inheritance base (§9)
 runtime = "claude"
 
-[roles]                         # role → runtime/model override (§9)
-plan = { runtime = "claude" }
-code-review = { runtime = "pi", model = "…" }
+[roles.plan]                    # phase role → per-field override (§9)
+runtime = "claude"
+
+[roles.code-review]
+runtime = "pi"
+model = "…"
 
 [policy]
 stallRounds = 3
@@ -46,6 +49,9 @@ maxReconcileAttempts = 3
 
 [dispatcher]
 capacity = 3                    # concurrent builds for this repo
+
+[tickets]
+source = "file"
 readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
@@ -67,13 +73,11 @@ const SPEC_EXAMPLE_WITH_UNIT = SPEC_EXAMPLE.replace(
 )
 
 /**
- * `[dispatcher].readyState` is required and non-blank (AUT-11), so every config
- * that isn't itself exercising the dispatcher must still supply one for parse to
- * reach the table under test — a missing readyState fails at the base object
- * schema, before the cross-validation superRefine even runs. Appended to the
- * focused fixtures below; TOML table order is irrelevant.
+ * `[tickets].readyState` is required and non-blank (AUT-11), so every config
+ * that is not itself exercising the tickets table must supply a minimal file
+ * source for parsing to reach the table under test.
  */
-const READY = '[dispatcher]\nreadyState = "ready"\n'
+const READY = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
 function parseError(toml: string, source?: string): ConfigError {
   try {
@@ -106,8 +110,8 @@ describe('parseConfig — SPEC §16.1 example', () => {
         },
       },
       finalize: { steps: ['release-notes'] },
-      agent: { runtime: 'claude' },
       roles: {
+        default: { runtime: 'claude' },
         plan: { runtime: 'claude' },
         'code-review': { runtime: 'pi', model: '…' },
       },
@@ -117,8 +121,12 @@ describe('parseConfig — SPEC §16.1 example', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 5,
       },
-      dispatcher: { capacity: 3, readyLabels: ['autobuild'], readyState: 'ready' },
-      tickets: { source: 'file' },
+      dispatcher: { capacity: 3 },
+      tickets: {
+        source: 'file',
+        readyLabels: ['autobuild'],
+        readyState: 'ready',
+      },
       harvest: { threshold: 10 },
       outer: {
         'ingest:sentry': { cron: '0 */4 * * *' },
@@ -134,13 +142,13 @@ describe('parseConfig — SPEC §16.1 example', () => {
 })
 
 describe('parseConfig — defaults', () => {
-  test('an empty file now fails — readyState has no default (AUT-11)', () => {
+  test('an empty file fails at tickets.readyState — the gate has no default', () => {
     const error = parseError('')
-    expect(error.message).toContain('dispatcher.readyState')
+    expect(error.message).toContain('tickets.readyState')
     expect(error.message).toContain('is required')
   })
 
-  test('a minimal valid [dispatcher] yields every other table default', () => {
+  test('a minimal valid [tickets] yields every other table default', () => {
     expect(parseConfig(READY)).toEqual({
       project: { baseBranch: 'main' },
       commands: {},
@@ -153,8 +161,8 @@ describe('parseConfig — defaults', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 5,
       },
-      dispatcher: { capacity: 1, readyState: 'ready' },
-      tickets: { source: 'file' },
+      dispatcher: { capacity: 1 },
+      tickets: { source: 'file', readyState: 'ready' },
       harvest: { threshold: 10 },
       outer: {},
     })
@@ -270,47 +278,61 @@ describe('parseConfig — cross-validation', () => {
 
 describe('parseConfig — [tickets]', () => {
   test('a valid linear source parses, claimedState optional', () => {
-    const config = parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`)
-    expect(config.tickets).toEqual({ source: 'linear', teamKey: 'ENG' })
+    const config = parseConfig(
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+    )
+    expect(config.tickets).toEqual({
+      source: 'linear',
+      teamKey: 'ENG',
+      readyState: 'Todo',
+    })
   })
 
   test('a valid file source parses', () => {
-    const config = parseConfig(`${READY}[tickets]\nsource = "file"\ndir = "tickets"\n`)
-    expect(config.tickets).toEqual({ source: 'file', dir: 'tickets' })
+    const config = parseConfig(
+      '[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
+    )
+    expect(config.tickets).toEqual({
+      source: 'file',
+      dir: 'tickets',
+      readyState: 'ready',
+    })
   })
 
-  test('absent table means the local file tracker — a repo dispatches with a minimal config', () => {
-    expect(parseConfig(READY).tickets).toEqual({ source: 'file' })
+  test('an absent table fails specifically at tickets.readyState', () => {
+    const error = parseError('[dispatcher]\ncapacity = 2\n')
+    expect(error.message).toContain('tickets.readyState')
+    expect(error.message).toContain('is required')
+    expect(error.message).toContain('every ticket from the source eligible')
   })
 
   test('the default leaves dir undefined — the factory decides, and only it knows it was defaulted', () => {
     expect(parseConfig(READY).tickets.dir).toBeUndefined()
   })
 
-  test('a present-but-partial table is not clobbered by the default', () => {
-    expect(
-      parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`).tickets,
-    ).toEqual({
-      source: 'linear',
-      teamKey: 'ENG',
-    })
+  test('a present table is not clobbered by the file-source prefault input', () => {
+    const config = parseConfig(
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+    )
+    expect(config.tickets.source).toBe('linear')
   })
 
   test('linear without teamKey is an error with path and remedy', () => {
-    const error = parseError(`${READY}[tickets]\nsource = "linear"\n`)
+    const error = parseError('[tickets]\nsource = "linear"\nreadyState = "Todo"\n')
     expect(error.message).toContain('tickets.teamKey')
     expect(error.message).toContain('requires teamKey')
   })
 
   test('file without dir parses — dir is optional, defaulting to .autobuild/tickets', () => {
-    expect(parseConfig(`${READY}[tickets]\nsource = "file"\n`).tickets).toEqual({
+    expect(parseConfig(READY).tickets).toEqual({
       source: 'file',
+      readyState: 'ready',
     })
   })
 
   test('dir on a linear source is rejected', () => {
     const error = parseError(
-      `${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\ndir = "tickets"\n`,
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\ndir = "tickets"\n',
     )
     expect(error.message).toContain('tickets.dir')
     expect(error.message).toContain('applies only to source = "file"')
@@ -318,7 +340,7 @@ describe('parseConfig — [tickets]', () => {
 
   test('teamKey and claimedState on a file source are rejected', () => {
     const error = parseError(
-      `${READY}[tickets]\nsource = "file"\ndir = "tickets"\nteamKey = "ENG"\nclaimedState = "Doing"\n`,
+      '[tickets]\nsource = "file"\nreadyState = "ready"\ndir = "tickets"\nteamKey = "ENG"\nclaimedState = "Doing"\n',
     )
     expect(error.message).toContain('tickets.teamKey')
     expect(error.message).toContain('tickets.claimedState')
@@ -326,78 +348,108 @@ describe('parseConfig — [tickets]', () => {
   })
 
   test('an unknown source is rejected', () => {
-    const error = parseError(`${READY}[tickets]\nsource = "jira"\n`)
+    const error = parseError('[tickets]\nsource = "jira"\nreadyState = "Ready"\n')
     expect(error.message).toContain('tickets.source')
   })
 
   test('createState is accepted on both sources — absent means provider default', () => {
     const linear = parseConfig(
-      `${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\ncreateState = "Triage"\n`,
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\ncreateState = "Triage"\n',
     )
-    expect(linear.tickets?.createState).toBe('Triage')
+    expect(linear.tickets.createState).toBe('Triage')
     const file = parseConfig(
-      `${READY}[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "Backlog"\n`,
+      '[tickets]\nsource = "file"\nreadyState = "ready"\ndir = "tickets"\ncreateState = "Backlog"\n',
     )
-    expect(file.tickets?.createState).toBe('Backlog')
+    expect(file.tickets.createState).toBe('Backlog')
     expect(
-      parseConfig(`${READY}[tickets]\nsource = "linear"\nteamKey = "ENG"\n`).tickets
-        ?.createState,
+      parseConfig(
+        '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+      ).tickets.createState,
     ).toBeUndefined()
   })
 
   test('triageState is accepted on both sources — absent means provider default', () => {
     const linear = parseConfig(
-      '[tickets]\nsource = "linear"\nteamKey = "ENG"\ntriageState = "Backlog"\n[dispatcher]\nreadyState = "Ready"\n',
+      '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\ntriageState = "Backlog"\n',
     )
-    expect(linear.tickets?.triageState).toBe('Backlog')
+    expect(linear.tickets.triageState).toBe('Backlog')
     const file = parseConfig(
-      '[tickets]\nsource = "file"\ntriageState = "Triage"\n[dispatcher]\nreadyState = "Ready"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\ntriageState = "Triage"\n',
     )
-    expect(file.tickets?.triageState).toBe('Triage')
+    expect(file.tickets.triageState).toBe('Triage')
     expect(
       parseConfig(
-        '[tickets]\nsource = "linear"\nteamKey = "ENG"\n[dispatcher]\nreadyState = "Ready"\n',
-      ).tickets?.triageState,
+        '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n',
+      ).tickets.triageState,
     ).toBeUndefined()
   })
 })
 
-describe('parseConfig — [dispatcher] readiness', () => {
-  test('readyState is required — omitting it (or the whole table) is an actionable error', () => {
-    for (const toml of ['', '[dispatcher]\ncapacity = 2\n']) {
+describe('parseConfig — [tickets] readiness', () => {
+  test('readyState is required and reports the new path', () => {
+    for (const toml of ['', '[tickets]\nsource = "file"\n']) {
       const error = parseError(toml)
-      expect(error.message).toContain('dispatcher.readyState')
+      expect(error.message).toContain('tickets.readyState')
       expect(error.message).toContain('is required')
-      // The actionable message names what to set and why omission is dangerous.
       expect(error.message).toContain('every ticket from the source eligible')
     }
   })
 
-  test('an empty readyState is rejected as blank, not accepted', () => {
-    const error = parseError('[dispatcher]\nreadyState = ""\n')
-    expect(error.message).toContain('dispatcher.readyState')
-    expect(error.message).toContain('must not be blank')
+  test('empty and whitespace-only readyState values are rejected as blank', () => {
+    for (const value of ['', '   ']) {
+      const error = parseError(
+        `[tickets]\nsource = "file"\nreadyState = ${JSON.stringify(value)}\n`,
+      )
+      expect(error.message).toContain('tickets.readyState')
+      expect(error.message).toContain('must not be blank')
+    }
   })
 
-  test('a whitespace-only readyState is rejected as blank', () => {
-    const error = parseError('[dispatcher]\nreadyState = "   "\n')
-    expect(error.message).toContain('dispatcher.readyState')
-    expect(error.message).toContain('must not be blank')
+  test('readyLabels is optional and absent by default — the source decides its own label gate', () => {
+    expect(parseConfig(READY).tickets.readyLabels).toBeUndefined()
   })
 
-  test('readyLabels is optional and absent by default — the source decides its own gate', () => {
-    // Not [] and not ['autobuild']: the schema records "unset" and readyCriteria
-    // (src/processes/dispatcher.ts) resolves it per source. A default here would
-    // label-gate the file tracker's ready/ directory.
-    expect(parseConfig(READY).dispatcher.readyLabels).toBeUndefined()
+  test('readyLabels accepts an explicit empty array and nonempty entries', () => {
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "file"\nreadyState = "Ready"\nreadyLabels = []\n',
+      ).tickets.readyLabels,
+    ).toEqual([])
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "file"\nreadyState = "Ready"\nreadyLabels = ["urgent"]\n',
+      ).tickets.readyLabels,
+    ).toEqual(['urgent'])
   })
 
-  test('a set readyState parses alongside readyLabels', () => {
-    const config = parseConfig(
-      '[dispatcher]\nreadyLabels = []\nreadyState = "Ready"\n',
+  test('readyLabels rejects blank entries', () => {
+    const error = parseError(
+      '[tickets]\nsource = "file"\nreadyState = "Ready"\nreadyLabels = [""]\n',
     )
-    expect(config.dispatcher.readyState).toBe('Ready')
-    expect(config.dispatcher.readyLabels).toEqual([])
+    expect(error.message).toContain('tickets.readyLabels[0]')
+  })
+
+  test('each old dispatcher key is rejected with its new qualified home', () => {
+    for (const [key, value] of [
+      ['readyState', '"Ready"'],
+      ['readyLabels', '["autobuild"]'],
+    ] as const) {
+      const error = parseError(`${READY}[dispatcher]\n${key} = ${value}\n`)
+      expect(error.message).toContain(`[dispatcher].${key}`)
+      expect(error.message).toContain(`[tickets].${key}`)
+      expect(error.message).toContain('has moved')
+    }
+  })
+
+  test('old keys still fail when valid new values exist, and all bad keys are named', () => {
+    const error = parseError(
+      `${READY}[dispatcher]\nreadyState = "Old"\nreadyLabels = []\ncapcity = 2\n`,
+    )
+    expect(error.message).toContain('[dispatcher].readyState')
+    expect(error.message).toContain('[tickets].readyState')
+    expect(error.message).toContain('[dispatcher].readyLabels')
+    expect(error.message).toContain('[tickets].readyLabels')
+    expect(error.message).toContain('"capcity"')
   })
 })
 
@@ -440,24 +492,41 @@ describe('parseConfig — strictness (a typo must not silently disable a verifie
     expect(error.message).toContain('"runner"')
   })
 
-  test('unknown key inside [agent] is rejected', () => {
-    const error = parseError(`${READY}[agent]\nruntime = "claude"\nmdel = "x"\n`)
-    expect(error.message).toContain('agent')
+  test('unknown key inside [roles.default] is rejected', () => {
+    const error = parseError(
+      `${READY}[roles.default]\nruntime = "claude"\nmdel = "x"\n`,
+    )
+    expect(error.message).toContain('roles.default')
     expect(error.message).toContain('"mdel"')
   })
 })
 
-describe('parseConfig — [agent] defaults + [roles] two-axis (§9)', () => {
-  test('[agent] parses each shape: runtime-only, model-only, both, absent', () => {
-    expect(parseConfig(`${READY}[agent]\nruntime = "pi"\n`).agent).toEqual({ runtime: 'pi' })
-    expect(parseConfig(`${READY}[agent]\nmodel = "kimi-k3"\n`).agent).toEqual({
+describe('parseConfig — [roles.default] + phase roles (§9)', () => {
+  test('[roles.default] accepts all three role fields', () => {
+    const config = parseConfig(
+      `${READY}[roles.default]\n` +
+        `runtime = "pi"\n` +
+        `model = "kimi-k3"\n` +
+        `extensions = ["subagents", "web-access"]\n`,
+    )
+    expect(config.roles.default).toEqual({
+      runtime: 'pi',
       model: 'kimi-k3',
+      extensions: ['subagents', 'web-access'],
     })
-    expect(
-      parseConfig(`${READY}[agent]\nruntime = "pi"\nmodel = "kimi-k3"\n`).agent,
-    ).toEqual({ runtime: 'pi', model: 'kimi-k3' })
-    // Absent is meaningful (⇒ built-in fallback): the key is not present at all.
-    expect(parseConfig(READY).agent).toBeUndefined()
+  })
+
+  test('[roles.default] is optional and may be explicitly empty', () => {
+    expect(parseConfig(READY).roles).toEqual({})
+    expect(parseConfig(`${READY}[roles.default]\n`).roles).toEqual({ default: {} })
+  })
+
+  test('legacy [agent] is rejected with its [roles.default] replacement', () => {
+    const error = parseError(`${READY}[agent]\nruntime = "pi"\n`)
+    expect(error.message).toContain('[agent]')
+    expect(error.message).toContain('removed')
+    expect(error.message).toContain('[roles.default]')
+    expect(error.message).toContain('default entry in [roles]')
   })
 
   test('[roles] entries accept runtime, model, both, or neither', () => {
