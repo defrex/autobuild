@@ -31,6 +31,7 @@ import type {
   TicketSource,
 } from '../ports/types'
 import { installedSkillName } from '../skills'
+import { defaultTriageState } from './dispatcher'
 import {
   artifactRef,
   HARVEST_REPORT_ARTIFACT,
@@ -87,6 +88,19 @@ class SessionFailure extends Error {
   }
 }
 
+/** A heartbeat proved this process no longer owns the repository lease and a
+ * replacement claimed it before we could re-acquire. This is not workflow
+ * failure: the replacement resumes the same journal at the next boundary. */
+class HarvestLeaseLostError extends Error {
+  constructor(repo: string, instance: string) {
+    super(
+      `harvest lease for ${repo} is held by another runner ` +
+        `(former holder ${instance})`,
+    )
+    this.name = 'HarvestLeaseLostError'
+  }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -110,6 +124,9 @@ export class HarvestRunner {
   private readonly maxSessionAttempts: number
   private readonly resolver: RuntimeResolver
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  /** Set only when the store positively reports a lapsed/stolen lease. A
+   * rejected heartbeat is an outage; later beats retry until one can decide. */
+  private leaseLost = false
   private producer: ProducerSession | undefined
 
   constructor(private readonly deps: HarvestRunnerDeps) {
@@ -130,10 +147,11 @@ export class HarvestRunner {
     if (!(await store.claimRepoLease(repo, instance, this.leaseTtlMs))) {
       return { outcome: 'held' }
     }
-    this.startHeartbeat()
     let initial: 'started' | 'resumed' = 'resumed'
     let run: HarvestRunState | undefined
     try {
+      await this.startHeartbeat()
+      await this.ensureLease()
       let events = await store.getRepoEvents(repo)
       run = openHarvestRun(reduceHarvest(events))
       if (!run) {
@@ -151,6 +169,7 @@ export class HarvestRunner {
           observations: scan.observations,
           state: scan.state,
         })
+        await this.ensureLease()
         const { event } = await store.appendRepoWithArtifacts(
           repo,
           [
@@ -170,11 +189,13 @@ export class HarvestRunner {
             },
           }),
         )
+        await this.ensureLease()
         await store.appendRepo(repo, {
           actor: KERNEL,
           type: 'harvest.step.started',
           payload: { run: runId, step: 'scan' },
         })
+        await this.ensureLease()
         await store.appendRepo(repo, {
           actor: KERNEL,
           type: 'harvest.step.completed',
@@ -195,12 +216,16 @@ export class HarvestRunner {
         const outcome = await this.executeWorkflow(run)
         return { outcome, launch: initial, run: run.run }
       } catch (error) {
+        if (error instanceof HarvestLeaseLostError) throw error
         if (error instanceof SessionFailure) {
           return { outcome: 'failed', launch: initial, run: run.run }
         }
         await this.recordWorkflowFailure(run.run, error)
         return { outcome: 'failed', launch: initial, run: run.run }
       }
+    } catch (error) {
+      if (error instanceof HarvestLeaseLostError) return { outcome: 'held' }
+      throw error
     } finally {
       this.stopHeartbeat()
       if (this.producer !== undefined) {
@@ -440,6 +465,7 @@ export class HarvestRunner {
     terminal: (event: HarvestEvent, session: string) => boolean
   }): Promise<void> {
     const { store, repo, ids, workspacePath } = this.deps
+    await this.ensureLease()
     const failures = (await store.getRepoEvents(repo)).filter(
       (event) =>
         event.type === 'harvest.failed' &&
@@ -453,6 +479,7 @@ export class HarvestRunner {
 
     const session = ids('hs')
     const resolved = this.resolver.resolve(spec.role)
+    await this.ensureLease()
     const started = await store.appendRepo(repo, {
       actor: KERNEL,
       type: 'harvest.session.started',
@@ -495,6 +522,22 @@ export class HarvestRunner {
       }
     } catch (error) {
       turnError = error
+    }
+
+    try {
+      await this.ensureLease()
+    } catch (error) {
+      // The turn may have crossed the lease-expiry boundary. Close adapter
+      // resources, but deposit no transcript/result after a replacement has
+      // taken ownership. Continued producers are closed by run()'s finally.
+      if (handle !== undefined && live === undefined) {
+        try {
+          await resolved.runner.end(handle)
+        } catch {
+          // A dead session may have nothing left to close.
+        }
+      }
+      throw error
     }
 
     const since = await store.getRepoEvents(repo, started.seq)
@@ -550,7 +593,8 @@ export class HarvestRunner {
           transcript.metadata.usage,
           transcript.metadata.model ?? resolved.model,
         )
-      } catch {
+      } catch (error) {
+        if (error instanceof HarvestLeaseLostError) throw error
         // A dead agent may have no recoverable transcript.
       }
     }
@@ -559,6 +603,7 @@ export class HarvestRunner {
     const willRetry = attempt < this.maxSessionAttempts
     const failureMessage =
       turnError === undefined ? 'no-terminal' : errorMessage(turnError)
+    await this.ensureLease()
     await store.appendRepo(repo, {
       actor: KERNEL,
       type: 'harvest.failed',
@@ -571,6 +616,7 @@ export class HarvestRunner {
         willRetry,
       },
     })
+    await this.ensureLease()
     await store.appendRepo(repo, {
       actor: KERNEL,
       type: 'harvest.step.completed',
@@ -601,6 +647,7 @@ export class HarvestRunner {
     usage: { inputTokens: number; outputTokens: number; turns: number },
     model?: string,
   ): Promise<void> {
+    await this.ensureLease()
     await this.deps.store.appendRepoWithArtifacts(
       this.deps.repo,
       [
@@ -633,6 +680,7 @@ export class HarvestRunner {
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
     const { store, repo, tickets, config } = this.deps
+    await this.ensureLease()
     const current = await this.refreshRun(run.run)
     if (current.status === 'completed') return
     await this.startStep(run.run, 'file')
@@ -659,6 +707,7 @@ export class HarvestRunner {
     const report: Array<Record<string, unknown>> = []
 
     for (const proposal of set.proposals) {
+      await this.ensureLease()
       if (proposal.action === 'create') {
         const proposalKey = harvestProposalKey(proposal)
         let ticket = alreadyFiled.get(proposalKey)
@@ -668,13 +717,15 @@ export class HarvestRunner {
             await tickets.create(
               { title: proposal.title, body },
               {
-                state:
-                  config.tickets.triageState ??
-                  (config.tickets.source === 'linear' ? 'Backlog' : 'Triage'),
+                state: defaultTriageState(config),
                 idempotencyKey: proposalKey,
               },
             )
           ).ref
+          // External create is idempotent, so a lease loss in this window
+          // leaves no old-owner journal write; the replacement adopts the
+          // same ticket and records it.
+          await this.ensureLease()
           await store.appendRepo(repo, {
             actor: KERNEL,
             type: 'harvest.proposal.filed',
@@ -743,6 +794,7 @@ export class HarvestRunner {
       throw new Error('filing dispositions do not partition the claimed snapshot')
     }
     await this.completeStep(run.run, 'file', undefined, 'completed')
+    await this.ensureLease()
     await store.appendRepoWithArtifacts(
       repo,
       [
@@ -770,8 +822,10 @@ export class HarvestRunner {
     reason: string,
     round?: number,
   ): Promise<void> {
+    await this.ensureLease()
     const refreshed = await this.refreshRun(run.run)
     if (refreshed.status !== 'running') return
+    await this.ensureLease()
     await this.deps.store.appendRepo(this.deps.repo, {
       actor: KERNEL,
       type: 'harvest.escalated',
@@ -789,6 +843,7 @@ export class HarvestRunner {
     run: string,
     error: unknown,
   ): Promise<void> {
+    await this.ensureLease()
     const events = await this.deps.store.getRepoEvents(this.deps.repo)
     const state = reduceHarvest(events)
     const current = state.runs.find((candidate) => candidate.run === run)
@@ -808,6 +863,7 @@ export class HarvestRunner {
     const attempt = prior + 1
     const willRetry = attempt < this.maxSessionAttempts
     const message = errorMessage(error)
+    await this.ensureLease()
     await this.deps.store.appendRepo(this.deps.repo, {
       actor: KERNEL,
       type: 'harvest.failed',
@@ -821,6 +877,7 @@ export class HarvestRunner {
       },
     })
     if (open !== undefined) {
+      await this.ensureLease()
       await this.deps.store.appendRepo(this.deps.repo, {
         actor: KERNEL,
         type: 'harvest.step.completed',
@@ -845,6 +902,7 @@ export class HarvestRunner {
   }
 
   private async ensureScanStep(run: HarvestRunState): Promise<void> {
+    await this.ensureLease()
     const completed = run.steps.some(
       (occurrence) =>
         occurrence.step === 'scan' && occurrence.completedSeq !== undefined,
@@ -855,12 +913,14 @@ export class HarvestRunner {
         occurrence.step === 'scan' && occurrence.completedSeq === undefined,
     )
     if (!open) {
+      await this.ensureLease()
       await this.deps.store.appendRepo(this.deps.repo, {
         actor: KERNEL,
         type: 'harvest.step.started',
         payload: { run: run.run, step: 'scan' },
       })
     }
+    await this.ensureLease()
     await this.deps.store.appendRepo(this.deps.repo, {
       actor: KERNEL,
       type: 'harvest.step.completed',
@@ -878,6 +938,7 @@ export class HarvestRunner {
     step: 'synthesize' | 'review' | 'file',
     round?: number,
   ): Promise<void> {
+    await this.ensureLease()
     const refreshed = await this.refreshRun(run)
     const open = refreshed.steps.some(
       (occurrence) =>
@@ -886,6 +947,7 @@ export class HarvestRunner {
         occurrence.completedSeq === undefined,
     )
     if (open) return
+    await this.ensureLease()
     await this.deps.store.appendRepo(this.deps.repo, {
       actor: KERNEL,
       type: 'harvest.step.started',
@@ -900,6 +962,7 @@ export class HarvestRunner {
     outcome: 'completed' | 'approve' | 'revise' | 'escalate' | 'failed',
     artifact?: ArtifactRef,
   ): Promise<void> {
+    await this.ensureLease()
     await this.deps.store.appendRepo(this.deps.repo, {
       actor: KERNEL,
       type: 'harvest.step.completed',
@@ -949,10 +1012,31 @@ export class HarvestRunner {
     }
   }
 
-  private startHeartbeat(): void {
-    void this.deps.store.heartbeatRepo(this.deps.repo, this.deps.instance)
+  /** Re-acquire a lapsed lease only when no replacement won it. Checked at
+   * every durable boundary; work already in an agent turn cannot be revoked,
+   * but this process performs no subsequent kernel/file action without
+   * ownership. */
+  private async ensureLease(): Promise<void> {
+    if (!this.leaseLost) return
+    const { store, repo, instance } = this.deps
+    const reclaimed = await store.claimRepoLease(repo, instance, this.leaseTtlMs)
+    if (!reclaimed) throw new HarvestLeaseLostError(repo, instance)
+    this.leaseLost = false
+  }
+
+  private async startHeartbeat(): Promise<void> {
+    const { store, repo, instance } = this.deps
+    if (!(await store.heartbeatRepo(repo, instance))) this.leaseLost = true
     this.heartbeatTimer = setInterval(() => {
-      void this.deps.store.heartbeatRepo(this.deps.repo, this.deps.instance)
+      store.heartbeatRepo(repo, instance).then(
+        (alive) => {
+          if (!alive) this.leaseLost = true
+        },
+        () => {
+          // Store unreachable: retry on the next beat. A later false result
+          // proves expiry/takeover; rejecting timer promises are contained.
+        },
+      )
     }, this.heartbeatMs)
     this.heartbeatTimer.unref?.()
   }

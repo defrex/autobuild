@@ -437,6 +437,68 @@ describe('HarvestRunner', () => {
     expect(await store.getRepoEvents('/repo')).toEqual([])
   })
 
+  test('a rejected heartbeat is contained and a later false beat stops at the next durable boundary', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-heartbeat-loss-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const originalClaim = store.claimRepoLease.bind(store)
+    const originalHeartbeat = store.heartbeatRepo.bind(store)
+    let claims = 0
+    let beats = 0
+    store.claimRepoLease = async (...args) => {
+      claims += 1
+      if (claims === 1) return originalClaim(...args)
+      // A replacement won the lease after the positive lapsed-lease signal.
+      return false
+    }
+    store.heartbeatRepo = async (...args) => {
+      beats += 1
+      if (beats === 1) return originalHeartbeat(...args)
+      if (beats === 2) throw new Error('transient remote-store outage')
+      return false
+    }
+
+    let producerCalls = 0
+    let reviewerCalls = 0
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        if (opts.skill === 'ab-harvest') producerCalls += 1
+        else reviewerCalls += 1
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return defaultTurnResult('turn crossed lease expiry without a terminal')
+      },
+    })
+    await seedObservation(store, 'heartbeat-loss', 'lease ownership changed')
+
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      defaultRuntime: 'scripted',
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      clock: steppingClock(),
+      instance: 'former-owner',
+      opts: {
+        heartbeatMs: 1,
+        leaseTtlMs: 3_600_000,
+      },
+    }).run()
+
+    expect(result).toEqual({ outcome: 'held' })
+    expect(beats).toBeGreaterThanOrEqual(3)
+    expect(claims).toBe(2)
+    expect(producerCalls).toBe(1)
+    expect(reviewerCalls).toBe(0)
+    expect(
+      (await store.getRepoEvents('/repo')).some(
+        (event) => event.type === 'harvest.failed',
+      ),
+    ).toBe(false)
+  })
+
   test('no-terminal sessions retry across process restarts, then fail terminally without hot-looping', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-no-terminal-'))
     roots.push(workspace)
