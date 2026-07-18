@@ -374,6 +374,39 @@ function frameWidths(builds: DashboardBuild[]): Widths {
 export const DASHBOARD_LEGEND =
   'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit'
 
+/** Keep the renderer's ASCII/width invariant while retaining the exact input
+ * in the model for submission. Non-ASCII text is displayed as a code-point
+ * escape; it is not rewritten in memory or in the eventual event. */
+function displayInput(value: string): string {
+  let displayed = ''
+  for (const char of value) {
+    const code = char.codePointAt(0)!
+    displayed +=
+      code >= 0x20 && code <= 0x7e
+        ? char
+        : `\\u{${code.toString(16)}}`
+  }
+  return displayed
+}
+
+function dashboardControls(model: DashboardModel, color: boolean, width: number): string {
+  if (model.resumeInput === undefined) {
+    return truncate(paint(DASHBOARD_LEGEND, 'dim', color), width)
+  }
+
+  // Instructions are right-pinned and the field is the flexible segment, just
+  // like status on a build row. The full value remains in DashboardModel even
+  // when this display copy is truncated.
+  const prefix = 'Resume feedback (empty retries): ['
+  const suffix = ']  Enter submit  Esc cancel'
+  const fieldWidth = width - prefix.length - suffix.length
+  const plain =
+    fieldWidth > 0
+      ? `${prefix}${truncate(displayInput(model.resumeInput.value), fieldWidth)}${suffix}`
+      : 'Resume: Enter=submit Esc=cancel'
+  return truncate(paint(plain, 'cyan', color), width)
+}
+
 function overflowNotice(text: string, color: boolean, width: number): string {
   return truncate(paint(`  ... ${text}`, 'dim', color), width)
 }
@@ -396,7 +429,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     ].join('  '),
     width,
   )
-  const legend = truncate(paint(DASHBOARD_LEGEND, 'dim', color), width)
+  const controls = dashboardControls(model, color, width)
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
   // nothing. A single line would scroll itself off and land in scrollback on
@@ -404,9 +437,9 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   if (height !== undefined && height <= 0) return []
 
   // A one-line physical impossibility keeps the long-standing header priority;
-  // from two lines onward the legend always owns the final line.
+  // from two lines onward the controls always own the final line.
   if (height !== undefined && height <= 1) return [header]
-  if (height !== undefined && height === 2) return [header, legend]
+  if (height !== undefined && height === 2) return [header, controls]
 
   const harvestBlock =
     model.harvest === undefined
@@ -416,12 +449,12 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   if (model.builds.length === 0) {
     if (harvestBlock.length > 0) {
       const available = height === undefined ? harvestBlock.length : height - 2
-      return [header, ...harvestBlock.slice(0, Math.max(0, available)), legend]
+      return [header, ...harvestBlock.slice(0, Math.max(0, available)), controls]
     }
     const body = truncate(paint('  no active builds', 'dim', color), width)
     return height === undefined || height >= 3
-      ? [header, body, legend]
-      : [header, legend]
+      ? [header, body, controls]
+      : [header, controls]
   }
 
   // Build blocks first — each is its blank separator plus its lines — so the
@@ -435,11 +468,11 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   const bodyTotal =
     harvestBlock.length + blocks.reduce((n, block) => n + block.length, 0)
   if (height === undefined || bodyTotal + 2 <= height) {
-    return [header, ...harvestBlock, ...blocks.flat(), legend]
+    return [header, ...harvestBlock, ...blocks.flat(), controls]
   }
 
-  const totalBodyBudget = Math.max(0, height - 2) // header + reserved legend
-  if (totalBodyBudget === 0) return [header, legend]
+  const totalBodyBudget = Math.max(0, height - 2) // header + reserved controls
+  if (totalBodyBudget === 0) return [header, controls]
   // Keep a running harvest visible and non-selectable. If it consumes the
   // whole viewport, builds remain selectable in state but are omitted from
   // this narrow frame; no keyboard action can ever target the harvest row.
@@ -450,7 +483,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     )
     const selectedLine = rendered[selectedIndex]?.[0]
     if (totalBodyBudget === 1 || selectedLine === undefined) {
-      return [header, ...(selectedLine !== undefined ? [selectedLine] : []), legend]
+      return [header, ...(selectedLine !== undefined ? [selectedLine] : []), controls]
     }
     // At impossible narrow heights, retain both identities: the literal
     // HARVEST marker and the selected build slug. Detail rows return as soon
@@ -460,7 +493,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       header,
       ...harvestBlock.slice(1, totalBodyBudget),
       selectedLine,
-      legend,
+      controls,
     ]
   }
   const bodyBudget = totalBodyBudget - harvestBlock.length
@@ -502,7 +535,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     if (below > 0) {
       body.push(overflowNotice(`and ${below} more below`, color, width))
     }
-    return [header, ...harvestBlock, ...body, legend]
+    return [header, ...harvestBlock, ...body, controls]
   }
 
   // A detailed selected block itself cannot fit. Keep its selectable slug row
@@ -536,5 +569,5 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       ),
     )
   }
-  return [header, ...harvestBlock, ...body.slice(0, bodyBudget), legend]
+  return [header, ...harvestBlock, ...body.slice(0, bodyBudget), controls]
 }

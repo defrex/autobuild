@@ -18,7 +18,11 @@ import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchWiring } from './dispatch'
 import { stripAnsi } from './dashboard/render'
-import type { DashboardKey, TerminalInput, TerminalOut } from './terminal'
+import type {
+  TerminalInput,
+  TerminalInputEvent,
+  TerminalOut,
+} from './terminal'
 import type { Config } from '../config/schema'
 import { KERNEL, agentActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
@@ -35,7 +39,8 @@ import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
-import { systemClock } from '../store/types'
+import { systemClock, type Clock } from '../store/types'
+import { manualClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
   GIT_ID,
@@ -106,13 +111,14 @@ async function makeFixture(
   ticket: Ticket | Ticket[],
   handlers: SkillHandlers,
   toml = DISPATCH_CONFIG_TOML,
+  clock: Clock = systemClock,
 ): Promise<Fixture> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
   const origin = join(tmp, 'origin')
   await initOrigin(origin, toml)
 
   const ids = sequentialIds()
-  const store = new MemoryBuildStore({ clock: systemClock })
+  const store = new MemoryBuildStore({ clock })
   const forge = new FakeForge()
   const tickets = new FakeTicketSource(Array.isArray(ticket) ? ticket : [ticket])
   const workspaces = new GitWorktreeProvider({ root: join(tmp, 'worktrees') })
@@ -134,7 +140,7 @@ async function makeFixture(
         forge,
         exec: spawnExec,
         ids,
-        clock: systemClock,
+        clock,
         stdout: (line) => out.push(line),
         stderr: (line) => errLines.push(line),
       })
@@ -164,7 +170,7 @@ async function makeFixture(
     defaultRuntime: 'scripted',
     storeRef: 'memory', // unused: the scripted CLI writes the shared store by ref
     ids,
-    clock: systemClock,
+    clock,
   })
 
   return {
@@ -770,30 +776,60 @@ describe('abDispatch watch harvest coordination', () => {
   }, 30_000)
 })
 
-/** A TerminalOut that claims to be a TTY and records every raw write. */
-function fakeInput(initial: DashboardKey[] = []): TerminalInput & {
-  press: (key: DashboardKey) => void
+/** Test convenience names map to the raw normalized events production emits.
+ * Command letters remain printable text at the terminal seam. */
+type FakeInputKey =
+  | 'up'
+  | 'down'
+  | 'auto-merge'
+  | 'pause'
+  | 'drain'
+  | 'interrupt'
+  | 'enter'
+  | 'backspace'
+  | 'escape'
+
+function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
+  switch (key) {
+    case 'auto-merge':
+      return { type: 'text', text: 'm' }
+    case 'pause':
+      return { type: 'text', text: 'p' }
+    case 'drain':
+      return { type: 'text', text: 'd' }
+    default:
+      return { type: key }
+  }
+}
+
+/** A TerminalInput that records lifecycle and can send text/editing events. */
+function fakeInput(initial: FakeInputKey[] = []): TerminalInput & {
+  press: (key: FakeInputKey) => void
+  text: (text: string) => void
   starts: number
   cleanups: number
 } {
-  let onKey: ((key: DashboardKey) => void) | undefined
+  let onInput: ((input: TerminalInputEvent) => void) | undefined
   const input = {
     starts: 0,
     cleanups: 0,
-    start(handler: (key: DashboardKey) => void): () => void {
+    start(handler: (event: TerminalInputEvent) => void): () => void {
       input.starts += 1
-      onKey = handler
-      for (const key of initial) handler(key)
+      onInput = handler
+      for (const key of initial) handler(fakeInputEvent(key))
       let cleaned = false
       return () => {
         if (cleaned) return
         cleaned = true
         input.cleanups += 1
-        onKey = undefined
+        onInput = undefined
       }
     },
-    press(key: DashboardKey): void {
-      onKey?.(key)
+    press(key: FakeInputKey): void {
+      onInput?.(fakeInputEvent(key))
+    },
+    text(text: string): void {
+      onInput?.({ type: 'text', text })
     },
   }
   return input
@@ -1263,6 +1299,409 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(input.starts).toBe(1)
       expect(input.cleanups).toBe(1)
       expect(term.all()).toContain('\x1b[?25h')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('p on a blocked build opens input without writing; typed guidance answers it as the configured human', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-guidance', { title: 'Guidance work' }),
+      happyHandlers(),
+    )
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('guidance-work', {
+        actor: KERNEL,
+        type: 'finalize.started',
+        payload: {},
+      })
+      await fx.store.append('guidance-work', {
+        actor: agentActor('finalize', 's_blocked'),
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_guidance',
+          phase: 'finalize',
+          source: 'agent',
+          question: 'Should finalize use the manual merge path?',
+        },
+      })
+      const before = await fx.store.getEvents('guidance-work')
+
+      const term = fakeTerminal()
+      const input = fakeInput()
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'dashboard-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => stripAnsi(term.all()).includes('Should finalize use the manual merge path?'))
+
+      input.press('pause')
+      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      expect(await fx.store.getEvents('guidance-work')).toHaveLength(before.length)
+
+      // m/p/d are feedback characters while the modal is active, never global
+      // actions. Backspace edits by code point before Enter submits.
+      input.text('Use pmdX')
+      input.press('backspace')
+      input.text(' after checks. ')
+      input.press('enter')
+      await waitFor(async () =>
+        (await fx.store.getEvents('guidance-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const added = (await fx.store.getEvents('guidance-work')).slice(before.length)
+      const answer = added.find((event) => event.type === 'escalation.answered')
+      expect(answer?.actor).toEqual({ kind: 'human', user: 'dashboard-op' })
+      expect(answer?.payload).toEqual({
+        id: 'esc_guidance',
+        answer: 'Use pmd after checks.',
+        resolution: 'guidance',
+      })
+      expect(answer?.seq).toBeGreaterThan(before.at(-1)!.seq)
+      expect(Date.parse(answer!.ts)).not.toBeNaN()
+      expect(
+        added.some((event) =>
+          [
+            'build.pause-requested',
+            'build.auto-merge-requested',
+            'build.auto-merge-cancelled',
+          ].includes(event.type),
+        ),
+      ).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('blank blocked resume retries every captured source and also unpauses a paused+blocked build', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-retry', { title: 'Retry work' }),
+      happyHandlers(),
+    )
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('retry-work', {
+        actor: KERNEL,
+        type: 'finalize.started',
+        payload: {},
+      })
+      for (const [id, source] of [
+        ['esc_agent', 'agent'],
+        ['esc_stall', 'stall'],
+        ['esc_policy', 'policy'],
+      ] as const) {
+        await fx.store.append('retry-work', {
+          actor:
+            source === 'agent'
+              ? agentActor('finalize', 's_blocked')
+              : KERNEL,
+          type: 'escalation.raised',
+          payload: {
+            id,
+            phase: 'finalize',
+            source,
+            question: `${source} blocker remains unresolved`,
+          },
+        })
+      }
+      await fx.store.append('retry-work', {
+        actor: KERNEL,
+        type: 'build.paused',
+        payload: {},
+      })
+      const before = await fx.store.getEvents('retry-work')
+
+      const input = fakeInput()
+      const term = fakeTerminal()
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: {}, // stable fallback user: dashboard
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => input.starts === 1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      input.press('pause')
+      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      input.text('   ')
+      input.press('enter')
+      await waitFor(async () => {
+        const added = (await fx.store.getEvents('retry-work')).slice(before.length)
+        return (
+          added.filter((event) => event.type === 'escalation.answered').length === 3 &&
+          added.some((event) => event.type === 'build.resume-requested')
+        )
+      })
+      input.press('interrupt')
+      await run
+
+      const added = (await fx.store.getEvents('retry-work')).slice(before.length)
+      const answers = added.filter((event) => event.type === 'escalation.answered')
+      expect(answers.map((event) => event.payload.id)).toEqual([
+        'esc_agent',
+        'esc_stall',
+        'esc_policy',
+      ])
+      expect(
+        answers.every(
+          (event) =>
+            event.payload.resolution === 'retry' &&
+            event.payload.answer.toLowerCase().includes('no feedback') &&
+            event.actor.kind === 'human' &&
+            event.actor.user === 'dashboard',
+        ),
+      ).toBe(true)
+      expect(added.map((event) => event.type).slice(-1)).toEqual([
+        'build.resume-requested',
+      ])
+      expect(added.some((event) => event.type === 'build.pause-requested')).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('finalize blocked by auto-merge recovers after cancellation and an empty dashboard retry', async () => {
+    const clock = manualClock()
+    const handlers = happyHandlers()
+    const happyPlan = handlers.plan!
+    const happyFinalize = handlers.finalize!
+    let releasePlan!: () => void
+    let planReleased = false
+    const planGate = new Promise<void>((resolve) => {
+      releasePlan = () => {
+        planReleased = true
+        resolve()
+      }
+    })
+    handlers.plan = async (cli) => {
+      await planGate
+      return happyPlan(cli)
+    }
+    const blocker =
+      'Finalize opened the PR, but native auto-merge could not be enabled; cancel it and retry.'
+    handlers.finalize = async (cli) => {
+      try {
+        return await happyFinalize(cli)
+      } catch (error) {
+        if (!String(error).includes('permission denied enabling native auto-merge')) {
+          throw error
+        }
+        await cli.run(['escalate', blocker])
+      }
+    }
+
+    const fx = await makeFixture(
+      readyTicket('T-finalize-retry', { title: 'Finalize retry' }),
+      handlers,
+      DISPATCH_CONFIG_TOML,
+      clock,
+    )
+    const nativeSetAutoMerge = fx.forge.setAutoMerge.bind(fx.forge)
+    fx.forge.setAutoMerge = async (
+      workspacePath: string,
+      number: number,
+      enabled: boolean,
+    ) => {
+      if (enabled) {
+        throw new Error('permission denied enabling native auto-merge')
+      }
+      return nativeSetAutoMerge(workspacePath, number, enabled)
+    }
+
+    const term = fakeTerminal()
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'manual-merge-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 5,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => stripAnsi(term.all()).includes('finalize-retry'))
+
+      // Hold plan long enough to record durable pre-PR auto-merge intent.
+      input.press('auto-merge')
+      await waitFor(async () =>
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) => event.type === 'build.auto-merge-requested',
+        ),
+      )
+      releasePlan()
+
+      await waitFor(async () =>
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) => event.type === 'escalation.raised',
+        ),
+        5_000,
+      )
+      await waitFor(() => stripAnsi(term.all()).includes(blocker), 5_000)
+      expect(fx.forge.opened).toHaveLength(1)
+      expect(
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) => event.type === 'finalize.completed',
+        ),
+      ).toBe(false)
+
+      // The operator chooses manual merge, then submits the blocked-resume
+      // field empty. No direct launch occurs; the ordinary lease sweep owns
+      // durable reattachment after the parked runner's lease expires.
+      input.press('auto-merge')
+      await waitFor(async () =>
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) => event.type === 'build.auto-merge-cancelled',
+        ),
+      )
+      input.press('pause')
+      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      input.press('enter')
+      await waitFor(async () =>
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) =>
+            event.type === 'escalation.answered' &&
+            event.payload.resolution === 'retry',
+        ),
+      )
+      clock.advance(120_000)
+      await waitFor(async () =>
+        (await fx.store.getEvents('finalize-retry')).some(
+          (event) => event.type === 'finalize.completed',
+        ),
+        5_000,
+      )
+      input.press('interrupt')
+      await run
+      run = undefined
+
+      const events = await fx.store.getEvents('finalize-retry')
+      const retry = events.find(
+        (event) =>
+          event.type === 'escalation.answered' &&
+          event.payload.resolution === 'retry',
+      )
+      const cancellation = events.find(
+        (event) => event.type === 'build.auto-merge-cancelled',
+      )
+      const completed = events.find((event) => event.type === 'finalize.completed')
+      expect(retry?.actor).toEqual({ kind: 'human', user: 'manual-merge-op' })
+      expect(retry?.payload).toMatchObject({
+        answer: expect.stringContaining('no feedback'),
+        resolution: 'retry',
+      })
+      expect(Date.parse(retry!.ts)).not.toBeNaN()
+      expect(retry!.seq).toBeGreaterThan(cancellation!.seq)
+      expect(completed!.seq).toBeGreaterThan(retry!.seq)
+      expect(fx.forge.opened).toHaveLength(1) // retry adopted the existing PR
+      expect(fx.forge.autoMergeCalls.at(-1)).toMatchObject({
+        number: 1,
+        enabled: false,
+      })
+      expect(await fx.forge.getPrState('', 1)).toMatchObject({ state: 'open' })
+      expect(
+        events.filter((event) => event.type === 'escalation.raised'),
+      ).toHaveLength(1)
+      expect(fx.cliErrors).toHaveLength(1)
+      expect(fx.cliErrors[0]).toContain('permission denied enabling native auto-merge')
+    } finally {
+      if (!planReleased) releasePlan()
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Escape cancels blocked resume with no event and leaves the blocker visible', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-cancel', { title: 'Cancel work' }),
+      happyHandlers(),
+    )
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('cancel-work', {
+        actor: agentActor('finalize', 's_blocked'),
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_cancel',
+          phase: 'finalize',
+          source: 'agent',
+          question: 'Cancellation must leave this blocker untouched',
+        },
+      })
+      const before = await fx.store.getEvents('cancel-work')
+      const term = fakeTerminal()
+      const input = fakeInput()
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'))
+      input.press('pause')
+      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      input.text('do not submit this')
+      input.press('escape')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(await fx.store.getEvents('cancel-work')).toEqual(before)
+      expect(stripAnsi(term.all())).toContain('Cancellation must leave this blocker untouched')
+      input.press('interrupt')
+      await run
+      expect(
+        (await fx.store.getEvents('cancel-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      ).toBe(false)
     } finally {
       await fx.cleanup()
     }

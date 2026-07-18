@@ -41,7 +41,7 @@ export interface ContextInputs {
   commitRange?: boolean
   implementNotes?: boolean
   verifyReports?: boolean
-  /** Reconcile: the `{baseSha}` from `pr.conflicted` (§15.7). */
+  /** Reconcile: the fresh `{baseSha}` from this attempt's `reconcile.started` (§15.7). */
   conflict?: boolean
   prTemplate?: boolean
   /** Agent-verify: the step's config from autobuild.toml (§16.1). */

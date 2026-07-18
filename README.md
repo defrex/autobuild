@@ -33,7 +33,8 @@ queryable paper trail.
    ready-state gate — moved into `ready/` with the file tracker, or placed in
    the named Linear state with any required labels — and that act is human.
 2. **Answering escalations** — the questions a build parks on rather than
-   deciding alone.
+   deciding alone. The dispatch dashboard accepts optional free-text guidance
+   when you resume a blocked build.
 3. **Reviewing and choosing when to land the PR.** Merge it yourself, or opt a
    selected build into auto-merge from the dashboard. On gated branches GitHub
    owns the wait; on proved-ungated branches that consent permits Autobuild's
@@ -416,15 +417,27 @@ ab dispatch --interval 30
 ab dispatch --plain     # force line-oriented output, even on a TTY
 ```
 
-On a TTY the dispatch dashboard is interactive and always shows its key legend:
+On a TTY the dispatch dashboard is interactive. Its bottom line shows the
+normal key legend, or the active feedback field with its editing controls:
 
 | Key | Action |
 |---|---|
 | Up / Down | Move the slug-based build selection. Repaints and re-sorts keep the same build selected. |
 | `m` | Toggle durable auto-merge intent for the selected build. Pre-PR intent is remembered; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
-| `p` | Request pause, or resume an authoritatively paused build. The current agent step finishes before pause takes effect. |
+| `p` | Request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. The current agent step finishes before pause takes effect. |
 | `d` | Toggle drain for this dispatcher process: stop claiming new tickets while janitor, stale-runner, and in-flight work continue. Restart resets drain off. |
+| Enter / Escape | While blocked-resume feedback is open, submit / cancel. Backspace edits; all printable keys, including `m`, `p`, and `d`, are text rather than dashboard actions. |
 | Ctrl-C | Stop and restore terminal input/cursor state. |
+
+A blocked row keeps every red `!` blocker visible while its field is open.
+Submitting an empty or whitespace-only field answers every blocker captured
+when the field opened with a bare `retry`; entering text sends trimmed
+`guidance` to the next run of the parked phase. Escape appends nothing. A build
+that is both blocked and paused is also sent a resume request. Every submission
+is recorded as human-authored `escalation.answered` event(s), with store-assigned
+time and the operator user. The ordinary lease sweep performs reattachment, so
+resume is an attempt rather than a guarantee: an unresolved condition can
+escalate and become blocked again.
 
 Rows show `auto off`, `auto requested`, `auto enabled`, or `auto cancelling`,
 and the header shows `intake ON` or `intake DRAINED`. Pipes, redirects, and
@@ -438,7 +451,9 @@ Each tick runs in this order:
    merged/closed builds, routes conflicts to `reconcile`, and cleans up aborted
    builds.
 2. **startup resume** — first tick of an invocation only; attempts every
-   current build. Later ticks preserve deliberate policy parks.
+   actionable current build and automatically retries only an all-`policy`
+   escalation set. Agent/stall questions remain parked for a human. Later ticks
+   preserve deliberate policy parks.
 3. **lease sweep** — re-attaches runners to builds whose lease went stale.
 4. **dispatch** — claims and launches new work (skipped while the interactive
    dispatcher is drained).

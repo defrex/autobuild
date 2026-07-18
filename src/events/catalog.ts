@@ -86,8 +86,9 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
 
   'observation.recorded': ['agent'],
   'escalation.raised': ['agent', 'kernel'],
-  // Dispatcher-authored answers are restricted to `retry` below; matching
-  // them to open policy raises requires log context and lives in Dispatcher.
+  // Humans may use every resolution, including a bare `retry`. Dispatcher-
+  // authored answers are restricted to `retry` below; matching those to an
+  // all-policy open set requires log context and lives in Dispatcher.
   'escalation.answered': ['human', 'dispatcher'],
   'phase.failed': ['kernel'],
 }

@@ -90,6 +90,59 @@ describe('renderDashboard: the header', () => {
   })
 })
 
+describe('renderDashboard: blocked-resume input', () => {
+  const answering = (value = ''): DashboardModel => ({
+    ...model([
+      build({
+        status: 'blocked',
+        blockers: ['Choose whether finalize should keep native auto-merge.'],
+      }),
+    ]),
+    selectedSlug: 'auth-rate-limit',
+    resumeInput: { slug: 'auth-rate-limit', value },
+  })
+
+  test('the modal replaces only the bottom legend with a field and Enter/Esc instructions', () => {
+    const lines = rd(answering('use manual merge'), WIDE)
+    const controls = lines.at(-1)!
+    expect(controls).toContain('Resume feedback')
+    expect(controls).toContain('use manual merge')
+    expect(controls).toContain('Enter submit')
+    expect(controls).toContain('Esc cancel')
+    expect(controls).not.toContain('Up/Down')
+  })
+
+  test('the blocker remains visible while its answer is being typed', () => {
+    const out = rd(answering('manual merge'), WIDE).join('\n')
+    expect(out).toContain('Choose whether finalize should keep native auto-merge.')
+    expect(out).toContain('manual merge')
+  })
+
+  test('plain modal rendering has no ANSI and safely escapes non-ASCII without changing the model value', () => {
+    const m = answering('type p/m, café')
+    const out = rd(m, { color: false, width: 100 }).join('\n')
+    expect(out).not.toContain('\x1b')
+    expect(out).toContain('type p/m, caf\\u{e9}')
+    expect(m.resumeInput?.value).toBe('type p/m, café')
+  })
+
+  test('modal controls obey constrained width and height caps', () => {
+    for (const width of [20, 40, 80]) {
+      for (const height of [0, 1, 2, 4, 10]) {
+        const lines = rd(answering('a very long answer '.repeat(20)), {
+          color: true,
+          width,
+          height,
+        })
+        expect(lines.length).toBeLessThanOrEqual(height)
+        for (const line of lines) {
+          expect(stripAnsi(line).length).toBeLessThanOrEqual(width)
+        }
+      }
+    }
+  })
+})
+
 describe('renderDashboard: plain mode (the --plain AC)', () => {
   test('color: false emits NOT ONE escape byte', () => {
     const out = rd(

@@ -36,7 +36,7 @@ import {
   reconcileSelection,
 } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
-import type { DashboardKey, TerminalInput, TerminalOut } from './terminal'
+import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
 import { ClaudeAgentRunner } from '../ports/runner/claude'
 import { PiAgentRunner } from '../ports/runner/pi'
@@ -103,6 +103,21 @@ const DASHBOARD_POLL_MS = 500
  * state (AC 8). */
 const DASHBOARD_TICK_MS = 250
 
+/** `escalation.answered.answer` is schema-nonempty even when `retry` carries no
+ * guidance. This fixed audit description makes that absence explicit and is
+ * never materialized as phase feedback because the resolution is `retry`. */
+const BARE_RETRY_ANSWER =
+  'Operator requested a bare retry from the dispatch dashboard with no feedback'
+
+type DashboardAction = 'up' | 'down' | 'auto-merge' | 'pause' | 'drain'
+
+interface ResumePrompt {
+  slug: string
+  /** Snapshot at prompt-open time. Submission revalidates each id. */
+  escalationIds: string[]
+  value: string
+}
+
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
 export interface DispatchWiring {
@@ -155,7 +170,7 @@ export interface DispatchOpts {
    * constructs the real one over `process.stdout`.
    */
   terminal?: TerminalOut
-  /** Injectable normalized key source; the binary wraps process.stdin. */
+  /** Injectable normalized keyboard/text source; the binary wraps stdin. */
   input?: TerminalInput
 }
 
@@ -287,6 +302,10 @@ class DispatchLoop {
   /** Ephemeral per-process controls — deliberately absent from durable state. */
   private selectedSlug: string | undefined
   private drained = false
+  /** A slug/id-bound blocked-resume field. The model receives only slug/value;
+   * captured escalation ids stay controller-private. */
+  private resumePrompt: ResumePrompt | undefined
+  private resumeSubmitting = false
   /** One queue defines order between ticks and mutating keys. */
   private operationTail: Promise<void> = Promise.resolve()
   private acceptingKeys = false
@@ -366,15 +385,27 @@ class DispatchLoop {
     return 'dashboard'
   }
 
-  /** Remove a stale optional selectedSlug while retaining current drain. */
+  /** Overlay process-local controls onto the latest store projection. */
   private syncModelControls(): void {
     if (this.model === undefined) return
-    const { selectedSlug: _old, ...base } = this.model
+    const {
+      selectedSlug: _oldSelection,
+      resumeInput: _oldResumeInput,
+      ...base
+    } = this.model
     this.model = {
       ...base,
       drained: this.drained,
       ...(this.selectedSlug !== undefined
         ? { selectedSlug: this.selectedSlug }
+        : {}),
+      ...(this.resumePrompt !== undefined
+        ? {
+            resumeInput: {
+              slug: this.resumePrompt.slug,
+              value: this.resumePrompt.value,
+            },
+          }
         : {}),
     }
   }
@@ -412,6 +443,22 @@ class DispatchLoop {
   private async togglePause(): Promise<void> {
     const selected = await this.selectedBuild()
     if (selected === undefined) return
+
+    // A blocker is an escalation gate, not a pause state. It takes precedence
+    // even when the reducer authoritatively reports `paused` (the dashboard
+    // intentionally displays that overlap as BLOCKED + `(paused)`). Opening
+    // the field is process-local and writes nothing until Enter.
+    if (selected.state.openEscalations.length > 0) {
+      this.resumePrompt = {
+        slug: selected.slug,
+        escalationIds: selected.state.openEscalations.map((item) => item.id),
+        value: '',
+      }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+
     const resume = selected.state.status === 'paused'
     await this.wiring.store.append(selected.slug, {
       actor: humanActor(this.dashboardUser()),
@@ -419,6 +466,78 @@ class DispatchLoop {
       payload: {},
     })
     this.say(`build ${selected.slug}: ${resume ? 'resume' : 'pause'} requested`)
+    await this.renderOnce()
+  }
+
+  private clearResumePrompt(slug: string): void {
+    if (this.resumePrompt?.slug !== slug) return
+    this.resumePrompt = undefined
+    this.syncModelControls()
+    this.paint()
+  }
+
+  /** Submit the prompt as existing escalation-answer events. Empty input is a
+   * retry with no feedback; nonempty input is authoritative guidance. */
+  private async submitResume(prompt: ResumePrompt): Promise<void> {
+    const record = await this.wiring.store.getBuild(prompt.slug)
+    if (record === null || record.repo !== this.opts.targetRepo) {
+      this.clearResumePrompt(prompt.slug)
+      this.warn(`dashboard resume ignored: build ${prompt.slug} disappeared`)
+      await this.renderOnce()
+      return
+    }
+
+    const state = reduceBuild(await this.wiring.store.getEvents(prompt.slug))
+    if (!['running', 'paused', 'blocked'].includes(state.status)) {
+      this.clearResumePrompt(prompt.slug)
+      this.warn(`dashboard resume ignored: build ${prompt.slug} is no longer active`)
+      await this.renderOnce()
+      return
+    }
+
+    const captured = new Set(prompt.escalationIds)
+    const open = state.openEscalations.filter((item) => captured.has(item.id))
+    if (open.length === 0) {
+      this.clearResumePrompt(prompt.slug)
+      this.warn(`dashboard resume ignored: build ${prompt.slug} is no longer blocked by the captured escalation(s)`)
+      await this.renderOnce()
+      return
+    }
+
+    const guidance = prompt.value.trim()
+    const resolution = guidance === '' ? 'retry' : 'guidance'
+    const answer = guidance === '' ? BARE_RETRY_ANSWER : guidance
+    // One stable actor value for the whole multi-escalation operator action.
+    const actor = humanActor(this.dashboardUser())
+    const alsoPaused = state.status === 'paused'
+
+    // BuildStore appends one event at a time. Revalidation above plus a retry
+    // after any partial failure makes this idempotent at the reducer level:
+    // already-answered ids drop out, and only captured ids still open append.
+    for (const escalation of open) {
+      await this.wiring.store.append(prompt.slug, {
+        actor,
+        type: 'escalation.answered',
+        payload: { id: escalation.id, answer, resolution },
+      })
+    }
+    // Paused has reducer precedence over blocked. Clear every escalation first,
+    // then make the runner actionable so no lease sweep can observe a partially
+    // answered set as resumed work.
+    if (alsoPaused) {
+      await this.wiring.store.append(prompt.slug, {
+        actor,
+        type: 'build.resume-requested',
+        payload: {},
+      })
+    }
+
+    this.clearResumePrompt(prompt.slug)
+    this.say(
+      `build ${prompt.slug}: blocked resume requested${
+        resolution === 'guidance' ? ' with guidance' : ' without feedback'
+      }`,
+    )
     await this.renderOnce()
   }
 
@@ -439,8 +558,8 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
-  private async handleKey(key: Exclude<DashboardKey, 'interrupt'>): Promise<void> {
-    switch (key) {
+  private async handleAction(action: DashboardAction): Promise<void> {
+    switch (action) {
       case 'up':
         this.moveSelection(-1)
         return
@@ -462,24 +581,96 @@ class DispatchLoop {
     }
   }
 
-  private onKey(key: DashboardKey): void {
+  private queueAction(action: DashboardAction): void {
+    void this.serialize(() => this.handleAction(action)).catch((error: unknown) => {
+      this.warn(
+        `dashboard ${action} action failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+  }
+
+  /** Modal edits are synchronous and never enter the dispatcher operation
+   * queue. Only Enter serializes a store write, so polling/ticks continue while
+   * an operator thinks and types. */
+  private handleResumeInput(input: TerminalInputEvent): void {
+    const prompt = this.resumePrompt
+    if (prompt === undefined || this.resumeSubmitting) return
+    switch (input.type) {
+      case 'text':
+        this.resumePrompt = { ...prompt, value: prompt.value + input.text }
+        this.syncModelControls()
+        this.paint()
+        return
+      case 'backspace':
+        this.resumePrompt = {
+          ...prompt,
+          value: [...prompt.value].slice(0, -1).join(''),
+        }
+        this.syncModelControls()
+        this.paint()
+        return
+      case 'escape':
+        this.clearResumePrompt(prompt.slug)
+        return
+      case 'enter':
+        this.resumeSubmitting = true
+        void this.serialize(() => this.submitResume(prompt))
+          .catch((error: unknown) => {
+            this.warn(
+              `dashboard resume action failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            )
+          })
+          .finally(() => {
+            this.resumeSubmitting = false
+            this.syncModelControls()
+            this.paint()
+          })
+        return
+      case 'up':
+      case 'down':
+      case 'interrupt':
+        return
+    }
+  }
+
+  private onInput(input: TerminalInputEvent): void {
     if (!this.acceptingKeys) return
-    if (key === 'interrupt') {
+    if (input.type === 'interrupt') {
       this.acceptingKeys = false
       this.inputStop.abort()
       return
     }
-    void this.serialize(() => this.handleKey(key)).catch((error: unknown) => {
-      this.warn(
-        `dashboard ${key} action failed: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    })
+    if (this.resumePrompt !== undefined) {
+      this.handleResumeInput(input)
+      return
+    }
+
+    if (input.type === 'up' || input.type === 'down') {
+      this.queueAction(input.type)
+      return
+    }
+    if (input.type !== 'text') return
+    switch (input.text.toLowerCase()) {
+      case 'm':
+        this.queueAction('auto-merge')
+        return
+      case 'p':
+        this.queueAction('pause')
+        return
+      case 'd':
+        this.queueAction('drain')
+        return
+      default:
+        return
+    }
   }
 
   private startInput(): void {
     if (!this.dashboard || this.opts.input === undefined) return
     this.acceptingKeys = true
-    this.cleanupInput = this.opts.input.start((key) => this.onKey(key))
+    this.cleanupInput = this.opts.input.start((input) => this.onInput(input))
   }
 
   private stopInput(): void {
@@ -722,6 +913,24 @@ class DispatchLoop {
       const events = await this.wiring.store.getEvents(record.slug)
       entries.push({ record, state: reduceBuild(events), events })
     }
+    // Polling continues while the operator types. Keep the prompt bound to the
+    // captured build/escalations, shrink it around externally answered ids, and
+    // clear it rather than ever retargeting feedback to a newly selected row.
+    if (this.resumePrompt !== undefined) {
+      const prompt = this.resumePrompt
+      const entry = entries.find((item) => item.record.slug === prompt.slug)
+      const active =
+        entry !== undefined &&
+        ['running', 'paused', 'blocked'].includes(entry.state.status)
+      const openIds = new Set(entry?.state.openEscalations.map((item) => item.id) ?? [])
+      const remaining = prompt.escalationIds.filter((id) => openIds.has(id))
+      if (!active || remaining.length === 0) {
+        this.resumePrompt = undefined
+      } else if (remaining.length !== prompt.escalationIds.length) {
+        this.resumePrompt = { ...prompt, escalationIds: remaining }
+      }
+    }
+
     const previousSlugs = this.model?.builds.map((build) => build.slug) ?? []
     const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
     const harvestEvents =
@@ -745,12 +954,8 @@ class DispatchLoop {
       nextSlugs,
       this.selectedSlug,
     )
-    this.model = {
-      ...projected,
-      ...(this.selectedSlug !== undefined
-        ? { selectedSlug: this.selectedSlug }
-        : {}),
-    }
+    this.model = projected
+    this.syncModelControls()
     this.paint()
   }
 

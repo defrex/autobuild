@@ -524,6 +524,69 @@ describe('decideNext: rule 3 — escalation gating', () => {
     ).toEqual(wait('blocked'))
   })
 
+  test('human retry re-runs the parked phase without guidance for agent, stall, and policy raises', () => {
+    for (const source of ['agent', 'stall', 'policy'] as const) {
+      const raised = ev(
+        'escalation.raised',
+        {
+          id: `e_${source}`,
+          phase: 'plan',
+          round: 1,
+          source,
+          question: `${source} condition still needs a retry`,
+        },
+        source === 'agent'
+          ? { kind: 'agent', role: 'plan', session: `s_${source}` }
+          : KERNEL,
+      )
+      expect(
+        decide([
+          ...prelude(),
+          ev('plan.started', { round: 1 }),
+          raised,
+          ev('escalation.answered', {
+            id: `e_${source}`,
+            answer: 'Operator requested a bare retry with no feedback',
+            resolution: 'retry',
+          }),
+        ]),
+      ).toEqual(runPhase('plan', 1))
+    }
+  })
+
+  test('a bare retry that encounters the unresolved condition can escalate and block again', () => {
+    const writes = [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('escalation.raised', {
+        id: 'e_first',
+        phase: 'plan',
+        round: 1,
+        source: 'agent',
+        question: 'Which auth flow?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_first',
+        answer: 'Operator requested a bare retry with no feedback',
+        resolution: 'retry',
+      }),
+    ]
+    expect(decide(writes)).toEqual(runPhase('plan', 1))
+    expect(
+      decide([
+        ...writes,
+        ev('plan.started', { round: 1 }),
+        ev('escalation.raised', {
+          id: 'e_second',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'Which auth flow?',
+        }),
+      ]),
+    ).toEqual(wait('blocked'))
+  })
+
   test('answered abort-resolution without build.aborted → acknowledge abort, even with other escalations open', () => {
     const writes = [
       ...prelude(),
@@ -1209,12 +1272,12 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     expect(decide([...throughFinalize, ev('pr.closed', {})])).toEqual(wait('awaiting-pr'))
   })
 
-  test('pr.conflicted → reconcile attempt 1 with the conflict baseSha', () => {
+  test('pr.conflicted → reconcile attempt 1 without forwarding the detection-time baseSha', () => {
     expect(decide([...throughFinalize, ev('pr.conflicted', { baseSha: 'sha-main-2' })])).toEqual({
       kind: 'run-phase',
       phase: 'reconcile',
       round: 1,
-      reconcile: { attempt: 1, baseSha: 'sha-main-2' },
+      reconcile: { attempt: 1 },
     })
   })
 
@@ -1229,7 +1292,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       kind: 'run-phase',
       phase: 'reconcile',
       round: 1,
-      reconcile: { attempt: 1, baseSha: 'sha-main-2' },
+      reconcile: { attempt: 1 },
     })
   })
 
@@ -1320,7 +1383,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       kind: 'run-phase',
       phase: 'reconcile',
       round: 4,
-      reconcile: { attempt: 4, baseSha: 'sha-main-5' },
+      reconcile: { attempt: 4 },
     })
   })
 })

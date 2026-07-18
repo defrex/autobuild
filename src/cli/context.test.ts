@@ -590,14 +590,19 @@ describe('buildContext — finalize (§8.3: spec, plan, verify reports)', () => 
   })
 })
 
-describe('buildContext — reconcile (§8.3: conflict {baseSha} from pr.conflicted)', () => {
-  test('materializes spec, plan, implement-notes and the conflict base sha', async () => {
+describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start)', () => {
+  test('materializes the fresh reconcile.started base instead of the detection snapshot', async () => {
     await seedPlanApproved()
     await seedImplementRound(1, 'sha-head-1')
     await store.append(BUILD, {
       actor: DISPATCHER,
       type: 'pr.conflicted',
-      payload: { baseSha: 'sha-conflict-base' },
+      payload: { baseSha: 'sha-detected-base' },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-current-base' },
     })
 
     const manifest = await buildContext({
@@ -613,9 +618,59 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from pr.conflict
       'plan.md',
       'spec.md',
     ])
-    expect(manifest.conflict).toEqual({ baseSha: 'sha-conflict-base' })
+    expect(manifest.conflict).toEqual({ baseSha: 'sha-current-base' })
     expect(manifest.required).toEqual(['reconcile-notes'])
     expect(manifest.allowedTerminals).toEqual(['done', 'escalate'])
+  })
+
+  test('a crashed attempt exposes its newest matching reconcile.started base', async () => {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'sha-detected-base' },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-first-start' },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-refreshed-rerun' },
+    })
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.conflict).toEqual({ baseSha: 'sha-refreshed-rerun' })
+  })
+
+  test('fails clearly when the runner did not record this reconcile attempt start', async () => {
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'sha-detected-base' },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-other-attempt' },
+    })
+
+    await expect(
+      buildContext({
+        store,
+        env: makeEnv({ phase: 'reconcile', round: 2 }),
+        workspacePath: workspace,
+      }),
+    ).rejects.toThrow(/reconcile@2 context requires a matching reconcile\.started/)
   })
 
   test('answered reconcile guidance materializes for the next attempt (§15.6-B, §15.7)', async () => {
@@ -642,6 +697,11 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from pr.conflict
       actor: humanActor('aron'),
       type: 'escalation.answered',
       payload: { id: 'esc_r1', answer: 'Keep trying, base settled.', resolution: 'guidance' },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 4, baseSha: 'sha-current-base' },
     })
 
     const manifest = await buildContext({

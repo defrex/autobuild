@@ -397,7 +397,7 @@ CLI validates with. Per-phase inputs and terminals:
 | `code-review` | spec, plan, commit range `{base, head}`, prior findings, implement-notes | `verdict` |
 | `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range | `verdict pass\|fail --report` |
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
-| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` | `done` (requires merge commit present) |
+| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` from this attempt's `reconcile.started` | `done` (requires merge commit present) |
 
 Scoping is deliberate: the planner never sees code-review rounds; the
 reviewer sees prior findings but not the producer's session. What a phase
@@ -562,11 +562,23 @@ builds with the question and an answer channel (an `escalation.answered`
 event — commands are events, §15.2.7). The durable record is in the store
 like everything else.
 
+On the interactive dispatch dashboard, `p` on a blocked build opens optional
+feedback without hiding the blocker. Enter answers every escalation captured
+when the field opened, regardless of `agent`, `stall`, or `policy` source:
+whitespace-only input records human `resolution: retry` and carries no phase
+feedback; nonempty input records human `resolution: guidance` with the trimmed
+text. Escape cancels without an event. If the build was also authoritatively
+paused, submission requests resume after answering the blockers. The normal
+lease sweep re-attaches the parked phase from durable state. This is an attempt,
+not a forced success: an unresolved condition or question may escalate again
+and return the build to blocked.
+
 Policy escalations caused by an exhausted bounded retry/round budget are the
 narrow exception to the human-answer rule: a fresh `ab dispatch` invocation
-answers them with `resolution: retry` and attempts the build from durable
-state. This is an explicit process-restart retry boundary, not a watch-tick
-loop; agent and stall escalations remain human judgment gates.
+answers an all-policy open set with dispatcher-authored `resolution: retry` and
+attempts the build from durable state. This unattended startup path is an
+explicit process-restart retry boundary, not a watch-tick loop; agent and stall
+escalations remain human judgment gates until an operator answers them.
 
 ## 12. The outer loop
 
@@ -665,11 +677,16 @@ vocabulary *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 - v2.0 front end: terminal, with herdr as the multiplexer.
 - `ab dispatch` on a TTY is an interactive fleet dashboard. Its bottom legend
   is the authoritative key map: Up/Down select a build by slug identity, `p`
-  requests pause/resume, `m` toggles durable auto-merge intent, `d` toggles
-  in-memory dispatcher drain, and Ctrl-C exits. Intent uses GitHub-native
-  auto-merge whenever a real merge gate exists; on a proved-ungated branch it
-  consents to the guarded non-admin squash fallback defined in §15.7. `--plain`
-  (and non-TTY output) remains line-oriented and reads no keyboard input.
+  requests pause/resume when unblocked and opens optional resume feedback when
+  blocked, `m` toggles durable auto-merge intent, `d` toggles in-memory
+  dispatcher drain, and Ctrl-C exits. While the blocked-resume field is active,
+  printable keys edit it (including `m`/`p`/`d`), Backspace edits, Enter submits,
+  and Escape cancels; navigation and build actions are suppressed. The field is
+  slug-bound process state, polling remains live, and the selected build's
+  blocker rows remain visible. Auto-merge intent uses GitHub-native auto-merge
+  whenever a real merge gate exists; on a proved-ungated branch it consents to
+  the guarded non-admin squash fallback defined in §15.7. `--plain` (and
+  non-TTY output) remains line-oriented and reads no keyboard input.
 - Selection survives repaint/re-sort by tracking the build slug. Drain belongs
   only to one running dispatcher: while on it skips new ticket claims but keeps
   janitor, stale-runner, harvest, and in-flight work running; restart defaults
@@ -728,13 +745,13 @@ interpret outer-loop state.
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
 7. **[D2] Operator commands are events in the same log.** Humans append
-   `*-requested`/`*-cancelled` events; kernel or dispatcher plumbing
-   acknowledges their effects with fact events. The store is the *only*
-   coordination surface — no side channel — and polling covers commands
-   exactly the way it covers `subscribe`. A runner that is dead still receives
-   pause/resume/abort commands on resume. Auto-merge commands carry desired
-   state until PR plumbing applies them, including when the command predates
-   PR creation.
+   `*-requested`/`*-cancelled` events and `escalation.answered`; kernel or
+   dispatcher plumbing acknowledges their effects with fact events. The store
+   is the *only* coordination surface — no side channel — and polling covers
+   commands exactly the way it covers `subscribe`. A runner that is dead still
+   receives pause/resume/abort commands and escalation answers on resume.
+   Auto-merge commands carry desired state until PR plumbing applies them,
+   including when the command predates PR creation.
 
 ### 15.3 Catalog
 
@@ -803,9 +820,15 @@ janitor, `reconcile.*` by a re-attached build-runner)
 | `pr.auto-merge-enabled` / `pr.auto-merge-disabled` | kernel, dispatcher | `{commandSeq}` (correlated native-state application fact; never emitted for a direct candidate) |
 | `pr.merged` | dispatcher | `{sha}` |
 | `pr.closed` | dispatcher | `{}` |
-| `pr.conflicted` | dispatcher | `{baseSha}` |
-| `reconcile.started` | kernel | `{attempt, baseSha}` |
+| `pr.conflicted` | dispatcher | `{baseSha}` (detection-time snapshot/evidence) |
+| `reconcile.started` | kernel | `{attempt, baseSha}` (fresh execution-time merge target) |
 | `reconcile.completed` | agent | `{mergeCommit, artifact: {kind: "reconcile-notes", rev}}` |
+
+The two `baseSha` facts deliberately have different boundaries:
+`pr.conflicted.baseSha` preserves what the janitor observed when it detected
+conflict; `reconcile.started.baseSha` records the base freshly fetched and
+resolved immediately before that actual attempt runs. Agent context uses only
+the matching started fact, never the older conflict snapshot.
 
 **Cross-cutting**
 
@@ -813,7 +836,7 @@ janitor, `reconcile.*` by a re-attached build-runner)
 |---|---|---|
 | `observation.recorded` | agent | `{id, kind: followup \| refactor \| latent-bug, summary, files?, refs?}` |
 | `escalation.raised` | agent, kernel | `{id, phase, round?, source: agent \| stall \| policy, question, refs?}` |
-| `escalation.answered` | human; dispatcher for policy retry | `{id, answer, resolution: guidance \| dismiss-finding \| revise-spec \| abort \| retry}` |
+| `escalation.answered` | human; dispatcher only for all-policy startup retry | `{id, answer, resolution: guidance \| dismiss-finding \| revise-spec \| abort \| retry}` |
 | `phase.failed` | kernel | `{phase, round?, attempt, error, willRetry}` (infra failure — distinct from verdicts) |
 
 **Repository observation harvest** (separate journal)
@@ -855,10 +878,13 @@ chain survives `policy.stallRounds` rounds.
 
 `status ∈ queued | running | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], pr?, autoMerge, lastEvent}`. `blocked` ≡ an
-`escalation.raised` without a matching `escalation.answered`; `paused` ≡ a
-`build.paused` without a later `build.resumed`. `autoMerge` retains the latest
-human desired value and command seq separately from the latest applied
-`{enabled, commandSeq}` fact. The desired command is settled only when both
+`escalation.raised` without a matching `escalation.answered`; matching is by id,
+so answering every open id clears the block regardless of source. `paused` ≡ a
+`build.paused` without a later `build.resumed`; paused has authoritative reducer
+precedence, while the dashboard visually labels a paused build with open
+escalations as blocked and retains a separate `(paused)` marker. `autoMerge`
+retains the latest human desired value and command seq separately from the
+latest applied `{enabled, commandSeq}` fact. The desired command is settled only when both
 fields match, so a stale acknowledgement cannot erase newer intent. The
 operator UI's build list is exactly this reduction over every build in the
 store.
@@ -906,8 +932,11 @@ to discover work: on its first tick it attempts every actionable,
 non-terminal build in its repo. Lease claiming remains the exclusivity gate,
 so an old runner that is genuinely alive wins harmlessly. Pauses, PR/spec
 waits, and agent/stall escalations remain parked. An all-policy escalation
-set is recorded as `escalation.answered {resolution: retry}` before launch,
-re-arming the bounded phase-failure budget once for this invocation.
+set is recorded as dispatcher-authored `escalation.answered {resolution:
+retry}` before launch, re-arming the bounded phase-failure budget once for this
+invocation. This remains distinct from a human dashboard submission: the human
+may retry any source with empty input or supply guidance, and the later ordinary
+lease sweep performs the reattachment.
 
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 
@@ -969,15 +998,28 @@ subject to protection added after the probe.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted {baseSha}` and re-attaches
-a build-runner (the dispatcher itself never runs agents). The runner
-executes the `reconcile` epilogue phase: an agent merges base into the
-branch guided by the spec, plan, and implement-notes, with the explicit
-charge to regress against neither; the resolution lands as a merge commit
-(`reconcile.completed {mergeCommit}`; the push is `ab done` plumbing per
-[D7]). Because reconciliation changed code, **`verify:*` re-runs in full**;
-a failure routes back into the code loop as usual (§5). A resolution the
-agent judges risky — semantic conflicts, spec-relevant choices — escalates
-rather than guesses. Reconcile output skips
+a build-runner (the dispatcher itself never runs agents). That SHA is durable
+detection-time evidence, not the later merge target. Immediately before each
+actual reconcile run, after its bounded infrastructure-retry guard, the runner
+fetches the build's frozen `build.created.baseBranch` from `origin` into a
+build-scoped internal ref, resolves it as a commit, and emits
+`reconcile.started {attempt, baseSha}`. `ab context` supplies the newest started
+SHA matching that attempt; it never falls back to `pr.conflicted`. A fetch or
+resolution failure emits `phase.failed` and starts no agent, so known-stale
+input is never used.
+
+A crashed attempt re-runs with the same attempt number but refreshes and records
+the base again before its replacement session. If the base moves after a
+session starts, a still-conflicted PR is observed by the existing epilogue loop
+and receives the next reconcile attempt.
+
+The agent merges that supplied base into the branch guided by the spec, plan,
+and implement-notes, with the explicit charge to regress against neither; the
+resolution lands as a merge commit (`reconcile.completed {mergeCommit}`; the
+push is `ab done` plumbing per [D7]). Because reconciliation changed code,
+**`verify:*` re-runs in full**; a failure routes back into the code loop as
+usual (§5). A resolution the agent judges risky — semantic conflicts,
+spec-relevant choices — escalates rather than guesses. Reconcile output skips
 `code-review` by default (escalation covers the judgment cases;
 `policy.reconcileReview` can force it), and `policy.maxReconcileAttempts`
 bounds thrash against a busy base.

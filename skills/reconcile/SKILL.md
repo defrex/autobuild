@@ -15,7 +15,9 @@ SHA provenance; it is banned in this system).
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`,
    `.ab/implement-notes.md`, and the conflict info (`baseSha` in
-   `.ab/context.json`).
+   `.ab/context.json`). Kernel plumbing fetched the PR's configured base and
+   resolved this SHA immediately before your session, so the commit already
+   exists locally; it is not the older conflict-detection snapshot.
 2. `git merge <baseSha>` in the workspace and resolve every conflict with
    the explicit charge to **regress against neither side**:
    - The spec and plan tell you what this branch's changes are *for* — a

@@ -15,17 +15,18 @@ import { emitKeypressEvents } from 'node:readline'
  * scripted `ab dispatch` starts emitting escape sequences.
  */
 
-export type DashboardKey =
-  | 'up'
-  | 'down'
-  | 'auto-merge'
-  | 'pause'
-  | 'drain'
-  | 'interrupt'
+export type TerminalInputEvent =
+  | { type: 'up' }
+  | { type: 'down' }
+  | { type: 'enter' }
+  | { type: 'backspace' }
+  | { type: 'escape' }
+  | { type: 'interrupt' }
+  | { type: 'text'; text: string }
 
 /** Injectable keyboard seam. Starting returns an idempotent cleanup. */
 export interface TerminalInput {
-  start(onKey: (key: DashboardKey) => void): () => void
+  start(onInput: (input: TerminalInputEvent) => void): () => void
 }
 
 export interface TerminalOut {
@@ -88,25 +89,58 @@ export function processTerminal(stream: NodeJS.WriteStream = process.stdout): Te
 interface Keypress {
   name?: string
   ctrl?: boolean
+  meta?: boolean
   sequence?: string
 }
 
-function dashboardKey(text: string | undefined, key: Keypress): DashboardKey | undefined {
+/** Normalize readline's platform-dependent keypress shape without deciding
+ * what printable characters mean. In particular, `m`, `p`, and `d` remain
+ * text here: the dispatch controller maps them to commands only while no text
+ * input is active, so they can be typed into blocked-build feedback. */
+function dashboardInput(
+  text: string | undefined,
+  key: Keypress,
+): TerminalInputEvent | undefined {
   if ((key.ctrl === true && key.name === 'c') || key.sequence === '\u0003') {
-    return 'interrupt'
+    return { type: 'interrupt' }
   }
-  if (key.name === 'up') return 'up'
-  if (key.name === 'down') return 'down'
-  switch ((text ?? key.name ?? '').toLowerCase()) {
-    case 'm':
-      return 'auto-merge'
-    case 'p':
-      return 'pause'
-    case 'd':
-      return 'drain'
-    default:
-      return undefined
+  if (key.name === 'up') return { type: 'up' }
+  if (key.name === 'down') return { type: 'down' }
+  if (
+    key.name === 'return' ||
+    key.name === 'enter' ||
+    key.sequence === '\r' ||
+    key.sequence === '\n'
+  ) {
+    return { type: 'enter' }
   }
+  if (
+    key.name === 'backspace' ||
+    key.sequence === '\b' ||
+    key.sequence === '\u007f'
+  ) {
+    return { type: 'backspace' }
+  }
+  if (key.name === 'escape' || key.sequence === '\u001b') {
+    return { type: 'escape' }
+  }
+  if (key.ctrl === true || key.meta === true) return undefined
+
+  const printable =
+    text ??
+    (key.name?.length === 1
+      ? key.name
+      : key.sequence !== undefined
+        ? key.sequence
+        : undefined)
+  if (
+    printable === undefined ||
+    printable.length === 0 ||
+    /[\u0000-\u001f\u007f]/u.test(printable)
+  ) {
+    return undefined
+  }
+  return { type: 'text', text: printable }
 }
 
 /**
@@ -127,7 +161,7 @@ export function processTerminalInput(
       const priorFlowing = stream.readableFlowing
       let cleaned = false
       const listener = (text: string | undefined, key: Keypress = {}): void => {
-        const normalized = dashboardKey(text, key)
+        const normalized = dashboardInput(text, key)
         if (normalized !== undefined) onKey(normalized)
       }
 

@@ -107,6 +107,13 @@ export interface DashboardBuild {
   pr?: { url: string; state: PrLifecycle }
 }
 
+export interface ResumeInputView {
+  /** The prompt stays bound to this build even while polling re-sorts rows. */
+  slug: string
+  /** Full operator input. Rendering may truncate it, submission never does. */
+  value: string
+}
+
 export interface DashboardModel {
   repo: string
   mode: 'watch' | 'once'
@@ -115,6 +122,8 @@ export interface DashboardModel {
   drained: boolean
   /** Slug identity, never a row index. */
   selectedSlug?: string
+  /** Ephemeral blocked-resume field; never derived from or stored in events. */
+  resumeInput?: ResumeInputView
   builds: DashboardBuild[]
   /** Latest run remains visible after terminal completion until a newer run
    * replaces it. It is display-only and never enters build selection. */
@@ -709,6 +718,7 @@ export function buildDashboard(
     capacity: number
     drained?: boolean
     selectedSlug?: string
+    resumeInput?: ResumeInputView
   },
   harvestEvents: HarvestEvent[] = [],
 ): DashboardModel {
@@ -723,6 +733,7 @@ export function buildDashboard(
     capacity: header.capacity,
     drained: header.drained ?? false,
     ...(header.selectedSlug !== undefined ? { selectedSlug: header.selectedSlug } : {}),
+    ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
     ...(harvest !== undefined ? { harvest } : {}),
   }

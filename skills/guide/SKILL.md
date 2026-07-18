@@ -368,6 +368,30 @@ Outcomes:
 Local customization survives upgrades; divergence is made visible instead of
 silent.
 
+## Resuming blocked builds from the dashboard
+
+On a TTY, select a blocked build and press `p`. Instead of pausing it, the
+bottom controls become an optional feedback field while the red blocker
+question stays visible. Printable keys edit the field (including `m`, `p`, and
+`d`), Backspace deletes, Enter submits, and Escape cancels without changing the
+build.
+
+- **Empty or whitespace-only Enter** records a human `retry` answer for every
+  escalation captured when the field opened, regardless of `agent`, `stall`,
+  or `policy` source. This is a bare re-attempt and supplies no agent guidance.
+- **Entered text** records human `guidance` with the trimmed text and delivers it
+  to the next run of the parked phase.
+- If the blocked build is also paused, submission records a resume request after
+  answering its escalations.
+
+The events retain the human user, store-assigned time, resolution, and answer.
+The normal lease sweep re-attaches the runner; the UI does not launch one through
+a side channel. Resume is therefore an attempt, not a guarantee: if the
+condition still fails or the question remains unanswered, the phase can raise a
+new escalation and return to blocked. This operator flow does not broaden the
+unattended startup rule: a fresh `ab dispatch` still auto-retries only an
+all-policy escalation set and never invents guidance.
+
 ## Checking build status
 
 Two read-only commands answer "what is happening?" without inspecting SQLite,

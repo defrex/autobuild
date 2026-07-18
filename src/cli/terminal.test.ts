@@ -9,7 +9,11 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { PassThrough } from 'node:stream'
-import { processTerminal, processTerminalInput } from './terminal'
+import {
+  processTerminal,
+  processTerminalInput,
+  type TerminalInputEvent,
+} from './terminal'
 
 function stream(props: { isTTY?: boolean; columns?: number; rows?: number }): NodeJS.WriteStream {
   const writes: string[] = []
@@ -114,20 +118,50 @@ function inputStream(opts: { tty?: boolean; raw?: boolean; flowing?: boolean } =
 }
 
 describe('processTerminalInput', () => {
-  test('normalizes arrows, action keys, and raw-mode Ctrl-C', () => {
+  test('normalizes navigation, editing controls, printable text, and raw-mode Ctrl-C', () => {
     const stream = inputStream()
-    const keys: string[] = []
-    const cleanup = processTerminalInput(stream).start((key) => keys.push(key))
+    const inputs: TerminalInputEvent[] = []
+    const cleanup = processTerminalInput(stream).start((input) => inputs.push(input))
 
     stream.emit('keypress', undefined, { name: 'up' })
     stream.emit('keypress', undefined, { name: 'down' })
+    // Command letters deliberately remain text; dispatch interprets them only
+    // when no feedback field is active.
     stream.emit('keypress', 'm', { name: 'm' })
     stream.emit('keypress', 'P', { name: 'p' })
-    stream.emit('keypress', 'd', { name: 'd' })
+    stream.emit('keypress', 'answer', {})
+    stream.emit('keypress', undefined, { name: 'space', sequence: ' ' })
+    stream.emit('keypress', undefined, { name: 'return', sequence: '\r' })
+    stream.emit('keypress', undefined, { name: 'backspace', sequence: '\u007f' })
+    stream.emit('keypress', undefined, { name: 'escape', sequence: '\u001b' })
     stream.emit('keypress', undefined, { name: 'c', ctrl: true, sequence: '\u0003' })
-    stream.emit('keypress', 'x', { name: 'x' })
 
-    expect(keys).toEqual(['up', 'down', 'auto-merge', 'pause', 'drain', 'interrupt'])
+    expect(inputs).toEqual([
+      { type: 'up' },
+      { type: 'down' },
+      { type: 'text', text: 'm' },
+      { type: 'text', text: 'P' },
+      { type: 'text', text: 'answer' },
+      { type: 'text', text: ' ' },
+      { type: 'enter' },
+      { type: 'backspace' },
+      { type: 'escape' },
+      { type: 'interrupt' },
+    ])
+    cleanup()
+  })
+
+  test('excludes control/meta input that is not a supported editing key', () => {
+    const stream = inputStream()
+    const inputs: TerminalInputEvent[] = []
+    const cleanup = processTerminalInput(stream).start((input) => inputs.push(input))
+
+    stream.emit('keypress', '\t', { name: 'tab', sequence: '\t' })
+    stream.emit('keypress', '\u0001', { name: 'a', ctrl: true, sequence: '\u0001' })
+    stream.emit('keypress', 'x', { name: 'x', meta: true })
+    stream.emit('keypress', undefined, { name: 'f1' })
+
+    expect(inputs).toEqual([])
     cleanup()
   })
 

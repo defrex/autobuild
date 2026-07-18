@@ -26,6 +26,17 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 The grammar is fixed; `verify:*` and `finalize:*` are the only extension
 points, declared per-repo in `autobuild.toml`.
 
+The reconcile boundary intentionally has two durable snapshots.
+`pr.conflicted.baseSha` is what the janitor observed at conflict detection;
+the pure engine uses it only as conflict sequence evidence. Immediately before
+each real run, `src/processes/build-runner.ts` fetches the frozen
+`build.created.baseBranch` from `origin` into a slug-scoped internal ref and
+records the resolved commit in `reconcile.started.baseSha`. That matching
+phase-start fact is what `src/cli/context.ts` gives the agent. Same-attempt
+crash recovery refreshes again; movement after startup is handled by another
+conflict/reconcile loop. Refresh failures are `phase.failed` infrastructure
+facts and never fall back to the stale detection snapshot.
+
 Observation harvest is adjacent, never added to that grammar:
 
 ```
@@ -79,17 +90,25 @@ suffix. Existing build records have no mutation path and are never re-slugged.
 The dashboard is an operator command producer, not forge plumbing. Its `p` and
 `m` handlers append human-actor events through the BuildStore; build-runner and
 dispatcher code acknowledge pause/resume and reconcile auto-merge via the
-`Forge` port. The GitHub adapter combines exact-branch classic protection and
-active ruleset probes with the complete PR merge-state enum: a real gate keeps
-native auto-merge ownership, while only two successful negative probes can
-return a guarded direct-squash candidate. `Dispatcher.checkPr` is the sole
-fallback owner and additionally requires positive mergeability, unchanged
-latest intent, and `decideNext(...)=awaiting-pr`; the normal non-admin merge is
-head-SHA guarded and completion remains an observed `pr.merged` fact on the
-next poll. `d` is the sole exception because drain is intentionally
-process-local: it gates only the current dispatcher's ticket-claim stage and is
-reset by restart. Raw input and live-region output have separate adapters so
-keypresses cannot write into or tear a rendered frame.
+`Forge` port. On a blocked row, `p` instead opens slug/escalation-bound process
+state: Enter appends one human `escalation.answered` per captured id (`retry`
+for blank input, `guidance` for text), then requests resume too if the reduced
+build was paused. Escape writes nothing. The field is overlaid on the pure
+dashboard model, so blocker rows and polling remain live while terminal input
+edits synchronously; only submission joins the serialized operation queue.
+Reattachment remains the ordinary dispatcher lease sweep. The GitHub adapter
+combines exact-branch classic protection and active ruleset probes with the
+complete PR merge-state enum: a real gate keeps native auto-merge ownership,
+while only two successful negative probes can return a guarded direct-squash
+candidate. `Dispatcher.checkPr` is the sole fallback owner and additionally
+requires positive mergeability, unchanged latest intent, and
+`decideNext(...)=awaiting-pr`; the normal non-admin merge is head-SHA guarded
+and completion remains an observed `pr.merged` fact on the next poll. The
+automatic startup path in `src/processes/dispatcher.ts` is unchanged and
+retries only an all-policy escalation set without input. `d` is the other
+process-local state: it gates only the current dispatcher's ticket-claim stage
+and resets on restart. Raw input and live-region output have separate adapters
+so keypresses cannot write into or tear a rendered frame.
 
 ## Development
 

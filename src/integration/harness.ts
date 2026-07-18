@@ -4,9 +4,9 @@
  *
  * - ONE MemoryBuildStore shared by dispatcher, build-runner, and every CLI
  *   invocation (steppingClock so store-assigned `ts` are deterministic).
- * - A REAL temp git repo as the origin, with a committed autobuild.toml
- *   fixture (§16.1 D9) whose check command is controllable: `test -f
- *   ok.marker` fails until an implement round commits the marker.
+ * - A REAL temp git repo with a real bare `origin` remote and a committed
+ *   autobuild.toml fixture (§16.1 D9) whose check command is controllable:
+ *   `test -f ok.marker` fails until an implement round commits the marker.
  * - REAL worktrees via GitWorktreeProvider for the dispatcher's provisioning.
  * - A Dispatcher whose `launchRunner` constructs a REAL in-process
  *   BuildRunner over the SAME store and the provisioned workspace path.
@@ -151,13 +151,22 @@ export async function writeFileIn(
 }
 
 async function initOrigin(dir: string, configToml: string): Promise<void> {
+  // Reconcile fetches the current base from the conventional `origin` remote
+  // at phase startup. Keep that seam real in every integration scenario: the
+  // dispatcher works from `dir`, while a separate bare repo is its remote.
+  const remote = join(dirname(dir), 'remote.git')
+  await mkdir(remote, { recursive: true })
+  await git(['init', '--bare', '-q', '-b', 'main'], remote)
+
   await mkdir(dir, { recursive: true })
   await git(['init', '-q', '-b', 'main'], dir)
+  await git(['remote', 'add', 'origin', remote], dir)
   // No `.ab/` ignore here — see commitAll: the product establishes it.
   await writeFile(join(dir, 'autobuild.toml'), configToml)
   await writeFile(join(dir, 'README.md'), 'e2e origin\n')
   await git(['add', '-A'], dir)
   await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir)
+  await git(['push', '-q', '-u', 'origin', 'main'], dir)
 }
 
 // ── Event helpers ────────────────────────────────────────────────────────────

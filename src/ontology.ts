@@ -104,7 +104,7 @@ export const escalationResolutionSchema = z.enum([
   'dismiss-finding',
   'revise-spec',
   'abort',
-  /** Dispatcher-command restart of policy-exhausted infrastructure work. */
+  /** Bare re-attempt with no phase guidance: human UI, or policy-only startup. */
   'retry',
 ])
 export type EscalationResolution = z.infer<typeof escalationResolutionSchema>
