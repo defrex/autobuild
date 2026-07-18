@@ -620,7 +620,22 @@ slug = { runtime = "namer", model = "gpt-slug-name" }
         }),
       )
 
-      await abDispatch({
+      const originalCreate = fx.tickets.create.bind(fx.tickets)
+      let releaseCreate!: () => void
+      const createGate = new Promise<void>((resolve) => {
+        releaseCreate = resolve
+      })
+      let markCreateStarted!: () => void
+      const createStarted = new Promise<void>((resolve) => {
+        markCreateStarted = resolve
+      })
+      fx.tickets.create = async (...args) => {
+        markCreateStarted()
+        await createGate
+        return originalCreate(...args)
+      }
+
+      const dispatch = abDispatch({
         targetRepo: fx.origin,
         env: {},
         exec: spawnExec,
@@ -629,6 +644,20 @@ slug = { runtime = "namer", model = "gpt-slug-name" }
         once: true,
         wire: fx.wire,
       })
+      let dispatchSettled = false
+      void dispatch.then(
+        () => {
+          dispatchSettled = true
+        },
+        () => {
+          dispatchSettled = true
+        },
+      )
+      await createStarted
+      await Promise.resolve()
+      expect(dispatchSettled).toBe(false)
+      releaseCreate()
+      await dispatch
 
       expect(reduceHarvest(await fx.store.getRepoEvents(fx.origin)).latest).toMatchObject({
         run,
@@ -653,6 +682,125 @@ slug = { runtime = "namer", model = "gpt-slug-name" }
       expect(fx.cliErrors).toEqual([])
       expect(fx.err).toEqual([])
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('abDispatch watch harvest coordination', () => {
+  test('long harvest work does not block later ticks or SIGINT', async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      `${DISPATCH_CONFIG_TOML}\n[harvest]\nthreshold = 1\n`,
+    )
+    let releaseTurn!: () => void
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve
+    })
+    let markStarted!: () => void
+    const agentStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    let turnReleased = false
+    const blockingAgents = new ScriptedAgentRunner({
+      script: async () => {
+        markStarted()
+        await turnGate
+        return defaultTurnResult('released without terminal')
+      },
+    })
+    const run = 'h_watch_responsive'
+    const stop = new AbortController()
+    const out: string[] = []
+    let sleeps = 0
+
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      const packet = {
+        repo: fx.origin,
+        run,
+        observations: [
+          {
+            occurrence: { build: 'observation-source', seq: 1 },
+            id: 'obs-watch-responsive',
+            kind: 'latent-bug' as const,
+            summary: 'a long harvest must not stop the outer loop',
+            ts: '2026-07-15T12:00:00.000Z',
+          },
+        ],
+        ledger: [],
+      }
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run,
+            observations: [{ build: 'observation-source', seq: 1 }],
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+
+      const dispatch = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await agentStarted
+          } else {
+            stop.abort()
+          }
+        },
+        wire: () => ({
+          ...fx.wire(),
+          runtimes: {
+            scripted: { runner: blockingAgents, servesModels: [] },
+          },
+        }),
+      })
+
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          dispatch,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('dispatch stayed blocked on harvest')),
+              1_000,
+            )
+          }),
+        ])
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout)
+      }
+      expect(turnReleased).toBe(false)
+      expect(sleeps).toBe(2)
+      expect(blockingAgents.sessions.size).toBe(1)
+      expect(out).toContain('ab dispatch stopped')
+
+      turnReleased = true
+      releaseTurn()
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) =>
+            event.type === 'harvest.step.completed' &&
+            event.payload.outcome === 'failed',
+        ),
+      )
+      await waitFor(async () => (await fx.store.getRepo(fx.origin))?.lease === undefined)
+      expect(fx.err).toEqual([])
+    } finally {
+      if (!turnReleased) releaseTurn()
       await fx.cleanup()
     }
   }, 30_000)

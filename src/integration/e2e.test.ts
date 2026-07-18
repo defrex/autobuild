@@ -23,7 +23,10 @@ import { reduceBuild } from '../kernel/reducer'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { FileTicketSource } from '../ports/tickets/file'
 import { Dispatcher, emptyTickReport } from '../processes/dispatcher'
-import { HarvestRunner } from '../processes/harvest-runner'
+import {
+  HarvestRunner,
+  type HarvestRunnerResult,
+} from '../processes/harvest-runner'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { textContent } from '../store/types'
@@ -951,9 +954,14 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
   })
 
   let instances = 0
-  const runHarvest = async () => {
+  let harvestActive: Promise<void> | undefined
+  const harvestRuns = new Set<Promise<void>>()
+  const harvestOutcomes: HarvestRunnerResult[] = []
+  const startHarvest = (): void => {
+    if (harvestActive !== undefined) return
     instances += 1
-    return new HarvestRunner({
+    let tracked: Promise<void>
+    tracked = new HarvestRunner({
       store: h.store,
       tickets: h.tickets,
       config: h.config,
@@ -966,7 +974,23 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
       instance: `harvest-e2e-${instances}`,
       sessionEnv: { AB_STORE: 'memory' },
       opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
-    }).run()
+    })
+      .run()
+      .then((result) => {
+        harvestOutcomes.push(result)
+      })
+      .finally(() => {
+        harvestRuns.delete(tracked)
+        if (harvestActive === tracked) harvestActive = undefined
+      })
+    harvestActive = tracked
+    harvestRuns.add(tracked)
+  }
+  const drainHarvest = async (): Promise<HarvestRunnerResult> => {
+    while (harvestRuns.size > 0) await Promise.all([...harvestRuns])
+    const result = harvestOutcomes.shift()
+    if (result === undefined) throw new Error('harvest launch produced no outcome')
+    return result
   }
   const dispatcher = new Dispatcher({
     store: h.store,
@@ -979,7 +1003,7 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
     launchRunner: async (slug) => {
       throw new Error(`unexpected build launch for ${slug}`)
     },
-    runHarvest,
+    startHarvest,
     ids: h.ids,
     clock: h.clock,
   })
@@ -1006,12 +1030,13 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
 
   await seed('harvest-a', 'same defect in path A')
   expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await drainHarvest()).toEqual({ outcome: 'idle' })
 
   await seed('harvest-b', 'same defect in path B')
-  expect(await dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    harvestStarted: 1,
-    harvestCompleted: 1,
+  expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await drainHarvest()).toMatchObject({
+    outcome: 'completed',
+    launch: 'started',
   })
   expect(cliErrors).toEqual([])
   expect(reviewTurns).toBe(2)
@@ -1023,18 +1048,20 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
 
   const repoEventsAfterFirst = (await h.store.getRepoEvents(h.origin)).length
   expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await drainHarvest()).toEqual({ outcome: 'idle' })
   expect(await h.store.getRepoEvents(h.origin)).toHaveLength(repoEventsAfterFirst)
   expect(await h.tickets.get('fake-2')).toBeNull()
 
   await seed('harvest-c', 'new defect occurrence C')
   expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await drainHarvest()).toEqual({ outcome: 'idle' })
   expect(await h.tickets.get('fake-2')).toBeNull()
 
   await seed('harvest-d', 'new defect occurrence D')
-  expect(await dispatcher.tick()).toEqual({
-    ...emptyTickReport(),
-    harvestStarted: 1,
-    harvestCompleted: 1,
+  expect(await dispatcher.tick()).toEqual(emptyTickReport())
+  expect(await drainHarvest()).toMatchObject({
+    outcome: 'completed',
+    launch: 'started',
   })
   expect((await h.tickets.get('fake-2'))?.state).toBe('Triage')
   expect(cliErrors).toEqual([])

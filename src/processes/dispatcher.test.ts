@@ -82,10 +82,7 @@ function harness(
     opts?: DispatcherOpts
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
-    runHarvest?: () => Promise<{
-      outcome: 'idle' | 'held' | 'completed' | 'escalated' | 'failed'
-      launch?: 'started' | 'resumed'
-    }>
+    startHarvest?: () => void
   } = {},
 ) {
   const clock = manualClock()
@@ -113,7 +110,7 @@ function harness(
     },
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
-    ...(opts.runHarvest ? { runHarvest: opts.runHarvest } : {}),
+    ...(opts.startHarvest ? { startHarvest: opts.startHarvest } : {}),
     ids: sequentialIds(),
     clock,
     ...(opts.opts ? { opts: opts.opts } : {}),
@@ -951,43 +948,58 @@ describe('Dispatcher dispatch', () => {
 // ── Harvest coordination (§12) ───────────────────────────────────────────────
 
 describe('Dispatcher harvest coordination', () => {
-  test('runs harvest after ready-ticket dispatch and projects its outcome', async () => {
+  test('starts harvest after ready-ticket dispatch without folding its later outcome into this tick', async () => {
     let h!: Harness
     h = harness({
       tickets: [readyTicket('T-harvest', { title: 'Harvest ordering' })],
-      runHarvest: async () => {
+      startHarvest: () => {
         expect(h.launches).toEqual(['harvest-ordering'])
-        return { outcome: 'completed', launch: 'started' }
       },
     })
 
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       dispatched: 1,
-      harvestStarted: 1,
-      harvestCompleted: 1,
     })
   })
 
+  test('a long harvest promise does not delay tick completion', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started = false
+    const h = harness({
+      startHarvest: async () => {
+        started = true
+        await gate
+      },
+    })
+
+    const result = await Promise.race([
+      h.dispatcher.tick(),
+      new Promise<'timed-out'>((resolve) =>
+        setTimeout(() => resolve('timed-out'), 20),
+      ),
+    ])
+    expect(result).not.toBe('timed-out')
+    expect(started).toBe(true)
+    release()
+  })
+
   test('harvest remains independent of drain and occupied build capacity', async () => {
-    const outcomes = [
-      { outcome: 'idle' as const },
-      { outcome: 'failed' as const, launch: 'resumed' as const },
-    ]
     let calls = 0
     const h = harness({
       tickets: [readyTicket('T-blocked-by-capacity')],
-      runHarvest: async () => outcomes[calls++]!,
+      startHarvest: () => {
+        calls += 1
+      },
     })
     await seedBuild(h, { slug: 'capacity-holder' })
     await h.store.claimLease('capacity-holder', 'live-runner', 3_600_000)
 
     expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
-    expect(await h.dispatcher.tick()).toEqual({
-      ...emptyTickReport(),
-      harvestResumed: 1,
-      harvestFailed: 1,
-    })
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(calls).toBe(2)
     expect(h.launches).toEqual([])
     expect(h.tickets.claims).toEqual([])

@@ -257,7 +257,9 @@ export interface TickReport {
   /** One line per held ticket naming its unresolved blockers — the operator's
    * only view of the dependency queue short of provider inspection. */
   dependencyDiagnostics: string[]
-  /** Repository observation workflow counters (independent of build capacity). */
+  /** Repository observation workflow counters (independent of build capacity).
+   * The CLI's in-flight coordinator merges these when asynchronous harvest
+   * runs settle; Dispatcher.tick itself only initiates the work. */
   harvestStarted: number
   harvestResumed: number
   harvestCompleted: number
@@ -354,12 +356,10 @@ export interface DispatcherDeps {
    * return session metadata the fake would have to invent.
    */
   authorSpec?: (ticket: Ticket) => Promise<string | null>
-  /** Repository-scoped observation workflow. It owns its own lease and is
-   * serialized after ready-ticket dispatch; drain does not disable it. */
-  runHarvest?: () => Promise<{
-    outcome: 'idle' | 'held' | 'completed' | 'escalated' | 'failed'
-    launch?: 'started' | 'resumed'
-  }>
+  /** Start the repository-scoped observation workflow without awaiting it.
+   * The owner must single-flight and track the promise; Dispatcher invokes
+   * this after ready-ticket dispatch, independent of drain/build capacity. */
+  startHarvest?: () => void
   /** Optional one-shot judgment over the final conforming spec. The dispatcher
    * supplies cancellation and treats every absence/failure/invalid result as a
    * local deterministic fallback, so naming can never prevent build creation. */
@@ -426,18 +426,11 @@ export class Dispatcher {
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
     await this.leaseSweep(report, launched)
     if (opts.acceptNewWork !== false) await this.dispatch(report, launched)
-    await this.harvest(report)
+    // Fire-and-forget by contract: long synthesize/review sessions must not
+    // stop janitor, lease sweep, ticket dispatch, or signal handling on later
+    // watch ticks. The DispatchLoop owns tracking and --once draining.
+    this.deps.startHarvest?.()
     return report
-  }
-
-  private async harvest(report: TickReport): Promise<void> {
-    if (this.deps.runHarvest === undefined) return
-    const result = await this.deps.runHarvest()
-    if (result.launch === 'started') report.harvestStarted += 1
-    else if (result.launch === 'resumed') report.harvestResumed += 1
-    if (result.outcome === 'completed') report.harvestCompleted += 1
-    else if (result.outcome === 'escalated') report.harvestEscalated += 1
-    else if (result.outcome === 'failed') report.harvestFailed += 1
   }
 
   private async launch(slug: string, launched: Set<string>): Promise<void> {
