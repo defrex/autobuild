@@ -412,10 +412,14 @@ Up/Down moves through one ordered list: the optional `Harvest` row first, then
 slug-sorted builds. Selection uses stable kind/slug identity, so repaint,
 re-sort, and harvest appearance or disappearance do not retarget it by row
 index. `Harvest` uses the same marker, right-aligned status column, and status
-colors as builds; its internal run id is not shown. `PAUSED` is a supported
-yellow display signifier, but harvest pause/resume itself is not implemented.
-Consequently `m` and `p` on `Harvest` are explanatory status-line no-ops; they
-never append a build or repository event. `d` remains repository/process-wide.
+colors as builds; its internal run id is not shown. On `Harvest`, `p` appends a
+human repository pause request, or a resume request when the reduced gate is
+already paused; the status slot names the requested action. The kernel
+acknowledges pause only at the next durable workflow boundary, then the row
+shows yellow `PAUSED`. No tick launches new harvest work while that durable gate
+stands, and resume continues the same open run and claimed snapshot rather than
+repeating completed units. The gate survives dispatch restart. `m` remains an
+explanatory build-only no-op; `d` remains repository/process-wide.
 
 ## Resuming blocked builds from the dashboard
 
@@ -478,14 +482,14 @@ restarted, not that verify never ran.
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
-latest repository harvest run from the same journal the runner resumes. It
-shows the claimed observation count, each scan/synthesize/review/file
-occurrence and outcome, review rounds, filed ticket refs, and any escalation or
-infrastructure failure. It is read-only and also reports an idle repository
-that has never harvested. The dispatch dashboard shows the latest run as the
-selectable, non-color-only `Harvest` step row without its internal run id.
-Build-only pause/auto-merge controls explain their no-op there; harvest
-pause/resume state is not yet implemented.
+durable repository pause gate and latest harvest run from the same journal the
+runner resumes. It shows the claimed observation count, each
+scan/synthesize/review/file occurrence and outcome, review rounds, filed ticket
+refs, and any escalation or infrastructure failure. It is read-only and also
+reports an idle or paused repository with no run. The dispatch dashboard shows
+repository harvest as the selectable, non-color-only `Harvest` step row without
+its internal run id; `p` requests pause/resume there and `m` remains the
+build-only no-op.
 
 ### Lease health is not build status
 

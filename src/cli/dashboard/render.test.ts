@@ -388,7 +388,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(buildLine).toContain('\x1b[32mRUNNING\x1b[0m')
   })
 
-  test('display-only PAUSED is literal and uses the same yellow as a paused build', () => {
+  test('harvest PAUSED is literal and uses the same yellow as a paused build', () => {
     const lines = rd(
       {
         ...model([build({ slug: 'build-row', status: 'paused', pr: undefined })]),

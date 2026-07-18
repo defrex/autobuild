@@ -4,6 +4,7 @@
  * claims, and the dedup ledger are all re-derived from append-only facts.
  */
 import type { HarvestEvent } from '../events/harvest'
+import type { Actor } from '../events/envelope'
 import type { ArtifactRef, Finding, TicketRef } from '../ontology'
 import {
   occurrenceKey,
@@ -74,15 +75,38 @@ export interface HarvestLedgerEntry extends HarvestDisposition {
   seq: number
 }
 
+/** An operator request not yet acknowledged by the harvest kernel. Requests
+ * are ordered repository facts; pause and resume countermand older opposing
+ * intent exactly as build commands do. */
+export interface HarvestPendingCommand {
+  command: 'pause' | 'resume'
+  seq: number
+  actor: Actor
+}
+
 export interface HarvestState {
   lastSeq: number
   runs: HarvestRunState[]
   latest?: HarvestRunState
+  /** Repository-wide gate, independent of any one run. It changes only on the
+   * kernel acknowledgement, never on the human request. */
+  paused: boolean
+  /** Boundary at which the current pause was acknowledged. Dashboard timing
+   * freezes here; absent whenever the gate is open. */
+  pausedSeq?: number
+  pausedAt?: string
+  /** Unacknowledged human commands in repository sequence order. */
+  pendingCommands: HarvestPendingCommand[]
   /** Every occurrence claimed by a harvest.started fact, terminal or not. */
   claimed: OccurrenceKey[]
   /** Successful terminal disposition facts. */
   ledger: HarvestLedgerEntry[]
 }
+
+export type HarvestControlDecision =
+  | { kind: 'acknowledge'; command: 'pause' | 'resume' }
+  | { kind: 'park' }
+  | { kind: 'proceed' }
 
 function cloneRef(ref: ArtifactRef): ArtifactRef {
   return { kind: ref.kind, rev: ref.rev }
@@ -109,11 +133,46 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
   const order: HarvestRunState[] = []
   const claimed = new Map<string, OccurrenceKey>()
   const ledger: HarvestLedgerEntry[] = []
+  const pending: Record<HarvestPendingCommand['command'], HarvestPendingCommand[]> = {
+    pause: [],
+    resume: [],
+  }
+  let paused = false
+  let pausedSeq: number | undefined
+  let pausedAt: string | undefined
   let lastSeq = 0
 
   for (const event of events) {
     lastSeq = Math.max(lastSeq, event.seq)
     switch (event.type) {
+      case 'harvest.pause-requested':
+        pending.resume = []
+        pending.pause.push({
+          command: 'pause',
+          seq: event.seq,
+          actor: event.actor,
+        })
+        break
+      case 'harvest.resume-requested':
+        pending.pause = []
+        pending.resume.push({
+          command: 'resume',
+          seq: event.seq,
+          actor: event.actor,
+        })
+        break
+      case 'harvest.paused':
+        paused = true
+        pausedSeq = event.seq
+        pausedAt = event.ts
+        pending.pause = []
+        break
+      case 'harvest.resumed':
+        paused = false
+        pausedSeq = undefined
+        pausedAt = undefined
+        pending.resume = []
+        break
       case 'harvest.started': {
         if (runs.has(event.payload.run)) {
           throw new Error(
@@ -314,6 +373,12 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
   const state: HarvestState = {
     lastSeq,
     runs: order,
+    paused,
+    ...(pausedSeq !== undefined ? { pausedSeq } : {}),
+    ...(pausedAt !== undefined ? { pausedAt } : {}),
+    pendingCommands: [...pending.pause, ...pending.resume].sort(
+      (left, right) => left.seq - right.seq,
+    ),
     claimed: [...claimed.values()],
     ledger,
   }
@@ -324,6 +389,24 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
 
 export function claimedOccurrenceKeys(state: HarvestState): Set<string> {
   return new Set(state.claimed.map(occurrenceKey))
+}
+
+/** Pure repository-control routing shared by dispatcher and harvest runner.
+ * A request is actionable even before its fact acknowledgement; only an
+ * acknowledged pause with no pending resume is durably parked. */
+export function decideHarvestControl(
+  state: HarvestState,
+): HarvestControlDecision {
+  if (state.paused) {
+    if (state.pendingCommands.some((command) => command.command === 'resume')) {
+      return { kind: 'acknowledge', command: 'resume' }
+    }
+    return { kind: 'park' }
+  }
+  if (state.pendingCommands.some((command) => command.command === 'pause')) {
+    return { kind: 'acknowledge', command: 'pause' }
+  }
+  return { kind: 'proceed' }
 }
 
 export function openHarvestRun(state: HarvestState): HarvestRunState | undefined {

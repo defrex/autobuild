@@ -1005,6 +1005,65 @@ describe('Dispatcher harvest coordination', () => {
     release()
   })
 
+  test('an acknowledged pause gates every tick, while an unacknowledged pause still launches settlement', async () => {
+    let calls = 0
+    const h = harness({
+      startHarvest: () => {
+        calls += 1
+      },
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+
+    await h.dispatcher.tick()
+    expect(calls).toBe(1)
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
+  })
+
+  test('a pending resume reopens harvest launch even while drained and at build capacity', async () => {
+    let calls = 0
+    const h = harness({
+      startHarvest: () => {
+        calls += 1
+      },
+    })
+    await seedBuild(h, { slug: 'capacity-holder' })
+    await h.store.claimLease('capacity-holder', 'live-runner', 3_600_000)
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
+      emptyTickReport(),
+    )
+    expect(calls).toBe(1)
+    expect(h.launches).toEqual([])
+  })
+
   test('harvest remains independent of drain and occupied build capacity', async () => {
     let calls = 0
     const h = harness({

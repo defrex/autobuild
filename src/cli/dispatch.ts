@@ -33,6 +33,7 @@ import {
   type IdSource,
   type UuidSource,
 } from '../ids'
+import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import {
   buildDashboard,
@@ -458,11 +459,8 @@ class DispatchLoop {
       return undefined
     }
     if (selection.kind === 'harvest') {
-      this.say(
-        action === 'auto-merge'
-          ? 'Harvest auto-merge unavailable: select a build'
-          : 'Harvest pause/resume unavailable: harvest controls are not implemented',
-      )
+      if (action === 'pause/resume') await this.toggleHarvestPause()
+      else this.say('Harvest auto-merge unavailable: select a build')
       return undefined
     }
     const slug = selection.slug
@@ -482,6 +480,10 @@ class DispatchLoop {
   }
 
   private async togglePause(): Promise<void> {
+    if (this.selection?.kind === 'harvest') {
+      await this.toggleHarvestPause()
+      return
+    }
     const selected = await this.selectedBuild('pause/resume')
     if (selected === undefined) return
 
@@ -507,6 +509,23 @@ class DispatchLoop {
       payload: {},
     })
     this.say(`build ${selected.slug}: ${resume ? 'resume' : 'pause'} requested`)
+    await this.renderOnce()
+  }
+
+  private async toggleHarvestPause(): Promise<void> {
+    const { store } = this.wiring
+    const repo = this.opts.targetRepo
+    await store.ensureRepo(repo)
+    const state = reduceHarvest(await store.getRepoEvents(repo))
+    const resume = state.paused
+    await store.appendRepo(repo, {
+      actor: humanActor(this.dashboardUser()),
+      type: resume
+        ? 'harvest.resume-requested'
+        : 'harvest.pause-requested',
+      payload: {},
+    })
+    this.say(`harvest: ${resume ? 'resume' : 'pause'} requested`)
     await this.renderOnce()
   }
 
@@ -765,8 +784,9 @@ class DispatchLoop {
         this.recordHarvestResult(result)
         if (
           !this.stopped &&
-          result.outcome !== 'idle' &&
-          result.outcome !== 'held'
+          (result.outcome === 'completed' ||
+            result.outcome === 'escalated' ||
+            result.outcome === 'failed')
         ) {
           this.say(`harvest ${result.run} ${result.outcome}`)
         }

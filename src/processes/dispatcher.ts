@@ -35,6 +35,7 @@ import {
   pendingAutoMerge,
 } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
+import { decideHarvestControl, reduceHarvest } from '../kernel/harvest'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
 import type {
@@ -428,9 +429,25 @@ export class Dispatcher {
     if (opts.acceptNewWork !== false) await this.dispatch(report, launched)
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
-    // watch ticks. The DispatchLoop owns tracking and --once draining.
-    this.deps.startHarvest?.()
+    // watch ticks. The durable repository gate suppresses only an acknowledged
+    // pause. Pending pause/resume commands still launch the runner so the
+    // kernel can settle them under the repository lease.
+    await this.triggerHarvest()
     return report
+  }
+
+  private async triggerHarvest(): Promise<void> {
+    const start = this.deps.startHarvest
+    if (start === undefined) return
+    const record = await this.deps.store.getRepo(this.deps.repo)
+    if (record === null) {
+      start()
+      return
+    }
+    const state = reduceHarvest(
+      await this.deps.store.getRepoEvents(this.deps.repo),
+    )
+    if (decideHarvestControl(state).kind !== 'park') start()
   }
 
   private async launch(slug: string, launched: Set<string>): Promise<void> {

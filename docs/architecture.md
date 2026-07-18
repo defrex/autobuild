@@ -50,10 +50,15 @@ executes the staged workflow under a heartbeated repository lease. The dispatch
 loop starts it fire-and-forget, keeps one process-local in-flight handle, and
 drains that handle only for `--once`, so watch ticks and SIGINT remain
 responsive. `src/events/harvest.ts` and `src/kernel/harvest.ts` define and reduce
-a separate repository journal, including claims, UUID-v4 reservation facts
-written before external creates, per-proposal filing facts, and the committed
-dedup ledger. Build reducers therefore never interpret a non-build workflow.
-Typed session deposits live under
+a separate repository journal, including human pause/resume requests, kernel
+boundary acknowledgements, claims, UUID-v4 reservation facts written before
+external creates, per-proposal filing facts, and the committed dedup ledger.
+Build reducers therefore never interpret a non-build workflow. The dispatcher
+suppresses launch only for an acknowledged pause with no pending resume; the
+runner settles commands under the repository lease and checks control between
+durable scan, synthesize, review, filing, and escalation units. Parking leaves
+the open run and claimed occurrence snapshot untouched, so resume skips every
+completed unit rather than rescanning. Typed session deposits live under
 `ab harvest context|submit|verdict`; `ab harvest status` and the selectable
 `Harvest` dashboard row read the same facts. The row omits the internal run id;
 that remains available through status and the repository journal.
@@ -115,11 +120,13 @@ selection marker and right-pinned status column across harvest and build rows;
 The dashboard is an operator command producer, not forge plumbing. Its model
 tracks selection as `{kind: 'harvest'} | {kind: 'build', slug}` over the same
 ordered rows the renderer paints, so insertion/removal never retargets by row
-index. `p` and `m` narrow that identity to a build before store access; on
-harvest they only replace the explanatory status row. For a build they append
-human-actor events through the BuildStore; build-runner and dispatcher code
-acknowledge pause/resume and reconcile auto-merge via the `Forge` port. On a
-blocked build, `p` instead opens slug/escalation-bound process state: Enter
+index. `m` narrows that identity to a build and remains explanatory on harvest.
+`p` branches by identity: builds append human events to their stream, while
+harvest appends `harvest.pause-requested` / `harvest.resume-requested` to the
+repository journal from authoritative reduced gate state. Build-runner and
+harvest-runner acknowledge pause/resume at their respective safe boundaries;
+dispatcher code reconciles auto-merge via the `Forge` port. On a blocked build,
+`p` instead opens slug/escalation-bound process state: Enter
 appends one human `escalation.answered` per captured id (`retry` for blank
 input, `guidance` for text), then requests resume too if the reduced build was
 paused. Escape writes nothing. The field is overlaid on the pure dashboard

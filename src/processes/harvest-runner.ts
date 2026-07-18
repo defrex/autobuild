@@ -6,7 +6,7 @@
  * starting a duplicate run.
  */
 import type { Config } from '../config/schema'
-import type { HarvestEvent, HarvestEventWrite } from '../events/harvest'
+import type { HarvestEvent } from '../events/harvest'
 import { KERNEL } from '../events/envelope'
 import type { IdSource, UuidSource } from '../ids'
 import {
@@ -16,6 +16,7 @@ import {
 import { converge } from '../kernel/converge'
 import { stalledChains } from '../kernel/stall'
 import {
+  decideHarvestControl,
   openHarvestRun,
   proposalArtifactForRound,
   reduceHarvest,
@@ -71,6 +72,7 @@ export interface HarvestRunnerDeps {
 export type HarvestRunnerResult =
   | { outcome: 'idle' }
   | { outcome: 'held' }
+  | { outcome: 'parked'; run?: string }
   | {
       outcome: 'completed' | 'escalated' | 'failed'
       launch: 'started' | 'resumed'
@@ -86,6 +88,15 @@ class SessionFailure extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'HarvestSessionFailure'
+  }
+}
+
+/** Internal, non-error unwind from a durable control boundary. It must never
+ * consume failure budget or emit harvest.failed. */
+class HarvestParkedSignal extends Error {
+  constructor(readonly run?: string) {
+    super('harvest parked by operator')
+    this.name = 'HarvestParkedSignal'
   }
 }
 
@@ -154,12 +165,24 @@ export class HarvestRunner {
       await this.ensureLease()
       let events = await store.getRepoEvents(repo)
       run = openHarvestRun(reduceHarvest(events))
+
+      // Settle durable operator control before scanning or resuming work. A
+      // pending resume is acknowledged here and then normal threshold/open-run
+      // routing continues in this same lease ownership window.
+      await this.controlBoundary(run?.run)
+      events = await store.getRepoEvents(repo)
+      run = openHarvestRun(reduceHarvest(events))
+
       if (!run) {
+        await this.controlBoundary()
         const scan = await scanUnclaimedObservations(store, repo)
+        // Scanning may span many build streams. Treat its completion as a
+        // boundary even when the threshold is not met, so a request arriving
+        // during the read is acknowledged before this runner returns idle.
+        await this.controlBoundary()
         if (scan.observations.length < this.deps.config.harvest.threshold) {
           return { outcome: 'idle' }
         }
-        initial = 'started'
         const runId = this.deps.ids('harvest')
         const packet = await makeHarvestScanPacket({
           store,
@@ -169,8 +192,11 @@ export class HarvestRunner {
           observations: scan.observations,
           state: scan.state,
         })
-        await this.ensureLease()
-        const { event } = await store.appendRepoWithArtifacts(
+        // Scan preparation is not a claim. Re-read operator control immediately
+        // before atomically committing the immutable snapshot.
+        await this.controlBoundary()
+        initial = 'started'
+        await store.appendRepoWithArtifacts(
           repo,
           [
             {
@@ -189,34 +215,26 @@ export class HarvestRunner {
             },
           }),
         )
-        await this.ensureLease()
-        await store.appendRepo(repo, {
-          actor: KERNEL,
-          type: 'harvest.step.started',
-          payload: { run: runId, step: 'scan' },
-        })
-        await this.ensureLease()
-        await store.appendRepo(repo, {
-          actor: KERNEL,
-          type: 'harvest.step.completed',
-          payload: {
-            run: runId,
-            step: 'scan',
-            outcome: 'completed',
-            artifact: event.payload.scan,
-          },
-        })
         events = await store.getRepoEvents(repo)
         run = reduceHarvest(events).runs.find((candidate) => candidate.run === runId)
         if (!run) throw new Error(`harvest.started did not reduce run "${runId}"`)
+        // A request racing the claim parks this exact run; its snapshot stays
+        // open and is resumed rather than scanned again.
+        await this.controlBoundary(run.run)
       }
 
       try {
         await this.ensureScanStep(run)
+        await this.controlBoundary(run.run)
         const outcome = await this.executeWorkflow(run)
         return { outcome, launch: initial, run: run.run }
       } catch (error) {
-        if (error instanceof HarvestLeaseLostError) throw error
+        if (
+          error instanceof HarvestLeaseLostError ||
+          error instanceof HarvestParkedSignal
+        ) {
+          throw error
+        }
         if (error instanceof SessionFailure) {
           return { outcome: 'failed', launch: initial, run: run.run }
         }
@@ -224,6 +242,12 @@ export class HarvestRunner {
         return { outcome: 'failed', launch: initial, run: run.run }
       }
     } catch (error) {
+      if (error instanceof HarvestParkedSignal) {
+        const parkedRun = error.run ?? run?.run
+        return parkedRun === undefined
+          ? { outcome: 'parked' }
+          : { outcome: 'parked', run: parkedRun }
+      }
       if (error instanceof HarvestLeaseLostError) return { outcome: 'held' }
       throw error
     } finally {
@@ -266,6 +290,7 @@ export class HarvestRunner {
       )
     }
     run = await this.refreshRun(run.run)
+    await this.controlBoundary(run.run)
     const existingApproval = [...run.reviews]
       .reverse()
       .find((review) => review.verdict === 'approve')
@@ -330,6 +355,7 @@ export class HarvestRunner {
       },
       produce: async (_feedback, round) => {
         run = await this.refreshRun(run.run)
+        await this.controlBoundary(run.run)
         const existing = proposalArtifactForRound(run, round)
         if (existing !== undefined) {
           await this.ensureStepCompleted(
@@ -339,12 +365,14 @@ export class HarvestRunner {
             'completed',
             existing,
           )
+          await this.controlBoundary(run.run)
           return existing
         }
         return this.synthesize(run, round)
       },
       review: async (_artifact, round) => {
         run = await this.refreshRun(run.run)
+        await this.controlBoundary(run.run)
         const existing = [...run.reviews]
           .reverse()
           .find((review) => review.round === round)
@@ -366,6 +394,7 @@ export class HarvestRunner {
               candidate.payload.round === round,
           )
           if (!event) throw new Error('review reducer/event mismatch')
+          await this.controlBoundary(run.run)
           return verdictFromEvent(event)
         }
         return this.review(run, round)
@@ -385,6 +414,7 @@ export class HarvestRunner {
     run: HarvestRunState,
     round: number,
   ): Promise<ArtifactRef> {
+    await this.controlBoundary(run.run)
     await this.startStep(run.run, 'synthesize', round)
     await this.executeSession({
       run: run.run,
@@ -410,10 +440,12 @@ export class HarvestRunner {
       'completed',
       artifact,
     )
+    await this.controlBoundary(run.run)
     return artifact
   }
 
   private async review(run: HarvestRunState, round: number): Promise<Verdict> {
+    await this.controlBoundary(run.run)
     await this.startStep(run.run, 'review', round)
     await this.executeSession({
       run: run.run,
@@ -449,6 +481,7 @@ export class HarvestRunner {
       verdict.payload.verdict,
       verdict.payload.artifact,
     )
+    await this.controlBoundary(run.run)
     return verdictFromEvent(verdict)
   }
 
@@ -682,6 +715,9 @@ export class HarvestRunner {
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
     const { store, repo, tickets, config, uuids } = this.deps
+    // Filing is one deterministic side-effecting unit: settle pause before it,
+    // then leave reservation/create/adoption bookkeeping uninterrupted.
+    await this.controlBoundary(run.run)
     await this.ensureLease()
     const current = await this.refreshRun(run.run)
     if (current.status === 'completed') return
@@ -839,6 +875,7 @@ export class HarvestRunner {
     reason: string,
     round?: number,
   ): Promise<void> {
+    await this.controlBoundary(run.run)
     await this.ensureLease()
     const refreshed = await this.refreshRun(run.run)
     if (refreshed.status !== 'running') return
@@ -906,6 +943,36 @@ export class HarvestRunner {
           detail: message,
         },
       })
+    }
+  }
+
+  /** Settle repository-wide pause/resume only at a durable workflow boundary.
+   * A pause acknowledgement unwinds through HarvestParkedSignal, deliberately
+   * bypassing every failure path. Resume acknowledgements keep this runner in
+   * the same lease and continue the preserved open run (or normal threshold
+   * handling when no run exists). */
+  private async controlBoundary(run?: string): Promise<void> {
+    while (true) {
+      await this.ensureLease()
+      const state = reduceHarvest(
+        await this.deps.store.getRepoEvents(this.deps.repo),
+      )
+      const decision = decideHarvestControl(state)
+      if (decision.kind === 'proceed') return
+      if (decision.kind === 'park') throw new HarvestParkedSignal(run)
+
+      await this.ensureLease()
+      await this.deps.store.appendRepo(this.deps.repo, {
+        actor: KERNEL,
+        type:
+          decision.command === 'pause'
+            ? 'harvest.paused'
+            : 'harvest.resumed',
+        payload: {},
+      })
+      // Re-reduce after every acknowledgement. An opposing request may have
+      // raced the append; the newest durable intent must win before this
+      // runner either parks or starts another unit.
     }
   }
 

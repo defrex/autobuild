@@ -427,7 +427,7 @@ remain line-oriented and unchanged.
 |---|---|
 | Up / Down | Move through the optional `Harvest` row and slug-sorted build rows. Stable row identity preserves selection across repaint, re-sort, and harvest appearance/disappearance. |
 | `m` | Toggle durable auto-merge intent for the selected build. Pre-PR intent is remembered; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. On `Harvest`, this is an explanatory no-op. |
-| `p` | Request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. The current agent step finishes before pause takes effect. On `Harvest`, this is an explanatory no-op; harvest pause/resume is not implemented. |
+| `p` | For a build, request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. For `Harvest`, request repository-wide pause or resume. An in-flight agent step finishes before either pause takes effect. |
 | `d` | Toggle drain for this dispatcher process: stop claiming new tickets while janitor, stale-runner, and in-flight work continue. Restart resets drain off. |
 | Enter / Escape | While blocked-resume feedback is open, submit / cancel. Backspace edits; all printable keys, including `m`, `p`, and `d`, are text rather than dashboard actions. |
 | Ctrl-C | Stop and restore terminal input/cursor state. |
@@ -465,16 +465,23 @@ Each tick runs in this order:
    At the threshold, claim the accumulation and run one journaled
    scan/synthesize/review/file workflow. The workflow is tracked in-flight but
    does not block later watch ticks or Ctrl-C; `--once` drains it before exit.
+   An acknowledged durable harvest pause suppresses new launches on every tick;
+   a pending command still launches settlement. Resume continues the same open
+   claimed snapshot or, with no open run, restores normal threshold handling.
    Approved proposals are created directly in Triage and are never dispatched
    by the harvester.
 
-The dashboard renders the latest run as the selectable `Harvest` row with
+The dashboard renders repository harvest as the selectable `Harvest` row with
 elapsed times, observation count, and the same marker, right-aligned status
 column, and status colors as build rows. The internal run id is not displayed.
-`RUNNING` is green; `PAUSED` is a supported display signifier in yellow, though
-nothing yet gives harvest a paused state. Build-only `p` and `m` explain their
-no-op in the status row. Use `ab harvest status --events 20` for the run id and
-event-level paper trail.
+`RUNNING` is green; acknowledged pause is literal yellow `PAUSED`. Pressing `p`
+appends a human repository request and reports `harvest: pause requested` or
+`harvest: resume requested` in the status row; `m` remains a build-only no-op.
+The runner parks at the next durable workflow boundary, preserving the open
+run's claim and completed rounds, and restart does not clear the gate. While
+parked, no old occurrence appears current and its timer stays frozen. Use
+`ab harvest status --events 20` for the durable gate, run id, and event-level
+paper trail.
 Optional runtime/model overrides are `[roles.harvest]` and
 `[roles.harvest-review]`; the producer continues across revision rounds and
 each reviewer is fresh.
@@ -551,7 +558,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
-| `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the latest repository harvest run, including steps, verdicts, filing, and failures. Read-only. |
+| `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository pause gate and latest harvest run, including steps, verdicts, filing, and failures. Read-only. |
 | `ab help` | Print the command surface. |
 
 ### Agent build-session commands

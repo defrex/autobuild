@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KERNEL } from '../events/envelope'
+import { humanActor, KERNEL } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -64,6 +64,56 @@ async function fixture() {
 }
 
 describe('harvest status', () => {
+  test('reports the durable pause gate while preserving underlying run state', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    const paused = await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+
+    const view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view).toMatchObject({
+      run: 'h_1',
+      status: 'paused',
+      runStatus: 'running',
+      paused: true,
+      pausedSeq: paused.seq,
+      pausedAt: paused.ts,
+      pendingCommands: [],
+      observations: 1,
+    })
+
+    const idle = new MemoryBuildStore({ clock: steppingClock() })
+    await idle.ensureRepo('/idle')
+    await idle.appendRepo('/idle', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    await idle.appendRepo('/idle', {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+    expect(
+      projectHarvestStatus('/idle', await idle.getRepoEvents('/idle')),
+    ).toMatchObject({
+      status: 'paused',
+      paused: true,
+      observations: 0,
+      steps: [],
+    })
+  })
+
   test('shares store precedence and uses the main checkout as journal identity', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await store.ensureRepo('/main/repo')

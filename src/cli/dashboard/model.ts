@@ -86,9 +86,8 @@ export type DashboardSelection =
 
 export interface DashboardHarvest {
   kind: 'harvest'
-  run: string
-  /** `paused` is a display signifier only. The repository workflow does not
-   * currently enter that state. */
+  /** Absent when the repository gate was paused before its first run. */
+  run?: string
   status: 'running' | 'paused' | 'completed' | 'escalated' | 'failed'
   steps: PipelineStep[]
   observations: number
@@ -612,6 +611,7 @@ function harvestStepTiming(
     completedAt?: string
   }>,
   name: string,
+  frozenAt?: number,
 ): StepTiming | undefined {
   const matching = occurrences.filter((occurrence) => occurrence.step === name)
   if (matching.length === 0) return undefined
@@ -621,6 +621,8 @@ function harvestStepTiming(
     const start = Date.parse(occurrence.startedAt)
     if (occurrence.completedAt !== undefined) {
       accumulatedMs += Math.max(0, Date.parse(occurrence.completedAt) - start)
+    } else if (frozenAt !== undefined) {
+      accumulatedMs += Math.max(0, frozenAt - start)
     } else {
       runningSince = start
     }
@@ -632,47 +634,53 @@ function harvestStepTiming(
 }
 
 /** Latest repository harvest as a step row. Terminal runs deliberately stay
- * visible until replaced, so a fast --once workflow is still observable. */
+ * visible until replaced, and a repository paused before its first run still
+ * gets a queryable/selectable row. */
 export function projectHarvest(
   events: HarvestEvent[],
 ): DashboardHarvest | undefined {
-  const run = reduceHarvest(events).latest
-  if (run === undefined) return undefined
-  const terminal = run.status !== 'running'
+  const state = reduceHarvest(events)
+  const run = state.latest
+  if (run === undefined && !state.paused) return undefined
+  const occurrences = run?.steps ?? []
+  const terminal = run === undefined || run.status !== 'running'
   const current = (name: string): boolean => {
-    if (terminal) return false
-    const latest = [...run.steps]
+    if (terminal || state.paused) return false
+    const latest = [...occurrences]
       .reverse()
       .find((occurrence) => occurrence.step === name)
     return latest !== undefined && latest.completedSeq === undefined
   }
   const hasCompleted = (name: string): boolean =>
-    run.steps.some(
+    occurrences.some(
       (occurrence) =>
         occurrence.step === name && occurrence.completedSeq !== undefined,
     )
   const hasOutcome = (name: string, outcome: string): boolean =>
-    run.steps.some(
+    occurrences.some(
       (occurrence) =>
         occurrence.step === name && occurrence.outcome === outcome,
     )
   const failedAt = (name: string): boolean =>
-    run.status === 'failed' && run.failure?.step === name
+    run?.status === 'failed' && run.failure?.step === name
   const rounds = Math.max(
     0,
-    ...run.proposals.map((proposal) => proposal.round),
-    ...run.reviews.map((review) => review.round),
-    ...run.steps.map((occurrence) => occurrence.round ?? 0),
+    ...(run?.proposals.map((proposal) => proposal.round) ?? []),
+    ...(run?.reviews.map((review) => review.round) ?? []),
+    ...occurrences.map((occurrence) => occurrence.round ?? 0),
   )
   const count = rounds > 1 ? rounds : undefined
-  const approved = run.reviews.some((review) => review.verdict === 'approve')
-  const synthOutput = run.proposals.length > 0
-  const reviewOutput = run.reviews.length > 0
+  const approved = run?.reviews.some((review) => review.verdict === 'approve') ?? false
+  const synthOutput = (run?.proposals.length ?? 0) > 0
+  const reviewOutput = (run?.reviews.length ?? 0) > 0
+  const frozenAt = state.pausedAt === undefined
+    ? undefined
+    : Date.parse(state.pausedAt)
   const steps: PipelineStep[] = [
     step('scan', hasOutcome('scan', 'completed'), current('scan'), {
       qualifier: failedAt('scan') ? 'failed' : undefined,
       producedOutput: hasCompleted('scan'),
-      timing: harvestStepTiming(run.steps, 'scan'),
+      timing: harvestStepTiming(occurrences, 'scan', frozenAt),
     }),
     step(
       'synthesize',
@@ -682,7 +690,7 @@ export function projectHarvest(
         producedOutput: synthOutput || hasCompleted('synthesize'),
         qualifier: failedAt('synthesize') ? 'failed' : undefined,
         count,
-        timing: harvestStepTiming(run.steps, 'synthesize'),
+        timing: harvestStepTiming(occurrences, 'synthesize', frozenAt),
       },
     ),
     step(
@@ -693,25 +701,25 @@ export function projectHarvest(
         producedOutput: reviewOutput || hasCompleted('review'),
         qualifier: failedAt('review') ? 'failed' : undefined,
         count,
-        timing: harvestStepTiming(run.steps, 'review'),
+        timing: harvestStepTiming(occurrences, 'review', frozenAt),
       },
     ),
-    step('file', run.status === 'completed', current('file'), {
+    step('file', run?.status === 'completed', current('file'), {
       producedOutput: hasCompleted('file'),
       qualifier: failedAt('file') ? 'failed' : undefined,
-      timing: harvestStepTiming(run.steps, 'file'),
+      timing: harvestStepTiming(occurrences, 'file', frozenAt),
     }),
   ]
   return {
     kind: 'harvest',
-    run: run.run,
-    status: run.status,
+    ...(run !== undefined ? { run: run.run } : {}),
+    status: state.paused ? 'paused' : run!.status,
     steps,
-    observations: run.observations.length,
+    observations: run?.observations.length ?? 0,
     rounds,
-    ...(run.escalation !== undefined
+    ...(run?.escalation !== undefined
       ? { detail: run.escalation.reason }
-      : run.failure !== undefined
+      : run?.failure !== undefined
         ? { detail: run.failure.error }
         : {}),
   }

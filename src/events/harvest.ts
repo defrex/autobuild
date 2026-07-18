@@ -15,8 +15,15 @@ import { EventValidationError } from './catalog'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
+const empty = z.strictObject({})
 
 export const harvestEventPayloadSchemas = {
+  // Repository-wide operator control. Requests are human commands; paused /
+  // resumed are kernel acknowledgements made only at workflow boundaries.
+  'harvest.pause-requested': empty,
+  'harvest.resume-requested': empty,
+  'harvest.paused': empty,
+  'harvest.resumed': empty,
   'harvest.started': z.strictObject({
     run: z.string().min(1),
     observations: z.array(occurrenceKeySchema).min(1),
@@ -132,6 +139,10 @@ export interface HarvestEventWrite<T extends HarvestEventType = HarvestEventType
 }
 
 const allowedActorKinds: Record<HarvestEventType, readonly ActorKind[]> = {
+  'harvest.pause-requested': ['human'],
+  'harvest.resume-requested': ['human'],
+  'harvest.paused': ['kernel'],
+  'harvest.resumed': ['kernel'],
   'harvest.started': ['dispatcher', 'kernel'],
   'harvest.step.started': ['kernel'],
   'harvest.step.completed': ['kernel'],
