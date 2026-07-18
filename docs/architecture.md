@@ -54,8 +54,9 @@ a separate repository journal, including claims, UUID-v4 reservation facts
 written before external creates, per-proposal filing facts, and the committed
 dedup ledger. Build reducers therefore never interpret a non-build workflow.
 Typed session deposits live under
-`ab harvest context|submit|verdict`; `ab harvest status` and the nonselectable
-`HARVEST` dashboard row read the same facts.
+`ab harvest context|submit|verdict`; `ab harvest status` and the selectable
+`Harvest` dashboard row read the same facts. The row omits the internal run id;
+that remains available through status and the repository journal.
 
 ## Pre-build identity
 
@@ -98,7 +99,7 @@ uses the same result contract; its reducer makes `harvest.failed
 | `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
-| `src/cli/dashboard/` | `ab dispatch`'s live build + nonselectable harvest dashboard — pure reducer projection/rendering plus build-slug selection | §14, §15.5 |
+| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated harvest/build row selection, status overlay pixels, and in-place replacement | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
@@ -106,15 +107,24 @@ uses the same result contract; its reducer makes `harvest.failed
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
 | `templates/` | What `ab init` installs | §16.3 |
 
-The dashboard is an operator command producer, not forge plumbing. Its `p` and
-`m` handlers append human-actor events through the BuildStore; build-runner and
-dispatcher code acknowledge pause/resume and reconcile auto-merge via the
-`Forge` port. On a blocked row, `p` instead opens slug/escalation-bound process
-state: Enter appends one human `escalation.answered` per captured id (`retry`
-for blank input, `guidance` for text), then requests resume too if the reduced
-build was paused. Escape writes nothing. The field is overlaid on the pure
-dashboard model, so blocker rows and polling remain live while terminal input
-edits synchronously; only submission joins the serialized operation queue.
+The renderer reserves one `Auto Build` title row, one always-present status
+row, and one blank separator before the legend/modal controls. It shares the
+selection marker and right-pinned status column across harvest and build rows;
+`Harvest` is operator-facing identity, while its run id stays in the journal.
+
+The dashboard is an operator command producer, not forge plumbing. Its model
+tracks selection as `{kind: 'harvest'} | {kind: 'build', slug}` over the same
+ordered rows the renderer paints, so insertion/removal never retargets by row
+index. `p` and `m` narrow that identity to a build before store access; on
+harvest they only replace the explanatory status row. For a build they append
+human-actor events through the BuildStore; build-runner and dispatcher code
+acknowledge pause/resume and reconcile auto-merge via the `Forge` port. On a
+blocked build, `p` instead opens slug/escalation-bound process state: Enter
+appends one human `escalation.answered` per captured id (`retry` for blank
+input, `guidance` for text), then requests resume too if the reduced build was
+paused. Escape writes nothing. The field is overlaid on the pure dashboard
+model, so blocker rows and polling remain live while terminal input edits
+synchronously; only submission joins the serialized operation queue.
 Reattachment remains the ordinary dispatcher lease sweep. The GitHub adapter
 combines exact-branch classic protection and active ruleset probes with the
 complete PR merge-state enum: a real gate keeps native auto-merge ownership,
@@ -126,8 +136,12 @@ and completion remains an observed `pr.merged` fact on the next poll. The
 automatic startup path in `src/processes/dispatcher.ts` is unchanged and
 retries only an all-policy escalation set without input. `d` is the other
 process-local state: it gates only the current dispatcher's ticket-claim stage
-and resets on restart. Raw input and live-region output have separate adapters
-so keypresses cannot write into or tear a rendered frame.
+and resets on restart. Dispatcher notices are a process-local latest-status
+overlay reapplied after every asynchronous projection; dashboard mode never
+routes them to line sinks or scrollback, while plain mode keeps those sinks.
+The live region therefore owns only in-place frame replacement and cursor
+restoration. Raw input and live output remain separate adapters so keypresses
+cannot write into or tear a rendered frame.
 
 ## Development
 

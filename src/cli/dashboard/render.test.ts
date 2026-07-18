@@ -4,7 +4,12 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
-import type { DashboardBuild, DashboardModel, PipelineStep } from './model'
+import type {
+  DashboardBuild,
+  DashboardHarvest,
+  DashboardModel,
+  PipelineStep,
+} from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
  * irrelevant to them; the ticking tests pass `now` explicitly. */
@@ -22,6 +27,23 @@ function rd(m: DashboardModel, opts: Omit<RenderOpts, 'now'> & { now?: number })
  * truncated a line containing a hyperlink — which is exactly how an unclosed
  * OSC 8 (`f_f72ad952`) survived a green suite.
  */
+function harvest(overrides: Partial<DashboardHarvest> = {}): DashboardHarvest {
+  return {
+    kind: 'harvest',
+    run: 'harvest_internal_123',
+    status: 'running',
+    observations: 36,
+    rounds: 1,
+    steps: [
+      { label: 'scan', state: 'done' },
+      { label: 'synthesize', state: 'current' },
+      { label: 'review', state: 'pending' },
+      { label: 'file', state: 'pending' },
+    ],
+    ...overrides,
+  }
+}
+
 function build(overrides: Partial<DashboardBuild> = {}): DashboardBuild {
   return {
     slug: 'auth-rate-limit',
@@ -53,18 +75,55 @@ function unclosedLinks(line: string): number {
 }
 
 function model(builds: DashboardBuild[]): DashboardModel {
-  return { repo: '/repos/app', mode: 'watch', capacity: 2, drained: false, builds }
+  return {
+    repo: '/repos/app',
+    mode: 'watch',
+    capacity: 2,
+    drained: false,
+    statusLine: '',
+    builds,
+  }
 }
 
 const WIDE = { color: false, width: 200 }
 
-describe('renderDashboard: the header', () => {
-  test('names the repo, the mode and the capacity', () => {
-    const [header] = rd(model([build()]), WIDE)
+describe('renderDashboard: the title and status rows', () => {
+  test('one title names the product, repo basename, mode, capacity, count, and intake', () => {
+    const lines = rd(model([build()]), WIDE)
+    const header = lines[0]!
+    expect(header).toContain('Auto Build')
     expect(header).toContain('app') // the repo basename
+    expect(header).not.toContain('/repos/app')
     expect(header).toContain('watch')
     expect(header).toContain('capacity 2')
     expect(header).toContain('1 active')
+    expect(header).toContain('intake ON')
+    expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
+  })
+
+  test('exactly one status row is always second, including before the first notice', () => {
+    const empty = rd(model([build()]), WIDE)
+    expect(empty[1]).toBe('')
+
+    const messaged = rd(
+      { ...model([build()]), statusLine: 'tick: dispatched=1' },
+      WIDE,
+    )
+    expect(messaged[1]).toBe('tick: dispatched=1')
+    expect(messaged.filter((line) => line.includes('tick:'))).toHaveLength(1)
+    expect(messaged).toHaveLength(empty.length)
+  })
+
+  test('long, multiline, and non-ASCII notices stay on one safe physical row', () => {
+    const short = rd(model([build()]), { color: true, width: 40 })
+    const long = rd(
+      { ...model([build()]), statusLine: `warning\n${'x'.repeat(100)} café` },
+      { color: true, width: 40 },
+    )
+    expect(long).toHaveLength(short.length)
+    expect(stripAnsi(long[1]!).length).toBeLessThanOrEqual(40)
+    expect(long[1]).not.toContain('\n')
+    expect(stripAnsi(long[1]!)).toContain('warning\\u{a}')
   })
 
   test('an empty dashboard says so', () => {
@@ -98,7 +157,7 @@ describe('renderDashboard: blocked-resume input', () => {
         blockers: ['Choose whether finalize should keep native auto-merge.'],
       }),
     ]),
-    selectedSlug: 'auth-rate-limit',
+    selection: { kind: 'build', slug: 'auth-rate-limit' },
     resumeInput: { slug: 'auth-rate-limit', value },
   })
 
@@ -263,16 +322,83 @@ describe('renderDashboard: layout', () => {
     expect(short!.indexOf('ENG-42')).toBe(long!.indexOf('ENG-42'))
   })
 
-  test('builds are separated by a blank line', () => {
+  test('rows are separated, and a blank line separates the body from the legend', () => {
     const lines = rd(model([build({ slug: 'a' }), build({ slug: 'b' })]), WIDE)
-    expect(lines.filter((l) => l === '')).toHaveLength(2)
+    const first = lines.findIndex((line) => line.includes(' a') && line.includes('RUNNING'))
+    const second = lines.findIndex((line) => line.includes(' b') && line.includes('RUNNING'))
+    expect(lines.slice(first, second)).toContain('')
+    expect(lines.at(-2)).toBe('')
   })
 
   test('selection is an ASCII marker on exactly the selected slug row', () => {
-    const selected = { ...model([build({ slug: 'a' }), build({ slug: 'b' })]), selectedSlug: 'b' }
+    const selected = {
+      ...model([build({ slug: 'a' }), build({ slug: 'b' })]),
+      selection: { kind: 'build' as const, slug: 'b' },
+    }
     const lines = rd(selected, WIDE).map(stripAnsi)
     expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
     expect(lines.find((line) => line.startsWith('> '))).toContain('b')
+  })
+})
+
+describe('renderDashboard: harvest uses the selectable build-row grammar', () => {
+  test('identity is Harvest, the internal run id is absent, and selection uses the shared marker', () => {
+    const lines = rd(
+      {
+        ...model([build({ slug: 'build-row', pr: undefined })]),
+        harvest: harvest(),
+        selection: { kind: 'harvest' },
+      },
+      WIDE,
+    ).map(stripAnsi)
+    const line = lines.find((candidate) => candidate.includes('Harvest'))!
+    expect(line.startsWith('> ')).toBe(true)
+    expect(line).toContain('Harvest')
+    expect(line).toContain('36 observations')
+    expect(lines.join('\n')).not.toContain('harvest_internal_123')
+    expect(lines.filter((candidate) => candidate.startsWith('> '))).toHaveLength(1)
+  })
+
+  test('harvest and build statuses end in the same column and RUNNING uses the same green', () => {
+    const lines = rd(
+      {
+        ...model([
+          build({ slug: 'build-row', pr: undefined }),
+          build({ slug: 'paused-row', status: 'paused', pr: undefined }),
+        ]),
+        harvest: harvest(),
+      },
+      { color: true, width: 100 },
+    )
+    const harvestLine = lines.find((line) => stripAnsi(line).includes('Harvest'))!
+    const buildLine = lines.find((line) => stripAnsi(line).includes('build-row'))!
+    const pausedLine = lines.find((line) => stripAnsi(line).includes('paused-row'))!
+    const harvestPlain = stripAnsi(harvestLine)
+    const buildPlain = stripAnsi(buildLine)
+    const pausedPlain = stripAnsi(pausedLine)
+    expect(harvestPlain.endsWith('RUNNING')).toBe(true)
+    expect(buildPlain.endsWith('RUNNING')).toBe(true)
+    expect(pausedPlain.endsWith('PAUSED')).toBe(true)
+    expect(harvestPlain.indexOf('RUNNING') + 'RUNNING'.length).toBe(
+      pausedPlain.indexOf('PAUSED') + 'PAUSED'.length,
+    )
+    expect(harvestPlain.length).toBe(buildPlain.length)
+    expect(harvestPlain.length).toBe(100)
+    expect(harvestLine).toContain('\x1b[32mRUNNING\x1b[0m')
+    expect(buildLine).toContain('\x1b[32mRUNNING\x1b[0m')
+  })
+
+  test('display-only PAUSED is literal and uses the same yellow as a paused build', () => {
+    const lines = rd(
+      {
+        ...model([build({ slug: 'build-row', status: 'paused', pr: undefined })]),
+        harvest: harvest({ status: 'paused' }),
+      },
+      { color: true, width: 100 },
+    )
+    const statusLines = lines.filter((line) => stripAnsi(line).endsWith('PAUSED'))
+    expect(statusLines).toHaveLength(2)
+    expect(statusLines.every((line) => line.includes('\x1b[33mPAUSED\x1b[0m'))).toBe(true)
   })
 })
 
@@ -409,7 +535,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   test('the header survives the clamp — it is the line the ACs name', () => {
     for (let height = 1; height <= 12; height += 1) {
       const [header] = rd(model(many(8)), { color: false, width: 80, height })
-      expect(header).toContain('ab dispatch')
+      expect(header).toContain('Auto Build')
       expect(header).toContain('capacity 2')
       // The count is on the header, so it still reports every build even when
       // most rows are clamped away.
@@ -441,12 +567,36 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     for (const selected of [1, 4, 7]) {
       const m = {
         ...model(many(8)),
-        selectedSlug: `interactive-build-dashboard-for-ab-${selected}`,
+        selection: {
+          kind: 'build' as const,
+          slug: `interactive-build-dashboard-for-ab-${selected}`,
+        },
       }
       const lines = rd(m, { color: false, width: 80, height: 12 })
       expect(lines.some((line) => line.startsWith(`> AB-${selected}`))).toBe(true)
       expect(lines.at(-1)).toContain('Up/Down')
     }
+  })
+
+  test('a selected harvest or build remains visible when both participate in overflow', () => {
+    const base = { ...model(many(8)), harvest: harvest() }
+    const harvestLines = rd(
+      { ...base, selection: { kind: 'harvest' } },
+      { color: false, width: 80, height: 8 },
+    )
+    expect(harvestLines.some((line) => line.startsWith('> ') && line.includes('Harvest'))).toBe(true)
+
+    const buildLines = rd(
+      {
+        ...base,
+        selection: {
+          kind: 'build',
+          slug: 'interactive-build-dashboard-for-ab-7',
+        },
+      },
+      { color: false, width: 80, height: 8 },
+    )
+    expect(buildLines.some((line) => line.startsWith('> AB-7'))).toBe(true)
   })
 
   test('a frame that fits is not clamped and gets no notice', () => {

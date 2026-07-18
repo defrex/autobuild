@@ -414,14 +414,20 @@ ab dispatch --interval 30
 ab dispatch --plain     # force line-oriented output, even on a TTY
 ```
 
-On a TTY the dispatch dashboard is interactive. Its bottom line shows the
-normal key legend, or the active feedback field with its editing controls:
+On a TTY the interactive dashboard is one fixed frame. Its title is
+`Auto Build` plus the repository basename, mode, capacity, active-build count,
+and intake state. The next row is always one status slot: each tick count,
+dependency diagnostic, parked-build notice, harvest outcome, action
+confirmation, or warning replaces that row instead of scrolling above the
+frame. There is no separate startup banner, and a blank row separates the body
+from the bottom legend (or active feedback field). `--plain` and non-TTY output
+remain line-oriented and unchanged.
 
 | Key | Action |
 |---|---|
-| Up / Down | Move the slug-based build selection. Repaints and re-sorts keep the same build selected. |
-| `m` | Toggle durable auto-merge intent for the selected build. Pre-PR intent is remembered; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
-| `p` | Request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. The current agent step finishes before pause takes effect. |
+| Up / Down | Move through the optional `Harvest` row and slug-sorted build rows. Stable row identity preserves selection across repaint, re-sort, and harvest appearance/disappearance. |
+| `m` | Toggle durable auto-merge intent for the selected build. Pre-PR intent is remembered; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. On `Harvest`, this is an explanatory no-op. |
+| `p` | Request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. The current agent step finishes before pause takes effect. On `Harvest`, this is an explanatory no-op; harvest pause/resume is not implemented. |
 | `d` | Toggle drain for this dispatcher process: stop claiming new tickets while janitor, stale-runner, and in-flight work continue. Restart resets drain off. |
 | Enter / Escape | While blocked-resume feedback is open, submit / cancel. Backspace edits; all printable keys, including `m`, `p`, and `d`, are text rather than dashboard actions. |
 | Ctrl-C | Stop and restore terminal input/cursor state. |
@@ -436,9 +442,9 @@ time and the operator user. The ordinary lease sweep performs reattachment, so
 resume is an attempt rather than a guarantee: an unresolved condition can
 escalate and become blocked again.
 
-Rows show `auto off`, `auto requested`, `auto enabled`, or `auto cancelling`,
-and the header shows `intake ON` or `intake DRAINED`. Pipes, redirects, and
-`--plain` remain non-interactive and emit no terminal escapes.
+Build rows show `auto off`, `auto requested`, `auto enabled`, or
+`auto cancelling`, and the title shows `intake ON` or `intake DRAINED`. Pipes,
+redirects, and `--plain` remain non-interactive and emit no terminal escapes.
 
 Each tick runs in this order:
 
@@ -462,9 +468,13 @@ Each tick runs in this order:
    Approved proposals are created directly in Triage and are never dispatched
    by the harvester.
 
-The dashboard renders the latest run as a literal `HARVEST` step row with
-elapsed times. It is not selectable, so `p` and `m` still target build slugs
-only. Use `ab harvest status --events 20` for its event-level paper trail.
+The dashboard renders the latest run as the selectable `Harvest` row with
+elapsed times, observation count, and the same marker, right-aligned status
+column, and status colors as build rows. The internal run id is not displayed.
+`RUNNING` is green; `PAUSED` is a supported display signifier in yellow, though
+nothing yet gives harvest a paused state. Build-only `p` and `m` explain their
+no-op in the status row. Use `ab harvest status --events 20` for the run id and
+event-level paper trail.
 Optional runtime/model overrides are `[roles.harvest]` and
 `[roles.harvest-review]`; the producer continues across revision rounds and
 each reviewer is fresh.
@@ -510,7 +520,9 @@ and branch `ab/<slug>` are chosen once; existing builds are never renamed.
 > again, move it back into the configured ready state — prior builds never
 > permanently suppress it; the gate is the ticket's *current* state.
 
-Each tick prints a report of its nonzero counters:
+In plain/non-interactive mode, each tick prints a report of its nonzero
+counters. In dashboard mode, the newest non-idle report replaces the one status
+row; idle ticks leave the latest message in place:
 
 ```text
 tick: merged=1 dispatched=2

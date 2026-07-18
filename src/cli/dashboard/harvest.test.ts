@@ -72,7 +72,7 @@ describe('dashboard harvest row', () => {
     expect(byLabel.get('file')?.qualifier).toBeUndefined()
   })
 
-  test('projects the staged run, keeps terminal runs visible, and renders a literal nonselectable marker', async () => {
+  test('projects the staged run, keeps terminal runs visible, and renders a selectable Harvest row', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')
     await store.appendRepoWithArtifacts(
@@ -121,14 +121,15 @@ describe('dashboard harvest row', () => {
         mode: 'watch',
         capacity: 2,
         drained: false,
+        statusLine: '',
+        selection: { kind: 'harvest' },
         builds: [],
         harvest: projected!,
       },
       { color: true, width: 100, height: 20, now: Date.now() },
     )
     const plain = stripAnsi(lines.join('\n'))
-    expect(plain).toContain('HARVEST')
-    expect(plain).toContain('h_1')
-    expect(plain).not.toContain('> HARVEST')
+    expect(plain).toContain('> Harvest')
+    expect(plain).not.toContain('h_1')
   })
 })

@@ -605,6 +605,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: randomUuids(),
         clock: steppingClock(),
         instance,
         opts: { heartbeatMs: 100_000, maxSessionAttempts: 2 },

@@ -8,10 +8,9 @@
  *
  *   >>> The region is always the LAST thing on screen. <<<
  *
- * which is why `log()` exists: a diagnostic printed straight to the stream
- * would land in the middle of a frame we are about to cursor-up over, and the
- * next repaint would eat it. So a line erases the region, prints, and repaints
- * — messages scroll cleanly ABOVE a dashboard that never moves.
+ * Dispatcher messages are part of the frame's reserved status row, so this
+ * seam owns only in-place replacement and cursor restoration. Nothing may
+ * print through it into dashboard scrollback.
  */
 import type { TerminalOut } from '../terminal'
 
@@ -75,27 +74,6 @@ export class LiveRegion {
   }
 
   /**
-   * Erase the region → hand `line` to the CALLER's sink → repaint.
-   *
-   * The sink is a parameter, not `this.term`, on purpose: a stderr diagnostic
-   * must stay on stderr. The region changes WHEN a line is written (around an
-   * erase/repaint), never WHICH stream it goes to. If stderr is redirected
-   * while stdout is a TTY, the erase/repaint still applies to stdout and the
-   * message still lands in the file — no corruption on either path.
-   */
-  log(line: string, write: (line: string) => void): void {
-    if (this.finished) {
-      write(line)
-      return
-    }
-    const frame = this.painted
-    this.erase()
-    this.painted = []
-    write(line)
-    this.update(frame)
-  }
-
-  /**
    * Release the region: LEAVE the last frame painted, restore the cursor, stop
    * tracking. Idempotent.
    *
@@ -116,7 +94,7 @@ export class LiveRegion {
   }
 
   /** Cursor-up over the painted rows and clear to the end of the screen. Used
-   * by `update` and `log` and nothing else — the region's only erasure. */
+   * by `update` and nothing else — the region's only erasure. */
   private erase(): void {
     if (this.painted.length === 0) return
     this.term.write(CURSOR_UP(this.painted.length) + CLEAR_TO_END)

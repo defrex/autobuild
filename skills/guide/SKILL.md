@@ -397,6 +397,26 @@ while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
 
+## Dispatch dashboard
+
+On a TTY, `ab dispatch` renders one fixed interactive frame. Its first row is a
+single `Auto Build` title with the repository basename, mode, capacity,
+active-build count, and `intake ON`/`intake DRAINED`. Its second row is always
+one status slot. Tick counts, dependency diagnostics, parked-build notices,
+harvest outcomes, action confirmations, and warnings replace that slot instead
+of scrolling above the frame. The duplicate startup banner is suppressed, and
+a blank row separates the body from the legend or feedback controls. `--plain`
+and non-TTY output remain line-oriented and unchanged.
+
+Up/Down moves through one ordered list: the optional `Harvest` row first, then
+slug-sorted builds. Selection uses stable kind/slug identity, so repaint,
+re-sort, and harvest appearance or disappearance do not retarget it by row
+index. `Harvest` uses the same marker, right-aligned status column, and status
+colors as builds; its internal run id is not shown. `PAUSED` is a supported
+yellow display signifier, but harvest pause/resume itself is not implemented.
+Consequently `m` and `p` on `Harvest` are explanatory status-line no-ops; they
+never append a build or repository event. `d` remains repository/process-wide.
+
 ## Resuming blocked builds from the dashboard
 
 On a TTY, select a blocked build and press `p`. Instead of pausing it, the
@@ -462,9 +482,10 @@ latest repository harvest run from the same journal the runner resumes. It
 shows the claimed observation count, each scan/synthesize/review/file
 occurrence and outcome, review rounds, filed ticket refs, and any escalation or
 infrastructure failure. It is read-only and also reports an idle repository
-that has never harvested. The dispatch dashboard shows the latest run as a
-literal, non-color-only `HARVEST` step row; it is not selectable and build
-pause/auto-merge controls can never target it.
+that has never harvested. The dispatch dashboard shows the latest run as the
+selectable, non-color-only `Harvest` step row without its internal run id.
+Build-only pause/auto-merge controls explain their no-op there; harvest
+pause/resume state is not yet implemented.
 
 ### Lease health is not build status
 

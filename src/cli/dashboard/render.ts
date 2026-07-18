@@ -24,8 +24,10 @@ import type {
   DashboardBuild,
   DashboardHarvest,
   DashboardModel,
+  DashboardSelection,
   PipelineStep,
 } from './model'
+import { dashboardSelections, sameSelection } from './selection'
 
 export interface RenderOpts {
   /** ANSI on. False ⇒ not a single `\x1b` in the output (the `--plain` AC). */
@@ -127,6 +129,7 @@ export function stripAnsi(text: string): string {
  * operator's shell prompt.
  */
 function truncate(text: string, width: number): string {
+  if (width <= 0) return ''
   if (visibleLength(text) <= width) return text
   let out = ''
   let visible = 0
@@ -241,10 +244,37 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
 
 // ── Builds ───────────────────────────────────────────────────────────────────
 
-const STATUS_COLOR: Record<DashboardBuild['status'], ColorName> = {
+const STATUS_COLOR: Record<
+  DashboardBuild['status'] | DashboardHarvest['status'],
+  ColorName
+> = {
   running: 'green',
   paused: 'yellow',
   blocked: 'red',
+  completed: 'green',
+  escalated: 'yellow',
+  failed: 'red',
+}
+
+/** The marker is one shared visual grammar for every selectable row. */
+function selectionMarker(selected: boolean, selecting: boolean, color: boolean): string {
+  if (!selecting) return ''
+  return selected ? paint('> ', 'cyan', color) : '  '
+}
+
+/** Pin a right cluster to the frame edge while keeping exactly one flexible,
+ * truncatable segment on the left. */
+function rightPinnedLine(
+  prefix: string,
+  flexible: string,
+  right: string,
+  width: number,
+): string {
+  const budget = width - visibleLength(prefix) - visibleLength(right) - 2
+  const left = truncate(flexible, Math.max(0, budget))
+  const used = visibleLength(prefix) + visibleLength(left)
+  const gap = ' '.repeat(Math.max(1, width - used - visibleLength(right)))
+  return truncate(`${prefix}${left}${gap}${right}`, width)
 }
 
 function renderBuild(
@@ -266,11 +296,7 @@ function renderBuild(
 
   // Left column: ticket id, padded frame-wide so slugs align even for a build
   // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
-  const marker = selecting
-    ? selected
-      ? paint('> ', 'cyan', color)
-      : '  '
-    : ''
+  const marker = selectionMarker(selected, selecting, color)
   const ticketCol =
     widths.ticket > 0 ? paint((build.ticketId ?? '').padEnd(widths.ticket), 'blue', color) : ''
   const leftPrefix = `${marker}${ticketCol === '' ? '' : `${ticketCol}  `}`
@@ -298,16 +324,11 @@ function renderBuild(
   const rightStr = rightTokens.join('  ')
 
   // The slug is the only element that truncates; ticket id and status never do.
-  const slugBudget = width - visibleLength(leftPrefix) - visibleLength(rightStr) - 2
-  const slug = paint(truncate(build.slug, Math.max(0, slugBudget)), 'bold', color)
-  // Pad the gap so the right cluster hugs the edge; `visibleLength`, never
-  // `.length`, so colored/linked tokens don't miscount the gap.
-  const used = visibleLength(leftPrefix) + visibleLength(slug)
-  const gap = ' '.repeat(Math.max(1, width - used - visibleLength(rightStr)))
-  // Final safety for widths narrower than the fixed parts: keeps the one-row
-  // invariant and closes any hyperlink the cut crosses. Under normal widths the
-  // line is exactly `width` with no `~`, so status/ticket/PR are intact.
-  const lines = [truncate(`${leftPrefix}${slug}${gap}${rightStr}`, width)]
+  // Final truncation inside `rightPinnedLine` is only a safety net for widths
+  // narrower than the fixed columns.
+  const lines = [
+    rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width),
+  ]
 
   // The progress row wraps rather than truncating: the tail is `finalize` and
   // `merge waiting`, which the ACs require and the operator is waiting on.
@@ -328,36 +349,41 @@ function renderBuild(
 function renderHarvest(
   harvest: DashboardHarvest,
   opts: RenderOpts,
+  widths: Widths,
+  selected: boolean,
+  selecting: boolean,
 ): string[] {
-  const statusColor: ColorName =
-    harvest.status === 'completed'
-      ? 'green'
-      : harvest.status === 'running'
-        ? 'cyan'
-        : harvest.status === 'escalated'
-          ? 'yellow'
-          : 'red'
+  const { color, width, now } = opts
+  const marker = selectionMarker(selected, selecting, color)
+  // Harvest has no ticket id, but it occupies the shared empty ticket column so
+  // its identity follows the same row grammar as builds in mixed frames.
+  const ticketCol = widths.ticket > 0 ? `${' '.repeat(widths.ticket)}  ` : ''
+  const leftPrefix = `${marker}${ticketCol}`
   const identity = [
-    paint('HARVEST', 'bold', opts.color),
-    paint(harvest.run, 'bold', opts.color),
-    paint(`${harvest.observations} observations`, 'dim', opts.color),
-    paint(harvest.status.toUpperCase(), statusColor, opts.color),
+    paint('Harvest', 'bold', color),
+    paint(`${harvest.observations} observations`, 'dim', color),
   ].join('  ')
-  const lines = [truncate(identity, opts.width)]
+  const statusColor = STATUS_COLOR[harvest.status]
+  const status = paint(
+    harvest.status.toUpperCase().padStart(widths.status),
+    statusColor,
+    color,
+  )
+  const lines = [rightPinnedLine(leftPrefix, identity, status, width)]
   lines.push(
     ...packLines(
-      harvest.steps.map((item) => renderStep(item, opts.color, opts.now)),
-      opts.width,
+      harvest.steps.map((item) => renderStep(item, color, now)),
+      width,
       '  ',
     ),
   )
   if (harvest.detail !== undefined) {
-    const wrapped = packLines(harvest.detail.split(/\s+/), opts.width - 4, '')
+    const wrapped = packLines(harvest.detail.split(/\s+/), width - 4, '')
     for (const [index, line] of wrapped.entries()) {
       lines.push(
         truncate(
-          paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, opts.color),
-          opts.width,
+          paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, color),
+          width,
         ),
       )
     }
@@ -371,12 +397,20 @@ interface Widths {
 }
 
 /** Pad ticket id and status to the widest in the FRAME, so columns line up down
- * the whole dashboard rather than per-build. `ticket` is 0 when no build in the
- * frame has a ticket id — then there is no ticket column at all. */
-function frameWidths(builds: DashboardBuild[]): Widths {
+ * the whole dashboard rather than per-row. `ticket` is 0 when no build in the
+ * frame has a ticket id — then there is no ticket column at all. Harvest joins
+ * the status-width calculation even in a mixed frame. */
+function frameWidths(
+  builds: DashboardBuild[],
+  harvest: DashboardHarvest | undefined,
+): Widths {
   return {
     ticket: Math.max(0, ...builds.map((b) => (b.ticketId ?? '').length)),
-    status: Math.max(0, ...builds.map((b) => b.status.length)),
+    status: Math.max(
+      0,
+      ...builds.map((b) => b.status.length),
+      ...(harvest !== undefined ? [harvest.status.length] : []),
+    ),
   }
 }
 
@@ -385,10 +419,10 @@ function frameWidths(builds: DashboardBuild[]): Widths {
 export const DASHBOARD_LEGEND =
   'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit'
 
-/** Keep the renderer's ASCII/width invariant while retaining the exact input
- * in the model for submission. Non-ASCII text is displayed as a code-point
- * escape; it is not rewritten in memory or in the eventual event. */
-function displayInput(value: string): string {
+/** Keep the renderer's one-physical-row ASCII/width invariant while retaining
+ * exact process state. Non-ASCII and control characters (including newlines)
+ * are displayed as code-point escapes; the model value is never rewritten. */
+function displayText(value: string): string {
   let displayed = ''
   for (const char of value) {
     const code = char.codePointAt(0)!
@@ -413,13 +447,27 @@ function dashboardControls(model: DashboardModel, color: boolean, width: number)
   const fieldWidth = width - prefix.length - suffix.length
   const plain =
     fieldWidth > 0
-      ? `${prefix}${truncate(displayInput(model.resumeInput.value), fieldWidth)}${suffix}`
+      ? `${prefix}${truncate(displayText(model.resumeInput.value), fieldWidth)}${suffix}`
       : 'Resume: Enter=submit Esc=cancel'
   return truncate(paint(plain, 'cyan', color), width)
 }
 
 function overflowNotice(text: string, color: boolean, width: number): string {
   return truncate(paint(`  ... ${text}`, 'dim', color), width)
+}
+
+interface RenderedDashboardRow {
+  selection: DashboardSelection
+  lines: string[]
+}
+
+function flattenRows(rows: readonly RenderedDashboardRow[]): string[] {
+  const lines: string[] = []
+  for (const [index, row] of rows.entries()) {
+    if (index > 0) lines.push('')
+    lines.push(...row.lines)
+  }
+  return lines
 }
 
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
@@ -429,10 +477,10 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     : paint('intake ON', 'green', color)
   const header = truncate(
     [
-      paint('ab dispatch', 'bold', color),
-      basename(model.repo),
+      paint('Auto Build', 'bold', color),
+      displayText(basename(model.repo)),
       paint(
-        `${model.mode} · capacity ${model.capacity} · ${model.builds.length} active${model.harvest !== undefined ? ' + HARVEST' : ''}`,
+        `${model.mode} | capacity ${model.capacity} | ${model.builds.length} active`,
         'dim',
         color,
       ),
@@ -440,145 +488,138 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     ].join('  '),
     width,
   )
+  // One reserved physical row, even before the first notice. Escaping controls
+  // here prevents a diagnostic from adding rows or violating ASCII width.
+  const status = truncate(displayText(model.statusLine), width)
   const controls = dashboardControls(model, color, width)
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
   // nothing. A single line would scroll itself off and land in scrollback on
   // every repaint, which is worse than an empty region.
   if (height !== undefined && height <= 0) return []
+  if (height !== undefined && height === 1) return [header]
+  if (height !== undefined && height === 2) return [header, status]
+  // At three rows there is no room for body spacing; retain title, status, and
+  // the controls. From four rows onward the body/controls separator is fixed.
+  if (height !== undefined && height === 3) return [header, status, controls]
 
-  // A one-line physical impossibility keeps the long-standing header priority;
-  // from two lines onward the controls always own the final line.
-  if (height !== undefined && height <= 1) return [header]
-  if (height !== undefined && height === 2) return [header, controls]
-
-  const harvestBlock =
-    model.harvest === undefined
-      ? []
-      : ['', ...renderHarvest(model.harvest, opts)]
-
-  if (model.builds.length === 0) {
-    if (harvestBlock.length > 0) {
-      const available = height === undefined ? harvestBlock.length : height - 2
-      return [header, ...harvestBlock.slice(0, Math.max(0, available)), controls]
+  const widths = frameWidths(model.builds, model.harvest)
+  const selecting = model.selection !== undefined
+  const rows: RenderedDashboardRow[] = dashboardSelections(model).map((selection) => {
+    if (selection.kind === 'harvest') {
+      return {
+        selection,
+        lines: renderHarvest(
+          model.harvest!,
+          opts,
+          widths,
+          sameSelection(selection, model.selection),
+          selecting,
+        ),
+      }
     }
-    const body = truncate(paint('  no active builds', 'dim', color), width)
-    return height === undefined || height >= 3
-      ? [header, body, controls]
-      : [header, controls]
-  }
-
-  // Build blocks first — each is its blank separator plus its lines — so the
-  // viewport can choose a contiguous window around the selected SLUG.
-  const widths = frameWidths(model.builds)
-  const selecting = model.selectedSlug !== undefined
-  const rendered = model.builds.map((build) =>
-    renderBuild(build, opts, widths, build.slug === model.selectedSlug, selecting),
-  )
-  const blocks = rendered.map((lines) => ['', ...lines])
-  const bodyTotal =
-    harvestBlock.length + blocks.reduce((n, block) => n + block.length, 0)
-  if (height === undefined || bodyTotal + 2 <= height) {
-    return [header, ...harvestBlock, ...blocks.flat(), controls]
-  }
-
-  const totalBodyBudget = Math.max(0, height - 2) // header + reserved controls
-  if (totalBodyBudget === 0) return [header, controls]
-  // Keep a running harvest visible and non-selectable. If it consumes the
-  // whole viewport, builds remain selectable in state but are omitted from
-  // this narrow frame; no keyboard action can ever target the harvest row.
-  if (harvestBlock.length >= totalBodyBudget) {
-    const selectedIndex = Math.max(
-      0,
-      model.builds.findIndex((build) => build.slug === model.selectedSlug),
-    )
-    const selectedLine = rendered[selectedIndex]?.[0]
-    if (totalBodyBudget === 1 || selectedLine === undefined) {
-      return [header, ...(selectedLine !== undefined ? [selectedLine] : []), controls]
+    const build = model.builds.find((candidate) => candidate.slug === selection.slug)!
+    return {
+      selection,
+      lines: renderBuild(
+        build,
+        opts,
+        widths,
+        sameSelection(selection, model.selection),
+        selecting,
+      ),
     }
-    // At impossible narrow heights, retain both identities: the literal
-    // HARVEST marker and the selected build slug. Detail rows return as soon
-    // as the viewport has room; keyboard selection is never made invisible by
-    // a nonselectable item.
-    return [
-      header,
-      ...harvestBlock.slice(1, totalBodyBudget),
-      selectedLine,
-      controls,
-    ]
-  }
-  const bodyBudget = totalBodyBudget - harvestBlock.length
-  const selectedIndex = Math.max(
-    0,
-    model.builds.findIndex((build) => build.slug === model.selectedSlug),
-  )
-  const prefix = [0]
-  for (const block of blocks) prefix.push(prefix.at(-1)! + block.length)
+  })
 
-  // Brute force is intentional and tiny (dashboard build counts are bounded by
-  // operator workload): choose the largest contiguous whole-build window that
-  // contains selection and includes explicit above/below omission notices.
-  let best: { start: number; end: number; count: number; used: number } | undefined
-  for (let start = 0; start <= selectedIndex; start += 1) {
-    for (let end = selectedIndex; end < blocks.length; end += 1) {
-      const blockLines = prefix[end + 1]! - prefix[start]!
-      const notices = (start > 0 ? 1 : 0) + (end < blocks.length - 1 ? 1 : 0)
-      const used = blockLines + notices
-      if (used > bodyBudget) continue
-      const count = end - start + 1
-      if (
-        best === undefined ||
-        count > best.count ||
-        (count === best.count && used > best.used)
-      ) {
-        best = { start, end, count, used }
+  const bodyBudget = height === undefined ? Number.POSITIVE_INFINITY : Math.max(0, height - 4)
+  let body: string[]
+  if (rows.length === 0) {
+    body = bodyBudget >= 1
+      ? [truncate(paint('  no active builds', 'dim', color), width)]
+      : []
+  } else {
+    const allRows = flattenRows(rows)
+    if (allRows.length <= bodyBudget) {
+      body = allRows
+    } else if (bodyBudget <= 0) {
+      body = []
+    } else {
+      const selectedIndex = Math.max(
+        0,
+        rows.findIndex((row) => sameSelection(row.selection, model.selection)),
+      )
+      const prefix = [0]
+      for (const row of rows) prefix.push(prefix.at(-1)! + row.lines.length)
+
+      // Brute force is intentional and tiny (dashboard row counts are bounded
+      // by operator workload): choose the largest contiguous whole-row window
+      // containing selection, with explicit omission notices. Harvest and
+      // builds participate identically.
+      let best: { start: number; end: number; count: number; used: number } | undefined
+      for (let start = 0; start <= selectedIndex; start += 1) {
+        for (let end = selectedIndex; end < rows.length; end += 1) {
+          const rowLines = prefix[end + 1]! - prefix[start]! + (end - start)
+          const notices = (start > 0 ? 1 : 0) + (end < rows.length - 1 ? 1 : 0)
+          const used = rowLines + notices
+          if (used > bodyBudget) continue
+          const count = end - start + 1
+          if (
+            best === undefined ||
+            count > best.count ||
+            (count === best.count && used > best.used)
+          ) {
+            best = { start, end, count, used }
+          }
+        }
+      }
+
+      if (best !== undefined) {
+        body = []
+        if (best.start > 0) {
+          body.push(overflowNotice(`${best.start} more above`, color, width))
+        }
+        body.push(...flattenRows(rows.slice(best.start, best.end + 1)))
+        const below = rows.length - best.end - 1
+        if (below > 0) {
+          body.push(overflowNotice(`and ${below} more below`, color, width))
+        }
+      } else {
+        // A detailed selected row itself cannot fit. Keep its selectable
+        // identity visible, then spend remaining rows on detail and omission.
+        const selectedLines = rows[selectedIndex]!.lines
+        const above = selectedIndex
+        const below = rows.length - selectedIndex - 1
+        let noticeLines = 0
+        if (bodyBudget > 1 && (above > 0 || below > 0)) {
+          noticeLines = bodyBudget > 2 && above > 0 && below > 0 ? 2 : 1
+        }
+        const detailCapacity = Math.max(1, bodyBudget - noticeLines)
+        body = []
+        if (noticeLines === 2 && above > 0) {
+          body.push(overflowNotice(`${above} more above`, color, width))
+        }
+        body.push(...selectedLines.slice(0, detailCapacity))
+        if (noticeLines === 2 && below > 0) {
+          body.push(overflowNotice(`and ${below} more below`, color, width))
+        } else if (noticeLines === 1) {
+          body.push(
+            overflowNotice(
+              above > 0 && below > 0
+                ? `${above} above, ${below} below`
+                : above > 0
+                  ? `${above} more above`
+                  : `and ${below} more below`,
+              color,
+              width,
+            ),
+          )
+        }
+        body = body.slice(0, bodyBudget)
       }
     }
   }
 
-  if (best !== undefined) {
-    const body: string[] = []
-    if (best.start > 0) {
-      body.push(overflowNotice(`${best.start} more above`, color, width))
-    }
-    body.push(...blocks.slice(best.start, best.end + 1).flat())
-    const below = blocks.length - best.end - 1
-    if (below > 0) {
-      body.push(overflowNotice(`and ${below} more below`, color, width))
-    }
-    return [header, ...harvestBlock, ...body, controls]
-  }
-
-  // A detailed selected block itself cannot fit. Keep its selectable slug row
-  // visible, then spend remaining rows on detail and omission direction.
-  const selectedLines = rendered[selectedIndex]!
-  const above = selectedIndex
-  const below = blocks.length - selectedIndex - 1
-  let noticeLines = 0
-  if (bodyBudget > 1 && (above > 0 || below > 0)) {
-    noticeLines = bodyBudget > 2 && above > 0 && below > 0 ? 2 : 1
-  }
-  const detailCapacity = Math.max(1, bodyBudget - noticeLines)
-  const details = selectedLines.slice(0, detailCapacity)
-  const body: string[] = []
-  if (noticeLines === 2 && above > 0) {
-    body.push(overflowNotice(`${above} more above`, color, width))
-  }
-  body.push(...details)
-  if (noticeLines === 2 && below > 0) {
-    body.push(overflowNotice(`and ${below} more below`, color, width))
-  } else if (noticeLines === 1) {
-    body.push(
-      overflowNotice(
-        above > 0 && below > 0
-          ? `${above} above, ${below} below`
-          : above > 0
-            ? `${above} more above`
-            : `and ${below} more below`,
-        color,
-        width,
-      ),
-    )
-  }
-  return [header, ...harvestBlock, ...body.slice(0, bodyBudget), controls]
+  // The blank separator is fixed frame chrome, not part of a row block. It is
+  // therefore present regardless of body size and message volume.
+  return [header, status, ...body, '', controls]
 }

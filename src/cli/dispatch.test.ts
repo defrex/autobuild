@@ -951,14 +951,8 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('prints a SUPERSET of plain mode — the dashboard adds, never removes', async () => {
-    // Plan@4 suppressed the tick report and the parked line on the rationale
-    // that "the dashboard conveys both". It does not: a parked-`done` build is
-    // filtered OUT of the dashboard by construction, and TickReport carries
-    // counts no row ever shows. Suppressing them would be an unrequested
-    // information regression, worst in the interactive --once an operator runs
-    // by hand.
-    const fx = await makeFixture(readyTicket('T-super'), happyHandlers())
+  test('dashboard startup and notices stay inside the fixed frame, never the line sinks', async () => {
+    const fx = await makeFixture(readyTicket('T-frame'), happyHandlers())
     const term = fakeTerminal()
     const out: string[] = []
     try {
@@ -974,11 +968,14 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const slug = (await fx.store.listBuilds())[0]!.slug
-      expect(out.some((line) => line.includes(`build ${slug} parked`))).toBe(true)
-      expect(out.some((line) => line.startsWith('tick: dispatched=1'))).toBe(true)
-      expect(out.some((line) => line.includes('one pass over'))).toBe(true)
-      // …and the final frame is still on screen at exit.
-      expect(term.all()).toContain(slug)
+      const painted = stripAnsi(term.all())
+      expect(out).toEqual([])
+      expect(fx.err).toEqual([])
+      expect(painted).toContain('Auto Build')
+      expect(painted).toContain(`build ${slug} parked`)
+      expect(painted).toContain(slug)
+      expect(painted).not.toContain(`one pass over ${fx.origin}`)
+      expect(painted).not.toContain('Ctrl-C to stop')
     } finally {
       await fx.cleanup()
     }
@@ -1019,7 +1016,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.cliErrors).toEqual([])
       expect(tallestFrame(term)).toBeGreaterThan(0) // it really did paint
       expect(tallestFrame(term)).toBeLessThan(rows) // STRICTLY — see above
-      expect(term.all()).toContain('ab dispatch') // the header survives
+      expect(term.all()).toContain('Auto Build') // the title survives
     } finally {
       await fx.cleanup()
     }
@@ -1051,6 +1048,33 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
+  test('dashboard warnings are retained for the first frame and never hit stderr', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput(['pause'])
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      expect(out).toEqual([])
+      expect(fx.err).toEqual([])
+      expect(stripAnsi(term.all())).toContain(
+        'dashboard action ignored: no active row is selected',
+      )
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('a non-interactive terminal (a pipe or redirect) auto-selects plain', async () => {
     const fx = await makeFixture(readyTicket('T-pipe'), happyHandlers())
     const term = fakeTerminal(false)
@@ -1073,22 +1097,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  /**
-   * The reconcile guard where this branch's dashboard met main's dependency
-   * diagnostics: main added them to `printReport` writing straight to
-   * `opts.stdout`, which on a TTY lands inside the frame the region is about
-   * to repaint over — the "routine runner messages must not corrupt or
-   * interleave with the dashboard" criterion. They must route through `say()`.
-   *
-   * This is a WATCH-mode test on purpose, and neither test above can replace
-   * it. In plain mode `say()` IS `opts.stdout` (no region), so both spellings
-   * pass. In `--once` the only tick's diagnostics are printed BEFORE the
-   * render loop has painted anything, so the region is empty and `log()`
-   * degrades to a bare write — again both spellings pass. Only a tick that
-   * runs while a frame is already on screen distinguishes them, and only watch
-   * mode has one.
-   */
-  test('watch: a diagnostic on a later tick is bracketed by the region, not dropped into the frame', async () => {
+  test('watch: successive diagnostics replace the reserved status row without using line sinks', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-blocked-tty', { title: 'Blocked work', blockedBy: ['T-9'] }),
@@ -1096,21 +1105,9 @@ describe('abDispatch --once with an interactive terminal', () => {
       ],
       happyHandlers(),
     )
-    // One interleaved transcript across BOTH sinks: asserting on `out` alone
-    // cannot discriminate, because region.log() forwards to this same stdout
-    // sink. The difference is only the erase/repaint the TERMINAL sees hugging
-    // the write, so the two streams have to be ordered against each other.
-    const transcript: string[] = []
+    const out: string[] = []
     const term = fakeTerminal()
-    const termWrite = term.write.bind(term)
-    term.write = (chunk: string) => {
-      termWrite(chunk)
-      transcript.push(`term:${chunk}`)
-    }
     const controller = new AbortController()
-    // Two ticks: the first paints the header frame, the second emits its
-    // diagnostic into a live region. Real (short) sleeps, so the render loop's
-    // async store reads land between them rather than racing the assertion.
     let sleeps = 0
     const sleep = async (): Promise<void> => {
       sleeps += 1
@@ -1122,7 +1119,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         targetRepo: fx.origin,
         env: {},
         exec: spawnExec,
-        stdout: (line) => transcript.push(`out:${line}`),
+        stdout: (line) => out.push(line),
         stderr: (line) => fx.err.push(line),
         once: false,
         intervalMs: 1,
@@ -1132,21 +1129,21 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: term,
       })
 
-      const marker = 'out:ticket T-blocked-tty blocked by T-9 (not complete)'
-      // The LAST diagnostic — the one from a tick with a frame already up.
-      const at = transcript.lastIndexOf(marker)
-      expect(at).toBeGreaterThan(0)
-      // The operator still sees WHY the ticket is sitting still (main's
-      // criterion: discoverable from dispatcher output alone) — AND the region
-      // ERASED the frame immediately before the write, then repainted after.
-      //
-      // The erase must be matched precisely (cursor-up + clear-down), not as
-      // "some escape sequence": the painted frame is itself full of colour
-      // escapes, so a loose /\x1b/ here matches the raw-write bug too — the
-      // failure mode being guarded against is exactly `term:<frame>` followed
-      // by `out:<diagnostic>` scribbled on top of it.
-      expect(transcript[at - 1]).toMatch(/^term:\x1b\[\d+A\x1b\[0J$/)
-      expect(transcript[at + 1]).toMatch(/^term:\x1b\[1mab dispatch/)
+      const diagnostic = 'ticket T-blocked-tty blocked by T-9 (not complete)'
+      const diagnosticFrame = term.frames.find((chunk) => stripAnsi(chunk).includes(diagnostic))
+      const countFrame = term.frames.find((chunk) =>
+        stripAnsi(chunk).includes('tick: dependencyBlocked=1'),
+      )
+      expect(out).toEqual([])
+      expect(fx.err).toEqual([])
+      expect(diagnosticFrame).toBeDefined()
+      expect(countFrame).toBeDefined()
+      const diagnosticLines = stripAnsi(diagnosticFrame!).split('\n').slice(0, -1)
+      const countLines = stripAnsi(countFrame!).split('\n').slice(0, -1)
+      expect(diagnosticLines[0]).toContain('Auto Build')
+      expect(diagnosticLines[1]).toBe(diagnostic)
+      expect(countLines[1]).toBe('tick: dependencyBlocked=1')
+      expect(countLines).toHaveLength(diagnosticLines.length)
     } finally {
       await fx.cleanup()
     }
@@ -1408,6 +1405,109 @@ describe('abDispatch --once with an interactive terminal', () => {
 })
 
 describe('abDispatch interactive keyboard controls', () => {
+  test('harvest is selected first; build-only actions explain and no-op, then Down reaches a build', async () => {
+    const fx = await makeFixture(
+      [
+        readyTicket('T-alpha-harvest', { title: 'Alpha work' }),
+        readyTicket('T-beta-harvest', { title: 'Beta work' }),
+      ],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: '{}' }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'harvest_keyboard_internal',
+            observations: [{ build: 'alpha-work', seq: 1 }],
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      // Keep the staged run visibly open without letting this control-focused
+      // test launch harvest agents. The production runner returns `held`.
+      expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
+
+      const beforeRepo = await fx.store.getRepoEvents(fx.origin)
+      const beforeBuilds = new Map(
+        await Promise.all(
+          ['alpha-work', 'beta-work'].map(async (slug) => [
+            slug,
+            await fx.store.getEvents(slug),
+          ] as const),
+        ),
+      )
+      const term = fakeTerminal()
+      const input = fakeInput()
+      const out: string[] = []
+      const run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'harvest-op' },
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => /^> .*Harvest/m.test(stripAnsi(term.all())))
+
+      input.press('auto-merge')
+      await waitFor(() => stripAnsi(term.all()).includes('Harvest auto-merge unavailable'))
+      input.press('pause')
+      await waitFor(() => stripAnsi(term.all()).includes('Harvest pause/resume unavailable'))
+
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(beforeRepo)
+      for (const slug of ['alpha-work', 'beta-work']) {
+        const added = (await fx.store.getEvents(slug)).slice(beforeBuilds.get(slug)!.length)
+        expect(added.some((event) => event.actor.kind === 'human')).toBe(false)
+      }
+      expect(out).toEqual([])
+
+      input.press('down')
+      await waitFor(() => /^> .*alpha-work/m.test(stripAnsi(term.all())))
+      input.press('auto-merge')
+      input.press('pause')
+      await waitFor(async () => {
+        const events = await fx.store.getEvents('alpha-work')
+        return (
+          events.some((event) => event.type === 'build.auto-merge-requested') &&
+          events.some((event) => event.type === 'build.pause-requested')
+        )
+      })
+      input.press('interrupt')
+      await run
+
+      const human = (await fx.store.getEvents('alpha-work')).filter(
+        (event) => event.actor.kind === 'human',
+      )
+      expect(human.slice(-2).map((event) => event.type)).toEqual([
+        'build.auto-merge-requested',
+        'build.pause-requested',
+      ])
+      expect(human.slice(-2).every(
+        (event) => event.actor.kind === 'human' && event.actor.user === 'harvest-op',
+      )).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('Down selects by slug; p/m target that build with human events; rapid m toggles in order', async () => {
     const fx = await makeFixture(
       [

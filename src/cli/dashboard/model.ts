@@ -80,10 +80,16 @@ export interface PipelineStep {
   timing?: StepTiming
 }
 
+export type DashboardSelection =
+  | { kind: 'harvest' }
+  | { kind: 'build'; slug: string }
+
 export interface DashboardHarvest {
   kind: 'harvest'
   run: string
-  status: 'running' | 'completed' | 'escalated' | 'failed'
+  /** `paused` is a display signifier only. The repository workflow does not
+   * currently enter that state. */
+  status: 'running' | 'paused' | 'completed' | 'escalated' | 'failed'
   steps: PipelineStep[]
   observations: number
   rounds: number
@@ -120,13 +126,17 @@ export interface DashboardModel {
   capacity: number
   /** Ephemeral state owned by this `ab dispatch` process only. */
   drained: boolean
-  /** Slug identity, never a row index. */
-  selectedSlug?: string
+  /** Stable row identity, never a row index. */
+  selection?: DashboardSelection
+  /** Latest process-local dispatcher notice. Always rendered on one reserved
+   * physical row; an empty string keeps that row present before the first
+   * notice. */
+  statusLine: string
   /** Ephemeral blocked-resume field; never derived from or stored in events. */
   resumeInput?: ResumeInputView
   builds: DashboardBuild[]
   /** Latest run remains visible after terminal completion until a newer run
-   * replaces it. It is display-only and never enters build selection. */
+   * replaces it. It is selectable display state, never a synthetic build. */
   harvest?: DashboardHarvest
 }
 
@@ -717,7 +727,8 @@ export function buildDashboard(
     mode: 'watch' | 'once'
     capacity: number
     drained?: boolean
-    selectedSlug?: string
+    selection?: DashboardSelection
+    statusLine?: string
     resumeInput?: ResumeInputView
   },
   harvestEvents: HarvestEvent[] = [],
@@ -732,7 +743,8 @@ export function buildDashboard(
     mode: header.mode,
     capacity: header.capacity,
     drained: header.drained ?? false,
-    ...(header.selectedSlug !== undefined ? { selectedSlug: header.selectedSlug } : {}),
+    statusLine: header.statusLine ?? '',
+    ...(header.selection !== undefined ? { selection: header.selection } : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
     ...(harvest !== undefined ? { harvest } : {}),

@@ -690,8 +690,9 @@ The harvester only proposes: it never claims, readies, grooms, or dispatches a
 proposal. A terminal escalation consumes its claimed snapshot so watch ticks do
 not hot-loop. Completed/cancelled/missing proposal refs remain dedup tombstones.
 Every step brackets start/result events and agent sessions/transcripts, and the
-latest run appears as a visibly literal, nonselectable `HARVEST` row in the
-dispatch dashboard. Humans still own Triage → Ready.
+latest run appears as the selectable `Harvest` row in the dispatch dashboard.
+Its internal run id remains in the repository journal, not in the row. Humans
+still own Triage → Ready.
 
 ## 13. Ticket source policy
 
@@ -739,25 +740,38 @@ events, render, send commands** — commands being events in the same log
 vocabulary *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 
 - v2.0 front end: terminal, with herdr as the multiplexer.
-- `ab dispatch` on a TTY is an interactive fleet dashboard. Its bottom legend
-  is the authoritative key map: Up/Down select a build by slug identity, `p`
-  requests pause/resume when unblocked and opens optional resume feedback when
-  blocked, `m` toggles durable auto-merge intent, `d` toggles in-memory
-  dispatcher drain, and Ctrl-C exits. While the blocked-resume field is active,
-  printable keys edit it (including `m`/`p`/`d`), Backspace edits, Enter submits,
-  and Escape cancels; navigation and build actions are suppressed. The field is
-  slug-bound process state, polling remains live, and the selected build's
-  blocker rows remain visible. Auto-merge intent uses GitHub-native auto-merge
-  whenever a real merge gate exists; on a proved-ungated branch it consents to
-  the guarded non-admin squash fallback defined in §15.7. `--plain` (and
-  non-TTY output) remains line-oriented and reads no keyboard input.
-- Selection survives repaint/re-sort by tracking the build slug. Drain belongs
-  only to one running dispatcher: while on it skips new ticket claims but keeps
-  janitor, stale-runner, harvest, and in-flight work running; restart defaults
-  it off.
+- `ab dispatch` on a TTY is an interactive fixed frame. Its first row is one
+  `Auto Build` title with the repository basename, mode, capacity, active-build
+  count, and intake state. Its second row is always one process-local status
+  slot: tick counts, dependency diagnostics, parked-build notices, harvest
+  outcomes, action confirmations, and warnings replace that row instead of
+  entering scrollback. A blank row separates the body from the legend or modal
+  controls. The redundant startup banner is omitted. `--plain` (and non-TTY
+  output) remains line-oriented, prints every line as before, and reads no
+  keyboard input.
+- The bottom legend is the authoritative key map: Up/Down move through one
+  ordered list — optional harvest first, then slug-sorted builds. `p` requests
+  pause/resume when an unblocked build is selected and opens optional resume
+  feedback when it is blocked; `m` toggles durable auto-merge intent; `d`
+  toggles in-memory dispatcher drain; Ctrl-C exits. While the blocked-resume
+  field is active, printable keys edit it (including `m`/`p`/`d`), Backspace
+  edits, Enter submits, and Escape cancels; navigation and actions are
+  suppressed. The field stays bound to its captured build and escalation ids,
+  polling remains live, and that build's blocker rows remain visible.
+- Selection survives repaint/re-sort and harvest appearance/disappearance by
+  tracking a discriminated stable identity (`harvest` or build slug), never a
+  row index. Drain belongs only to one running dispatcher: while on it skips
+  new ticket claims but keeps janitor, stale-runner, harvest, and in-flight work
+  running; restart defaults it off.
 - The latest repository harvest is projected with the same `PipelineStep`
-  representation as builds, but carries a literal `HARVEST` marker and is not
-  selectable. Every keyboard action continues to enumerate build slugs only.
+  representation and row grammar as builds. Its identity is `Harvest` (never
+  its internal run id); its status is right-aligned and uses the shared status
+  colors, including the display-only `PAUSED` signifier. The row is selectable,
+  but build-only `m` and `p` actions are explanatory no-ops. Harvest pause and
+  resume state, events, and dispatcher gating are not implemented here.
+- Auto-merge intent uses GitHub-native auto-merge whenever a real merge gate
+  exists; on a proved-ungated branch it consents to the guarded non-admin squash
+  fallback defined in §15.7.
 - Later: web UI and others — same adapter pattern against the same store.
 - The operator's job across many concurrent builds: see status at a glance,
   act on a selected build, find blocked builds, answer escalations, and inspect
