@@ -397,7 +397,7 @@ CLI validates with. Per-phase inputs and terminals:
 | `code-review` | spec, plan, commit range `{base, head}`, prior findings, implement-notes | `verdict` |
 | `verify:<step>` (agent) | spec (acceptance criteria), step config, commit range | `verdict pass\|fail --report` |
 | `finalize` | spec, plan, verify reports, PR template config | `done` (requires `pr-description` artifact) |
-| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` | `done` (requires merge commit present) |
+| `reconcile` | spec, plan, implement-notes, conflict `{baseSha}` from this attempt's `reconcile.started` | `done` (requires merge commit present) |
 
 Scoping is deliberate: the planner never sees code-review rounds; the
 reviewer sees prior findings but not the producer's session. What a phase
@@ -818,9 +818,15 @@ janitor, `reconcile.*` by a re-attached build-runner)
 | `pr.auto-merge-enabled` / `pr.auto-merge-disabled` | kernel, dispatcher | `{commandSeq}` (correlated application fact) |
 | `pr.merged` | dispatcher | `{sha}` |
 | `pr.closed` | dispatcher | `{}` |
-| `pr.conflicted` | dispatcher | `{baseSha}` |
-| `reconcile.started` | kernel | `{attempt, baseSha}` |
+| `pr.conflicted` | dispatcher | `{baseSha}` (detection-time snapshot/evidence) |
+| `reconcile.started` | kernel | `{attempt, baseSha}` (fresh execution-time merge target) |
 | `reconcile.completed` | agent | `{mergeCommit, artifact: {kind: "reconcile-notes", rev}}` |
+
+The two `baseSha` facts deliberately have different boundaries:
+`pr.conflicted.baseSha` preserves what the janitor observed when it detected
+conflict; `reconcile.started.baseSha` records the base freshly fetched and
+resolved immediately before that actual attempt runs. Agent context uses only
+the matching started fact, never the older conflict snapshot.
 
 **Cross-cutting**
 
@@ -973,15 +979,28 @@ existing PR or clears the pre-PR desired flag.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted {baseSha}` and re-attaches
-a build-runner (the dispatcher itself never runs agents). The runner
-executes the `reconcile` epilogue phase: an agent merges base into the
-branch guided by the spec, plan, and implement-notes, with the explicit
-charge to regress against neither; the resolution lands as a merge commit
-(`reconcile.completed {mergeCommit}`; the push is `ab done` plumbing per
-[D7]). Because reconciliation changed code, **`verify:*` re-runs in full**;
-a failure routes back into the code loop as usual (§5). A resolution the
-agent judges risky — semantic conflicts, spec-relevant choices — escalates
-rather than guesses. Reconcile output skips
+a build-runner (the dispatcher itself never runs agents). That SHA is durable
+detection-time evidence, not the later merge target. Immediately before each
+actual reconcile run, after its bounded infrastructure-retry guard, the runner
+fetches the build's frozen `build.created.baseBranch` from `origin` into a
+build-scoped internal ref, resolves it as a commit, and emits
+`reconcile.started {attempt, baseSha}`. `ab context` supplies the newest started
+SHA matching that attempt; it never falls back to `pr.conflicted`. A fetch or
+resolution failure emits `phase.failed` and starts no agent, so known-stale
+input is never used.
+
+A crashed attempt re-runs with the same attempt number but refreshes and records
+the base again before its replacement session. If the base moves after a
+session starts, a still-conflicted PR is observed by the existing epilogue loop
+and receives the next reconcile attempt.
+
+The agent merges that supplied base into the branch guided by the spec, plan,
+and implement-notes, with the explicit charge to regress against neither; the
+resolution lands as a merge commit (`reconcile.completed {mergeCommit}`; the
+push is `ab done` plumbing per [D7]). Because reconciliation changed code,
+**`verify:*` re-runs in full**; a failure routes back into the code loop as
+usual (§5). A resolution the agent judges risky — semantic conflicts,
+spec-relevant choices — escalates rather than guesses. Reconcile output skips
 `code-review` by default (escalation covers the judgment cases;
 `policy.reconcileReview` can force it), and `policy.maxReconcileAttempts`
 bounds thrash against a busy base.

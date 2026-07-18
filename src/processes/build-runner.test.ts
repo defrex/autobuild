@@ -240,11 +240,19 @@ class FakeServer implements ServerLifecycle {
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 
+type ReconcileRefresh =
+  | { sha: string }
+  | { fetchError: string }
+  | { resolveError: string }
+
 interface HarnessOptions {
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   noServer?: boolean
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
   failCommands?: string[]
+  /** Results for successive reconcile-time remote-base refreshes. The final
+   * entry repeats when more refreshes occur. */
+  reconcileRefreshes?: ReconcileRefresh[]
   sessionEnv?: Record<string, string>
   runnerOpts?: { maxPhaseAttempts?: number; heartbeatMs?: number; leaseTtlMs?: number }
   clock?: Clock
@@ -308,9 +316,32 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const runner = new ScriptedAgentRunner({ script })
 
   const failing = new Set(options.failCommands ?? [])
+  const refreshes = options.reconcileRefreshes ?? [{ sha: 'a'.repeat(40) }]
+  let refreshIndex = -1
+  const currentRefresh = (): ReconcileRefresh =>
+    refreshes[Math.min(Math.max(refreshIndex, 0), refreshes.length - 1)] ?? {
+      fetchError: 'no reconcile refresh result configured',
+    }
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
+    if (cmd[0] === 'git' && cmd[1] === 'fetch') {
+      refreshIndex += 1
+      const refresh = currentRefresh()
+      return 'fetchError' in refresh
+        ? { stdout: '', stderr: refresh.fetchError, exitCode: 128 }
+        : { stdout: '', stderr: '', exitCode: 0 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'rev-parse') {
+      const refresh = currentRefresh()
+      if ('resolveError' in refresh) {
+        return { stdout: '', stderr: refresh.resolveError, exitCode: 128 }
+      }
+      if ('fetchError' in refresh) {
+        return { stdout: '', stderr: refresh.fetchError, exitCode: 128 }
+      }
+      return { stdout: `${refresh.sha}\n`, stderr: '', exitCode: 0 }
+    }
     const shell = cmd[2] ?? ''
     return failing.has(shell)
       ? {
@@ -382,6 +413,30 @@ async function seedCodeApproved(store: BuildStore): Promise<void> {
     actor: agentActor('code-review', 's_seed'),
     type: 'code-review.verdict',
     payload: { round: 1, verdict: 'approve', findings: [], artifact: { kind: 'code-review', rev: 0 } },
+  })
+}
+
+async function seedFinalized(store: BuildStore): Promise<void> {
+  await seedPlanApproved(store)
+  await seedCodeApproved(store)
+  for (const step of ['types', 'unit', 'e2e']) {
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step, attempt: 1, pass: true },
+    })
+  }
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: {
+      pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
+    },
+  })
+  await store.append(SLUG, {
+    actor: agentActor('release-notes', 's_seed'),
+    type: 'finalize.step-completed',
+    payload: { step: 'release-notes', ok: true },
   })
 }
 
@@ -585,31 +640,16 @@ describe('step', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
-  test('reconcile: pr.conflicted routes a reconcile run with {attempt, baseSha} (§15.7)', async () => {
-    const h = await makeHarness()
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    for (const step of ['types', 'unit', 'e2e']) {
-      await h.store.append(SLUG, {
-        actor: KERNEL,
-        type: 'verify.completed',
-        payload: { step, attempt: 1, pass: true },
-      })
-    }
-    await h.store.append(SLUG, {
-      actor: KERNEL,
-      type: 'finalize.completed',
-      payload: { pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' } },
-    })
-    await h.store.append(SLUG, {
-      actor: agentActor('release-notes', 's_seed'),
-      type: 'finalize.step-completed',
-      payload: { step: 'release-notes', ok: true },
-    })
+  const DETECTED_BASE = '1'.repeat(40)
+  const CURRENT_BASE = '2'.repeat(40)
+
+  test('reconcile refreshes an advanced base before recording the phase start (§15.7)', async () => {
+    const h = await makeHarness({ reconcileRefreshes: [{ sha: CURRENT_BASE }] })
+    await seedFinalized(h.store)
     await h.store.append(SLUG, {
       actor: DISPATCHER,
       type: 'pr.conflicted',
-      payload: { baseSha: 'sha-main-9' },
+      payload: { baseSha: DETECTED_BASE },
     })
 
     const decision = await h.br.step()
@@ -617,7 +657,7 @@ describe('step', () => {
       kind: 'run-phase',
       phase: 'reconcile',
       round: 1,
-      reconcile: { attempt: 1, baseSha: 'sha-main-9' },
+      reconcile: { attempt: 1 },
     })
 
     const events = await h.store.getEvents(SLUG)
@@ -627,8 +667,33 @@ describe('step', () => {
       'reconcile.completed',
       'session.ended',
     ])
-    const started = ofType(events, 'reconcile.started')[0]!
-    expect(started.payload).toEqual({ attempt: 1, baseSha: 'sha-main-9' })
+    expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(DETECTED_BASE)
+    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
+      attempt: 1,
+      baseSha: CURRENT_BASE,
+    })
+    expect(h.execCalls.slice(-2)).toEqual([
+      {
+        cmd: [
+          'git',
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          'origin',
+          `+refs/heads/main:refs/autobuild/reconcile/${SLUG}/base`,
+        ],
+        cwd: h.workspacePath,
+      },
+      {
+        cmd: [
+          'git',
+          'rev-parse',
+          '--verify',
+          `refs/autobuild/reconcile/${SLUG}/base^{commit}`,
+        ],
+        cwd: h.workspacePath,
+      },
+    ])
 
     // AB_PHASE uses the attempt as the round for reconcile (D8).
     const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-reconcile')
@@ -644,6 +709,101 @@ describe('step', () => {
       command: 'bun tsc --noEmit',
       attempt: 2,
     })
+  })
+
+  test('reconcile preserves unchanged-base behavior when refresh resolves the detected SHA', async () => {
+    const h = await makeHarness({ reconcileRefreshes: [{ sha: DETECTED_BASE }] })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: DETECTED_BASE },
+    })
+
+    await h.br.step()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
+      attempt: 1,
+      baseSha: DETECTED_BASE,
+    })
+    expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
+  })
+
+  test('a crashed same-attempt reconcile refreshes the base again before replacement session startup', async () => {
+    const firstStartBase = '3'.repeat(40)
+    const h = await makeHarness({ reconcileRefreshes: [{ sha: CURRENT_BASE }] })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: DETECTED_BASE },
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: firstStartBase },
+    })
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 1,
+      reconcile: { attempt: 1 },
+    })
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'reconcile.started').map(
+        (event) => event.payload.baseSha,
+      ),
+    ).toEqual([firstStartBase, CURRENT_BASE])
+  })
+
+  test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {
+    const h = await makeHarness({
+      reconcileRefreshes: [{ fetchError: 'fatal: could not read from origin' }],
+    })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: DETECTED_BASE },
+    })
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 1,
+      reconcile: { attempt: 1 },
+    })
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.started')).toEqual([])
+    expect(h.runner.sessions.size).toBe(0)
+    expect(ofType(events, 'phase.failed')[0]!.payload).toEqual({
+      phase: 'reconcile',
+      round: 1,
+      attempt: 1,
+      error: expect.stringContaining('could not read from origin'),
+      willRetry: true,
+    })
+  })
+
+  test('a fetched ref that cannot resolve to a commit also fails before session startup', async () => {
+    const h = await makeHarness({
+      reconcileRefreshes: [{ resolveError: 'fatal: expected a commit object' }],
+    })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: DETECTED_BASE },
+    })
+
+    await h.br.step()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.started')).toEqual([])
+    expect(h.runner.sessions.size).toBe(0)
+    expect(ofType(events, 'phase.failed')[0]!.payload.error).toContain(
+      'expected a commit object',
+    )
   })
 })
 

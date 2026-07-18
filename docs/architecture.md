@@ -26,6 +26,17 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 The grammar is fixed; `verify:*` and `finalize:*` are the only extension
 points, declared per-repo in `autobuild.toml`.
 
+The reconcile boundary intentionally has two durable snapshots.
+`pr.conflicted.baseSha` is what the janitor observed at conflict detection;
+the pure engine uses it only as conflict sequence evidence. Immediately before
+each real run, `src/processes/build-runner.ts` fetches the frozen
+`build.created.baseBranch` from `origin` into a slug-scoped internal ref and
+records the resolved commit in `reconcile.started.baseSha`. That matching
+phase-start fact is what `src/cli/context.ts` gives the agent. Same-attempt
+crash recovery refreshes again; movement after startup is handled by another
+conflict/reconcile loop. Refresh failures are `phase.failed` infrastructure
+facts and never fall back to the stale detection snapshot.
+
 Observation harvest is adjacent, never added to that grammar:
 
 ```

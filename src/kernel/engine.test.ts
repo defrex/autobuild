@@ -1272,12 +1272,12 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     expect(decide([...throughFinalize, ev('pr.closed', {})])).toEqual(wait('awaiting-pr'))
   })
 
-  test('pr.conflicted → reconcile attempt 1 with the conflict baseSha', () => {
+  test('pr.conflicted → reconcile attempt 1 without forwarding the detection-time baseSha', () => {
     expect(decide([...throughFinalize, ev('pr.conflicted', { baseSha: 'sha-main-2' })])).toEqual({
       kind: 'run-phase',
       phase: 'reconcile',
       round: 1,
-      reconcile: { attempt: 1, baseSha: 'sha-main-2' },
+      reconcile: { attempt: 1 },
     })
   })
 
@@ -1292,7 +1292,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       kind: 'run-phase',
       phase: 'reconcile',
       round: 1,
-      reconcile: { attempt: 1, baseSha: 'sha-main-2' },
+      reconcile: { attempt: 1 },
     })
   })
 
@@ -1383,7 +1383,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       kind: 'run-phase',
       phase: 'reconcile',
       round: 4,
-      reconcile: { attempt: 4, baseSha: 'sha-main-5' },
+      reconcile: { attempt: 4 },
     })
   })
 })

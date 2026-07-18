@@ -70,7 +70,7 @@ export interface ContextManifest {
   materialized: Record<string, MaterializedEntry>
   /** From the latest `implement.completed` (§8.3 code-review/verify inputs). */
   commitRange?: CommitRange
-  /** Reconcile: `{baseSha}` from the latest `pr.conflicted` (§15.7). */
+  /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
   conflict?: { baseSha: string }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
@@ -351,12 +351,23 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   if (inputs.conflict === true) {
+    // `pr.conflicted.baseSha` is the janitor's detection-time evidence. The
+    // runner refreshes the remote base immediately before each actual run and
+    // records the execution input in reconcile.started. A crashed same-attempt
+    // rerun can therefore have multiple starts; the newest matching AB_PHASE
+    // attempt is authoritative.
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const event = events[i]!
-      if (event.type === 'pr.conflicted') {
+      if (event.type === 'reconcile.started' && event.payload.attempt === round) {
         manifest.conflict = { baseSha: event.payload.baseSha }
         break
       }
+    }
+    if (manifest.conflict === undefined) {
+      throw new Error(
+        `reconcile@${round} context requires a matching reconcile.started event ` +
+          'with the freshly resolved base SHA — the runner must record the phase start before launching the session',
+      )
     }
   }
 
