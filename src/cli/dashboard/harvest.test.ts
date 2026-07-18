@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { KERNEL } from '../../events/envelope'
+import { humanActor, KERNEL } from '../../events/envelope'
 import { MemoryBuildStore } from '../../store/memory'
 import { projectHarvest } from './model'
 import { renderDashboard, stripAnsi } from './render'
@@ -70,6 +70,80 @@ describe('dashboard harvest row', () => {
     expect(byLabel.get('review')?.qualifier).toBeUndefined()
     expect(byLabel.get('file')).toMatchObject({ state: 'pending' })
     expect(byLabel.get('file')?.qualifier).toBeUndefined()
+  })
+
+  test('projects an acknowledged repository pause, freezes open timing, and supports no-run pauses', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_paused',
+        observations: [{ build: 'a', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.step.started',
+      payload: { run: 'h_paused', step: 'synthesize', round: 1 },
+    })
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+
+    const projected = projectHarvest(await store.getRepoEvents('/repo'))!
+    expect(projected.status).toBe('paused')
+    expect(projected.steps.find((step) => step.label === 'synthesize')).toMatchObject({
+      state: 'pending',
+      timing: { accumulatedMs: expect.any(Number) },
+    })
+    expect(
+      projected.steps.find((step) => step.label === 'synthesize')?.timing
+        ?.runningSince,
+    ).toBeUndefined()
+    const rendered = stripAnsi(
+      renderDashboard(
+        {
+          repo: '/repo',
+          mode: 'watch',
+          capacity: 1,
+          drained: false,
+          statusLine: '',
+          builds: [],
+          harvest: projected,
+        },
+        { color: false, width: 100, height: 20, now: Date.now() + 60_000 },
+      ).join('\n'),
+    )
+    expect(rendered).toContain('PAUSED')
+
+    const idleStore = new MemoryBuildStore()
+    await idleStore.ensureRepo('/idle')
+    await idleStore.appendRepo('/idle', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    await idleStore.appendRepo('/idle', {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+    expect(projectHarvest(await idleStore.getRepoEvents('/idle'))).toMatchObject({
+      kind: 'harvest',
+      status: 'paused',
+      observations: 0,
+      rounds: 0,
+    })
   })
 
   test('projects the staged run, keeps terminal runs visible, and renders a selectable Harvest row', async () => {

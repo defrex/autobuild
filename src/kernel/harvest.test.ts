@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { DISPATCHER, KERNEL } from '../events/envelope'
-import { claimedOccurrenceKeys, openHarvestRun, reduceHarvest } from './harvest'
+import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import {
+  claimedOccurrenceKeys,
+  decideHarvestControl,
+  openHarvestRun,
+  reduceHarvest,
+} from './harvest'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 
@@ -92,6 +97,91 @@ describe('reduceHarvest', () => {
       'filed',
       'suppressed',
     ])
+  })
+
+  test('reduces durable pause commands without terminalizing or replacing the open run', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_paused',
+        observations: [{ build: 'a', seq: 7 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+
+    let state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.paused).toBe(false)
+    expect(state.pendingCommands).toEqual([
+      {
+        command: 'pause',
+        seq: 2,
+        actor: humanActor('operator'),
+      },
+    ])
+    expect(decideHarvestControl(state)).toEqual({
+      kind: 'acknowledge',
+      command: 'pause',
+    })
+
+    const acknowledged = await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.paused',
+      payload: {},
+    })
+    state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state).toMatchObject({
+      paused: true,
+      pausedSeq: acknowledged.seq,
+      pausedAt: acknowledged.ts,
+      pendingCommands: [],
+    })
+    expect(decideHarvestControl(state)).toEqual({ kind: 'park' })
+    expect(openHarvestRun(state)).toMatchObject({
+      run: 'h_paused',
+      status: 'running',
+      observations: [{ build: 'a', seq: 7 }],
+    })
+
+    // A duplicate pause cannot resurrect after the opposing resume command.
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.pendingCommands.map((command) => command.command)).toEqual([
+      'resume',
+    ])
+    expect(decideHarvestControl(state)).toEqual({
+      kind: 'acknowledge',
+      command: 'resume',
+    })
+
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.paused).toBe(false)
+    expect(state.pausedSeq).toBeUndefined()
+    expect(state.pausedAt).toBeUndefined()
+    expect(state.pendingCommands).toEqual([])
+    expect(openHarvestRun(state)?.run).toBe('h_paused')
+    expect([...claimedOccurrenceKeys(state)]).toEqual(['a:7'])
   })
 
   test('a non-retrying infrastructure failure is terminal but preserves the claim', async () => {

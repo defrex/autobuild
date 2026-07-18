@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } from '../cli/harvest'
 import { resolveHarvestCliEnv } from '../cli/env'
 import { parseConfig } from '../config/load'
-import { KERNEL, agentActor } from '../events/envelope'
+import { KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
@@ -365,6 +365,196 @@ describe('HarvestRunner', () => {
     await seedObservation(store, 'four', 'fourth')
     expect((await makeRunner().run()).outcome).toBe('completed')
     expect(await tickets.get('fake-2')).not.toBeNull()
+  })
+
+  for (const pauseDuring of ['synthesize', 'review'] as const) {
+    test(`pauses after the in-flight ${pauseDuring} boundary and resumes without repeating completed work`, async () => {
+      const workspace = await mkdtemp(
+        join(tmpdir(), `ab-harvest-pause-${pauseDuring}-`),
+      )
+      roots.push(workspace)
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      const tickets = new FakeTicketSource()
+      const ids = sequentialIds()
+      let producers = 0
+      let reviewers = 0
+      const scripted = new ScriptedAgentRunner({
+        script: async ({ opts }) => {
+          const env = resolveHarvestCliEnv(opts.env)
+          const deps = { store, env, workspacePath: workspace, ids }
+          await buildHarvestContext(deps)
+          if (opts.skill === 'ab-harvest') {
+            producers += 1
+            const observations = JSON.parse(
+              await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+            ) as Array<{ occurrence: { build: string; seq: number } }>
+            const file = join(workspace, '.ab', 'paused-proposals.json')
+            await writeFile(file, JSON.stringify(proposalSet(observations)))
+            await submitHarvestProposals(deps, file)
+            if (pauseDuring === 'synthesize') {
+              await store.appendRepo('/repo', {
+                actor: humanActor('operator'),
+                type: 'harvest.pause-requested',
+                payload: {},
+              })
+            }
+          } else {
+            reviewers += 1
+            const notes = join(workspace, '.ab', 'paused-review.md')
+            await writeFile(notes, 'approved before pause\n')
+            await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+            if (pauseDuring === 'review') {
+              await store.appendRepo('/repo', {
+                actor: humanActor('operator'),
+                type: 'harvest.pause-requested',
+                payload: {},
+              })
+            }
+          }
+          return defaultTurnResult('done')
+        },
+      })
+      await seedObservation(store, `pause-${pauseDuring}`, 'pause at boundary')
+      const makeRunner = (instance: string) =>
+        new HarvestRunner({
+          store,
+          tickets,
+          config: config(1),
+          runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+          defaultRuntime: 'scripted',
+          repo: '/repo',
+          workspacePath: workspace,
+          ids,
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          instance,
+          opts: { heartbeatMs: 100_000 },
+        })
+
+      const parked = await makeRunner('pause-boundary').run()
+      expect(parked).toMatchObject({ outcome: 'parked' })
+      const beforeResumeEvents = await store.getRepoEvents('/repo')
+      const beforeResume = reduceHarvest(beforeResumeEvents)
+      const run = beforeResume.latest!
+      expect(beforeResume.paused).toBe(true)
+      expect(run.status).toBe('running')
+      expect(run.proposals).toHaveLength(1)
+      expect(run.reviews).toHaveLength(pauseDuring === 'review' ? 1 : 0)
+      expect(run.steps.some((step) => step.step === 'file')).toBe(false)
+      expect(
+        beforeResumeEvents.some(
+          (event) =>
+            event.type === 'harvest.completed' ||
+            event.type === 'harvest.failed' ||
+            event.type === 'harvest.escalated',
+        ),
+      ).toBe(false)
+      expect(await tickets.get('fake-1')).toBeNull()
+
+      await store.appendRepo('/repo', {
+        actor: humanActor('operator'),
+        type: 'harvest.resume-requested',
+        payload: {},
+      })
+      expect(await makeRunner('resume-boundary').run()).toEqual({
+        outcome: 'completed',
+        launch: 'resumed',
+        run: run.run,
+      })
+      const afterResumeEvents = await store.getRepoEvents('/repo')
+      expect(
+        afterResumeEvents.filter((event) => event.type === 'harvest.started'),
+      ).toHaveLength(1)
+      expect(
+        afterResumeEvents.filter(
+          (event) => event.type === 'harvest.proposals.submitted',
+        ),
+      ).toHaveLength(1)
+      expect(
+        afterResumeEvents.filter(
+          (event) => event.type === 'harvest.review.verdict',
+        ),
+      ).toHaveLength(1)
+      expect(producers).toBe(1)
+      expect(reviewers).toBe(1)
+      expect(await tickets.get('fake-1')).not.toBeNull()
+      expect(reduceHarvest(afterResumeEvents)).toMatchObject({
+        paused: false,
+        latest: { run: run.run, status: 'completed' },
+      })
+    })
+  }
+
+  test('an idle pause prevents threshold launch; resume reopens normal scanning', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-pause-idle-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    let agentCalls = 0
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        agentCalls += 1
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', 'idle-resume-proposals.json')
+          await writeFile(file, JSON.stringify(proposalSet(observations)))
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, '.ab', 'idle-resume-review.md')
+          await writeFile(notes, 'approved\n')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    await seedObservation(store, 'idle-pause', 'already over threshold')
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.pause-requested',
+      payload: {},
+    })
+    const makeRunner = (instance: string) =>
+      new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance,
+        opts: { heartbeatMs: 100_000 },
+      })
+
+    expect(await makeRunner('idle-pause').run()).toEqual({ outcome: 'parked' })
+    expect(reduceHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      paused: true,
+      runs: [],
+    })
+    expect(agentCalls).toBe(0)
+    expect(await makeRunner('still-paused').run()).toEqual({ outcome: 'parked' })
+    expect(agentCalls).toBe(0)
+
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    expect(await makeRunner('idle-resume').run()).toMatchObject({
+      outcome: 'completed',
+      launch: 'started',
+    })
+    expect(agentCalls).toBe(2)
   })
 
   for (const stage of ['started', 'proposals', 'reviewed', 'filed'] as const) {

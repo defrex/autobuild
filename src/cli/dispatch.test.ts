@@ -1405,7 +1405,7 @@ describe('abDispatch --once with an interactive terminal', () => {
 })
 
 describe('abDispatch interactive keyboard controls', () => {
-  test('harvest is selected first; build-only actions explain and no-op, then Down reaches a build', async () => {
+  test('harvest is selected first; p writes durable pause/resume commands while m remains build-only', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-alpha-harvest', { title: 'Alpha work' }),
@@ -1470,9 +1470,42 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('auto-merge')
       await waitFor(() => stripAnsi(term.all()).includes('Harvest auto-merge unavailable'))
       input.press('pause')
-      await waitFor(() => stripAnsi(term.all()).includes('Harvest pause/resume unavailable'))
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'harvest.pause-requested',
+        ),
+      )
+      await waitFor(() => stripAnsi(term.all()).includes('harvest: pause requested'))
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.paused',
+        payload: {},
+      })
+      await waitFor(() => /Harvest.*PAUSED/.test(stripAnsi(term.all())))
+      input.press('pause')
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) => event.type === 'harvest.resume-requested',
+        ),
+      )
+      await waitFor(() => stripAnsi(term.all()).includes('harvest: resume requested'))
 
-      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(beforeRepo)
+      const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(
+        beforeRepo.length,
+      )
+      expect(repoAdded.map((event) => event.type)).toEqual([
+        'harvest.pause-requested',
+        'harvest.paused',
+        'harvest.resume-requested',
+      ])
+      expect(repoAdded[0]?.actor).toEqual({
+        kind: 'human',
+        user: 'harvest-op',
+      })
+      expect(repoAdded[2]?.actor).toEqual({
+        kind: 'human',
+        user: 'harvest-op',
+      })
       for (const slug of ['alpha-work', 'beta-work']) {
         const added = (await fx.store.getEvents(slug)).slice(beforeBuilds.get(slug)!.length)
         expect(added.some((event) => event.actor.kind === 'human')).toBe(false)

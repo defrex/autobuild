@@ -15,6 +15,7 @@ import type { IdSource } from '../ids'
 import {
   proposalArtifactForRound,
   reduceHarvest,
+  type HarvestPendingCommand,
   type HarvestRunState,
 } from '../kernel/harvest'
 import { findingDraftSchema, type Finding } from '../ontology'
@@ -396,7 +397,14 @@ export async function submitHarvestVerdict(
 export interface HarvestStatusView {
   repo: string
   run?: string
-  status: 'idle' | HarvestRunState['status']
+  /** Repository control takes display precedence while paused; runStatus keeps
+   * the underlying run lifecycle queryable without making pause terminal. */
+  status: 'idle' | 'paused' | HarvestRunState['status']
+  runStatus?: HarvestRunState['status']
+  paused: boolean
+  pausedSeq?: number
+  pausedAt?: string
+  pendingCommands: HarvestPendingCommand[]
   observations: number
   steps: HarvestRunState['steps']
   rounds: number
@@ -411,11 +419,16 @@ export function projectHarvestStatus(
   events: HarvestEvent[],
   newestEvents?: number,
 ): HarvestStatusView {
-  const latest = reduceHarvest(events).latest
+  const state = reduceHarvest(events)
+  const latest = state.latest
   if (!latest) {
     return {
       repo,
-      status: 'idle',
+      status: state.paused ? 'paused' : 'idle',
+      paused: state.paused,
+      ...(state.pausedSeq !== undefined ? { pausedSeq: state.pausedSeq } : {}),
+      ...(state.pausedAt !== undefined ? { pausedAt: state.pausedAt } : {}),
+      pendingCommands: state.pendingCommands,
       observations: 0,
       steps: [],
       rounds: 0,
@@ -428,7 +441,12 @@ export function projectHarvestStatus(
   return {
     repo,
     run: latest.run,
-    status: latest.status,
+    status: state.paused ? 'paused' : latest.status,
+    runStatus: latest.status,
+    paused: state.paused,
+    ...(state.pausedSeq !== undefined ? { pausedSeq: state.pausedSeq } : {}),
+    ...(state.pausedAt !== undefined ? { pausedAt: state.pausedAt } : {}),
+    pendingCommands: state.pendingCommands,
     observations: latest.observations.length,
     steps: latest.steps,
     rounds: Math.max(0, ...latest.reviews.map((review) => review.round)),
@@ -447,13 +465,30 @@ export function projectHarvestStatus(
 }
 
 export function renderHarvestStatus(view: HarvestStatusView): string[] {
-  if (view.status === 'idle') return [`harvest ${view.repo}: idle (no runs)`]
-  const lines = [
-    `harvest ${view.run} — ${view.status}`,
-    `observations: ${view.observations}`,
-    `review rounds: ${view.rounds}`,
-    'steps:',
-  ]
+  const noRun = view.run === undefined
+  const lines = noRun
+    ? [
+        `harvest ${view.repo}: ${
+          view.status === 'paused' ? 'paused' : 'idle'
+        } (no runs)`,
+      ]
+    : [
+        `harvest ${view.run} — ${view.status}${
+          view.status === 'paused' && view.runStatus !== undefined
+            ? ` (run ${view.runStatus})`
+            : ''
+        }`,
+        `observations: ${view.observations}`,
+        `review rounds: ${view.rounds}`,
+        'steps:',
+      ]
+  if (view.pendingCommands.length > 0) {
+    lines.splice(
+      1,
+      0,
+      `control pending: ${view.pendingCommands.map((command) => command.command).join(', ')}`,
+    )
+  }
   for (const step of view.steps) {
     lines.push(
       `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +

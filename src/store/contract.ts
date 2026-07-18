@@ -12,7 +12,12 @@ import {
   EventValidationError,
   type EventWrite,
 } from '../events/catalog'
-import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
+import {
+  agentActor,
+  DISPATCHER,
+  humanActor,
+  KERNEL,
+} from '../events/envelope'
 import type { HarvestEventWrite } from '../events/harvest'
 import { manualClock } from '../testing/fixed'
 import {
@@ -222,6 +227,43 @@ export function describeBuildStoreContract(
             .catch((error: unknown) => error)
           expect(err).toBeInstanceOf(EventValidationError)
           expect(await store.getRepoEvents('acme/a')).toEqual([])
+        })
+      })
+
+      test('harvest control requests are human-only and acknowledgements are kernel-only', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/control')
+          await store.appendRepo('acme/control', {
+            actor: humanActor('operator'),
+            type: 'harvest.pause-requested',
+            payload: {},
+          })
+          await store.appendRepo('acme/control', {
+            actor: KERNEL,
+            type: 'harvest.paused',
+            payload: {},
+          })
+
+          for (const invalid of [
+            {
+              actor: KERNEL,
+              type: 'harvest.resume-requested',
+              payload: {},
+            },
+            {
+              actor: humanActor('operator'),
+              type: 'harvest.resumed',
+              payload: {},
+            },
+          ] as const) {
+            const error = await store
+              .appendRepo('acme/control', invalid)
+              .catch((caught: unknown) => caught)
+            expect(error).toBeInstanceOf(EventValidationError)
+          }
+          expect(
+            (await store.getRepoEvents('acme/control')).map((event) => event.type),
+          ).toEqual(['harvest.pause-requested', 'harvest.paused'])
         })
       })
 
