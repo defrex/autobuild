@@ -8,13 +8,12 @@
 baseBranch = "main"
 
 # Deterministic verbs the kernel may run. `setup` runs after provision and
-# after a sandbox rehydrate (§15.6-C); the rest are referenced by name from
-# [verify.*] check steps.
+# after a sandbox rehydrate (§15.6-C). On first init, exact `lint`,
+# `type-check`, and `test` scripts from the root package.json add truthful
+# `bun run` commands below; absent scripts add nothing.
 [commands]
 setup = "bun install"
-lint = "bun lint"
-typecheck = "bun tsc --noEmit"
-test = "bun test"
+# @ab-init/package-script-commands
 
 # Dev-server lifecycle (§16.2, D10): config declares, the kernel owns.
 # Agents control it only through `ab server start|stop|restart|status|logs`.
@@ -25,15 +24,14 @@ test = "bun test"
 #readyTimeout = 60               # seconds
 
 [verify]
-steps = ["types", "unit"]
+# An exact `type-check` script adds `types`; `test` adds `unit`, in this order.
+# `lint` remains an available command rather than an automatic verifier.
+steps = [
+# @ab-init/package-script-verify-steps
+]
 
-[verify.types]
-kind = "check"        # deterministic: command + pass/fail, never an agent
-command = "typecheck" # ref into [commands]
-
-[verify.unit]
-kind = "check"
-command = "test"
+# Check tables are rendered only when their backing command was detected.
+# @ab-init/package-script-verify-tables
 
 # Agent-verify example — a skill run with a pass|fail verdict (§5):
 #[verify.e2e]

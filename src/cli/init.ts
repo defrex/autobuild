@@ -90,6 +90,118 @@ export async function readIfExists(path: string): Promise<string | undefined> {
   }
 }
 
+const PACKAGE_COMMANDS_ANCHOR = '# @ab-init/package-script-commands'
+const PACKAGE_VERIFY_STEPS_ANCHOR = '# @ab-init/package-script-verify-steps'
+const PACKAGE_VERIFY_TABLES_ANCHOR = '# @ab-init/package-script-verify-tables'
+
+/** Exact root-package script names that may contribute fresh config. */
+const PACKAGE_SCRIPT_CONFIG = [
+  { script: 'lint', command: 'lint', shell: 'bun run lint' },
+  {
+    script: 'type-check',
+    command: 'typecheck',
+    shell: 'bun run type-check',
+    verify: 'types',
+  },
+  { script: 'test', command: 'test', shell: 'bun run test', verify: 'unit' },
+] as const
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Inspect only the target repository's root manifest. Missing package metadata
+ * means there are no package-backed commands; malformed metadata must not be
+ * mistaken for a successful empty detection.
+ */
+export async function detectInitPackageScripts(targetRepo: string): Promise<Set<string>> {
+  const manifestPath = join(targetRepo, 'package.json')
+  let source: string | undefined
+  try {
+    source = await readIfExists(manifestPath)
+  } catch (error) {
+    throw new Error(`${manifestPath}: unable to read package manifest: ${errorMessage(error)}`)
+  }
+  if (source === undefined) return new Set()
+
+  let manifest: unknown
+  try {
+    manifest = JSON.parse(source)
+  } catch (error) {
+    throw new Error(`${manifestPath}: invalid JSON: ${errorMessage(error)}`)
+  }
+
+  const scripts = isRecord(manifest) ? manifest.scripts : undefined
+  if (!isRecord(scripts)) return new Set()
+
+  const detected = new Set<string>()
+  for (const descriptor of PACKAGE_SCRIPT_CONFIG) {
+    if (!Object.hasOwn(scripts, descriptor.script)) continue
+    const declaration = scripts[descriptor.script]
+    if (typeof declaration !== 'string' || declaration.trim() === '') {
+      throw new Error(
+        `${manifestPath}: package script "${descriptor.script}" must be a non-empty string`,
+      )
+    }
+    detected.add(descriptor.script)
+  }
+  return detected
+}
+
+function replaceTemplateAnchor(
+  template: string,
+  anchor: string,
+  replacement: string,
+): string {
+  const occurrences = template.split(anchor).length - 1
+  if (occurrences !== 1) {
+    throw new Error(
+      `autobuild.toml template anchor "${anchor}" must occur exactly once; found ${occurrences}`,
+    )
+  }
+  const line = `${anchor}\n`
+  if (!template.includes(line)) {
+    throw new Error(`autobuild.toml template anchor "${anchor}" must occupy its own line`)
+  }
+  return template.replace(line, replacement === '' ? '' : `${replacement}\n`)
+}
+
+/**
+ * Render package-backed commands and their matching checks into the valid,
+ * setup-only template baseline. Fixed descriptors and strict anchor counts
+ * make every script subset deterministic and make template drift fail loudly.
+ */
+export function renderAutobuildTemplate(
+  template: string,
+  detectedScripts: ReadonlySet<string>,
+): string {
+  const enabled = PACKAGE_SCRIPT_CONFIG.filter(({ script }) => detectedScripts.has(script))
+  const commands = enabled
+    .map(({ command, shell }) => `${command} = "${shell}"`)
+    .join('\n')
+  const checks = enabled.flatMap((descriptor) =>
+    'verify' in descriptor
+      ? [{ step: descriptor.verify, command: descriptor.command }]
+      : [],
+  )
+  const verifySteps = checks.map(({ step }) => `  "${step}",`).join('\n')
+  const verifyTables = checks
+    .map(
+      ({ step, command }) =>
+        `[verify.${step}]\nkind = "check"\ncommand = "${command}"`,
+    )
+    .join('\n\n')
+
+  let rendered = replaceTemplateAnchor(template, PACKAGE_COMMANDS_ANCHOR, commands)
+  rendered = replaceTemplateAnchor(rendered, PACKAGE_VERIFY_STEPS_ANCHOR, verifySteps)
+  return replaceTemplateAnchor(rendered, PACKAGE_VERIFY_TABLES_ANCHOR, verifyTables)
+}
+
 /**
  * Ensure the exact repository-local state rule exists without rewriting any
  * existing ignore bytes. Re-running is duplicate-free, including when the
@@ -383,14 +495,17 @@ export async function abInit(opts: {
   // complete tree before inspecting or writing any skills.
   await migrateLegacyAgentSkills(opts.targetRepo)
 
-  // autobuild.toml from the template — never overwrite an existing one
-  // (§16.3): the repo's config is the repo's, from the very first re-run.
+  // Render autobuild.toml only when it is absent (§16.3). Package inspection
+  // deliberately stays inside this branch: the repo's config is the repo's
+  // from the very first re-run, even if package scripts later change.
   const configPath = join(opts.targetRepo, 'autobuild.toml')
   let config: InitConfigAction
   if ((await readIfExists(configPath)) === undefined) {
     const template = await readFile(join(distRoot, 'templates', 'autobuild.toml'), 'utf8')
+    const detectedScripts = await detectInitPackageScripts(opts.targetRepo)
+    const rendered = renderAutobuildTemplate(template, detectedScripts)
     await mkdir(opts.targetRepo, { recursive: true })
-    await writeFile(configPath, template)
+    await writeFile(configPath, rendered)
     config = 'written'
   } else {
     config = 'skipped'

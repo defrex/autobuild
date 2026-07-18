@@ -122,6 +122,23 @@ error. Historical attempt counts remain monotonic, but that cleared boundary
 permits one actual session re-entry even when the old occurrence exhausted its
 ordinary budget. A new failure consumes the grant and parks again.
 
+## Repository initialization
+
+`src/cli/init.ts` treats first config creation as a pure render over
+`templates/autobuild.toml`, which is itself a valid setup-only, zero-verify
+baseline. Three comment anchors receive fragments from one fixed descriptor
+table: exact root-package scripts `lint`, `type-check`, and `test` generate
+`bun run` commands; only `type-check` and `test` generate the matching `types`
+and `unit` check tables. Anchor cardinality is validated so template drift
+cannot silently omit a declaration or leave a dangling verify reference.
+
+Package inspection occurs only after init establishes that `autobuild.toml` is
+absent. Missing `package.json` or `scripts` means an empty detected set, while
+malformed JSON and invalid recognized declarations fail with the manifest
+path. Once config exists, later package changes — or even an unreadable
+manifest — are irrelevant: init skips rendering and never reconciles config,
+including under `--force`.
+
 ## Layout
 
 | Path | Contents | SPEC |
@@ -132,14 +149,14 @@ ordinary budget. A new failure consumes the grant and parks again.
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §9, §13 |
-| `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
+| `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated harvest/build row selection, status overlay pixels, and in-place replacement | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
 | `skills/guide/` | `ab-guide` — the model-invocable reference covering the lifecycle, the complete `autobuild.toml` surface, and the other skills. Update it when the config surface changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
-| `templates/` | What `ab init` installs | §16.3 |
+| `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
 The renderer reserves one `Auto Build` title row, one always-present status
 row, and one blank separator before the legend/modal controls. It shares the
