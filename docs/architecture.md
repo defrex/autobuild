@@ -35,8 +35,11 @@ K unclaimed observation.recorded events
 
 `ab dispatch` owns the back-pressure trigger. `src/processes/harvest.ts` scans
 raw build envelopes by canonical `{build, seq}` occurrence; `harvest-runner.ts`
-executes the staged workflow under a repository lease. `src/events/harvest.ts`
-and `src/kernel/harvest.ts` define and reduce a separate repository journal,
+executes the staged workflow under a heartbeated repository lease. The dispatch
+loop starts it fire-and-forget, keeps one process-local in-flight handle, and
+drains that handle only for `--once`, so watch ticks and SIGINT remain
+responsive. `src/events/harvest.ts` and `src/kernel/harvest.ts` define and reduce
+a separate repository journal,
 including claims and the committed dedup ledger. Build reducers therefore
 never interpret a non-build workflow. Typed session deposits live under
 `ab harvest context|submit|verdict`; `ab harvest status` and the nonselectable

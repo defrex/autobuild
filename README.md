@@ -412,8 +412,10 @@ Each tick runs in this order:
 5. **harvest** — independently of build capacity and drain, count newly
    unclaimed structured observations. Below `[harvest].threshold`, do nothing.
    At the threshold, claim the accumulation and run one journaled
-   scan/synthesize/review/file workflow. Approved proposals are created directly
-   in Triage and are never dispatched by the harvester.
+   scan/synthesize/review/file workflow. The workflow is tracked in-flight but
+   does not block later watch ticks or Ctrl-C; `--once` drains it before exit.
+   Approved proposals are created directly in Triage and are never dispatched
+   by the harvester.
 
 The dashboard renders the latest run as a literal `HARVEST` step row with
 elapsed times. It is not selectable, so `p` and `m` still target build slugs
@@ -470,6 +472,8 @@ tick: idle          # every counter zero
 Counters are `merged`, `closed`, `conflicted`, `abandoned`, `resumed`, `swept`,
 `dispatched`, `authored`, `bounced`, `claimRaces`, `harvestStarted`,
 `harvestResumed`, `harvestCompleted`, `harvestEscalated`, and `harvestFailed`.
+Harvest counters are attributed when the asynchronous workflow settles (on the
+next watch report, or after the `--once` drain).
 
 ---
 

@@ -587,8 +587,13 @@ Occurrence identity is `{build slug, event seq}` — never payload id or a scala
 high-water mark, because event sequences are per build. The repository journal
 is separate from build streams and reduces to run/step state, claims, review
 history, filing facts, and the authoritative committed disposition ledger.
-A repository lease plus dispatch's serialized operation queue enforces one
-harvest at a time.
+Dispatch starts harvest fire-and-forget and tracks it as in-flight: watch ticks
+remain responsive for janitor, lease sweep, ticket dispatch, dashboard input,
+and SIGINT, while `--once` drains the visible workflow before exit. A
+process-local in-flight guard prevents overlapping launches from one dispatcher;
+the repository lease is the cross-process exclusivity gate. Heartbeats that
+positively report a lapsed lease force the former owner to re-claim or stop at
+the next durable boundary, so a replacement never advances concurrently.
 
 The fixed workflow is:
 

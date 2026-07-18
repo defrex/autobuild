@@ -314,7 +314,10 @@ variable (a local `.env` works). If a user asks you to put an API key in
 Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
 wall clock. The table is prefaulted, so omitting it enables the sensible
 default. Harvest remains independent of build capacity and of the dashboard's
-drain toggle.
+drain toggle. Dispatch tracks the workflow in-flight without awaiting it on
+watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
+it before exit. The repository lease remains the cross-process single-flight
+gate.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
