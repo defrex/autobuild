@@ -127,6 +127,43 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
   })
 })
 
+describe('ab-guide — durable build-control coverage', () => {
+  test('documents every sessionless command form beside the dashboard controls', () => {
+    const missing: string[] = []
+    const forms: [string, RegExp][] = [
+      ['pause', /`ab pause <slug> \[--store <ref>\]`/],
+      ['resume', /`ab resume <slug> \[--store <ref>\]`/],
+      [
+        'auto-merge',
+        /`ab auto-merge <slug> on\\\|off \[--store <ref>\]`/,
+      ],
+      ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
+      ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
+      ['abort', /`ab abort <slug> \[--store <ref>\]`/],
+    ]
+    for (const [name, form] of forms) {
+      if (!form.test(guide)) missing.push(name)
+    }
+    expect(
+      missing,
+      `skills/guide/SKILL.md is missing build-control forms for: ${missing.join(', ')}`,
+    ).toEqual([])
+  })
+
+  test('names the durable event behind every control', () => {
+    for (const event of [
+      'build.pause-requested',
+      'build.resume-requested',
+      'build.auto-merge-requested',
+      'build.auto-merge-cancelled',
+      'escalation.answered',
+      'build.abort-requested',
+    ]) {
+      expect(guide).toContain(`\`${event}\``)
+    }
+  })
+})
+
 describe('ab-guide — model-invocable (AC3)', () => {
   test('installs as ab-guide with no disable-model-invocation key', async () => {
     const skills = await readDistSkills(DIST_ROOT)

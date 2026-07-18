@@ -417,29 +417,56 @@ yellow display signifier, but harvest pause/resume itself is not implemented.
 Consequently `m` and `p` on `Harvest` are explanatory status-line no-ops; they
 never append a build or repository event. `d` remains repository/process-wide.
 
-## Resuming blocked builds from the dashboard
+### Durable build controls: CLI and dashboard
 
-On a TTY, select a blocked build and press `p`. Instead of pausing it, the
-bottom controls become an optional feedback field while the red blocker
-question stays visible. Printable keys edit the field (including `m`, `p`, and
-`d`), Backspace deletes, Enter submits, and Escape cancels without changing the
-build.
+The CLI and dashboard are two surfaces over the same store-backed control
+operations. Use the CLI from a non-TTY, a script, or an assistant; use the
+keys while watching the interactive dashboard. Both append human-authored facts
+to the build's event log and apply the same write-time checks.
 
-- **Empty or whitespace-only Enter** records a human `retry` answer for every
-  escalation captured when the field opened, regardless of `agent`, `stall`,
-  or `policy` source. This is a bare re-attempt and supplies no agent guidance.
-- **Entered text** records human `guidance` with the trimmed text and delivers it
-  to the next run of the parked phase.
-- If the blocked build is also paused, submission records a resume request after
-  answering its escalations.
+| Intent | CLI | Dashboard | Durable event(s) |
+|---|---|---|---|
+| Pause | `ab pause <slug> [--store <ref>]` | Select the build and press `p` while it is not paused or blocked. | `build.pause-requested` |
+| Resume | `ab resume <slug> [--store <ref>]` | Select a paused build and press `p`. | `build.resume-requested` |
+| Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
+| Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `p`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
+| Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `p` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
+| Abort | `ab abort <slug> [--store <ref>]` | No key in this release. | `build.abort-requested` |
 
-The events retain the human user, store-assigned time, resolution, and answer.
-The normal lease sweep re-attaches the runner; the UI does not launch one through
-a side channel. Resume is therefore an attempt, not a guarantee: if the
-condition still fails or the question remains unanswered, the phase can raise a
-new escalation and return to blocked. This operator flow does not broaden the
-unattended startup rule: a fresh `ab dispatch` still auto-retries only an
-all-policy escalation set and never invents guidance.
+On the dashboard, `p` on a blocked build replaces the bottom legend with the
+optional feedback field while the blocker stays visible. Printable keys —
+including `m`, `p`, and `d` — edit the field instead of triggering global
+actions; Backspace deletes, Enter submits, and Escape cancels.
+
+`ab answer` answers every escalation that is open when the command runs,
+regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
+and delivered as authoritative guidance. With no text (or only whitespace), it
+requests a bare retry and supplies no agent guidance. The dashboard captures
+the blocker ids when its field opens, then answers only those still open at
+submission; Escape cancels without writing. If the build is also paused, both
+surfaces append all answers first and `build.resume-requested` last. A plain
+`ab resume` does not answer blockers; use `ab answer` for a blocked build.
+
+Every command requires the target to exist in this repository and be active
+(`running`, `paused`, or `blocked`); `ab answer` additionally requires an open
+escalation. A stale, missing, queued, done, aborted, or unblocked target is an
+error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
+same stable fallback on both surfaces. All five commands run sessionless and
+accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
+local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
+caller's own phase build, the command refuses it; a phase cannot pause, resume,
+auto-merge, answer, or abort itself.
+
+These commands request normal kernel work; they do not wake a runner, operate
+the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
+guarantee: if the condition still fails, a phase may raise a new escalation and
+block again. A fresh `ab dispatch` still auto-retries only an all-policy
+escalation set and never invents guidance.
+
+Two asymmetries are intentional and explicit. Dashboard drain (`d`) remains
+process-local state inside that running `ab dispatch`, so it has no durable CLI
+command. Conversely, abort has a CLI command but gains no TUI key in this
+release. `m` and `p` on the `Harvest` row remain explanatory no-ops.
 
 ## Checking build status
 
