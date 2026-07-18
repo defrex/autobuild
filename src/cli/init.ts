@@ -45,6 +45,9 @@ export const CLAUDE_SKILLS_DIR = join('.claude', 'skills')
 /** Where init records pristine installs, under `.agents/skills/`. */
 export const PRISTINE_DIR = '.ab-pristine'
 
+/** Repository-local state is always excluded by a fresh/repeated init. */
+export const LOCAL_STATE_IGNORE_RULE = '.autobuild/'
+
 /**
  * The autobuild distribution root, resolved relative to THIS module file
  * (src/cli/init.ts → two levels up) so `ab init` works from any cwd. Its
@@ -85,6 +88,26 @@ export async function readIfExists(path: string): Promise<string | undefined> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
   }
+}
+
+/**
+ * Ensure the exact repository-local state rule exists without rewriting any
+ * existing ignore bytes. Re-running is duplicate-free, including when the
+ * original file had no trailing newline.
+ */
+export async function ensureLocalStateIgnored(targetRepo: string): Promise<boolean> {
+  const path = join(targetRepo, '.gitignore')
+  const current = await readIfExists(path)
+  if (current !== undefined) {
+    const rules = current.split(/\r?\n/)
+    if (rules.includes(LOCAL_STATE_IGNORE_RULE)) return false
+    const separator = current === '' || current.endsWith('\n') ? '' : '\n'
+    await writeFile(path, `${current}${separator}${LOCAL_STATE_IGNORE_RULE}\n`)
+    return true
+  }
+  await mkdir(targetRepo, { recursive: true })
+  await writeFile(path, `${LOCAL_STATE_IGNORE_RULE}\n`)
+  return true
 }
 
 /**
@@ -373,6 +396,10 @@ export async function abInit(opts: {
     config = 'skipped'
   }
   stdout(`autobuild.toml: ${config}`)
+
+  // State is repository-local by default and must never appear as source.
+  // This append-only/idempotent update preserves every user-authored rule.
+  await ensureLocalStateIgnored(opts.targetRepo)
 
   const skills: InitReport['skills'] = []
   for (const skill of await readDistSkills(distRoot)) {

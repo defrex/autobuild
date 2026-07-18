@@ -283,11 +283,22 @@ The same contract has repository-scoped `ensureRepo`, event/artifact deposit and
 read methods, plus a repository lease. Build methods and reducers remain
 unchanged for build callers.
 
-1. **Local** — SQLite + blob directory under `~/.autobuild/`. Zero setup,
-   offline, v1-parity for solo use. The repo never sees build metadata.
-2. **Remote** — the same layout behind a small self-hosted HTTP API binary.
-   What remote sandboxes talk to. Postgres (Neon) and any `BlobStore`
-   adapter (§7.1) sit behind it without touching the interface.
+1. **Local** — one self-contained state tree at
+   `<main-repo>/.autobuild/` by default: `autobuild.sqlite`, content-addressed
+   `blobs/`, Git `worktrees/`, and the file source's default `tickets/` tree.
+   The main checkout is derived from Git's absolute common directory, so a
+   command run inside a linked worktree resolves the same state. There is no
+   home-directory fallback or machine-global state location. Selection is
+   uniform for sessionless commands: explicit `--store` > nonempty `AB_STORE`
+   > repository default. A local override is normalized against the main repo
+   and relocates the complete local tree, including worktrees and default file
+   tickets. An explicitly configured `[tickets].dir` remains repo-relative.
+2. **Remote** — the same store interface behind a small self-hosted HTTP API
+   binary, selected by an unchanged `http(s)://` reference. What remote
+   sandboxes talk to. Postgres (Neon) and any `BlobStore` adapter (§7.1) sit
+   behind it without touching the interface. Git worktrees and default file
+   tickets remain local under `<main-repo>/.autobuild/` because a URL cannot be
+   a local-state root.
 
 `subscribe` is specced in the interface; the v2.0 implementation is polling
 `getEvents(since)`. True push comes later.

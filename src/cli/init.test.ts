@@ -133,6 +133,11 @@ describe('abInit — fresh install', () => {
     expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(template)
   })
 
+  test('creates a .gitignore containing the repository-local state rule', async () => {
+    await abInit({ targetRepo: target })
+    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('.autobuild/\n')
+  })
+
   test('the generated autobuild.toml parses with its dispatch and role defaults', async () => {
     // A fresh project must be dispatchable out of the box: the required
     // readyState is present, non-blank, and set to the file tracker's `ready/`
@@ -160,6 +165,23 @@ describe('abInit — fresh install', () => {
 })
 
 describe('abInit — idempotence and safety', () => {
+  test('appends the state rule without changing existing ignore bytes', async () => {
+    await writeFile(join(target, '.gitignore'), 'dist/\n.env')
+    await abInit({ targetRepo: target })
+    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe(
+      'dist/\n.env\n.autobuild/\n',
+    )
+  })
+
+  test('does not duplicate an existing state rule on re-init', async () => {
+    await writeFile(join(target, '.gitignore'), 'dist/\n.autobuild/\n')
+    await abInit({ targetRepo: target })
+    await abInit({ targetRepo: target })
+    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe(
+      'dist/\n.autobuild/\n',
+    )
+  })
+
   test('migrates .agent skills, pristine bases, local additions, and Claude links', async () => {
     const name = 'ab-plan'
     const customName = 'ab-custom'

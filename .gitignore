@@ -1,7 +1,7 @@
 node_modules/
 # per-phase agent scratch — disposable by construction (SPEC §7)
 .ab/
-# local store default location when overridden into the repo for dev
+# repository-local autobuild state (store, worktrees, and file tickets)
 .autobuild/
 *.local.db
 

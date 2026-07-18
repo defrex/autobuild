@@ -334,6 +334,8 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
 - Writes `autobuild.toml` from the template, and **never overwrites an existing
   one**. The repo's config is the repo's from the first re-run onward.
+- Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
+  preserving every existing byte/rule and handling a missing trailing newline.
 - **Copies** each canonical skill to `.agents/skills/ab-<name>/SKILL.md` —
   copies, not references. These are **editable**: per-repo customization is the
   point, and this repo's review standards belong in its vendored skill.
@@ -367,6 +369,30 @@ Outcomes:
 
 Local customization survives upgrades; divergence is made visible instead of
 silent.
+
+## Local state and store selection
+
+By default, each Git repository owns one self-contained state tree at
+`<main-repo>/.autobuild/`:
+
+- `autobuild.sqlite` — build records, event logs, and repository journals.
+- `blobs/` — content-addressed artifacts.
+- `worktrees/` — autobuild-created Git worktrees.
+- `tickets/` — the default location for the `file` ticket source.
+
+The main checkout comes from Git's absolute common directory, not the current
+worktree's top level. Commands run in an autobuild-created linked worktree
+therefore read the main checkout's state and file tickets. There is no
+home-directory fallback: a repository with no state tree starts empty.
+
+Every command uses the same precedence: explicit `--store <ref>` > nonempty
+`AB_STORE` > `<main-repo>/.autobuild`. Relative local overrides are normalized
+against the main checkout. A local override relocates the whole state tree,
+including `worktrees/` and default file tickets; an explicit `[tickets].dir`
+remains repo-relative. An HTTP(S) URL still selects the remote store unchanged,
+while worktrees and default file tickets remain under the repository-default
+`.autobuild/` directory. The dispatcher passes its normalized selection to
+every agent session as `AB_STORE`.
 
 ## Resuming blocked builds from the dashboard
 
