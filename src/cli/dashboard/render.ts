@@ -20,7 +20,12 @@
  * posture change to win a color map.
  */
 import { basename } from 'node:path'
-import type { DashboardBuild, DashboardModel, PipelineStep } from './model'
+import type {
+  DashboardBuild,
+  DashboardHarvest,
+  DashboardModel,
+  PipelineStep,
+} from './model'
 
 export interface RenderOpts {
   /** ANSI on. False ⇒ not a single `\x1b` in the output (the `--plain` AC). */
@@ -309,6 +314,46 @@ function renderBuild(
   return lines
 }
 
+function renderHarvest(
+  harvest: DashboardHarvest,
+  opts: RenderOpts,
+): string[] {
+  const statusColor: ColorName =
+    harvest.status === 'completed'
+      ? 'green'
+      : harvest.status === 'running'
+        ? 'cyan'
+        : harvest.status === 'escalated'
+          ? 'yellow'
+          : 'red'
+  const identity = [
+    paint('HARVEST', 'bold', opts.color),
+    paint(harvest.run, 'bold', opts.color),
+    paint(`${harvest.observations} observations`, 'dim', opts.color),
+    paint(harvest.status.toUpperCase(), statusColor, opts.color),
+  ].join('  ')
+  const lines = [truncate(identity, opts.width)]
+  lines.push(
+    ...packLines(
+      harvest.steps.map((item) => renderStep(item, opts.color, opts.now)),
+      opts.width,
+      '  ',
+    ),
+  )
+  if (harvest.detail !== undefined) {
+    const wrapped = packLines(harvest.detail.split(/\s+/), opts.width - 4, '')
+    for (const [index, line] of wrapped.entries()) {
+      lines.push(
+        truncate(
+          paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, opts.color),
+          opts.width,
+        ),
+      )
+    }
+  }
+  return lines
+}
+
 interface Widths {
   ticket: number
   status: number
@@ -343,7 +388,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       paint('ab dispatch', 'bold', color),
       basename(model.repo),
       paint(
-        `${model.mode} · capacity ${model.capacity} · ${model.builds.length} active`,
+        `${model.mode} · capacity ${model.capacity} · ${model.builds.length} active${model.harvest !== undefined ? ' + HARVEST' : ''}`,
         'dim',
         color,
       ),
@@ -363,7 +408,16 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   if (height !== undefined && height <= 1) return [header]
   if (height !== undefined && height === 2) return [header, legend]
 
+  const harvestBlock =
+    model.harvest === undefined
+      ? []
+      : ['', ...renderHarvest(model.harvest, opts)]
+
   if (model.builds.length === 0) {
+    if (harvestBlock.length > 0) {
+      const available = height === undefined ? harvestBlock.length : height - 2
+      return [header, ...harvestBlock.slice(0, Math.max(0, available)), legend]
+    }
     const body = truncate(paint('  no active builds', 'dim', color), width)
     return height === undefined || height >= 3
       ? [header, body, legend]
@@ -378,13 +432,38 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     renderBuild(build, opts, widths, build.slug === model.selectedSlug, selecting),
   )
   const blocks = rendered.map((lines) => ['', ...lines])
-  const bodyTotal = blocks.reduce((n, block) => n + block.length, 0)
+  const bodyTotal =
+    harvestBlock.length + blocks.reduce((n, block) => n + block.length, 0)
   if (height === undefined || bodyTotal + 2 <= height) {
-    return [header, ...blocks.flat(), legend]
+    return [header, ...harvestBlock, ...blocks.flat(), legend]
   }
 
-  const bodyBudget = Math.max(0, height - 2) // header + reserved legend
-  if (bodyBudget === 0) return [header, legend]
+  const totalBodyBudget = Math.max(0, height - 2) // header + reserved legend
+  if (totalBodyBudget === 0) return [header, legend]
+  // Keep a running harvest visible and non-selectable. If it consumes the
+  // whole viewport, builds remain selectable in state but are omitted from
+  // this narrow frame; no keyboard action can ever target the harvest row.
+  if (harvestBlock.length >= totalBodyBudget) {
+    const selectedIndex = Math.max(
+      0,
+      model.builds.findIndex((build) => build.slug === model.selectedSlug),
+    )
+    const selectedLine = rendered[selectedIndex]?.[0]
+    if (totalBodyBudget === 1 || selectedLine === undefined) {
+      return [header, ...(selectedLine !== undefined ? [selectedLine] : []), legend]
+    }
+    // At impossible narrow heights, retain both identities: the literal
+    // HARVEST marker and the selected build slug. Detail rows return as soon
+    // as the viewport has room; keyboard selection is never made invisible by
+    // a nonselectable item.
+    return [
+      header,
+      ...harvestBlock.slice(1, totalBodyBudget),
+      selectedLine,
+      legend,
+    ]
+  }
+  const bodyBudget = totalBodyBudget - harvestBlock.length
   const selectedIndex = Math.max(
     0,
     model.builds.findIndex((build) => build.slug === model.selectedSlug),
@@ -423,7 +502,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     if (below > 0) {
       body.push(overflowNotice(`and ${below} more below`, color, width))
     }
-    return [header, ...body, legend]
+    return [header, ...harvestBlock, ...body, legend]
   }
 
   // A detailed selected block itself cannot fit. Keep its selectable slug row
@@ -457,5 +536,5 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       ),
     )
   }
-  return [header, ...body.slice(0, bodyBudget), legend]
+  return [header, ...harvestBlock, ...body.slice(0, bodyBudget), legend]
 }

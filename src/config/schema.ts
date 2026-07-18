@@ -226,9 +226,22 @@ export const ticketsSchema = z.strictObject({
 })
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
+// ── [harvest] ────────────────────────────────────────────────────────────────
+//
+// Observation harvest is back-pressure driven by dispatch. It is deliberately
+// not an [outer] cron entry: idle repositories do no work and bursts are
+// handled on the next dispatch tick.
+
+export const harvestSchema = z.strictObject({
+  /** Unclaimed observation occurrences required to start one harvest run. */
+  threshold: z.number().int().positive().default(10),
+})
+export type HarvestConfig = z.infer<typeof harvestSchema>
+
 // ── [outer] ──────────────────────────────────────────────────────────────────
 //
-// Open map: outer-loop process name → cron schedule (§16.1).
+// Open map: scheduled outer-loop ingesters. Harvest is rejected below because
+// it moved to [harvest].threshold; other names remain open and cron-driven.
 
 export const outerScheduleSchema = z.strictObject({
   cron: z.string().min(1),
@@ -257,6 +270,7 @@ const configTableSchema = z.strictObject({
   tickets: ticketsSchema.prefault({
     source: 'file',
   } as z.input<typeof ticketsSchema>),
+  harvest: harvestSchema.prefault({}),
   outer: z.record(z.string().min(1), outerScheduleSchema).prefault({}),
 })
 
@@ -269,6 +283,15 @@ export const TOP_LEVEL_TABLES = Object.keys(configTableSchema.shape)
  * discipline applied to config).
  */
 export const configSchema = configTableSchema.superRefine((config, ctx) => {
+  if (Object.hasOwn(config.outer, 'harvest')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['outer', 'harvest'],
+      message:
+        '[outer].harvest is no longer scheduled by cron — remove it and configure observation back-pressure with [harvest].threshold',
+    })
+  }
+
   const commandNames = Object.keys(config.commands)
   const knownCommands =
     commandNames.length > 0

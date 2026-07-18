@@ -7,6 +7,7 @@
 import type {
   DependencyState,
   Ticket,
+  TicketCreateOptions,
   TicketDraft,
   TicketSource,
 } from '../types'
@@ -39,6 +40,7 @@ export class FakeTicketSource implements TicketSource {
 
   private readonly tickets = new Map<string, Ticket>()
   private readonly claimed = new Set<string>()
+  private readonly idempotency = new Map<string, string>()
   private readonly createState: string
   private readonly doneState: string
   private nextId = 1
@@ -106,13 +108,20 @@ export class FakeTicketSource implements TicketSource {
     this.transitions.push({ id, state })
   }
 
-  async create(draft: TicketDraft): Promise<Ticket> {
+  async create(
+    draft: TicketDraft,
+    opts: TicketCreateOptions = {},
+  ): Promise<Ticket> {
+    if (opts.idempotencyKey !== undefined) {
+      const adopted = this.idempotency.get(opts.idempotencyKey)
+      if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'))
+    }
     const id = `fake-${this.nextId++}`
     const ticket: Ticket = {
       ref: { source: this.name, id, title: draft.title },
       title: draft.title,
       body: draft.body,
-      state: this.createState,
+      state: opts.state ?? this.createState,
       labels: [...(draft.labels ?? [])],
       // Recorded verbatim, never discarded — the same contract the real
       // adapters owe (§13).
@@ -121,6 +130,9 @@ export class FakeTicketSource implements TicketSource {
         : {}),
     }
     this.tickets.set(id, ticket)
+    if (opts.idempotencyKey !== undefined) {
+      this.idempotency.set(opts.idempotencyKey, id)
+    }
     return cloneTicket(ticket)
   }
 

@@ -74,6 +74,15 @@ points. There are no custom phases, no DAGs, no reordering — a repo extends
 autobuild by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
+**Observation harvest is not a build phase.** On each dispatch tick, once
+`[harvest].threshold` new structured observations have accumulated, dispatch
+runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
+⇄ fresh adversarial `review`, then deterministic `file`. Only approved
+spec-standard proposals are created directly in Triage. A repository journal,
+artifact stream, dedup ledger, and lease make every step queryable and
+crash-safe without polluting `ab builds` or the fixed phase grammar. Already
+claimed observations never trigger again; idle ticks launch no harvest agent.
+
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
 The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
@@ -92,10 +101,10 @@ The distinctions that change an administrator's answer:
 - **The kernel owns determinism** — phase transitions, gating, deduplication,
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
-- **The BuildStore is an append-only event log.** Status is *reduced* from
-  events (`src/kernel/reducer.ts`); snapshots are never authoritative. This is
-  what makes builds resumable after a crash. Events record facts, never derived
-  state.
+- **The BuildStore is append-only event logs.** Build status is reduced from
+  each build stream (`src/kernel/reducer.ts`); harvest state and its dedup ledger
+  are reduced from the repository journal (`src/kernel/harvest.ts`). Snapshots
+  are never authoritative. Events record facts, never derived state.
 - **Workspaces** are provisioned per build. Config is read from **the build's
   branch** at provision — so a config change flows through the pipeline like
   any other change, and every phase of one build sees one consistent config.
@@ -198,7 +207,8 @@ mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
 [query]` looks them up).
 
 The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
-plus each verify/finalize step by name. The pre-build `slug` role uses the same
+plus each verify/finalize step by name. The repository workflow resolves
+`harvest` and `harvest-review`. The pre-build `slug` role uses the same
 runtime/model resolution for optional one-shot naming; it is not a pipeline
 phase, its extension allowlist is not enabled, and it remains tool-free.
 
@@ -293,14 +303,29 @@ through `ab-tickets` rather than running `mv` by hand.
 variable (a local `.env` works). If a user asks you to put an API key in
 `autobuild.toml`, use the environment variable instead and say why.
 
-### `[outer]`
+### `[harvest]`
 
-An **open map** of outer-loop process name → schedule. Keys are user-chosen
-(e.g. `"ingest:sentry"`, `harvest`).
+Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
+wall clock. The table is prefaulted, so omitting it enables the sensible
+default. Harvest remains independent of build capacity and of the dashboard's
+drain toggle. Dispatch tracks the workflow in-flight without awaiting it on
+watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
+it before exit. The repository lease remains the cross-process single-flight
+gate.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `cron` | — | **required**, nonempty string | Cron schedule for that outer-loop process. |
+| `threshold` | `10` | positive integer | Number of newly unclaimed `observation.recorded` occurrences required to start one harvest run. The run claims the whole current accumulation. |
+
+### `[outer]`
+
+An **open map** of scheduled outer-loop ingester name → schedule (for example
+`"ingest:sentry"`). The exact key `harvest` is rejected with an error directing
+the user to `[harvest].threshold`; other scheduled ingesters are unaffected.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `cron` | — | **required**, nonempty string | Cron schedule for that non-harvest outer-loop process. |
 
 ## Setup and upgrades
 
@@ -319,7 +344,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
-  set (`ab-spec`, `ab-guide`).
+  set (`ab-spec`, `ab-tickets`, `ab-guide`).
 
 Per-skill outcomes: `installed` (new), `unchanged` (byte-identical to the
 default), `kept` (locally edited — **init never clobbers an edit**), or
@@ -379,6 +404,15 @@ restarted, not that verify never ran.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
+**`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
+latest repository harvest run from the same journal the runner resumes. It
+shows the claimed observation count, each scan/synthesize/review/file
+occurrence and outcome, review rounds, filed ticket refs, and any escalation or
+infrastructure failure. It is read-only and also reports an idle repository
+that has never harvested. The dispatch dashboard shows the latest run as a
+literal, non-color-only `HARVEST` step row; it is not selectable and build
+pause/auto-merge controls can never target it.
+
 ### Lease health is not build status
 
 These are **two independent axes**, and reading one as the other is the mistake
@@ -411,6 +445,8 @@ default, when you need to know what this repo's version says).
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
 | `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invocable.** |
+| `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
+| `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
 | `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |

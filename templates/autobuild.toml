@@ -103,7 +103,15 @@ readyState = "ready"
 #teamKey = "ENG"                 # Linear team key (required)
 #claimedState = "In Progress"    # Linear workflow state claim() moves into
 
-# Cron schedules for outer-loop processes (§12).
+# Observation harvest is back-pressure driven by `ab dispatch`: no agent runs
+# while fewer than this many new structured observations are waiting. Once the
+# threshold is reached, scan -> synthesize <-> review -> file is journaled and
+# approved proposals are created in Triage only. Optional role overrides are
+# `[roles.harvest]` and `[roles.harvest-review]`.
+[harvest]
+threshold = 10
+
+# Cron schedules for OTHER outer-loop ingesters (§12). The exact key `harvest`
+# is rejected; configure it above instead.
 #[outer]
 #"ingest:sentry" = { cron = "0 */4 * * *" }
-#harvest = { cron = "0 9 * * *" }

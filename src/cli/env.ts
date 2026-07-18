@@ -10,6 +10,16 @@
  */
 import { CORE_PHASES, isPhase, type Phase } from '../ontology'
 
+export interface HarvestCliEnv {
+  store: string
+  repo: string
+  run: string
+  phase: 'synthesize' | 'review'
+  round: number
+  session: string
+  token?: string
+}
+
 export interface CliEnv {
   /** Store URL or local path (`AB_STORE`). */
   store: string
@@ -74,6 +84,48 @@ export function parseAbPhase(raw: string): { phase: Phase; round: number } {
  * Resolve the CLI's ambient environment (D8). Throws with the exact variable
  * and expected format on the first problem found.
  */
+export function parseHarvestPhase(raw: string): {
+  phase: 'synthesize' | 'review'
+  round: number
+} {
+  const match = /^(synthesize|review)@([1-9]\d*)$/.exec(raw)
+  if (!match) {
+    throw new Error(
+      `AB_PHASE "${raw}" is not a harvest session phase — expected ` +
+        `'synthesize@<round>' or 'review@<round>'`,
+    )
+  }
+  return {
+    phase: match[1] as 'synthesize' | 'review',
+    round: Number(match[2]),
+  }
+}
+
+export function resolveHarvestCliEnv(
+  env: Record<string, string | undefined>,
+): HarvestCliEnv {
+  const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
+  const repo = requireVar(env, 'AB_REPO', 'the repository identity')
+  const run = requireVar(env, 'AB_HARVEST', 'the harvest run id')
+  const rawPhase = requireVar(
+    env,
+    'AB_PHASE',
+    `'synthesize@<round>' or 'review@<round>'`,
+  )
+  const session = requireVar(env, 'AB_SESSION', 'the session id')
+  const { phase, round } = parseHarvestPhase(rawPhase)
+  const token = env['AB_TOKEN']
+  return {
+    store,
+    repo,
+    run,
+    phase,
+    round,
+    session,
+    ...(token !== undefined && token !== '' ? { token } : {}),
+  }
+}
+
 export function resolveCliEnv(env: Record<string, string | undefined>): CliEnv {
   const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
   const build = requireVar(env, 'AB_BUILD', 'the build slug')

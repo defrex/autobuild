@@ -12,25 +12,52 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
-export interface TokenScope {
-  /** Build slug this token may touch; `'*'` = admin (dispatcher/operator). */
+export interface LegacyBuildTokenScope {
+  /** Retained wire compatibility for all existing build-scoped tokens. */
   build: string
-  /**
-   * Agent session this token was minted for (`AB_SESSION`, §8.1) — event
-   * writes must be attributed to it; `'*'` = any session (admin/runner
-   * tokens). D8 scopes are build AND session, so a token leaked from one
-   * session cannot write as a later session of the same build.
-   */
   session: string
-  /** Expiry as epoch milliseconds; a token with `exp <= now` is dead. */
   exp: number
 }
 
-const tokenScopeSchema = z.strictObject({
-  build: z.string().min(1),
+export interface ResourceTokenScope {
+  resource: {
+    kind: 'build' | 'repo'
+    id: string
+  }
+  session: string
+  exp: number
+}
+
+/** Legacy build scopes remain valid; repository harvest sessions use the
+ * explicit resource form so a repo token cannot read any build stream. */
+export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope
+
+const commonScope = {
   session: z.string().min(1),
   exp: z.number().int(),
-})
+}
+const tokenScopeSchema = z.union([
+  z.strictObject({ build: z.string().min(1), ...commonScope }),
+  z.strictObject({
+    resource: z.strictObject({
+      kind: z.enum(['build', 'repo']),
+      id: z.string().min(1),
+    }),
+    ...commonScope,
+  }),
+])
+
+export function tokenResource(scope: TokenScope): {
+  kind: 'build' | 'repo' | 'admin'
+  id: string
+} {
+  if ('build' in scope) {
+    return scope.build === '*'
+      ? { kind: 'admin', id: '*' }
+      : { kind: 'build', id: scope.build }
+  }
+  return scope.resource
+}
 
 function sign(secret: string, payload: string): Buffer {
   return createHmac('sha256', secret).update(payload).digest()

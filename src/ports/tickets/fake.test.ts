@@ -93,6 +93,21 @@ describe('FakeTicketSource', () => {
     await expect(source.transition('nope', 'Ready')).rejects.toThrow('nope')
   })
 
+  test('create state override and idempotency key adopt one ticket', async () => {
+    const source = new FakeTicketSource([], { createState: 'Ready' })
+    const first = await source.create(
+      { title: 'A', body: 'one' },
+      { state: 'Triage', idempotencyKey: 'cluster-a' },
+    )
+    const retry = await source.create(
+      { title: 'changed', body: 'two' },
+      { state: 'Ready', idempotencyKey: 'cluster-a' },
+    )
+    expect(retry.ref.id).toBe(first.ref.id)
+    expect(retry.title).toBe('A')
+    expect(retry.state).toBe('Triage')
+  })
+
   test('create assigns ids fake-1, fake-2, … and stores the ticket', async () => {
     const source = new FakeTicketSource()
 

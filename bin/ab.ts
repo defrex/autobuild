@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { runCli, SESSIONLESS_COMMANDS } from '../src/cli/main'
 import { loadDotEnv } from '../src/cli/dotenv'
-import { resolveCliEnv } from '../src/cli/env'
+import { resolveCliEnv, resolveHarvestCliEnv } from '../src/cli/env'
 import { resolveStore } from '../src/cli/store-ref'
 import { processTerminal, processTerminalInput } from '../src/cli/terminal'
 import { RemoteBuildStore } from '../src/store/remote/client'
@@ -29,7 +29,11 @@ async function main(): Promise<number> {
   // no AB_* environment set. The list lives in src/cli/main.ts beside the
   // switch that implements them (SESSIONLESS_COMMANDS) — this file only routes
   // on it.
-  if (command === undefined || SESSIONLESS_COMMANDS.has(command)) {
+  if (
+    command === undefined ||
+    SESSIONLESS_COMMANDS.has(command) ||
+    (command === 'harvest' && argv[1] === 'status')
+  ) {
     // The dispatch watch loop runs until SIGINT; abort the signal so it exits
     // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
     // a future dispatch re-attaches).
@@ -51,6 +55,34 @@ async function main(): Promise<number> {
       })
     } finally {
       process.removeListener('SIGINT', onSigint)
+    }
+  }
+
+  if (command === 'harvest') {
+    let harvestEnv
+    try {
+      harvestEnv = resolveHarvestCliEnv(process.env)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      return 1
+    }
+    const store = resolveStore(harvestEnv.store, {
+      token: harvestEnv.token,
+      remoteFactory: (url, token) => new RemoteBuildStore({ url, token }),
+    })
+    try {
+      return await runCli(argv, {
+        store,
+        harvestEnv,
+        workspacePath: process.cwd(),
+        exec: spawnExec,
+        ids: randomIds(),
+        clock: systemClock,
+        stdout: (line) => console.log(line),
+        stderr: (line) => console.error(line),
+      })
+    } finally {
+      await store.close()
     }
   }
 

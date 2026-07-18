@@ -24,7 +24,13 @@ import { join } from 'node:path'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { z } from 'zod'
 import { systemClock, type Clock } from '../../store/types'
-import type { DependencyState, Ticket, TicketDraft, TicketSource } from '../types'
+import type {
+  DependencyState,
+  Ticket,
+  TicketCreateOptions,
+  TicketDraft,
+  TicketSource,
+} from '../types'
 
 /**
  * The canonical states, in workflow order. This set is closed: the states are
@@ -65,6 +71,9 @@ const frontmatterSchema = z.strictObject({
   /** Source-local blocker ids (§13). Absent ≡ no dependencies, which keeps
    * every pre-existing ticket file valid. */
   blockedBy: z.array(z.string()).optional(),
+  /** Stable external-create adoption key. It travels with the ticket across
+   * state-directory moves, so retries find it in any lifecycle state. */
+  idempotencyKey: z.string().min(1).optional(),
 })
 type Frontmatter = z.infer<typeof frontmatterSchema>
 
@@ -106,6 +115,9 @@ function serializeTicketFile(front: Frontmatter, body: string): string {
   // byte-identically rather than sprouting `blockedBy = []` on every write.
   if (front.blockedBy !== undefined && front.blockedBy.length > 0) {
     data.blockedBy = front.blockedBy
+  }
+  if (front.idempotencyKey !== undefined) {
+    data.idempotencyKey = front.idempotencyKey
   }
   // smol-toml stringify ends with a newline; the closing fence follows it.
   return `${OPEN_FENCE}${stringifyToml(data)}+++\n${body}`
@@ -230,10 +242,33 @@ export class FileTicketSource implements TicketSource {
     await rename(found.path, this.pathIn(target, id))
   }
 
-  /** Writes `<createState>/file-<n>.md` with the next free n (gaps reused). */
-  async create(draft: TicketDraft): Promise<Ticket> {
+  /** Writes `<createState>/file-<n>.md` with the next free n (gaps reused),
+   * or adopts the ticket carrying the same idempotency key. */
+  async create(
+    draft: TicketDraft,
+    opts: TicketCreateOptions = {},
+  ): Promise<Ticket> {
     await this.ensureLayout()
-    const taken = new Set((await this.scan()).map((f) => f.id))
+    const located = await this.scan()
+    if (opts.idempotencyKey !== undefined) {
+      const matches: Array<{ found: Located; front: Frontmatter; body: string }> = []
+      for (const found of located) {
+        const loaded = await this.loadAt(found)
+        if (loaded.front.idempotencyKey === opts.idempotencyKey) {
+          matches.push({ found, ...loaded })
+        }
+      }
+      if (matches.length > 1) {
+        throw new Error(
+          `file ticket source: idempotency key "${opts.idempotencyKey}" exists on multiple tickets: ${matches.map((match) => match.found.id).join(', ')}`,
+        )
+      }
+      const adopted = matches[0]
+      if (adopted !== undefined) {
+        return this.toTicket(adopted.front, adopted.body, adopted.found.state)
+      }
+    }
+    const taken = new Set(located.map((f) => f.id))
     let n = 1
     while (taken.has(`file-${n}`)) n += 1
     const front: Frontmatter = {
@@ -243,12 +278,17 @@ export class FileTicketSource implements TicketSource {
       ...(draft.blockedBy !== undefined && draft.blockedBy.length > 0
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
+      ...(opts.idempotencyKey !== undefined
+        ? { idempotencyKey: opts.idempotencyKey }
+        : {}),
     }
+    const targetState =
+      opts.state === undefined ? this.createState : stateDir(opts.state)
     await writeFile(
-      this.pathIn(this.createState, front.id),
+      this.pathIn(targetState, front.id),
       serializeTicketFile(front, draft.body),
     )
-    return this.toTicket(front, draft.body, this.createState)
+    return this.toTicket(front, draft.body, targetState)
   }
 
   /**

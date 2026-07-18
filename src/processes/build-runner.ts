@@ -616,6 +616,7 @@ export class BuildRunner {
     try {
       const turn = await runner.start({
         skill: installedSkillName(step), // installed names carry `ab-` (§4)
+        invocation: slug,
         buildSlug: slug,
         workspacePath,
         ...(model !== undefined ? { model } : {}),
@@ -713,6 +714,7 @@ export class BuildRunner {
       } else {
         const turn = await runner.start({
           skill: spec.skill,
+          invocation: slug,
           buildSlug: slug,
           workspacePath,
           ...(model !== undefined ? { model } : {}),

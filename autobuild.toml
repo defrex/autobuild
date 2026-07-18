@@ -104,7 +104,14 @@ createState = "Backlog"         # state new tickets are filed into (absent = pro
 triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with readyState = "ready" and optional dir = "tickets"
 
-# Cron schedules for outer-loop processes (§12).
+# Structured observations are harvested on back-pressure by `ab dispatch`.
+# The workflow is repository-scoped and independent of build capacity; its two
+# optional runtime/model overrides are `[roles.harvest]` and
+# `[roles.harvest-review]`.
+[harvest]
+threshold = 10
+
+# Cron schedules for other outer-loop ingesters (§12). `harvest` is no longer a
+# legal cron key; ingest:sentry and other scheduled sources are unchanged.
 #[outer]
 #"ingest:sentry" = { cron = "0 */4 * * *" }
-#harvest = { cron = "0 9 * * *" }

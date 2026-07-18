@@ -55,9 +55,11 @@ source = "file"
 readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
-[outer]                         # cron schedules for outer-loop processes
+[harvest]                       # observation back-pressure, owned by dispatch
+threshold = 10
+
+[outer]                         # cron schedules for other outer-loop processes
 "ingest:sentry" = { cron = "0 */4 * * *" }
-harvest = { cron = "0 9 * * *" }
 `
 
 /**
@@ -125,9 +127,9 @@ describe('parseConfig — SPEC §16.1 example', () => {
         readyLabels: ['autobuild'],
         readyState: 'ready',
       },
+      harvest: { threshold: 10 },
       outer: {
         'ingest:sentry': { cron: '0 */4 * * *' },
-        harvest: { cron: '0 9 * * *' },
       },
     })
   })
@@ -161,6 +163,7 @@ describe('parseConfig — defaults', () => {
       },
       dispatcher: { capacity: 1 },
       tickets: { source: 'file', readyState: 'ready' },
+      harvest: { threshold: 10 },
       outer: {},
     })
   })
@@ -195,6 +198,31 @@ describe('parseConfig — defaults', () => {
       maxReconcileAttempts: 3,
       maxReviewRounds: 5,
     })
+  })
+})
+
+describe('parseConfig — harvest back-pressure', () => {
+  test('threshold defaults to 10 and accepts a positive override', () => {
+    expect(parseConfig(READY).harvest.threshold).toBe(10)
+    expect(
+      parseConfig(`${READY}[harvest]\nthreshold = 3\n`).harvest.threshold,
+    ).toBe(3)
+  })
+
+  test('rejects the legacy [outer].harvest cron with the replacement knob', () => {
+    const error = parseError(
+      `${READY}[outer]\nharvest = { cron = "0 9 * * *" }\n`,
+    )
+    expect(error.message).toContain('outer.harvest')
+    expect(error.message).toContain('[harvest].threshold')
+  })
+
+  test('other scheduled ingesters remain valid', () => {
+    expect(
+      parseConfig(
+        `${READY}[outer]\n"ingest:sentry" = { cron = "0 */4 * * *" }\n`,
+      ).outer,
+    ).toEqual({ 'ingest:sentry': { cron: '0 */4 * * *' } })
   })
 })
 

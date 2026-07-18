@@ -37,11 +37,13 @@ import { parseConfig } from '../config/load'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 
-/** The 10 canonical skills shipped in the distribution (§16.3). */
+/** The canonical skills shipped in the distribution (§16.3). */
 const SKILL_NAMES = [
   'code-review',
   'finalize',
   'guide',
+  'harvest',
+  'harvest-review',
   'implement',
   'plan',
   'plan-review',
@@ -71,7 +73,7 @@ function splitFrontmatter(content: string): { front: string[]; body: string } {
 }
 
 describe('abInit — fresh install', () => {
-  test('installs all 9 skills under .agents and links Claude discovery to the same copies', async () => {
+  test('installs every skill under .agents and links Claude discovery to the same copies', async () => {
     const report = await abInit({ targetRepo: target })
 
     expect(report.config).toBe('written')

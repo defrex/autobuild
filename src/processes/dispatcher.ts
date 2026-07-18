@@ -14,6 +14,7 @@
  *                  current build, including policy-exhausted infra failures.
  *   c. LEASE SWEEP — re-attaches runners to builds whose runner died.
  *   d. DISPATCH  — fills remaining capacity from Ready tickets.
+ *   e. HARVEST   — observation back-pressure, independent of build capacity.
  * A build launched in an earlier step is never launched again by a later
  * one (per-tick launch dedupe); a build dispatched in step (d) is not swept
  * in the same tick because the sweep already ran.
@@ -45,6 +46,8 @@ import type {
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
+import { specConformance } from '../spec-standard'
+export { specConformance, type SpecConformance } from '../spec-standard'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
 
@@ -88,69 +91,8 @@ export function defaultTriageState(config: Config): string {
 }
 
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
-
-export interface SpecConformance {
-  conforms: boolean
-  /** Human-readable names of the missing parts — the bounce comment cites
-   * exactly these, moving failure to the cheapest point (§6.3). */
-  missing: string[]
-}
-
-const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/
-const HEADING = /^(#{1,6})\s*(.+?)\s*$/
-
-/** Lines of the section under the first heading whose text starts with
- * `name` (case-insensitive). The section runs to the next heading at the
- * same or a shallower level: deeper subheadings (an h3 under an h2 section)
- * and their content are part of the section, not its end — criteria grouped
- * under subheadings still count (the AUT-15 mis-bounce). */
-function sectionUnder(lines: string[], name: string): string[] | null {
-  let start = -1
-  let level = 0
-  for (let i = 0; i < lines.length; i += 1) {
-    const match = lines[i]?.match(HEADING)
-    if (match?.[2]?.toLowerCase().startsWith(name)) {
-      start = i + 1
-      level = match[1]?.length ?? 0
-      break
-    }
-  }
-  if (start === -1) return null
-  const section: string[] = []
-  for (let i = start; i < lines.length; i += 1) {
-    const line = lines[i]
-    if (line === undefined) break
-    const heading = line.match(HEADING)
-    if (heading !== null && (heading[1]?.length ?? 0) <= level) break
-    section.push(line)
-  }
-  return section
-}
-
-/**
- * The spec standard's checkable core (docs/spec-standard.md): nonempty body,
- * a case-insensitive '## Acceptance criteria' heading with at least one list
- * item (items grouped under deeper subheadings count), and an '## Out of
- * scope' heading. Any heading level h1–h6 is accepted (the '##' in these
- * names is illustrative, not required) — do not re-narrow the HEADING regex. A heuristic by design — full conformance is judgment and
- * lives in the skills; this gate only catches tickets that would certainly
- * thrash (§6.3). Exported for testing.
- */
-export function specConformance(body: string): SpecConformance {
-  const missing: string[] = []
-  if (body.trim().length === 0) missing.push('a nonempty spec body')
-  const lines = body.split('\n')
-  const criteria = sectionUnder(lines, 'acceptance criteria')
-  if (criteria === null) {
-    missing.push("an '## Acceptance criteria' heading")
-  } else if (!criteria.some((line) => LIST_ITEM.test(line))) {
-    missing.push("at least one list item under '## Acceptance criteria'")
-  }
-  if (sectionUnder(lines, 'out of scope') === null) {
-    missing.push("an '## Out of scope' heading")
-  }
-  return { conforms: missing.length === 0, missing }
-}
+// Shared with deterministic harvest filing; imported/re-exported above so the
+// long-standing dispatcher API remains stable.
 
 // ── Ticket dependency gate (SPEC §13) ────────────────────────────────────────
 //
@@ -315,6 +257,14 @@ export interface TickReport {
   /** One line per held ticket naming its unresolved blockers — the operator's
    * only view of the dependency queue short of provider inspection. */
   dependencyDiagnostics: string[]
+  /** Repository observation workflow counters (independent of build capacity).
+   * The CLI's in-flight coordinator merges these when asynchronous harvest
+   * runs settle; Dispatcher.tick itself only initiates the work. */
+  harvestStarted: number
+  harvestResumed: number
+  harvestCompleted: number
+  harvestEscalated: number
+  harvestFailed: number
 }
 
 export function emptyTickReport(): TickReport {
@@ -331,6 +281,11 @@ export function emptyTickReport(): TickReport {
     claimRaces: 0,
     dependencyBlocked: 0,
     dependencyDiagnostics: [],
+    harvestStarted: 0,
+    harvestResumed: 0,
+    harvestCompleted: 0,
+    harvestEscalated: 0,
+    harvestFailed: 0,
   }
 }
 
@@ -401,6 +356,10 @@ export interface DispatcherDeps {
    * return session metadata the fake would have to invent.
    */
   authorSpec?: (ticket: Ticket) => Promise<string | null>
+  /** Start the repository-scoped observation workflow without awaiting it.
+   * The owner must single-flight and track the promise; Dispatcher invokes
+   * this after ready-ticket dispatch, independent of drain/build capacity. */
+  startHarvest?: () => void
   /** Optional one-shot judgment over the final conforming spec. The dispatcher
    * supplies cancellation and treats every absence/failure/invalid result as a
    * local deterministic fallback, so naming can never prevent build creation. */
@@ -467,6 +426,10 @@ export class Dispatcher {
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
     await this.leaseSweep(report, launched)
     if (opts.acceptNewWork !== false) await this.dispatch(report, launched)
+    // Fire-and-forget by contract: long synthesize/review sessions must not
+    // stop janitor, lease sweep, ticket dispatch, or signal handling on later
+    // watch ticks. The DispatchLoop owns tracking and --once draining.
+    this.deps.startHarvest?.()
     return report
   }
 

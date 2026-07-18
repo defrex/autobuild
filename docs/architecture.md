@@ -26,6 +26,25 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 The grammar is fixed; `verify:*` and `finalize:*` are the only extension
 points, declared per-repo in `autobuild.toml`.
 
+Observation harvest is adjacent, never added to that grammar:
+
+```
+K unclaimed observation.recorded events
+  → scan → synthesize ⇄ review → file approved proposals in Triage
+```
+
+`ab dispatch` owns the back-pressure trigger. `src/processes/harvest.ts` scans
+raw build envelopes by canonical `{build, seq}` occurrence; `harvest-runner.ts`
+executes the staged workflow under a heartbeated repository lease. The dispatch
+loop starts it fire-and-forget, keeps one process-local in-flight handle, and
+drains that handle only for `--once`, so watch ticks and SIGINT remain
+responsive. `src/events/harvest.ts` and `src/kernel/harvest.ts` define and reduce
+a separate repository journal,
+including claims and the committed dedup ledger. Build reducers therefore
+never interpret a non-build workflow. Typed session deposits live under
+`ab harvest context|submit|verdict`; `ab harvest status` and the nonselectable
+`HARVEST` dashboard row read the same facts.
+
 ## Pre-build identity
 
 After the spec gate, the dispatcher chooses a build slug once from the final
@@ -43,13 +62,14 @@ suffix. Existing build records have no mutation path and are never re-slugged.
 | Path | Contents | SPEC |
 |---|---|---|
 | `src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs | §4 |
-| `src/events/` | Envelope, payload schemas (frozen), catalog + validation | §15 |
-| `src/store/` | BuildStore interface, contract suite, memory + SQLite/blob adapters | §7 |
-| `src/kernel/` | Phase table, reducer, converge, stall detection, engine, server lifecycle | §5, §10, §15.4–15.5, §16.2 |
+| `src/events/` | Build and repository-harvest envelopes, frozen payload schemas, actor validation | §15 |
+| `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
+| `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), and the `claude.ts` / `pi.ts` adapters | §3.2, §6.3, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
-| `src/cli/dashboard/` | `ab dispatch`'s live build dashboard — pure reducer projection/rendering plus slug selection; TTY-interactive, with plain output for pipes/`--plain` | §14, §15.5 |
-| `src/processes/` | build-runner, dispatcher (+ janitor duty) | §3.3, §15.7 |
+| `src/cli/dashboard/` | `ab dispatch`'s live build + nonselectable harvest dashboard — pure reducer projection/rendering plus build-slug selection | §14, §15.5 |
+| `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
 | `skills/guide/` | `ab-guide` — the model-invocable reference covering the lifecycle, the complete `autobuild.toml` surface, and the other skills. Update it when the config surface changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
@@ -74,6 +94,6 @@ bun typecheck     # tsc --noEmit
 
 The seams are the contract: every `BuildStore` adapter must pass the suite
 in `src/store/contract.ts`; every event write passes
-`validateEventWrite`; phase behavior derives from the table in
+`validateEventWrite` or `validateHarvestEventWrite`; phase behavior derives from the table in
 `src/kernel/phases.ts`. When adding an adapter, start from the contract
 tests, not the interface.

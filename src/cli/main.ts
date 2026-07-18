@@ -19,7 +19,7 @@ import { artifactGet, artifactPut } from './artifact'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
 import type { TerminalInput, TerminalOut } from './terminal'
-import type { CliEnv } from './env'
+import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import { abModels } from './models'
 import { observe } from './observe'
@@ -28,6 +28,13 @@ import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
 import { abTicketCreate } from './ticket'
 import { abUpgrade } from './upgrade'
+import {
+  abHarvestStatus,
+  buildHarvestContext,
+  submitHarvestProposals,
+  submitHarvestVerdict,
+  type HarvestCliDeps,
+} from './harvest'
 
 /**
  * Commands that run OUTSIDE build sessions (§16.3, §8.8, §3.3) — they take a
@@ -92,6 +99,7 @@ export interface SessionlessCliDeps {
   input?: TerminalInput
   store?: BuildStore
   env?: CliEnv
+  harvestEnv?: HarvestCliEnv
   forge?: Forge
   exec?: Exec
   ids?: IdSource
@@ -99,6 +107,20 @@ export interface SessionlessCliDeps {
 }
 
 /** Narrow to full session deps, or fail with agent feedback (D6). */
+function requireHarvestSession(
+  command: string,
+  deps: SessionlessCliDeps,
+): HarvestCliDeps {
+  const { store, harvestEnv: env, ids } = deps
+  if (store === undefined || env === undefined || ids === undefined) {
+    throw new Error(
+      `'ab harvest ${command}' runs inside a harvest agent session — the ` +
+        'runner sets AB_STORE, AB_REPO, AB_HARVEST, AB_PHASE, and AB_SESSION.',
+    )
+  }
+  return { store, env, ids, workspacePath: deps.workspacePath }
+}
+
 function requireSession(command: string, deps: SessionlessCliDeps): CliDeps {
   const { store, env, forge, exec, ids, clock } = deps
   if (
@@ -152,6 +174,12 @@ const HELP = [
   '  ab build status <slug> [--events <n>] [--json] [--store <ref>]',
   '                                         detailed state for one build — escalations, sessions, verify, PR, lease;',
   '                                         --events <n> appends the newest n events (read-only, runs outside sessions)',
+  '  ab harvest status [--events <n>] [--json] [--store <ref>]',
+  '                                         latest repository harvest workflow and paper trail (read-only)',
+  '  ab harvest context [--json]            hydrate harvest session inputs',
+  '  ab harvest submit <proposals.json>     synthesize terminal: validate and deposit proposals',
+  '  ab harvest verdict <approve|revise|escalate> --notes <file> [--findings <json>] [--reason <text>]',
+  '                                         harvest-review terminal',
   '',
   'Every phase ends with exactly one terminal command (D5).',
 ].join('\n')
@@ -517,6 +545,102 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
+    }
+
+    case 'harvest': {
+      const [sub, ...more] = rest
+      if (sub === 'status') {
+        const usage =
+          'usage: ab harvest status [--events <n>] [--json] [--store <ref>]'
+        let json = false
+        let events: number | undefined
+        let storeRef: string | undefined
+        for (let i = 0; i < more.length; i += 1) {
+          const arg = more[i]!
+          if (arg === '--json') json = true
+          else if (arg === '--events') {
+            const value = more[(i += 1)]
+            const count = value === undefined ? NaN : Number(value)
+            if (!Number.isInteger(count) || count <= 0) {
+              throw new Error(`--events requires a positive integer — ${usage}`)
+            }
+            events = count
+          } else if (arg === '--store') {
+            storeRef = flagValue(more[(i += 1)], 'store', usage)
+          } else {
+            throw new Error(`unknown argument "${arg}" — ${usage}`)
+          }
+        }
+        await abHarvestStatus({
+          repo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          stdout,
+          json,
+          ...(events !== undefined ? { events } : {}),
+          ...(storeRef !== undefined ? { storeRef } : {}),
+        })
+        return 0
+      }
+      if (sub === 'context') {
+        const parsed = parseArgs(more)
+        if (parsed.positionals.length > 0) {
+          throw new Error('usage: ab harvest context [--json]')
+        }
+        const manifest = await buildHarvestContext(
+          requireHarvestSession('context', deps),
+        )
+        if (parsed.flags.get('json') === true) {
+          stdout(JSON.stringify(manifest, null, 2))
+        } else {
+          stdout(
+            `harvest context materialized for ${manifest.run} — ${manifest.phase}@${manifest.round}`,
+          )
+          stdout(`required deposit: ${manifest.required.join(', ')}`)
+          for (const file of manifest.materialized) stdout(`  .ab/${file}`)
+        }
+        return 0
+      }
+      if (sub === 'submit') {
+        const [file, ...extra] = more
+        if (file === undefined || extra.length > 0 || file.startsWith('--')) {
+          throw new Error('usage: ab harvest submit <proposals.json>')
+        }
+        const event = await submitHarvestProposals(
+          requireHarvestSession('submit', deps),
+          file,
+        )
+        stdout(`${event.type} recorded (repo seq ${event.seq})`)
+        return 0
+      }
+      if (sub === 'verdict') {
+        const parsed = parseArgs(more)
+        const [kind, ...extra] = parsed.positionals
+        const notes = stringFlag(parsed, 'notes')
+        if (kind === undefined || extra.length > 0 || notes === undefined) {
+          throw new Error(
+            'usage: ab harvest verdict <approve|revise|escalate> --notes <file> ' +
+              '[--findings <json>] [--reason <text>]',
+          )
+        }
+        const event = await submitHarvestVerdict(
+          requireHarvestSession('verdict', deps),
+          {
+            verdict: kind,
+            notes,
+            ...(stringFlag(parsed, 'findings') !== undefined
+              ? { findings: stringFlag(parsed, 'findings')! }
+              : {}),
+            ...(stringFlag(parsed, 'reason') !== undefined
+              ? { reason: stringFlag(parsed, 'reason')! }
+              : {}),
+          },
+        )
+        stdout(`${event.type} recorded (repo seq ${event.seq})`)
+        return 0
+      }
+      throw new Error(
+        'usage: ab harvest <status|context|submit|verdict> …',
+      )
     }
 
     case 'context': {

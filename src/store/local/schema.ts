@@ -40,6 +40,44 @@ export const events = sqliteTable(
   (t) => [primaryKey({ columns: [t.build, t.seq] })],
 )
 
+export const repoStreams = sqliteTable('repo_streams', {
+  repo: text('repo').primaryKey(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  leaseHolder: text('lease_holder'),
+  leaseExpiresAt: text('lease_expires_at'),
+  leaseTtlMs: integer('lease_ttl_ms'),
+  heartbeatAt: text('heartbeat_at'),
+})
+
+export const repoEvents = sqliteTable(
+  'repo_events',
+  {
+    repo: text('repo').notNull(),
+    seq: integer('seq').notNull(),
+    ts: text('ts').notNull(),
+    actor: text('actor', { mode: 'json' }).notNull().$type<Actor>(),
+    type: text('type').notNull(),
+    payload: text('payload', { mode: 'json' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.repo, t.seq] })],
+)
+
+export const repoArtifacts = sqliteTable(
+  'repo_artifacts',
+  {
+    repo: text('repo').notNull(),
+    kind: text('kind').notNull(),
+    revision: integer('revision').notNull(),
+    blobRef: text('blob_ref').notNull(),
+    metadata: text('metadata', { mode: 'json' })
+      .notNull()
+      .$type<Record<string, unknown>>(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.repo, t.kind, t.revision] })],
+)
+
 export const artifacts = sqliteTable(
   'artifacts',
   {

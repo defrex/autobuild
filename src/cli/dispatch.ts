@@ -46,7 +46,15 @@ import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { GitWorktreeProvider, type Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError } from '../processes/build-runner'
-import { Dispatcher } from '../processes/dispatcher'
+import {
+  HarvestRunner,
+  type HarvestRunnerResult,
+} from '../processes/harvest-runner'
+import {
+  Dispatcher,
+  emptyTickReport,
+  type TickReport,
+} from '../processes/dispatcher'
 import { RemoteBuildStore } from '../store/remote/client'
 import { DEFAULT_LOCAL_ROOT } from '../store/local/store'
 import { resolveStore } from './store-ref'
@@ -244,9 +252,20 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
   private readonly host = hostname()
-  /** In-flight runner runs (fire-and-forget) — awaited before a `--once`
-   * exit so builds actually reach a park point. */
+  /** In-flight build and harvest runs (fire-and-forget) — awaited before a
+   * `--once` exit so every visible workflow reaches a durable boundary. */
   private readonly inFlight = new Set<Promise<void>>()
+  /** Process-local fast path; the repository lease is the cross-process gate. */
+  private harvestInFlight: Promise<void> | undefined
+  /** Outcomes settle outside Dispatcher.tick(), then merge into the next
+   * printed report (or the final --once report after drain). */
+  private pendingHarvest = {
+    harvestStarted: 0,
+    harvestResumed: 0,
+    harvestCompleted: 0,
+    harvestEscalated: 0,
+    harvestFailed: 0,
+  }
   /**
    * Interactive dashboard on. `opts.terminal?.interactive === true` — an
    * absent terminal yields `undefined === true` ⇒ false ⇒ today's exact
@@ -313,6 +332,7 @@ class DispatchLoop {
       repo: opts.targetRepo,
       exec: opts.exec,
       launchRunner: (slug) => this.launchRunner(slug),
+      startHarvest: () => this.launchHarvest(),
       ...(nameSlug !== undefined ? { nameSlug } : {}),
       ids: wiring.ids,
       clock: wiring.clock,
@@ -469,14 +489,95 @@ class DispatchLoop {
     cleanup?.()
   }
 
-  /**
-   * §3.3, §15.6-C, §15.7: construct a BuildRunner over the shared store and
-   * the build's provisioned workspace, and start it WITHOUT blocking the
-   * dispatcher — capacity (§16.1) is enforced by the dispatcher's active-count
-   * gate, not by serializing runs here. The run is tracked so a `--once` exit
-   * can drain it; a LeaseHeldError is expected (another runner owns it) and
-   * only noted.
-   */
+  /** Start one repository workflow without blocking the dispatcher tick.
+   * Process-local tracking prevents redundant contenders and lets `--once`
+   * drain it; the repository lease excludes other dispatch processes. */
+  private launchHarvest(): void {
+    // Do not even start a second local contender while one is active. A second
+    // dispatch process is independently excluded by the repository lease.
+    if (this.harvestInFlight !== undefined) return
+
+    const { store, tickets, runtimes, defaultRuntime, ids, clock, storeRef, token } =
+      this.wiring
+    const runner = new HarvestRunner({
+      store,
+      tickets,
+      config: this.config,
+      runtimes,
+      defaultRuntime,
+      repo: this.opts.targetRepo,
+      workspacePath: this.opts.targetRepo,
+      ids,
+      clock,
+      instance: `${this.host}-harvest-${ids('inst')}`,
+      sessionEnv: {
+        AB_STORE: storeRef,
+        ...(token !== undefined ? { AB_TOKEN: token } : {}),
+      },
+    })
+
+    let tracked: Promise<void>
+    tracked = runner
+      .run()
+      .then((result) => {
+        this.recordHarvestResult(result)
+        if (
+          !this.stopped &&
+          result.outcome !== 'idle' &&
+          result.outcome !== 'held'
+        ) {
+          this.say(`harvest ${result.run} ${result.outcome}`)
+        }
+      })
+      .catch((error: unknown) => {
+        this.pendingHarvest.harvestFailed += 1
+        if (!this.stopped) {
+          this.warn(
+            `harvest runner failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      })
+      .finally(() => {
+        this.inFlight.delete(tracked)
+        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
+      })
+    this.harvestInFlight = tracked
+    this.inFlight.add(tracked)
+  }
+
+  private recordHarvestResult(result: HarvestRunnerResult): void {
+    if ('launch' in result) {
+      if (result.launch === 'started') this.pendingHarvest.harvestStarted += 1
+      else this.pendingHarvest.harvestResumed += 1
+    }
+    if (result.outcome === 'completed') this.pendingHarvest.harvestCompleted += 1
+    else if (result.outcome === 'escalated') {
+      this.pendingHarvest.harvestEscalated += 1
+    } else if (result.outcome === 'failed') {
+      this.pendingHarvest.harvestFailed += 1
+    }
+  }
+
+  /** Merge asynchronously settled harvest outcomes exactly once. */
+  private consumeHarvestResults(report: TickReport): TickReport {
+    report.harvestStarted += this.pendingHarvest.harvestStarted
+    report.harvestResumed += this.pendingHarvest.harvestResumed
+    report.harvestCompleted += this.pendingHarvest.harvestCompleted
+    report.harvestEscalated += this.pendingHarvest.harvestEscalated
+    report.harvestFailed += this.pendingHarvest.harvestFailed
+    this.pendingHarvest = {
+      harvestStarted: 0,
+      harvestResumed: 0,
+      harvestCompleted: 0,
+      harvestEscalated: 0,
+      harvestFailed: 0,
+    }
+    return report
+  }
+
+  /** Construct a BuildRunner over the shared store/workspace and start it
+   * without blocking the dispatcher. Capacity is enforced by the dispatcher's
+   * active-count gate; the tracked promise lets `--once` drain it. */
   private async launchRunner(slug: string): Promise<void> {
     const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
     const record = await store.getBuild(slug)
@@ -579,7 +680,10 @@ class DispatchLoop {
    * region is about to repaint. `say()` is the identity in plain mode, so
    * their line-oriented behavior is unchanged.
    */
-  private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>): void {
+  private printReport(
+    report: Awaited<ReturnType<Dispatcher['tick']>>,
+    printIdle = true,
+  ): boolean {
     const { dependencyDiagnostics, ...counts } = report
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
@@ -587,11 +691,15 @@ class DispatchLoop {
       .map(([name, count]) => `${name}=${count}`)
     if (parts.length > 0) {
       this.say(`tick: ${parts.join(' ')}`)
-      return
+      return true
     }
     // A tick that did something is worth a scroll line; a tick that did
     // nothing is the every-10s noise the dashboard replaces.
-    if (!this.dashboard) this.opts.stdout('tick: idle')
+    if (!this.dashboard && printIdle) {
+      this.opts.stdout('tick: idle')
+      return true
+    }
+    return dependencyDiagnostics.length > 0
   }
 
   // ── The live region ───────────────────────────────────────────────────────
@@ -615,12 +723,22 @@ class DispatchLoop {
       entries.push({ record, state: reduceBuild(events), events })
     }
     const previousSlugs = this.model?.builds.map((build) => build.slug) ?? []
-    const projected = buildDashboard(entries, this.config, {
-      repo: this.opts.targetRepo,
-      mode: this.opts.once === true ? 'once' : 'watch',
-      capacity: this.config.dispatcher.capacity,
-      drained: this.drained,
-    })
+    const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
+    const harvestEvents =
+      repoRecord === null
+        ? []
+        : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
+    const projected = buildDashboard(
+      entries,
+      this.config,
+      {
+        repo: this.opts.targetRepo,
+        mode: this.opts.once === true ? 'once' : 'watch',
+        capacity: this.config.dispatcher.capacity,
+        drained: this.drained,
+      },
+      harvestEvents,
+    )
     const nextSlugs = projected.builds.map((build) => build.slug)
     this.selectedSlug = reconcileSelection(
       previousSlugs,
@@ -734,8 +852,18 @@ class DispatchLoop {
       try {
         this.startInput()
         this.startRendering()
-        this.printReport(await this.dispatcherTick(true))
+        const initial = this.consumeHarvestResults(
+          await this.dispatcherTick(true),
+        )
+        const initialPrinted = this.printReport(initial, false)
         await this.drainInFlight()
+        const settledPrinted = this.printReport(
+          this.consumeHarvestResults(emptyTickReport()),
+          false,
+        )
+        if (!initialPrinted && !settledPrinted) {
+          this.printReport(emptyTickReport())
+        }
       } finally {
         await this.finishRendering()
       }
@@ -757,7 +885,10 @@ class DispatchLoop {
       let startup = true
       while (!this.stopped) {
         try {
-          this.printReport(await this.dispatcherTick(startup))
+          const report = this.consumeHarvestResults(
+            await this.dispatcherTick(startup),
+          )
+          this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
           this.warn(`tick failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -766,6 +897,12 @@ class DispatchLoop {
         await sleep(intervalMs)
       }
     } finally {
+      // A result that settled after the final tick still gets one attributed
+      // counter line; active work is deliberately not awaited in watch mode.
+      this.printReport(
+        this.consumeHarvestResults(emptyTickReport()),
+        false,
+      )
       // SIGINT lands here too: without it the region keeps the cursor hidden.
       await this.finishRendering()
     }

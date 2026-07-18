@@ -91,6 +91,35 @@ describe('FileTicketSource', () => {
 
   // ── The state is the directory ─────────────────────────────────────────────
 
+  test('create adopts an idempotency key across adapter restarts and state moves', async () => {
+    const first = await source().create(
+      { title: 'Harvested', body: SPEC_BODY },
+      { state: 'Triage', idempotencyKey: 'harvest-cluster-1' },
+    )
+    expect(first.ref.id).toBe('file-1')
+    await source().transition(first.ref.id, 'Done')
+
+    const adopted = await source().create(
+      { title: 'Changed retry prose', body: 'different' },
+      { state: 'Triage', idempotencyKey: 'harvest-cluster-1' },
+    )
+    expect(adopted.ref.id).toBe('file-1')
+    expect(adopted.state).toBe('Done')
+    expect(await readdir(join(dir, 'triage'))).toEqual([])
+    expect(await readFile(path('done', 'file-1'), 'utf8')).toContain(
+      'idempotencyKey = "harvest-cluster-1"',
+    )
+  })
+
+  test('create state override wins over the adapter default', async () => {
+    const created = await source({ createState: 'Ready' }).create(
+      { title: 'Harvested', body: SPEC_BODY },
+      { state: 'Triage' },
+    )
+    expect(created.state).toBe('Triage')
+    expect(await readdir(join(dir, 'triage'))).toContain('file-1.md')
+  })
+
   test('create lands the ticket in triage/ (§12) and round-trips labels and body', async () => {
     const tickets = source()
     const created = await tickets.create({

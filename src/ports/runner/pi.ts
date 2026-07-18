@@ -35,13 +35,14 @@
  * Sessions are deliberately non-interactive (build workspaces are disposable,
  * agents invoke `ab` without a human approval prompt), matching claude.
  */
-import type {
-  AgentContinueOpts,
-  AgentRunner,
-  AgentSessionHandle,
-  AgentStartOpts,
-  AgentTurnResult,
-  Transcript,
+import {
+  agentInvocation,
+  type AgentContinueOpts,
+  type AgentRunner,
+  type AgentSessionHandle,
+  type AgentStartOpts,
+  type AgentTurnResult,
+  type Transcript,
 } from '../types'
 import type {
   OneShotCompletion,
@@ -317,7 +318,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     })
 
     // Every phase skill takes only the build slug (§4).
-    const prompt = `/${opts.skill} ${opts.buildSlug}`
+    const prompt = `/${opts.skill} ${agentInvocation(opts)}`
     const turn = await session.prompt(prompt, this.turnEnv(opts.env))
 
     const handle: AgentSessionHandle = {
@@ -372,7 +373,10 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         {
           session: session.id,
           skill: state.opts.skill,
-          buildSlug: state.opts.buildSlug,
+          invocation: agentInvocation(state.opts),
+          ...(state.opts.buildSlug !== undefined
+            ? { buildSlug: state.opts.buildSlug }
+            : {}),
           turns: state.turns,
         },
         null,

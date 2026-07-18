@@ -22,11 +22,13 @@
  */
 import type { ZodType } from 'zod'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
+import type { HarvestEventWrite } from '../../events/harvest'
 import { systemClock, type BuildStore, type Clock } from '../types'
 import {
   decodeBase64,
   depositsBodySchema,
   encodeBase64,
+  ensureRepoBodySchema,
   eventWriteWireSchema,
   leaseClaimBodySchema,
   leaseHolderBodySchema,
@@ -36,7 +38,7 @@ import {
   type ErrorBody,
   type ErrorKind,
 } from './protocol'
-import { verifyToken, type TokenScope } from './token'
+import { tokenResource, verifyToken, type TokenScope } from './token'
 
 export interface StoreServerOptions {
   store: BuildStore
@@ -116,7 +118,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * scope (null in open local-dev mode) so event-write routes can enforce
    * the session dimension.
    */
-  function authorize(req: Request, buildScope: string): TokenScope | null {
+  function authorize(
+    req: Request,
+    kind: 'build' | 'repo' | 'admin',
+    id: string,
+  ): TokenScope | null {
     if (opts.secret === undefined) return null
     const header = req.headers.get('authorization')
     const match = header === null ? null : /^Bearer\s+(.+)$/i.exec(header)
@@ -125,13 +131,17 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (scope === null) {
       throw new RequestError(401, 'auth', 'invalid or expired token')
     }
-    if (scope.build !== '*' && scope.build !== buildScope) {
+    const resource = tokenResource(scope)
+    const allowed =
+      resource.kind === 'admin' ||
+      (kind !== 'admin' && resource.kind === kind && resource.id === id)
+    if (!allowed) {
+      const target =
+        kind === 'admin' ? 'admin operations' : `${kind} "${id}"`
       throw new RequestError(
         403,
         'auth',
-        buildScope === '*'
-          ? `token scoped to build "${scope.build}" may not perform admin operations`
-          : `token scoped to build "${scope.build}" may not access build "${buildScope}"`,
+        `token scoped to ${resource.kind} "${resource.id}" may not access ${target}`,
       )
     }
     return scope
@@ -168,7 +178,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   async function adminRoute(req: Request): Promise<Response> {
-    authorize(req, '*')
+    authorize(req, 'admin', '*')
     if (req.method === 'POST') {
       const body = await readBody(req, newBuildBodySchema)
       if ((await store.getBuild(body.slug)) !== null) {
@@ -180,6 +190,129 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return json(200, await store.listBuilds())
     }
     return fail(404, 'not-found', `no route: ${req.method} /builds`)
+  }
+
+  async function repoAdminRoute(req: Request): Promise<Response> {
+    authorize(req, 'admin', '*')
+    if (req.method !== 'POST') {
+      return fail(404, 'not-found', `no route: ${req.method} /repos`)
+    }
+    const body = await readBody(req, ensureRepoBodySchema)
+    return json(200, await store.ensureRepo(body.repo))
+  }
+
+  async function repoRoute(
+    req: Request,
+    url: URL,
+    repo: string,
+    rest: string,
+    scope: TokenScope | null,
+  ): Promise<Response> {
+    switch (`${req.method} ${rest}`) {
+      case 'POST events': {
+        const body = await readBody(req, eventWriteWireSchema)
+        authorizeSession(scope, body.actor)
+        return json(
+          201,
+          await store.appendRepo(repo, body as HarvestEventWrite),
+        )
+      }
+      case 'GET events':
+        return json(
+          200,
+          await store.getRepoEvents(repo, intParam(url, 'since') ?? 0),
+        )
+      case 'POST deposits': {
+        const body = await readBody(req, depositsBodySchema)
+        authorizeSession(scope, body.event.actor)
+        const inputs = body.artifacts.map((artifact) => ({
+          kind: artifact.kind,
+          content: decodeBase64(artifact.contentBase64),
+          ...(artifact.metadata !== undefined
+            ? { metadata: artifact.metadata }
+            : {}),
+        }))
+        const result = await store.appendRepoWithArtifacts(
+          repo,
+          inputs,
+          (deposited) =>
+            ({
+              actor: body.event.actor,
+              type: body.event.type,
+              payload: substitutePlaceholderRefs(
+                body.event.payload,
+                deposited,
+              ),
+            }) as HarvestEventWrite,
+        )
+        return json(201, result)
+      }
+      case 'POST artifacts': {
+        const body = await readBody(req, putArtifactBodySchema)
+        return json(
+          201,
+          await store.putRepoArtifact(repo, {
+            kind: body.kind,
+            content: decodeBase64(body.contentBase64),
+            ...(body.metadata !== undefined
+              ? { metadata: body.metadata }
+              : {}),
+          }),
+        )
+      }
+      case 'GET artifacts': {
+        const kind = url.searchParams.get('kind')
+        if (kind === null || kind === '') {
+          throw new RequestError(
+            400,
+            'validation',
+            'query parameter "kind" is required',
+          )
+        }
+        const artifact = await store.getRepoArtifact(
+          repo,
+          kind,
+          intParam(url, 'rev'),
+        )
+        return artifact === null
+          ? json(200, null)
+          : json(200, {
+              meta: artifact.meta,
+              contentBase64: encodeBase64(artifact.content),
+            })
+      }
+      case 'GET artifact-list':
+        return json(
+          200,
+          await store.listRepoArtifacts(
+            repo,
+            url.searchParams.get('kind') ?? undefined,
+          ),
+        )
+      case 'POST lease/claim': {
+        const body = await readBody(req, leaseClaimBodySchema)
+        return json(200, {
+          ok: await store.claimRepoLease(repo, body.holder, body.ttlMs),
+        })
+      }
+      case 'POST lease/heartbeat': {
+        const body = await readBody(req, leaseHolderBodySchema)
+        return json(200, {
+          ok: await store.heartbeatRepo(repo, body.holder),
+        })
+      }
+      case 'POST lease/release': {
+        const body = await readBody(req, leaseHolderBodySchema)
+        await store.releaseRepoLease(repo, body.holder)
+        return json(200, { ok: true })
+      }
+      default:
+        return fail(
+          404,
+          'not-found',
+          `no route: ${req.method} /repos/:repo/${rest}`,
+        )
+    }
   }
 
   async function buildRoute(
@@ -282,13 +415,28 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
       return json(200, { ok: true })
     }
+    if (segments[0] === 'repos') {
+      if (segments.length === 1) return repoAdminRoute(req)
+      const repo = segments[1]!
+      const scope = authorize(req, 'repo', repo)
+      const record = await store.getRepo(repo)
+      if (record === null) {
+        return fail(404, 'not-found', `unknown repo "${repo}"`)
+      }
+      if (segments.length === 2) {
+        if (req.method === 'GET') return json(200, record)
+        return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
+      }
+      return repoRoute(req, url, repo, segments.slice(2).join('/'), scope)
+    }
+
     if (segments[0] !== 'builds') {
       return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
     if (segments.length === 1) return adminRoute(req)
 
     const slug = segments[1]!
-    const scope = authorize(req, slug)
+    const scope = authorize(req, 'build', slug)
     const record = await store.getBuild(slug)
     if (record === null) {
       return fail(404, 'not-found', `unknown build "${slug}"`)
@@ -311,7 +459,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (error instanceof Error && error.message.includes('already exists')) {
       return fail(409, 'conflict', error.message)
     }
-    if (error instanceof Error && error.message.startsWith('unknown build')) {
+    if (
+      error instanceof Error &&
+      (error.message.startsWith('unknown build') ||
+        error.message.startsWith('unknown repo'))
+    ) {
       return fail(404, 'not-found', error.message)
     }
     return fail(500, 'internal', error instanceof Error ? error.message : String(error))
