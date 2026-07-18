@@ -19,6 +19,7 @@ import type { Finding } from '../ontology'
 import {
   ScriptedAgentRunner,
   defaultTurnResult,
+  failedTurnResult,
   type Script,
   type ScriptContext,
 } from '../ports/runner/fake'
@@ -33,6 +34,8 @@ import { BuildRunner, LeaseHeldError, type ServerLifecycle } from './build-runne
 const SLUG = 'auth-rate-limit'
 const BRANCH = 'ab/auth-rate-limit'
 const TICKET = { source: 'linear', id: 'ENG-42', title: 'Auth rate limiting' }
+const KIMI_QUOTA =
+  '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
 
 // Mirrors §16.1: two check steps (types, unit) + one agent step (e2e,
 // needsServer), one finalize post-step, one routed role with a model.
@@ -989,6 +992,43 @@ describe('happy path (§15.6)', () => {
     )!
     expect(stepDone.actor.session).toBe(notesSession.payload.session)
   })
+
+  test('a structured finalize-step failure is failure-tolerant and keeps its transcript', async () => {
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'release-notes': () => failedTurnResult('403 billing disabled', true),
+      }),
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+    for (const step of ['types', 'unit', 'e2e']) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step, attempt: 1, pass: true },
+      })
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
+      },
+    })
+
+    const decision = await h.br.step()
+    expect(decision.kind).toBe('run-finalize-step')
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'finalize.step-completed').at(-1)?.payload).toEqual({
+      step: 'release-notes',
+      ok: false,
+    })
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+    expect(ofType(events, 'observation.recorded').at(-1)?.payload.summary).toContain(
+      'release-notes',
+    )
+  })
 })
 
 // ── Producer session memory (§10) ────────────────────────────────────────────
@@ -1260,6 +1300,95 @@ describe('session memory (§10)', () => {
       error: 'no-terminal',
       willRetry: true,
     })
+  })
+})
+
+// ── Provider/runner failures (§8.4, §9) ──────────────────────────────────────
+
+describe('structured provider failure policy', () => {
+  test('AUT-28 quota rejection fails attempt 1 verbatim, deposits the transcript, and escalates without attempt 2', async () => {
+    let calls = 0
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table['plan']!
+        table['plan'] = async (ctx) => {
+          calls += 1
+          if (calls === 1) return failedTurnResult(KIMI_QUOTA, true)
+          return happyPlan(ctx)
+        }
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    let events = await h.store.getEvents(SLUG)
+    const failed = ofType(events, 'phase.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.payload).toEqual({
+      phase: 'plan',
+      round: 1,
+      attempt: 1,
+      error: KIMI_QUOTA,
+      willRetry: false,
+    })
+    expect(ofType(events, 'plan.started')).toHaveLength(1)
+    expect(ofType(events, 'session.started')).toHaveLength(1)
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+    expect(calls).toBe(1)
+
+    const ended = ofType(events, 'session.ended')[0]!
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      ended.payload.transcript.rev,
+    )
+    const transcriptJson = JSON.parse(new TextDecoder().decode(transcript!.content))
+    expect(transcriptJson.turns[0].result.failure.message).toBe(KIMI_QUOTA)
+    const escalation = ofType(events, 'escalation.raised')[0]!
+    expect(escalation.payload.source).toBe('policy')
+    expect(escalation.payload.question).toContain('non-retryable')
+    expect(escalation.payload.question).toContain(KIMI_QUOTA)
+
+    // A human answer deliberately re-arms both the count and non-retryable
+    // disposition, allowing corrected provider configuration to be tried.
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: { id: escalation.payload.id, answer: 'retry', resolution: 'retry' },
+    })
+    expect((await h.br.run()).status).toBe('running')
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'plan.started')).toHaveLength(2)
+    expect(calls).toBe(2)
+  })
+
+  test('a non-permanent provider failure takes the existing retry and can recover', async () => {
+    let calls = 0
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table['plan']!
+        table['plan'] = async (ctx) => {
+          calls += 1
+          if (calls === 1) {
+            return failedTurnResult('503 provider overloaded', false)
+          }
+          return happyPlan(ctx)
+        }
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('running')
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'phase.failed')[0]!.payload).toMatchObject({
+      attempt: 1,
+      error: '503 provider overloaded',
+      willRetry: true,
+    })
+    expect(ofType(events, 'plan.started')).toHaveLength(2)
+    expect(calls).toBe(2)
   })
 })
 
@@ -1559,6 +1688,38 @@ describe('needsServer (D10)', () => {
       error: 'browser crashed',
       willRetry: true,
     })
+  })
+
+  test('a permanent agent-verify provider failure uses the shared no-retry guard', async () => {
+    let calls = 0
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'verify-e2e': () => {
+          calls += 1
+          return failedTurnResult(KIMI_QUOTA, true)
+        },
+      }),
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const failed = ofType(events, 'phase.failed').at(-1)!
+    expect(failed.payload).toEqual({
+      phase: 'verify:e2e',
+      round: 1,
+      attempt: 1,
+      error: KIMI_QUOTA,
+      willRetry: false,
+    })
+    expect(calls).toBe(1)
+    expect(ofType(events, 'escalation.raised').at(-1)?.payload.question).toContain(
+      KIMI_QUOTA,
+    )
+    expect(h.ops.filter((op) => op === 'server:ensureStarted')).toHaveLength(1)
+    expect(h.ops.filter((op) => op === 'server:stop').length).toBeGreaterThanOrEqual(1)
   })
 
   test('needsServer without a server dep fails the phase with a clear error, no session', async () => {

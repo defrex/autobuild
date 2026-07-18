@@ -32,6 +32,8 @@ import {
 const NOW = new Date('2026-07-15T12:00:00.000Z')
 const REPO = '/Users/dev/code/acme-app'
 const OTHER_REPO = '/Users/dev/code/other-app'
+const KIMI_QUOTA =
+  '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle."}}'
 
 function record(overrides: Partial<BuildRecord> = {}): BuildRecord {
   return {
@@ -400,6 +402,40 @@ describe('detail', () => {
     expect(d.openSessions[0]!.session).toBe('s_1')
     expect(d.lastEvent?.type).toBe('session.started')
     expect(d.lastEvent?.actor.kind).toBe('kernel')
+  })
+
+  test('renders the provider text from a non-retryable policy escalation', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'phase.failed',
+      payload: {
+        phase: 'code-review',
+        round: 1,
+        attempt: 1,
+        error: KIMI_QUOTA,
+        willRetry: false,
+      },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_quota',
+        phase: 'code-review',
+        round: 1,
+        source: 'policy',
+        question: `code-review stopped after a non-retryable provider failure: ${KIMI_QUOTA}`,
+      },
+    })
+
+    const rendered = renderDetail(
+      detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW),
+      NOW,
+    ).join('\n')
+    expect(rendered).toContain(KIMI_QUOTA)
+    expect(rendered).toContain('quota')
   })
 
   test('outcome present once the build is done', async () => {

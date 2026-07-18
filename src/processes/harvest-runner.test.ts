@@ -9,13 +9,19 @@ import { KERNEL, agentActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
-import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
+import {
+  ScriptedAgentRunner,
+  defaultTurnResult,
+  failedTurnResult,
+} from '../ports/runner/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import { HarvestRunner } from './harvest-runner'
 
 const roots: string[] = []
+const KIMI_QUOTA =
+  '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
@@ -549,6 +555,70 @@ describe('HarvestRunner', () => {
     expect(await tickets.get('fake-1')).toBeNull()
     expect(await makeRunner('attempt-3').run()).toEqual({ outcome: 'idle' })
     expect(calls).toBe(2)
+  })
+
+  test('a permanent provider failure terminalizes the durable run after one session', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-provider-error-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    let calls = 0
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        calls += 1
+        return failedTurnResult(KIMI_QUOTA, true)
+      },
+    })
+    await seedObservation(store, 'provider-error', 'quota rejection during harvest')
+    const makeRunner = (instance: string) =>
+      new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        clock: steppingClock(),
+        instance,
+        opts: { heartbeatMs: 100_000, maxSessionAttempts: 2 },
+      })
+
+    expect(await makeRunner('provider-attempt-1').run()).toMatchObject({
+      outcome: 'failed',
+      launch: 'started',
+    })
+    const events = await store.getRepoEvents('/repo')
+    const failure = events.find((event) => event.type === 'harvest.failed')
+    expect(failure?.payload).toMatchObject({
+      step: 'synthesize',
+      round: 1,
+      attempt: 1,
+      error: KIMI_QUOTA,
+      willRetry: false,
+    })
+    expect(
+      events.filter((event) => event.type === 'harvest.session.started'),
+    ).toHaveLength(1)
+    const ended = events.find((event) => event.type === 'harvest.session.ended')
+    expect(ended).toBeDefined()
+    if (ended?.type !== 'harvest.session.ended') throw new Error('unreachable')
+    const transcript = await store.getRepoArtifact(
+      '/repo',
+      ended.payload.transcript.kind,
+      ended.payload.transcript.rev,
+    )
+    const transcriptJson = JSON.parse(new TextDecoder().decode(transcript!.content))
+    expect(transcriptJson.turns[0].result.failure.message).toBe(KIMI_QUOTA)
+    expect(reduceHarvest(events).latest?.status).toBe('failed')
+    expect(calls).toBe(1)
+
+    // A fresh process consults the reducer/open-run gate and cannot re-enter
+    // executeSession for this terminal run.
+    expect(await makeRunner('provider-attempt-2').run()).toEqual({ outcome: 'idle' })
+    expect(calls).toBe(1)
   })
 
   test('max review rounds escalate without filing', async () => {

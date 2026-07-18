@@ -409,11 +409,27 @@ reviewer sees prior findings but not the producer's session. What a phase
 or `escalate`. The CLI rejects a second terminal call, and each terminal
 validates its preconditions before emitting the phase event (no `done`
 without the required artifacts; no `done` on a dirty worktree in
-`implement`). A session that ends **without** any terminal call is an infra
-failure: the runner emits `phase.failed {error: "no-terminal"}` and applies
-retry policy. This completes the sentinel-parsing replacement: success is
-only expressible through the typed channel, so "the agent rambled and
-exited" can never be misread as completion.
+`implement`). A normally completed turn that ends **without** any terminal
+call is an infra failure: the runner emits
+`phase.failed {error: "no-terminal"}` and applies retry policy. This is the
+only meaning of `no-terminal`; it cannot represent a provider rejection.
+
+Provider/runtime-declared turn failures are a separate `AgentRunner` result
+(§9). The runner ends the returned handle, deposits the transcript and
+`session.ended`, then emits `phase.failed` with the provider's message
+verbatim. Authentication, permission, quota, and billing failures positively
+classified as permanent record attempt 1 with `willRetry: false`. The next
+durable decision raises a policy escalation containing that message before
+starting another session; deriving the guard from `phase.failed` closes the
+crash gap between failure and escalation. Unknown errors and ordinary 429,
+overload, timeout, transport, and 5xx failures retain the existing bounded
+retry policy. If the turn already wrote a valid typed terminal, that terminal
+remains authoritative and no contradictory failure is appended.
+
+This completes the sentinel-parsing replacement: success is only expressible
+through the typed channel, so "the agent rambled and exited" can never be
+misread as completion, while a rejected turn cannot be misreported as agent
+silence.
 
 ### 8.5 Atomic deposits, validation as feedback [D6]
 
@@ -454,8 +470,13 @@ implementer:  ab context   (findings.json now materialized) → …
 
 **Failure paths:**
 
-- *Silent session end* (no terminal) → `phase.failed {no-terminal}`, retry
-  per policy [D5].
+- *Completed turn, no terminal* → `phase.failed {no-terminal}`, retry per
+  policy [D5].
+- *Provider rejection, retryable or unknown* → end/deposit the session, then
+  `phase.failed` with the verbatim provider error and bounded retry.
+- *Provider rejection, permanent auth/permission/quota/billing signal* →
+  end/deposit the session, then `phase.failed {attempt: 1, willRetry: false}`;
+  raise a policy escalation containing the same error before attempt 2.
 - *Malformed deposit* → rejected in-session with schema + error; agent
   corrects and retries [D6].
 - *Crash after deposits, before terminal* → artifacts are revisioned; the
@@ -484,12 +505,30 @@ creates/adopts approved proposals and commits ledger facts.
 Session-based, because review loops need memory:
 
 ```ts
+type Result =
+  | { kind: 'completed', text, usage }
+  | { kind: 'failed', text, usage, failure: { message, permanent } }
+
 interface AgentRunner {
-  start(opts: { skill, invocation, workspace, model, … }): Session
+  start(opts: { skill, invocation, workspace, model, … }): { session, result }
   continue(session, message): Result    // review-loop rounds
   end(session): Transcript              // → store, always
 }
 ```
+
+The discriminator is a port-level requirement: an SDK/provider-declared error
+must never be returned as `completed`, so every current and future adapter
+inherits the distinction from `no-terminal`. `failure.message` preserves
+provider text; `permanent: false` means "use existing retry policy," not a
+claim that the error is transient. Adapters extract native terminal errors and
+a shared narrow classifier marks only positive authentication, permission,
+quota, and billing evidence permanent. A failed `start` still returns an
+endable session handle, guaranteeing transcript deposition and
+`session.ended`; only failures with no completed SDK result/handle are thrown.
+Harvest uses the same result: a permanent failure records
+`harvest.failed {willRetry: false}`, whose reducer makes that repository run
+terminal. Failure-tolerant finalize post-steps record `ok: false` and their
+normal follow-up observation.
 
 Pre-build naming does not widen this session/skill contract. A runtime may
 separately register an optional one-shot completion capability
@@ -522,7 +561,8 @@ deterministic naming fallback (§6.3).
   `runner` field carries the resolved runtime name), so an experiment's outcome
   is attributable to the configuration that produced it.
 - **Transcripts come back through the interface**, not scraped from disk, so
-  every adapter must produce one: the corpus is guaranteed complete.
+  every adapter must produce one: the corpus is guaranteed complete, including
+  turns rejected by a provider after a session handle exists.
 - Adapters without native session resumption (and post-sandbox-death
   resumes) implement `continue` as start-with-rehydrate-from-store — which
   must exist anyway per §7.4.

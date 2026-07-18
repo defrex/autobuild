@@ -68,6 +68,24 @@ the internal `slug` role through the normal runtime/model resolver.
 validation, deterministic title fallback, and store-wide numeric collision
 suffix. Existing build records have no mutation path and are never re-slugged.
 
+## Agent turn failures
+
+`src/ports/types.ts` makes an agent turn a discriminated completed/failed
+result. Adapters own SDK-native extraction: `src/ports/runner/pi.ts` retains
+the final assistant error after Pi's internal retries settle, while
+`src/ports/runner/claude.ts` interprets the SDK result/error fields. Both feed
+`src/ports/runner/provider-error.ts`, the shared positive-only classifier for
+permanent authentication, permission, quota, and billing signals, and both
+retain an endable handle for rejected turns.
+
+Processes own durable policy rather than adapters. `src/processes/build-runner.ts`
+deposits the transcript and `session.ended`, writes the provider message to
+`phase.failed`, and derives immediate policy escalation from durable
+`willRetry: false` before another session can start. A completed turn without a
+typed terminal remains the separate `no-terminal` case. `harvest-runner.ts`
+uses the same result contract; its reducer makes `harvest.failed
+{willRetry:false}` terminal, so a fresh dispatcher cannot retry that run.
+
 ## Layout
 
 | Path | Contents | SPEC |
@@ -77,7 +95,7 @@ suffix. Existing build records have no mutation path and are never re-slugged.
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), and the `claude.ts` / `pi.ts` adapters | §3.2, §6.3, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel | §8 |
 | `src/cli/dashboard/` | `ab dispatch`'s live build + nonselectable harvest dashboard — pure reducer projection/rendering plus build-slug selection | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |

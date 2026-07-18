@@ -33,8 +33,8 @@
  *   actors (§15.3), so the runner records a post-step's outcome on the
  *   session's behalf using the session's own agent actor.
  * - The D5 retry guard also covers agent-verify steps (keyed `verify:<step>`,
- *   round = attempt): a no-terminal verify session would otherwise re-run
- *   forever, since its `verify.completed` never lands.
+ *   round = attempt): a no-terminal or provider-failed verify session would
+ *   otherwise re-run forever, since its `verify.completed` never lands.
  * - A throwing Exec in `run-check` propagates: deterministic checks carry no
  *   session to fail (§8.2), and a crashed runner's dangling `verify.started`
  *   simply re-runs the check on re-attach (§15.6-C) — the same crash model
@@ -442,6 +442,10 @@ export class BuildRunner {
       await this.raisePolicyExhausted(phase, round, failures)
       return
     }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable(phase, round, failures)
+      return
+    }
 
     // A conflict's recorded baseSha is an observation-time snapshot. Resolve
     // the build's frozen base branch again at the actual execution boundary,
@@ -594,6 +598,10 @@ export class BuildRunner {
       await this.raisePolicyExhausted(phase, attempt, failures)
       return
     }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable(phase, attempt, failures)
+      return
+    }
     if (needsServer && server === undefined) {
       // D10: needsServer without a configured server dep is an infra failure
       // with a clear error, not a mystery hang.
@@ -654,8 +662,9 @@ export class BuildRunner {
   }
 
   /**
-   * Failure-tolerant post-step (§5): the outcome is only "did the session
-   * complete without throwing". The runner records `finalize.step-completed`
+   * Failure-tolerant post-step (§5): the outcome is "did the turn complete
+   * without throwing or reporting a structured failure". The runner records
+   * `finalize.step-completed`
    * (and, on failure, the follow-up observation) on the session's behalf
    * with the session's agent actor — those event types only admit agents
    * (§15.3); pragmatism, documented. Never fails the build.
@@ -692,6 +701,7 @@ export class BuildRunner {
         env: this.sessionEnvFor('finalize@1', session),
       })
       handle = turn.session
+      if (turn.result.kind === 'failed') ok = false
     } catch {
       ok = false
     }
@@ -860,8 +870,9 @@ export class BuildRunner {
       return
     }
 
-    // No terminal (or the turn threw): an infra failure, not a verdict (§8.4).
-    // End whatever session exists — the transcript still joins the corpus —
+    // No terminal, a structured failed turn, or a throw: an infra failure,
+    // not a verdict (§8.4). End whatever session exists — the transcript still
+    // joins the corpus —
     // then record the failure and drop the producer handle: a rambling
     // session is not continued; the next attempt starts fresh (D5).
     if (handle !== undefined) {
@@ -882,11 +893,21 @@ export class BuildRunner {
     if (spec.producerPhase !== undefined) {
       this.producerSessions.delete(spec.producerPhase)
     }
+    const failure =
+      turnError !== undefined
+        ? { message: errorMessage(turnError), mayRetry: true }
+        : result?.kind === 'failed'
+          ? {
+              message: result.failure.message,
+              mayRetry: !result.failure.permanent,
+            }
+          : { message: 'no-terminal', mayRetry: true }
     await this.failPhase(
       spec.phase,
       spec.round,
       spec.priorFailures,
-      turnError !== undefined ? errorMessage(turnError) : 'no-terminal',
+      failure.message,
+      failure.mayRetry,
     )
   }
 
@@ -997,11 +1018,12 @@ export class BuildRunner {
     events: AbEvent[],
     phase: Phase,
     round: number,
-  ): { count: number; lastError?: string } {
+  ): { count: number; lastError?: string; lastWillRetry?: boolean } {
     /** id → the raise's {phase, round} — answers are matched by id (§15.3). */
     const raised = new Map<string, { phase: Phase; round?: number }>()
     let count = 0
     let lastError: string | undefined
+    let lastWillRetry: boolean | undefined
     for (const event of events) {
       switch (event.type) {
         case 'escalation.raised':
@@ -1017,6 +1039,7 @@ export class BuildRunner {
           if (raise?.phase === phase && (raise.round === undefined || raise.round === round)) {
             count = 0
             lastError = undefined
+            lastWillRetry = undefined
           }
           break
         }
@@ -1024,13 +1047,18 @@ export class BuildRunner {
           if (event.payload.phase === phase && event.payload.round === round) {
             count += 1
             lastError = event.payload.error
+            lastWillRetry = event.payload.willRetry
           }
           break
         default:
           break
       }
     }
-    return { count, ...(lastError !== undefined ? { lastError } : {}) }
+    return {
+      count,
+      ...(lastError !== undefined ? { lastError } : {}),
+      ...(lastWillRetry !== undefined ? { lastWillRetry } : {}),
+    }
   }
 
   private async failPhase(
@@ -1038,6 +1066,7 @@ export class BuildRunner {
     round: number,
     priorFailures: number,
     error: string,
+    mayRetry = true,
   ): Promise<void> {
     const attempt = priorFailures + 1
     await this.deps.store.append(this.deps.slug, {
@@ -1048,9 +1077,33 @@ export class BuildRunner {
         round,
         attempt,
         error,
-        willRetry: attempt < this.maxPhaseAttempts,
+        willRetry: mayRetry && attempt < this.maxPhaseAttempts,
       },
     } satisfies EventWrite<'phase.failed'>)
+  }
+
+  /** A provider/runner-declared permanent failure parks immediately. The fact
+   * comes from the latest durable `phase.failed {willRetry:false}`, so a crash
+   * between that write and this escalation resumes safely without attempt 2. */
+  private async raisePolicyNonRetryable(
+    phase: Phase,
+    round: number,
+    failures: { count: number; lastError?: string },
+  ): Promise<void> {
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: this.deps.ids('esc'),
+        phase,
+        round,
+        source: 'policy',
+        question:
+          `${phase} round ${round} stopped after a non-retryable ` +
+          `provider/runner failure on attempt ${failures.count}; last error: ` +
+          `${failures.lastError ?? 'unknown'}`,
+      },
+    } satisfies EventWrite<'escalation.raised'>)
   }
 
   /** D5: the retry cap escalates (source 'policy') instead of running,
