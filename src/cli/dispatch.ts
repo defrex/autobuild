@@ -27,10 +27,18 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
-import { randomIds, type IdSource } from '../ids'
+import {
+  randomIds,
+  randomUuids,
+  type IdSource,
+  type UuidSource,
+} from '../ids'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { buildDashboard, type DashboardModel } from './dashboard/model'
-import { renderDashboard } from './dashboard/render'
+import {
+  renderDashboard,
+  type DashboardRendererResolver,
+} from './dashboard/render'
 import {
   moveSelection,
   reconcileSelection,
@@ -136,6 +144,7 @@ export interface DispatchWiring {
   /** Scoped token for a remote store (D8, `AB_TOKEN`); passed to sessions. */
   token?: string
   ids: IdSource
+  uuids: UuidSource
   clock: Clock
 }
 
@@ -166,12 +175,15 @@ export interface DispatchOpts {
   /**
    * The interactive output seam. ABSENT ⇒ non-interactive ⇒ plain — which is
    * exactly today's behavior, so the dashboard can never be the reason a
-   * scripted or piped `ab dispatch` starts emitting escapes. `bin/ab.ts`
-   * constructs the real one over `process.stdout`.
+   * scripted or piped `ab dispatch` starts emitting escapes. The shared binary
+   * wiring constructs the real one over `process.stdout`.
    */
   terminal?: TerminalOut
   /** Injectable normalized keyboard/text source; the binary wraps stdin. */
   input?: TerminalInput
+  /** Optional repo-dev presentation seam. The resolver is called for every
+   * paint; production omits it and remains bound to `renderDashboard`. */
+  resolveDashboardRenderer?: DashboardRendererResolver
 }
 
 /** setTimeout that also resolves the moment ANY stop signal aborts, so OS
@@ -269,6 +281,7 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     storeRef,
     ...(token !== undefined && token !== '' ? { token } : {}),
     ids: randomIds(),
+    uuids: randomUuids(),
     clock: systemClock,
   }
 }
@@ -699,8 +712,17 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
-    const { store, tickets, runtimes, defaultRuntime, ids, clock, storeRef, token } =
-      this.wiring
+    const {
+      store,
+      tickets,
+      runtimes,
+      defaultRuntime,
+      ids,
+      uuids,
+      clock,
+      storeRef,
+      token,
+    } = this.wiring
     const runner = new HarvestRunner({
       store,
       tickets,
@@ -710,6 +732,7 @@ class DispatchLoop {
       repo: this.opts.targetRepo,
       workspacePath: this.opts.targetRepo,
       ids,
+      uuids,
       clock,
       instance: `${this.host}-harvest-${ids('inst')}`,
       sessionEnv: {
@@ -979,8 +1002,9 @@ class DispatchLoop {
   private paint(): void {
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined || this.model === undefined) return
+    const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
     this.region.update(
-      renderDashboard(this.model, {
+      renderer(this.model, {
         color: true,
         width: terminal.columns,
         // NOT `terminal.rows` — the region's trailing newline needs a row of

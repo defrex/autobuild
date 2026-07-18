@@ -6,7 +6,7 @@ import { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } fro
 import { resolveHarvestCliEnv } from '../cli/env'
 import { parseConfig } from '../config/load'
 import { KERNEL, agentActor } from '../events/envelope'
-import { sequentialIds } from '../ids'
+import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
@@ -19,6 +19,19 @@ const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
+
+function countingUuids() {
+  const platform = randomUuids()
+  const allocated: string[] = []
+  return {
+    allocated,
+    source: () => {
+      const id = platform()
+      allocated.push(id)
+      return id
+    },
+  }
+}
 
 async function seedObservation(store: MemoryBuildStore, build: string, summary: string): Promise<void> {
   if ((await store.getBuild(build)) === null) {
@@ -73,6 +86,9 @@ async function seedOpenRun(opts: {
   ids: ReturnType<typeof sequentialIds>
   workspace: string
   stage: 'started' | 'proposals' | 'reviewed' | 'filed'
+  makeProposals?: (
+    observations: Parameters<typeof proposalSet>[0],
+  ) => ReturnType<typeof proposalSet>
 }): Promise<{ run: string; proposals: ReturnType<typeof proposalSet> }> {
   const { store, tickets, ids, workspace, stage } = opts
   await seedObservation(store, `resume-${stage}`, `${stage} boundary`)
@@ -100,7 +116,7 @@ async function seedOpenRun(opts: {
     }),
   )
 
-  const proposals = proposalSet(scan.observations)
+  const proposals = opts.makeProposals?.(scan.observations) ?? proposalSet(scan.observations)
   if (stage === 'started') return { run, proposals }
 
   const proposalFile = join(workspace, '.ab', `${stage}-proposals.json`)
@@ -250,6 +266,7 @@ describe('HarvestRunner', () => {
       repo: '/repo',
       workspacePath: workspace,
       ids,
+      uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
       opts: { heartbeatMs: 100_000 },
@@ -317,6 +334,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: randomUuids(),
         clock: steppingClock(),
         instance: ids('instance'),
         opts: { heartbeatMs: 100_000 },
@@ -350,6 +368,7 @@ describe('HarvestRunner', () => {
       const store = new MemoryBuildStore({ clock: steppingClock() })
       const tickets = new FakeTicketSource()
       const ids = sequentialIds()
+      const uuids = countingUuids()
       const seeded = await seedOpenRun({ store, tickets, ids, workspace, stage })
       let producers = 0
       let reviewers = 0
@@ -384,6 +403,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: uuids.source,
         clock: steppingClock(),
         instance: `resume-${stage}`,
         opts: { heartbeatMs: 100_000 },
@@ -401,6 +421,7 @@ describe('HarvestRunner', () => {
       )
       expect(await tickets.get('fake-1')).not.toBeNull()
       expect(await tickets.get('fake-2')).toBeNull()
+      expect(uuids.allocated).toHaveLength(stage === 'filed' ? 0 : 1)
       expect(await runner.run()).toEqual({ outcome: 'idle' })
     })
   }
@@ -429,6 +450,7 @@ describe('HarvestRunner', () => {
       repo: '/repo',
       workspacePath: workspace,
       ids: sequentialIds(),
+      uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'contender',
     }).run()
@@ -480,6 +502,7 @@ describe('HarvestRunner', () => {
       repo: '/repo',
       workspacePath: workspace,
       ids: sequentialIds(),
+      uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'former-owner',
       opts: {
@@ -524,6 +547,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: randomUuids(),
         clock: steppingClock(),
         instance,
         opts: { heartbeatMs: 100_000, maxSessionAttempts: 2 },
@@ -594,6 +618,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: randomUuids(),
         clock: steppingClock(),
         instance: 'policy',
         opts: { heartbeatMs: 100_000 },
@@ -663,6 +688,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: randomUuids(),
         clock: steppingClock(),
         instance: 'stall',
         opts: { heartbeatMs: 100_000 },
@@ -675,13 +701,175 @@ describe('HarvestRunner', () => {
     expect(await tickets.get('fake-1')).toBeNull()
   })
 
+  test('reserves a distinct UUID durably before each approved external create', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-reserve-order-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const createIds: string[] = []
+    class InspectingTickets extends FakeTicketSource {
+      override async create(...args: Parameters<FakeTicketSource['create']>) {
+        const reservedId = args[1]?.idempotencyKey
+        expect(reservedId).toBeDefined()
+        const current = reduceHarvest(await store.getRepoEvents('/repo')).latest
+        const reservation = current?.reservations.find(
+          (entry) => entry.id === reservedId,
+        )
+        expect(reservation).toBeDefined()
+        expect(
+          current?.filed.some(
+            (entry) => entry.proposalKey === reservation?.proposalKey,
+          ),
+        ).toBe(false)
+        createIds.push(reservedId!)
+        return super.create(...args)
+      }
+    }
+    const tickets = new InspectingTickets()
+    const ids = sequentialIds()
+    await seedObservation(store, 'reserve-extra', 'second approved proposal')
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+      makeProposals: (observations) => ({
+        proposals: observations.map((item, index) => ({
+          action: 'create' as const,
+          title: `Harvested defect ${index + 1}`,
+          whatWhy: 'The observation describes a concrete recurring defect.',
+          acceptanceCriteria: ['The recorded defect no longer occurs.'],
+          outOfScope: ['Unrelated cleanup.'],
+          observations: [item.occurrence],
+        })),
+      }),
+    })
+    const uuids = countingUuids()
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('approved run should not start another agent')
+      },
+    })
+
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: uuids.source,
+        clock: steppingClock(),
+        instance: 'reserve-order',
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+
+    expect(createIds).toEqual(uuids.allocated)
+    expect(new Set(uuids.allocated).size).toBe(2)
+    expect(await tickets.get('fake-1')).not.toBeNull()
+    expect(await tickets.get('fake-2')).not.toBeNull()
+    const events = await store.getRepoEvents('/repo')
+    const reservations = events.filter(
+      (event) => event.type === 'harvest.proposal.id-reserved',
+    )
+    const filings = events.filter(
+      (event) => event.type === 'harvest.proposal.filed',
+    )
+    expect(reservations).toHaveLength(2)
+    expect(filings).toHaveLength(2)
+    for (const reservation of reservations) {
+      const filed = filings.find(
+        (event) => event.payload.proposalKey === reservation.payload.proposalKey,
+      )
+      expect(filed?.seq).toBeGreaterThan(reservation.seq)
+    }
+  })
+
+  test('a retry after pre-create interruption reuses the durable reservation', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-before-create-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const createIds: Array<string | undefined> = []
+    class FailBeforeCreateTickets extends FakeTicketSource {
+      private interrupted = false
+
+      override async create(...args: Parameters<FakeTicketSource['create']>) {
+        createIds.push(args[1]?.idempotencyKey)
+        if (!this.interrupted) {
+          this.interrupted = true
+          throw new Error('simulated interruption before external create')
+        }
+        return super.create(...args)
+      }
+    }
+    const tickets = new FailBeforeCreateTickets()
+    const ids = sequentialIds()
+    const uuids = countingUuids()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+    })
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('approved run should not start another agent')
+      },
+    })
+    const makeRunner = (instance: string) =>
+      new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: uuids.source,
+        clock: steppingClock(),
+        instance,
+        opts: { heartbeatMs: 100_000 },
+      })
+
+    expect(await makeRunner('before-create').run()).toEqual({
+      outcome: 'failed',
+      launch: 'resumed',
+      run: seeded.run,
+    })
+    expect(await tickets.get('fake-1')).toBeNull()
+    expect(uuids.allocated).toHaveLength(1)
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest).toMatchObject({
+      status: 'running',
+      reservations: [{ id: uuids.allocated[0] }],
+      filed: [],
+    })
+
+    expect(await makeRunner('after-create').run()).toEqual({
+      outcome: 'completed',
+      launch: 'resumed',
+      run: seeded.run,
+    })
+    expect(uuids.allocated).toHaveLength(1)
+    expect(createIds).toEqual([uuids.allocated[0], uuids.allocated[0]])
+    expect(await tickets.get('fake-1')).not.toBeNull()
+    expect(await tickets.get('fake-2')).toBeNull()
+  })
+
   test('create-then-crash retry adopts one ticket before committing the ledger', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-create-crash-'))
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
+    const createKeys: Array<string | undefined> = []
     class CreateThenCrashTickets extends FakeTicketSource {
       crashed = false
       override async create(...args: Parameters<FakeTicketSource['create']>) {
+        createKeys.push(args[1]?.idempotencyKey)
         const ticket = await super.create(...args)
         if (!this.crashed) {
           this.crashed = true
@@ -692,6 +880,7 @@ describe('HarvestRunner', () => {
     }
     const tickets = new CreateThenCrashTickets()
     const ids = sequentialIds()
+    const uuids = countingUuids()
     let producerCalls = 0
     let reviewerCalls = 0
     const scripted = new ScriptedAgentRunner({
@@ -727,6 +916,7 @@ describe('HarvestRunner', () => {
         repo: '/repo',
         workspacePath: workspace,
         ids,
+        uuids: uuids.source,
         clock: steppingClock(),
         instance,
         opts: { heartbeatMs: 100_000 },
@@ -737,7 +927,11 @@ describe('HarvestRunner', () => {
       launch: 'started',
     })
     expect(await tickets.get('fake-1')).not.toBeNull()
-    expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toEqual([])
+    const interrupted = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(interrupted.ledger).toEqual([])
+    expect(interrupted.latest?.reservations).toEqual([
+      expect.objectContaining({ id: uuids.allocated[0] }),
+    ])
 
     expect(await makeRunner('after-crash').run()).toMatchObject({
       outcome: 'completed',
@@ -747,6 +941,8 @@ describe('HarvestRunner', () => {
     expect(await tickets.get('fake-2')).toBeNull()
     expect(producerCalls).toBe(1)
     expect(reviewerCalls).toBe(1)
+    expect(uuids.allocated).toHaveLength(1)
+    expect(createKeys).toEqual([uuids.allocated[0], uuids.allocated[0]])
     expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toHaveLength(1)
   })
 
@@ -815,6 +1011,7 @@ describe('HarvestRunner', () => {
           repo: '/repo',
           workspacePath: workspace,
           ids,
+          uuids: randomUuids(),
           clock: steppingClock(),
           instance,
           opts: { heartbeatMs: 100_000 },

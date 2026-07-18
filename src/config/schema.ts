@@ -135,9 +135,9 @@ export const policySchema = z.strictObject({
   /**
    * converge's `maxRounds` for the review loops (SPEC §10). §16.1's example
    * leaves this knob implicit — §10 names it in the converge policy, so it
-   * lives here; default 5.
+   * lives here; default 4.
    */
-  maxReviewRounds: z.number().int().positive().default(5),
+  maxReviewRounds: z.number().int().positive().default(4),
 })
 export type PolicyConfig = z.infer<typeof policySchema>
 

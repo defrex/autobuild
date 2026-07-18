@@ -119,7 +119,7 @@ describe('parseConfig — SPEC §16.1 example', () => {
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxReconcileAttempts: 3,
-        maxReviewRounds: 5,
+        maxReviewRounds: 4,
       },
       dispatcher: { capacity: 3 },
       tickets: {
@@ -159,7 +159,7 @@ describe('parseConfig — defaults', () => {
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxReconcileAttempts: 3,
-        maxReviewRounds: 5,
+        maxReviewRounds: 4,
       },
       dispatcher: { capacity: 1 },
       tickets: { source: 'file', readyState: 'ready' },
@@ -196,7 +196,7 @@ describe('parseConfig — defaults', () => {
       stallRounds: 7,
       maxVerifyAttempts: 3,
       maxReconcileAttempts: 3,
-      maxReviewRounds: 5,
+      maxReviewRounds: 4,
     })
   })
 })

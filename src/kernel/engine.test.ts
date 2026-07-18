@@ -28,8 +28,8 @@ import { decideNext, type Decision, type WaitReason } from './engine'
 const BUILD = 'auth-rate-limit'
 
 // Policy defaults apply: stallRounds 3, maxVerifyAttempts 3,
-// maxReconcileAttempts 3, maxReviewRounds 5 (§16.1).
-const config = parseConfig(`
+// maxReconcileAttempts 3, maxReviewRounds 4 (§16.1).
+const CONFIG_TOML = `
 [tickets]
 source = "file"
 readyState = "ready"
@@ -60,7 +60,17 @@ needsServer = true
 
 [finalize]
 steps = ["release-notes"]
-`)
+`
+
+const config = parseConfig(CONFIG_TOML)
+
+/**
+ * Same config with a roomier review cap. Tests about feedback plumbing across
+ * a post-stall round (guidance consumption, chain dismissal) need the loop to
+ * survive past round 4; the cap itself is exercised by its own tests above, so
+ * letting it fire here would assert the wrong thing.
+ */
+const roomyConfig = parseConfig(`${CONFIG_TOML}\n[policy]\nmaxReviewRounds = 6\n`)
 
 // ── Fixture plumbing (reducer-test style) ────────────────────────────────────
 
@@ -108,6 +118,11 @@ function toLog(writes: EventWrite[]): AbEvent[] {
 
 function decide(writes: EventWrite[]): Decision {
   return decideNext(toLog(writes), config)
+}
+
+/** `decide` under `roomyConfig` — see its comment. */
+function decideRoomy(writes: EventWrite[]): Decision {
+  return decideNext(toLog(writes), roomyConfig)
 }
 
 function finding(id: string, persists: string[] = []): Finding {
@@ -794,14 +809,13 @@ describe('decideNext: rule 5 — plan loop', () => {
         ...planRound(2, 'revise', [finding('f_b')]),
         ...planRound(3, 'revise', [finding('f_c')]),
         ...planRound(4, 'revise', [finding('f_d')]),
-        ...planRound(5, 'revise', [finding('f_e')]),
       ]),
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
       phase: 'plan-review',
-      round: 5,
-      question: 'maxReviewRounds (5) exhausted without approval',
+      round: 4,
+      question: 'maxReviewRounds (4) exhausted without approval',
     })
   })
 
@@ -812,15 +826,14 @@ describe('decideNext: rule 5 — plan loop', () => {
       ...planRound(2, 'revise', [finding('f_b')]),
       ...planRound(3, 'revise', [finding('f_c')]),
       ...planRound(4, 'revise', [finding('f_d')]),
-      ...planRound(5, 'revise', [finding('f_e')]),
       ev(
         'escalation.raised',
         {
           id: 'e_1',
           phase: 'plan-review',
-          round: 5,
+          round: 4,
           source: 'policy',
-          question: 'maxReviewRounds (5) exhausted without approval',
+          question: 'maxReviewRounds (4) exhausted without approval',
         },
         KERNEL,
       ),
@@ -832,7 +845,7 @@ describe('decideNext: rule 5 — plan loop', () => {
         ev('escalation.answered', { id: 'e_1', answer: 'One more round: drop scope X.', resolution: 'guidance' }),
       ]),
     ).toEqual(
-      runPhase('plan', 6, { guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' } }),
+      runPhase('plan', 5, { guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' } }),
     )
   })
 })
@@ -928,7 +941,7 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
 
   test('consumed guidance is not reused: the next revise round gets findings feedback', () => {
     expect(
-      decide([
+      decideRoomy([
         ...threeReviseRounds,
         stallRaised,
         ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
@@ -969,7 +982,7 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
 
   test('no re-stall on the dismissed chain: the next reviewer round proceeds', () => {
     expect(
-      decide([
+      decideRoomy([
         ...threeReviseRounds,
         stallRaised,
         ev('escalation.answered', { id: 'e_1', answer: 'Not a real issue.', resolution: 'dismiss-finding' }),

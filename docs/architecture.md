@@ -50,9 +50,10 @@ executes the staged workflow under a heartbeated repository lease. The dispatch
 loop starts it fire-and-forget, keeps one process-local in-flight handle, and
 drains that handle only for `--once`, so watch ticks and SIGINT remain
 responsive. `src/events/harvest.ts` and `src/kernel/harvest.ts` define and reduce
-a separate repository journal,
-including claims and the committed dedup ledger. Build reducers therefore
-never interpret a non-build workflow. Typed session deposits live under
+a separate repository journal, including claims, UUID-v4 reservation facts
+written before external creates, per-proposal filing facts, and the committed
+dedup ledger. Build reducers therefore never interpret a non-build workflow.
+Typed session deposits live under
 `ab harvest context|submit|verdict`; `ab harvest status` and the nonselectable
 `HARVEST` dashboard row read the same facts.
 
@@ -117,6 +118,22 @@ bun install
 bun test          # unit tests, colocated *.test.ts
 bun typecheck     # tsc --noEmit
 ```
+
+For dashboard presentation work, run the repository-only hot CLI:
+
+```sh
+bun run dev -- dispatch
+# Generic form: bun run dev -- <ab arguments>
+```
+
+Bun keeps the original CLI promise and its `DispatchLoop` alive while hot
+module evaluation replaces only the renderer used by the next repaint. Edits
+to `src/cli/dashboard/render.ts` and presentation-only dependencies imported by
+it therefore appear without restarting runners, releasing leases, or stacking
+input handlers. Changes to dispatcher logic, dashboard model/controller logic,
+keyboard handling, or build-runner code still require a restart. Ctrl-C follows
+the normal CLI teardown path, including raw-mode cleanup and cursor restoration.
+The installed `ab` binary remains the non-watching production entry.
 
 The seams are the contract: every `BuildStore` adapter must pass the suite
 in `src/store/contract.ts`; every event write passes

@@ -19,7 +19,13 @@ goes nowhere.
    code. Review what changed *and* what the change touches.
 3. Judge on exactly these axes, in this order:
    - **Correctness** — bugs, broken edge cases, races, wrong behavior under
-     real inputs. This is most of your job.
+     real inputs. This is most of your job. When the diff touches a
+     third-party API boundary, check the provider's own schema or reference
+     documentation for the actual request shapes, argument types, enum syntax,
+     and identifier constraints. Raise any mismatch or unverified assumption
+     as a concrete finding; memory, nearby adapter code, and green tests over a
+     fake or mock are not contract evidence because they can repeat the
+     author's assumption.
    - **Spec conformance** — every acceptance criterion met; nothing beyond
      the spec's scope smuggled in.
    - **Tests** — do the new tests exercise the seams this change created or

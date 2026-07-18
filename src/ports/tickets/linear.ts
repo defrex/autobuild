@@ -8,7 +8,7 @@
  * called mid-build; comments and transitions flow outward, and the build
  * never reads Linear again after dispatch imports the spec.
  */
-import { createHash } from 'node:crypto'
+import { z } from 'zod'
 import type {
   DependencyState,
   Ticket,
@@ -132,17 +132,7 @@ const UPDATE_STATE_MUTATION = `mutation UpdateState($id: String!, $stateId: Stri
 const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
 const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id ${ISSUE_FIELDS} } } }`
 const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: "blocks" }) { success } }`
-
-/** Linear IssueCreateInput accepts a caller-supplied UUID. Derive one from the
- * stable harvest key so a retry can query/adopt the same issue after a crash. */
-export function linearIdempotencyUuid(key: string): string {
-  const bytes = Buffer.from(createHash('sha256').update(key).digest().subarray(0, 16))
-  // RFC 4122 variant + version 5-shaped deterministic UUID.
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80
-  const hex = bytes.toString('hex')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
+const linearReservedIssueIdSchema = z.uuidv4()
 
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
@@ -251,6 +241,13 @@ export class LinearTicketSource implements TicketSource {
     draft: TicketDraft,
     opts: TicketCreateOptions = {},
   ): Promise<Ticket> {
+    const reservedId = opts.idempotencyKey
+    if (
+      reservedId !== undefined &&
+      !linearReservedIssueIdSchema.safeParse(reservedId).success
+    ) {
+      throw new Error('linear create: idempotency key must be a UUID v4')
+    }
     const team = await this.getTeamInfo('create')
     const labelIds = (draft.labels ?? []).map((label) => {
       const labelId = team.labelIds.get(label)
@@ -279,11 +276,7 @@ export class LinearTicketSource implements TicketSource {
       }
       input['stateId'] = stateId
     }
-    const deterministicId =
-      opts.idempotencyKey === undefined
-        ? undefined
-        : linearIdempotencyUuid(opts.idempotencyKey)
-    if (deterministicId !== undefined) input['id'] = deterministicId
+    if (reservedId !== undefined) input['id'] = reservedId
 
     let data: { issueCreate: { success: boolean; issue: GqlIssue | null } }
     try {
@@ -291,17 +284,17 @@ export class LinearTicketSource implements TicketSource {
         issueCreate: { success: boolean; issue: GqlIssue | null }
       }>('create', CREATE_ISSUE_MUTATION, { input })
     } catch (error) {
-      if (deterministicId === undefined) throw error
+      if (reservedId === undefined) throw error
       // The create may have committed before the caller/store crashed. Query
-      // the deterministic UUID and adopt it; if it is absent, preserve the
+      // the durably reserved UUID and adopt it; if it is absent, preserve the
       // original error rather than hiding a real outage.
-      const adopted = await this.adoptCreatedIssue(deterministicId)
+      const adopted = await this.adoptCreatedIssue(reservedId)
       if (adopted !== null) return adopted
       throw error
     }
     if (!data.issueCreate.success || !data.issueCreate.issue) {
-      if (deterministicId !== undefined) {
-        const adopted = await this.adoptCreatedIssue(deterministicId)
+      if (reservedId !== undefined) {
+        const adopted = await this.adoptCreatedIssue(reservedId)
         if (adopted !== null) return adopted
       }
       throw new Error(`linear create: issueCreate failed for "${draft.title}"`)

@@ -67,6 +67,11 @@ export const harvestEventPayloadSchemas = {
     artifact: artifactRefSchema,
     reason: z.string().optional(),
   }),
+  'harvest.proposal.id-reserved': z.strictObject({
+    run: z.string().min(1),
+    proposalKey: z.string().min(1),
+    id: z.uuidv4(),
+  }),
   'harvest.proposal.filed': z.strictObject({
     run: z.string().min(1),
     proposalKey: z.string().min(1),
@@ -134,6 +139,7 @@ const allowedActorKinds: Record<HarvestEventType, readonly ActorKind[]> = {
   'harvest.session.ended': ['kernel'],
   'harvest.proposals.submitted': ['agent'],
   'harvest.review.verdict': ['agent'],
+  'harvest.proposal.id-reserved': ['kernel'],
   'harvest.proposal.filed': ['kernel'],
   'harvest.completed': ['kernel'],
   'harvest.escalated': ['kernel', 'agent'],

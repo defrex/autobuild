@@ -58,6 +58,17 @@ export interface RenderOpts {
   height?: number
 }
 
+/** A dashboard presentation implementation. Kept as a named dependency so the
+ * repo-local dev entry can replace presentation without replacing the live
+ * dispatch loop that owns runners, input, timers, and leases. */
+export type DashboardRenderer = (
+  model: DashboardModel,
+  opts: RenderOpts,
+) => string[]
+
+/** Resolve at paint time rather than capturing one renderer at loop startup. */
+export type DashboardRendererResolver = () => DashboardRenderer
+
 // ── ANSI ─────────────────────────────────────────────────────────────────────
 
 const ESC = '\x1b['

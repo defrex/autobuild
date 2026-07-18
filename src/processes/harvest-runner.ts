@@ -8,7 +8,7 @@
 import type { Config } from '../config/schema'
 import type { HarvestEvent, HarvestEventWrite } from '../events/harvest'
 import { KERNEL } from '../events/envelope'
-import type { IdSource } from '../ids'
+import type { IdSource, UuidSource } from '../ids'
 import {
   occurrenceKey,
   type HarvestDisposition,
@@ -61,6 +61,7 @@ export interface HarvestRunnerDeps {
   repo: string
   workspacePath: string
   ids: IdSource
+  uuids: UuidSource
   clock: Clock
   instance: string
   sessionEnv?: Record<string, string>
@@ -675,7 +676,7 @@ export class HarvestRunner {
   }
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
-    const { store, repo, tickets, config } = this.deps
+    const { store, repo, tickets, config, uuids } = this.deps
     await this.ensureLease()
     const current = await this.refreshRun(run.run)
     if (current.status === 'completed') return
@@ -699,6 +700,9 @@ export class HarvestRunner {
     const alreadyFiled = new Map(
       current.filed.map((entry) => [entry.proposalKey, entry.ticket]),
     )
+    const reservations = new Map(
+      current.reservations.map((entry) => [entry.proposalKey, entry.id]),
+    )
     const dispositions: HarvestDisposition[] = []
     const report: Array<Record<string, unknown>> = []
 
@@ -708,19 +712,31 @@ export class HarvestRunner {
         const proposalKey = harvestProposalKey(proposal)
         let ticket = alreadyFiled.get(proposalKey)
         if (ticket === undefined) {
+          let reservedId = reservations.get(proposalKey)
+          if (reservedId === undefined) {
+            reservedId = uuids()
+            await this.ensureLease()
+            await store.appendRepo(repo, {
+              actor: KERNEL,
+              type: 'harvest.proposal.id-reserved',
+              payload: { run: run.run, proposalKey, id: reservedId },
+            })
+            await this.ensureLease()
+            reservations.set(proposalKey, reservedId)
+          }
           const body = renderHarvestProposal(proposal, observations)
           ticket = (
             await tickets.create(
               { title: proposal.title, body },
               {
                 state: defaultTriageState(config),
-                idempotencyKey: proposalKey,
+                idempotencyKey: reservedId,
               },
             )
           ).ref
-          // External create is idempotent, so a lease loss in this window
-          // leaves no old-owner journal write; the replacement adopts the
-          // same ticket and records it.
+          // If the process stops before create, the replacement reads the
+          // reservation. If it stops after create but before this filing fact,
+          // it sends the same reserved id and adopts the external ticket.
           await this.ensureLease()
           await store.appendRepo(repo, {
             actor: KERNEL,

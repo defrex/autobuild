@@ -35,7 +35,7 @@ import { buildDashboard, projectBuild, type DashboardBuild, type PipelineStep } 
 
 const BUILD = 'auth-rate-limit'
 
-/** Default policy: maxVerifyAttempts 3, maxReviewRounds 5. `[finalize].steps`
+/** Default policy: maxVerifyAttempts 3, maxReviewRounds 4. `[finalize].steps`
  * defaults to `[]` — the DEFAULT config path, and the one the merge row's
  * vacuous-`every` window lives in. */
 const CONFIG = parseConfig(`

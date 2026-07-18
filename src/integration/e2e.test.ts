@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { resolveHarvestCliEnv } from '../cli/env'
 import { runCli } from '../cli/main'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
+import { randomUuids } from '../ids'
 import { decideNext } from '../kernel/engine'
 import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
@@ -1154,6 +1155,7 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
       repo: h.origin,
       workspacePath: h.origin,
       ids: h.ids,
+      uuids: randomUuids(),
       clock: h.clock,
       instance: `harvest-e2e-${instances}`,
       sessionEnv: { AB_STORE: 'memory' },
@@ -1225,12 +1227,26 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
   expect(cliErrors).toEqual([])
   expect(reviewTurns).toBe(2)
   expect((await h.tickets.get('fake-1'))?.state).toBe('Triage')
-  expect(reduceHarvest(await h.store.getRepoEvents(h.origin))).toMatchObject({
-    latest: { status: 'completed' },
+  const firstRepoEvents = await h.store.getRepoEvents(h.origin)
+  expect(reduceHarvest(firstRepoEvents)).toMatchObject({
+    latest: {
+      status: 'completed',
+      reservations: [expect.objectContaining({ proposalKey: expect.any(String) })],
+    },
     ledger: [{ action: 'filed' }, { action: 'filed' }],
   })
+  const reserved = firstRepoEvents.find(
+    (event) => event.type === 'harvest.proposal.id-reserved',
+  )
+  const filed = firstRepoEvents.find(
+    (event) =>
+      event.type === 'harvest.proposal.filed' &&
+      event.payload.proposalKey === reserved?.payload.proposalKey,
+  )
+  expect(reserved).toBeDefined()
+  expect(filed?.seq).toBeGreaterThan(reserved!.seq)
 
-  const repoEventsAfterFirst = (await h.store.getRepoEvents(h.origin)).length
+  const repoEventsAfterFirst = firstRepoEvents.length
   expect(await dispatcher.tick()).toEqual(emptyTickReport())
   expect(await drainHarvest()).toEqual({ outcome: 'idle' })
   expect(await h.store.getRepoEvents(h.origin)).toHaveLength(repoEventsAfterFirst)

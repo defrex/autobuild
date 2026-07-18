@@ -74,7 +74,7 @@ runtime = "claude"   # no configured model ⇒ this runtime's own default
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
-maxReviewRounds = 5
+maxReviewRounds = 4
 
 [dispatcher]
 capacity = 1             # concurrent builds for this repo

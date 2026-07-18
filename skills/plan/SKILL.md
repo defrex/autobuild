@@ -17,7 +17,13 @@ write product code in this phase.
    `.ab/ticket.md`, and on round > 1 your prior plan revision plus
    `.ab/findings.json` (the reviewer's feedback).
 2. Read the spec, then the codebase. The spec says what and why; you decide
-   how. Explore enough of the code to name real files and real seams.
+   how. Explore enough of the code to name real files and real seams. When an
+   approach touches a third-party service, ground it in the provider's own
+   schema or reference documentation before fixing the plan. Verify the
+   relevant request and response shapes, argument types, enum syntax, and
+   identifier constraints; memory, nearby adapter code, and passing tests over
+   a fake or mock are not evidence of the real contract because they can
+   repeat the author's assumption.
 3. Write the plan to `.ab/plan.md`, deposit it, and finish:
 
    ```

@@ -33,6 +33,12 @@ export interface HarvestReviewRound {
   seq: number
 }
 
+export interface HarvestProposalReservation {
+  proposalKey: string
+  id: string
+  seq: number
+}
+
 export interface HarvestRunState {
   run: string
   status: 'running' | 'completed' | 'escalated' | 'failed'
@@ -43,6 +49,7 @@ export interface HarvestRunState {
   steps: HarvestStepOccurrence[]
   proposals: Array<{ round: number; artifact: ArtifactRef; seq: number }>
   reviews: HarvestReviewRound[]
+  reservations: HarvestProposalReservation[]
   filed: Array<{ proposalKey: string; ticket: TicketRef; seq: number }>
   dispositions: HarvestDisposition[]
   report?: ArtifactRef
@@ -123,6 +130,7 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
           steps: [],
           proposals: [],
           reviews: [],
+          reservations: [],
           filed: [],
           dispositions: [],
         }
@@ -194,6 +202,40 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
           ...(event.payload.reason !== undefined
             ? { reason: event.payload.reason }
             : {}),
+          seq: event.seq,
+        })
+        break
+      }
+      case 'harvest.proposal.id-reserved': {
+        const run = requireRun(runs, event.payload.run, event)
+        const normalizedId = event.payload.id.toLowerCase()
+        const existingKey = run.reservations.find(
+          (entry) => entry.proposalKey === event.payload.proposalKey,
+        )
+        if (existingKey !== undefined) {
+          if (existingKey.id.toLowerCase() !== normalizedId) {
+            throw new Error(
+              `harvest proposal key "${event.payload.proposalKey}" was already ` +
+                `reserved as "${existingKey.id}" at repo seq ${existingKey.seq}; ` +
+                `repo seq ${event.seq} cannot replace it with "${event.payload.id}"`,
+            )
+          }
+          // Exact replay is one logical reservation.
+          break
+        }
+        const existingId = run.reservations.find(
+          (entry) => entry.id.toLowerCase() === normalizedId,
+        )
+        if (existingId !== undefined) {
+          throw new Error(
+            `harvest reserved id "${event.payload.id}" already belongs to proposal ` +
+              `key "${existingId.proposalKey}" at repo seq ${existingId.seq}; ` +
+              `repo seq ${event.seq} cannot reuse it for "${event.payload.proposalKey}"`,
+          )
+        }
+        run.reservations.push({
+          proposalKey: event.payload.proposalKey,
+          id: event.payload.id,
           seq: event.seq,
         })
         break

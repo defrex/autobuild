@@ -19,7 +19,13 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
      acceptance criterion? Does anything in it exceed the spec's scope?
    - **Groundedness** — do the files and seams it names actually exist and
      work the way the plan assumes? Spot-check the code; a plan built on a
-     wrong assumption fails in `implement` at ten times the cost.
+     wrong assumption fails in `implement` at ten times the cost. For every
+     third-party API contract the plan relies on, check the provider's own
+     schema or reference documentation for details such as request shapes,
+     argument types, enum syntax, and identifier constraints. Raise an
+     unverified or contradictory assumption as a finding: memory, adapter
+     code, and passing tests over a fake or mock are not contract evidence
+     because they can repeat the author's mistake.
    - **Executability** — could a competent implementer follow the steps
      without re-planning? Are the steps ordered so the build is never broken
      mid-sequence?
