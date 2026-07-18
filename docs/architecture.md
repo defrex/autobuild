@@ -37,6 +37,21 @@ crash recovery refreshes again; movement after startup is handled by another
 conflict/reconcile loop. Refresh failures are `phase.failed` infrastructure
 facts and never fall back to the stale detection snapshot.
 
+## Build-runner launch ownership
+
+`src/cli/dispatch.ts` owns a process-local single-flight map keyed by build
+slug. It reserves the slug before asynchronous runner setup and clears that
+exact reservation on setup failure or when the tracked run settles. Thus a
+watch tick that sees a transiently stale lease cannot construct another
+`BuildRunner` while this dispatch process still owns one; the runner's own
+no-terminal retry remains sequential inside the same tracked run.
+`src/processes/dispatcher.ts` receives an explicit `scheduled` /
+`already-active` launch result so `resumed` and `swept` count actual schedules,
+not suppressed polls. The BuildStore lease remains the cross-process gate: a
+dead process loses the map, after which lease expiry permits durable-state
+recovery. Open `session.started` history is not a lock because process death can
+leave it open forever.
+
 Observation harvest is adjacent, never added to that grammar:
 
 ```

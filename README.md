@@ -473,6 +473,16 @@ Each tick runs in this order:
    same unresolved error parks again instead of hot-looping. Approved proposals
    are created directly in Triage and are never dispatched by the harvester.
 
+Within one dispatcher process, build-runner launches are single-flighted by
+slug. Repeated polling or a transiently stale lease cannot open another agent
+session while that process still has the build's runner in flight. A session
+that ends without a terminal uses the runner's bounded sequential retry; once a
+runner settles or fails, its local slot is reusable. If the process actually
+dies, that in-memory guard disappears and the durable build lease remains the
+cross-process stale-runner recovery gate. Accordingly, `resumed` and `swept`
+count runners actually scheduled, not launch requests suppressed as already
+active.
+
 The dashboard renders repository harvest as the selectable `Harvest` row with
 elapsed times, observation count, and the same marker, right-aligned status
 column, and status colors as build rows. The internal run id is not displayed.

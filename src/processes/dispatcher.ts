@@ -335,6 +335,11 @@ export interface TickOpts {
   acceptNewWork?: boolean
 }
 
+/** Process-local launch coordination result. Durable lease acquisition remains
+ * the BuildRunner's responsibility; "scheduled" means only that this process
+ * accepted a runner launch rather than suppressing a known in-flight slug. */
+export type LaunchRunnerResult = 'scheduled' | 'already-active'
+
 export interface DispatcherDeps {
   store: BuildStore
   tickets: TicketSource
@@ -346,8 +351,9 @@ export interface DispatcherDeps {
   repo: string
   exec: Exec
   /** Launch (or re-attach — §15.6-C, §15.7) a build-runner for `slug`. The
-   * dispatcher never runs pipeline agents itself. */
-  launchRunner: (slug: string) => Promise<void>
+   * dispatcher never runs pipeline agents itself. The launcher reports local
+   * single-flight suppression so resume/sweep counters describe real schedules. */
+  launchRunner: (slug: string) => Promise<LaunchRunnerResult>
   /**
    * Non-interactive spec authoring for thin-but-groomed tickets (§6.3):
    * returns a candidate spec body, or null when the ticket cannot be
@@ -450,10 +456,13 @@ export class Dispatcher {
     if (decideHarvestControl(state).kind !== 'park') start()
   }
 
-  private async launch(slug: string, launched: Set<string>): Promise<void> {
-    if (launched.has(slug)) return
+  private async launch(
+    slug: string,
+    launched: Set<string>,
+  ): Promise<LaunchRunnerResult> {
+    if (launched.has(slug)) return 'already-active'
     launched.add(slug)
-    await this.deps.launchRunner(slug)
+    return this.deps.launchRunner(slug)
   }
 
   // ── a. Janitor (SPEC §15.7, D1) ────────────────────────────────────────────
@@ -740,8 +749,8 @@ export class Dispatcher {
       // Human pauses and judgment escalations are not "failures" for dispatch
       // to override; awaiting-pr/spec and terminal states have no runner work.
       if (decision.kind === 'wait') continue
-      await this.launch(record.slug, launched)
-      report.resumed += 1
+      const result = await this.launch(record.slug, launched)
+      if (result === 'scheduled') report.resumed += 1
     }
   }
 
@@ -782,8 +791,8 @@ export class Dispatcher {
       }
       const events = await this.deps.store.getEvents(record.slug)
       if (decideNext(events, this.deps.config).kind === 'wait') continue
-      await this.launch(record.slug, launched)
-      report.swept += 1
+      const result = await this.launch(record.slug, launched)
+      if (result === 'scheduled') report.swept += 1
     }
   }
 

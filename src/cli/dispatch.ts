@@ -67,6 +67,7 @@ import {
 import {
   Dispatcher,
   emptyTickReport,
+  type LaunchRunnerResult,
   type TickReport,
 } from '../processes/dispatcher'
 import { RemoteBuildStore } from '../store/remote/client'
@@ -300,6 +301,10 @@ class DispatchLoop {
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
    * `--once` exit so every visible workflow reaches a durable boundary. */
   private readonly inFlight = new Set<Promise<void>>()
+  /** One active BuildRunner per slug in this dispatch process. The token is
+   * reserved before async setup and makes cleanup identity-safe; the durable
+   * build lease remains the cross-process recovery/exclusion gate. */
+  private readonly activeBuildRuns = new Map<string, symbol>()
   /** Process-local fast path; the repository lease is the cross-process gate. */
   private harvestInFlight: Promise<void> | undefined
   /** Outcomes settle outside Dispatcher.tick(), then merge into the next
@@ -831,59 +836,84 @@ class DispatchLoop {
 
   /** Construct a BuildRunner over the shared store/workspace and start it
    * without blocking the dispatcher. Capacity is enforced by the dispatcher's
-   * active-count gate; the tracked promise lets `--once` drain it. */
-  private async launchRunner(slug: string): Promise<void> {
-    const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
-    const record = await store.getBuild(slug)
-    const wsRef = openWorkspaceRef(await store.getEvents(slug))
-    if (record === null || wsRef === null) {
-      throw new Error(
-        `launchRunner("${slug}"): no build record or open workspace — the ` +
-          'dispatcher provisions both before launching (§12)',
-      )
-    }
+   * active-count gate; the tracked promise lets `--once` drain it. A known
+   * local run wins over a transiently stale lease, so polling cannot create a
+   * second agent session for the same build while that run is still live. */
+  private async launchRunner(slug: string): Promise<LaunchRunnerResult> {
+    if (this.activeBuildRuns.has(slug)) return 'already-active'
 
-    const runner = new BuildRunner({
-      store,
-      config: this.config,
-      runtimes,
-      defaultRuntime,
-      workspacePath: wsRef,
-      branch: record.branch ?? `ab/${slug}`,
-      slug,
-      exec: this.opts.exec,
-      ids,
-      clock,
-      instance: `${this.host}-${slug}-${ids('inst')}`,
-      host: this.host,
-      // D8: sessions resolve THIS store; identity keys (AB_BUILD/PHASE/SESSION)
-      // are stamped per session by the runner and never overridden here.
-      sessionEnv: {
-        AB_STORE: storeRef,
-        ...(token !== undefined ? { AB_TOKEN: token } : {}),
-      },
-    })
+    // Reserve before the first await: startup resume and later lease sweeps
+    // share this seam, and neither may pass async setup for the same slug.
+    const reservation = Symbol(slug)
+    this.activeBuildRuns.set(slug, reservation)
 
-    const run = runner
-      .run()
-      .then(
-        (state: BuildState) => {
-          this.say(`build ${slug} parked (${state.status})`)
+    try {
+      const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } =
+        this.wiring
+      const record = await store.getBuild(slug)
+      const wsRef = openWorkspaceRef(await store.getEvents(slug))
+      if (record === null || wsRef === null) {
+        throw new Error(
+          `launchRunner("${slug}"): no build record or open workspace — the ` +
+            'dispatcher provisions both before launching (§12)',
+        )
+      }
+
+      const runner = new BuildRunner({
+        store,
+        config: this.config,
+        runtimes,
+        defaultRuntime,
+        workspacePath: wsRef,
+        branch: record.branch ?? `ab/${slug}`,
+        slug,
+        exec: this.opts.exec,
+        ids,
+        clock,
+        instance: `${this.host}-${slug}-${ids('inst')}`,
+        host: this.host,
+        // D8: sessions resolve THIS store; identity keys (AB_BUILD/PHASE/SESSION)
+        // are stamped per session by the runner and never overridden here.
+        sessionEnv: {
+          AB_STORE: storeRef,
+          ...(token !== undefined ? { AB_TOKEN: token } : {}),
         },
-        (error: unknown) => {
-          if (error instanceof LeaseHeldError) {
-            this.say(`build ${slug} already held by another runner — skipped`)
-            return
-          }
-          this.warn(
-            `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`,
-          )
-        },
-      )
-      .finally(() => {
-        this.inFlight.delete(run)
       })
-    this.inFlight.add(run)
+
+      let tracked: Promise<void>
+      tracked = runner
+        .run()
+        .then(
+          (state: BuildState) => {
+            this.say(`build ${slug} parked (${state.status})`)
+          },
+          (error: unknown) => {
+            if (error instanceof LeaseHeldError) {
+              this.say(`build ${slug} already held by another runner — skipped`)
+              return
+            }
+            this.warn(
+              `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          },
+        )
+        .finally(() => {
+          this.inFlight.delete(tracked)
+          // An old run must never clear a newer reservation for this slug.
+          if (this.activeBuildRuns.get(slug) === reservation) {
+            this.activeBuildRuns.delete(slug)
+          }
+        })
+      this.inFlight.add(tracked)
+      return 'scheduled'
+    } catch (error) {
+      // Preflight/setup failures never strand the slug. Identity-checking keeps
+      // this safe if launch coordination grows more concurrent in the future.
+      if (this.activeBuildRuns.get(slug) === reservation) {
+        this.activeBuildRuns.delete(slug)
+      }
+      throw error
+    }
   }
 
   private get stopped(): boolean {

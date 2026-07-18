@@ -26,6 +26,7 @@ import {
   validateSlugCandidate,
   type DependencyVerdict,
   type DispatcherOpts,
+  type LaunchRunnerResult,
 } from './dispatcher'
 import type { DependencyState } from '../ports/types'
 
@@ -82,6 +83,7 @@ function harness(
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
+    launchResult?: LaunchRunnerResult
     workspaceBase?: WorkspaceBase
   } = {},
 ) {
@@ -110,6 +112,7 @@ function harness(
     exec,
     launchRunner: async (slug) => {
       launches.push(slug)
+      return opts.launchResult ?? 'scheduled'
     },
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
@@ -2201,6 +2204,23 @@ describe('Dispatcher startup resume', () => {
 
     expect(report).toEqual({ ...emptyTickReport(), resumed: 1 })
     expect(h.launches).toEqual([slug])
+  })
+
+  test('does not count a startup or sweep request suppressed by a known active runner', async () => {
+    const h = harness({ launchResult: 'already-active' })
+    const slug = await seedBuild(h)
+    await h.store.claimLease(slug, 'runner-1', 1000)
+    h.clock.advance(2000)
+
+    // Startup owns this tick's launch attempt, so its per-tick slug set also
+    // prevents the stale-lease stage from asking twice.
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(
+      emptyTickReport(),
+    )
+    // A later stale-lease poll asks again, but the launcher still knows the
+    // process-local run is live. Neither no-op is observable as resumed/swept.
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([slug, slug])
   })
 
   test('re-arms a policy-exhausted phase and records an auditable retry answer', async () => {

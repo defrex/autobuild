@@ -701,6 +701,234 @@ model = "gpt-slug-name"
   }, 30_000)
 })
 
+describe('abDispatch watch build-runner coordination', () => {
+  test('stale-lease polling cannot open competing sessions for one phase attempt', async () => {
+    const handlers = happyHandlers()
+    const happyCodeReview = handlers['code-review']!
+    let releaseFirst!: () => void
+    let firstReleased = false
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = () => {
+        if (firstReleased) return
+        firstReleased = true
+        resolve()
+      }
+    })
+    let markFirstStarted!: () => void
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve
+    })
+    let reviewTurns = 0
+    handlers['code-review'] = async (cli) => {
+      reviewTurns += 1
+      if (reviewTurns === 1) {
+        markFirstStarted()
+        await firstGate
+        return defaultTurnResult('first review ended without a terminal')
+      }
+      return happyCodeReview(cli)
+    }
+
+    const clock = manualClock()
+    const fx = await makeFixture(
+      readyTicket('T-session-single-flight'),
+      handlers,
+      DISPATCH_CONFIG_TOML,
+      clock,
+    )
+    const stop = new AbortController()
+    const out: string[] = []
+    let sleeps = 0
+    let turnsWhileFirstLive = 0
+    let sessionsWhileFirstLive = 0
+    let attachmentsWhileFirstLive = 0
+    let dispatch: Promise<void> | undefined
+
+    try {
+      dispatch = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            // Hold the real code-review turn open, then make its build lease
+            // look stale before the next watch tick. The heartbeat uses real
+            // time, so this manual-clock jump creates the reported race
+            // deterministically without waiting a minute.
+            await firstStarted
+            clock.advance(61_000)
+            return
+          }
+          if (sleeps === 2) {
+            // Permit another full lease-sweep tick over the same stale record.
+            return
+          }
+
+          const [record] = await fx.store.listBuilds()
+          const events = await fx.store.getEvents(record!.slug)
+          const ended = new Set(
+            events
+              .filter((event) => event.type === 'session.ended')
+              .map((event) => event.payload.session),
+          )
+          const liveReviews = events.filter(
+            (event) =>
+              event.type === 'session.started' &&
+              event.payload.phase === 'code-review' &&
+              !ended.has(event.payload.session),
+          )
+          turnsWhileFirstLive = reviewTurns
+          sessionsWhileFirstLive = liveReviews.length
+          attachmentsWhileFirstLive = events.filter(
+            (event) => event.type === 'runner.attached',
+          ).length
+
+          // The first session is now confirmed ended without a terminal. The
+          // same BuildRunner's bounded retry may start one fresh session; it
+          // must happen sequentially, never as a polling-launched competitor.
+          releaseFirst()
+          await waitFor(
+            async () =>
+              (await fx.store.getEvents(record!.slug)).some(
+                (event) => event.type === 'finalize.completed',
+              ),
+            10_000,
+          )
+          stop.abort()
+        },
+        wire: fx.wire,
+      })
+      await dispatch
+
+      expect(sleeps).toBe(3)
+      expect(turnsWhileFirstLive).toBe(1)
+      expect(sessionsWhileFirstLive).toBe(1)
+      expect(attachmentsWhileFirstLive).toBe(1)
+
+      const [record] = await fx.store.listBuilds()
+      const events = await fx.store.getEvents(record!.slug)
+      const reviewSessionIds = new Set(
+        events.flatMap((event) =>
+          event.type === 'session.started' &&
+          event.payload.phase === 'code-review'
+            ? [event.payload.session]
+            : [],
+        ),
+      )
+      const reviewStarts = events.filter(
+        (event) =>
+          event.type === 'session.started' &&
+          event.payload.phase === 'code-review',
+      )
+      const reviewEnds = events.filter(
+        (event) =>
+          event.type === 'session.ended' &&
+          reviewSessionIds.has(event.payload.session),
+      )
+      const reviewFailures = events.filter(
+        (event) =>
+          event.type === 'phase.failed' &&
+          event.payload.phase === 'code-review' &&
+          event.payload.round === 1,
+      )
+      const verdicts = events.filter(
+        (event) => event.type === 'code-review.verdict',
+      )
+
+      expect(reviewStarts).toHaveLength(2)
+      expect(reviewEnds).toHaveLength(2)
+      expect(reviewFailures).toHaveLength(1)
+      expect(verdicts).toHaveLength(1)
+      expect(reviewEnds[0]!.seq).toBeLessThan(reviewStarts[1]!.seq)
+      expect(
+        events.filter((event) => event.type === 'runner.attached'),
+      ).toHaveLength(1)
+      // Suppressed sweeps are no-ops, not inflated observability counters;
+      // one successful verdict also means there was no D5 terminal race.
+      expect(out.some((line) => line.includes('swept='))).toBe(false)
+      expect(fx.cliErrors).toEqual([])
+      expect(fx.err).toEqual([])
+    } finally {
+      releaseFirst()
+      stop.abort()
+      await dispatch?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a launch preflight failure releases the slug for a later sweep', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-launch-preflight-retry'),
+      happyHandlers(),
+    )
+    const originalGetBuild = fx.store.getBuild.bind(fx.store)
+    let failedPreflight = false
+    fx.store.getBuild = async (slug) => {
+      const record = await originalGetBuild(slug)
+      // uniqueSlug probes before createBuild and sees null. Fail only the first
+      // post-provision lookup inside DispatchLoop.launchRunner.
+      if (record !== null && !failedPreflight) {
+        failedPreflight = true
+        throw new Error('scripted launch preflight failure')
+      }
+      return record
+    }
+
+    const stop = new AbortController()
+    const err: string[] = []
+    let sleeps = 0
+    let dispatch: Promise<void> | undefined
+    try {
+      dispatch = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) return
+          const [record] = await fx.store.listBuilds()
+          await waitFor(
+            async () =>
+              (await fx.store.getEvents(record!.slug)).some(
+                (event) => event.type === 'finalize.completed',
+              ),
+            10_000,
+          )
+          stop.abort()
+        },
+        wire: fx.wire,
+      })
+      await dispatch
+
+      expect(failedPreflight).toBe(true)
+      expect(sleeps).toBe(2)
+      expect(err).toEqual([
+        'tick failed: scripted launch preflight failure',
+      ])
+      const [record] = await fx.store.listBuilds()
+      expect(
+        (await fx.store.getEvents(record!.slug)).filter(
+          (event) => event.type === 'runner.attached',
+        ),
+      ).toHaveLength(1)
+      expect(fx.cliErrors).toEqual([])
+    } finally {
+      stop.abort()
+      await dispatch?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
 describe('abDispatch watch harvest coordination', () => {
   test('long harvest work does not block later ticks or SIGINT', async () => {
     const fx = await makeFixture(

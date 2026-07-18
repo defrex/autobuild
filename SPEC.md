@@ -1087,6 +1087,18 @@ checks that branch before remote access and never re-cuts it from a newer base.
 Uncommitted round-2 work is lost by design (§7.3 — phase boundaries are the
 resume points).
 
+One live `ab dispatch` process single-flights build-runners by build slug. Its
+in-memory runner slot is stronger local liveness evidence than a transiently
+stale lease, so repeated ticks cannot replace a runner that the same process
+still knows is active or open competing agent sessions for its current phase
+attempt. The slot clears when that runner settles or fails; a no-terminal turn
+can therefore take its existing bounded sequential retry, and later actionable
+work can be launched again. This guard is deliberately not durable: when the
+process genuinely dies its memory disappears, and the BuildStore lease remains
+the cross-process stale-runner exclusion and recovery gate. An open historical
+`session.started` bracket is never used as a lock because a dead session may
+never append `session.ended`.
+
 A new `ab dispatch` process does not wait for the ordinary stale-lease sweep
 to discover work: on its first tick it attempts every actionable,
 non-terminal build in its repo. Lease claiming remains the exclusivity gate,
