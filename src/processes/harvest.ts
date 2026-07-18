@@ -215,8 +215,8 @@ export function parseApprovedProposalSet(
   return parsed.data
 }
 
-/** Stable adapter idempotency key: semantic cluster membership, independent of
- * prose edits and review rounds. */
+/** Stable proposal identity: semantic cluster membership, independent of prose
+ * edits, review rounds, and the separately reserved external-create UUID. */
 export function harvestProposalKey(proposal: HarvestProposal): string {
   const members = proposal.observations.map(occurrenceKey).sort().join('\n')
   return `harvest-${contentHash(toBytes(members)).slice(0, 24)}`

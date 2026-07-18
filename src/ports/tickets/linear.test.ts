@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   LINEAR_API_URL,
   LinearTicketSource,
-  linearIdempotencyUuid,
   type LinearFetch,
 } from './linear'
 
@@ -89,17 +88,6 @@ const TEAM_INFO_RESPONSE = {
 }
 
 describe('LinearTicketSource', () => {
-  test('idempotency keys derive stable, distinct RFC-shaped issue UUIDs', () => {
-    expect(linearIdempotencyUuid('cluster-a')).toBe(
-      linearIdempotencyUuid('cluster-a'),
-    )
-    expect(linearIdempotencyUuid('cluster-a')).not.toBe(
-      linearIdempotencyUuid('cluster-b'),
-    )
-    expect(linearIdempotencyUuid('cluster-a')).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    )
-  })
   test('listReady sends team + state + and-of-label filters and maps issues to Tickets', async () => {
     const { fetchFn, calls } = fakeLinear([
       { body: { data: { issues: { nodes: [gqlIssue()] } } } },
@@ -352,16 +340,17 @@ describe('LinearTicketSource', () => {
       fetchFn,
       createState: 'Ready',
     })
+    const reservedId = crypto.randomUUID()
     await source.create(
       { title: 'X', body: 'y' },
-      { state: 'Done', idempotencyKey: 'cluster-x' },
+      { state: 'Done', idempotencyKey: reservedId },
     )
     const input = (calls[1]?.variables as { input: Record<string, unknown> }).input
     expect(input['stateId']).toBe('st-done')
-    expect(input['id']).toBe(linearIdempotencyUuid('cluster-x'))
+    expect(input['id']).toBe(reservedId)
   })
 
-  test('a duplicate idempotent create adopts the deterministic issue', async () => {
+  test('a duplicate idempotent create adopts the exact reserved issue id', async () => {
     const { fetchFn, calls } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -376,14 +365,58 @@ describe('LinearTicketSource', () => {
       },
       { body: { data: { issue: gqlIssue({ identifier: 'ENG-88' }) } } },
     ])
+    const reservedId = crypto.randomUUID()
     const adopted = await makeSource(fetchFn).create(
       { title: 'X', body: 'y' },
-      { idempotencyKey: 'cluster-retry' },
+      { idempotencyKey: reservedId },
     )
     expect(adopted.ref.id).toBe('ENG-88')
-    expect(calls[2]?.variables).toEqual({
-      id: linearIdempotencyUuid('cluster-retry'),
+    expect(calls[1]?.variables).toMatchObject({
+      input: { id: reservedId },
     })
+    expect(calls[2]?.variables).toEqual({ id: reservedId })
+  })
+
+  test('an unsuccessful idempotent mutation also adopts the exact reserved id', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: { issueCreate: { success: false, issue: null } },
+        },
+      },
+      { body: { data: { issue: gqlIssue({ identifier: 'ENG-89' }) } } },
+    ])
+    const reservedId = crypto.randomUUID()
+
+    expect(
+      (
+        await makeSource(fetchFn).create(
+          { title: 'X', body: 'y' },
+          { idempotencyKey: reservedId },
+        )
+      ).ref.id,
+    ).toBe('ENG-89')
+    expect(calls[2]?.variables).toEqual({ id: reservedId })
+  })
+
+  test('invalid and non-v4 idempotency keys fail before issuing a Linear request', async () => {
+    const { fetchFn, calls } = fakeLinear([])
+
+    for (const idempotencyKey of [
+      'not-a-uuid',
+      Bun.randomUUIDv5('cluster-retry', 'dns'),
+    ]) {
+      await expect(
+        makeSource(fetchFn).create(
+          { title: 'X', body: 'y' },
+          { idempotencyKey },
+        ),
+      ).rejects.toThrow(
+        'linear create: idempotency key must be a UUID v4',
+      )
+    }
+    expect(calls).toHaveLength(0)
   })
 
   test('create without createState sends no stateId — the team default applies', async () => {
@@ -400,6 +433,7 @@ describe('LinearTicketSource', () => {
 
     const input = (calls[1]?.variables as { input: Record<string, unknown> }).input
     expect(input['stateId']).toBeUndefined()
+    expect(input['id']).toBeUndefined()
   })
 
   test('create with a createState the team lacks throws with the known states', async () => {

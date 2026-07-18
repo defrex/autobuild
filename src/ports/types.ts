@@ -51,7 +51,9 @@ export interface DependencyState {
 export interface TicketCreateOptions {
   /** Explicit workflow state for this create (harvest always targets Triage). */
   state?: string
-  /** Stable source-level adoption key for crash-safe external creation. */
+  /** Source-level adoption key for crash-safe external creation. File and fake
+   * sources treat it as opaque; Linear requires a durably reserved UUID v4,
+   * sends it verbatim as the issue id, and queries that id when adopting. */
   idempotencyKey?: string
 }
 

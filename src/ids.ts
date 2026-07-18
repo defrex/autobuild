@@ -5,6 +5,15 @@
  */
 export type IdSource = (prefix: string) => string
 
+/** UUID v4 allocation is separate from short kernel ids: callers that need
+ * crash-stable UUIDs must reserve the generated value in durable state. */
+export type UuidSource = () => string
+
+/** Platform-backed UUID v4 allocation; no hand-rolled UUID bit shaping. */
+export function randomUuids(): UuidSource {
+  return () => crypto.randomUUID()
+}
+
 /** e.g. `f_3a91c07b` — 4 random bytes, hex. */
 export function randomIds(): IdSource {
   return (prefix) => {

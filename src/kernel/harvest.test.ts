@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { KERNEL } from '../events/envelope'
+import { DISPATCHER, KERNEL } from '../events/envelope'
 import { claimedOccurrenceKeys, openHarvestRun, reduceHarvest } from './harvest'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -127,6 +127,124 @@ describe('reduceHarvest', () => {
     expect(openHarvestRun(state)).toBeUndefined()
     expect([...claimedOccurrenceKeys(state)]).toEqual(['a:1'])
   })
+
+  test('validates UUID v4 reservations and restricts them to the kernel actor', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_reservation',
+        observations: [{ build: 'a', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    const id = crypto.randomUUID()
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: { run: 'h_reservation', proposalKey: 'cluster-1', id },
+    })
+
+    await expect(
+      store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: {
+          run: 'h_reservation',
+          proposalKey: 'cluster-2',
+          id: Bun.randomUUIDv5('cluster-2', 'dns'),
+        },
+      }),
+    ).rejects.toThrow(/uuid/i)
+    await expect(
+      store.appendRepo('/repo', {
+        actor: DISPATCHER,
+        type: 'harvest.proposal.id-reserved',
+        payload: {
+          run: 'h_reservation',
+          proposalKey: 'cluster-2',
+          id: crypto.randomUUID(),
+        },
+      }),
+    ).rejects.toThrow(/may not emit/)
+
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest).toMatchObject({
+      reservations: [{ proposalKey: 'cluster-1', id }],
+      filed: [],
+      dispositions: [],
+    })
+  })
+
+  test('replays an identical reservation as one logical mapping', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_replay',
+        observations: [{ build: 'a', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    const id = crypto.randomUUID()
+    for (let replay = 0; replay < 2; replay += 1) {
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_replay', proposalKey: 'cluster-1', id },
+      })
+    }
+
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.reservations).toEqual([
+      { proposalKey: 'cluster-1', id, seq: 2 },
+    ])
+  })
+
+  for (const contradiction of ['key-remapped', 'id-reused'] as const) {
+    test(`throws when a reservation is contradicted by ${contradiction}`, async () => {
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      await store.ensureRepo('/repo')
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_contradiction',
+          observations: [{ build: 'a', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      const firstId = crypto.randomUUID()
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: {
+          run: 'h_contradiction',
+          proposalKey: 'cluster-1',
+          id: firstId,
+        },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: {
+          run: 'h_contradiction',
+          proposalKey:
+            contradiction === 'key-remapped' ? 'cluster-1' : 'cluster-2',
+          id: contradiction === 'key-remapped' ? crypto.randomUUID() : firstId,
+        },
+      })
+
+      const events = await store.getRepoEvents('/repo')
+      expect(() => reduceHarvest(events)).toThrow(
+        contradiction === 'key-remapped'
+          ? /cannot replace it/
+          : /cannot reuse it/,
+      )
+    })
+  }
 
   test('throws on cross-event references to an unknown run', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })

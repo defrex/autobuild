@@ -25,7 +25,7 @@ import type {
 } from './terminal'
 import type { Config } from '../config/schema'
 import { KERNEL, agentActor } from '../events/envelope'
-import { sequentialIds } from '../ids'
+import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
 import type { OneShotCompletionInput } from '../ports/runner/one-shot'
@@ -170,6 +170,7 @@ async function makeFixture(
     defaultRuntime: 'scripted',
     storeRef: 'memory', // unused: the scripted CLI writes the shared store by ref
     ids,
+    uuids: randomUuids(),
     clock,
   })
 
@@ -279,6 +280,7 @@ describe('abDispatch guards', () => {
             defaultRuntime: 'claude',
             storeRef: join(tmp, 'store'),
             ids: sequentialIds(),
+            uuids: randomUuids(),
             clock: systemClock,
           }),
         }),

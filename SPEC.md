@@ -603,7 +603,8 @@ observations arriving later wait for the next threshold.
 Occurrence identity is `{build slug, event seq}` — never payload id or a scalar
 high-water mark, because event sequences are per build. The repository journal
 is separate from build streams and reduces to run/step state, claims, review
-history, filing facts, and the authoritative committed disposition ledger.
+history, external-create ID reservations, filing facts, and the authoritative
+committed disposition ledger.
 Dispatch starts harvest fire-and-forget and tracks it as in-flight: watch ticks
 remain responsive for janitor, lease sweep, ticket dispatch, dashboard input,
 and SIGINT, while `--once` drains the visible workflow before exit. A
@@ -624,9 +625,13 @@ The fixed workflow is:
    quality, and evidence. `revise` findings feed the next producer round;
    `maxReviewRounds` and `stallRounds` bound the loop. Only approval advances.
 3. **file (deterministic)** — render creates to the spec standard, target the
-   configured Triage state explicitly, and create/adopt through a stable
-   cluster idempotency key. Per-proposal filing facts close the external-create
-   crash window; one terminal event commits every occurrence disposition.
+   configured Triage state explicitly, and keep a deterministic proposal key
+   as the semantic/ledger identity. Before each new external create, generate a
+   platform UUID v4 and durably reserve it for that proposal key; only then pass
+   the reserved ID through the TicketSource adoption seam. A restart before
+   create reuses the reservation, while a restart after create but before the
+   per-proposal filing fact resends the same ID and adopts the ticket. One
+   terminal event commits every occurrence disposition.
 
 The harvester only proposes: it never claims, readies, grooms, or dispatches a
 proposal. A terminal escalation consumes its claimed snapshot so watch ticks do
@@ -659,11 +664,17 @@ ticket stays queued source work rather than becoming a blocked build: the
 runtime `blocked` status is for builds awaiting a human, not for work that
 has not started.
 
-`create(draft, {state?, idempotencyKey?})` supports deterministic outer-loop
+`create(draft, {state?, idempotencyKey?})` supports crash-safe outer-loop
 filing. A state override lets harvest target Triage even when ordinary user
 creation has another default. An idempotency key must adopt the same ticket on
-retry across process restarts: the file adapter persists it in frontmatter;
-Linear uses a deterministic caller-supplied issue UUID and adopt-on-conflict.
+retry across process restarts. File persists the opaque key in frontmatter,
+and fake sources also treat it as opaque. Linear requires the key to be a
+durably reserved UUID v4, sends it verbatim as the caller-supplied issue ID,
+and queries that same ID to adopt after an ambiguous or duplicate create. The
+deterministic proposal key remains the semantic ledger identity; the random
+Linear ID is stable across restarts because its reservation fact precedes the
+side effect. Ordinary Linear creation without an idempotency key generates and
+sends no caller-supplied issue ID.
 
 ## 14. Operator UI
 
@@ -848,7 +859,8 @@ the matching started fact, never the older conflict snapshot.
 | `harvest.session.started` / `harvest.session.ended` | kernel | run/session/role/round and transcript/usage facts |
 | `harvest.proposals.submitted` | agent | `{run, round, artifact}` |
 | `harvest.review.verdict` | agent | `{run, round, verdict, findings, artifact, reason?}` |
-| `harvest.proposal.filed` | kernel | `{run, proposalKey, ticket}` — external-create retry boundary |
+| `harvest.proposal.id-reserved` | kernel | `{run, proposalKey, id}` — UUID v4 reserved before external create |
+| `harvest.proposal.filed` | kernel | `{run, proposalKey, ticket}` — post-create adoption/filing boundary |
 | `harvest.completed` | kernel | `{run, dispositions, report}` — authoritative committed ledger facts |
 | `harvest.escalated` | kernel/agent | `{run, source, reason, round?, observations}` |
 | `harvest.failed` | kernel | `{run, step, round?, attempt, error, willRetry}` |
