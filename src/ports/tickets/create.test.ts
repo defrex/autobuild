@@ -84,6 +84,14 @@ describe('createTicketSource — file', () => {
     expect(await readdir(join(repo, '.autobuild', 'tickets'))).toContain('.gitignore')
   })
 
+  test('no dir: a selected local state root relocates the tracker too', async () => {
+    const stateRoot = join(repo, 'alternate-state')
+    const source = createTicketSource(FILE_CONFIG, {}, repo, stateRoot)
+    await source.create({ title: 'T', body: 'b' })
+
+    expect(await readdir(join(stateRoot, 'tickets', 'triage'))).toEqual(['file-1.md'])
+  })
+
   test('an explicit relative dir resolves against the repo, not cwd — and is NOT gitignored', async () => {
     const source = createTicketSource({ ...FILE_CONFIG, dir: 'tickets' }, {}, repo)
     await source.create({ title: 'T', body: 'b' })

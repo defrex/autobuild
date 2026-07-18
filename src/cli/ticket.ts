@@ -7,11 +7,13 @@
  * (e.g. LINEAR_API_KEY via the binary's .env loader), never from config.
  */
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { TicketsConfig } from '../config/schema'
 import { createTicketSource } from '../ports/tickets/create'
 import type { TicketSource } from '../ports/types'
+import type { Exec } from '../ports/workspace/git-worktree'
+import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
 
 export interface TicketCreateOpts {
   targetRepo: string
@@ -24,25 +26,32 @@ export interface TicketCreateOpts {
   blockedBy?: string[]
   /** Process environment — adapter secrets (D8-adjacent, never in config). */
   env: Record<string, string | undefined>
+  /** Git seam supplied by the CLI; omitted direct callers use the target path. */
+  exec?: Exec
   stdout: (line: string) => void
   /** Injectable for tests; defaults to the real adapter factory. */
   sourceFactory?: (
     config: TicketsConfig,
     env: Record<string, string | undefined>,
     targetRepo: string,
+    localStateRoot?: string,
   ) => TicketSource
 }
 
 export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
-  const configPath = join(opts.targetRepo, 'autobuild.toml')
+  const targetRepo =
+    opts.exec === undefined
+      ? resolve(opts.targetRepo)
+      : await resolveMainRepo(opts.targetRepo, opts.exec)
+  const configPath = join(targetRepo, 'autobuild.toml')
   let config
   try {
     config = await loadConfig(configPath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(
-        `${configPath}: not found — 'ab ticket create' reads the target repo's ` +
-          'autobuild.toml (run it from the repo root, SPEC §8.8)',
+        `${configPath}: not found — 'ab ticket create' reads autobuild.toml ` +
+          'from the resolved Git main checkout (SPEC §8.8)',
       )
     }
     throw error
@@ -59,8 +68,17 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     throw error
   }
 
+  const repoState = resolveRepoStatePaths({
+    repo: targetRepo,
+    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+  })
   const factory = opts.sourceFactory ?? createTicketSource
-  const source = factory(config.tickets, opts.env, opts.targetRepo)
+  const source = factory(
+    config.tickets,
+    opts.env,
+    targetRepo,
+    repoState.localStateRoot,
+  )
 
   // Validate blockers BEFORE creating: a ticket referencing a nonexistent
   // blocker would never dispatch, and failing here costs nothing, whereas

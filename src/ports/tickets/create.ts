@@ -7,10 +7,10 @@
  *
  * This factory is also the single place that knows how a file tracker's
  * directory is decided, because three facts have to be settled together and
- * only here are all three in scope: the default (`.autobuild/tickets`), the
- * repo-relative → absolute resolution, and whether the directory was DEFAULTED
- * (which decides `selfIgnore`). Filling `dir` in earlier would destroy that
- * last bit before the adapter is constructed.
+ * only here are all three in scope: the default (`<local-state>/tickets`),
+ * repo-relative → absolute resolution for an explicit directory, and whether
+ * the directory was DEFAULTED (which decides `selfIgnore`). Filling `dir` in
+ * earlier would destroy that last bit before the adapter is constructed.
  */
 import { resolve } from 'node:path'
 import type { TicketsConfig } from '../../config/schema'
@@ -23,6 +23,8 @@ export function createTicketSource(
   env: Record<string, string | undefined>,
   /** A relative [tickets].dir is relative to the repo, not this process's cwd. */
   targetRepo: string,
+  /** Selected local state root. Remote stores pass the repo-local default. */
+  localStateRoot?: string,
 ): TicketSource {
   if (config.source === 'linear') {
     const apiKey = env['LINEAR_API_KEY']
@@ -53,7 +55,10 @@ export function createTicketSource(
   }
 
   return new FileTicketSource({
-    dir: resolve(targetRepo, config.dir ?? DEFAULT_TICKETS_DIR),
+    dir:
+      config.dir === undefined && localStateRoot !== undefined
+        ? resolve(localStateRoot, 'tickets')
+        : resolve(targetRepo, config.dir ?? DEFAULT_TICKETS_DIR),
     // Only the DEFAULTED backlog hides itself from git. An explicit dir is the
     // user's directory — possibly tracked on purpose — and silently dropping it
     // out of `git status` would be a bad, hard-to-notice failure.

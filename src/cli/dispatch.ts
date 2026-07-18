@@ -39,7 +39,10 @@ import {
   type DashboardModel,
   type DashboardSelection,
 } from './dashboard/model'
-import { renderDashboard } from './dashboard/render'
+import {
+  renderDashboard,
+  type DashboardRendererResolver,
+} from './dashboard/render'
 import {
   dashboardSelections,
   moveSelection,
@@ -66,7 +69,7 @@ import {
   type TickReport,
 } from '../processes/dispatcher'
 import { RemoteBuildStore } from '../store/remote/client'
-import { DEFAULT_LOCAL_ROOT } from '../store/local/store'
+import { resolveRepoState, resolveRepoStatePaths } from './repo-state'
 import { resolveStore } from './store-ref'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 
@@ -162,7 +165,7 @@ export interface DispatchOpts {
   once?: boolean
   /** Watch-loop cadence in ms (§3.3); default DEFAULT_INTERVAL_MS. */
   intervalMs?: number
-  /** `AB_STORE` override; default the local store at ~/.autobuild. */
+  /** Explicit `--store` override; otherwise AB_STORE, then repo-local state. */
   storeRef?: string
   /** Watch-loop stop signal — the binary aborts it on SIGINT (§15.6-C: an
    * interrupted runner's lease expires and a future dispatch re-attaches). */
@@ -177,12 +180,15 @@ export interface DispatchOpts {
   /**
    * The interactive output seam. ABSENT ⇒ non-interactive ⇒ plain — which is
    * exactly today's behavior, so the dashboard can never be the reason a
-   * scripted or piped `ab dispatch` starts emitting escapes. `bin/ab.ts`
-   * constructs the real one over `process.stdout`.
+   * scripted or piped `ab dispatch` starts emitting escapes. The shared binary
+   * wiring constructs the real one over `process.stdout`.
    */
   terminal?: TerminalOut
   /** Injectable normalized keyboard/text source; the binary wraps stdin. */
   input?: TerminalInput
+  /** Optional repo-dev presentation seam. The resolver is called for every
+   * paint; production omits it and remains bound to `renderDashboard`. */
+  resolveDashboardRenderer?: DashboardRendererResolver
 }
 
 /** setTimeout that also resolves the moment ANY stop signal aborts, so OS
@@ -221,14 +227,24 @@ function openWorkspaceRef(events: AbEvent[]): string | null {
 /** Production wiring: the local (or remote) store, the configured
  * TicketSource, the GitHub forge, git worktrees, and shipped runtimes. */
 async function defaultWire(config: Config, opts: DispatchOpts): Promise<DispatchWiring> {
-  const storeRef = opts.storeRef ?? DEFAULT_LOCAL_ROOT
+  const state = resolveRepoStatePaths({
+    repo: opts.targetRepo,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+  })
+  const storeRef = state.storeRef
   const token = opts.env['AB_TOKEN']
   const store = resolveStore(storeRef, {
     remoteFactory: (url, tok) => new RemoteBuildStore({ url, token: tok }),
     ...(token !== undefined && token !== '' ? { token } : {}),
   })
 
-  const tickets = createTicketSource(config.tickets, opts.env, opts.targetRepo)
+  const tickets = createTicketSource(
+    config.tickets,
+    opts.env,
+    opts.targetRepo,
+    state.localStateRoot,
+  )
   // One adapter instance carries both capabilities. A one-shot completion is
   // pre-build judgment, not a second phase runner or a resumable session.
   const claude = new ClaudeAgentRunner()
@@ -238,8 +254,9 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     store,
     tickets,
     forge: new GitHubForge(),
-    // Worktrees live under the autobuild home, never inside the repo tree.
-    workspaces: new GitWorktreeProvider({ root: join(DEFAULT_LOCAL_ROOT, 'worktrees') }),
+    // A local override relocates the whole tree. Remote stores still need
+    // local Git scratch, which stays beneath the repository's default root.
+    workspaces: new GitWorktreeProvider({ root: state.worktreeRoot }),
     // Two registered runtimes (§9): claude serves Claude models (its own SDK
     // default model ⇒ no `defaultModel`); pi validates configured models against
     // its provider catalog. Pi model ids are provider-qualified
@@ -1003,8 +1020,9 @@ class DispatchLoop {
   private paint(): void {
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined || this.model === undefined) return
+    const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
     this.region.update(
-      renderDashboard(this.model, {
+      renderer(this.model, {
         color: true,
         width: terminal.columns,
         // NOT `terminal.rows` — the region's trailing newline needs a row of
@@ -1163,21 +1181,34 @@ class DispatchLoop {
  * and runs until one pass finishes (`--once`) or `opts.signal` aborts (SIGINT).
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
-  const configPath = join(opts.targetRepo, 'autobuild.toml')
+  const state = await resolveRepoState({
+    targetRepo: opts.targetRepo,
+    exec: opts.exec,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+  })
+  // Normalize once, then use these exact values for config/tickets/repository
+  // identity, store wiring, worktrees, and every session's AB_STORE.
+  const resolvedOpts: DispatchOpts = {
+    ...opts,
+    targetRepo: state.repo,
+    storeRef: state.storeRef,
+  }
+  const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let config: Config
   try {
     config = await loadConfig(configPath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(
-        `${configPath}: not found — 'ab dispatch' runs from the repo root and ` +
-          'reads its autobuild.toml (SPEC §8.2, §16.1)',
+        `${configPath}: not found — 'ab dispatch' reads autobuild.toml from ` +
+          'the resolved Git main checkout (SPEC §8.2, §16.1)',
       )
     }
     throw error
   }
-  const wire = opts.wire ?? defaultWire
-  const wiring = await wire(config, opts)
+  const wire = resolvedOpts.wire ?? defaultWire
+  const wiring = await wire(config, resolvedOpts)
   // §9: resolve the whole config against the registry ONCE, at startup — a
   // config naming an unregistered runtime or an incompatible merged
   // runtime/model pair fails `ab dispatch` loudly here, before any build
@@ -1188,6 +1219,6 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     config.roles,
     wiring.defaultRuntime,
   )
-  const loop = new DispatchLoop(config, wiring, opts, resolver)
+  const loop = new DispatchLoop(config, wiring, resolvedOpts, resolver)
   await loop.run()
 }

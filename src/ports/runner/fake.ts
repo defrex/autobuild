@@ -33,9 +33,28 @@ export type Script = (
   ctx: ScriptContext,
 ) => Promise<AgentTurnResult> | AgentTurnResult
 
-/** Default turn (text '', usage 1/1/1) — keeps scripts terse. */
+/** Default completed turn (text '', usage 1/1/1) — keeps scripts terse. */
 export function defaultTurnResult(text = ''): AgentTurnResult {
-  return { text, usage: { inputTokens: 1, outputTokens: 1, turns: 1 } }
+  return {
+    kind: 'completed',
+    text,
+    usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+  }
+}
+
+/** Script a provider/runner-declared failure while preserving the same endable
+ * fake session and transcript behavior as a real adapter. */
+export function failedTurnResult(
+  message: string,
+  permanent: boolean,
+  text = '',
+): AgentTurnResult {
+  return {
+    kind: 'failed',
+    text,
+    usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
+    failure: { message, permanent },
+  }
 }
 
 export interface RecordedTurn {

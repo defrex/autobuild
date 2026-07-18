@@ -28,7 +28,6 @@
  * formatting" are both satisfied by emitting none rather than by gating on a
  * TTY check.
  */
-import { dirname, resolve } from 'node:path'
 import type { AbEvent } from '../events/catalog'
 import type { Actor } from '../events/envelope'
 import {
@@ -40,10 +39,16 @@ import {
 } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { DEFAULT_LOCAL_ROOT } from '../store/local/store'
 import { RemoteBuildStore } from '../store/remote/client'
 import type { BuildRecord, BuildStore } from '../store/types'
+import {
+  resolveMainRepo,
+  resolveRepoStatePaths,
+} from './repo-state'
 import { resolveStore } from './store-ref'
+
+/** Backward-compatible name for callers/tests; repository resolution is shared. */
+export const currentRepo = resolveMainRepo
 
 // ── The projection ───────────────────────────────────────────────────────────
 
@@ -420,23 +425,16 @@ export function statusFilter(all?: boolean, queued?: boolean): BuildStatus[] {
 }
 
 /**
- * Store precedence: `--store` > `AB_STORE` > the local default, with
- * `AB_TOKEN` passed through for remote refs. Reference handling itself is
- * `resolveStore` — the same path-vs-URL behavior `ab dispatch` gets.
- *
- * The `AB_STORE` middle term is a DELIBERATE divergence from dispatch, not a
- * copy of it: `defaultWire` in dispatch.ts is `opts.storeRef ??
- * DEFAULT_LOCAL_ROOT` and never consults `AB_STORE`. That fits a dispatcher,
- * which is told which store to serve. It does not fit these commands, whose
- * primary audience is an agent inside a session:
- * `bin/ab.ts` passes `processEnv: process.env` in its sessionless branch, so
- * an agent running `ab builds` inside a session sees the `AB_STORE` its own
- * build lives in (dispatch's `storeRef` is literally what becomes a session's
- * `AB_STORE`). Defaulting past it to ~/.autobuild would report a store that
- * agent has nothing to do with.
+ * Open the shared selection: `--store` > non-blank `AB_STORE` > the main
+ * repository's `.autobuild/`. Local references are already absolute here;
+ * HTTP(S) references remain unchanged for the remote adapter.
  */
-function openStoreFor(opts: StatusOpts): BuildStore {
-  const ref = opts.storeRef ?? opts.env['AB_STORE'] ?? DEFAULT_LOCAL_ROOT
+function openStoreFor(opts: StatusOpts, repo: string): BuildStore {
+  const ref = resolveRepoStatePaths({
+    repo,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+  }).storeRef
   const token = opts.env['AB_TOKEN']
   const open =
     opts.openStore ??
@@ -448,33 +446,6 @@ function openStoreFor(opts: StatusOpts): BuildStore {
   return open(ref, token !== undefined && token !== '' ? token : undefined)
 }
 
-/**
- * The repo a build record would name: the MAIN repo root, not the cwd.
- *
- * `record.repo` is the dispatcher's `targetRepo` — the main repo root. But
- * agents run inside linked worktrees (~/.autobuild/worktrees/ab-<slug>), where
- * `--show-toplevel` returns the WORKTREE, so a naive cwd comparison would
- * match zero builds for exactly the callers this command serves.
- * `--git-common-dir` returns the main repo's `.git` from both a linked
- * worktree and the main worktree; its dirname is the repo root.
- *
- * Falls back to the cwd when git fails (not a repo) so the command degrades to
- * cwd matching rather than throwing.
- */
-export async function currentRepo(targetRepo: string, exec: Exec): Promise<string> {
-  try {
-    const result = await exec(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-      cwd: targetRepo,
-    })
-    if (result.exitCode !== 0) return resolve(targetRepo)
-    const gitDir = result.stdout.trim()
-    if (gitDir === '') return resolve(targetRepo)
-    return dirname(resolve(gitDir))
-  } catch {
-    return resolve(targetRepo)
-  }
-}
-
 export interface AbBuildsOpts extends StatusOpts {
   queued?: boolean
   all?: boolean
@@ -483,8 +454,8 @@ export interface AbBuildsOpts extends StatusOpts {
 /** `ab builds` — this repo's builds, active by default. Read-only. */
 export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  const repo = await currentRepo(opts.targetRepo, opts.exec)
-  const store = openStoreFor(opts)
+  const repo = await resolveMainRepo(opts.targetRepo, opts.exec)
+  const store = openStoreFor(opts, repo)
   try {
     const wanted = new Set(statusFilter(opts.all, opts.queued))
     // Cross-repo aggregation is out of scope (§12: one dispatcher per repo,
@@ -525,7 +496,8 @@ export interface AbBuildStatusOpts extends StatusOpts {
 /** `ab build status <slug>` — one build in detail. Read-only. */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  const store = openStoreFor(opts)
+  const repo = await resolveMainRepo(opts.targetRepo, opts.exec)
+  const store = openStoreFor(opts, repo)
   try {
     const record = await store.getBuild(opts.slug)
     if (record === null) {

@@ -7,13 +7,23 @@
  */
 import { describe, expect, test } from 'bun:test'
 import type { AgentStartOpts } from '../types'
-import { PiAgentRunner, type PiCreateSessionFn, type PiModelRef, type PiTurn } from './pi'
+import {
+  PiAgentRunner,
+  PiTurnCapture,
+  type PiCreateSessionFn,
+  type PiModelRef,
+  type PiTurn,
+} from './pi'
+
+const KIMI_QUOTA =
+  '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
 
 /** One scripted turn's output for the fake session. */
 interface ScriptedTurn {
   text: string
   inputTokens: number
   outputTokens: number
+  failure?: NonNullable<PiTurn['failure']>
 }
 
 interface RecordedCreate {
@@ -67,6 +77,7 @@ function fakeSessions(
         return {
           text: scripted.text,
           usage: { inputTokens: scripted.inputTokens, outputTokens: scripted.outputTokens },
+          ...(scripted.failure !== undefined ? { failure: scripted.failure } : {}),
         }
       },
       dispose() {
@@ -86,6 +97,61 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
     ...overrides,
   }
 }
+
+describe('PiTurnCapture', () => {
+  test('extracts the reproduced provider error and classifies it without rewriting', () => {
+    const capture = new PiTurnCapture()
+    capture.observe({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'error',
+        error: {
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: KIMI_QUOTA,
+        },
+      },
+    })
+    capture.observe({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        stopReason: 'error',
+        errorMessage: KIMI_QUOTA,
+      },
+    })
+
+    expect(capture.result({ inputTokens: 0, outputTokens: 0 })).toEqual({
+      text: '',
+      usage: { inputTokens: 0, outputTokens: 0 },
+      failure: { message: KIMI_QUOTA, permanent: true },
+    })
+  })
+
+  test('a successful completion after Pi internal retry clears the stale error', () => {
+    const capture = new PiTurnCapture()
+    capture.observe({
+      type: 'message_end',
+      message: { role: 'assistant', stopReason: 'error', errorMessage: '503 overloaded' },
+    })
+    capture.observe({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: 'recovered',
+      },
+    })
+    capture.observe({
+      type: 'message_end',
+      message: { role: 'assistant', stopReason: 'stop' },
+    })
+
+    expect(capture.result({ inputTokens: 2, outputTokens: 1 })).toEqual({
+      text: 'recovered',
+      usage: { inputTokens: 2, outputTokens: 1 },
+    })
+  })
+})
 
 describe('PiAgentRunner.start', () => {
   test('formats the prompt as /{skill} {buildSlug} and flows the model from config (§4, §9)', async () => {
@@ -165,6 +231,37 @@ describe('PiAgentRunner.start', () => {
     expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, turns: 1 })
   })
 
+  test('returns a failed result with an endable handle and retains it in the transcript', async () => {
+    const { disposed, createSessionFn } = fakeSessions([
+      {
+        sessionId: 'pi-quota',
+        turns: [
+          {
+            text: '',
+            inputTokens: 0,
+            outputTokens: 0,
+            failure: { message: KIMI_QUOTA, permanent: true },
+          },
+        ],
+      },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+    const { session, result } = await runner.start(startOpts({ model: 'kimi-coding/k3' }))
+
+    expect(result).toEqual({
+      kind: 'failed',
+      text: '',
+      usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
+      failure: { message: KIMI_QUOTA, permanent: true },
+    })
+    const transcript = await runner.end(session)
+    expect(JSON.parse(transcript.content).turns[0].failure).toEqual({
+      message: KIMI_QUOTA,
+      permanent: true,
+    })
+    expect(disposed).toEqual(['pi-quota'])
+  })
+
   test('passes the ambient process env through, with scoped AB_* winning the merge (D8)', async () => {
     process.env['AB_TEST_AMBIENT'] = 'from-process'
     process.env['AB_TEST_OVERRIDE'] = 'ambient-loses'
@@ -222,6 +319,28 @@ describe('PiAgentRunner.complete', () => {
     )
   })
 
+  test('throws a failed provider turn and still disposes the one-shot session', async () => {
+    const { disposed, createSessionFn } = fakeSessions([
+      {
+        sessionId: 'failed-one-shot',
+        turns: [
+          {
+            text: '',
+            inputTokens: 0,
+            outputTokens: 0,
+            failure: { message: KIMI_QUOTA, permanent: true },
+          },
+        ],
+      },
+    ])
+    const runner = new PiAgentRunner({ createSessionFn })
+
+    await expect(
+      runner.complete({ prompt: 'name this spec', cwd: '/repos/app', env: {} }),
+    ).rejects.toThrow(KIMI_QUOTA)
+    expect(disposed).toEqual(['failed-one-shot'])
+  })
+
   test('forwards an already-aborted deadline and still disposes the one-shot session', async () => {
     const { prompts, disposed, createSessionFn } = fakeSessions([
       {
@@ -263,7 +382,11 @@ describe('PiAgentRunner.continue', () => {
     const result = await runner.continue(session, 'address findings f_1, f_2')
 
     expect(prompts[1]?.text).toBe('address findings f_1, f_2')
-    expect(result).toEqual({ text: 'revised', usage: { inputTokens: 7, outputTokens: 3, turns: 1 } })
+    expect(result).toEqual({
+      kind: 'completed',
+      text: 'revised',
+      usage: { inputTokens: 7, outputTokens: 3, turns: 1 },
+    })
   })
 
   test('re-issued ambient env merges over the start env for the continued turn (§10, D8)', async () => {

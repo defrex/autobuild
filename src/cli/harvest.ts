@@ -18,6 +18,7 @@ import {
   type HarvestRunState,
 } from '../kernel/harvest'
 import { findingDraftSchema, type Finding } from '../ontology'
+import type { Exec } from '../ports/workspace/git-worktree'
 import {
   HARVEST_PROPOSALS_ARTIFACT,
   HARVEST_REVIEW_ARTIFACT,
@@ -25,9 +26,9 @@ import {
   validateProposalCoverage,
 } from '../processes/harvest'
 import type { BuildStore } from '../store/types'
-import { DEFAULT_LOCAL_ROOT } from '../store/local/store'
 import { RemoteBuildStore } from '../store/remote/client'
 import type { HarvestCliEnv } from './env'
+import { resolveRepoState } from './repo-state'
 import { resolveStore } from './store-ref'
 
 export interface HarvestCliDeps {
@@ -476,27 +477,43 @@ export function renderHarvestStatus(view: HarvestStatusView): string[] {
   return lines
 }
 
-export async function abHarvestStatus(opts: {
+export interface HarvestStatusOpts {
+  /** Current directory; normalized to the main checkout before journal reads. */
   repo: string
   env: Record<string, string | undefined>
+  exec: Exec
   stdout: (line: string) => void
   storeRef?: string
   json?: boolean
   events?: number
-}): Promise<void> {
+  /** Injectable store seam for command tests. */
+  openStore?: (ref: string, token?: string) => BuildStore
+}
+
+export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
+  const state = await resolveRepoState({
+    targetRepo: opts.repo,
+    exec: opts.exec,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+  })
   const token = opts.env['AB_TOKEN']
-  const store = resolveStore(
-    opts.storeRef ?? opts.env['AB_STORE'] ?? DEFAULT_LOCAL_ROOT,
-    {
-      ...(token !== undefined && token !== '' ? { token } : {}),
-      remoteFactory: (url, scoped) =>
-        new RemoteBuildStore({ url, token: scoped }),
-    },
+  const open =
+    opts.openStore ??
+    ((ref: string, scoped?: string) =>
+      resolveStore(ref, {
+        ...(scoped !== undefined && scoped !== '' ? { token: scoped } : {}),
+        remoteFactory: (url, remoteToken) =>
+          new RemoteBuildStore({ url, token: remoteToken }),
+      }))
+  const store = open(
+    state.storeRef,
+    token !== undefined && token !== '' ? token : undefined,
   )
   try {
-    const record = await store.getRepo(opts.repo)
-    const events = record === null ? [] : await store.getRepoEvents(opts.repo)
-    const view = projectHarvestStatus(opts.repo, events, opts.events)
+    const record = await store.getRepo(state.repo)
+    const events = record === null ? [] : await store.getRepoEvents(state.repo)
+    const view = projectHarvestStatus(state.repo, events, opts.events)
     if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
     else for (const line of renderHarvestStatus(view)) opts.stdout(line)
   } finally {

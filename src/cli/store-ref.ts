@@ -8,6 +8,7 @@
  */
 import { openLocalStore } from '../store/local/store'
 import type { BuildStore } from '../store/types'
+import { isRemoteStoreRef } from './repo-state'
 
 export interface ResolveStoreOpts {
   /** Constructs the remote HTTP store (§7.2.2); wired by `bin/ab.ts`. */
@@ -17,7 +18,7 @@ export interface ResolveStoreOpts {
 }
 
 export function resolveStore(ref: string, opts: ResolveStoreOpts = {}): BuildStore {
-  if (/^https?:\/\//i.test(ref)) {
+  if (isRemoteStoreRef(ref)) {
     if (opts.remoteFactory === undefined) {
       throw new Error(
         `remote store support not wired: cannot open "${ref}" from this entry ` +

@@ -3,6 +3,7 @@ import type { AgentStartOpts } from '../types'
 import {
   ScriptedAgentRunner,
   defaultTurnResult,
+  failedTurnResult,
   type ScriptContext,
 } from './fake'
 
@@ -19,6 +20,7 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
 describe('defaultTurnResult', () => {
   test('defaults to empty text and 1/1/1 usage', () => {
     expect(defaultTurnResult()).toEqual({
+      kind: 'completed',
       text: '',
       usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
     })
@@ -26,6 +28,15 @@ describe('defaultTurnResult', () => {
 
   test('carries the given text', () => {
     expect(defaultTurnResult('done').text).toBe('done')
+  })
+
+  test('scripts a structured failure without rewriting it', () => {
+    expect(failedTurnResult('403 quota exhausted', true)).toEqual({
+      kind: 'failed',
+      text: '',
+      usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
+      failure: { message: '403 quota exhausted', permanent: true },
+    })
   })
 })
 
@@ -157,6 +168,7 @@ describe('ScriptedAgentRunner', () => {
   test('end returns a Transcript: JSON of recorded turns + summed usage', async () => {
     const runner = new ScriptedAgentRunner({
       script: (ctx) => ({
+        kind: 'completed',
         text: `turn-${ctx.turn}`,
         usage: { inputTokens: ctx.turn * 10, outputTokens: ctx.turn, turns: 1 },
       }),
@@ -184,6 +196,16 @@ describe('ScriptedAgentRunner', () => {
     expect(content.turns[1].result.text).toBe('turn-2')
 
     expect(runner.sessions.get('s_1')?.ended).toBe(true)
+  })
+
+  test('failed turns remain in the journal and transcript', async () => {
+    const failed = failedTurnResult('permission denied', true)
+    const runner = new ScriptedAgentRunner({ script: () => failed })
+    const { session, result } = await runner.start(startOpts())
+    expect(result).toEqual(failed)
+    expect(runner.sessions.get(session.id)?.turns[0]?.result).toEqual(failed)
+    const transcript = JSON.parse((await runner.end(session)).content)
+    expect(transcript.turns[0].result).toEqual(failed)
   })
 
   test('continue on an ended session throws', async () => {

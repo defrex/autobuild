@@ -1,7 +1,7 @@
 /**
- * The local BuildStore (SPEC §7.2.1): SQLite + blob directory under
- * `~/.autobuild/`. Zero setup, offline, v1-parity for solo use — the repo
- * never sees build metadata.
+ * The local BuildStore (SPEC §7.2.1): SQLite + blob directory beneath an
+ * explicitly resolved local state root. Repository/default selection belongs
+ * to the CLI; this adapter only opens the path it is given.
  *
  * Every write goes through `validateEventWrite` (§8 — the enforced ontology).
  * Seq assignment and `appendWithArtifacts` are transactional: bun:sqlite
@@ -14,7 +14,6 @@ import { Database } from 'bun:sqlite'
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite'
 import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   validateEventWrite,
@@ -819,14 +818,12 @@ export class SqliteBuildStore implements BuildStore {
   }
 }
 
-export const DEFAULT_LOCAL_ROOT = join(homedir(), '.autobuild')
-
 /**
  * Open the local store (SPEC §7.2.1): `<root>/autobuild.sqlite` plus a
- * content-addressed blob dir at `<root>/blobs`, defaulting to `~/.autobuild/`.
+ * content-addressed blob directory at `<root>/blobs`.
  */
 export function openLocalStore(
-  rootDir: string = DEFAULT_LOCAL_ROOT,
+  rootDir: string,
   opts: { clock?: Clock } = {},
 ): SqliteBuildStore {
   mkdirSync(rootDir, { recursive: true })

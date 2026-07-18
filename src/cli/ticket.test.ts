@@ -206,6 +206,50 @@ describe('abTicketCreate', () => {
     expect(lines).toEqual(['ticket created: file:file-1 (Triage)'])
   })
 
+  test('AB_STORE relocates the default file tracker with local state', async () => {
+    await writeRepo('[tickets]\nsource = "file"\n')
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Alternate tracker',
+      bodyFile,
+      env: { AB_STORE: 'alternate-state' },
+      stdout: () => {},
+    })
+
+    expect(
+      await readFile(
+        join(tmp, 'alternate-state', 'tickets', 'triage', 'file-1.md'),
+        'utf8',
+      ),
+    ).toContain('title = "Alternate tracker"')
+  })
+
+  test('normalizes a linked-worktree cwd before resolving default file tickets', async () => {
+    await writeRepo('[tickets]\nsource = "file"\n')
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+
+    await abTicketCreate({
+      targetRepo: join(tmp, 'linked-worktree'),
+      exec: async () => ({
+        stdout: `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+        stderr: '',
+        exitCode: 0,
+      }),
+      title: 'Main tracker only',
+      bodyFile,
+      env: {},
+      stdout: () => {},
+    })
+
+    expect(
+      await readFile(join(tmp, '.autobuild', 'tickets', 'triage', 'file-1.md'), 'utf8'),
+    ).toContain('title = "Main tracker only"')
+  })
+
   test('--blocked-by reaches the draft and the success line names the blockers', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')
@@ -317,6 +361,11 @@ describe('runCli — ticket routing', () => {
     return {
       deps: {
         workspacePath: tmp,
+        exec: async () => ({
+          stdout: `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+          stderr: '',
+          exitCode: 0,
+        }),
         stdout: (line: string) => out.push(line),
         stderr: (line: string) => err.push(line),
       },

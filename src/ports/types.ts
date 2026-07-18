@@ -170,12 +170,38 @@ export interface AgentSessionHandle {
   model?: string
 }
 
-export interface AgentTurnResult {
+interface AgentTurnResultBase {
   /** Final text of the turn — informational only; outcomes travel the typed
    * channel (`ab done|verdict|escalate`), never parsed from output (§8.4). */
   text: string
   usage: { inputTokens: number; outputTokens: number; turns: number }
 }
+
+/** A turn whose provider/runtime completed normally. This does not mean the
+ * phase completed: only a typed terminal event can express that outcome. */
+export interface AgentTurnCompleted extends AgentTurnResultBase {
+  kind: 'completed'
+}
+
+export interface AgentTurnFailure {
+  /** Provider/runner text, preserved verbatim when one was supplied. */
+  message: string
+  /** False means "apply the existing bounded retry policy"; it does not claim
+   * the failure is transient. True is reserved for positive permanent signals
+   * such as authentication, permission, quota, or billing rejection. */
+  permanent: boolean
+}
+
+/** A turn that reached a provider/runtime-declared failure while retaining an
+ * endable session handle, so transcript deposition remains guaranteed. */
+export interface AgentTurnFailed extends AgentTurnResultBase {
+  kind: 'failed'
+  failure: AgentTurnFailure
+}
+
+/** SDK/provider-declared failures must use the failed variant. A completed turn
+ * with no typed terminal is the distinct `no-terminal` condition (§8.4). */
+export type AgentTurnResult = AgentTurnCompleted | AgentTurnFailed
 
 /** Transcripts come back through the interface, not scraped from disk (§9). */
 export interface Transcript {

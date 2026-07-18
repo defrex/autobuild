@@ -21,6 +21,10 @@ function assistant(...texts: string[]): SdkAssistantMessage {
   }
 }
 
+function assistantError(error: string): SdkAssistantMessage {
+  return { type: 'assistant', message: { content: [] }, error }
+}
+
 function sdkResult(
   sessionId: string,
   inputTokens: number,
@@ -30,6 +34,22 @@ function sdkResult(
     type: 'result',
     session_id: sessionId,
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  }
+}
+
+function sdkError(
+  sessionId: string,
+  message: string,
+  opts: { subtype?: string; status?: number | null } = {},
+): SdkResultMessage {
+  return {
+    type: 'result',
+    subtype: opts.subtype ?? 'error_during_execution',
+    is_error: true,
+    errors: [message],
+    ...(opts.status !== undefined ? { api_error_status: opts.status } : {}),
+    session_id: sessionId,
+    usage: { input_tokens: 0, output_tokens: 0 },
   }
 }
 
@@ -154,6 +174,51 @@ describe('ClaudeAgentRunner.start', () => {
     expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, turns: 1 })
   })
 
+  test('returns an authentication failure verbatim with an endable handle and transcript', async () => {
+    const message = 'Invalid API key: authentication failed'
+    const { queryFn } = fakeQuery([
+      [assistantError('authentication_failed'), sdkError('sdk-auth', message, { status: 401 })],
+    ])
+    const runner = new ClaudeAgentRunner({ queryFn })
+    const { session, result } = await runner.start(startOpts())
+
+    expect(result).toEqual({
+      kind: 'failed',
+      text: '',
+      usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
+      failure: { message, permanent: true },
+    })
+    const transcript = await runner.end(session)
+    expect(JSON.parse(transcript.content).turns[0].failure).toEqual({
+      message,
+      permanent: true,
+    })
+  })
+
+  test.each([
+    ['permission', 'You do not have permission to use this model'],
+    ['billing', 'Billing error: account has insufficient credits'],
+  ])('classifies a %s SDK result as permanent', async (_name, message) => {
+    const { queryFn } = fakeQuery([[sdkError('sdk-permanent', message)]])
+    const runner = new ClaudeAgentRunner({ queryFn })
+    const { session, result } = await runner.start(startOpts())
+    expect(result.kind).toBe('failed')
+    if (result.kind !== 'failed') throw new Error('unreachable')
+    expect(result.failure).toEqual({ message, permanent: true })
+    await runner.end(session)
+  })
+
+  test('keeps an unknown execution error eligible for bounded retry', async () => {
+    const message = 'worker process exited unexpectedly'
+    const { queryFn } = fakeQuery([[sdkError('sdk-unknown', message)]])
+    const runner = new ClaudeAgentRunner({ queryFn })
+    const { session, result } = await runner.start(startOpts())
+    expect(result.kind).toBe('failed')
+    if (result.kind !== 'failed') throw new Error('unreachable')
+    expect(result.failure).toEqual({ message, permanent: false })
+    await runner.end(session)
+  })
+
   test('throws when the stream ends without a result message', async () => {
     const { queryFn } = fakeQuery([[assistant('no terminal result')]])
     const runner = new ClaudeAgentRunner({ queryFn })
@@ -194,6 +259,15 @@ describe('ClaudeAgentRunner.complete', () => {
       runner.end({ id: 'one-shot-id', runner: 'claude' }),
     ).rejects.toThrow('unknown session "one-shot-id"')
   })
+
+  test('throws a failed one-shot result instead of returning empty text', async () => {
+    const message = 'Billing error: no credits remain'
+    const { queryFn } = fakeQuery([[sdkError('one-shot-error', message)]])
+    const runner = new ClaudeAgentRunner({ queryFn })
+    await expect(
+      runner.complete({ prompt: 'name this spec', cwd: '/repo', env: {} }),
+    ).rejects.toThrow(message)
+  })
 })
 
 describe('ClaudeAgentRunner.continue', () => {
@@ -214,6 +288,7 @@ describe('ClaudeAgentRunner.continue', () => {
     expect(calls[1]?.options.allowDangerouslySkipPermissions).toBe(true)
     expect(calls[1]?.options.env['AB_BUILD']).toBe('auth-rate-limit')
     expect(result).toEqual({
+      kind: 'completed',
       text: 'revised',
       usage: { inputTokens: 7, outputTokens: 3, turns: 1 },
     })

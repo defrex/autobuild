@@ -7,8 +7,8 @@
  * `createAgentSession(...)` once and drive it with `session.prompt(text)`, so
  * the injectable boundary here is a session FACTORY, not a query function.
  *
- * Two things the Claude adapter gets "for free" from its SDK need explicit
- * handling here, both grounded in the real Pi types:
+ * Three things the Claude adapter gets "for free" from its SDK need explicit
+ * handling here, all grounded in the real Pi types:
  *
  *  1. Per-turn env → tool subprocess. Pi has no per-prompt `env` option; its
  *     bash tool spawns with the shell env. The build-runner refreshes the
@@ -26,6 +26,12 @@
  *     is non-negative integers (`session.ended`), so the diff is rounded and
  *     clamped.
  *
+ *  3. Provider failure extraction. Pi reports request failures as final
+ *     assistant messages (`stopReason: "error"`) and may retry internally.
+ *     Per-prompt capture therefore retains only the final assistant completion
+ *     after `prompt()` settles and returns the error through AgentRunner while
+ *     keeping the session endable for transcript deposition.
+ *
  * The model identifier is provider-qualified and flows from config
  * (`opts.model`, e.g. `openai/gpt-5.6-sol`), never hardcoded — runtime/model
  * routing keeps the model in config rather than code. `parsePiModel` splits it
@@ -41,9 +47,11 @@ import {
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
+  type AgentTurnFailure,
   type AgentTurnResult,
   type Transcript,
 } from '../types'
+import { classifyProviderError } from './provider-error'
 import type {
   OneShotCompletion,
   OneShotCompletionInput,
@@ -81,11 +89,12 @@ export function parsePiModel(model: string): PiModelRef {
   return { provider: model.slice(0, slash), id: model.slice(slash + 1) }
 }
 
-/** One prompt's captured output: accumulated assistant text and the per-turn
- * token delta (already non-negative integers). */
+/** One prompt's captured output: accumulated assistant text, per-turn token
+ * delta, and any final provider-declared failure. */
 export interface PiTurn {
   text: string
   usage: { inputTokens: number; outputTokens: number }
+  failure?: AgentTurnFailure
 }
 
 /**
@@ -127,10 +136,71 @@ export type PiCreateSessionFn = (opts: {
 // shapes so the rest of the adapter stays cleanly typed. Deliberately untested
 // — tests inject a fake PiCreateSessionFn instead (offline).
 
-/** Minimal shape of the SDK `message_update`/`text_delta` event we consume. */
-interface PiTextDeltaEvent {
+/** Minimal structural shape of the Pi events used by the capture seam. */
+interface PiAssistantCompletion {
+  role?: string
+  stopReason?: string
+  errorMessage?: string
+}
+
+export interface PiSessionEvent {
   type: string
-  assistantMessageEvent?: { type: string; delta?: string }
+  message?: PiAssistantCompletion
+  assistantMessageEvent?: {
+    type: string
+    delta?: string
+    message?: PiAssistantCompletion
+    error?: PiAssistantCompletion
+  }
+}
+
+/** Per-prompt event accumulator. Pi may emit an error completion and then retry
+ * internally before `prompt()` settles, so every later successful assistant
+ * completion clears the prior failure and only the final completion wins. */
+export class PiTurnCapture {
+  private readonly textParts: string[] = []
+  private failureMessage: string | undefined
+
+  observe(event: PiSessionEvent): void {
+    if (
+      event.type === 'message_update' &&
+      event.assistantMessageEvent?.type === 'text_delta' &&
+      event.assistantMessageEvent.delta !== undefined
+    ) {
+      this.textParts.push(event.assistantMessageEvent.delta)
+    }
+
+    const completion =
+      event.type === 'message_end'
+        ? event.message
+        : event.type === 'message_update' &&
+            event.assistantMessageEvent?.type === 'error'
+          ? event.assistantMessageEvent.error
+          : event.type === 'message_update' &&
+              event.assistantMessageEvent?.type === 'done'
+            ? event.assistantMessageEvent.message
+            : undefined
+    if (completion?.role !== 'assistant') return
+
+    if (completion.stopReason === 'error' || completion.stopReason === 'aborted') {
+      this.failureMessage =
+        completion.errorMessage !== undefined && completion.errorMessage.length > 0
+          ? completion.errorMessage
+          : `pi runtime: assistant turn ended with stopReason "${completion.stopReason}"`
+    } else if (completion.stopReason !== undefined) {
+      this.failureMessage = undefined
+    }
+  }
+
+  result(usage: PiTurn['usage']): PiTurn {
+    return {
+      text: this.textParts.join(''),
+      usage,
+      ...(this.failureMessage !== undefined
+        ? { failure: classifyProviderError(this.failureMessage) }
+        : {}),
+    }
+  }
 }
 
 /** Minimal shape of `getSessionStats().tokens`. */
@@ -205,18 +275,10 @@ const piSdkCreateSession: PiCreateSessionFn = async (opts) => {
   })
   session.setActiveToolsByName([...opts.tools, ...extensionTools.map((t) => t.name)])
 
-  // Assistant text streams as `text_delta`s; buffer per turn.
-  let turnTexts: string[] = []
-  session.subscribe((event) => {
-    const e = event as PiTextDeltaEvent
-    if (
-      e.type === 'message_update' &&
-      e.assistantMessageEvent?.type === 'text_delta' &&
-      e.assistantMessageEvent.delta !== undefined
-    ) {
-      turnTexts.push(e.assistantMessageEvent.delta)
-    }
-  })
+  // Assistant text and terminal provider errors stream through one capture.
+  // It is replaced per prompt so turns cannot leak into one another.
+  let capture = new PiTurnCapture()
+  session.subscribe((event) => capture.observe(event as PiSessionEvent))
 
   const tokens = (): PiTokens => session.getSessionStats().tokens as PiTokens
 
@@ -226,7 +288,7 @@ const piSdkCreateSession: PiCreateSessionFn = async (opts) => {
     },
     async prompt(text, env, signal) {
       injectedEnv = env
-      turnTexts = []
+      capture = new PiTurnCapture()
       const before = tokens()
       let aborting: Promise<void> | undefined
       const onAbort = (): void => {
@@ -244,13 +306,10 @@ const piSdkCreateSession: PiCreateSessionFn = async (opts) => {
       }
       if (signal !== undefined && signalAborted(signal)) throw abortError(signal)
       const after = tokens()
-      return {
-        text: turnTexts.join(''),
-        usage: {
-          inputTokens: Math.max(0, Math.round(after.input - before.input)),
-          outputTokens: Math.max(0, Math.round(after.output - before.output)),
-        },
-      }
+      return capture.result({
+        inputTokens: Math.max(0, Math.round(after.input - before.input)),
+        outputTokens: Math.max(0, Math.round(after.output - before.output)),
+      })
     },
     dispose() {
       session.dispose()
@@ -263,6 +322,7 @@ interface TurnRecord {
   prompt: string
   text: string
   usage: { inputTokens: number; outputTokens: number }
+  failure?: AgentTurnFailure
 }
 
 interface SessionState {
@@ -300,6 +360,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         { ...ambientEnv(), ...input.env },
         input.signal,
       )
+      if (turn.failure !== undefined) throw new Error(turn.failure.message)
       return { text: turn.text }
     } finally {
       await session.dispose()
@@ -330,7 +391,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       opts,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
       session,
-      turns: [{ turn: 1, prompt, text: turn.text, usage: turn.usage }],
+      turns: [this.turnRecord(1, prompt, turn)],
     })
     return { session: handle, result: this.toResult(turn) }
   }
@@ -347,12 +408,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     const scoped =
       opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
     const turn = await state.session.prompt(message, this.turnEnv(scoped))
-    state.turns.push({
-      turn: state.turns.length + 1,
-      prompt: message,
-      text: turn.text,
-      usage: turn.usage,
-    })
+    state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
 
@@ -403,8 +459,21 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     return state
   }
 
+  private turnRecord(turnNumber: number, prompt: string, turn: PiTurn): TurnRecord {
+    return {
+      turn: turnNumber,
+      prompt,
+      text: turn.text,
+      usage: turn.usage,
+      ...(turn.failure !== undefined ? { failure: turn.failure } : {}),
+    }
+  }
+
   private toResult(turn: PiTurn): AgentTurnResult {
-    return { text: turn.text, usage: { ...turn.usage, turns: 1 } }
+    const base = { text: turn.text, usage: { ...turn.usage, turns: 1 } }
+    return turn.failure === undefined
+      ? { kind: 'completed', ...base }
+      : { kind: 'failed', ...base, failure: turn.failure }
   }
 }
 

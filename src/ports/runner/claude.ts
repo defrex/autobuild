@@ -16,9 +16,11 @@ import {
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
+  type AgentTurnFailure,
   type AgentTurnResult,
   type Transcript,
 } from '../types'
+import { classifyProviderError } from './provider-error'
 import type {
   OneShotCompletion,
   OneShotCompletionInput,
@@ -33,12 +35,19 @@ import type {
 export interface SdkAssistantMessage {
   type: 'assistant'
   message: { content: Array<{ type: string; text?: string }> }
+  /** Claude SDK's structured API failure code, when this assistant message
+   * represents an API failure rather than model output. */
+  error?: string
 }
 
 export interface SdkResultMessage {
   type: 'result'
   session_id: string
   usage: { input_tokens: number; output_tokens: number }
+  subtype?: string
+  is_error?: boolean
+  errors?: string[]
+  api_error_status?: number | null
 }
 
 export type SdkMessage =
@@ -83,11 +92,19 @@ const sdkQueryFn: QueryFn = async function* (opts) {
   }) as AsyncIterable<SdkMessage>
 }
 
+interface ClaudeTurn {
+  text: string
+  usage: { inputTokens: number; outputTokens: number }
+  sessionId: string
+  failure?: AgentTurnFailure
+}
+
 interface TurnRecord {
   turn: number
   prompt: string
   text: string
   usage: { inputTokens: number; outputTokens: number }
+  failure?: AgentTurnFailure
 }
 
 interface SessionState {
@@ -123,6 +140,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
           ? { abortController: cancellation.abortController }
           : {}),
       })
+      if (turn.failure !== undefined) throw new Error(turn.failure.message)
       return { text: turn.text }
     } finally {
       cancellation.dispose()
@@ -144,7 +162,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     this.sessions.set(session.id, {
       opts,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
-      turns: [{ turn: 1, prompt, text: turn.text, usage: turn.usage }],
+      turns: [this.turnRecord(1, prompt, turn)],
     })
     return { session, result: this.toResult(turn) }
   }
@@ -163,12 +181,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts
     const turn = await this.runTurn(message, turnOpts, session.id)
-    state.turns.push({
-      turn: state.turns.length + 1,
-      prompt: message,
-      text: turn.text,
-      usage: turn.usage,
-    })
+    state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
 
@@ -221,11 +234,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     prompt: string,
     opts: AgentStartOpts,
     resume?: string,
-  ): Promise<{
-    text: string
-    usage: { inputTokens: number; outputTokens: number }
-    sessionId: string
-  }> {
+  ): Promise<ClaudeTurn> {
     return this.runPrompt(prompt, {
       cwd: opts.workspacePath,
       // Ambient auth (D8): AB_* scoped vars merged over process.env.
@@ -244,16 +253,14 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   private async runPrompt(
     prompt: string,
     options: Parameters<QueryFn>[0]['options'],
-  ): Promise<{
-    text: string
-    usage: { inputTokens: number; outputTokens: number }
-    sessionId: string
-  }> {
+  ): Promise<ClaudeTurn> {
     const stream = this.queryFn({ prompt, options })
     const texts: string[] = []
+    let assistantError: string | undefined
     let result: SdkResultMessage | undefined
     for await (const message of stream) {
       if (isAssistant(message)) {
+        assistantError = message.error
         for (const block of message.message.content) {
           if (block.type === 'text' && block.text !== undefined) texts.push(block.text)
         }
@@ -266,21 +273,58 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
         `${this.name}: SDK stream ended without a result message (prompt "${prompt}")`,
       )
     }
+
+    const usage = {
+      inputTokens: result.usage.input_tokens,
+      outputTokens: result.usage.output_tokens,
+    }
+    const failed =
+      result.is_error === true ||
+      (result.subtype !== undefined && result.subtype !== 'success')
+    if (!failed) {
+      return {
+        text: texts.join('\n'),
+        usage,
+        sessionId: result.session_id,
+      }
+    }
+
+    const suppliedErrors = (result.errors ?? []).filter((error) => error.length > 0)
+    const message =
+      suppliedErrors.length > 0
+        ? suppliedErrors.join('\n')
+        : assistantError ??
+          `${this.name}: SDK result ${result.subtype ?? 'error'} supplied no error text`
     return {
       text: texts.join('\n'),
-      usage: {
-        inputTokens: result.usage.input_tokens,
-        outputTokens: result.usage.output_tokens,
-      },
+      usage,
       sessionId: result.session_id,
+      failure: classifyProviderError(message, {
+        status: result.api_error_status,
+        codes: [assistantError, result.subtype],
+      }),
     }
   }
 
-  private toResult(turn: {
-    text: string
-    usage: { inputTokens: number; outputTokens: number }
-  }): AgentTurnResult {
-    return { text: turn.text, usage: { ...turn.usage, turns: 1 } }
+  private turnRecord(
+    turnNumber: number,
+    prompt: string,
+    turn: ClaudeTurn,
+  ): TurnRecord {
+    return {
+      turn: turnNumber,
+      prompt,
+      text: turn.text,
+      usage: turn.usage,
+      ...(turn.failure !== undefined ? { failure: turn.failure } : {}),
+    }
+  }
+
+  private toResult(turn: ClaudeTurn): AgentTurnResult {
+    const base = { text: turn.text, usage: { ...turn.usage, turns: 1 } }
+    return turn.failure === undefined
+      ? { kind: 'completed', ...base }
+      : { kind: 'failed', ...base, failure: turn.failure }
   }
 }
 

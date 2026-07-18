@@ -40,7 +40,7 @@ import type {
 export const TICKET_STATES = ['Triage', 'Ready', 'Doing', 'Done'] as const
 export type TicketState = (typeof TICKET_STATES)[number]
 
-/** Where a repo's tracker lives when [tickets].dir is absent (SPEC §16.1). */
+/** Repo-relative fallback when no selected local-state root is supplied. */
 export const DEFAULT_TICKETS_DIR = '.autobuild/tickets'
 
 /**
@@ -154,7 +154,7 @@ export class FileTicketSource implements TicketSource {
     doneState?: string
     /**
      * Write a self-excluding `<dir>/.gitignore`. Set ONLY for the defaulted
-     * `.autobuild/tickets` backlog (see createTicketSource): an explicitly
+     * local-state `tickets/` backlog (see createTicketSource): an explicitly
      * configured dir is the user's directory, and ab does not decide git's
      * view of it.
      */

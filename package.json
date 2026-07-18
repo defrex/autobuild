@@ -7,6 +7,7 @@
     "ab": "bin/ab.ts"
   },
   "scripts": {
+    "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

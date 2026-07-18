@@ -120,7 +120,6 @@ an early adopter.
   safe only under that rule.
 - **Capacity is per-repo.** `[dispatcher].capacity` defaults to 1. There is no
   global cap across repos sharing a store.
-- **`ab dispatch` must run from the repo root** — it reads `./autobuild.toml`.
 - **Merged builds are terminal.** A fixup on merged work is a new ticket, never
   a reopened build.
 - **Tickets that fail the spec gate are bounced back for human triage**,
@@ -128,8 +127,6 @@ an early adopter.
 - **The dispatcher's `Done` state name is not configurable** via
   `autobuild.toml`. The triage hand-back state is — `[tickets].triageState`
   (default `Backlog` for Linear, `Triage` for the file tracker).
-- **Worktrees always live under `~/.autobuild/worktrees`**, even when `--store`
-  points somewhere else.
 
 ---
 
@@ -627,24 +624,38 @@ slug is the stable identifier used by the dashboard, `ab` commands, runner
 instances, worktree names, and the branch `ab/<slug>`. Builds created before
 this rule retain their existing slugs and branches.
 
-### Local state lives outside your repo
+### Local state is repository-relative
 
-Under `~/.autobuild` by default:
+Each repository owns one state tree under its main checkout by default:
 
 | Path | Contents |
 |---|---|
-| `~/.autobuild/autobuild.sqlite` | Events and build records |
-| `~/.autobuild/blobs/` | Content-addressed build and repository-journal artifact blobs |
-| `~/.autobuild/worktrees/ab-<slug>/` | One git worktree per build. The branch is `ab/<slug>`; the directory name flattens it — every run of characters outside `[A-Za-z0-9._-]` becomes a `-`, so branch `ab/add-rate-limiting` lives at `worktrees/ab-add-rate-limiting/`. |
+| `.autobuild/autobuild.sqlite` | Events, build records, and repository journals |
+| `.autobuild/blobs/` | Content-addressed build and repository-journal artifact blobs |
+| `.autobuild/worktrees/ab-<slug>/` | One git worktree per build. The branch is `ab/<slug>`; the directory name flattens it — every run of characters outside `[A-Za-z0-9._-]` becomes a `-`, so branch `ab/add-rate-limiting` lives at `worktrees/ab-add-rate-limiting/`. |
+| `.autobuild/tickets/` | Default `file` ticket source (`triage/`, `ready/`, `doing/`, `done/`) |
 
-`ab dispatch --store <ref>` moves the store — a local path, or an
-`http(s)://` remote store. It does **not** move the worktree root.
+Git's repository/worktree metadata identifies the main checkout, so commands
+run from an autobuild-created linked worktree use the same state tree and ticket
+tracker as the main checkout. Submodules and checkouts using a separate Git
+directory remain distinct repositories with state beneath their own working
+trees. There is no machine-level or home-directory fallback.
+
+Store selection is identical everywhere: explicit `--store <ref>` wins over a
+nonempty `AB_STORE`, which wins over `<main-repo>/.autobuild`. A local override
+may be relative to the main checkout or absolute and relocates the complete
+local tree, including `worktrees/` and the default `file` ticket directory. An
+explicit `[tickets].dir` remains relative to the main checkout. An `http(s)://`
+reference still selects the remote store; Git worktrees and default file tickets
+necessarily remain local under the repository's default `.autobuild/` root.
 
 ### Commit these
 
-`ab init` does not touch your `.gitignore`; that is up to you.
+`ab init` idempotently adds `.autobuild/` to `.gitignore` without rewriting
+existing rules.
 
 - `autobuild.toml`
+- `.gitignore`
 - `.agents/skills/ab-*/`
 - `.agents/skills/.ab-pristine/` — **commit this.** It is `ab upgrade`'s merge
   base; without it, upgrade cannot tell your edits from an old default and will
@@ -654,11 +665,9 @@ Under `~/.autobuild` by default:
 ### Keep uncommitted
 
 - `.ab/` — per-phase agent scratch, disposable by construction
-- `.autobuild/` — the default file tracker at `.autobuild/tickets` writes its
-  own self-excluding `.gitignore`, so it stays out of git without your help.
-  (An explicit `[tickets].dir` is *your* directory — autobuild does not
-  gitignore it.) Also covers the store, if you point it into the repo for
-  local dev.
+- `.autobuild/` — repository-local database, blobs, worktrees, and default
+  file tickets; the rule added by `ab init` excludes the complete tree. An
+  explicit `[tickets].dir` outside it is *your* directory and is not ignored.
 - `*.local.db`
 - `.env`
 
@@ -669,11 +678,12 @@ Under `~/.autobuild` by default:
 | Variable | When |
 |---|---|
 | `LINEAR_API_KEY` | `[tickets].source = "linear"` only |
-| `AB_TOKEN` | Only when `--store` is a remote `http(s)://` store |
+| `AB_STORE` | Optional local state-root path or remote `http(s)://` store override |
+| `AB_TOKEN` | Only when the selected store is remote |
 
-**The runner sets these** inside build sessions — you never set them by hand:
-`AB_STORE`, `AB_BUILD`, `AB_PHASE` (`<phase>[@<round>]`; round defaults to 1),
-`AB_SESSION`.
+**The runner sets these** inside build sessions: `AB_STORE`, `AB_BUILD`,
+`AB_PHASE` (`<phase>[@<round>]`; round defaults to 1), and `AB_SESSION`. The
+session's `AB_STORE` is the dispatcher's already-normalized selection.
 
 **`.env`:** the `ab` binary loads `<cwd>/.env` if it exists. `KEY=VALUE` lines,
 `#` comments, an optional `export ` prefix, and one layer of matching quotes
@@ -722,8 +732,9 @@ Tickets then live under `.autobuild/tickets/triage/ ready/ doing/ done/`; see
 
 ### `<repo>/autobuild.toml: not found`
 
-You are not at the repo root. `ab dispatch` and `ab ticket create` read
-`./autobuild.toml`.
+The Git main checkout does not contain `autobuild.toml`. Sessionless repository
+commands resolve the main checkout through Git even when run from a linked
+worktree or subdirectory.
 
 ### `tick: idle`, but I have tickets waiting
 
@@ -786,6 +797,10 @@ yourself — there is nothing an operator needs from those commands.
 ---
 
 ## Contributing
+
+Dashboard presentation can be developed without restarting in-flight builds:
+`bun run dev -- dispatch`. See [`docs/architecture.md`](docs/architecture.md)
+for the generic CLI form, supported hot boundary, and teardown behavior.
 
 - [`docs/architecture.md`](docs/architecture.md) — the codebase map, the seams,
   and the development commands.

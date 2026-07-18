@@ -8,6 +8,7 @@ import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import type { HarvestCliEnv } from './env'
 import {
+  abHarvestStatus,
   buildHarvestContext,
   projectHarvestStatus,
   submitHarvestProposals,
@@ -61,6 +62,49 @@ async function fixture() {
   }
   return { store, workspacePath, env, ids: sequentialIds() }
 }
+
+describe('harvest status', () => {
+  test('shares store precedence and uses the main checkout as journal identity', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/main/repo')
+    const exec = async () => ({
+      stdout: '/main/repo/.git\n/main/repo/.git\n/main/repo\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    const refs: string[] = []
+    const outputs: string[] = []
+    const common = {
+      repo: '/linked/worktree',
+      exec,
+      stdout: (line: string) => outputs.push(line),
+      json: true,
+      openStore: (ref: string) => {
+        refs.push(ref)
+        return store
+      },
+    }
+
+    await abHarvestStatus({
+      ...common,
+      env: { AB_STORE: 'environment' },
+      storeRef: 'flag',
+    })
+    await abHarvestStatus({ ...common, env: { AB_STORE: 'environment' } })
+    await abHarvestStatus({ ...common, env: {} })
+
+    expect(refs).toEqual([
+      '/main/repo/flag',
+      '/main/repo/environment',
+      '/main/repo/.autobuild',
+    ])
+    expect(outputs.map((line) => JSON.parse(line).repo)).toEqual([
+      '/main/repo',
+      '/main/repo',
+      '/main/repo',
+    ])
+  })
+})
 
 describe('harvest CLI', () => {
   test('context scopes inputs; submit enforces coverage; reviewer deposits typed verdict', async () => {

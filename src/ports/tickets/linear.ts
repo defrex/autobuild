@@ -109,6 +109,40 @@ function blockersOf(issue: GqlIssue): string[] {
   return [...new Set(blockers)]
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function blockerList(ids: string[]): string {
+  return ids.length > 0 ? ids.map((id) => `"${id}"`).join(', ') : 'none'
+}
+
+/**
+ * `issueCreate` and relation creation are separate Linear mutations. Once the
+ * former succeeds, every failure must say that an issue now exists: otherwise
+ * an operator can reasonably retry the command and create a duplicate. Keep
+ * the original failure in both the message (the CLI prints only that) and the
+ * structured cause (for programmatic callers).
+ */
+function blockerRecordingError(
+  issue: GqlIssue,
+  requested: string[],
+  recorded: string[],
+  cause: unknown,
+): Error {
+  const recordedSet = new Set(recorded)
+  const unrecorded = requested.filter((id) => !recordedSet.has(id))
+  return new Error(
+    `linear create: ticket "${issue.identifier}" was created at ${issue.url}, ` +
+      'but its blockers were not all recorded. ' +
+      `Blockers recorded: ${blockerList(recorded)}. ` +
+      `Blockers not recorded: ${blockerList(unrecorded)}. ` +
+      'Do not rerun ticket creation; repair the blockers on the existing ticket. ' +
+      `Underlying failure: ${errorMessage(cause)}`,
+    { cause },
+  )
+}
+
 interface GqlTeamInfo {
   teams: {
     nodes: Array<{
@@ -131,7 +165,7 @@ const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key
 const UPDATE_STATE_MUTATION = `mutation UpdateState($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`
 const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
 const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id ${ISSUE_FIELDS} } } }`
-const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: "blocks" }) { success } }`
+const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: blocks }) { success } }`
 const linearReservedIssueIdSchema = z.uuidv4()
 
 export class LinearTicketSource implements TicketSource {
@@ -302,31 +336,37 @@ export class LinearTicketSource implements TicketSource {
     const issue = data.issueCreate.issue
     const blockedBy = [...new Set(draft.blockedBy ?? [])]
     if (blockedBy.length > 0) {
-      const createdId = issue.id
-      if (createdId === undefined) {
-        throw new Error(
-          'linear create: issueCreate returned no id — cannot record blockers',
-        )
-      }
-      this.issueIds.set(issue.identifier, createdId)
-      for (const blockerId of blockedBy) {
-        // Direction matters and is the inverse of how it reads aloud: the
-        // BLOCKER is `issueId` and the new issue is `relatedIssueId`, because
-        // Linear's `blocks` relation reads "issueId blocks relatedIssueId".
-        // Transposing these silently records the exact opposite relationship.
-        const blockerUuid = await this.resolveIssueId('create', blockerId)
-        const relation = await this.gql<{
-          issueRelationCreate: { success: boolean }
-        }>('create', CREATE_RELATION_MUTATION, {
-          issueId: blockerUuid,
-          relatedIssueId: createdId,
-        })
-        if (!relation.issueRelationCreate.success) {
+      const recorded: string[] = []
+      try {
+        const createdId = issue.id
+        if (createdId === undefined) {
           throw new Error(
-            `linear create: issueRelationCreate failed — "${blockerId}" was ` +
-              `not recorded as blocking "${issue.identifier}"`,
+            'linear create: issueCreate returned no id — cannot record blockers',
           )
         }
+        this.issueIds.set(issue.identifier, createdId)
+        for (const blockerId of blockedBy) {
+          // Direction matters and is the inverse of how it reads aloud: the
+          // BLOCKER is `issueId` and the new issue is `relatedIssueId`, because
+          // Linear's `blocks` relation reads "issueId blocks relatedIssueId".
+          // Transposing these silently records the exact opposite relationship.
+          const blockerUuid = await this.resolveIssueId('create', blockerId)
+          const relation = await this.gql<{
+            issueRelationCreate: { success: boolean }
+          }>('create', CREATE_RELATION_MUTATION, {
+            issueId: blockerUuid,
+            relatedIssueId: createdId,
+          })
+          if (!relation.issueRelationCreate.success) {
+            throw new Error(
+              `linear create: issueRelationCreate failed — "${blockerId}" was ` +
+                `not recorded as blocking "${issue.identifier}"`,
+            )
+          }
+          recorded.push(blockerId)
+        }
+      } catch (error) {
+        throw blockerRecordingError(issue, blockedBy, recorded, error)
       }
       // The create response predates the relations; report what we recorded.
       return { ...this.toTicket(issue), blockedBy }

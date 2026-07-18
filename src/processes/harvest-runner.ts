@@ -597,9 +597,16 @@ export class HarvestRunner {
     }
     if (spec.producer) this.producer = undefined
     const attempt = failures + 1
-    const willRetry = attempt < this.maxSessionAttempts
+    const structuredFailure =
+      turnError === undefined && result?.kind === 'failed'
+        ? result.failure
+        : undefined
     const failureMessage =
-      turnError === undefined ? 'no-terminal' : errorMessage(turnError)
+      turnError !== undefined
+        ? errorMessage(turnError)
+        : structuredFailure?.message ?? 'no-terminal'
+    const willRetry =
+      structuredFailure?.permanent !== true && attempt < this.maxSessionAttempts
     await this.ensureLease()
     await store.appendRepo(repo, {
       actor: KERNEL,
@@ -626,9 +633,7 @@ export class HarvestRunner {
       },
     })
     throw new SessionFailure(
-      `${spec.step}@${spec.round} failed: ${
-        turnError === undefined ? 'no-terminal' : errorMessage(turnError)
-      }`,
+      `${spec.step}@${spec.round} failed: ${failureMessage}`,
     )
   }
 

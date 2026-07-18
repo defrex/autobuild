@@ -38,6 +38,16 @@ function makeSource(fetchFn: LinearFetch, claimedState?: string) {
   })
 }
 
+async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise
+  } catch (error) {
+    if (error instanceof Error) return error
+    throw new Error(`expected an Error rejection, received ${String(error)}`)
+  }
+  throw new Error('expected promise to reject')
+}
+
 /** Mirrors what ISSUE_FIELDS actually selects — `state.type` and
  * `inverseRelations` included, so every canned issue looks like a real one. */
 function gqlIssue(over: Record<string, unknown> = {}) {
@@ -528,7 +538,7 @@ describe('LinearTicketSource', () => {
    * Transposing these records the exact inverse relationship — and no other
    * test in this file would notice.
    */
-  test('create with blockedBy issues issueRelationCreate with the BLOCKER as issueId', async () => {
+  test('create with blockedBy sends Linear\'s bare blocks enum with the BLOCKER as issueId', async () => {
     const { fetchFn, calls } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -551,7 +561,8 @@ describe('LinearTicketSource', () => {
     expect(calls).toHaveLength(4)
     expect(calls[2]?.variables).toEqual({ id: 'ENG-8' })
     expect(calls[3]?.query).toContain('issueRelationCreate')
-    expect(calls[3]?.query).toContain('type: "blocks"')
+    expect(calls[3]?.query).toContain('type: blocks')
+    expect(calls[3]?.query).not.toContain('type: "blocks"')
     expect(calls[3]?.variables).toEqual({
       issueId: 'uuid-blocker-8', // the blocker blocks…
       relatedIssueId: 'uuid-new', // …the newly created issue
@@ -559,7 +570,7 @@ describe('LinearTicketSource', () => {
     expect(created.blockedBy).toEqual(['ENG-8'])
   })
 
-  test('create with several blockers records one relation per blocker', async () => {
+  test('create with several blockers records correctly shaped relations in order', async () => {
     const { fetchFn, calls } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -581,18 +592,24 @@ describe('LinearTicketSource', () => {
       blockedBy: ['ENG-8', 'ENG-9'],
     })
 
-    expect(calls[3]?.variables).toEqual({
-      issueId: 'uuid-8',
-      relatedIssueId: 'uuid-new',
-    })
-    expect(calls[5]?.variables).toEqual({
-      issueId: 'uuid-9',
-      relatedIssueId: 'uuid-new',
-    })
+    const relationCalls = calls.filter((call) =>
+      call.query.includes('issueRelationCreate'),
+    )
+    expect(relationCalls.map((call) => call.variables)).toEqual([
+      { issueId: 'uuid-8', relatedIssueId: 'uuid-new' },
+      { issueId: 'uuid-9', relatedIssueId: 'uuid-new' },
+    ])
+    expect(
+      relationCalls.every(
+        (call) =>
+          call.query.includes('type: blocks') &&
+          !call.query.includes('type: "blocks"'),
+      ),
+    ).toBe(true)
     expect(created.blockedBy).toEqual(['ENG-8', 'ENG-9'])
   })
 
-  test('a failed relation throws rather than silently discarding the blocker', async () => {
+  test('a success: false relation reports the ticket that already exists', async () => {
     const { fetchFn } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -606,12 +623,104 @@ describe('LinearTicketSource', () => {
       { body: { data: { issueRelationCreate: { success: false } } } },
     ])
 
-    await expect(
+    const error = await rejectionOf(
       makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-8'] }),
-    ).rejects.toThrow(/issueRelationCreate failed.*"ENG-8".*not recorded/)
+    )
+
+    expect(error.message).toContain('ticket "ENG-42" was created')
+    expect(error.message).toContain('https://linear.app/acme/issue/ENG-42')
+    expect(error.message).toContain('its blockers were not all recorded')
+    expect(error.message).toContain('Blockers recorded: none')
+    expect(error.message).toContain('Blockers not recorded: "ENG-8"')
+    expect(error.message).toContain('Do not rerun ticket creation')
+    expect(error.message).toContain('repair the blockers on the existing ticket')
+    expect(error.message).toContain('issueRelationCreate failed')
+    expect((error.cause as Error).message).toContain('issueRelationCreate failed')
   })
 
-  test('an unknown blocker throws while resolving it', async () => {
+  test('a relation HTTP failure retains its cause inside partial-create guidance', async () => {
+    const { fetchFn } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: {
+            issueCreate: { success: true, issue: gqlIssue({ id: 'uuid-new' }) },
+          },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-8' } } } },
+      { status: 400, body: {} },
+    ])
+
+    const error = await rejectionOf(
+      makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-8'] }),
+    )
+
+    expect(error.message).toContain('ticket "ENG-42" was created')
+    expect(error.message).toContain('https://linear.app/acme/issue/ENG-42')
+    expect(error.message).toContain('Blockers not recorded: "ENG-8"')
+    expect(error.message).toContain('Underlying failure: linear create: HTTP 400')
+    expect((error.cause as Error).message).toBe('linear create: HTTP 400')
+  })
+
+  test('a later relation failure distinguishes recorded from unrecorded blockers', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: {
+            issueCreate: { success: true, issue: gqlIssue({ id: 'uuid-new' }) },
+          },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-8' } } } },
+      { body: { data: { issueRelationCreate: { success: true } } } },
+      { body: { data: { issue: { id: 'uuid-9' } } } },
+      { body: { errors: [{ message: 'relation denied' }] } },
+    ])
+
+    const error = await rejectionOf(
+      makeSource(fetchFn).create({
+        title: 'X',
+        body: 'y',
+        blockedBy: ['ENG-8', 'ENG-9', 'ENG-10'],
+      }),
+    )
+
+    expect(calls).toHaveLength(6) // stop on ENG-9; ENG-10 was never attempted
+    expect(error.message).toContain('Blockers recorded: "ENG-8"')
+    expect(error.message).toContain('Blockers not recorded: "ENG-9", "ENG-10"')
+    expect(error.message).toContain('relation denied')
+  })
+
+  test('a missing created UUID still reports the created ticket and every blocker', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: {
+            issueCreate: { success: true, issue: gqlIssue({ id: undefined }) },
+          },
+        },
+      },
+    ])
+
+    const error = await rejectionOf(
+      makeSource(fetchFn).create({
+        title: 'X',
+        body: 'y',
+        blockedBy: ['ENG-8', 'ENG-9'],
+      }),
+    )
+
+    expect(calls).toHaveLength(2)
+    expect(error.message).toContain('ticket "ENG-42" was created')
+    expect(error.message).toContain('Blockers recorded: none')
+    expect(error.message).toContain('Blockers not recorded: "ENG-8", "ENG-9"')
+    expect(error.message).toContain('issueCreate returned no id')
+  })
+
+  test('a blocker resolution failure reports the ticket created before it failed', async () => {
     const { fetchFn } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -624,9 +733,17 @@ describe('LinearTicketSource', () => {
       { body: { data: { issue: null } } },
     ])
 
-    await expect(
-      makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-404'] }),
-    ).rejects.toThrow('unknown ticket "ENG-404"')
+    const error = await rejectionOf(
+      makeSource(fetchFn).create({
+        title: 'X',
+        body: 'y',
+        blockedBy: ['ENG-404'],
+      }),
+    )
+
+    expect(error.message).toContain('ticket "ENG-42" was created')
+    expect(error.message).toContain('Blockers not recorded: "ENG-404"')
+    expect(error.message).toContain('unknown ticket "ENG-404"')
   })
 
   test('dependencyStates maps Linear state types to resolution, failing closed', async () => {
@@ -743,7 +860,7 @@ describe('LinearTicketSource', () => {
     )
   })
 
-  test('an unknown blocker on create surfaces the adapter message, not raw GraphQL prose', async () => {
+  test('an unknown blocker on create keeps adapter prose inside created-ticket context', async () => {
     const { fetchFn } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -756,9 +873,17 @@ describe('LinearTicketSource', () => {
       ENTITY_NOT_FOUND,
     ])
 
-    await expect(
-      makeSource(fetchFn).create({ title: 'X', body: 'y', blockedBy: ['ENG-404'] }),
-    ).rejects.toThrow('linear create: unknown ticket "ENG-404"')
+    const error = await rejectionOf(
+      makeSource(fetchFn).create({
+        title: 'X',
+        body: 'y',
+        blockedBy: ['ENG-404'],
+      }),
+    )
+
+    expect(error.message).toContain('ticket "ENG-42" was created')
+    expect(error.message).toContain('linear create: unknown ticket "ENG-404"')
+    expect(error.message).not.toContain('Entity not found: Issue')
   })
 
   test('dependencyStates reports a missing issue as exists: false, in request order', async () => {

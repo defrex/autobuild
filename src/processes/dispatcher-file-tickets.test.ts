@@ -13,14 +13,10 @@
  * scan is the one claim() will take from. A tightening of either side that
  * silently stalls the dispatcher fails here and nowhere else.
  *
- * Note it does NOT go through `ab dispatch`, and that is permanent, not a
- * workaround: abDispatch's defaultWire opens a real SQLite store and a real
- * worktree provider under DEFAULT_LOCAL_ROOT (~/.autobuild), so driving the
- * CLI entry point from a test would write into the developer's actual autobuild
- * home. cli/dispatch.test.ts:202 carries that reasoning in full and stops at
- * the `wire` seam for the same reason. This file covers the seam by
- * construction instead: MemoryBuildStore + fakes, exactly as dispatcher.test.ts
- * wires them.
+ * This does not go through `ab dispatch`: it is the focused agreement test at
+ * the Dispatcher/TicketSource seam. CLI dispatch wiring has separate coverage
+ * over temporary repositories, whose default state roots are isolated beneath
+ * those repositories.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
