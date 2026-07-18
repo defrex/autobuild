@@ -3,7 +3,7 @@
  * point of the entire ontology (SPEC §8). This module is pure routing: every
  * dependency is injected via CliDeps, so the whole surface is testable over
  * fakes; wiring real deps (resolved env, resolved store, real forge, real
- * exec, random ids) is `bin/ab.ts`'s job.
+ * exec, random ids) is `src/cli/binary.ts`'s job.
  *
  * Errors go to stderr with exit code 1, formatted as agent feedback (D6):
  * what was wrong and what would be accepted, so the in-session correction
@@ -18,6 +18,7 @@ import type { IdSource } from '../ids'
 import { artifactGet, artifactPut } from './artifact'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
+import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
@@ -40,7 +41,7 @@ import {
  * Commands that run OUTSIDE build sessions (§16.3, §8.8, §3.3) — they take a
  * repo path, not a build, so they must work with no AB_* environment set.
  *
- * `bin/ab.ts` routes on this set: a command absent from it goes through
+ * `src/cli/binary.ts` routes on this set: a command absent from it goes through
  * `resolveCliEnv`, which REQUIRES AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION and
  * exits 1 before routing. It lives here, beside the `switch` that implements
  * these commands, so the next sessionless command has one obvious place to
@@ -97,6 +98,9 @@ export interface SessionlessCliDeps {
   terminal?: TerminalOut
   /** Raw keyboard seam for the interactive dispatch dashboard. */
   input?: TerminalInput
+  /** Optional per-paint presentation lookup used only by the repo-local dev
+   * entry. The published binary never supplies it. */
+  resolveDashboardRenderer?: DashboardRendererResolver
   store?: BuildStore
   env?: CliEnv
   harvestEnv?: HarvestCliEnv
@@ -422,6 +426,9 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
         ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
         ...(deps.input !== undefined ? { input: deps.input } : {}),
+        ...(deps.resolveDashboardRenderer !== undefined
+          ? { resolveDashboardRenderer: deps.resolveDashboardRenderer }
+          : {}),
       })
       return 0
     }

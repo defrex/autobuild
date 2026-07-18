@@ -2,8 +2,9 @@
  * End-to-end smoke tests for the REAL `ab` binary.
  *
  * These exist because every other CLI test calls `runCli` directly and so
- * never traverses `bin/ab.ts`. That file routes sessionless commands on
- * SESSIONLESS_COMMANDS and sends everything else through `resolveCliEnv`,
+ * never traverses the real process entries and shared `src/cli/binary.ts`
+ * wiring. That wiring routes sessionless commands on SESSIONLESS_COMMANDS and
+ * sends everything else through `resolveCliEnv`,
  * which REQUIRES AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION and returns 1 before
  * `runCli` routes anything. A command missing from the set therefore ships
  * broken while the entire unit suite stays green — a green `bun test` is not
@@ -18,7 +19,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const BIN = join(import.meta.dir, '..', '..', 'bin', 'ab.ts')
+const ROOT = join(import.meta.dir, '..', '..')
+const BIN = join(ROOT, 'bin', 'ab.ts')
 
 let tmp: string
 
@@ -30,25 +32,43 @@ afterEach(async () => {
   await rm(tmp, { recursive: true, force: true })
 })
 
-async function runBin(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
-  const proc = Bun.spawn(['bun', BIN, ...args], {
-    cwd: tmp,
-    env: {
-      PATH: process.env['PATH'] ?? '',
-      HOME: process.env['HOME'] ?? '',
-      // The store is a temp dir; AB_BUILD/AB_PHASE/AB_SESSION are deliberately
-      // absent — resolveCliEnv would reject on them if routing regressed.
-      AB_STORE: join(tmp, 'store'),
-    },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+async function collect(
+  proc: Bun.ReadableSubprocess,
+): Promise<{ stdout: string; stderr: string; code: number }> {
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ])
   return { stdout, stderr, code }
+}
+
+function testEnv(): Record<string, string> {
+  return {
+    PATH: process.env['PATH'] ?? '',
+    HOME: process.env['HOME'] ?? '',
+    // The store is a temp dir; AB_BUILD/AB_PHASE/AB_SESSION are deliberately
+    // absent — resolveCliEnv would reject on them if routing regressed.
+    AB_STORE: join(tmp, 'store'),
+  }
+}
+
+async function runBin(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  return collect(Bun.spawn(['bun', BIN, ...args], {
+    cwd: tmp,
+    env: testEnv(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  }))
+}
+
+async function runDev(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  return collect(Bun.spawn(['bun', 'run', 'dev', '--', ...args], {
+    cwd: ROOT,
+    env: testEnv(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  }))
 }
 
 test('ab builds runs with no session environment set', async () => {
@@ -61,6 +81,13 @@ test('ab builds runs with no session environment set', async () => {
 
 test('ab builds --json emits parseable JSON and no ANSI', async () => {
   const result = await runBin(['builds', '--all', '--json'])
+  expect(result.code).toBe(0)
+  expect(result.stdout).not.toContain('\x1b')
+  expect(JSON.parse(result.stdout)).toEqual([])
+})
+
+test('the repo dev script forwards a complete CLI invocation and exits under --hot', async () => {
+  const result = await runDev(['builds', '--all', '--json'])
   expect(result.code).toBe(0)
   expect(result.stdout).not.toContain('\x1b')
   expect(JSON.parse(result.stdout)).toEqual([])
