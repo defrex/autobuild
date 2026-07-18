@@ -17,7 +17,11 @@ import { join } from 'node:path'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchWiring } from './dispatch'
-import { stripAnsi } from './dashboard/render'
+import {
+  renderDashboard,
+  stripAnsi,
+  type DashboardRenderer,
+} from './dashboard/render'
 import type {
   TerminalInput,
   TerminalInputEvent,
@@ -98,6 +102,7 @@ interface Fixture {
   store: MemoryBuildStore
   tickets: FakeTicketSource
   forge: FakeForge
+  agents: ScriptedAgentRunner
   cliErrors: string[]
   err: string[]
   /** The injectable wire abDispatch is called with (fakes over real git). */
@@ -179,6 +184,7 @@ async function makeFixture(
     store,
     tickets,
     forge,
+    agents,
     cliErrors,
     err: [],
     wire,
@@ -1154,6 +1160,161 @@ describe('abDispatch --once with an interactive terminal', () => {
       const builds = await fx.store.listBuilds()
       expect(builds.map((b) => b.ticket?.id)).toEqual(['T-first'])
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('watch: a renderer swap repaints without replacing the in-flight dispatcher, runner, or input', async () => {
+    const handlers = happyHandlers()
+    const happyPlan = handlers.plan!
+    let releasePlan!: () => void
+    let planReleased = false
+    const planGate = new Promise<void>((resolve) => {
+      releasePlan = () => {
+        if (planReleased) return
+        planReleased = true
+        resolve()
+      }
+    })
+    let markPlanStarted!: () => void
+    const planStarted = new Promise<void>((resolve) => {
+      markPlanStarted = resolve
+    })
+    handlers.plan = async (cli) => {
+      markPlanStarted()
+      await planGate
+      return happyPlan(cli)
+    }
+
+    const fx = await makeFixture(
+      readyTicket('T-hot-render', { title: 'Hot render work' }),
+      handlers,
+    )
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    let readyScans = 0
+    fx.tickets.listReady = async (criteria) => {
+      readyScans += 1
+      return originalListReady(criteria)
+    }
+
+    const markedRenderer = (marker: string): DashboardRenderer =>
+      (model, opts) => {
+        const lines = renderDashboard(model, opts)
+        return lines.length === 0
+          ? lines
+          : [`${marker}  ${lines[0]}`, ...lines.slice(1)]
+      }
+    let currentRenderer = markedRenderer('renderer A')
+    const term = fakeTerminal(true, { columns: 160 })
+    const input = fakeInput()
+    const stop = new AbortController()
+    let wakeSleep!: () => void
+    let sleepReleased = false
+    const sleepGate = new Promise<void>((resolve) => {
+      wakeSleep = () => {
+        if (sleepReleased) return
+        sleepReleased = true
+        resolve()
+      }
+    })
+    let sleeps = 0
+    let dispatchLaunches = 0
+    let run: Promise<void> | undefined
+
+    try {
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        signal: stop.signal,
+        sleep: async () => {
+          sleeps += 1
+          await sleepGate
+        },
+        wire: () => {
+          dispatchLaunches += 1
+          return fx.wire()
+        },
+        terminal: term,
+        input,
+        resolveDashboardRenderer: () => currentRenderer,
+      })
+
+      await planStarted
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('renderer A'),
+      )
+      await waitFor(() => input.starts === 1 && sleeps === 1)
+
+      const [record] = await fx.store.listBuilds()
+      expect(record).toBeDefined()
+      const slug = record!.slug
+      const leaseHolder = (await fx.store.getBuild(slug))?.lease?.holder
+      expect(typeof leaseHolder).toBe('string')
+      const attachedBefore = (await fx.store.getEvents(slug)).filter(
+        (event) => event.type === 'runner.attached',
+      )
+      expect(attachedBefore).toHaveLength(1)
+      const [openSession] = [...fx.agents.sessions.values()]
+      expect(openSession).toBeDefined()
+      expect(openSession!.ended).toBe(false)
+      expect(dispatchLaunches).toBe(1)
+      expect(readyScans).toBe(1)
+      expect(sleeps).toBe(1)
+      expect(input.starts).toBe(1)
+
+      // Simulate Bun re-evaluating the dev entry: only the mutable renderer
+      // pointer changes. The existing tick timer performs the next paint.
+      currentRenderer = markedRenderer('renderer B')
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('renderer B'),
+      )
+
+      expect(dispatchLaunches).toBe(1)
+      expect(readyScans).toBe(1)
+      expect(sleeps).toBe(1)
+      expect(input.starts).toBe(1)
+      expect(fx.agents.sessions.size).toBe(1)
+      expect(fx.agents.sessions.get(openSession!.session.id)?.ended).toBe(false)
+      expect(
+        (await fx.store.getEvents(slug)).filter(
+          (event) => event.type === 'runner.attached',
+        ),
+      ).toHaveLength(1)
+      expect((await fx.store.getBuild(slug))?.lease?.holder).toBe(leaseHolder)
+
+      // The very same blocked phase resumes and completes normally after the
+      // presentation swap; no replacement runner is needed.
+      releasePlan()
+      await waitFor(
+        async () =>
+          (await fx.store.getEvents(slug)).some(
+            (event) => event.type === 'finalize.completed',
+          ),
+        10_000,
+      )
+      expect(
+        (await fx.store.getEvents(slug)).filter(
+          (event) => event.type === 'runner.attached',
+        ),
+      ).toHaveLength(1)
+      expect((await fx.store.getBuild(slug))?.lease?.holder).toBe(leaseHolder)
+
+      stop.abort()
+      wakeSleep()
+      await run
+      expect(input.cleanups).toBe(1)
+      expect(term.all()).toContain('\x1b[?25h')
+      expect(fx.cliErrors).toEqual([])
+      expect(fx.err).toEqual([])
+    } finally {
+      releasePlan()
+      stop.abort()
+      wakeSleep()
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)

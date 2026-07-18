@@ -775,6 +775,10 @@ yourself — there is nothing an operator needs from those commands.
 
 ## Contributing
 
+Dashboard presentation can be developed without restarting in-flight builds:
+`bun run dev -- dispatch`. See [`docs/architecture.md`](docs/architecture.md)
+for the generic CLI form, supported hot boundary, and teardown behavior.
+
 - [`docs/architecture.md`](docs/architecture.md) — the codebase map, the seams,
   and the development commands.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and terminology.
