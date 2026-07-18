@@ -67,10 +67,24 @@ function skillSource(name: string, body: string): string {
   return `---\nname: ${name}\ndescription: ${name} skill.\n---\n\n${body}`
 }
 
-/** Build a fake distribution root: skills/<name>/SKILL.md + a template. */
+/** Build a fake distribution root: skills/<name>/SKILL.md + a renderable template. */
 async function writeDist(dist: string, skills: Record<string, string>): Promise<void> {
   await mkdir(join(dist, 'templates'), { recursive: true })
-  await writeFile(join(dist, 'templates', 'autobuild.toml'), '[project]\nbaseBranch = "main"\n')
+  await writeFile(
+    join(dist, 'templates', 'autobuild.toml'),
+    [
+      '[project]',
+      'baseBranch = "main"',
+      '[commands]',
+      '# @ab-init/package-script-commands',
+      '[verify]',
+      'steps = [',
+      '# @ab-init/package-script-verify-steps',
+      ']',
+      '# @ab-init/package-script-verify-tables',
+      '',
+    ].join('\n'),
+  )
   for (const [name, body] of Object.entries(skills)) {
     await mkdir(join(dist, 'skills', name), { recursive: true })
     await writeFile(join(dist, 'skills', name, 'SKILL.md'), skillSource(name, body))

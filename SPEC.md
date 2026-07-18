@@ -1208,9 +1208,10 @@ baseBranch = "main"
 
 [commands]                      # deterministic verbs the kernel may run
 setup = "bun install"           # after provision / sandbox rehydrate (§15.6-C)
-lint = "bun lint"
-typecheck = "bun tsc --noEmit"
-test = "bun test"
+# This example assumes the root package defines these exact scripts.
+lint = "bun run lint"
+typecheck = "bun run type-check"
+test = "bun run test"
 
 [server]                        # dev-server lifecycle — see §16.2
 start = "bun dev"
@@ -1222,6 +1223,9 @@ steps = ["types", "unit", "e2e"]
 [verify.types]
 kind = "check"                  # deterministic: command + pass/fail
 command = "typecheck"           # ref into [commands]
+[verify.unit]
+kind = "check"
+command = "test"
 [verify.e2e]
 kind = "agent"                  # agent-verify: skill + verdict schema
 skill = "ab-verify-e2e"
@@ -1304,7 +1308,16 @@ This project ships the **canonical default skills** (`plan`, `plan-review`,
 `spec`, `tickets`, `guide`, and the outer-loop skills). `ab init` installs into
 a repo:
 
-- Writes an `autobuild.toml` template.
+- When `autobuild.toml` is absent, renders it from a valid setup-only baseline
+  template after inspecting only the target repository's root `package.json`.
+  Exact own script keys produce fixed fragments: `lint` →
+  `lint = "bun run lint"` (command only), `type-check` →
+  `typecheck = "bun run type-check"` plus the `types` check, and `test` →
+  `test = "bun run test"` plus the `unit` check. Missing `package.json` or a
+  missing `scripts` map produces no package-backed commands or checks;
+  malformed JSON or an invalid recognized declaration fails with the manifest
+  path. The `types` and `unit` tables exist only with their backing commands.
+  Existing config is never reconciled or overwritten, even with `--force`.
 - **Copies** the default skills into the Agent Skills standard project
   directory, namespaced `ab-*` (e.g. `.agents/skills/ab-code-review/`). Copies,
   not references — per-repo customization is the point: this repo's code-review

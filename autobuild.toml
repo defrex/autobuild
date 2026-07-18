@@ -12,9 +12,8 @@ baseBranch = "main"
 # [verify.*] check steps.
 [commands]
 setup = "bun install"
-lint = "bun lint"
 typecheck = "bun tsc --noEmit"
-test = "bun test"
+test = "bun run test"
 
 # Dev-server lifecycle (§16.2, D10): config declares, the kernel owns.
 # Agents control it only through `ab server start|stop|restart|status|logs`.

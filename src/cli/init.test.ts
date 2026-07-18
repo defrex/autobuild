@@ -30,6 +30,7 @@ import {
   installedSkillPath,
   MODEL_INVOCABLE_SKILLS,
   pristineSkillPath,
+  renderAutobuildTemplate,
   rewriteSkillSource,
 } from './init'
 import { runCli, type SessionlessCliDeps } from './main'
@@ -127,10 +128,17 @@ describe('abInit — fresh install', () => {
     }
   })
 
-  test('autobuild.toml is written from the template', async () => {
-    await abInit({ targetRepo: target })
+  test('the template and a no-package render are setup-only, zero-verify configs', async () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
-    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(template)
+    const baseline = parseConfig(template)
+    expect(baseline.commands).toEqual({ setup: 'bun install' })
+    expect(baseline.verify).toEqual({ steps: [], stepConfigs: {} })
+
+    await abInit({ targetRepo: target })
+    const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
+    expect(generated).not.toContain('@ab-init/')
+    expect(parseConfig(generated).commands).toEqual({ setup: 'bun install' })
+    expect(parseConfig(generated).verify).toEqual({ steps: [], stepConfigs: {} })
   })
 
   test('creates a .gitignore containing the repository-local state rule', async () => {
@@ -147,6 +155,8 @@ describe('abInit — fresh install', () => {
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.tickets.readyState).toBe('ready')
     expect(config.roles.default).toEqual({ runtime: 'claude' })
+    expect(config.commands).toEqual({ setup: 'bun install' })
+    expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
   })
 
   test('distRoot defaults relative to the module — identical to an explicit distRoot', async () => {
@@ -161,6 +171,112 @@ describe('abInit — fresh install', () => {
     } finally {
       await rm(other, { recursive: true, force: true })
     }
+  })
+})
+
+describe('abInit — package-script-aware config rendering', () => {
+  const recognized = ['lint', 'type-check', 'test'] as const
+  const subsets = Array.from({ length: 1 << recognized.length }, (_, mask) =>
+    recognized.filter((_, index) => (mask & (1 << index)) !== 0),
+  )
+
+  for (const scripts of subsets) {
+    test(`renders only ${scripts.length === 0 ? 'no recognized scripts' : scripts.join(', ')}`, async () => {
+      const declarations: Record<string, string> = {
+        build: 'bun build src/index.ts',
+        // Deliberate near miss: this must not stand in for exact `type-check`.
+        typecheck: 'tsc --noEmit',
+      }
+      for (const script of scripts) declarations[script] = `echo ${script}`
+      await writeFile(
+        join(target, 'package.json'),
+        JSON.stringify({ name: 'fixture', scripts: declarations }),
+      )
+
+      await abInit({ targetRepo: target })
+      const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
+      const config = parseConfig(generated)
+      const has = (script: (typeof recognized)[number]) => scripts.includes(script)
+
+      expect(config.commands).toEqual({
+        setup: 'bun install',
+        ...(has('lint') ? { lint: 'bun run lint' } : {}),
+        ...(has('type-check') ? { typecheck: 'bun run type-check' } : {}),
+        ...(has('test') ? { test: 'bun run test' } : {}),
+      })
+      expect(config.verify.steps).toEqual([
+        ...(has('type-check') ? ['types'] : []),
+        ...(has('test') ? ['unit'] : []),
+      ])
+      expect(config.verify.stepConfigs).toEqual({
+        ...(has('type-check')
+          ? { types: { kind: 'check', command: 'typecheck' } }
+          : {}),
+        ...(has('test') ? { unit: { kind: 'check', command: 'test' } } : {}),
+      })
+      for (const step of Object.values(config.verify.stepConfigs)) {
+        if (step.kind === 'check') {
+          expect(Object.hasOwn(config.commands, step.command)).toBe(true)
+        }
+      }
+      expect(generated).not.toContain('@ab-init/')
+    })
+  }
+
+  test('a package with no scripts map produces the empty package-backed set', async () => {
+    await writeFile(join(target, 'package.json'), JSON.stringify({ name: 'fixture' }))
+    await abInit({ targetRepo: target })
+    const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.commands).toEqual({ setup: 'bun install' })
+    expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
+  })
+
+  test('malformed package JSON fails with the manifest path', async () => {
+    const manifestPath = join(target, 'package.json')
+    await writeFile(manifestPath, '{"scripts":')
+    await expect(abInit({ targetRepo: target })).rejects.toThrow(
+      `${manifestPath}: invalid JSON`,
+    )
+    expect(existsSync(join(target, 'autobuild.toml'))).toBe(false)
+  })
+
+  test('an unreadable package manifest fails with its path', async () => {
+    const manifestPath = join(target, 'package.json')
+    await mkdir(manifestPath)
+    await expect(abInit({ targetRepo: target })).rejects.toThrow(
+      `${manifestPath}: unable to read package manifest`,
+    )
+    expect(existsSync(join(target, 'autobuild.toml'))).toBe(false)
+  })
+
+  test('invalid recognized script declarations fail with the manifest path and script', async () => {
+    const invalid: Array<[string, unknown]> = [
+      ['lint', 42],
+      ['type-check', null],
+      ['test', '   '],
+    ]
+    for (const [script, declaration] of invalid) {
+      const repo = join(target, script)
+      await mkdir(repo, { recursive: true })
+      const manifestPath = join(repo, 'package.json')
+      await writeFile(manifestPath, JSON.stringify({ scripts: { [script]: declaration } }))
+      await expect(abInit({ targetRepo: repo })).rejects.toThrow(
+        `${manifestPath}: package script "${script}" must be a non-empty string`,
+      )
+    }
+  })
+
+  test('template rendering rejects a missing or duplicated insertion anchor', async () => {
+    const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
+    expect(() =>
+      renderAutobuildTemplate(
+        template.replace('# @ab-init/package-script-commands', ''),
+        new Set(['lint']),
+      ),
+    ).toThrow(/must occur exactly once; found 0/)
+    expect(() => renderAutobuildTemplate(`${template}\n${template}`, new Set())).toThrow(
+      /must occur exactly once; found 2/,
+    )
   })
 })
 
@@ -284,6 +400,26 @@ describe('abInit — idempotence and safety', () => {
     )
   })
 
+  test('an existing config skips later package inspection, including with force', async () => {
+    const manifestPath = join(target, 'package.json')
+    await writeFile(manifestPath, JSON.stringify({ scripts: { lint: 'eslint .' } }))
+    await abInit({ targetRepo: target })
+    const original = await readFile(join(target, 'autobuild.toml'), 'utf8')
+    expect(parseConfig(original).commands.lint).toBe('bun run lint')
+
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ scripts: { 'type-check': 'tsc', test: 'vitest' } }),
+    )
+    expect((await abInit({ targetRepo: target, force: true })).config).toBe('skipped')
+    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(original)
+
+    await rm(manifestPath)
+    await mkdir(manifestPath)
+    expect((await abInit({ targetRepo: target })).config).toBe('skipped')
+    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(original)
+  })
+
   test('re-init after a local edit keeps the edit (kept) — pristine untouched', async () => {
     await abInit({ targetRepo: target })
     const live = installedSkillPath(target, 'ab-plan')
@@ -399,6 +535,10 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
   })
 
   test('bin/ab.ts init works in a subprocess with NO AB_* env set', async () => {
+    await writeFile(
+      join(target, 'package.json'),
+      JSON.stringify({ scripts: { test: 'custom-test-runner' } }),
+    )
     const env: Record<string, string> = {}
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined && !key.startsWith('AB_')) env[key] = value
@@ -418,5 +558,8 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(exitCode).toBe(0)
     expect(stdout).toContain('autobuild.toml: written')
     expect(existsSync(installedSkillPath(target, 'ab-spec'))).toBe(true)
+    const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.commands.test).toBe('bun run test')
+    expect(config.verify.steps).toEqual(['unit'])
   })
 })

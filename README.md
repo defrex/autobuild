@@ -156,8 +156,11 @@ ab init
 `ab init [target] [--force]` writes, for the target repo (default: the current
 directory):
 
-- **`autobuild.toml`** from the template — **only if absent**. An existing
-  config is never overwritten, not even with `--force`.
+- **`autobuild.toml`**, rendered from the baseline template **only if absent**.
+  That first render inspects the target's root `package.json` so generated
+  package-backed commands match scripts the repository actually defines. Once
+  config exists, package scripts are not inspected and config is never
+  overwritten, not even with `--force`.
 - **Per skill**, three things:
   - the live, editable copy at `.agents/skills/ab-<name>/SKILL.md`
   - a pristine record at `.agents/skills/.ab-pristine/ab-<name>/SKILL.md`
@@ -200,20 +203,20 @@ is an error, so a typo cannot silently disable a verifier.
 | `[harvest]` | Observation-count back-pressure for the staged harvester: positive `threshold` | `threshold = 10` |
 | `[outer]` | Map of other scheduled ingesters → `{ cron = "…" }`; the exact `harvest` key is rejected | — |
 
-The generated template ships a working `[verify]` pair:
+A fresh config always includes `setup = "bun install"`. During that first
+init only, Autobuild recognizes these exact root-package script names:
 
-```toml
-[verify]
-steps = ["types", "unit"]
+| `package.json` script | Generated `[commands]` entry | Generated verify step |
+|---|---|---|
+| `lint` | `lint = "bun run lint"` | none — lint remains an available command |
+| `type-check` | `typecheck = "bun run type-check"` | `types`, backed by `typecheck` |
+| `test` | `test = "bun run test"` | `unit`, backed by `test` |
 
-[verify.types]
-kind = "check"
-command = "typecheck"   # a key in [commands]
-
-[verify.unit]
-kind = "check"
-command = "test"
-```
+An absent script produces neither its command nor its verify step; missing
+`package.json` or `scripts` therefore leaves `steps = []`. Detection is exact,
+so `typecheck` is not an alias for `type-check`. Malformed JSON or a recognized
+script whose value is not a non-empty string fails init with the manifest path.
+Re-running init never reconciles an existing config after scripts change.
 
 **Runtime, model, and extensions — one role map with explicit inheritance.**
 Every agent session runs on a `runtime` (the adapter that executes it), a

@@ -150,6 +150,16 @@ likes.
 sandbox rehydrate. Values are never evaluated as config — they are handed to a
 shell as written.
 
+For first config creation, `ab init` starts with `setup = "bun install"` and
+recognizes only exact own keys in the root `package.json` scripts map: `lint`
+adds `lint = "bun run lint"`; `type-check` adds
+`typecheck = "bun run type-check"` and the `types` verify check; `test` adds
+`test = "bun run test"` and the `unit` check. Lint remains command-only.
+Missing scripts add nothing (`typecheck` is not an alias for `type-check`), so
+every generated package command names a script that exists and every generated
+check has a backing command. This detection does not restrict later manual
+configuration: commands remain an open map.
+
 ### `[server]`
 
 Optional table. Config **declares**; the kernel **owns** the lifecycle. Agents
@@ -336,8 +346,13 @@ the user to `[harvest].threshold`; other scheduled ingesters are unaffected.
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a
 repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
-- Writes `autobuild.toml` from the template, and **never overwrites an existing
-  one**. The repo's config is the repo's from the first re-run onward.
+- If `autobuild.toml` is absent, renders the valid setup-only template using
+  the target's root `package.json`: exact `lint`, `type-check`, and `test`
+  scripts add the command/check fragments described above. Missing package
+  metadata means no package-backed commands or checks; malformed JSON or an
+  invalid recognized declaration fails with the manifest path. It **never
+  inspects package scripts or overwrites config once the file exists**, even
+  with `--force`; the repo's config is the repo's from the first re-run onward.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
   preserving every existing byte/rule and handling a missing trailing newline.
 - **Copies** each canonical skill to `.agents/skills/ab-<name>/SKILL.md` —
