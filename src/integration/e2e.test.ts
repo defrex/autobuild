@@ -23,7 +23,11 @@ import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { FileTicketSource } from '../ports/tickets/file'
-import { Dispatcher, emptyTickReport } from '../processes/dispatcher'
+import {
+  Dispatcher,
+  emptyTickReport,
+  type LaunchRunnerResult,
+} from '../processes/dispatcher'
 import {
   HarvestRunner,
   type HarvestRunnerResult,
@@ -1252,7 +1256,7 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
     config: h.config,
     repo: h.origin,
     exec: spawnExec,
-    launchRunner: async (slug) => {
+    launchRunner: async (slug): Promise<LaunchRunnerResult> => {
       throw new Error(`unexpected build launch for ${slug}`)
     },
     startHarvest,

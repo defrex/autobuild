@@ -44,7 +44,10 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import type { AgentTurnResult, Ticket, TicketSource } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { BuildRunner } from '../processes/build-runner'
-import { Dispatcher } from '../processes/dispatcher'
+import {
+  Dispatcher,
+  type LaunchRunnerResult,
+} from '../processes/dispatcher'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 
@@ -351,7 +354,7 @@ export async function makeHarness(opts: {
   // the SAME store and the provisioned workspace path; the dispatcher never
   // runs agents itself.
   let instances = 0
-  const launchRunner = async (slug: string): Promise<void> => {
+  const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
     const record = await store.getBuild(slug)
     const wsRef = openWorkspaceRef(await store.getEvents(slug))
     if (record === null || wsRef === null) {
@@ -387,6 +390,7 @@ export async function makeHarness(opts: {
         opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
       }),
     })
+    return 'scheduled'
   }
 
   const dispatcher = new Dispatcher({

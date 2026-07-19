@@ -41,7 +41,10 @@ import type { Config } from '../../config/schema'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import { verifyPhase } from '../../ontology'
 import type { BuildRecord } from '../../store/types'
-import { reduceHarvest } from '../../kernel/harvest'
+import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  reduceHarvest,
+} from '../../kernel/harvest'
 
 /** The only statuses a listed build can have — queued/done/aborted are
  * filtered out entirely (they are not active work). */
@@ -728,6 +731,33 @@ export function projectHarvest(
       timing: harvestStepTiming(occurrences, 'file', frozenAt),
     }),
   ]
+  const exhaustion = run?.recoveryExhaustion
+  const recoveryAttempts = run?.recoveryRequests.length ?? 0
+  const recoveryLimit =
+    exhaustion?.limit ??
+    run?.recoveryRequests.at(-1)?.limit ??
+    DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+  const stoppedAt = run?.failure
+    ? `${run.failure.step}${
+        run.failure.round !== undefined ? ` r${run.failure.round}` : ''
+      }`
+    : undefined
+  const detail =
+    run?.escalation !== undefined
+      ? run.escalation.reason
+      : exhaustion !== undefined
+        ? `recovery exhausted — ${
+            exhaustion.attentionAcknowledgedSeq === undefined
+              ? 'human attention required'
+              : 'attention acknowledged'
+          }; stopped at ${exhaustion.step}${
+            exhaustion.round !== undefined ? ` r${exhaustion.round}` : ''
+          }; pending ${exhaustion.releasedObservations.length}`
+        : run?.failure !== undefined
+          ? `stopped at ${stoppedAt} — automatic recovery ${recoveryAttempts}/${recoveryLimit}; ${run.failure.error}`
+          : recoveryAttempts > 0
+            ? `automatic recovery ${recoveryAttempts}/${recoveryLimit} resumed`
+            : undefined
   return {
     kind: 'harvest',
     ...(run !== undefined ? { run: run.run } : {}),
@@ -735,11 +765,7 @@ export function projectHarvest(
     steps,
     observations: run?.observations.length ?? 0,
     rounds,
-    ...(run?.escalation !== undefined
-      ? { detail: run.escalation.reason }
-      : run?.failure !== undefined
-        ? { detail: run.failure.error }
-        : {}),
+    ...(detail !== undefined ? { detail } : {}),
   }
 }
 

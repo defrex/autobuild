@@ -35,7 +35,11 @@ import {
   pendingAutoMerge,
 } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
-import { decideHarvestControl, reduceHarvest } from '../kernel/harvest'
+import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  decideHarvestControl,
+  reduceHarvest,
+} from '../kernel/harvest'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
 import type {
@@ -317,6 +321,8 @@ export interface DispatcherOpts {
   /** Internal deadline for the optional pre-build naming seam. Production is
    * fixed; injection exists only so timeout behavior is deterministic in tests. */
   slugNamingTimeoutMs?: number
+  /** Must match the HarvestRunner's durable outer recovery budget. */
+  maxHarvestRecoveryAttempts?: number
 }
 
 export interface TickOpts {
@@ -335,6 +341,11 @@ export interface TickOpts {
   acceptNewWork?: boolean
 }
 
+/** Process-local launch coordination result. Durable lease acquisition remains
+ * the BuildRunner's responsibility; "scheduled" means only that this process
+ * accepted a runner launch rather than suppressing a known in-flight slug. */
+export type LaunchRunnerResult = 'scheduled' | 'already-active'
+
 export interface DispatcherDeps {
   store: BuildStore
   tickets: TicketSource
@@ -346,8 +357,9 @@ export interface DispatcherDeps {
   repo: string
   exec: Exec
   /** Launch (or re-attach — §15.6-C, §15.7) a build-runner for `slug`. The
-   * dispatcher never runs pipeline agents itself. */
-  launchRunner: (slug: string) => Promise<void>
+   * dispatcher never runs pipeline agents itself. The launcher reports local
+   * single-flight suppression so resume/sweep counters describe real schedules. */
+  launchRunner: (slug: string) => Promise<LaunchRunnerResult>
   /**
    * Non-interactive spec authoring for thin-but-groomed tickets (§6.3):
    * returns a candidate spec body, or null when the ticket cannot be
@@ -404,6 +416,7 @@ export class Dispatcher {
   private readonly triageState: string
   private readonly doneState: string
   private readonly slugNamingTimeoutMs: number
+  private readonly maxHarvestRecoveryAttempts: number
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
@@ -411,6 +424,9 @@ export class Dispatcher {
     this.doneState = deps.opts?.doneState ?? 'Done'
     this.slugNamingTimeoutMs =
       deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
+    this.maxHarvestRecoveryAttempts =
+      deps.opts?.maxHarvestRecoveryAttempts ??
+      DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   }
 
   /**
@@ -447,13 +463,21 @@ export class Dispatcher {
     const state = reduceHarvest(
       await this.deps.store.getRepoEvents(this.deps.repo),
     )
-    if (decideHarvestControl(state).kind !== 'park') start()
+    if (
+      decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !==
+      'park'
+    ) {
+      start()
+    }
   }
 
-  private async launch(slug: string, launched: Set<string>): Promise<void> {
-    if (launched.has(slug)) return
+  private async launch(
+    slug: string,
+    launched: Set<string>,
+  ): Promise<LaunchRunnerResult> {
+    if (launched.has(slug)) return 'already-active'
     launched.add(slug)
-    await this.deps.launchRunner(slug)
+    return this.deps.launchRunner(slug)
   }
 
   // ── a. Janitor (SPEC §15.7, D1) ────────────────────────────────────────────
@@ -740,8 +764,8 @@ export class Dispatcher {
       // Human pauses and judgment escalations are not "failures" for dispatch
       // to override; awaiting-pr/spec and terminal states have no runner work.
       if (decision.kind === 'wait') continue
-      await this.launch(record.slug, launched)
-      report.resumed += 1
+      const result = await this.launch(record.slug, launched)
+      if (result === 'scheduled') report.resumed += 1
     }
   }
 
@@ -782,8 +806,8 @@ export class Dispatcher {
       }
       const events = await this.deps.store.getEvents(record.slug)
       if (decideNext(events, this.deps.config).kind === 'wait') continue
-      await this.launch(record.slug, launched)
-      report.swept += 1
+      const result = await this.launch(record.slug, launched)
+      if (result === 'scheduled') report.swept += 1
     }
   }
 

@@ -433,10 +433,10 @@ The legend changes with the selected row and lists only meaningful actions:
 
 | Selection | Keys |
 |---|---|
-| Any | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
+| Any selection | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
 | Global top section | `p` toggles this process's intake on/off. `m` is an explanatory “select a build” no-op. |
-| `Harvest` | `p` requests repository-wide pause, or resumes when paused or stopped on an infrastructure error. `m` is the same build-only no-op. |
-| Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
+| `Harvest` | `p` requests repository-wide pause, resumes a paused or ordinarily failed run, or acknowledges a recovery-exhausted attention stop. That acknowledgement releases the barrier; it does not reopen the exhausted run. `m` is the same build-only no-op. |
+| Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. An in-flight agent step finishes before pause takes effect. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
 | Blocked feedback field | Enter submits and Escape cancels. Backspace edits; all printable keys are text rather than dashboard actions. |
 
 `--intake` and `--no-intake` choose only the launch value and cannot be combined;
@@ -474,36 +474,58 @@ Each tick runs in this order:
    preserve deliberate policy parks.
 3. **lease sweep** — re-attaches runners to builds whose lease went stale.
 4. **dispatch** — claims and launches new work (skipped while intake is off).
-5. **harvest** — independently of build capacity and intake, count newly
-   unclaimed structured observations. Below `[harvest].threshold`, do nothing.
-   At the threshold, claim the accumulation and run one journaled
-   scan/synthesize/review/file workflow. The workflow is tracked in-flight but
-   does not block later watch ticks or Ctrl-C; `--once` drains it before exit.
-   An acknowledged durable harvest pause or a latest run stopped on a
-   non-retrying infrastructure error suppresses new launches on every tick; a
-   pending resume still launches one settlement. Resume clears either stop and
-   continues the same claimed snapshot from its journaled boundary, or, with no
-   open run, restores normal threshold handling. Attempts are not reset: the
-   same unresolved error parks again instead of hot-looping. Approved proposals
-   are created directly in Triage and are never dispatched by the harvester.
+5. **harvest** — independently of build capacity and intake, settle an
+   outstanding recoverable run **before** considering a new scan. A stopped run
+   is automatically reopened at most twice through durable monotonic request
+   facts and the same `harvest.resumed` acknowledgement a human resume uses.
+   Completed steps, approved artifacts, reservations, and filing facts survive;
+   an approved run goes straight to filing and creates only missing tickets.
+   This outer budget is fixed and separate from retries inside one step.
+   With no recovery/control settlement due, count newly unclaimed structured
+   observations. Below `[harvest].threshold`, do nothing; at the threshold,
+   claim the accumulation and run one journaled scan/synthesize/review/file
+   workflow. Work is tracked in-flight without blocking later watch ticks or
+   Ctrl-C, and `--once` drains it before exit. Approved proposals are created
+   directly in Triage and are never dispatched by the harvester.
+
+If both automatic reopen attempts fail, one `harvest.recovery-exhausted` fact
+atomically commits the safe partial disposition ledger and releases only work
+still pending. Before approval that is the whole snapshot; after approval,
+filed creates, still-valid frozen joins, and suppressions stay dispositioned,
+while missing creates, tombstone/unknown joins, and otherwise unclassifiable
+members are released. Successfully read malformed/missing content fails safe to
+release; a rejected artifact read remains retryable infrastructure. A durable
+human-attention barrier prevents those released observations from being
+reclaimed immediately into another hot loop.
+Press `p` to acknowledge the barrier; the old run stays finished, and a future
+scan may claim the released work. Deliberate agent/stall/policy escalations
+still consume their snapshots and are never automatically recovered.
+
+Within one dispatcher process, build-runner launches are single-flighted by
+slug. Repeated polling or a transiently stale lease cannot open another agent
+session while that process still has the build's runner in flight. A session
+that ends without a terminal uses the runner's bounded sequential retry; once a
+runner settles or fails, its local slot is reusable. If the process actually
+dies, that in-memory guard disappears and the durable build lease remains the
+cross-process stale-runner recovery gate. Accordingly, `resumed` and `swept`
+count runners actually scheduled, not launch requests suppressed as already
+active.
 
 The dashboard renders repository harvest as the selectable `Harvest` row with
 elapsed times, observation count, and the same marker, right-aligned status
 column, and status colors as build rows. The internal run id is not displayed.
 `RUNNING` is green, acknowledged pause is literal yellow `PAUSED`, and an
-infrastructure stop is literal red `FAILED` with the stopped step and error
-visible. Pressing `p` on `FAILED` appends the same human resume request used for
-a pause and reports the distinct `harvest: error resume requested`; pressing it
-on an escalation does not reopen that run. `m` remains a build-only no-op.
+infrastructure stop is literal red `FAILED`. A recoverable stop shows its exact
+step/error and automatic attempt progress. An exhausted stop remains red for
+compatibility but says `recovery exhausted — human attention required`, names
+the stopped step, and shows the pending count. Pressing `p` there appends the
+human acknowledgement request; pressing it on an escalation does not reopen
+that run. `m` remains a build-only no-op.
 
-The acknowledgement clears the error and continues the same run from its last
-durable boundary. Its observation claim, approved artifacts, reservations, and
-filed-ticket facts survive; completed synthesize/review work is not repeated,
-and filing skips proposal keys already recorded as filed. If the condition is
-still broken, the attempt returns to `FAILED` and waits for another operator
-resume. Dispatch restart does not clear pause or error stops, and parked timers
-stay frozen. Use `ab harvest status --events 20` for the durable gate, run id,
-and event-level paper trail.
+Use `ab harvest status --events 20` for the durable gate, run id, recoverable
+versus terminal state, automatic attempts/limit, stopped boundary, exact pending
+observation/proposal keys, and event-level paper trail. Dispatch restarts do not
+clear pause or exhausted-attention stops, and stopped timers stay frozen.
 Optional runtime/model overrides are `[roles.harvest]` and
 `[roles.harvest-review]`; the producer continues across revision rounds and
 each reviewer is fresh.
@@ -580,7 +602,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on. |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
-| `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository pause/error stops and latest harvest run, including steps, verdicts, filing, and failures. Read-only. |
+| `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository gate and latest harvest run, including recovery attempts/limit, stopped boundary, attention state, exact pending work, steps, filing, and failures. Read-only. |
 | `ab help` | Print the command surface. |
 
 ### Agent build-session commands

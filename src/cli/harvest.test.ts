@@ -11,6 +11,7 @@ import {
   abHarvestStatus,
   buildHarvestContext,
   projectHarvestStatus,
+  renderHarvestStatus,
   submitHarvestProposals,
   submitHarvestVerdict,
 } from './harvest'
@@ -187,6 +188,165 @@ describe('harvest status', () => {
       filed: before.filed,
     })
     expect(after.failure).toBeUndefined()
+  })
+
+  test('reports automatic recovery progress, exhausted pending work, and attention acknowledgement', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_1',
+        step: 'file',
+        attempt: 2,
+        error: 'ticket provider unavailable',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_1', attempt: 1, limit: 2 },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    let view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view).toMatchObject({
+      status: 'running',
+      recovery: {
+        recoverable: false,
+        finished: false,
+        automatic: { attempts: 1, limit: 2, exhausted: false },
+        attention: { required: false, acknowledged: false },
+      },
+    })
+
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_1',
+        step: 'file',
+        attempt: 3,
+        error: 'ticket provider unavailable',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_1', attempt: 2, limit: 2 },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_1',
+        step: 'file',
+        attempt: 4,
+        error: 'ticket provider unavailable',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-exhausted',
+      payload: {
+        run: 'h_1',
+        step: 'file',
+        error: 'ticket provider unavailable',
+        attempts: 2,
+        limit: 2,
+        releasedObservations: [{ build: 'build-a', seq: 4 }],
+        committedDispositions: [],
+        pendingProposals: [
+          {
+            proposalKey: 'pending-cluster',
+            action: 'create',
+            observations: [{ build: 'build-a', seq: 4 }],
+          },
+        ],
+      },
+    })
+    view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view).toMatchObject({
+      status: 'failed',
+      recovery: {
+        recoverable: false,
+        finished: true,
+        automatic: { attempts: 2, limit: 2, exhausted: true },
+        stopped: { step: 'file' },
+        attention: { required: true, acknowledged: false },
+        pending: {
+          observations: [{ build: 'build-a', seq: 4 }],
+          proposalKeys: ['pending-cluster'],
+        },
+      },
+    })
+    const rendered = renderHarvestStatus(view).join('\n')
+    expect(rendered).toContain('stopped at: file')
+    expect(rendered).toContain('automatic recovery: 2/2 exhausted')
+    expect(rendered).toContain('pending: 1 observation (build-a:4)')
+    expect(rendered).toContain('attention: human acknowledgement required')
+
+    await deps.store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view.runStatus).toBe('failed')
+    expect(view.recovery.attention).toEqual({
+      required: false,
+      acknowledged: true,
+    })
+    expect(renderHarvestStatus(view)).toContain('attention: acknowledged')
+  })
+
+  test('completed and escalated runs project as terminal, never recoverable', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'h_1',
+        source: 'agent',
+        reason: 'human judgment required',
+        observations: [{ build: 'build-a', seq: 4 }],
+      },
+    })
+    const view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view.status).toBe('escalated')
+    expect(view.recovery).toMatchObject({
+      recoverable: false,
+      finished: true,
+      automatic: { attempts: 0, exhausted: false },
+    })
   })
 
   test('shares store precedence and uses the main checkout as journal identity', async () => {

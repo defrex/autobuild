@@ -63,7 +63,8 @@ describe('dashboard harvest row', () => {
     const byLabel = new Map(projected.steps.map((step) => [step.label, step]))
     expect(projected).toMatchObject({
       status: 'failed',
-      detail: 'no-terminal',
+      detail:
+        'stopped at synthesize r1 — automatic recovery 0/2; no-terminal',
     })
     expect(byLabel.get('scan')?.state).toBe('done')
     expect(byLabel.get('synthesize')).toMatchObject({
@@ -93,6 +94,128 @@ describe('dashboard harvest row', () => {
     expect(rendered).toMatch(/\[x\] scan/)
     expect(rendered).toMatch(/synthesize\(failed,/)
     expect(rendered).toContain('no-terminal')
+  })
+
+  test('shows recovery progress and an exhausted human-attention barrier', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_recovery',
+        observations: [{ build: 'a', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_recovery',
+        step: 'file',
+        attempt: 2,
+        error: 'provider down',
+        willRetry: false,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_recovery', attempt: 1, limit: 2 },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    expect(projectHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      status: 'running',
+      detail: 'automatic recovery 1/2 resumed',
+    })
+
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_recovery',
+        step: 'file',
+        attempt: 3,
+        error: 'provider down',
+        willRetry: false,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_recovery', attempt: 2, limit: 2 },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_recovery',
+        step: 'file',
+        attempt: 4,
+        error: 'provider down',
+        willRetry: false,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-exhausted',
+      payload: {
+        run: 'h_recovery',
+        step: 'file',
+        error: 'provider down',
+        attempts: 2,
+        limit: 2,
+        releasedObservations: [{ build: 'a', seq: 1 }],
+        committedDispositions: [],
+        pendingProposals: [],
+      },
+    })
+    let projected = projectHarvest(await store.getRepoEvents('/repo'))!
+    expect(projected).toMatchObject({
+      status: 'failed',
+      detail:
+        'recovery exhausted — human attention required; stopped at file; pending 1',
+    })
+    const rendered = stripAnsi(
+      renderDashboard(
+        {
+          repo: '/repo',
+          mode: 'watch',
+          capacity: 1,
+          drained: false,
+          statusLine: '',
+          builds: [],
+          harvest: projected,
+        },
+        { color: true, width: 120, height: 20, now: Date.now() },
+      ).join('\n'),
+    )
+    expect(rendered).toContain('FAILED')
+    expect(rendered).toContain('recovery exhausted — human attention required')
+
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    projected = projectHarvest(await store.getRepoEvents('/repo'))!
+    expect(projected.detail).toContain('attention acknowledged')
+    expect(projected.status).toBe('failed')
   })
 
   test('projects an acknowledged repository pause, freezes open timing, and supports no-run pauses', async () => {

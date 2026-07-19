@@ -13,6 +13,7 @@ import {
 } from '../harvest/schema'
 import type { IdSource } from '../ids'
 import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   proposalArtifactForRound,
   reduceHarvest,
   type HarvestPendingCommand,
@@ -394,6 +395,30 @@ export async function submitHarvestVerdict(
   return event
 }
 
+export interface HarvestRecoveryStatus {
+  /** True only for an ordinary infrastructure stop the dispatcher may reopen. */
+  recoverable: boolean
+  /** Completed, escalated, and recovery-exhausted runs are genuinely terminal. */
+  finished: boolean
+  automatic: {
+    attempts: number
+    limit: number
+    exhausted: boolean
+  }
+  stopped?: {
+    step: NonNullable<HarvestRunState['failure']>['step']
+    round?: number
+  }
+  attention: {
+    required: boolean
+    acknowledged: boolean
+  }
+  pending: {
+    observations: Array<{ build: string; seq: number }>
+    proposalKeys: string[]
+  }
+}
+
 export interface HarvestStatusView {
   repo: string
   run?: string
@@ -411,7 +436,59 @@ export interface HarvestStatusView {
   filed: Array<{ proposalKey: string; ticket: { source: string; id: string } }>
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
+  recovery: HarvestRecoveryStatus
   events?: HarvestEvent[]
+}
+
+function projectRecovery(
+  run: HarvestRunState | undefined,
+): HarvestRecoveryStatus {
+  const exhaustion = run?.recoveryExhaustion
+  const attempts = run?.recoveryRequests.length ?? 0
+  const limit =
+    exhaustion?.limit ??
+    run?.recoveryRequests.at(-1)?.limit ??
+    DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+  const stopped = run?.failure
+  return {
+    recoverable:
+      run?.status === 'failed' && exhaustion === undefined,
+    finished:
+      run?.status === 'completed' ||
+      run?.status === 'escalated' ||
+      exhaustion !== undefined,
+    automatic: {
+      attempts,
+      limit,
+      exhausted: exhaustion !== undefined,
+    },
+    ...(stopped !== undefined
+      ? {
+          stopped: {
+            step: stopped.step,
+            ...(stopped.round !== undefined
+              ? { round: stopped.round }
+              : {}),
+          },
+        }
+      : {}),
+    attention: {
+      required:
+        exhaustion !== undefined &&
+        exhaustion.attentionAcknowledgedSeq === undefined,
+      acknowledged:
+        exhaustion?.attentionAcknowledgedSeq !== undefined,
+    },
+    pending: {
+      observations: structuredClone(
+        exhaustion?.releasedObservations ?? [],
+      ),
+      proposalKeys:
+        exhaustion?.pendingProposals.map(
+          (proposal) => proposal.proposalKey,
+        ) ?? [],
+    },
+  }
 }
 
 export function projectHarvestStatus(
@@ -433,6 +510,7 @@ export function projectHarvestStatus(
       steps: [],
       rounds: 0,
       filed: [],
+      recovery: projectRecovery(undefined),
       ...(newestEvents !== undefined
         ? { events: events.slice(-newestEvents) }
         : {}),
@@ -458,6 +536,7 @@ export function projectHarvestStatus(
       ? { escalation: latest.escalation }
       : {}),
     ...(latest.failure !== undefined ? { failure: latest.failure } : {}),
+    recovery: projectRecovery(latest),
     ...(newestEvents !== undefined
       ? { events: events.slice(-newestEvents) }
       : {}),
@@ -493,6 +572,46 @@ export function renderHarvestStatus(view: HarvestStatusView): string[] {
     lines.push(
       `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +
         `${step.outcome ?? (step.completedSeq === undefined ? 'running' : 'done')}`,
+    )
+  }
+  if (view.recovery.stopped !== undefined) {
+    lines.push(
+      `stopped at: ${view.recovery.stopped.step}${
+        view.recovery.stopped.round !== undefined
+          ? ` r${view.recovery.stopped.round}`
+          : ''
+      }`,
+    )
+  }
+  if (
+    view.recovery.recoverable ||
+    view.recovery.automatic.attempts > 0 ||
+    view.recovery.automatic.exhausted
+  ) {
+    lines.push(
+      `automatic recovery: ${view.recovery.automatic.attempts}/${view.recovery.automatic.limit}${
+        view.recovery.automatic.exhausted
+          ? ' exhausted'
+          : view.recovery.recoverable
+            ? ' available'
+            : ' resumed'
+      }`,
+    )
+  }
+  if (view.recovery.automatic.exhausted) {
+    const observations = view.recovery.pending.observations.map(
+      (occurrence) => `${occurrence.build}:${occurrence.seq}`,
+    )
+    const proposals = view.recovery.pending.proposalKeys
+    lines.push(
+      `pending: ${observations.length} observation${observations.length === 1 ? '' : 's'}` +
+        `${observations.length > 0 ? ` (${observations.join(', ')})` : ''}` +
+        `${proposals.length > 0 ? `; proposals ${proposals.join(', ')}` : ''}`,
+    )
+    lines.push(
+      view.recovery.attention.required
+        ? 'attention: human acknowledgement required'
+        : 'attention: acknowledged',
     )
   }
   if (view.escalation) lines.push(`escalation: ${view.escalation.reason}`)

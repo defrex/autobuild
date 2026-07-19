@@ -26,6 +26,7 @@ import {
   validateSlugCandidate,
   type DependencyVerdict,
   type DispatcherOpts,
+  type LaunchRunnerResult,
 } from './dispatcher'
 import type { DependencyState } from '../ports/types'
 
@@ -82,6 +83,7 @@ function harness(
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
+    launchResult?: LaunchRunnerResult
     workspaceBase?: WorkspaceBase
   } = {},
 ) {
@@ -110,6 +112,7 @@ function harness(
     exec,
     launchRunner: async (slug) => {
       launches.push(slug)
+      return opts.launchResult ?? 'scheduled'
     },
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
@@ -1090,7 +1093,7 @@ describe('Dispatcher harvest coordination', () => {
     expect(h.launches).toEqual([])
   })
 
-  test('an errored run stays parked across ticks until a resume requests one settlement launch', async () => {
+  test('an errored run is selected for automatic recovery on every eligible tick', async () => {
     let calls = 0
     const h = harness({
       startHarvest: () => {
@@ -1125,7 +1128,7 @@ describe('Dispatcher harvest coordination', () => {
     expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
       emptyTickReport(),
     )
-    expect(calls).toBe(0)
+    expect(calls).toBe(2)
 
     await h.store.appendRepo(REPO, {
       actor: humanActor('operator'),
@@ -1135,8 +1138,90 @@ describe('Dispatcher harvest coordination', () => {
     expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
       emptyTickReport(),
     )
-    expect(calls).toBe(1)
+    expect(calls).toBe(3)
     expect(h.launches).toEqual([])
+  })
+
+  test('an exhausted attention barrier suppresses repeated ticks until a human acknowledgement request', async () => {
+    let calls = 0
+    const h = harness({
+      startHarvest: () => {
+        calls += 1
+      },
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_exhausted',
+        observations: [{ build: 'old-build', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_exhausted',
+        step: 'synthesize',
+        round: 1,
+        attempt: 2,
+        error: 'provider unavailable',
+        willRetry: false,
+      },
+    })
+    for (const attempt of [1, 2]) {
+      await h.store.appendRepo(REPO, {
+        actor: KERNEL,
+        type: 'harvest.recovery-requested',
+        payload: { run: 'h_exhausted', attempt, limit: 2 },
+      })
+      await h.store.appendRepo(REPO, {
+        actor: KERNEL,
+        type: 'harvest.resumed',
+        payload: {},
+      })
+      await h.store.appendRepo(REPO, {
+        actor: KERNEL,
+        type: 'harvest.failed',
+        payload: {
+          run: 'h_exhausted',
+          step: 'synthesize',
+          round: 1,
+          attempt: attempt + 2,
+          error: 'provider unavailable',
+          willRetry: false,
+        },
+      })
+    }
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.recovery-exhausted',
+      payload: {
+        run: 'h_exhausted',
+        step: 'synthesize',
+        round: 1,
+        error: 'provider unavailable',
+        attempts: 2,
+        limit: 2,
+        releasedObservations: [{ build: 'old-build', seq: 1 }],
+        committedDispositions: [],
+        pendingProposals: [],
+      },
+    })
+
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(0)
+
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
   })
 
   test('harvest remains independent of drain and occupied build capacity', async () => {
@@ -2201,6 +2286,23 @@ describe('Dispatcher startup resume', () => {
 
     expect(report).toEqual({ ...emptyTickReport(), resumed: 1 })
     expect(h.launches).toEqual([slug])
+  })
+
+  test('does not count a startup or sweep request suppressed by a known active runner', async () => {
+    const h = harness({ launchResult: 'already-active' })
+    const slug = await seedBuild(h)
+    await h.store.claimLease(slug, 'runner-1', 1000)
+    h.clock.advance(2000)
+
+    // Startup owns this tick's launch attempt, so its per-tick slug set also
+    // prevents the stale-lease stage from asking twice.
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(
+      emptyTickReport(),
+    )
+    // A later stale-lease poll asks again, but the launcher still knows the
+    // process-local run is live. Neither no-op is observable as resumed/swept.
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([slug, slug])
   })
 
   test('re-arms a policy-exhausted phase and records an auditable retry answer', async () => {

@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { artifactRefSchema, findingSchema, reviewVerdictKindSchema, ticketRefSchema } from '../ontology'
 import {
   harvestDispositionSchema,
+  harvestPendingProposalSchema,
   harvestStepSchema,
   occurrenceKeySchema,
 } from '../harvest/schema'
@@ -24,6 +25,26 @@ export const harvestEventPayloadSchemas = {
   'harvest.resume-requested': empty,
   'harvest.paused': empty,
   'harvest.resumed': empty,
+  /** Durable selection of one outer automatic recovery. The acknowledgement
+   * is the same harvest.resumed fact used by a human request. */
+  'harvest.recovery-requested': z.strictObject({
+    run: z.string().min(1),
+    attempt,
+    limit: z.number().int().positive(),
+  }),
+  /** Atomic give-up boundary: commit the safe partial ledger, release only
+   * pending observations, and raise a durable human-attention barrier. */
+  'harvest.recovery-exhausted': z.strictObject({
+    run: z.string().min(1),
+    step: harvestStepSchema,
+    round: round.optional(),
+    error: z.string().min(1),
+    attempts: z.number().int().positive(),
+    limit: z.number().int().positive(),
+    releasedObservations: z.array(occurrenceKeySchema),
+    committedDispositions: z.array(harvestDispositionSchema),
+    pendingProposals: z.array(harvestPendingProposalSchema),
+  }),
   'harvest.started': z.strictObject({
     run: z.string().min(1),
     observations: z.array(occurrenceKeySchema).min(1),
@@ -99,8 +120,8 @@ export const harvestEventPayloadSchemas = {
     round: round.optional(),
     observations: z.array(occurrenceKeySchema).min(1),
   }),
-  /** Infrastructure failure. A non-retrying failure stops the run until an
-   * explicit operator resume; retrying failures resume the same claimed snapshot. */
+  /** Infrastructure failure. A non-retrying failure stops the run at a
+   * durable boundary for bounded automatic or explicit recovery. */
   'harvest.failed': z.strictObject({
     run: z.string().min(1),
     step: harvestStepSchema,
@@ -143,6 +164,8 @@ const allowedActorKinds: Record<HarvestEventType, readonly ActorKind[]> = {
   'harvest.resume-requested': ['human'],
   'harvest.paused': ['kernel'],
   'harvest.resumed': ['kernel'],
+  'harvest.recovery-requested': ['kernel'],
+  'harvest.recovery-exhausted': ['kernel'],
   'harvest.started': ['dispatcher', 'kernel'],
   'harvest.step.started': ['kernel'],
   'harvest.step.completed': ['kernel'],

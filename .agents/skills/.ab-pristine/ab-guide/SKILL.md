@@ -80,12 +80,21 @@ runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created directly in Triage. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
-crash-safe without polluting `ab builds` or the fixed phase grammar. Already
-claimed observations never trigger again; idle ticks launch no harvest agent. A
-non-retrying infrastructure failure parks the same run in `failed`: ordinary
-ticks do not retry it, but an explicit human resume reopens it at the durable
-boundary with its claim, artifacts, attempts, reservations, and filing facts
-intact. Completed and escalated runs remain terminal.
+crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
+exclude observations until they are dispositioned or selectively released;
+idle ticks launch no harvest agent. A non-retrying infrastructure failure parks
+the same run at its durable
+boundary. Before any new scan, dispatch automatically reopens that run at most
+twice through durable request facts and the same `harvest.resumed`
+acknowledgement used by manual resume. Claims, artifacts, attempts,
+reservations, and filing facts stay intact, so completed work is not repeated.
+After the bound, one atomic fact commits only classifiable filed creates,
+still-valid frozen joins, and suppressions; missing creates, tombstone/unknown
+joins, and otherwise unclassifiable members are released as pending. A rejected
+store read remains retryable infrastructure, while successfully read malformed
+content fails safe toward release. The same fact raises a human-attention
+barrier. Acknowledging that barrier permits a future scan but never resurrects
+the old run. Completed and deliberate escalated runs remain terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
@@ -246,7 +255,7 @@ Every field is a **positive integer**.
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
-| `maxReviewRounds` | `5` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
+| `maxReviewRounds` | `4` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 
 ### `[dispatcher]`
 
@@ -315,7 +324,9 @@ default. Harvest remains independent of build capacity and of process-local
 intake. Dispatch tracks the workflow in-flight without awaiting it on
 watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
 it before exit. The repository lease remains the cross-process single-flight
-gate.
+gate. A fixed two-attempt automatic recovery budget applies before any new run;
+it is deliberately not configurable and is separate from retry policy inside
+one harvest step.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -427,15 +438,15 @@ janitor, stale-runner, harvest, and in-flight work continue, and a fresh run
 defaults on again.
 
 `Harvest` uses the same marker, right-aligned status column, and status colors
-as builds; its internal run id is not shown. On `Harvest`, `p` appends a resume
-request when the reduced gate is paused **or** the latest run is failed;
-otherwise it appends pause. Error recovery has the distinct status message
-`harvest: error resume requested`. The kernel acknowledges control only at a
-durable workflow boundary. Pause renders yellow `PAUSED`; an infrastructure
-stop renders red `FAILED` and marks the exact failed step. No tick launches
-while either stop stands. Resume continues the same claimed snapshot without
-repeating approved work or proposal keys already filed. Attempts stay
-monotonic, so an unresolved problem returns to `FAILED` rather than hot-looping.
+as builds; its internal run id is not shown. Pause renders yellow `PAUSED`. A
+recoverable infrastructure stop renders red `FAILED`, marks the stopped step,
+and shows automatic attempt progress. Exhaustion remains red for compatibility
+but says `recovery exhausted — human attention required` and shows the stopped
+step and pending count. On `Harvest`, `p` requests resume when the gate is
+paused, an ordinary failed run needs a manual reopen, or exhausted attention
+needs acknowledgement; otherwise it requests pause. Error recovery has the
+distinct status message `harvest: error resume requested`. The exhausted
+acknowledgement removes only the barrier and does not reopen the old run.
 Completed and escalated runs are not reopened.
 
 A build with auto-merge off has no auto-merge token. Requested, enabled, and
@@ -443,29 +454,58 @@ cancelling states all read `auto merge`: cyan means requested locally but not
 yet applied on GitHub, green means native auto-merge is enabled, and yellow
 means cancellation is in flight. The token disappears when cancellation lands.
 
-## Resuming blocked builds from the dashboard
+### Durable build controls: CLI and dashboard
 
-On a TTY, select a blocked build and press `p`. Instead of pausing it, the
-bottom controls become an optional feedback field while the red blocker
-question stays visible. All printable keys edit the field instead of triggering
-dashboard actions; Backspace deletes, Enter submits, and Escape cancels without
-changing the build.
+The CLI and dashboard are two surfaces over the same store-backed control
+operations. Use the CLI from a non-TTY, a script, or an assistant; use the
+keys while watching the interactive dashboard. Both append human-authored facts
+to the build's event log and apply the same write-time checks.
 
-- **Empty or whitespace-only Enter** records a human `retry` answer for every
-  escalation captured when the field opened, regardless of `agent`, `stall`,
-  or `policy` source. This is a bare re-attempt and supplies no agent guidance.
-- **Entered text** records human `guidance` with the trimmed text and delivers it
-  to the next run of the parked phase.
-- If the blocked build is also paused, submission records a resume request after
-  answering its escalations.
+| Intent | CLI | Dashboard | Durable event(s) |
+|---|---|---|---|
+| Pause | `ab pause <slug> [--store <ref>]` | Select the build and press `p` while it is not paused or blocked. | `build.pause-requested` |
+| Resume | `ab resume <slug> [--store <ref>]` | Select a paused build and press `p`. | `build.resume-requested` |
+| Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
+| Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `p`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
+| Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `p` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
+| Abort | `ab abort <slug> [--store <ref>]` | No key in this release. | `build.abort-requested` |
 
-The events retain the human user, store-assigned time, resolution, and answer.
-The normal lease sweep re-attaches the runner; the UI does not launch one through
-a side channel. Resume is therefore an attempt, not a guarantee: if the
-condition still fails or the question remains unanswered, the phase can raise a
-new escalation and return to blocked. This operator flow does not broaden the
-unattended startup rule: a fresh `ab dispatch` still auto-retries only an
-all-policy escalation set and never invents guidance.
+On the dashboard, `p` on a blocked build replaces the bottom legend with the
+optional feedback field while the blocker stays visible. All printable keys
+edit the field instead of triggering dashboard actions; Backspace deletes,
+Enter submits, and Escape cancels.
+
+`ab answer` answers every escalation that is open when the command runs,
+regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
+and delivered as authoritative guidance. With no text (or only whitespace), it
+requests a bare retry and supplies no agent guidance. The dashboard captures
+the blocker ids when its field opens, then answers only those still open at
+submission; Escape cancels without writing. If the build is also paused, both
+surfaces append all answers first and `build.resume-requested` last. A plain
+`ab resume` does not answer blockers; use `ab answer` for a blocked build.
+
+Every command requires the target to exist in this repository and be active
+(`running`, `paused`, or `blocked`); `ab answer` additionally requires an open
+escalation. A stale, missing, queued, done, aborted, or unblocked target is an
+error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
+same stable fallback on both surfaces. All five commands run sessionless and
+accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
+local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
+caller's own phase build, the command refuses it; a phase cannot pause, resume,
+auto-merge, answer, or abort itself.
+
+These commands request normal kernel work; they do not wake a runner, operate
+the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
+guarantee: if the condition still fails, a phase may raise a new escalation and
+block again. A fresh `ab dispatch` still auto-retries only an all-policy
+escalation set and never invents guidance.
+
+Two asymmetries are intentional and explicit. Dashboard intake remains
+process-local state inside that running `ab dispatch`, so its launch flags and
+global-row `p` have no durable CLI command. Conversely, abort has a CLI command
+but gains no TUI key in this release. On the repository-scoped `Harvest` row,
+`p` requests durable harvest pause/resume or acknowledges exhausted recovery
+attention, while `m` remains an explanatory build-only no-op.
 
 ## Checking build status
 
@@ -504,14 +544,15 @@ restarted, not that verify never ran.
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
-durable repository pause/error stops and latest harvest run from the same
-journal the runner resumes. It shows the claimed observation count, each
-scan/synthesize/review/file occurrence and outcome, review rounds, filed ticket
-refs, and any escalation or infrastructure failure. It is read-only and also
-reports an idle or paused repository with no run. The dispatch dashboard shows
+durable repository gate and latest harvest run from the same journal the runner
+resumes. It distinguishes recoverable from terminal, shows automatic
+attempts/limit, stopped step/round, attention state, exact pending observation
+and proposal keys, each workflow occurrence, review rounds, filed ticket refs,
+and any escalation or infrastructure failure. It is read-only and also reports
+an idle or paused repository with no run. The dispatch dashboard shows
 repository harvest as the selectable, non-color-only `Harvest` step row without
-its internal run id; `p` requests pause/resume there and `m` remains the
-build-only no-op.
+its internal run id; `p` requests pause/resume or acknowledges exhausted
+attention there, and `m` remains the build-only no-op.
 
 ### Lease health is not build status
 

@@ -96,6 +96,7 @@ function harness(toml = '') {
     exec,
     launchRunner: async (slug) => {
       launches.push(slug)
+      return 'scheduled'
     },
     ids: sequentialIds(),
     clock,
