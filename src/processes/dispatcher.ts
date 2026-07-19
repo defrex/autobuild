@@ -35,7 +35,11 @@ import {
   pendingAutoMerge,
 } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
-import { decideHarvestControl, reduceHarvest } from '../kernel/harvest'
+import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  decideHarvestControl,
+  reduceHarvest,
+} from '../kernel/harvest'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
 import type {
@@ -317,6 +321,8 @@ export interface DispatcherOpts {
   /** Internal deadline for the optional pre-build naming seam. Production is
    * fixed; injection exists only so timeout behavior is deterministic in tests. */
   slugNamingTimeoutMs?: number
+  /** Must match the HarvestRunner's durable outer recovery budget. */
+  maxHarvestRecoveryAttempts?: number
 }
 
 export interface TickOpts {
@@ -410,6 +416,7 @@ export class Dispatcher {
   private readonly triageState: string
   private readonly doneState: string
   private readonly slugNamingTimeoutMs: number
+  private readonly maxHarvestRecoveryAttempts: number
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
@@ -417,6 +424,9 @@ export class Dispatcher {
     this.doneState = deps.opts?.doneState ?? 'Done'
     this.slugNamingTimeoutMs =
       deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
+    this.maxHarvestRecoveryAttempts =
+      deps.opts?.maxHarvestRecoveryAttempts ??
+      DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   }
 
   /**
@@ -453,7 +463,12 @@ export class Dispatcher {
     const state = reduceHarvest(
       await this.deps.store.getRepoEvents(this.deps.repo),
     )
-    if (decideHarvestControl(state).kind !== 'park') start()
+    if (
+      decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !==
+      'park'
+    ) {
+      start()
+    }
   }
 
   private async launch(

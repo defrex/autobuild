@@ -96,6 +96,19 @@ export const harvestDispositionSchema = z.strictObject({
 })
 export type HarvestDisposition = z.infer<typeof harvestDispositionSchema>
 
+/** Stable, prose-free summary of proposal work still pending when automatic
+ * recovery is exhausted. The released occurrence list remains authoritative;
+ * these descriptors let status name reviewed proposal clusters without
+ * loading an artifact. */
+export const harvestPendingProposalSchema = z.strictObject({
+  proposalKey: z.string().min(1),
+  action: z.enum(['create', 'join', 'suppress']),
+  observations: z.array(occurrenceKeySchema).min(1),
+})
+export type HarvestPendingProposal = z.infer<
+  typeof harvestPendingProposalSchema
+>
+
 export const harvestStepSchema = z.enum(['scan', 'synthesize', 'review', 'file'])
 export type HarvestStep = z.infer<typeof harvestStepSchema>
 

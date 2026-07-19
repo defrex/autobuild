@@ -5,8 +5,10 @@ import {
   harvestProposalSetSchema,
   harvestScanPacketSchema,
   occurrenceKey,
+  type HarvestDisposition,
   type HarvestLedgerTicket,
   type HarvestObservation,
+  type HarvestPendingProposal,
   type HarvestProposal,
   type HarvestProposalSet,
   type HarvestScanPacket,
@@ -14,7 +16,9 @@ import {
 } from '../harvest/schema'
 import {
   claimedOccurrenceKeys,
+  proposalArtifactForRound,
   reduceHarvest,
+  type HarvestRunState,
   type HarvestState,
 } from '../kernel/harvest'
 import type { TicketSource } from '../ports/types'
@@ -220,6 +224,190 @@ export function parseApprovedProposalSet(
 export function harvestProposalKey(proposal: HarvestProposal): string {
   const members = proposal.observations.map(occurrenceKey).sort().join('\n')
   return `harvest-${contentHash(toBytes(members)).slice(0, 24)}`
+}
+
+export interface HarvestExhaustionPartition {
+  releasedObservations: OccurrenceKey[]
+  committedDispositions: HarvestDisposition[]
+  pendingProposals: HarvestPendingProposal[]
+}
+
+/** Determine the only safe give-up partition from frozen repository facts.
+ * No provider is queried and no external side effect occurs here: filed facts,
+ * the approved proposal artifact, and its original scan packet are the entire
+ * authority.
+ *
+ * Store read failures propagate so a transient outage can be retried. Once a
+ * read succeeds, malformed/missing artifacts and unclassifiable proposal
+ * members fail safe as pending work instead of making exhaustion itself a hot
+ * loop. */
+export async function partitionHarvestExhaustion(opts: {
+  store: BuildStore
+  repo: string
+  run: HarvestRunState
+}): Promise<HarvestExhaustionPartition> {
+  const { store, repo, run } = opts
+  const releaseWholeSnapshot = (): HarvestExhaustionPartition => ({
+    releasedObservations: structuredClone(run.observations),
+    committedDispositions: [],
+    pendingProposals: [],
+  })
+  const approval = [...run.reviews]
+    .reverse()
+    .find((review) => review.verdict === 'approve')
+  if (approval === undefined) return releaseWholeSnapshot()
+
+  const approved = proposalArtifactForRound(run, approval.round)
+  if (approved === undefined) return releaseWholeSnapshot()
+  // A rejected read is transient and must remain retryable. A successful
+  // missing result is durable corruption, so release rather than relaunching
+  // this same rejecting exhaustion settlement forever.
+  const artifact = await store.getRepoArtifact(repo, approved.kind, approved.rev)
+  if (artifact === null) return releaseWholeSnapshot()
+
+  let set: HarvestProposalSet
+  try {
+    set = parseApprovedProposalSet(
+      new TextDecoder().decode(artifact.content),
+      run.observations,
+    )
+  } catch {
+    return releaseWholeSnapshot()
+  }
+
+  // The scan packet is needed only to prove a join is still a valid frozen
+  // disposition. As above, transport/read errors propagate; missing,
+  // malformed, or mismatched content simply makes joins pending. Creates with
+  // durable filing facts and suppressions remain independently classifiable.
+  const scanArtifact = await store.getRepoArtifact(
+    repo,
+    run.scan.kind,
+    run.scan.rev,
+  )
+  let packet: HarvestScanPacket | undefined
+  if (scanArtifact !== null) {
+    let raw: unknown
+    try {
+      raw = JSON.parse(new TextDecoder().decode(scanArtifact.content))
+    } catch {
+      raw = undefined
+    }
+    const parsed = harvestScanPacketSchema.safeParse(raw)
+    if (parsed.success && parsed.data.run === run.run) {
+      const packetOccurrences = new Set(
+        parsed.data.observations.map((item) =>
+          occurrenceKey(item.occurrence),
+        ),
+      )
+      if (
+        packetOccurrences.size === run.observations.length &&
+        run.observations.every((item) =>
+          packetOccurrences.has(occurrenceKey(item)),
+        )
+      ) {
+        packet = parsed.data
+      }
+    }
+  }
+
+  const knownLedger = new Map(
+    (packet?.ledger ?? []).map((entry) => [
+      `${entry.ticket.source}:${entry.ticket.id}`,
+      entry,
+    ]),
+  )
+  const filed = new Map(
+    run.filed.map((entry) => [entry.proposalKey, entry.ticket]),
+  )
+  const proposalKeys = new Set<string>()
+  for (const proposal of set.proposals) {
+    const proposalKey = harvestProposalKey(proposal)
+    if (proposalKeys.has(proposalKey)) return releaseWholeSnapshot()
+    proposalKeys.add(proposalKey)
+  }
+
+  const releasedObservations: OccurrenceKey[] = []
+  const committedDispositions: HarvestDisposition[] = []
+  const pendingProposals: HarvestPendingProposal[] = []
+  const releaseProposal = (proposal: HarvestProposal): void => {
+    const proposalKey = harvestProposalKey(proposal)
+    releasedObservations.push(...structuredClone(proposal.observations))
+    pendingProposals.push({
+      proposalKey,
+      action: proposal.action,
+      observations: structuredClone(proposal.observations),
+    })
+  }
+
+  for (const proposal of set.proposals) {
+    if (proposal.action === 'create') {
+      const proposalKey = harvestProposalKey(proposal)
+      const ticket = filed.get(proposalKey)
+      if (ticket === undefined) {
+        releaseProposal(proposal)
+      } else {
+        for (const occurrence of proposal.observations) {
+          committedDispositions.push({
+            occurrence: { ...occurrence },
+            action: 'filed',
+            proposalKey,
+            ticket: structuredClone(ticket),
+          })
+        }
+      }
+      continue
+    }
+
+    if (proposal.action === 'join') {
+      const known = knownLedger.get(
+        `${proposal.ticket.source}:${proposal.ticket.id}`,
+      )
+      if (known === undefined || !known.exists || known.resolved) {
+        releaseProposal(proposal)
+        continue
+      }
+      for (const occurrence of proposal.observations) {
+        committedDispositions.push({
+          occurrence: { ...occurrence },
+          action: 'joined',
+          proposalKey: known.proposalKey,
+          ticket: structuredClone(known.ticket),
+          reason: proposal.reason,
+        })
+      }
+      continue
+    }
+
+    const proposalKey = harvestProposalKey(proposal)
+    for (const occurrence of proposal.observations) {
+      committedDispositions.push({
+        occurrence: { ...occurrence },
+        action: 'suppressed',
+        proposalKey,
+        reason: proposal.reason,
+      })
+    }
+  }
+
+  // Coverage was revalidated above, so this is a defensive fail-safe against a
+  // future classifier bug rather than a reachable content error.
+  const expected = new Set(run.observations.map(occurrenceKey))
+  const seen = new Set<string>()
+  for (const occurrence of [
+    ...committedDispositions.map((item) => item.occurrence),
+    ...releasedObservations,
+  ]) {
+    const key = occurrenceKey(occurrence)
+    if (!expected.has(key) || seen.has(key)) return releaseWholeSnapshot()
+    seen.add(key)
+  }
+  if (seen.size !== expected.size) return releaseWholeSnapshot()
+
+  return {
+    releasedObservations,
+    committedDispositions,
+    pendingProposals,
+  }
 }
 
 export function renderHarvestProposal(

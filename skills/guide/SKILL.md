@@ -80,12 +80,21 @@ runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created directly in Triage. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
-crash-safe without polluting `ab builds` or the fixed phase grammar. Already
-claimed observations never trigger again; idle ticks launch no harvest agent. A
-non-retrying infrastructure failure parks the same run in `failed`: ordinary
-ticks do not retry it, but an explicit human resume reopens it at the durable
-boundary with its claim, artifacts, attempts, reservations, and filing facts
-intact. Completed and escalated runs remain terminal.
+crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
+exclude observations until they are dispositioned or selectively released;
+idle ticks launch no harvest agent. A non-retrying infrastructure failure parks
+the same run at its durable
+boundary. Before any new scan, dispatch automatically reopens that run at most
+twice through durable request facts and the same `harvest.resumed`
+acknowledgement used by manual resume. Claims, artifacts, attempts,
+reservations, and filing facts stay intact, so completed work is not repeated.
+After the bound, one atomic fact commits only classifiable filed creates,
+still-valid frozen joins, and suppressions; missing creates, tombstone/unknown
+joins, and otherwise unclassifiable members are released as pending. A rejected
+store read remains retryable infrastructure, while successfully read malformed
+content fails safe toward release. The same fact raises a human-attention
+barrier. Acknowledging that barrier permits a future scan but never resurrects
+the old run. Completed and deliberate escalated runs remain terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
@@ -325,7 +334,9 @@ default. Harvest remains independent of build capacity and of the dashboard's
 drain toggle. Dispatch tracks the workflow in-flight without awaiting it on
 watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
 it before exit. The repository lease remains the cross-process single-flight
-gate.
+gate. A fixed two-attempt automatic recovery budget applies before any new run;
+it is deliberately not configurable and is separate from retry policy inside
+one harvest step.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -431,15 +442,14 @@ Up/Down moves through one ordered list: the optional `Harvest` row first, then
 slug-sorted builds. Selection uses stable kind/slug identity, so repaint,
 re-sort, and harvest appearance or disappearance do not retarget it by row
 index. `Harvest` uses the same marker, right-aligned status column, and status
-colors as builds; its internal run id is not shown. On `Harvest`, `p` appends a
-resume request when the reduced gate is paused **or** the latest run is failed;
-otherwise it appends pause. Error recovery has the distinct status message
-`harvest: error resume requested`. The kernel acknowledges control only at a
-durable workflow boundary. Pause renders yellow `PAUSED`; an infrastructure
-stop renders red `FAILED` and marks the exact failed step. No tick launches
-while either stop stands. Resume continues the same claimed snapshot without
-repeating approved work or proposal keys already filed. Attempts stay
-monotonic, so an unresolved problem returns to `FAILED` rather than hot-looping.
+colors as builds; its internal run id is not shown. Pause renders yellow
+`PAUSED`. A recoverable infrastructure stop renders red `FAILED`, marks the
+stopped step, and shows automatic attempt progress. Exhaustion remains red for
+compatibility but says `recovery exhausted — human attention required` and
+shows the stopped step and pending count. On `Harvest`, `p` requests resume when
+the gate is paused, an ordinary failed run needs a manual reopen, or exhausted
+attention needs acknowledgement; otherwise it requests pause. The exhausted
+acknowledgement removes only the barrier and does not reopen the old run.
 Completed and escalated runs are not reopened. `m` remains an explanatory
 build-only no-op; `d` remains repository/process-wide.
 
@@ -532,14 +542,15 @@ restarted, not that verify never ran.
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
-durable repository pause/error stops and latest harvest run from the same
-journal the runner resumes. It shows the claimed observation count, each
-scan/synthesize/review/file occurrence and outcome, review rounds, filed ticket
-refs, and any escalation or infrastructure failure. It is read-only and also
-reports an idle or paused repository with no run. The dispatch dashboard shows
+durable repository gate and latest harvest run from the same journal the runner
+resumes. It distinguishes recoverable from terminal, shows automatic
+attempts/limit, stopped step/round, attention state, exact pending observation
+and proposal keys, each workflow occurrence, review rounds, filed ticket refs,
+and any escalation or infrastructure failure. It is read-only and also reports
+an idle or paused repository with no run. The dispatch dashboard shows
 repository harvest as the selectable, non-color-only `Harvest` step row without
-its internal run id; `p` requests pause/resume there and `m` remains the
-build-only no-op.
+its internal run id; `p` requests pause/resume or acknowledges exhausted
+attention there, and `m` remains the build-only no-op.
 
 ### Lease health is not build status
 

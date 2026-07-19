@@ -9,6 +9,7 @@ import type { ArtifactRef, Finding, TicketRef } from '../ontology'
 import {
   occurrenceKey,
   type HarvestDisposition,
+  type HarvestPendingProposal,
   type HarvestStep,
   type OccurrenceKey,
 } from '../harvest/schema'
@@ -40,6 +41,30 @@ export interface HarvestProposalReservation {
   seq: number
 }
 
+export interface HarvestRecoveryRequest {
+  attempt: number
+  limit: number
+  seq: number
+  requestedAt: string
+  acknowledgedSeq?: number
+  acknowledgedAt?: string
+}
+
+export interface HarvestRecoveryExhaustion {
+  step: HarvestStep
+  round?: number
+  error: string
+  attempts: number
+  limit: number
+  releasedObservations: OccurrenceKey[]
+  committedDispositions: HarvestDisposition[]
+  pendingProposals: HarvestPendingProposal[]
+  seq: number
+  at: string
+  attentionAcknowledgedSeq?: number
+  attentionAcknowledgedAt?: string
+}
+
 export interface HarvestRunState {
   run: string
   status: 'running' | 'completed' | 'escalated' | 'failed'
@@ -66,6 +91,10 @@ export interface HarvestRunState {
     error: string
     willRetry: boolean
   }
+  /** Durable outer recoveries, independent of within-step attempt facts. */
+  recoveryRequests: HarvestRecoveryRequest[]
+  /** Present after the automatic recovery budget is atomically exhausted. */
+  recoveryExhaustion?: HarvestRecoveryExhaustion
   terminalSeq?: number
   terminalAt?: string
 }
@@ -97,14 +126,19 @@ export interface HarvestState {
   pausedAt?: string
   /** Unacknowledged human commands in repository sequence order. */
   pendingCommands: HarvestPendingCommand[]
-  /** Every occurrence claimed by a harvest.started fact, terminal or not. */
+  /** Occurrences still owned by started runs; exhaustion may selectively
+   * release pending members while retaining committed ones. */
   claimed: OccurrenceKey[]
-  /** Successful terminal disposition facts. */
+  /** Completed and recovery-exhausted committed disposition facts. */
   ledger: HarvestLedgerEntry[]
 }
 
+export const DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS = 2
+
 export type HarvestControlDecision =
   | { kind: 'acknowledge'; command: 'pause' | 'resume' }
+  | { kind: 'request-recovery'; run: string; attempt: number; limit: number }
+  | { kind: 'exhaust-recovery'; run: string; attempts: number; limit: number }
   | { kind: 'park' }
   | { kind: 'proceed' }
 
@@ -131,7 +165,10 @@ function requireRun(
 export function reduceHarvest(events: HarvestEvent[]): HarvestState {
   const runs = new Map<string, HarvestRunState>()
   const order: HarvestRunState[] = []
-  const claimed = new Map<string, OccurrenceKey>()
+  const claimed = new Map<
+    string,
+    { occurrence: OccurrenceKey; run: string }
+  >()
   const ledger: HarvestLedgerEntry[] = []
   const pending: Record<HarvestPendingCommand['command'], HarvestPendingCommand[]> = {
     pause: [],
@@ -168,20 +205,237 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
         pending.pause = []
         break
       case 'harvest.resumed': {
+        const hadHumanResume = pending.resume.length > 0
         paused = false
         pausedSeq = undefined
         pausedAt = undefined
         pending.resume = []
-        // The same acknowledgement opens the repository gate and clears an
-        // infrastructure stop. Only the latest failed run is recoverable:
-        // completed and deliberately escalated runs remain terminal.
         const latest = order.at(-1)
-        if (latest?.status === 'failed') {
-          latest.status = 'running'
-          delete latest.failure
-          delete latest.terminalSeq
-          delete latest.terminalAt
+        if (latest?.recoveryExhaustion !== undefined) {
+          // After give-up, the same human acknowledgement removes only the
+          // repository attention barrier. The old run remains terminal and
+          // its selectively released work may be claimed by a future run.
+          if (
+            hadHumanResume &&
+            latest.recoveryExhaustion.attentionAcknowledgedSeq === undefined
+          ) {
+            latest.recoveryExhaustion.attentionAcknowledgedSeq = event.seq
+            latest.recoveryExhaustion.attentionAcknowledgedAt = event.ts
+          }
+          break
         }
+        if (latest?.status === 'failed') {
+          const automatic = [...latest.recoveryRequests]
+            .reverse()
+            .find((request) => request.acknowledgedSeq === undefined)
+          if (automatic !== undefined) {
+            automatic.acknowledgedSeq = event.seq
+            automatic.acknowledgedAt = event.ts
+          }
+          // Human and automatic requests converge here. A bare, uncorrelated
+          // resumed fact cannot silently bypass the outer recovery budget.
+          if (hadHumanResume || automatic !== undefined) {
+            latest.status = 'running'
+            delete latest.failure
+            delete latest.terminalSeq
+            delete latest.terminalAt
+          }
+        }
+        break
+      }
+      case 'harvest.recovery-requested': {
+        const run = requireRun(runs, event.payload.run, event)
+        if (order.at(-1) !== run) {
+          throw new Error(
+            `harvest.recovery-requested at repo seq ${event.seq} must target the latest run`,
+          )
+        }
+        if (run.status !== 'failed' || run.recoveryExhaustion !== undefined) {
+          throw new Error(
+            `harvest.recovery-requested at repo seq ${event.seq} requires an ` +
+              `ordinary failed run; "${run.run}" is ${run.status}`,
+          )
+        }
+        if (
+          run.recoveryRequests.some(
+            (request) => request.acknowledgedSeq === undefined,
+          )
+        ) {
+          throw new Error(
+            `harvest run "${run.run}" already has an unacknowledged automatic recovery request`,
+          )
+        }
+        const expectedAttempt = run.recoveryRequests.length + 1
+        if (event.payload.attempt !== expectedAttempt) {
+          throw new Error(
+            `harvest run "${run.run}" recovery attempt must be ${expectedAttempt}; ` +
+              `repo seq ${event.seq} recorded ${event.payload.attempt}`,
+          )
+        }
+        const appliedLimit = run.recoveryRequests[0]?.limit
+        if (
+          appliedLimit !== undefined &&
+          event.payload.limit !== appliedLimit
+        ) {
+          throw new Error(
+            `harvest run "${run.run}" recovery limit was already applied as ` +
+              `${appliedLimit}; repo seq ${event.seq} cannot change it to ${event.payload.limit}`,
+          )
+        }
+        if (event.payload.attempt > event.payload.limit) {
+          throw new Error(
+            `harvest run "${run.run}" recovery attempt ${event.payload.attempt} ` +
+              `exceeds its applied limit ${event.payload.limit}`,
+          )
+        }
+        run.recoveryRequests.push({
+          attempt: event.payload.attempt,
+          limit: event.payload.limit,
+          seq: event.seq,
+          requestedAt: event.ts,
+        })
+        break
+      }
+      case 'harvest.recovery-exhausted': {
+        const run = requireRun(runs, event.payload.run, event)
+        if (order.at(-1) !== run) {
+          throw new Error(
+            `harvest.recovery-exhausted at repo seq ${event.seq} must target the latest run`,
+          )
+        }
+        if (run.recoveryExhaustion !== undefined) {
+          throw new Error(
+            `duplicate harvest.recovery-exhausted for run "${run.run}" at repo seq ${event.seq}`,
+          )
+        }
+        if (run.status !== 'failed' || run.failure === undefined) {
+          throw new Error(
+            `harvest.recovery-exhausted at repo seq ${event.seq} requires a failed run`,
+          )
+        }
+        if (
+          run.failure.step !== event.payload.step ||
+          run.failure.round !== event.payload.round ||
+          run.failure.error !== event.payload.error
+        ) {
+          throw new Error(
+            `harvest.recovery-exhausted at repo seq ${event.seq} does not match ` +
+              `the stopped boundary for run "${run.run}"`,
+          )
+        }
+        if (
+          event.payload.attempts !== run.recoveryRequests.length ||
+          event.payload.attempts !== event.payload.limit ||
+          run.recoveryRequests.some(
+            (request) => request.limit !== event.payload.limit,
+          )
+        ) {
+          throw new Error(
+            `harvest run "${run.run}" exhaustion must record its exact recovery ` +
+              `count and limit; got ${event.payload.attempts}/${event.payload.limit} ` +
+              `after ${run.recoveryRequests.length} requests`,
+          )
+        }
+        if (
+          run.recoveryRequests.some(
+            (request) => request.acknowledgedSeq === undefined,
+          )
+        ) {
+          throw new Error(
+            `harvest run "${run.run}" cannot exhaust with an unacknowledged recovery request`,
+          )
+        }
+
+        const expected = new Set(run.observations.map(occurrenceKey))
+        const partition = new Set<string>()
+        const released = new Set<string>()
+        for (const disposition of event.payload.committedDispositions) {
+          const key = occurrenceKey(disposition.occurrence)
+          if (!expected.has(key) || partition.has(key)) {
+            throw new Error(
+              `harvest run "${run.run}" exhaustion has an invalid or duplicate committed occurrence ${key}`,
+            )
+          }
+          partition.add(key)
+        }
+        for (const occurrence of event.payload.releasedObservations) {
+          const key = occurrenceKey(occurrence)
+          if (!expected.has(key) || partition.has(key)) {
+            throw new Error(
+              `harvest run "${run.run}" exhaustion has an invalid or duplicate released occurrence ${key}`,
+            )
+          }
+          partition.add(key)
+          released.add(key)
+        }
+        if (partition.size !== expected.size) {
+          const missing = [...expected].filter((key) => !partition.has(key))
+          throw new Error(
+            `harvest run "${run.run}" exhaustion does not partition its snapshot; ` +
+              `missing ${missing.join(', ')}`,
+          )
+        }
+        const pendingKeys = new Set<string>()
+        const pendingOccurrences = new Set<string>()
+        for (const proposal of event.payload.pendingProposals) {
+          if (pendingKeys.has(proposal.proposalKey)) {
+            throw new Error(
+              `harvest run "${run.run}" exhaustion repeats pending proposal key "${proposal.proposalKey}"`,
+            )
+          }
+          pendingKeys.add(proposal.proposalKey)
+          for (const occurrence of proposal.observations) {
+            const key = occurrenceKey(occurrence)
+            if (!released.has(key) || pendingOccurrences.has(key)) {
+              throw new Error(
+                `harvest run "${run.run}" pending proposal "${proposal.proposalKey}" ` +
+                  `does not uniquely describe released occurrence ${key}`,
+              )
+            }
+            pendingOccurrences.add(key)
+          }
+        }
+
+        for (const key of released) {
+          const owner = claimed.get(key)
+          if (owner?.run !== run.run) {
+            throw new Error(
+              `harvest run "${run.run}" cannot release ${key}; its claim owner is ` +
+                `${owner?.run ?? 'missing'}`,
+            )
+          }
+          claimed.delete(key)
+        }
+        run.dispositions = structuredClone(
+          event.payload.committedDispositions,
+        )
+        for (const disposition of event.payload.committedDispositions) {
+          ledger.push({
+            ...structuredClone(disposition),
+            run: run.run,
+            seq: event.seq,
+          })
+        }
+        run.recoveryExhaustion = {
+          step: event.payload.step,
+          ...(event.payload.round !== undefined
+            ? { round: event.payload.round }
+            : {}),
+          error: event.payload.error,
+          attempts: event.payload.attempts,
+          limit: event.payload.limit,
+          releasedObservations: structuredClone(
+            event.payload.releasedObservations,
+          ),
+          committedDispositions: structuredClone(
+            event.payload.committedDispositions,
+          ),
+          pendingProposals: structuredClone(event.payload.pendingProposals),
+          seq: event.seq,
+          at: event.ts,
+        }
+        run.terminalSeq = event.seq
+        run.terminalAt = event.ts
         break
       }
       case 'harvest.started': {
@@ -203,11 +457,20 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
           reservations: [],
           filed: [],
           dispositions: [],
+          recoveryRequests: [],
         }
         runs.set(run.run, run)
         order.push(run)
         for (const key of run.observations) {
-          claimed.set(occurrenceKey(key), { ...key })
+          const id = occurrenceKey(key)
+          const existing = claimed.get(id)
+          if (existing !== undefined) {
+            throw new Error(
+              `harvest run "${run.run}" at repo seq ${event.seq} cannot claim ` +
+                `${id}; it is already claimed by "${existing.run}"`,
+            )
+          }
+          claimed.set(id, { occurrence: { ...key }, run: run.run })
         }
         break
       }
@@ -328,6 +591,7 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
       }
       case 'harvest.completed': {
         const run = requireRun(runs, event.payload.run, event)
+        if (run.status !== 'running') break
         run.status = 'completed'
         run.dispositions = structuredClone(event.payload.dispositions)
         run.report = cloneRef(event.payload.report)
@@ -344,6 +608,7 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
       }
       case 'harvest.escalated': {
         const run = requireRun(runs, event.payload.run, event)
+        if (run.status !== 'running') break
         run.status = 'escalated'
         run.escalation = {
           source: event.payload.source,
@@ -395,7 +660,7 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
     pendingCommands: [...pending.pause, ...pending.resume].sort(
       (left, right) => left.seq - right.seq,
     ),
-    claimed: [...claimed.values()],
+    claimed: [...claimed.values()].map(({ occurrence }) => occurrence),
     ledger,
   }
   const latest = order.at(-1)
@@ -408,26 +673,65 @@ export function claimedOccurrenceKeys(state: HarvestState): Set<string> {
 }
 
 /** Pure repository-control routing shared by dispatcher and harvest runner.
- * Requests are actionable before acknowledgement. An acknowledged pause and a
- * failed latest run both park the workflow; only a pending resume clears either
- * stop. Pause intent keeps precedence so a racing pause is settled first. */
+ * Human commands settle first. An already-recorded automatic request is then
+ * acknowledged through the common harvest.resumed transition; only after that
+ * boundary may a new attempt be selected. Exhaustion is a separate durable
+ * settlement, never an inferred terminal state. */
 export function decideHarvestControl(
   state: HarvestState,
+  maxRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
 ): HarvestControlDecision {
+  if (!Number.isInteger(maxRecoveryAttempts) || maxRecoveryAttempts <= 0) {
+    throw new Error('max harvest recovery attempts must be a positive integer')
+  }
+  const wantsResume = state.pendingCommands.some(
+    (command) => command.command === 'resume',
+  )
   if (state.paused) {
-    if (state.pendingCommands.some((command) => command.command === 'resume')) {
-      return { kind: 'acknowledge', command: 'resume' }
-    }
+    if (wantsResume) return { kind: 'acknowledge', command: 'resume' }
     return { kind: 'park' }
   }
   if (state.pendingCommands.some((command) => command.command === 'pause')) {
     return { kind: 'acknowledge', command: 'pause' }
   }
-  if (state.latest?.status === 'failed') {
-    if (state.pendingCommands.some((command) => command.command === 'resume')) {
+  // A stale/racing human resume is still a command and must be consumed. On an
+  // exhausted run its acknowledgement clears attention without resurrection.
+  if (wantsResume) return { kind: 'acknowledge', command: 'resume' }
+
+  const latest = state.latest
+  if (latest?.status === 'failed') {
+    const exhaustion = latest.recoveryExhaustion
+    if (exhaustion !== undefined) {
+      return exhaustion.attentionAcknowledgedSeq === undefined
+        ? { kind: 'park' }
+        : { kind: 'proceed' }
+    }
+    if (
+      latest.recoveryRequests.some(
+        (request) => request.acknowledgedSeq === undefined,
+      )
+    ) {
       return { kind: 'acknowledge', command: 'resume' }
     }
-    return { kind: 'park' }
+    const attempts = latest.recoveryRequests.length
+    // Once the first request records the applied policy, replacements honor
+    // that durable limit even if a later process ships a different default.
+    const appliedLimit =
+      latest.recoveryRequests[0]?.limit ?? maxRecoveryAttempts
+    if (attempts < appliedLimit) {
+      return {
+        kind: 'request-recovery',
+        run: latest.run,
+        attempt: attempts + 1,
+        limit: appliedLimit,
+      }
+    }
+    return {
+      kind: 'exhaust-recovery',
+      run: latest.run,
+      attempts,
+      limit: appliedLimit,
+    }
   }
   return { kind: 'proceed' }
 }
