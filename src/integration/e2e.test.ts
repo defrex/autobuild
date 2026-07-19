@@ -10,18 +10,18 @@
  */
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { delimiter, join } from 'node:path'
 import { resolveHarvestCliEnv } from '../cli/env'
 import { runCli } from '../cli/main'
-import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids } from '../ids'
 import { decideNext } from '../kernel/engine'
 import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
+import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 import { FileTicketSource } from '../ports/tickets/file'
 import {
   Dispatcher,
@@ -972,35 +972,81 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
 
 // ── e. The real binary over the real local store (§7.2.1, §8.1) ──────────────
 
-test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqlite store', async () => {
+test('e. runner PATH uses the real `ab` for context through a validated terminal', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-bin-'))
   try {
     const root = join(tmp, 'store')
     const ws = join(tmp, 'ws')
+    const conflictBin = join(tmp, 'host-bin')
     await mkdir(ws, { recursive: true })
+    await mkdir(conflictBin, { recursive: true })
+    await writeFile(
+      join(conflictBin, 'ab'),
+      '#!/bin/sh\necho host-conflicting-ab\nexit 91\n',
+    )
+    await chmod(join(conflictBin, 'ab'), 0o755)
     const slug = 'local-e2e'
+    const ticket = { source: 'fake', id: 'T-local', title: 'Local e2e' }
 
-    // Seed through the API…
+    // Seed a real plan session through the store API.
     const seed = openLocalStore(root, { clock: steppingClock() })
-    await seed.createBuild({ slug, repo: '/repo/e2e' })
+    await seed.createBuild({ slug, repo: '/repo/e2e', ticket })
     await seed.putArtifact(slug, { kind: 'spec', content: '# Spec: local e2e\n' })
+    await seed.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: '/repo/e2e', baseBranch: 'main' },
+    })
+    await seed.append(slug, {
+      actor: DISPATCHER,
+      type: 'spec.imported',
+      payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
+    })
+    await seed.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+    await seed.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_e2e',
+        role: 'plan',
+        runner: 'pi',
+        phase: 'plan',
+        round: 1,
+      },
+    })
     await seed.close()
 
-    // …then drive the REAL binary with ambient auth (D8). Non-terminal
-    // commands only — no forge in this env.
-    const env = {
-      ...process.env,
-      AB_STORE: root,
-      AB_BUILD: slug,
-      AB_PHASE: 'implement@1',
-      AB_SESSION: 's_e2e',
-      AB_TOKEN: '',
-    }
-    const bin = fileURLToPath(new URL('../../bin/ab.ts', import.meta.url))
+    // The inherited host path resolves a hostile `ab` first. The runner's
+    // shared environment builder must override that ordering, after all
+    // scoped values are merged, without requiring a global Autobuild install.
+    const inheritedPath = [conflictBin, process.env['PATH'] ?? '']
+      .filter((entry) => entry !== '')
+      .join(delimiter)
+    const env = sessionEnv(
+      {
+        AB_STORE: root,
+        AB_BUILD: slug,
+        AB_PHASE: 'plan@1',
+        AB_SESSION: 's_e2e',
+        AB_TOKEN: '',
+      },
+      { ...process.env, PATH: inheritedPath },
+    )
+    expect(env['PATH']!.split(delimiter).slice(0, 2)).toEqual([
+      AGENT_BIN_DIR,
+      conflictBin,
+    ])
+
+    // Invoke by the documented spelling — no process.execPath or repository
+    // path escape hatch. This also executes the checked-in launcher's mode.
     const ab = async (
       argv: string[],
     ): Promise<{ stdout: string; stderr: string; code: number }> => {
-      const proc = Bun.spawn([process.execPath, bin, ...argv], {
+      const proc = Bun.spawn(['ab', ...argv], {
         cwd: ws,
         env,
         stdout: 'pipe',
@@ -1014,39 +1060,67 @@ test('e. `bun bin/ab.ts` round-trips artifacts and observations through the sqli
       return { stdout, stderr, code }
     }
 
-    const got = await ab(['artifact', 'get', 'spec'])
-    expect(got.stderr).toBe('')
-    expect(got.code).toBe(0)
-    expect(got.stdout).toBe('# Spec: local e2e\n\n') // content + console.log newline
+    const context = await ab(['context'])
+    expect(context).toMatchObject({ code: 0, stderr: '' })
+    expect(context.stdout).toContain(`context materialized for ${slug} — plan@1`)
+    expect(await readFile(join(ws, '.ab', 'spec.md'), 'utf8')).toBe(
+      '# Spec: local e2e\n',
+    )
 
-    await writeFile(join(ws, 'plan.md'), '# Plan via the binary\n')
+    const got = await ab(['artifact', 'get', 'spec'])
+    expect(got).toEqual({
+      code: 0,
+      stderr: '',
+      stdout: '# Spec: local e2e\n\n',
+    })
+
+    await writeFile(join(ws, 'plan.md'), '# Plan via the managed ab\n')
     const put = await ab(['artifact', 'put', 'plan', join(ws, 'plan.md')])
-    expect(put.stderr).toBe('')
-    expect(put.code).toBe(0)
-    expect(put.stdout).toBe('0\n') // the assigned rev is the one output (§8.2)
+    expect(put).toEqual({ code: 0, stderr: '', stdout: '0\n' })
 
     const obs = await ab(['observe', '--kind', 'followup', 'tighten the retry-after copy'])
-    expect(obs.stderr).toBe('')
-    expect(obs.code).toBe(0)
+    expect(obs).toMatchObject({ code: 0, stderr: '' })
     expect(obs.stdout).toMatch(/^observation recorded: obs_[0-9a-f]{8}\n$/)
 
-    // Round-trip through the sqlite store (§7.2.1).
+    const done = await ab(['done'])
+    expect(done).toEqual({
+      code: 0,
+      stderr: '',
+      stdout: 'plan.completed recorded (seq 6)\n',
+    })
+
+    // Round-trip through SQLite proves this was the typed Autobuild terminal,
+    // attributed to the active session, rather than a same-named shim.
     const store = openLocalStore(root)
     try {
       const plan = (await store.getArtifact(slug, 'plan'))!
-      expect(textContent(plan)).toBe('# Plan via the binary\n')
+      expect(textContent(plan)).toBe('# Plan via the managed ab\n')
       expect(plan.meta.revision).toBe(0)
       const events = await store.getEvents(slug)
-      expect(events).toHaveLength(1)
-      const event = events[0]!
-      expect(event.seq).toBe(1)
-      // The observation's actor is the ambient session (D8, §8.1).
-      expect(event.actor).toEqual({ kind: 'agent', role: 'implement', session: 's_e2e' })
-      expect(event.type).toBe('observation.recorded')
-      if (event.type === 'observation.recorded') {
-        expect(event.payload.kind).toBe('followup')
-        expect(event.payload.summary).toBe('tighten the retry-after copy')
-        expect(event.payload.id).toMatch(/^obs_[0-9a-f]{8}$/)
+      expect(events.map((event) => event.type)).toEqual([
+        'build.created',
+        'spec.imported',
+        'plan.started',
+        'session.started',
+        'observation.recorded',
+        'plan.completed',
+      ])
+      const observed = events[4]!
+      expect(observed.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_e2e' })
+      expect(observed.type).toBe('observation.recorded')
+      if (observed.type === 'observation.recorded') {
+        expect(observed.payload.kind).toBe('followup')
+        expect(observed.payload.summary).toBe('tighten the retry-after copy')
+        expect(observed.payload.id).toMatch(/^obs_[0-9a-f]{8}$/)
+      }
+      const completed = events[5]!
+      expect(completed.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_e2e' })
+      expect(completed.type).toBe('plan.completed')
+      if (completed.type === 'plan.completed') {
+        expect(completed.payload).toEqual({
+          round: 1,
+          artifact: { kind: 'plan', rev: 0 },
+        })
       }
     } finally {
       await store.close()

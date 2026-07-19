@@ -382,6 +382,14 @@ repository resources as well as session attribution. A leaked harvest token
 cannot read a build stream and vice versa. Least privilege comes from the
 runner, not prompt instructions.
 
+Every phase and harvest turn also receives a runner-controlled `PATH` prefix
+containing a private `ab` launcher from the same Autobuild distribution that
+started the session. The prefix is applied after ambient and turn-scoped
+environment values are merged, so an inherited or scoped executable named
+`ab` cannot shadow the typed CLI. Agent sessions therefore require no separate
+global Autobuild installation; this guarantee changes command resolution, not
+which commands the phase is authorized to execute.
+
 ### 8.2 Command surface
 
 | Command | Purpose | Terminal? |

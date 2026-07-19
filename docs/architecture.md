@@ -109,6 +109,24 @@ the internal `slug` role through the normal runtime/model resolver.
 validation, deterministic title fallback, and store-wide numeric collision
 suffix. Existing build records have no mutation path and are never re-slugged.
 
+## Agent session command environment
+
+`src/ports/runner/session-env.ts` is the shared per-turn environment boundary.
+It copies defined ambient values, overlays the current session's scoped
+identity, and only then forces the distribution-relative `bin/agent` directory
+to the front of `PATH`. `bin/agent/ab` is a private executable launcher that
+imports the canonical `bin/ab.ts`, so agent tools use the same CLI wiring as the
+operator binary even when the inherited host path contains another `ab`.
+
+The adapters propagate that fresh map through their runtime-specific seams.
+`claude.ts` supplies it as SDK `options.env`, which is the complete spawned
+process environment; `pi.ts` supplies it to each prompt and its custom bash
+`spawnHook` overlays it last onto Pi's shell environment. Continued turns
+therefore receive both refreshed `AB_PHASE`/`AB_SESSION` values and the stable
+managed prefix. Neither adapter mutates `process.env`, preserving isolation
+between concurrent builds. This is CLI availability plumbing only; tool and
+command authorization remain unchanged.
+
 ## Workspace base selection
 
 `src/ports/workspace/git-worktree.ts` owns creation-time Git base selection.
@@ -179,7 +197,8 @@ including under `--force`.
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
+| `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, and in-place replacement | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |

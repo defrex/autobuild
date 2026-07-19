@@ -136,10 +136,17 @@ an early adopter.
 > The package is private and unpublished, and choosing a distribution mechanism
 > is an open decision. This section will name a real command when there is one.
 
-Everything below assumes you have a working **`ab` executable on your PATH**.
-The binary is `bin/ab.ts`, declared as the `ab` bin in `package.json`; the same
-executable serves operators and agents. How it gets onto your PATH is the part
-that is unresolved.
+Everything below assumes the **operator** has a way to launch `ab` (normally a
+working executable on the operator's `PATH`). The binary is `bin/ab.ts`,
+declared as the `ab` bin in `package.json`; how operators install or invoke it
+is the unresolved part.
+
+Once `ab dispatch` is running, agent sessions need no separate global install.
+Both supported runners prepend a private launcher from that same Autobuild
+distribution to each turn's `PATH`, after merging the inherited and scoped
+environment. The phase skills' documented `ab context`, deposits, and terminal
+commands therefore cannot be redirected to ApacheBench or another host command
+named `ab` by normal host `PATH` ordering.
 
 ---
 
