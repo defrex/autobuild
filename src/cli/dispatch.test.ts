@@ -376,6 +376,54 @@ describe('abDispatch --once', () => {
     }
   }, 30_000)
 
+  test('initial intake off skips new claims while janitor still advances existing builds', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-existing', { title: 'Existing work' }),
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const [existing] = await fx.store.listBuilds()
+      expect(existing).toBeDefined()
+      expect(fx.tickets.claims).toEqual(['T-existing'])
+
+      fx.forge.setPrState(1, { state: 'merged', sha: 'merged-existing' })
+      fx.tickets.add(readyTicket('T-new', { title: 'New work' }))
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        intake: false,
+        wire: fx.wire,
+      })
+
+      expect(fx.tickets.claims).toEqual(['T-existing'])
+      expect((await fx.store.listBuilds()).map((record) => record.slug)).toEqual([
+        existing!.slug,
+      ])
+      expect(
+        (await fx.store.getEvents(existing!.slug)).some(
+          (event) =>
+            event.type === 'build.completed' && event.payload.outcome === 'merged',
+        ),
+      ).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('routes the slug role to a one-shot capability with the full spec and configured model', async () => {
     const toml = `${DISPATCH_CONFIG_TOML}
 [roles.default]
@@ -827,7 +875,7 @@ type FakeInputKey =
   | 'down'
   | 'auto-merge'
   | 'pause'
-  | 'drain'
+  | 'letter-d'
   | 'interrupt'
   | 'enter'
   | 'backspace'
@@ -839,7 +887,7 @@ function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
       return { type: 'text', text: 'm' }
     case 'pause':
       return { type: 'text', text: 'p' }
-    case 'drain':
+    case 'letter-d':
       return { type: 'text', text: 'd' }
     default:
       return { type: key }
@@ -1048,7 +1096,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('dashboard warnings are retained for the first frame and never hit stderr', async () => {
+  test('the global row accepts an early p before the first projection, even with no body rows', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
     const input = fakeInput(['pause'])
@@ -1067,9 +1115,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
-      expect(stripAnsi(term.all())).toContain(
-        'dashboard action ignored: no active row is selected',
-      )
+      const painted = stripAnsi(term.all())
+      expect(painted).toContain('> Auto Build')
+      expect(painted).toContain('intake OFF')
+      expect(painted).toContain('dispatcher intake OFF')
+      expect(painted).toContain('no active builds')
     } finally {
       await fx.cleanup()
     }
@@ -1405,7 +1455,7 @@ describe('abDispatch --once with an interactive terminal', () => {
 })
 
 describe('abDispatch interactive keyboard controls', () => {
-  test('harvest is selected first; p writes durable pause/resume commands while m remains build-only', async () => {
+  test('global is selected first; harvest/build p route by row while m remains build-only', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-alpha-harvest', { title: 'Alpha work' }),
@@ -1465,8 +1515,19 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: term,
         input,
       })
-      await waitFor(() => /^> .*Harvest/m.test(stripAnsi(term.all())))
+      await waitFor(() => stripAnsi(term.all()).includes('> Auto Build'))
 
+      input.press('auto-merge')
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('Dispatcher auto-merge unavailable: select a build'),
+      )
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(beforeRepo)
+      for (const slug of ['alpha-work', 'beta-work']) {
+        expect(await fx.store.getEvents(slug)).toEqual(beforeBuilds.get(slug))
+      }
+
+      input.press('down')
+      await waitFor(() => /^> .*Harvest/m.test(stripAnsi(term.all())))
       input.press('auto-merge')
       await waitFor(() => stripAnsi(term.all()).includes('Harvest auto-merge unavailable'))
       input.press('pause')
@@ -1489,6 +1550,7 @@ describe('abDispatch interactive keyboard controls', () => {
         ),
       )
       await waitFor(() => stripAnsi(term.all()).includes('harvest: resume requested'))
+      expect(stripAnsi(term.all())).toContain('intake ON')
 
       const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(
         beforeRepo.length,
@@ -1582,6 +1644,8 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => /Harvest.*FAILED/.test(stripAnsi(term.all())))
+      input.press('down')
+      await waitFor(() => /^> .*Harvest.*FAILED/m.test(stripAnsi(term.all())))
 
       input.press('pause')
       await waitFor(async () =>
@@ -1686,6 +1750,8 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => stripAnsi(term.all()).includes('alpha-work'))
 
       input.press('down')
+      input.press('down')
+      await waitFor(() => /^> .*beta-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       input.press('auto-merge')
       input.press('auto-merge')
@@ -1785,6 +1851,8 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => stripAnsi(term.all()).includes('Should finalize use the manual merge path?'))
+      input.press('down')
+      await waitFor(() => /^> .*guidance-work/m.test(stripAnsi(term.all())))
 
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
@@ -1889,6 +1957,8 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => input.starts === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
+      input.press('down')
+      await waitFor(() => /^> .*retry-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('   ')
@@ -1992,6 +2062,8 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => stripAnsi(term.all()).includes('finalize-retry'))
+      input.press('down')
+      await waitFor(() => /^> .*finalize-retry/m.test(stripAnsi(term.all())))
 
       // Hold plan long enough to record durable pre-PR auto-merge intent.
       input.press('auto-merge')
@@ -2123,6 +2195,8 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'))
+      input.press('down')
+      await waitFor(() => /^> .*cancel-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('do not submit this')
@@ -2173,8 +2247,10 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => input.starts === 1)
-      // Let the initial projection establish selection.
+      // Let the initial projection establish the global selection, then move
+      // to the build row before applying its contextual p action.
       await new Promise((resolve) => setTimeout(resolve, 20))
+      input.press('down')
       input.press('pause')
       await waitFor(async () =>
         (await fx.store.getEvents('paused-work')).some(
@@ -2193,13 +2269,14 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('d gates only this invocation and a fresh invocation accepts work again', async () => {
+  test('launch intake is process-local, global p toggles it, and the removed d key is inert', async () => {
     const fx = await makeFixture(
-      readyTicket('T-drained', { body: 'not a conforming spec' }),
+      readyTicket('T-intake-off', { body: 'not a conforming spec' }),
       {},
     )
     try {
-      const input = fakeInput(['drain'])
+      const input = fakeInput()
+      const term = fakeTerminal()
       let sleeps = 0
       await abDispatch({
         targetRepo: fx.origin,
@@ -2207,25 +2284,32 @@ describe('abDispatch interactive keyboard controls', () => {
         exec: spawnExec,
         stdout: () => {},
         stderr: (line) => fx.err.push(line),
+        intake: false,
         intervalMs: 1,
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
             expect(fx.tickets.claims).toEqual([])
-            input.press('drain')
+            expect(stripAnsi(term.all())).toContain('intake OFF')
+            input.press('letter-d')
             await new Promise((resolve) => setTimeout(resolve, 0))
+            expect(stripAnsi(term.all())).toContain('intake OFF')
+            input.press('pause')
+            await waitFor(() =>
+              stripAnsi(term.all()).includes('dispatcher intake ON'),
+            )
           } else {
             input.press('interrupt')
           }
         },
         wire: fx.wire,
-        terminal: fakeTerminal(),
+        terminal: term,
         input,
       })
-      expect(fx.tickets.claims).toEqual(['T-drained'])
+      expect(fx.tickets.claims).toEqual(['T-intake-off'])
 
-      // A new DispatchLoop starts undrained. A newly ready ticket is claimed on
-      // its first tick without an operator toggling drain off again.
+      // A new DispatchLoop defaults intake back on. A newly ready ticket is
+      // claimed on its first tick without another operator toggle.
       fx.tickets.add(readyTicket('T-fresh', { body: 'still nonconforming' }))
       const freshInput = fakeInput()
       await abDispatch({
@@ -2240,7 +2324,7 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: fakeTerminal(),
         input: freshInput,
       })
-      expect(fx.tickets.claims).toEqual(['T-drained', 'T-fresh'])
+      expect(fx.tickets.claims).toEqual(['T-intake-off', 'T-fresh'])
     } finally {
       await fx.cleanup()
     }

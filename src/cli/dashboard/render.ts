@@ -4,10 +4,12 @@
  *
  * Two constraints shape every choice here:
  *
- * **Never color-only.** Color is additive emphasis and nothing else: every
- * state also carries a glyph (`[x]` `[>]` `[~]` `[ ]`) and every status its
- * literal word (`RUNNING` / `PAUSED` / `BLOCKED`). Strip the escapes — as `--plain`
- * and every pipe do — and no information is lost.
+ * **Never color-only for pipeline and row state.** Color is additive emphasis:
+ * every step also carries a glyph (`[x]` `[>]` `[~]` `[ ]`) and every status
+ * its literal word (`RUNNING` / `PAUSED` / `BLOCKED`). Auto-merge is the one
+ * deliberate presentation exception: token presence carries on/off intent,
+ * while color distinguishes requested, enabled, and cancelling. Strip the
+ * escapes — as `--plain` and every pipe do — and the actionable intent remains.
  *
  * **ASCII only.** There is no string-width dependency in this repo and none
  * should be added: `.length` is honest only for ASCII, and a lying width
@@ -305,15 +307,15 @@ function renderBuild(
   // right-justifies the status word so it is never truncated and always ends at
   // the frame's right edge (AC 3, AC 5).
   const rightTokens: string[] = []
-  const autoColor: ColorName =
-    build.autoMerge === 'enabled'
-      ? 'green'
-      : build.autoMerge === 'requested'
-        ? 'cyan'
-        : build.autoMerge === 'cancelling'
-          ? 'yellow'
-          : 'dim'
-  rightTokens.push(paint(`auto ${build.autoMerge}`, autoColor, color))
+  if (build.autoMerge !== 'off') {
+    const autoColor: ColorName =
+      build.autoMerge === 'enabled'
+        ? 'green'
+        : build.autoMerge === 'requested'
+          ? 'cyan'
+          : 'yellow'
+    rightTokens.push(paint('auto merge', autoColor, color))
+  }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // Blocked overrides paused visually, but the pause is still a fact the
   // operator needs — so it rides along rather than being overwritten.
@@ -416,8 +418,12 @@ function frameWidths(
 
 // ── The frame ────────────────────────────────────────────────────────────────
 
-export const DASHBOARD_LEGEND =
-  'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit'
+export const DASHBOARD_GLOBAL_LEGEND =
+  'Keys: Up/Down select  p intake on/off  Ctrl-C quit'
+export const DASHBOARD_HARVEST_LEGEND =
+  'Keys: Up/Down select  p pause/resume  Ctrl-C quit'
+export const DASHBOARD_BUILD_LEGEND =
+  'Keys: Up/Down select  m auto-merge  p pause/resume  Ctrl-C quit'
 
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
  * exact process state. Non-ASCII and control characters (including newlines)
@@ -436,7 +442,13 @@ function displayText(value: string): string {
 
 function dashboardControls(model: DashboardModel, color: boolean, width: number): string {
   if (model.resumeInput === undefined) {
-    return truncate(paint(DASHBOARD_LEGEND, 'dim', color), width)
+    const legend =
+      model.selection?.kind === 'build'
+        ? DASHBOARD_BUILD_LEGEND
+        : model.selection?.kind === 'harvest'
+          ? DASHBOARD_HARVEST_LEGEND
+          : DASHBOARD_GLOBAL_LEGEND
+    return truncate(paint(legend, 'dim', color), width)
   }
 
   // Instructions are right-pinned and the field is the flexible segment, just
@@ -472,11 +484,18 @@ function flattenRows(rows: readonly RenderedDashboardRow[]): string[] {
 
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
   const { color, width, height } = opts
+  const selecting = model.selection !== undefined
+  const globalSelection = { kind: 'global' } as const
+  const marker = selectionMarker(
+    sameSelection(globalSelection, model.selection),
+    selecting,
+    color,
+  )
   const intake = model.drained
-    ? paint('intake DRAINED', 'yellow', color)
+    ? paint('intake OFF', 'yellow', color)
     : paint('intake ON', 'green', color)
   const header = truncate(
-    [
+    `${marker}${[
       paint('Auto Build', 'bold', color),
       displayText(basename(model.repo)),
       paint(
@@ -485,7 +504,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
         color,
       ),
       intake,
-    ].join('  '),
+    ].join('  ')}`,
     width,
   )
   // One reserved physical row, even before the first notice. Escaping controls
@@ -499,39 +518,45 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height === 1) return [header]
   if (height !== undefined && height === 2) return [header, status]
-  // At three rows there is no room for body spacing; retain title, status, and
-  // the controls. From four rows onward the body/controls separator is fixed.
+  // At three rows there is no room for spacing; retain title, status, and the
+  // controls. Four rows can retain one separator; a visible body requires both.
   if (height !== undefined && height === 3) return [header, status, controls]
+  if (height !== undefined && height === 4) return [header, status, '', controls]
 
   const widths = frameWidths(model.builds, model.harvest)
-  const selecting = model.selection !== undefined
-  const rows: RenderedDashboardRow[] = dashboardSelections(model).map((selection) => {
-    if (selection.kind === 'harvest') {
-      return {
+  const rows: RenderedDashboardRow[] = dashboardSelections(model).flatMap(
+    (selection): RenderedDashboardRow[] => {
+      // The global selection is fixed frame chrome above the body. It still
+      // participates in navigation/reconciliation, but never enters viewport
+      // clamping because its header is always visible.
+      if (selection.kind === 'global') return []
+      if (selection.kind === 'harvest') {
+        return [{
+          selection,
+          lines: renderHarvest(
+            model.harvest!,
+            opts,
+            widths,
+            sameSelection(selection, model.selection),
+            selecting,
+          ),
+        }]
+      }
+      const build = model.builds.find((candidate) => candidate.slug === selection.slug)!
+      return [{
         selection,
-        lines: renderHarvest(
-          model.harvest!,
+        lines: renderBuild(
+          build,
           opts,
           widths,
           sameSelection(selection, model.selection),
           selecting,
         ),
-      }
-    }
-    const build = model.builds.find((candidate) => candidate.slug === selection.slug)!
-    return {
-      selection,
-      lines: renderBuild(
-        build,
-        opts,
-        widths,
-        sameSelection(selection, model.selection),
-        selecting,
-      ),
-    }
-  })
+      }]
+    },
+  )
 
-  const bodyBudget = height === undefined ? Number.POSITIVE_INFINITY : Math.max(0, height - 4)
+  const bodyBudget = height === undefined ? Number.POSITIVE_INFINITY : Math.max(0, height - 5)
   let body: string[]
   if (rows.length === 0) {
     body = bodyBudget >= 1
@@ -619,7 +644,8 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     }
   }
 
-  // The blank separator is fixed frame chrome, not part of a row block. It is
-  // therefore present regardless of body size and message volume.
-  return [header, status, ...body, '', controls]
+  // Both blank separators are fixed frame chrome, not part of a row block:
+  // the first separates the global top section from harvest/build content and
+  // the second separates that content from the contextual controls.
+  return [header, status, '', ...body, '', controls]
 }

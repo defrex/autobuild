@@ -123,7 +123,7 @@ const DASHBOARD_POLL_MS = 500
  * state (AC 8). */
 const DASHBOARD_TICK_MS = 250
 
-type DashboardAction = 'up' | 'down' | 'auto-merge' | 'pause' | 'drain'
+type DashboardAction = 'up' | 'down' | 'auto-merge' | 'pause'
 
 interface ResumePrompt {
   slug: string
@@ -166,6 +166,8 @@ export interface DispatchOpts {
   once?: boolean
   /** Watch-loop cadence in ms (§3.3); default DEFAULT_INTERVAL_MS. */
   intervalMs?: number
+  /** Whether the process starts by accepting new tickets; default true. */
+  intake?: boolean
   /** Explicit `--store` override; otherwise AB_STORE, then repo-local state. */
   storeRef?: string
   /** Watch-loop stop signal — the binary aborts it on SIGINT (§15.6-C: an
@@ -330,9 +332,9 @@ class DispatchLoop {
    * model ticks without a re-read. */
   private model: DashboardModel | undefined
   /** Ephemeral per-process controls — deliberately absent from durable state. */
-  private selection: DashboardSelection | undefined
+  private selection: DashboardSelection | undefined = { kind: 'global' }
   private statusLine = ''
-  private drained = false
+  private drained: boolean
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -353,6 +355,7 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.region =
       this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
+    this.drained = opts.intake === false
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -450,11 +453,12 @@ class DispatchLoop {
       this.warn('dashboard action ignored: no active row is selected')
       return undefined
     }
-    if (selection.kind === 'harvest') {
+    if (selection.kind !== 'build') {
+      const subject = selection.kind === 'harvest' ? 'Harvest' : 'Dispatcher'
       this.say(
         action === 'auto-merge'
-          ? 'Harvest auto-merge unavailable: select a build'
-          : 'Harvest pause/resume unavailable: select a build',
+          ? `${subject} auto-merge unavailable: select a build`
+          : `${subject} pause/resume unavailable: select a build`,
       )
       return undefined
     }
@@ -472,6 +476,11 @@ class DispatchLoop {
   }
 
   private async togglePause(): Promise<void> {
+    if (this.selection?.kind === 'global') {
+      this.drained = !this.drained
+      this.say(`dispatcher intake ${this.drained ? 'OFF' : 'ON'}`)
+      return
+    }
     if (this.selection?.kind === 'harvest') {
       await this.toggleHarvestPause()
       return
@@ -618,12 +627,6 @@ class DispatchLoop {
       case 'down':
         this.moveSelection(1)
         return
-      case 'drain':
-        this.drained = !this.drained
-        this.syncModelControls()
-        this.paint()
-        this.say(`dispatcher drain ${this.drained ? 'on' : 'off'}`)
-        return
       case 'pause':
         await this.togglePause()
         return
@@ -710,9 +713,6 @@ class DispatchLoop {
         return
       case 'p':
         this.queueAction('pause')
-        return
-      case 'd':
-        this.queueAction('drain')
         return
       default:
         return
