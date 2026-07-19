@@ -168,6 +168,9 @@ export interface Forge {
 //
 // Session-based, because review loops need memory: the producer *continues*
 // its session across rounds; the reviewer gets a fresh one each round (§10).
+// Every production adapter also exposes this distribution's `ab` launcher at
+// the front of the tool environment's PATH; CLI availability is a runner
+// guarantee and does not depend on a global installation or host ordering.
 
 export interface AgentSessionHandle {
   id: string
@@ -230,7 +233,9 @@ export interface AgentStartOpts {
   /** Named extensions this session may use (§9, third axis). Empty/absent ⇒
    * hermetic. Runtime-specific: adapters without an extension model ignore it. */
   extensions?: readonly string[]
-  /** Ambient auth (D8): AB_STORE, AB_BUILD, AB_PHASE, AB_SESSION, AB_TOKEN. */
+  /** Scoped ambient auth (D8): AB_STORE, AB_BUILD, AB_PHASE, AB_SESSION,
+   * AB_TOKEN. Adapters merge it over their process environment and then apply
+   * the runner-controlled Autobuild CLI PATH prefix. */
   env: Record<string, string>
 }
 

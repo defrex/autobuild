@@ -9,6 +9,8 @@
  * Sessions are deliberately non-interactive: build workspaces are disposable,
  * agents must be able to invoke `ab` and development tools without a human
  * approval prompt, and the pipeline's typed CLI remains the state boundary.
+ * `sessionEnv` gives the SDK its complete process environment (SDK `env`
+ * replaces rather than augments it) and pins this distribution's CLI first.
  */
 import {
   agentInvocation,
@@ -21,6 +23,7 @@ import {
   type Transcript,
 } from '../types'
 import { classifyProviderError } from './provider-error'
+import { sessionEnv } from './session-env'
 import type {
   OneShotCompletion,
   OneShotCompletionInput,
@@ -130,7 +133,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     try {
       const turn = await this.runPrompt(input.prompt, {
         cwd: input.cwd,
-        env: { ...ambientEnv(), ...input.env },
+        env: sessionEnv(input.env),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         maxTurns: 1,
@@ -237,8 +240,9 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   ): Promise<ClaudeTurn> {
     return this.runPrompt(prompt, {
       cwd: opts.workspacePath,
-      // Ambient auth (D8): AB_* scoped vars merged over process.env.
-      env: { ...ambientEnv(), ...opts.env },
+      // Ambient auth (D8) plus a runner-owned PATH prefix: scoped AB_*
+      // values win, and the distribution's `ab` cannot be host-shadowed.
+      env: sessionEnv(opts.env),
       // The SDK is headless here: no user exists to answer permission
       // prompts. Build sessions therefore opt into unattended execution
       // explicitly; isolation and credentials remain launcher concerns.
@@ -341,12 +345,4 @@ function linkAbortSignal(signal?: AbortSignal): {
     abortController,
     dispose: () => signal.removeEventListener('abort', abort),
   }
-}
-
-function ambientEnv(): Record<string, string> {
-  const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) env[key] = value
-  }
-  return env
 }

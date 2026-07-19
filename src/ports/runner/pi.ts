@@ -15,10 +15,11 @@
  *     ambient AB_* env every round (§10/D8: new AB_PHASE, new AB_SESSION), and
  *     the `ab` CLI the agent invokes must see THIS round's identity. We install
  *     a custom bash tool whose `spawnHook` overlays a mutable env ref, and
- *     update that ref before every `prompt()`. This is why we hold ONE live
- *     session across continues rather than mutating `process.env` — the
- *     dispatcher runs multiple builds concurrently in one process (§16.1), so a
- *     global mutation would race.
+ *     update that ref before every `prompt()`. The shared `sessionEnv` builder
+ *     also pins this distribution's `ab` launcher ahead of the inherited PATH.
+ *     This is why we hold ONE live session across continues rather than
+ *     mutating `process.env` — the dispatcher runs multiple builds concurrently
+ *     in one process (§16.1), so a global mutation would race.
  *
  *  2. Per-turn usage. Pi exposes cumulative token totals via
  *     `session.getSessionStats()`, not a per-turn result message. We snapshot
@@ -52,6 +53,7 @@ import {
   type Transcript,
 } from '../types'
 import { classifyProviderError } from './provider-error'
+import { sessionEnv } from './session-env'
 import type {
   OneShotCompletion,
   OneShotCompletionInput,
@@ -357,7 +359,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     try {
       const turn = await session.prompt(
         input.prompt,
-        { ...ambientEnv(), ...input.env },
+        sessionEnv(input.env),
         input.signal,
       )
       if (turn.failure !== undefined) throw new Error(turn.failure.message)
@@ -446,9 +448,9 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     }
   }
 
-  /** Ambient process env (D8 base) with the scoped AB_* overlaid on top. */
+  /** Ambient process env (D8), scoped AB_*, and the managed CLI PATH prefix. */
   private turnEnv(scoped: Record<string, string>): Record<string, string> {
-    return { ...ambientEnv(), ...scoped }
+    return sessionEnv(scoped)
   }
 
   private liveState(session: AgentSessionHandle, op: 'continue' | 'end'): SessionState {
@@ -485,12 +487,4 @@ function abortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason
   const detail = signal.reason === undefined ? '' : `: ${String(signal.reason)}`
   return new Error(`pi runtime: prompt aborted${detail}`)
-}
-
-function ambientEnv(): Record<string, string> {
-  const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) env[key] = value
-  }
-  return env
 }

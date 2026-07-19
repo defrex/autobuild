@@ -6,6 +6,9 @@
  * is pure interop with no logic beyond the SDK calls.
  */
 import { describe, expect, test } from 'bun:test'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
   PiAgentRunner,
@@ -14,6 +17,7 @@ import {
   type PiModelRef,
   type PiTurn,
 } from './pi'
+import { AGENT_BIN_DIR } from './session-env'
 
 const KIMI_QUOTA =
   '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
@@ -96,6 +100,31 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
     env: { AB_BUILD: 'auth-rate-limit', AB_SESSION: 's_9f2' },
     ...overrides,
   }
+}
+
+async function writeConflictingAb(dir: string): Promise<void> {
+  const path = join(dir, 'ab')
+  await writeFile(path, '#!/bin/sh\necho host-conflicting-ab\nexit 91\n')
+  await chmod(path, 0o755)
+}
+
+async function invokeAbHelp(env: Record<string, string>): Promise<{
+  stdout: string
+  stderr: string
+  code: number
+}> {
+  const proc = Bun.spawn(['ab', '--help'], {
+    cwd: process.cwd(),
+    env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { stdout, stderr, code }
 }
 
 describe('PiTurnCapture', () => {
@@ -410,6 +439,56 @@ describe('PiAgentRunner.continue', () => {
     expect(env?.['AB_SESSION']).toBe('s_5')
     // A start-only key survives the per-turn refresh.
     expect(env?.['AB_BUILD']).toBe('auth-rate-limit')
+  })
+
+  test('keeps the distribution CLI ahead of a conflicting host ab on start and continue', async () => {
+    const conflictDir = await mkdtemp(join(tmpdir(), 'ab-pi-path-'))
+    const originalPath = process.env['PATH']
+    try {
+      await writeConflictingAb(conflictDir)
+      const inheritedPath = [conflictDir, originalPath ?? '']
+        .filter((entry) => entry !== '')
+        .join(delimiter)
+      process.env['PATH'] = inheritedPath
+      const { prompts, createSessionFn } = fakeSessions([
+        {
+          sessionId: 'pi-path',
+          turns: [
+            { text: 'first', inputTokens: 1, outputTokens: 1 },
+            { text: 'second', inputTokens: 1, outputTokens: 1 },
+          ],
+        },
+      ])
+      const runner = new PiAgentRunner({ createSessionFn })
+      const { session } = await runner.start(
+        startOpts({
+          env: {
+            AB_BUILD: 'auth-rate-limit',
+            AB_PHASE: 'plan@1',
+            AB_SESSION: 's_1',
+          },
+        }),
+      )
+      await runner.continue(session, 'next round', {
+        env: { AB_PHASE: 'plan@2', AB_SESSION: 's_2' },
+      })
+
+      for (const prompt of prompts) {
+        const entries = prompt.env['PATH']!.split(delimiter)
+        expect(entries[0]).toBe(AGENT_BIN_DIR)
+        expect(entries[1]).toBe(conflictDir)
+      }
+
+      const smoke = await invokeAbHelp(prompts[1]!.env)
+      expect(smoke).toMatchObject({ code: 0, stderr: '' })
+      expect(smoke.stdout).toContain('ab — the agent↔store channel')
+      expect(smoke.stdout).not.toContain('host-conflicting-ab')
+      await runner.end(session)
+    } finally {
+      if (originalPath === undefined) delete process.env['PATH']
+      else process.env['PATH'] = originalPath
+      await rm(conflictDir, { recursive: true, force: true })
+    }
   })
 
   test('throws on an unknown session', async () => {
