@@ -16,6 +16,7 @@ import {
 import { converge } from '../kernel/converge'
 import { stalledChains } from '../kernel/stall'
 import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
   openHarvestRun,
   proposalArtifactForRound,
@@ -42,6 +43,7 @@ import {
   loadScanPacket,
   makeHarvestScanPacket,
   parseApprovedProposalSet,
+  partitionHarvestExhaustion,
   renderHarvestProposal,
   scanUnclaimedObservations,
 } from './harvest'
@@ -50,7 +52,10 @@ import type { BuildStore, Clock } from '../store/types'
 export interface HarvestRunnerOpts {
   leaseTtlMs?: number
   heartbeatMs?: number
+  /** Retry budget inside one synthesize/review/file occurrence. */
   maxSessionAttempts?: number
+  /** Durable outer reopen budget for a stopped run. */
+  maxRecoveryAttempts?: number
 }
 
 export interface HarvestRunnerDeps {
@@ -134,6 +139,7 @@ export class HarvestRunner {
   private readonly leaseTtlMs: number
   private readonly heartbeatMs: number
   private readonly maxSessionAttempts: number
+  private readonly maxRecoveryAttempts: number
   private readonly resolver: RuntimeResolver
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   /** Set only when the store positively reports a lapsed/stolen lease. A
@@ -145,6 +151,15 @@ export class HarvestRunner {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.maxSessionAttempts = deps.opts?.maxSessionAttempts ?? 2
+    this.maxRecoveryAttempts =
+      deps.opts?.maxRecoveryAttempts ??
+      DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+    if (
+      !Number.isInteger(this.maxRecoveryAttempts) ||
+      this.maxRecoveryAttempts <= 0
+    ) {
+      throw new Error('maxRecoveryAttempts must be a positive integer')
+    }
     this.resolver = createRuntimeResolver(
       deps.runtimes,
       deps.config.roles,
@@ -240,9 +255,11 @@ export class HarvestRunner {
           throw error
         }
         if (error instanceof SessionFailure) {
+          await this.settleRecoveryExhaustion(run.run)
           return { outcome: 'failed', launch: initial, run: run.run }
         }
         await this.recordWorkflowFailure(run.run, error)
+        await this.settleRecoveryExhaustion(run.run)
         return { outcome: 'failed', launch: initial, run: run.run }
       }
     } catch (error) {
@@ -968,20 +985,111 @@ export class HarvestRunner {
     }
   }
 
-  /** Settle repository-wide pause/resume only at a durable workflow boundary.
-   * A pause acknowledgement unwinds through HarvestParkedSignal, deliberately
-   * bypassing every failure path. Resume acknowledgements keep this runner in
-   * the same lease and continue the preserved open run (or normal threshold
-   * handling when no run exists). */
+  /** If the just-failed execution consumed the final durable reopen, settle
+   * give-up before returning. Initial/within-step failures do not spend this
+   * outer budget and therefore remain recoverable. */
+  private async settleRecoveryExhaustion(run: string): Promise<void> {
+    await this.ensureLease()
+    const state = reduceHarvest(
+      await this.deps.store.getRepoEvents(this.deps.repo),
+    )
+    const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
+    if (decision.kind !== 'exhaust-recovery' || decision.run !== run) return
+    await this.finalizeRecoveryExhaustion(
+      decision.run,
+      decision.attempts,
+      decision.limit,
+    )
+  }
+
+  /** Compute and append the selective-release boundary. The second decision
+   * check closes the race with a human pause/resume request that can be written
+   * without this process's repository lease. */
+  private async finalizeRecoveryExhaustion(
+    runId: string,
+    attempts: number,
+    limit: number,
+  ): Promise<boolean> {
+    await this.ensureLease()
+    let run = await this.refreshRun(runId)
+    if (run.recoveryExhaustion !== undefined) return true
+    if (run.status !== 'failed' || run.failure === undefined) return false
+    const partition = await partitionHarvestExhaustion({
+      store: this.deps.store,
+      repo: this.deps.repo,
+      run,
+    })
+
+    await this.ensureLease()
+    const state = reduceHarvest(
+      await this.deps.store.getRepoEvents(this.deps.repo),
+    )
+    const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
+    if (
+      decision.kind !== 'exhaust-recovery' ||
+      decision.run !== runId ||
+      decision.attempts !== attempts ||
+      decision.limit !== limit
+    ) {
+      return false
+    }
+    run = state.runs.find((candidate) => candidate.run === runId)!
+    if (run.failure === undefined) return false
+    await this.ensureLease()
+    await this.deps.store.appendRepo(this.deps.repo, {
+      actor: KERNEL,
+      type: 'harvest.recovery-exhausted',
+      payload: {
+        run: runId,
+        step: run.failure.step,
+        ...(run.failure.round !== undefined
+          ? { round: run.failure.round }
+          : {}),
+        error: run.failure.error,
+        attempts,
+        limit,
+        ...partition,
+      },
+    })
+    return true
+  }
+
+  /** Settle repository-wide commands and automatic recovery only at a durable
+   * workflow boundary. Requests and acknowledgements are separate facts, so a
+   * replacement process can finish the same transition without spending a
+   * second recovery attempt. */
   private async controlBoundary(run?: string): Promise<void> {
     while (true) {
       await this.ensureLease()
       const state = reduceHarvest(
         await this.deps.store.getRepoEvents(this.deps.repo),
       )
-      const decision = decideHarvestControl(state)
+      const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
       if (decision.kind === 'park') throw new HarvestParkedSignal(run)
+
+      if (decision.kind === 'request-recovery') {
+        await this.ensureLease()
+        await this.deps.store.appendRepo(this.deps.repo, {
+          actor: KERNEL,
+          type: 'harvest.recovery-requested',
+          payload: {
+            run: decision.run,
+            attempt: decision.attempt,
+            limit: decision.limit,
+          },
+        })
+        continue
+      }
+      if (decision.kind === 'exhaust-recovery') {
+        const exhausted = await this.finalizeRecoveryExhaustion(
+          decision.run,
+          decision.attempts,
+          decision.limit,
+        )
+        if (exhausted) throw new HarvestParkedSignal(decision.run)
+        continue
+      }
 
       await this.ensureLease()
       await this.deps.store.appendRepo(this.deps.repo, {

@@ -33,7 +33,10 @@ import {
   type IdSource,
   type UuidSource,
 } from '../ids'
-import { reduceHarvest } from '../kernel/harvest'
+import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  reduceHarvest,
+} from '../kernel/harvest'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import {
   buildDashboard,
@@ -297,6 +300,8 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
   private readonly host = hostname()
+  private readonly maxHarvestRecoveryAttempts =
+    DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
    * `--once` exit so every visible workflow reaches a durable boundary. */
   private readonly inFlight = new Set<Promise<void>>()
@@ -386,6 +391,9 @@ class DispatchLoop {
       ...(nameSlug !== undefined ? { nameSlug } : {}),
       ids: wiring.ids,
       clock: wiring.clock,
+      opts: {
+        maxHarvestRecoveryAttempts: this.maxHarvestRecoveryAttempts,
+      },
     })
   }
 
@@ -518,8 +526,13 @@ class DispatchLoop {
     const repo = this.opts.targetRepo
     await store.ensureRepo(repo)
     const state = reduceHarvest(await store.getRepoEvents(repo))
-    const errorResume = state.latest?.status === 'failed'
-    const resume = state.paused || errorResume
+    const exhaustion = state.latest?.recoveryExhaustion
+    const attentionResume =
+      exhaustion !== undefined &&
+      exhaustion.attentionAcknowledgedSeq === undefined
+    const errorResume =
+      state.latest?.status === 'failed' && exhaustion === undefined
+    const resume = state.paused || errorResume || attentionResume
     await store.appendRepo(repo, {
       actor: humanActor(buildControlUser(this.opts.env)),
       type: resume
@@ -528,9 +541,11 @@ class DispatchLoop {
       payload: {},
     })
     this.say(
-      errorResume
-        ? 'harvest: error resume requested'
-        : `harvest: ${resume ? 'resume' : 'pause'} requested`,
+      attentionResume
+        ? 'harvest: exhausted recovery attention acknowledgement requested'
+        : errorResume
+          ? 'harvest: error resume requested'
+          : `harvest: ${resume ? 'resume' : 'pause'} requested`,
     )
     await this.renderOnce()
   }
@@ -766,6 +781,9 @@ class DispatchLoop {
       sessionEnv: {
         AB_STORE: storeRef,
         ...(token !== undefined ? { AB_TOKEN: token } : {}),
+      },
+      opts: {
+        maxRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
     })
 

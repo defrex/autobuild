@@ -622,6 +622,161 @@ describe('HarvestRunner', () => {
     })
   }
 
+  test('a replacement acknowledges an already-recorded recovery request without spending another attempt', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-request-gap-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'started',
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: seeded.run,
+        step: 'synthesize',
+        round: 1,
+        attempt: 2,
+        error: 'runner stopped',
+        willRetry: false,
+      },
+    })
+    // Simulate process death after durable selection but before the common
+    // harvest.resumed acknowledgement.
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: seeded.run, attempt: 1, limit: 2 },
+    })
+
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', 'gap-proposals.json')
+          await writeFile(file, JSON.stringify(proposalSet(observations)))
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, '.ab', 'gap-review.md')
+          await writeFile(notes, 'approved after replacement\n')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: 'request-gap-replacement',
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((event) => event.type === 'harvest.recovery-requested'),
+    ).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'harvest.resumed'),
+    ).toHaveLength(1)
+    expect(reduceHarvest(events).latest?.recoveryRequests).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        acknowledgedSeq: expect.any(Number),
+      }),
+    ])
+  })
+
+  test('automatic recovery at review reuses the submitted proposal artifact', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-review-recovery-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'proposals',
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: seeded.run,
+        step: 'review',
+        round: 1,
+        attempt: 2,
+        error: 'review provider unavailable',
+        willRetry: false,
+      },
+    })
+    let producers = 0
+    let reviewers = 0
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        if (opts.skill === 'ab-harvest') {
+          producers += 1
+          throw new Error('completed synthesize must not run again')
+        }
+        reviewers += 1
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        const notes = join(workspace, '.ab', 'recovered-review.md')
+        await writeFile(notes, 'approved on automatic recovery\n')
+        await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        return defaultTurnResult('done')
+      },
+    })
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: 'review-recovery',
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+    expect(producers).toBe(0)
+    expect(reviewers).toBe(1)
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((event) => event.type === 'harvest.proposals.submitted'),
+    ).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'harvest.recovery-requested'),
+    ).toHaveLength(1)
+  })
+
   test('a held repository lease excludes a duplicate launch', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-held-'))
     roots.push(workspace)
@@ -719,7 +874,7 @@ describe('HarvestRunner', () => {
     ).toBe(false)
   })
 
-  test('a resumed exhausted session gets one re-entry, then re-errors without hot-looping', async () => {
+  test('automatic recovery is durably bounded and then stops hot-looping', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-no-terminal-'))
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
@@ -767,33 +922,50 @@ describe('HarvestRunner', () => {
     })
     expect(calls).toBe(2)
     expect(await tickets.get('fake-1')).toBeNull()
-    expect(await makeRunner('uncommanded-park').run()).toEqual({
-      outcome: 'parked',
-      run: 'harvest_1',
-    })
-    expect(calls).toBe(2)
 
-    await store.appendRepo('/repo', {
-      actor: humanActor('operator'),
-      type: 'harvest.resume-requested',
-      payload: {},
-    })
-    expect(await makeRunner('manual-attempt-3').run()).toMatchObject({
+    expect(await makeRunner('automatic-recovery-1').run()).toMatchObject({
       outcome: 'failed',
       launch: 'resumed',
       run: 'harvest_1',
     })
-    const afterResume = reduceHarvest(await store.getRepoEvents('/repo'))
-    expect(afterResume.latest).toMatchObject({
-      status: 'failed',
-      failure: { step: 'synthesize', attempt: 3, willRetry: false },
+    expect(await makeRunner('automatic-recovery-2').run()).toMatchObject({
+      outcome: 'failed',
+      launch: 'resumed',
+      run: 'harvest_1',
     })
-    expect(calls).toBe(3)
-    expect(await makeRunner('still-parked').run()).toEqual({
+    const exhaustedEvents = await store.getRepoEvents('/repo')
+    const exhausted = reduceHarvest(exhaustedEvents)
+    expect(exhausted.latest).toMatchObject({
+      status: 'failed',
+      failure: { step: 'synthesize', attempt: 4, willRetry: false },
+      recoveryRequests: [
+        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
+        { attempt: 2, limit: 2, acknowledgedSeq: expect.any(Number) },
+      ],
+      recoveryExhaustion: {
+        step: 'synthesize',
+        round: 1,
+        attempts: 2,
+        limit: 2,
+        releasedObservations: [{ build: 'no-terminal', seq: 1 }],
+      },
+    })
+    expect(
+      exhaustedEvents.filter(
+        (event) => event.type === 'harvest.recovery-requested',
+      ),
+    ).toHaveLength(2)
+    expect(
+      exhaustedEvents.filter(
+        (event) => event.type === 'harvest.recovery-exhausted',
+      ),
+    ).toHaveLength(1)
+    expect(calls).toBe(4)
+    expect(await makeRunner('attention-barrier').run()).toEqual({
       outcome: 'parked',
       run: 'harvest_1',
     })
-    expect(calls).toBe(3)
+    expect(calls).toBe(4)
   })
 
   test('a repaired permanent provider failure resumes the stopped occurrence', async () => {
@@ -873,19 +1045,8 @@ describe('HarvestRunner', () => {
     expect(reduceHarvest(events).latest?.status).toBe('failed')
     expect(calls).toBe(1)
 
-    // No command means no runner work and no new scan/session.
-    expect(await makeRunner('provider-uncommanded').run()).toEqual({
-      outcome: 'parked',
-      run: 'harvest_1',
-    })
-    expect(calls).toBe(1)
-
+    // The next runner invocation automatically reopens the same stopped run.
     repaired = true
-    await store.appendRepo('/repo', {
-      actor: humanActor('operator'),
-      type: 'harvest.resume-requested',
-      payload: {},
-    })
     expect(await makeRunner('provider-repaired').run()).toEqual({
       outcome: 'completed',
       launch: 'resumed',
@@ -897,6 +1058,9 @@ describe('HarvestRunner', () => {
       run: 'harvest_1',
       status: 'completed',
       observations: [{ build: 'provider-error', seq: 1 }],
+      recoveryRequests: [
+        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
+      ],
     })
     expect(
       repairedEvents.filter((event) => event.type === 'harvest.started'),
@@ -1214,18 +1378,7 @@ describe('HarvestRunner', () => {
     expect(await tickets.get('fake-1')).not.toBeNull()
     expect(await tickets.get('fake-2')).toBeNull()
 
-    expect(await makeRunner('partial-uncommanded').run()).toEqual({
-      outcome: 'parked',
-      run: seeded.run,
-    })
-    expect(createTitles).toHaveLength(3)
-
     tickets.repaired = true
-    await store.appendRepo('/repo', {
-      actor: humanActor('operator'),
-      type: 'harvest.resume-requested',
-      payload: {},
-    })
     expect(await makeRunner('partial-repaired').run()).toEqual({
       outcome: 'completed',
       launch: 'resumed',
@@ -1238,6 +1391,9 @@ describe('HarvestRunner', () => {
       run: seeded.run,
       status: 'completed',
       observations: claimed,
+      recoveryRequests: [
+        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
+      ],
     })
     expect(state.latest?.filed).toHaveLength(2)
     expect(createTitles).toEqual([

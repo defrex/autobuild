@@ -5,8 +5,10 @@ import {
   harvestProposalSetSchema,
   harvestScanPacketSchema,
   occurrenceKey,
+  type HarvestDisposition,
   type HarvestLedgerTicket,
   type HarvestObservation,
+  type HarvestPendingProposal,
   type HarvestProposal,
   type HarvestProposalSet,
   type HarvestScanPacket,
@@ -14,7 +16,9 @@ import {
 } from '../harvest/schema'
 import {
   claimedOccurrenceKeys,
+  proposalArtifactForRound,
   reduceHarvest,
+  type HarvestRunState,
   type HarvestState,
 } from '../kernel/harvest'
 import type { TicketSource } from '../ports/types'
@@ -220,6 +224,199 @@ export function parseApprovedProposalSet(
 export function harvestProposalKey(proposal: HarvestProposal): string {
   const members = proposal.observations.map(occurrenceKey).sort().join('\n')
   return `harvest-${contentHash(toBytes(members)).slice(0, 24)}`
+}
+
+export interface HarvestExhaustionPartition {
+  releasedObservations: OccurrenceKey[]
+  committedDispositions: HarvestDisposition[]
+  pendingProposals: HarvestPendingProposal[]
+}
+
+/** Determine the only safe give-up partition from frozen repository facts.
+ * No provider is queried and no external side effect occurs here: filed facts,
+ * the approved proposal artifact, and its original scan packet are the entire
+ * authority. */
+export async function partitionHarvestExhaustion(opts: {
+  store: BuildStore
+  repo: string
+  run: HarvestRunState
+}): Promise<HarvestExhaustionPartition> {
+  const { store, repo, run } = opts
+  const approval = [...run.reviews]
+    .reverse()
+    .find((review) => review.verdict === 'approve')
+  if (approval === undefined) {
+    if (run.filed.length > 0) {
+      throw new Error(
+        `harvest ${run.run} has filed proposals without an approved artifact`,
+      )
+    }
+    return {
+      releasedObservations: structuredClone(run.observations),
+      committedDispositions: [],
+      pendingProposals: [],
+    }
+  }
+
+  const approved = proposalArtifactForRound(run, approval.round)
+  if (approved === undefined) {
+    throw new Error(
+      `harvest ${run.run} approval r${approval.round} has no proposal artifact`,
+    )
+  }
+  const artifact = await store.getRepoArtifact(repo, approved.kind, approved.rev)
+  if (artifact === null) {
+    throw new Error(
+      `approved proposal artifact ${approved.kind}@${approved.rev} is missing`,
+    )
+  }
+  const set = parseApprovedProposalSet(
+    new TextDecoder().decode(artifact.content),
+    run.observations,
+  )
+  const packet = await loadScanPacket(store, repo, run.scan)
+  if (packet.run !== run.run) {
+    throw new Error(
+      `harvest ${run.run} scan artifact belongs to run ${packet.run}`,
+    )
+  }
+  const packetOccurrences = new Set(
+    packet.observations.map((item) => occurrenceKey(item.occurrence)),
+  )
+  if (
+    packetOccurrences.size !== run.observations.length ||
+    run.observations.some((item) => !packetOccurrences.has(occurrenceKey(item)))
+  ) {
+    throw new Error(
+      `harvest ${run.run} scan artifact does not match its claimed snapshot`,
+    )
+  }
+
+  const knownLedger = new Map(
+    packet.ledger.map((entry) => [
+      `${entry.ticket.source}:${entry.ticket.id}`,
+      entry,
+    ]),
+  )
+  const filed = new Map(
+    run.filed.map((entry) => [entry.proposalKey, entry.ticket]),
+  )
+  const consumedFiled = new Set<string>()
+  const proposalKeys = new Set<string>()
+  const releasedObservations: OccurrenceKey[] = []
+  const committedDispositions: HarvestDisposition[] = []
+  const pendingProposals: HarvestPendingProposal[] = []
+
+  for (const proposal of set.proposals) {
+    if (proposal.action === 'create') {
+      const proposalKey = harvestProposalKey(proposal)
+      if (proposalKeys.has(proposalKey)) {
+        throw new Error(
+          `approved harvest proposals repeat stable key "${proposalKey}"`,
+        )
+      }
+      proposalKeys.add(proposalKey)
+      const ticket = filed.get(proposalKey)
+      if (ticket === undefined) {
+        releasedObservations.push(...structuredClone(proposal.observations))
+        pendingProposals.push({
+          proposalKey,
+          action: 'create',
+          observations: structuredClone(proposal.observations),
+        })
+      } else {
+        consumedFiled.add(proposalKey)
+        for (const occurrence of proposal.observations) {
+          committedDispositions.push({
+            occurrence: { ...occurrence },
+            action: 'filed',
+            proposalKey,
+            ticket: structuredClone(ticket),
+          })
+        }
+      }
+      continue
+    }
+
+    if (proposal.action === 'join') {
+      const known = knownLedger.get(
+        `${proposal.ticket.source}:${proposal.ticket.id}`,
+      )
+      if (known === undefined) {
+        throw new Error(
+          `approved join target ${proposal.ticket.source}:${proposal.ticket.id} is not in the frozen ledger context`,
+        )
+      }
+      if (!known.exists || known.resolved) {
+        throw new Error(
+          `approved join target ${proposal.ticket.id} is ${
+            !known.exists ? 'missing' : 'resolved'
+          }; it cannot be committed as a join`,
+        )
+      }
+      for (const occurrence of proposal.observations) {
+        committedDispositions.push({
+          occurrence: { ...occurrence },
+          action: 'joined',
+          proposalKey: known.proposalKey,
+          ticket: structuredClone(known.ticket),
+          reason: proposal.reason,
+        })
+      }
+      continue
+    }
+
+    const proposalKey = harvestProposalKey(proposal)
+    if (proposalKeys.has(proposalKey)) {
+      throw new Error(
+        `approved harvest proposals repeat stable key "${proposalKey}"`,
+      )
+    }
+    proposalKeys.add(proposalKey)
+    for (const occurrence of proposal.observations) {
+      committedDispositions.push({
+        occurrence: { ...occurrence },
+        action: 'suppressed',
+        proposalKey,
+        reason: proposal.reason,
+      })
+    }
+  }
+
+  const unexpectedFiled = [...filed.keys()].filter(
+    (proposalKey) => !consumedFiled.has(proposalKey),
+  )
+  if (unexpectedFiled.length > 0) {
+    throw new Error(
+      `harvest ${run.run} has filing facts absent from the approved proposal set: ${unexpectedFiled.join(', ')}`,
+    )
+  }
+  const expected = new Set(run.observations.map(occurrenceKey))
+  const partition = [
+    ...committedDispositions.map((item) => item.occurrence),
+    ...releasedObservations,
+  ]
+  const seen = new Set<string>()
+  for (const occurrence of partition) {
+    const key = occurrenceKey(occurrence)
+    if (!expected.has(key) || seen.has(key)) {
+      throw new Error(
+        `harvest ${run.run} exhaustion partition contains invalid or duplicate occurrence ${key}`,
+      )
+    }
+    seen.add(key)
+  }
+  if (seen.size !== expected.size) {
+    throw new Error(
+      `harvest ${run.run} exhaustion partition does not cover its claimed snapshot`,
+    )
+  }
+
+  return {
+    releasedObservations,
+    committedDispositions,
+    pendingProposals,
+  }
 }
 
 export function renderHarvestProposal(
