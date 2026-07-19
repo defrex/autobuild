@@ -657,15 +657,69 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
 
 describe('runCli — ab dispatch flag parsing (§3.3)', () => {
   // `dispatch` routes before any store/env requirement and does its own heavy
-  // wiring, so these assertions stop at the argv boundary: a flag either
-  // parses (and the command proceeds to fail on the missing autobuild.toml) or
-  // it does not (and the usage string comes back).
+  // wiring, so malformed argv must stop before config/store access. Valid argv
+  // reaches the real one-shot dispatcher over an empty file-ticket repo.
+  async function writeDispatchConfig(): Promise<void> {
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      '[tickets]\nsource = "file"\nreadyState = "ready"\ndir = "tickets"\n',
+    )
+  }
 
   test('--plain parses', async () => {
     const d = deps()
     expect(await runCli(['dispatch', '--once', '--plain'], { ...d, workspacePath: tmp })).toBe(1)
     expect(d.err.join('\n')).toContain('autobuild.toml: not found')
     expect(d.err.join('\n')).not.toContain('unknown argument')
+  })
+
+  test('--store with no value is the same usage error as other sessionless commands', async () => {
+    const d = deps()
+    expect(await runCli(['dispatch', '--store'], { ...d, workspacePath: tmp })).toBe(1)
+    const err = d.err.join('\n')
+    expect(err).toContain('--store requires a value')
+    expect(err).toContain('usage: ab dispatch')
+    expect(d.out).toEqual([])
+  })
+
+  test('--store followed by --once rejects before dispatch or state access', async () => {
+    await writeDispatchConfig()
+    const d = deps()
+    const stop = new AbortController()
+    stop.abort()
+
+    expect(
+      await runCli(['dispatch', '--store', '--once'], {
+        ...d,
+        workspacePath: tmp,
+        signal: stop.signal,
+      }),
+    ).toBe(1)
+    const err = d.err.join('\n')
+    expect(err).toContain('--store requires a value')
+    expect(err).toContain('--once')
+    expect(err).toContain('usage: ab dispatch')
+    expect(d.out).toEqual([])
+    expect(existsSync(join(tmp, '--once'))).toBe(false)
+  })
+
+  test('a valid --store value preserves one-shot dispatch flag ordering', async () => {
+    await writeDispatchConfig()
+    const cases = [
+      ['--store', join(tmp, 'store-first'), '--once', '--plain', '--interval', '0.001'],
+      ['--once', '--plain', '--interval', '0.001', '--store', join(tmp, 'store-last')],
+      ['--interval', '0.001', '--store', join(tmp, 'store-middle'), '--plain', '--once'],
+    ]
+
+    for (const args of cases) {
+      const d = deps()
+      expect(await runCli(['dispatch', ...args], { ...d, workspacePath: tmp })).toBe(0)
+      expect(d.err).toEqual([])
+      expect(d.out.join('\n')).toContain('ab dispatch — one pass')
+      expect(d.out.join('\n')).toContain('tick: idle')
+      const storeRef = args[args.indexOf('--store') + 1]!
+      expect(existsSync(join(storeRef, 'autobuild.sqlite'))).toBe(true)
+    }
   })
 
   test('--intake and --no-intake each parse', async () => {
