@@ -88,10 +88,13 @@ boundary. Before any new scan, dispatch automatically reopens that run at most
 twice through durable request facts and the same `harvest.resumed`
 acknowledgement used by manual resume. Claims, artifacts, attempts,
 reservations, and filing facts stay intact, so completed work is not repeated.
-After the bound, one atomic fact commits filed/joined/suppressed dispositions,
-releases only pending observations, and raises a human-attention barrier.
-Acknowledging that barrier permits a future scan but never resurrects the old
-run. Completed and deliberate escalated runs remain terminal.
+After the bound, one atomic fact commits only classifiable filed creates,
+still-valid frozen joins, and suppressions; missing creates, tombstone/unknown
+joins, and otherwise unclassifiable members are released as pending. A rejected
+store read remains retryable infrastructure, while successfully read malformed
+content fails safe toward release. The same fact raises a human-attention
+barrier. Acknowledging that barrier permits a future scan but never resurrects
+the old run. Completed and deliberate escalated runs remain terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.

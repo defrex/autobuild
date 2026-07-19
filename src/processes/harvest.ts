@@ -235,65 +235,83 @@ export interface HarvestExhaustionPartition {
 /** Determine the only safe give-up partition from frozen repository facts.
  * No provider is queried and no external side effect occurs here: filed facts,
  * the approved proposal artifact, and its original scan packet are the entire
- * authority. */
+ * authority.
+ *
+ * Store read failures propagate so a transient outage can be retried. Once a
+ * read succeeds, malformed/missing artifacts and unclassifiable proposal
+ * members fail safe as pending work instead of making exhaustion itself a hot
+ * loop. */
 export async function partitionHarvestExhaustion(opts: {
   store: BuildStore
   repo: string
   run: HarvestRunState
 }): Promise<HarvestExhaustionPartition> {
   const { store, repo, run } = opts
+  const releaseWholeSnapshot = (): HarvestExhaustionPartition => ({
+    releasedObservations: structuredClone(run.observations),
+    committedDispositions: [],
+    pendingProposals: [],
+  })
   const approval = [...run.reviews]
     .reverse()
     .find((review) => review.verdict === 'approve')
-  if (approval === undefined) {
-    if (run.filed.length > 0) {
-      throw new Error(
-        `harvest ${run.run} has filed proposals without an approved artifact`,
-      )
-    }
-    return {
-      releasedObservations: structuredClone(run.observations),
-      committedDispositions: [],
-      pendingProposals: [],
-    }
-  }
+  if (approval === undefined) return releaseWholeSnapshot()
 
   const approved = proposalArtifactForRound(run, approval.round)
-  if (approved === undefined) {
-    throw new Error(
-      `harvest ${run.run} approval r${approval.round} has no proposal artifact`,
-    )
-  }
+  if (approved === undefined) return releaseWholeSnapshot()
+  // A rejected read is transient and must remain retryable. A successful
+  // missing result is durable corruption, so release rather than relaunching
+  // this same rejecting exhaustion settlement forever.
   const artifact = await store.getRepoArtifact(repo, approved.kind, approved.rev)
-  if (artifact === null) {
-    throw new Error(
-      `approved proposal artifact ${approved.kind}@${approved.rev} is missing`,
+  if (artifact === null) return releaseWholeSnapshot()
+
+  let set: HarvestProposalSet
+  try {
+    set = parseApprovedProposalSet(
+      new TextDecoder().decode(artifact.content),
+      run.observations,
     )
+  } catch {
+    return releaseWholeSnapshot()
   }
-  const set = parseApprovedProposalSet(
-    new TextDecoder().decode(artifact.content),
-    run.observations,
+
+  // The scan packet is needed only to prove a join is still a valid frozen
+  // disposition. As above, transport/read errors propagate; missing,
+  // malformed, or mismatched content simply makes joins pending. Creates with
+  // durable filing facts and suppressions remain independently classifiable.
+  const scanArtifact = await store.getRepoArtifact(
+    repo,
+    run.scan.kind,
+    run.scan.rev,
   )
-  const packet = await loadScanPacket(store, repo, run.scan)
-  if (packet.run !== run.run) {
-    throw new Error(
-      `harvest ${run.run} scan artifact belongs to run ${packet.run}`,
-    )
-  }
-  const packetOccurrences = new Set(
-    packet.observations.map((item) => occurrenceKey(item.occurrence)),
-  )
-  if (
-    packetOccurrences.size !== run.observations.length ||
-    run.observations.some((item) => !packetOccurrences.has(occurrenceKey(item)))
-  ) {
-    throw new Error(
-      `harvest ${run.run} scan artifact does not match its claimed snapshot`,
-    )
+  let packet: HarvestScanPacket | undefined
+  if (scanArtifact !== null) {
+    let raw: unknown
+    try {
+      raw = JSON.parse(new TextDecoder().decode(scanArtifact.content))
+    } catch {
+      raw = undefined
+    }
+    const parsed = harvestScanPacketSchema.safeParse(raw)
+    if (parsed.success && parsed.data.run === run.run) {
+      const packetOccurrences = new Set(
+        parsed.data.observations.map((item) =>
+          occurrenceKey(item.occurrence),
+        ),
+      )
+      if (
+        packetOccurrences.size === run.observations.length &&
+        run.observations.every((item) =>
+          packetOccurrences.has(occurrenceKey(item)),
+        )
+      ) {
+        packet = parsed.data
+      }
+    }
   }
 
   const knownLedger = new Map(
-    packet.ledger.map((entry) => [
+    (packet?.ledger ?? []).map((entry) => [
       `${entry.ticket.source}:${entry.ticket.id}`,
       entry,
     ]),
@@ -301,31 +319,33 @@ export async function partitionHarvestExhaustion(opts: {
   const filed = new Map(
     run.filed.map((entry) => [entry.proposalKey, entry.ticket]),
   )
-  const consumedFiled = new Set<string>()
   const proposalKeys = new Set<string>()
+  for (const proposal of set.proposals) {
+    const proposalKey = harvestProposalKey(proposal)
+    if (proposalKeys.has(proposalKey)) return releaseWholeSnapshot()
+    proposalKeys.add(proposalKey)
+  }
+
   const releasedObservations: OccurrenceKey[] = []
   const committedDispositions: HarvestDisposition[] = []
   const pendingProposals: HarvestPendingProposal[] = []
+  const releaseProposal = (proposal: HarvestProposal): void => {
+    const proposalKey = harvestProposalKey(proposal)
+    releasedObservations.push(...structuredClone(proposal.observations))
+    pendingProposals.push({
+      proposalKey,
+      action: proposal.action,
+      observations: structuredClone(proposal.observations),
+    })
+  }
 
   for (const proposal of set.proposals) {
     if (proposal.action === 'create') {
       const proposalKey = harvestProposalKey(proposal)
-      if (proposalKeys.has(proposalKey)) {
-        throw new Error(
-          `approved harvest proposals repeat stable key "${proposalKey}"`,
-        )
-      }
-      proposalKeys.add(proposalKey)
       const ticket = filed.get(proposalKey)
       if (ticket === undefined) {
-        releasedObservations.push(...structuredClone(proposal.observations))
-        pendingProposals.push({
-          proposalKey,
-          action: 'create',
-          observations: structuredClone(proposal.observations),
-        })
+        releaseProposal(proposal)
       } else {
-        consumedFiled.add(proposalKey)
         for (const occurrence of proposal.observations) {
           committedDispositions.push({
             occurrence: { ...occurrence },
@@ -342,17 +362,9 @@ export async function partitionHarvestExhaustion(opts: {
       const known = knownLedger.get(
         `${proposal.ticket.source}:${proposal.ticket.id}`,
       )
-      if (known === undefined) {
-        throw new Error(
-          `approved join target ${proposal.ticket.source}:${proposal.ticket.id} is not in the frozen ledger context`,
-        )
-      }
-      if (!known.exists || known.resolved) {
-        throw new Error(
-          `approved join target ${proposal.ticket.id} is ${
-            !known.exists ? 'missing' : 'resolved'
-          }; it cannot be committed as a join`,
-        )
+      if (known === undefined || !known.exists || known.resolved) {
+        releaseProposal(proposal)
+        continue
       }
       for (const occurrence of proposal.observations) {
         committedDispositions.push({
@@ -367,12 +379,6 @@ export async function partitionHarvestExhaustion(opts: {
     }
 
     const proposalKey = harvestProposalKey(proposal)
-    if (proposalKeys.has(proposalKey)) {
-      throw new Error(
-        `approved harvest proposals repeat stable key "${proposalKey}"`,
-      )
-    }
-    proposalKeys.add(proposalKey)
     for (const occurrence of proposal.observations) {
       committedDispositions.push({
         occurrence: { ...occurrence },
@@ -383,34 +389,19 @@ export async function partitionHarvestExhaustion(opts: {
     }
   }
 
-  const unexpectedFiled = [...filed.keys()].filter(
-    (proposalKey) => !consumedFiled.has(proposalKey),
-  )
-  if (unexpectedFiled.length > 0) {
-    throw new Error(
-      `harvest ${run.run} has filing facts absent from the approved proposal set: ${unexpectedFiled.join(', ')}`,
-    )
-  }
+  // Coverage was revalidated above, so this is a defensive fail-safe against a
+  // future classifier bug rather than a reachable content error.
   const expected = new Set(run.observations.map(occurrenceKey))
-  const partition = [
+  const seen = new Set<string>()
+  for (const occurrence of [
     ...committedDispositions.map((item) => item.occurrence),
     ...releasedObservations,
-  ]
-  const seen = new Set<string>()
-  for (const occurrence of partition) {
+  ]) {
     const key = occurrenceKey(occurrence)
-    if (!expected.has(key) || seen.has(key)) {
-      throw new Error(
-        `harvest ${run.run} exhaustion partition contains invalid or duplicate occurrence ${key}`,
-      )
-    }
+    if (!expected.has(key) || seen.has(key)) return releaseWholeSnapshot()
     seen.add(key)
   }
-  if (seen.size !== expected.size) {
-    throw new Error(
-      `harvest ${run.run} exhaustion partition does not cover its claimed snapshot`,
-    )
-  }
+  if (seen.size !== expected.size) return releaseWholeSnapshot()
 
   return {
     releasedObservations,

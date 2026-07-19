@@ -717,13 +717,17 @@ descriptors.
 Give-up never silently destroys the snapshot. Before approval, every claimed
 occurrence is pending and released. After approval, the deterministic partition
 uses only the frozen scan/proposal artifacts and durable filing facts: filed
-creates, valid joins, and suppressions enter the committed repository ledger and
-stay claimed; only missing creates are pending and released. No TicketSource
-call occurs while calculating this boundary. A durable attention barrier then
-prevents the released work from being immediately reclaimed as a succession of
-new bounded runs. `ab harvest status` reports recoverability, automatic
-attempts/limit, the stopped boundary, exact pending occurrences/proposal keys,
-and attention state.
+creates, still-valid frozen joins, and suppressions enter the committed
+repository ledger and stay claimed; missing creates, tombstone/unknown joins,
+and any otherwise unclassifiable members are pending and released. If a
+successful artifact read proves content missing, malformed, or mismatched, the
+classifier fails safe toward release; a rejected store read remains a transient
+infrastructure failure and is retried instead of being mistaken for content.
+No TicketSource call occurs while calculating this boundary. A durable attention
+barrier then prevents the released work from being immediately reclaimed as a
+succession of new bounded runs. `ab harvest status` reports recoverability,
+automatic attempts/limit, the stopped boundary, exact pending
+occurrences/proposal keys, and attention state.
 
 A human resume before exhaustion and automatic recovery converge on
 `harvest.resumed` and therefore the same reopened run shape. After exhaustion,

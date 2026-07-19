@@ -477,9 +477,12 @@ Each tick runs in this order:
 If both automatic reopen attempts fail, one `harvest.recovery-exhausted` fact
 atomically commits the safe partial disposition ledger and releases only work
 still pending. Before approval that is the whole snapshot; after approval,
-filed creates, valid joins, and suppressions stay dispositioned while only
-missing creates are released. A durable human-attention barrier prevents those
-released observations from being reclaimed immediately into another hot loop.
+filed creates, still-valid frozen joins, and suppressions stay dispositioned,
+while missing creates, tombstone/unknown joins, and otherwise unclassifiable
+members are released. Successfully read malformed/missing content fails safe to
+release; a rejected artifact read remains retryable infrastructure. A durable
+human-attention barrier prevents those released observations from being
+reclaimed immediately into another hot loop.
 Press `p` to acknowledge the barrier; the old run stays finished, and a future
 scan may claim the released work. Deliberate agent/stall/policy escalations
 still consume their snapshots and are never automatically recovered.

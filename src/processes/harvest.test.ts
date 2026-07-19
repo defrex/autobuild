@@ -90,7 +90,13 @@ describe('harvest deterministic scan and ledger', () => {
 
   test('exhaustion commits filed/joined/suppressed members and releases only a missing create', async () => {
     const store = new MemoryBuildStore()
-    for (const build of ['filed', 'missing', 'joined', 'suppressed']) {
+    for (const build of [
+      'filed',
+      'missing',
+      'joined',
+      'tombstone',
+      'suppressed',
+    ]) {
       await observation(store, build, `${build}-observation`)
     }
     const initial = await scanUnclaimedObservations(store, '/repo')
@@ -122,6 +128,12 @@ describe('harvest deterministic scan and ledger', () => {
           reason: 'Covered by the prior proposal.',
         },
         {
+          action: 'join' as const,
+          ticket: { source: 'fake', id: 'T-gone' },
+          observations: [byBuild.get('tombstone')!.occurrence],
+          reason: 'The frozen target is now a tombstone.',
+        },
+        {
           action: 'suppress' as const,
           observations: [byBuild.get('suppressed')!.occurrence],
           reason: 'Not actionable.',
@@ -138,6 +150,12 @@ describe('harvest deterministic scan and ledger', () => {
           ticket: { source: 'fake', id: 'T-old' },
           exists: true,
           resolved: false,
+        },
+        {
+          proposalKey: 'gone-key',
+          ticket: { source: 'fake', id: 'T-gone' },
+          exists: true,
+          resolved: true,
         },
       ],
     }
@@ -184,6 +202,7 @@ describe('harvest deterministic scan and ledger', () => {
     )
     const filedKey = harvestProposalKey(proposals.proposals[0]!)
     const pendingKey = harvestProposalKey(proposals.proposals[1]!)
+    const tombstoneKey = harvestProposalKey(proposals.proposals[3]!)
     await store.appendRepo('/repo', {
       actor: KERNEL,
       type: 'harvest.proposal.filed',
@@ -202,12 +221,18 @@ describe('harvest deterministic scan and ledger', () => {
     })
     expect(partition.releasedObservations).toEqual([
       byBuild.get('missing')!.occurrence,
+      byBuild.get('tombstone')!.occurrence,
     ])
     expect(partition.pendingProposals).toEqual([
       {
         proposalKey: pendingKey,
         action: 'create',
         observations: [byBuild.get('missing')!.occurrence],
+      },
+      {
+        proposalKey: tombstoneKey,
+        action: 'join',
+        observations: [byBuild.get('tombstone')!.occurrence],
       },
     ])
     expect(partition.committedDispositions.map((item) => item.action)).toEqual([
@@ -266,6 +291,7 @@ describe('harvest deterministic scan and ledger', () => {
     const released = await scanUnclaimedObservations(store, '/repo')
     expect(released.observations.map((item) => item.occurrence)).toEqual([
       byBuild.get('missing')!.occurrence,
+      byBuild.get('tombstone')!.occurrence,
     ])
     state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.ledger.map((item) => item.action)).toEqual([
@@ -287,7 +313,7 @@ describe('harvest deterministic scan and ledger', () => {
     ].sort())
   })
 
-  test('pre-approval exhaustion releases the whole snapshot and malformed approved coverage is rejected', async () => {
+  test('pre-approval and malformed approved exhaustion release the whole snapshot', async () => {
     const store = new MemoryBuildStore()
     await observation(store, 'a', 'a1')
     await observation(store, 'b', 'b1')
@@ -358,8 +384,96 @@ describe('harvest deterministic scan and ledger', () => {
       },
     })
     run = reduceHarvest(await store.getRepoEvents('/repo')).latest!
+    expect(
+      await partitionHarvestExhaustion({ store, repo: '/repo', run }),
+    ).toEqual({
+      releasedObservations: scan.observations.map((item) => item.occurrence),
+      committedDispositions: [],
+      pendingProposals: [],
+    })
+  })
+
+  test('transient artifact read failures keep exhaustion settlement retryable', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'a', 'a1')
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    const packet = {
+      repo: '/repo',
+      run: 'h_transient',
+      observations: scan.observations,
+      ledger: [],
+    }
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_transient',
+          observations: scan.observations.map((item) => item.occurrence),
+          scan: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [
+        {
+          kind: 'harvest-proposals',
+          content: JSON.stringify({
+            proposals: [
+              {
+                action: 'suppress',
+                observations: scan.observations.map(
+                  (item) => item.occurrence,
+                ),
+                reason: 'not actionable',
+              },
+            ],
+          }),
+        },
+      ],
+      (deposited) => ({
+        actor: agentActor('harvest', 'hs_transient'),
+        type: 'harvest.proposals.submitted',
+        payload: {
+          run: 'h_transient',
+          round: 1,
+          artifact: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+    await store.appendRepo('/repo', {
+      actor: agentActor('harvest-review', 'hr_transient'),
+      type: 'harvest.review.verdict',
+      payload: {
+        run: 'h_transient',
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'harvest-review', rev: 0 },
+      },
+    })
+    const run = reduceHarvest(await store.getRepoEvents('/repo')).latest!
+    const read = store.getRepoArtifact.bind(store)
+
+    store.getRepoArtifact = async () => {
+      throw new Error('temporary artifact transport outage')
+    }
     await expect(
       partitionHarvestExhaustion({ store, repo: '/repo', run }),
-    ).rejects.toThrow(/not a partition/)
+    ).rejects.toThrow('temporary artifact transport outage')
+
+    store.getRepoArtifact = async (repo, kind, rev) => {
+      if (kind === 'harvest-scan') {
+        throw new Error('temporary scan transport outage')
+      }
+      return read(repo, kind, rev)
+    }
+    await expect(
+      partitionHarvestExhaustion({ store, repo: '/repo', run }),
+    ).rejects.toThrow('temporary scan transport outage')
+    store.getRepoArtifact = read
   })
 })

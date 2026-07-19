@@ -68,9 +68,13 @@ re-filing.
 
 After the second automatic reopen fails, `src/processes/harvest.ts` derives a
 provider-free partition from frozen scan/proposal artifacts plus filing facts.
-`harvest.recovery-exhausted` atomically commits filed/joined/suppressed members,
-releases only pending members, and raises an attention barrier. Dispatcher
-launch is suppressed until a human resume acknowledgement clears that barrier;
+It commits only classifiable filed creates, still-valid frozen joins, and
+suppressions; missing creates, tombstone/unknown joins, and malformed or
+otherwise unclassifiable content fail safe to pending release. Rejected store
+reads propagate as retryable infrastructure rather than being classified as
+content. `harvest.recovery-exhausted` records that exact partition and raises an
+attention barrier. Dispatcher launch is suppressed until a human resume
+acknowledgement clears that barrier;
 the acknowledgement does not reopen the exhausted run. Completed and deliberate
 escalated runs remain terminal, with escalation snapshots still claimed. Typed
 session deposits live under `ab harvest context|submit|verdict`; `ab harvest

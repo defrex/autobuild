@@ -1423,6 +1423,157 @@ describe('HarvestRunner', () => {
     ).toHaveLength(1)
   })
 
+  test('an approved tombstone join exhausts into pending work instead of relaunching forever', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-tombstone-exhaustion-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    await seedObservation(store, 'tombstone-join', 'join target became terminal')
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    const run = 'h_tombstone_join'
+    const packet = {
+      repo: '/repo',
+      run,
+      observations: scan.observations,
+      ledger: [
+        {
+          proposalKey: 'prior-cluster',
+          ticket: { source: 'fake', id: 'T-gone' },
+          exists: true,
+          resolved: true,
+        },
+      ],
+    }
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run,
+          observations: scan.observations.map((item) => item.occurrence),
+          scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+    const proposal = {
+      action: 'join' as const,
+      ticket: { source: 'fake', id: 'T-gone' },
+      observations: scan.observations.map((item) => item.occurrence),
+      reason: 'The reviewer incorrectly approved a tombstone join.',
+    }
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [
+        {
+          kind: 'harvest-proposals',
+          content: JSON.stringify({ proposals: [proposal] }),
+        },
+      ],
+      (deposited) => ({
+        actor: agentActor('harvest', 'hs_tombstone'),
+        type: 'harvest.proposals.submitted',
+        payload: {
+          run,
+          round: 1,
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-review', content: 'approved incorrectly\n' }],
+      (deposited) => ({
+        actor: agentActor('harvest-review', 'hr_tombstone'),
+        type: 'harvest.review.verdict',
+        payload: {
+          run,
+          round: 1,
+          verdict: 'approve',
+          findings: [],
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+        },
+      }),
+    )
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('approved tombstone recovery must not start an agent')
+      },
+    })
+    const makeRunner = (instance: string) =>
+      new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance,
+        opts: {
+          heartbeatMs: 100_000,
+          maxSessionAttempts: 1,
+          maxRecoveryAttempts: 2,
+        },
+      })
+
+    expect(await makeRunner('tombstone-initial').run()).toEqual({
+      outcome: 'failed',
+      launch: 'resumed',
+      run,
+    })
+    expect(await makeRunner('tombstone-recovery-1').run()).toEqual({
+      outcome: 'failed',
+      launch: 'resumed',
+      run,
+    })
+    expect(await makeRunner('tombstone-recovery-2').run()).toEqual({
+      outcome: 'failed',
+      launch: 'resumed',
+      run,
+    })
+
+    const events = await store.getRepoEvents('/repo')
+    const state = reduceHarvest(events)
+    expect(state.latest).toMatchObject({
+      run,
+      status: 'failed',
+      recoveryExhaustion: {
+        step: 'file',
+        attempts: 2,
+        limit: 2,
+        releasedObservations: scan.observations.map(
+          (item) => item.occurrence,
+        ),
+        pendingProposals: [
+          {
+            proposalKey: harvestProposalKey(proposal),
+            action: 'join',
+          },
+        ],
+      },
+    })
+    expect(
+      events.filter(
+        (event) => event.type === 'harvest.recovery-exhausted',
+      ),
+    ).toHaveLength(1)
+    expect(
+      (await scanUnclaimedObservations(store, '/repo')).observations.map(
+        (item) => item.occurrence,
+      ),
+    ).toEqual(scan.observations.map((item) => item.occurrence))
+    expect(await makeRunner('tombstone-attention-barrier').run()).toEqual({
+      outcome: 'parked',
+      run,
+    })
+  })
+
   test('a retry after pre-create interruption reuses the durable reservation', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-before-create-'))
     roots.push(workspace)
