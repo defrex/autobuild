@@ -84,6 +84,7 @@ export interface PipelineStep {
 }
 
 export type DashboardSelection =
+  | { kind: 'global' }
   | { kind: 'harvest' }
   | { kind: 'build'; slug: string }
 

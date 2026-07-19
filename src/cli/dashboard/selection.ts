@@ -1,12 +1,13 @@
 /** Pure stable-identity selection for every selectable dashboard row. */
 import type { DashboardModel, DashboardSelection } from './model'
 
-/** Render order is selection order: optional repository harvest first, then
- * the model's already slug-sorted builds. */
+/** Render order is selection order: the always-present process-global row,
+ * optional repository harvest, then the model's already slug-sorted builds. */
 export function dashboardSelections(
   model: Pick<DashboardModel, 'harvest' | 'builds'>,
 ): DashboardSelection[] {
   return [
+    { kind: 'global' },
     ...(model.harvest !== undefined ? [{ kind: 'harvest' } as const] : []),
     ...model.builds.map((build) => ({ kind: 'build' as const, slug: build.slug })),
   ]
@@ -18,7 +19,8 @@ export function sameSelection(
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   return left.kind === right.kind &&
-    (left.kind === 'harvest' ||
+    (left.kind === 'global' ||
+      left.kind === 'harvest' ||
       (right.kind === 'build' && left.slug === right.slug))
 }
 

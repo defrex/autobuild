@@ -177,11 +177,11 @@ const HELP = [
   '                                         file a ticket to the configured [tickets] source (§8.8; runs outside sessions).',
   '                                         --blocked-by takes comma-separated ticket ids from that same source',
   '                                         (e.g. AUT-8 for linear, file-1 for file); dispatch waits for all of them.',
-  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]',
+  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
-  '                                         an interactive terminal gets a fixed build/harvest dashboard; TTY controls: Up/Down select, m toggles native squash auto-merge,',
-  '                                         p pauses/resumes or opens optional feedback for a blocked build, d drains new claims, Ctrl-C stops; m/p explain a no-op on Harvest;',
-  '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list every active key; --plain forces line-oriented output',
+  '                                         an interactive terminal gets a fixed global/harvest/build dashboard; TTY controls: Up/Down select, p toggles intake on the global row',
+  '                                         or pauses/resumes the selected Harvest/build, m toggles native squash auto-merge on builds only, Ctrl-C stops;',
+  '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list only keys active for the selection; --plain forces line-oriented output',
   '                                         (also automatic when stdout is not a TTY)',
   '  ab models [query] [--available]        list Pi\'s model catalog (filtered by query) to find a provider-qualified id for autobuild.toml (§9; runs outside sessions)',
   '  ab builds [--queued] [--all] [--json] [--store <ref>]',
@@ -487,9 +487,12 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
       const usage =
-        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] (§3.3)'
+        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] [--intake | --no-intake] (§3.3)'
       let once = false
       let plain = false
+      let intake = true
+      let sawIntake = false
+      let sawNoIntake = false
       let intervalMs: number | undefined
       let storeRef: string | undefined
       for (let i = 0; i < rest.length; i += 1) {
@@ -498,6 +501,12 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           once = true
         } else if (arg === '--plain') {
           plain = true
+        } else if (arg === '--intake') {
+          sawIntake = true
+          intake = true
+        } else if (arg === '--no-intake') {
+          sawNoIntake = true
+          intake = false
         } else if (arg === '--interval') {
           const value = rest[(i += 1)]
           const seconds = value === undefined ? NaN : Number(value)
@@ -506,11 +515,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           }
           intervalMs = Math.round(seconds * 1000)
         } else if (arg === '--store') {
-          storeRef = rest[(i += 1)]
-          if (storeRef === undefined) throw new Error(`--store requires a value — ${usage}`)
+          storeRef = flagValue(rest[(i += 1)], 'store', usage)
         } else {
           throw new Error(`unknown argument "${arg}" — ${usage}`)
         }
+      }
+      if (sawIntake && sawNoIntake) {
+        throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
       }
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
@@ -523,6 +534,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stderr,
         once,
         plain,
+        intake,
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),

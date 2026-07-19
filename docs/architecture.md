@@ -181,7 +181,7 @@ including under `--force`.
 | `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §9, §13 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
-| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated harvest/build row selection, status overlay pixels, and in-place replacement | §14, §15.5 |
+| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, and in-place replacement | §14, §15.5 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |
@@ -189,24 +189,31 @@ including under `--force`.
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
-The renderer reserves one `Auto Build` title row, one always-present status
-row, and one blank separator before the legend/modal controls. It shares the
-selection marker and right-pinned status column across harvest and build rows;
-`Harvest` is operator-facing identity, while its run id stays in the journal.
+The renderer reserves one selectable `Auto Build` title row, one always-present
+status row, a blank separator before the harvest/build body, and another before
+the contextual legend/modal controls. It shares the selection marker and
+right-pinned status column across harvest and build rows; `Harvest` is
+operator-facing identity, while its run id stays in the journal. Auto-merge
+reduction retains four states, but rendering collapses the three active states
+to `auto merge` with cyan/green/yellow emphasis and omits the token for `off`.
 
 The dashboard is an operator command producer, not forge plumbing. Its model
-tracks selection as `{kind: 'harvest'} | {kind: 'build', slug}` over the same
-ordered rows the renderer paints, so insertion/removal never retargets by row
-index. `m` narrows that identity to a build and remains explanatory on harvest.
-`p` branches by identity: builds append human events to their stream, while
-harvest appends `harvest.resume-requested` when the reduced gate is paused, an
-ordinary failed run is manually resumed, or exhausted attention needs
-acknowledgement; otherwise it appends `harvest.pause-requested`. `FAILED` stays
-distinct from `RUNNING`: an ordinary stop names its step and automatic progress,
-while exhaustion clearly names the attention barrier and pending count. The
-exhaustion acknowledgement does not reopen the old run. An escalated run is
-never treated as recoverable infrastructure state. Build-runner and
-harvest-runner acknowledge pause/resume at their respective safe boundaries;
+tracks selection as `{kind: 'global'} | {kind: 'harvest'} | {kind: 'build',
+slug}` over global first, optional harvest second, and slug-sorted builds. The
+always-present global identity and structural reconciliation prevent repaint,
+insertion, or removal from retargeting by row index. The legend derives from
+that identity. `m` narrows it to a build and remains explanatory on global and
+harvest. `p` branches by identity: global toggles process-local intake, builds
+append human events to their stream, while harvest appends
+`harvest.resume-requested` when the reduced gate is paused, an ordinary failed
+run is manually resumed, or exhausted attention needs acknowledgement;
+otherwise it appends `harvest.pause-requested`. `FAILED` stays distinct from
+`RUNNING`: an ordinary stop names its step and automatic progress, while
+exhaustion clearly names the attention barrier and pending count. The
+exhaustion acknowledgement does not reopen the old run. Error recovery uses a
+distinct status message, and an escalated run is never treated as recoverable
+infrastructure state. Build-runner and harvest-runner acknowledge pause/resume
+at their respective safe boundaries;
 dispatcher code reconciles auto-merge via the `Forge` port. On a blocked build,
 `p` instead opens slug/escalation-bound process state: Enter
 appends one human `escalation.answered` per captured id (`retry` for blank
@@ -223,11 +230,13 @@ requires positive mergeability, unchanged latest intent, and
 `decideNext(...)=awaiting-pr`; the normal non-admin merge is head-SHA guarded
 and completion remains an observed `pr.merged` fact on the next poll. The
 automatic startup path in `src/processes/dispatcher.ts` is unchanged and
-retries only an all-policy escalation set without input. `d` is the other
-process-local state: it gates only the current dispatcher's ticket-claim stage
-and resets on restart. Dispatcher notices are a process-local latest-status
-overlay reapplied after every asynchronous projection; dashboard mode never
-routes them to line sinks or scrollback, while plain mode keeps those sinks.
+retries only an all-policy escalation set without input. Intake is process-local
+state that gates only the current dispatcher's ticket-claim stage. CLI
+`--intake`/`--no-intake` seed it (default on), and global-row `p` toggles it
+after launch; it is never persisted. Dispatcher notices are a process-local
+latest-status overlay reapplied after every asynchronous projection; dashboard
+mode never routes them to line sinks or scrollback, while plain mode keeps those
+sinks.
 The live region therefore owns only in-place frame replacement and cursor
 restoration. Raw input and live output remain separate adapters so keypresses
 cannot write into or tear a rendered frame.

@@ -320,8 +320,8 @@ variable (a local `.env` works). If a user asks you to put an API key in
 
 Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
 wall clock. The table is prefaulted, so omitting it enables the sensible
-default. Harvest remains independent of build capacity and of the dashboard's
-drain toggle. Dispatch tracks the workflow in-flight without awaiting it on
+default. Harvest remains independent of build capacity and of process-local
+intake. Dispatch tracks the workflow in-flight without awaiting it on
 watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
 it before exit. The repository lease remains the cross-process single-flight
 gate. A fixed two-attempt automatic recovery budget applies before any new run;
@@ -414,29 +414,45 @@ every agent session as `AB_STORE`.
 
 ## Dispatch dashboard
 
-On a TTY, `ab dispatch` renders one fixed interactive frame. Its first row is a
-single `Auto Build` title with the repository basename, mode, capacity,
-active-build count, and `intake ON`/`intake DRAINED`. Its second row is always
-one status slot. Tick counts, dependency diagnostics, parked-build notices,
-harvest outcomes, action confirmations, and warnings replace that slot instead
-of scrolling above the frame. The duplicate startup banner is suppressed, and
-a blank row separates the body from the legend or feedback controls. `--plain`
-and non-TTY output remain line-oriented and unchanged.
+On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
+lines are the always-present process-global section: a selectable `Auto Build`
+title with the repository basename, mode, capacity, active-build count, and
+`intake ON`/`intake OFF`, then one status slot. Tick counts, dependency
+diagnostics, parked-build notices, harvest outcomes, action confirmations, and
+warnings replace that slot instead of scrolling above the frame. A blank line
+separates the global section from the first body row, and another separates the
+body from the legend or feedback controls. The duplicate startup banner is
+suppressed; `--plain` and non-TTY output remain line-oriented and unchanged.
 
-Up/Down moves through one ordered list: the optional `Harvest` row first, then
-slug-sorted builds. Selection uses stable kind/slug identity, so repaint,
-re-sort, and harvest appearance or disappearance do not retarget it by row
-index. `Harvest` uses the same marker, right-aligned status column, and status
-colors as builds; its internal run id is not shown. Pause renders yellow
-`PAUSED`. A recoverable infrastructure stop renders red `FAILED`, marks the
-stopped step, and shows automatic attempt progress. Exhaustion remains red for
-compatibility but says `recovery exhausted — human attention required` and
-shows the stopped step and pending count. On `Harvest`, `p` requests resume when
-the gate is paused, an ordinary failed run needs a manual reopen, or exhausted
-attention needs acknowledgement; otherwise it requests pause. The exhausted
+Up/Down moves without wrapping through global first, optional `Harvest` second,
+then slug-sorted builds. Stable discriminated identity preserves selection
+through repaint, re-sort, and row appearance/disappearance. The legend is
+contextual: every row offers navigation and quit; global offers `p intake
+on/off`; `Harvest` offers `p pause/resume`; builds offer `m auto-merge` and `p
+pause/resume`. `m` on global or `Harvest` is an explanatory build-only no-op.
+
+`--intake` starts process-local intake on, `--no-intake` starts it off, and
+omitting both defaults on; combining them is an argument error. Global-row `p`
+can toggle either way afterward. Intake off skips only new ticket claims while
+janitor, stale-runner, harvest, and in-flight work continue, and a fresh run
+defaults on again.
+
+`Harvest` uses the same marker, right-aligned status column, and status colors
+as builds; its internal run id is not shown. Pause renders yellow `PAUSED`. A
+recoverable infrastructure stop renders red `FAILED`, marks the stopped step,
+and shows automatic attempt progress. Exhaustion remains red for compatibility
+but says `recovery exhausted — human attention required` and shows the stopped
+step and pending count. On `Harvest`, `p` requests resume when the gate is
+paused, an ordinary failed run needs a manual reopen, or exhausted attention
+needs acknowledgement; otherwise it requests pause. Error recovery has the
+distinct status message `harvest: error resume requested`. The exhausted
 acknowledgement removes only the barrier and does not reopen the old run.
-Completed and escalated runs are not reopened. `m` remains an explanatory
-build-only no-op; `d` remains repository/process-wide.
+Completed and escalated runs are not reopened.
+
+A build with auto-merge off has no auto-merge token. Requested, enabled, and
+cancelling states all read `auto merge`: cyan means requested locally but not
+yet applied on GitHub, green means native auto-merge is enabled, and yellow
+means cancellation is in flight. The token disappears when cancellation lands.
 
 ### Durable build controls: CLI and dashboard
 
@@ -455,9 +471,9 @@ to the build's event log and apply the same write-time checks.
 | Abort | `ab abort <slug> [--store <ref>]` | No key in this release. | `build.abort-requested` |
 
 On the dashboard, `p` on a blocked build replaces the bottom legend with the
-optional feedback field while the blocker stays visible. Printable keys —
-including `m`, `p`, and `d` — edit the field instead of triggering global
-actions; Backspace deletes, Enter submits, and Escape cancels.
+optional feedback field while the blocker stays visible. All printable keys
+edit the field instead of triggering dashboard actions; Backspace deletes,
+Enter submits, and Escape cancels.
 
 `ab answer` answers every escalation that is open when the command runs,
 regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
@@ -484,11 +500,12 @@ guarantee: if the condition still fails, a phase may raise a new escalation and
 block again. A fresh `ab dispatch` still auto-retries only an all-policy
 escalation set and never invents guidance.
 
-Two asymmetries are intentional and explicit. Dashboard drain (`d`) remains
-process-local state inside that running `ab dispatch`, so it has no durable CLI
-command. Conversely, abort has a CLI command but gains no TUI key in this
-release. On the repository-scoped `Harvest` row, `p` requests durable harvest
-pause/resume while `m` remains an explanatory build-only no-op.
+Two asymmetries are intentional and explicit. Dashboard intake remains
+process-local state inside that running `ab dispatch`, so its launch flags and
+global-row `p` have no durable CLI command. Conversely, abort has a CLI command
+but gains no TUI key in this release. On the repository-scoped `Harvest` row,
+`p` requests durable harvest pause/resume or acknowledges exhausted recovery
+attention, while `m` remains an explanatory build-only no-op.
 
 ## Checking build status
 

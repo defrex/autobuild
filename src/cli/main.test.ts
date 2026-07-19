@@ -668,17 +668,46 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     expect(d.err.join('\n')).not.toContain('unknown argument')
   })
 
+  test('--intake and --no-intake each parse', async () => {
+    for (const flag of ['--intake', '--no-intake']) {
+      const d = deps()
+      expect(
+        await runCli(['dispatch', '--once', flag], { ...d, workspacePath: tmp }),
+      ).toBe(1)
+      expect(d.err.join('\n')).toContain('autobuild.toml: not found')
+      expect(d.err.join('\n')).not.toContain('unknown argument')
+    }
+  })
+
+  test('--intake and --no-intake together are a usage error in either order', async () => {
+    for (const flags of [
+      ['--intake', '--no-intake'],
+      ['--no-intake', '--intake'],
+    ]) {
+      const d = deps()
+      expect(
+        await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp }),
+      ).toBe(1)
+      const err = d.err.join('\n')
+      expect(err).toContain('--intake and --no-intake cannot be combined')
+      expect(err).toContain('usage: ab dispatch')
+    }
+  })
+
   test('an unknown dispatch flag still errors with the usage string', async () => {
     const d = deps()
     expect(await runCli(['dispatch', '--dashboard'], { ...d, workspacePath: tmp })).toBe(1)
     const err = d.err.join('\n')
     expect(err).toContain('unknown argument "--dashboard"')
     expect(err).toContain('[--plain]')
+    expect(err).toContain('[--intake | --no-intake]')
   })
 
-  test('the help advertises --plain', async () => {
+  test('the help advertises plain output and both launch-intake forms', async () => {
     const d = deps()
     await runCli(['help'], d)
-    expect(d.out.join('\n')).toContain('ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]')
+    expect(d.out.join('\n')).toContain(
+      'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake]',
+    )
   })
 })

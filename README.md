@@ -411,29 +411,38 @@ when the source provides one.
 ### The dispatcher
 
 ```sh
-ab dispatch --once      # one pass, drain in-flight runners, exit
-ab dispatch             # watch; default interval 10s, Ctrl-C to stop
+ab dispatch --once       # one pass, drain in-flight runners, exit
+ab dispatch              # watch; default interval 10s, Ctrl-C to stop
 ab dispatch --interval 30
-ab dispatch --plain     # force line-oriented output, even on a TTY
+ab dispatch --no-intake  # start without claiming new tickets
+ab dispatch --intake     # explicitly start with intake on (the default)
+ab dispatch --plain      # force line-oriented output, even on a TTY
 ```
 
-On a TTY the interactive dashboard is one fixed frame. Its title is
-`Auto Build` plus the repository basename, mode, capacity, active-build count,
-and intake state. The next row is always one status slot: each tick count,
-dependency diagnostic, parked-build notice, harvest outcome, action
-confirmation, or warning replaces that row instead of scrolling above the
-frame. There is no separate startup banner, and a blank row separates the body
-from the bottom legend (or active feedback field). `--plain` and non-TTY output
-remain line-oriented and unchanged.
+On a TTY the interactive dashboard is one fixed frame. Its first two lines are
+an always-present, selectable global section: `Auto Build` plus the repository
+basename, mode, capacity, active-build count, and `intake ON`/`intake OFF`, then
+one status slot. Each tick count, dependency diagnostic, parked-build notice,
+harvest outcome, action confirmation, or warning replaces that slot instead of
+scrolling above the frame. A blank line separates this section from `Harvest`
+or the first build, matching the blank lines between body rows and before the
+bottom legend (or active feedback field). `--plain` and non-TTY output remain
+line-oriented and unchanged.
 
-| Key | Action |
+The legend changes with the selected row and lists only meaningful actions:
+
+| Selection | Keys |
 |---|---|
-| Up / Down | Move through the optional `Harvest` row and slug-sorted build rows. Stable row identity preserves selection across repaint, re-sort, and harvest appearance/disappearance. |
-| `m` | Toggle durable auto-merge intent for the selected build. Pre-PR intent is remembered; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. On `Harvest`, this is an explanatory no-op. |
-| `p` | For a build, request pause, resume an authoritatively paused unblocked build, or open optional feedback for a blocked build. For `Harvest`, request repository-wide pause/resume or acknowledge a recovery-exhausted attention stop. That acknowledgement releases the barrier; it does not reopen the exhausted run. An in-flight agent step finishes before pause takes effect. |
-| `d` | Toggle drain for this dispatcher process: stop claiming new tickets while janitor, stale-runner, and in-flight work continue. Restart resets drain off. |
-| Enter / Escape | While blocked-resume feedback is open, submit / cancel. Backspace edits; all printable keys, including `m`, `p`, and `d`, are text rather than dashboard actions. |
-| Ctrl-C | Stop and restore terminal input/cursor state. |
+| Any selection | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
+| Global top section | `p` toggles this process's intake on/off. `m` is an explanatory “select a build” no-op. |
+| `Harvest` | `p` requests repository-wide pause, resumes a paused or ordinarily failed run, or acknowledges a recovery-exhausted attention stop. That acknowledgement releases the barrier; it does not reopen the exhausted run. `m` is the same build-only no-op. |
+| Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. An in-flight agent step finishes before pause takes effect. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
+| Blocked feedback field | Enter submits and Escape cancels. Backspace edits; all printable keys are text rather than dashboard actions. |
+
+`--intake` and `--no-intake` choose only the launch value and cannot be combined;
+omitting both starts on. Global `p` can still toggle either way. Intake off skips
+new ticket claims while janitor, stale-runner, harvest, and in-flight work
+continue, and a fresh invocation defaults on again.
 
 A blocked row keeps every red `!` blocker visible while its field is open.
 Submitting an empty or whitespace-only field answers every blocker captured
@@ -445,9 +454,12 @@ time and the operator user. The ordinary lease sweep performs reattachment, so
 resume is an attempt rather than a guarantee: an unresolved condition can
 escalate and become blocked again.
 
-Build rows show `auto off`, `auto requested`, `auto enabled`, or
-`auto cancelling`, and the title shows `intake ON` or `intake DRAINED`. Pipes,
-redirects, and `--plain` remain non-interactive and emit no terminal escapes.
+When auto-merge is off, a build row has no auto-merge token. Requested,
+enabled, and cancelling states all read `auto merge`: teal/cyan means requested
+locally but not yet set on GitHub, green means native auto-merge is set, and
+yellow means cancellation is in flight. The token disappears when cancellation
+lands. Pipes, redirects, and `--plain` remain non-interactive and emit no
+terminal escapes.
 
 Each tick runs in this order:
 
@@ -461,9 +473,8 @@ Each tick runs in this order:
    escalation set. Agent/stall questions remain parked for a human. Later ticks
    preserve deliberate policy parks.
 3. **lease sweep** — re-attaches runners to builds whose lease went stale.
-4. **dispatch** — claims and launches new work (skipped while the interactive
-   dispatcher is drained).
-5. **harvest** — independently of build capacity and drain, settle an
+4. **dispatch** — claims and launches new work (skipped while intake is off).
+5. **harvest** — independently of build capacity and intake, settle an
    outstanding recoverable run **before** considering a new scan. A stopped run
    is automatically reopened at most twice through durable monotonic request
    facts and the same `harvest.resumed` acknowledgement a human resume uses.
@@ -588,7 +599,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b]` | File a ticket to the configured `[tickets]` source. |
-| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. |
+| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on. |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
 | `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository gate and latest harvest run, including recovery attempts/limit, stopped boundary, attention state, exact pending work, steps, filing, and failures. Read-only. |

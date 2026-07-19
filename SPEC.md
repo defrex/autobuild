@@ -817,31 +817,37 @@ or repository log (§15.2.7): `escalation.answered`,
 *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 
 - v2.0 front end: terminal, with herdr as the multiplexer.
-- `ab dispatch` on a TTY is an interactive fixed frame. Its first row is one
-  `Auto Build` title with the repository basename, mode, capacity, active-build
-  count, and intake state. Its second row is always one process-local status
-  slot: tick counts, dependency diagnostics, parked-build notices, harvest
-  outcomes, action confirmations, and warnings replace that row instead of
-  entering scrollback. A blank row separates the body from the legend or modal
-  controls. The redundant startup banner is omitted. `--plain` (and non-TTY
-  output) remains line-oriented, prints every line as before, and reads no
-  keyboard input.
-- The bottom legend is the authoritative key map: Up/Down move through one
-  ordered list — optional harvest first, then slug-sorted builds. `p` requests
-  pause/resume when an unblocked build is selected, opens optional resume
-  feedback when it is blocked, and requests repository harvest pause/resume
-  when `Harvest` is selected; `m` toggles durable build auto-merge intent and is
-  an explanatory no-op on `Harvest`; `d` toggles in-memory dispatcher drain;
-  Ctrl-C exits. While the blocked-resume
-  field is active, printable keys edit it (including `m`/`p`/`d`), Backspace
-  edits, Enter submits, and Escape cancels; navigation and actions are
-  suppressed. The field stays bound to its captured build and escalation ids,
-  polling remains live, and that build's blocker rows remain visible.
-- Selection survives repaint/re-sort and harvest appearance/disappearance by
-  tracking a discriminated stable identity (`harvest` or build slug), never a
-  row index. Drain belongs only to one running dispatcher: while on it skips
-  new ticket claims but keeps janitor, stale-runner, harvest, and in-flight work
-  running; restart defaults it off.
+- `ab dispatch` on a TTY is an interactive fixed frame. Its first two rows form
+  an always-present process-global top section: one selectable `Auto Build`
+  title row with the repository basename, mode, capacity, active-build count,
+  and `intake ON`/`intake OFF`, followed by one process-local status slot. Tick
+  counts, dependency diagnostics, parked-build notices, harvest outcomes,
+  action confirmations, and warnings replace that slot instead of entering
+  scrollback. A blank row separates the top section from the first body row,
+  and another separates the body from the legend or modal controls. The
+  redundant startup banner is omitted. `--plain` (and non-TTY output) remains
+  line-oriented, prints every line as before, and reads no keyboard input.
+- Up/Down move through one ordered list: the global top section first, optional
+  `Harvest` second, then slug-sorted builds. Selection survives repaint,
+  re-sort, and body-row appearance/disappearance by tracking a discriminated
+  stable identity (`global`, `harvest`, or build slug), never a row index. The
+  selection marker appears at the start of the title when global is selected;
+  Up there is a no-op.
+- The bottom legend is the authoritative, contextual key map. Navigation and
+  Ctrl-C appear for every selection. On global it offers only `p` for intake;
+  on `Harvest` it offers only `p` for pause/resume; on a build it offers `p`
+  for pause/resume (or blocked feedback) and `m` for durable auto-merge intent.
+  `m` on global or `Harvest` is an explanatory build-only no-op. While the
+  blocked-resume field is active, printable keys edit it, Backspace edits,
+  Enter submits, and Escape cancels; navigation and actions are suppressed.
+  The field stays bound to its captured build and escalation ids, polling
+  remains live, and that build's blocker rows remain visible.
+- Intake belongs only to one running dispatcher. `--intake` starts it on,
+  `--no-intake` starts it off, and omission defaults it on; the two forms are
+  mutually exclusive. `p` on global toggles it freely afterward. When off, new
+  ticket claims are skipped while janitor, stale-runner, harvest, and in-flight
+  work continue. The setting is not persisted and a fresh invocation defaults
+  it on again.
 - Repository harvest is projected with the same `PipelineStep` representation
   and row grammar as builds. Its identity is `Harvest` (never its internal run
   id); its status is right-aligned and uses the shared status colors. An
@@ -856,12 +862,18 @@ or repository log (§15.2.7): `escalation.answered`,
   and reports the pending count. `p` appends a resume request when the gate is
   paused, for a still-recoverable manual reopen, or to acknowledge an exhausted
   attention barrier; that last acknowledgement does not reopen the old run.
-  Escalated runs are not error-resumable, and an already-acknowledged exhausted
-  run retains ordinary repository-gate pause semantics. `m` remains the
-  build-only explanatory no-op.
-- Auto-merge intent uses GitHub-native auto-merge whenever a real merge gate
-  exists; on a proved-ungated branch it consents to the guarded non-admin squash
-  fallback defined in §15.7.
+  Error recovery reports `harvest: error resume requested`, distinct from
+  ordinary `harvest: resume requested`. Escalated runs are not error-resumable,
+  and an already-acknowledged exhausted run retains ordinary repository-gate
+  pause semantics. `m` remains the build-only explanatory no-op.
+- A build with auto-merge intent off has no auto-merge token. Requested,
+  natively enabled, and cancelling intent all render the literal `auto merge`;
+  teal/cyan means requested locally but not yet applied, green means native
+  auto-merge is enabled, and yellow means cancellation is in flight. The token
+  disappears when the correlated cancelling fact lands. Auto-merge intent uses
+  GitHub-native auto-merge whenever a real merge gate exists; on a
+  proved-ungated branch it consents to the guarded non-admin squash fallback
+  defined in §15.7.
 - Later: web UI and others — same adapter pattern against the same store.
 - The operator's job across many concurrent builds: see status at a glance,
   act on a selected build, find blocked builds, answer escalations, and inspect

@@ -136,16 +136,58 @@ describe('renderDashboard: the title and status rows', () => {
     expect(header).toContain('once')
   })
 
-  test('drain state is explicit and resets to intake ON in a fresh model', () => {
-    expect(rd({ ...model([]), drained: true }, WIDE)[0]).toContain('intake DRAINED')
+  test('intake state is explicit as ON/OFF and defaults to ON in a fresh model', () => {
+    expect(rd({ ...model([]), drained: true }, WIDE)[0]).toContain('intake OFF')
     expect(rd(model([]), WIDE)[0]).toContain('intake ON')
   })
 
-  test('the complete key legend is the final line', () => {
-    const lines = rd(model([build()]), WIDE)
-    expect(lines.at(-1)).toBe(
-      'Keys: Up/Down select  m auto-merge  p pause/resume  d drain  Ctrl-C quit',
+  test('the header is the selected global row even with no harvest or builds', () => {
+    const lines = rd(
+      { ...model([]), selection: { kind: 'global' } },
+      WIDE,
+    ).map(stripAnsi)
+    expect(lines[0]!.startsWith('> Auto Build')).toBe(true)
+    expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
+    expect(lines.join('\n')).toContain('no active builds')
+  })
+
+  test('the final legend exposes only controls meaningful for the selection', () => {
+    const globalLines = rd(
+      { ...model([build()]), selection: { kind: 'global' } },
+      WIDE,
     )
+    expect(globalLines.at(-1)).toBe(
+      'Keys: Up/Down select  p intake on/off  Ctrl-C quit',
+    )
+    expect(globalLines.at(-1)).not.toContain('m auto-merge')
+
+    const harvestLines = rd(
+      {
+        ...model([build()]),
+        harvest: harvest(),
+        selection: { kind: 'harvest' },
+      },
+      WIDE,
+    )
+    expect(harvestLines.at(-1)).toBe(
+      'Keys: Up/Down select  p pause/resume  Ctrl-C quit',
+    )
+    expect(harvestLines.at(-1)).not.toContain('m auto-merge')
+
+    const buildLines = rd(
+      {
+        ...model([build()]),
+        selection: { kind: 'build', slug: 'auth-rate-limit' },
+      },
+      WIDE,
+    )
+    expect(buildLines.at(-1)).toBe(
+      'Keys: Up/Down select  m auto-merge  p pause/resume  Ctrl-C quit',
+    )
+    for (const controls of [globalLines.at(-1), harvestLines.at(-1), buildLines.at(-1)]) {
+      expect(controls).toContain('Up/Down select')
+      expect(controls).toContain('Ctrl-C quit')
+    }
   })
 })
 
@@ -255,19 +297,24 @@ describe('renderDashboard: never color-only', () => {
     expect(plain).toContain('BLOCKED')
   })
 
-  test('every auto-merge state has a literal row label', () => {
-    const out = rd(
+  test('auto-merge intent is conveyed by one common token that is absent when off', () => {
+    const lines = rd(
       model([
-        build({ slug: 'off', autoMerge: 'off' }),
-        build({ slug: 'requested', autoMerge: 'requested' }),
-        build({ slug: 'enabled', autoMerge: 'enabled' }),
-        build({ slug: 'cancelling', autoMerge: 'cancelling' }),
+        build({ slug: 'off-row', autoMerge: 'off' }),
+        build({ slug: 'requested-row', autoMerge: 'requested' }),
+        build({ slug: 'enabled-row', autoMerge: 'enabled' }),
+        build({ slug: 'cancelling-row', autoMerge: 'cancelling' }),
       ]),
       WIDE,
-    ).join('\n')
-    for (const state of ['off', 'requested', 'enabled', 'cancelling']) {
-      expect(out).toContain(`auto ${state}`)
+    )
+    const row = (slug: string): string => lines.find((line) => line.includes(slug))!
+    expect(row('off-row')).not.toContain('auto merge')
+    for (const slug of ['requested-row', 'enabled-row', 'cancelling-row']) {
+      expect(row(slug)).toContain('auto merge')
     }
+    expect(lines.join('\n')).not.toContain('auto requested')
+    expect(lines.join('\n')).not.toContain('auto enabled')
+    expect(lines.join('\n')).not.toContain('auto cancelling')
   })
 })
 
@@ -302,6 +349,19 @@ describe('renderDashboard: emphasis', () => {
     const out = colored(build({ pr: { url: 'https://x/7', state: 'open' } }))
     expect(out).toContain('\x1b]8;;https://x/7\x07PR open\x1b]8;;\x07')
   })
+
+  test('auto merge uses cyan while requested, green when enabled, and yellow while cancelling', () => {
+    expect(colored(build({ autoMerge: 'requested' }))).toContain(
+      '\x1b[36mauto merge\x1b[0m',
+    )
+    expect(colored(build({ autoMerge: 'enabled' }))).toContain(
+      '\x1b[32mauto merge\x1b[0m',
+    )
+    expect(colored(build({ autoMerge: 'cancelling' }))).toContain(
+      '\x1b[33mauto merge\x1b[0m',
+    )
+    expect(colored(build({ autoMerge: 'off' }))).not.toContain('auto merge')
+  })
 })
 
 describe('renderDashboard: layout', () => {
@@ -322,12 +382,37 @@ describe('renderDashboard: layout', () => {
     expect(short!.indexOf('ENG-42')).toBe(long!.indexOf('ENG-42'))
   })
 
-  test('rows are separated, and a blank line separates the body from the legend', () => {
-    const lines = rd(model([build({ slug: 'a' }), build({ slug: 'b' })]), WIDE)
+  test('blank lines separate the top section, consecutive rows, and the legend', () => {
+    const lines = rd(
+      {
+        ...model([build({ slug: 'a' }), build({ slug: 'b' })]),
+        selection: { kind: 'global' },
+      },
+      WIDE,
+    )
     const first = lines.findIndex((line) => line.includes(' a') && line.includes('RUNNING'))
     const second = lines.findIndex((line) => line.includes(' b') && line.includes('RUNNING'))
+    expect(lines[2]).toBe('') // header + status, then top/body separator
+    expect(first).toBeGreaterThan(2)
     expect(lines.slice(first, second)).toContain('')
     expect(lines.at(-2)).toBe('')
+  })
+
+  test('PR and status columns remain aligned when the auto-merge token is absent', () => {
+    const lines = rd(
+      model([
+        build({ slug: 'off-row', autoMerge: 'off' }),
+        build({ slug: 'on-row', autoMerge: 'requested' }),
+      ]),
+      { color: false, width: 100 },
+    )
+    const off = lines.find((line) => line.includes('off-row'))!
+    const on = lines.find((line) => line.includes('on-row'))!
+    expect(off.indexOf('https://github.com/defrex/app/pull/7')).toBe(
+      on.indexOf('https://github.com/defrex/app/pull/7'),
+    )
+    expect(off.indexOf('RUNNING')).toBe(on.indexOf('RUNNING'))
+    expect(off.length).toBe(on.length)
   })
 
   test('selection is an ASCII marker on exactly the selected slug row', () => {
