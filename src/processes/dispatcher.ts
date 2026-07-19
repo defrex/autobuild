@@ -27,7 +27,7 @@
  * itself; the dispatcher only ever reads lease expiry.
  */
 import type { Config } from '../config/schema'
-import { DISPATCHER, agentActor } from '../events/envelope'
+import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { IdSource } from '../ids'
 import {
@@ -339,6 +339,15 @@ export interface TickOpts {
    * sweep, and in-flight runners continue. Absent defaults to true.
    */
   acceptNewWork?: boolean
+  /**
+   * Process-local claim-time default. True records the existing durable
+   * auto-merge request only on builds created by this tick's ticket claims.
+   * Absent/false preserves the existing event sequence.
+   */
+  defaultAutoMerge?: boolean
+  /** Human attribution for a claim-time auto-merge request. Required when
+   * `defaultAutoMerge` is true; the CLI resolves USER/USERNAME/fallback. */
+  autoMergeUser?: string
 }
 
 /** Process-local launch coordination result. Durable lease acquisition remains
@@ -435,6 +444,15 @@ export class Dispatcher {
    * once per command, while ordinary watch ticks must preserve policy parks.
    */
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    let autoMergeUser: string | undefined
+    if (opts.defaultAutoMerge === true) {
+      autoMergeUser = opts.autoMergeUser?.trim()
+      if (autoMergeUser === undefined || autoMergeUser === '') {
+        throw new Error(
+          'defaultAutoMerge requires nonempty human attribution in autoMergeUser',
+        )
+      }
+    }
     const report = emptyTickReport()
     /** Builds already launched this tick — a janitor/startup re-attach must
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
@@ -442,7 +460,9 @@ export class Dispatcher {
     await this.janitor(report, launched)
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
     await this.leaseSweep(report, launched)
-    if (opts.acceptNewWork !== false) await this.dispatch(report, launched)
+    if (opts.acceptNewWork !== false) {
+      await this.dispatch(report, launched, autoMergeUser)
+    }
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
     // watch ticks. Durable pause and infrastructure-error stops suppress
@@ -813,7 +833,11 @@ export class Dispatcher {
 
   // ── d. Dispatch (SPEC §12, §6.3) ───────────────────────────────────────────
 
-  private async dispatch(report: TickReport, launched: Set<string>): Promise<void> {
+  private async dispatch(
+    report: TickReport,
+    launched: Set<string>,
+    autoMergeUser: string | undefined,
+  ): Promise<void> {
     const { store, tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
     // pending work are live, only waiting on a human. Capacity is per repo
@@ -914,6 +938,13 @@ export class Dispatcher {
         type: 'build.created',
         payload: { ticket: ticket.ref, repo: this.deps.repo, baseBranch },
       } satisfies EventWrite<'build.created'>)
+      if (autoMergeUser !== undefined) {
+        await store.append(slug, {
+          actor: humanActor(autoMergeUser),
+          type: 'build.auto-merge-requested',
+          payload: {},
+        } satisfies EventWrite<'build.auto-merge-requested'>)
+      }
 
       const handle = await this.deps.workspaces.provision({
         repo: this.deps.repo,

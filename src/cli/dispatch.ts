@@ -172,6 +172,9 @@ export interface DispatchOpts {
   intervalMs?: number
   /** Whether the process starts by accepting new tickets; default true. */
   intake?: boolean
+  /** Whether freshly claimed builds start with durable auto-merge intent;
+   * process-local and false by default. */
+  defaultAutoMerge?: boolean
   /** Explicit `--store` override; otherwise AB_STORE, then repo-local state. */
   storeRef?: string
   /** Watch-loop stop signal — the binary aborts it on SIGINT (§15.6-C: an
@@ -345,6 +348,7 @@ class DispatchLoop {
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private statusLine = ''
   private drained: boolean
+  private defaultAutoMerge: boolean
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -366,6 +370,7 @@ class DispatchLoop {
     this.region =
       this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
     this.drained = opts.intake === false
+    this.defaultAutoMerge = opts.defaultAutoMerge === true
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -420,6 +425,8 @@ class DispatchLoop {
       this.dispatcher.tick({
         resumeCurrent,
         acceptNewWork: !this.drained,
+        defaultAutoMerge: this.defaultAutoMerge,
+        autoMergeUser: buildControlUser(this.opts.env),
       }),
     )
   }
@@ -436,6 +443,7 @@ class DispatchLoop {
     this.model = {
       ...base,
       drained: this.drained,
+      defaultAutoMerge: this.defaultAutoMerge,
       statusLine: this.statusLine,
       ...(this.selection !== undefined
         ? { selection: this.selection }
@@ -613,6 +621,13 @@ class DispatchLoop {
   }
 
   private async toggleAutoMerge(): Promise<void> {
+    if (this.selection?.kind === 'global') {
+      this.defaultAutoMerge = !this.defaultAutoMerge
+      this.say(
+        `dispatcher auto-merge default ${this.defaultAutoMerge ? 'ON' : 'OFF'}`,
+      )
+      return
+    }
     const slug = this.selectedBuildSlug('auto-merge')
     if (slug === undefined) return
 
@@ -1062,6 +1077,7 @@ class DispatchLoop {
         mode: this.opts.once === true ? 'once' : 'watch',
         capacity: this.config.dispatcher.capacity,
         drained: this.drained,
+        defaultAutoMerge: this.defaultAutoMerge,
       },
       harvestEvents,
     )
