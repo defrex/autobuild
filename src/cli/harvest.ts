@@ -36,10 +36,11 @@ import {
   validateProposalCoverage,
 } from '../processes/harvest'
 import type { BuildStore } from '../store/types'
-import { RemoteBuildStore } from '../store/remote/client'
 import type { HarvestCliEnv } from './env'
-import { resolveRepoState } from './repo-state'
-import { resolveStore } from './store-ref'
+import {
+  withSessionlessStore,
+  type StoreOpener,
+} from './store-opening'
 
 export interface HarvestCliDeps {
   store: BuildStore
@@ -729,36 +730,24 @@ export interface HarvestStatusOpts {
   json?: boolean
   events?: number
   /** Injectable store seam for command tests. */
-  openStore?: (ref: string, token?: string) => BuildStore
+  openStore?: StoreOpener
 }
 
 export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
-  const state = await resolveRepoState({
-    targetRepo: opts.repo,
-    exec: opts.exec,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
-  })
-  const token = opts.env['AB_TOKEN']
-  const open =
-    opts.openStore ??
-    ((ref: string, scoped?: string) =>
-      resolveStore(ref, {
-        ...(scoped !== undefined && scoped !== '' ? { token: scoped } : {}),
-        remoteFactory: (url, remoteToken) =>
-          new RemoteBuildStore({ url, token: remoteToken }),
-      }))
-  const store = open(
-    state.storeRef,
-    token !== undefined && token !== '' ? token : undefined,
+  await withSessionlessStore(
+    {
+      targetRepo: opts.repo,
+      env: opts.env,
+      exec: opts.exec,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
+    },
+    async ({ store, repo }) => {
+      const record = await store.getRepo(repo)
+      const events = record === null ? [] : await store.getRepoEvents(repo)
+      const view = projectHarvestStatus(repo, events, opts.events)
+      if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
+      else for (const line of renderHarvestStatus(view)) opts.stdout(line)
+    },
   )
-  try {
-    const record = await store.getRepo(state.repo)
-    const events = record === null ? [] : await store.getRepoEvents(state.repo)
-    const view = projectHarvestStatus(state.repo, events, opts.events)
-    if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
-    else for (const line of renderHarvestStatus(view)) opts.stdout(line)
-  } finally {
-    await store.close()
-  }
 }

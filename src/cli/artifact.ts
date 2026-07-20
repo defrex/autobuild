@@ -7,11 +7,12 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { RemoteBuildStore } from '../store/remote/client'
 import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import type { CliEnv } from './env'
-import { resolveRepoState } from './repo-state'
-import { resolveStore } from './store-ref'
+import {
+  withSessionlessStore,
+  type StoreOpener,
+} from './store-opening'
 
 export interface ArtifactDeps {
   store: BuildStore
@@ -93,7 +94,7 @@ export interface ArtifactDownloadOpts {
   /** Explicit --store; precedence remains flag > AB_STORE > local default. */
   storeRef?: string
   /** Adapter seam for local/remote selection tests. */
-  openStore?: (ref: string, token?: string) => BuildStore
+  openStore?: StoreOpener
 }
 
 export interface ArtifactDownloadResult {
@@ -115,39 +116,16 @@ export async function artifactDownload(
       "'ab artifact download' requires a non-empty <kind>[@rev]",
     )
   }
-  const state = await resolveRepoState({
-    targetRepo: opts.targetRepo,
-    exec: opts.exec,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined
-      ? { envStore: opts.env['AB_STORE'] }
-      : {}),
-  })
-  const token = opts.env['AB_TOKEN']?.trim()
-  const open =
-    opts.openStore ??
-    ((ref: string, scopedToken?: string) =>
-      resolveStore(ref, {
-        remoteFactory: (url, remoteToken) =>
-          new RemoteBuildStore({ url, token: remoteToken }),
-        ...(scopedToken !== undefined && scopedToken !== ''
-          ? { token: scopedToken }
-          : {}),
-      }))
-  const store = open(
-    state.storeRef,
-    token !== undefined && token !== '' ? token : undefined,
-  )
-  try {
+  return withSessionlessStore(opts, async ({ store, repo }) => {
     const record = await store.getBuild(opts.build)
     if (record === null) {
       throw new Error(
         `no build "${opts.build}" in this store — run 'ab builds --all' or pass --store <ref>`,
       )
     }
-    if (record.repo !== state.repo) {
+    if (record.repo !== repo) {
       throw new Error(
-        `build "${opts.build}" belongs to repository "${record.repo}", not "${state.repo}"`,
+        `build "${opts.build}" belongs to repository "${record.repo}", not "${repo}"`,
       )
     }
     const artifact = await store.getArtifact(opts.build, kind, rev)
@@ -164,7 +142,5 @@ export async function artifactDownload(
     await mkdir(dirname(outputPath), { recursive: true })
     await writeFile(outputPath, artifact.content)
     return { artifact, outputPath }
-  } finally {
-    await store.close()
-  }
+  })
 }

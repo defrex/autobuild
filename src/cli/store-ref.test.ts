@@ -33,7 +33,7 @@ describe('resolveStore', () => {
 
   test('an https URL without a wired factory fails with the not-wired error', () => {
     expect(() => resolveStore('https://store.example.com')).toThrow(
-      /remote store support not wired.*https:\/\/store\.example\.com.*bin\/ab\.ts/s,
+      /remote store support not wired.*https:\/\/store\.example\.com.*store-opening\.ts/s,
     )
   })
 

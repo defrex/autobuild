@@ -45,13 +45,12 @@ import type {
   VerifyOutcome,
 } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { RemoteBuildStore } from '../store/remote/client'
-import type { BuildRecord, BuildStore } from '../store/types'
+import type { BuildRecord } from '../store/types'
+import { resolveMainRepo } from './repo-state'
 import {
-  resolveMainRepo,
-  resolveRepoStatePaths,
-} from './repo-state'
-import { resolveStore } from './store-ref'
+  withSessionlessStore,
+  type StoreOpener,
+} from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
 export const currentRepo = resolveMainRepo
@@ -428,7 +427,7 @@ export interface StatusOpts {
   storeRef?: string
   /** Injectable store seam — mirrors dispatch.ts's `wire`, keeps tests off the
    * real filesystem. */
-  openStore?: (ref: string, token?: string) => BuildStore
+  openStore?: StoreOpener
   /** Injectable clock; defaults to the wall clock. */
   now?: () => Date
 }
@@ -441,28 +440,6 @@ export function statusFilter(all?: boolean, queued?: boolean): BuildStatus[] {
   return queued === true ? [...ACTIVE_STATUSES, 'queued'] : ACTIVE_STATUSES
 }
 
-/**
- * Open the shared selection: `--store` > non-blank `AB_STORE` > the main
- * repository's `.autobuild/`. Local references are already absolute here;
- * HTTP(S) references remain unchanged for the remote adapter.
- */
-function openStoreFor(opts: StatusOpts, repo: string): BuildStore {
-  const ref = resolveRepoStatePaths({
-    repo,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
-  }).storeRef
-  const token = opts.env['AB_TOKEN']
-  const open =
-    opts.openStore ??
-    ((r: string, tok?: string) =>
-      resolveStore(r, {
-        remoteFactory: (url, t) => new RemoteBuildStore({ url, token: t }),
-        ...(tok !== undefined && tok !== '' ? { token: tok } : {}),
-      }))
-  return open(ref, token !== undefined && token !== '' ? token : undefined)
-}
-
 export interface AbBuildsOpts extends StatusOpts {
   queued?: boolean
   all?: boolean
@@ -471,9 +448,7 @@ export interface AbBuildsOpts extends StatusOpts {
 /** `ab builds` — this repo's builds, active by default. Read-only. */
 export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  const repo = await resolveMainRepo(opts.targetRepo, opts.exec)
-  const store = openStoreFor(opts, repo)
-  try {
+  await withSessionlessStore(opts, async ({ store, repo }) => {
     const wanted = new Set(statusFilter(opts.all, opts.queued))
     // Cross-repo aggregation is out of scope (§12: one dispatcher per repo,
     // one repo's builds per answer).
@@ -499,10 +474,7 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
     for (const line of renderSummaries(summaries, now, `no ${scope} for ${repo}${hint}`)) {
       opts.stdout(line)
     }
-  } finally {
-    // Not optional: a leaked SQLite handle can hang the caller.
-    await store.close()
-  }
+  })
 }
 
 export interface AbBuildStatusOpts extends StatusOpts {
@@ -513,14 +485,17 @@ export interface AbBuildStatusOpts extends StatusOpts {
 /** `ab build status <slug>` — one build in detail. Read-only. */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  const repo = await resolveMainRepo(opts.targetRepo, opts.exec)
-  const store = openStoreFor(opts, repo)
-  try {
+  await withSessionlessStore(opts, async ({ store, repo }) => {
     const record = await store.getBuild(opts.slug)
     if (record === null) {
       throw new Error(
         `no build "${opts.slug}" in this store — run 'ab builds --all' to list ` +
           'this repo\'s builds, or pass --store <ref> if it lives in another store',
+      )
+    }
+    if (record.repo !== repo) {
+      throw new Error(
+        `build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`,
       )
     }
     const d = detail(record, await store.getEvents(opts.slug), now, opts.events)
@@ -529,7 +504,5 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
       return
     }
     for (const line of renderDetail(d, now)) opts.stdout(line)
-  } finally {
-    await store.close()
-  }
+  })
 }
