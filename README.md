@@ -45,51 +45,19 @@ queryable paper trail.
 ## How a build flows
 
 ```mermaid
-flowchart TD
-    T["📋 groomed ticket<br/><i>you move it to ready</i>"] --> D{{"dispatcher gates<br/>capacity · ready · claim · spec"}}
-    D -->|"fails the spec gate"| BOUNCE["↩ back to Triage<br/><i>commented with what was missing</i>"]
-    D -->|claimed| SPEC["<b>spec</b><br/>the contract + build slug"]
-
-    subgraph BUILD [" the build "]
-        direction LR
-        SPEC --> PLAN["<b>plan</b>"]
-        PLAN --> PR1{"<b>plan-review</b>"}
-        PR1 -->|revise| PLAN
-        PR1 -->|approve| IMPL["<b>implement</b>"]
-        IMPL --> CR{"<b>code-review</b>"}
-        CR -->|revise| IMPL
-        CR -->|approve| VER{"<b>verify:*</b><br/><i>your steps, in order</i>"}
-        VER -->|"fail — re-runs in full"| IMPL
-        VER -->|pass| FIN["<b>finalize</b><br/>PR description, then the<br/>kernel opens the PR"]
-    end
-
-    subgraph EPILOGUE [" epilogue — the dispatcher watches the PR "]
-        direction LR
-        EPI{{"PR state"}} -->|conflicted| REC["<b>reconcile</b>"]
-        REC --> VER2{"<b>verify:*</b>"}
-        VER2 --> EPI
-    end
-
-    FIN --> EPI
-    EPI -->|landed| MERGED(["✅ merged"])
-    EPI -->|closed| CLOSED(["closed"])
-
-    PR1 -.-> ESC
-    CR -.-> ESC
-    VER -.->|"policy limit or<br/>a finding that won't die"| ESC["⛔ escalation<br/><i>parked for you</i>"]
-    REC -.-> ESC
-    ESC -.->|"you answer in the dashboard"| RESUME(["the parked phase runs again"])
-
-    classDef human fill:#fff4d6,stroke:#b8860b,color:#3d2c00
-    classDef gate fill:#e8eefc,stroke:#3b5bdb,color:#12203f
-    classDef done fill:#e3f7e8,stroke:#2f9e44,color:#0b2e16
-    classDef stop fill:#fdecec,stroke:#c92a2a,color:#3d0d0d
-    class T,ESC human
-    class D,PR1,CR,VER,VER2,EPI gate
-    class MERGED done
-    class BOUNCE,CLOSED stop
-    style BUILD fill:transparent,stroke:#adb5bd,stroke-dasharray:4 4,color:#6c757d
-    style EPILOGUE fill:transparent,stroke:#adb5bd,stroke-dasharray:4 4,color:#6c757d
+flowchart LR
+    SPEC[spec] --> PLAN[plan]
+    PLAN --> PLANREV{plan-review}
+    PLANREV -->|revise| PLAN
+    PLANREV -->|approve| IMPL[implement]
+    IMPL --> CODEREV{code-review}
+    CODEREV -->|revise| IMPL
+    CODEREV -->|approve| VERIFY{"verify:*"}
+    VERIFY -->|fail| IMPL
+    VERIFY -->|pass| PR[finalize<br/>PR opens]
+    PR --> RECON{conflicted?}
+    RECON -->|yes| FIX[reconcile] --> RECON
+    RECON -->|no| MERGED([merged])
 ```
 
 In text, the same thing:
