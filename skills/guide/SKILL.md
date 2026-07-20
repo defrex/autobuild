@@ -327,8 +327,9 @@ claim is a rename — frontmatter carries no `state`/`claimedBy`, and a ticket
 body survives byte-exactly because a move never rewrites the file. The same id
 in two state dirs is a loud error naming both paths. When `dir` is defaulted,
 the backlog writes its own `.gitignore` of `*`, so git never sees it; an
-explicit `dir` is the user's and is left alone. Agents drive this tracker
-through `ab-tickets` rather than running `mv` by hand.
+explicit `dir` is the user's and is left alone. Agents and operators drive it
+through the source-agnostic `ab ticket` commands rather than running `mv` by
+hand.
 
 **Secrets never live in this file.** `LINEAR_API_KEY` is an environment
 variable (a local `.env` works). If a user asks you to put an API key in
@@ -434,6 +435,33 @@ remains repo-relative. An HTTP(S) URL still selects the remote store unchanged,
 while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
+
+## Source-agnostic ticket operations
+
+The `ab ticket` namespace runs outside build sessions and constructs whichever
+TicketSource the repository's `[tickets]` table selects. These forms therefore
+work unchanged with Linear and the file tracker:
+
+- `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]`
+  files a ticket. Blocker ids belong to the same source and are checked before
+  creation.
+- `ab ticket list [--state <state>] [--labels a,b] [--json]` lists tickets. With
+  no filters it uses exactly dispatch's configured ready state and source-aware
+  default labels. If either filter is present, only explicitly supplied
+  criteria apply; every requested label must match.
+- `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
+  labeled metadata and the body verbatim, so it can read a stored spec back.
+- `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
+  post-transition value.
+
+State names and ids are source-local. Quote multiword Linear states, for example
+`"In Progress"`; file states are case-insensitive on input and canonical on
+output. The adapters validate transitions, so an invalid state fails with the
+source's known states. A missing id fails nonzero with an error naming both the
+id and configured source.
+
+Human-readable output is the default. `--json` emits one bare JSON value and no
+prose: a `Ticket[]` for `list`, and the complete `Ticket` for `show` or `move`.
 
 ## Dispatch dashboard
 

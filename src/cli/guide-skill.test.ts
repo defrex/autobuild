@@ -164,6 +164,35 @@ describe('ab-guide — durable build-control coverage', () => {
   })
 })
 
+describe('ab-guide — source-agnostic ticket operations', () => {
+  test('documents every command form and machine-readable option', () => {
+    for (const form of [
+      '`ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]`',
+      '`ab ticket list [--state <state>] [--labels a,b] [--json]`',
+      '`ab ticket show <id> [--json]`',
+      '`ab ticket move <id> <state> [--json]`',
+    ]) {
+      expect(guide).toContain(form)
+    }
+    expect(guide).toContain('a `Ticket[]` for `list`')
+    expect(guide).toContain('complete `Ticket` for `show` or `move`')
+  })
+
+  test('explains defaults, filters, body output, and source-owned validation', () => {
+    for (const behavior of [
+      "dispatch's configured ready state and source-aware",
+      'only explicitly supplied',
+      'every requested label must match',
+      'body verbatim',
+      'State names and ids are source-local',
+      "invalid state fails with the\nsource's known states",
+      'error naming both the\nid and configured source',
+    ]) {
+      expect(guide).toContain(behavior)
+    }
+  })
+})
+
 describe('ab-guide — model-invocable (AC3)', () => {
   test('installs as ab-guide with no disable-model-invocation key', async () => {
     const skills = await readDistSkills(DIST_ROOT)

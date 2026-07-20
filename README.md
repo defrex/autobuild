@@ -304,9 +304,11 @@ it sits in**:
   triage/   ready/   doing/   done/
 ```
 
-`ls ready/` answers "what's dispatchable", and `mv triage/x.md ready/`
-dispatches it. The defaulted directory writes a self-excluding `.gitignore`, so
-it stays out of git on its own.
+`ab ticket list` answers "what's dispatchable" using the configured ready
+criteria, and `ab ticket move <id> Ready` moves a groomed ticket into the ready
+state. For the file source that move is a rename from `triage/` to `ready/`;
+the CLI avoids coupling operators to that layout. The defaulted directory
+writes a self-excluding `.gitignore`, so it stays out of git on its own.
 
 Tickets are `<id>.md` files with `+++`-fenced TOML frontmatter — `id`,
 `title`, optional `labels`/`blockedBy`, and an internal harvest idempotency key
@@ -412,15 +414,31 @@ system). Every other `ab-*` skill is a phase skill, installed with
 `disable-model-invocation: true` and invoked by the runner or by you — a model
 must never start a pipeline phase by pattern-matching a description.
 
-To file a groomed ticket by hand:
+To file and work a groomed ticket by hand:
 
 ```sh
 ab ticket create "Throttle repeated failed logins" --body spec.md --labels autobuild
 # → ticket created: file:file-1 (Triage)
+
+ab ticket list
+ab ticket list --state Triage --labels security,api
+ab ticket show file-1
+ab ticket move file-1 Ready
 ```
 
-The output is `ticket created: <source>:<id> (<state>)`, plus the ticket URL
-when the source provides one.
+Create prints `ticket created: <source>:<id> (<state>)`, plus the ticket URL
+when the source provides one. `list` with no filters uses exactly the configured
+ready state and source-aware label defaults that dispatch uses. If `--state`
+and/or `--labels` is supplied, only those explicit filters apply; every listed
+label must match. State names belong to the configured source, so quote names
+with spaces (for example `"In Progress"`). A move to an invalid state is
+rejected with the source's known states.
+
+`list` prints compact ticket summaries, while `show` includes the complete body
+so the spec can be read back. Add `--json` to `list`, `show`, or `move` for a
+bare `Ticket[]` or complete `Ticket` value with no surrounding prose. Moves
+render the post-transition ticket, including a canonicalized file state such as
+`Ready`. Unknown ids fail nonzero and name both the id and configured source.
 
 ### The dispatcher
 
@@ -641,7 +659,10 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 |---|---|
 | `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
-| `ab ticket create <title> --body <file> [--labels a,b]` | File a ticket to the configured `[tickets]` source. |
+| `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]` | File a ticket to the configured `[tickets]` source. |
+| `ab ticket list [--state <state>] [--labels a,b] [--json]` | List tickets; no filters uses dispatch's ready criteria. Explicit labels all must match. |
+| `ab ticket show <id> [--json]` | Show one ticket, including its complete body/spec. |
+| `ab ticket move <id> <state> [--json]` | Move a ticket to a source-local state; invalid states list the source's known states. |
 | `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake] [--auto-merge \| --no-auto-merge]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on; the claim-time auto-merge default starts off. |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
