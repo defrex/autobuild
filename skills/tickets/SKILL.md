@@ -17,7 +17,7 @@ that directory instead), holding exactly four state directories:
 ```
 .autobuild/tickets/
   triage/   # filed, not groomed — the inbox
-  ready/    # groomed and dispatchable
+  ready/    # groomed; file lifecycle-state gate satisfied
   doing/    # claimed; a build is running
   done/     # merged
 ```
@@ -62,7 +62,7 @@ retry, and adding validates the blocker exists and is not the ticket itself.
 ## Report the backlog
 
 ```
-ls .autobuild/tickets/ready     # what's dispatchable
+ls .autobuild/tickets/ready     # groomed candidates in the ready lifecycle state
 ls .autobuild/tickets/doing     # what's building right now
 ```
 
@@ -83,9 +83,22 @@ every ticket operation — including the dispatcher's scan — then fails loudly
 naming both paths. That is on purpose: the alternative is dispatching one
 ticket twice.
 
-Moving a ticket into `ready/` is the *entire* act of dispatching it. The
-dispatcher picks it up on its next tick, moves it to `doing/` when it claims
-it, `done/` on merge, and back to `triage/` if the build aborts or the spec
+Moving a file ticket into `ready/` satisfies the local file tracker's
+lifecycle-state gate. It makes the ticket a dispatch candidate; it does not
+guarantee an immediate claim. An unresolved `blockedBy` dependency prevents
+dispatch even when the ticket's state, labels, and spec otherwise qualify. The
+dependent stays in `ready/`, unclaimed and without a build.
+
+The dependency gate clears once every declared blocker has either reached the
+source's completed state (`done/` for the file tracker) or had its relationship
+deliberately removed with `ab ticket unblock file-3 file-1`. The dispatcher
+re-evaluates the dependent on a later tick; it can then become eligible without
+another move to `ready/`, subject to the remaining dispatch gates and available
+capacity. Blocker edits must use the source-agnostic `ab ticket block` and
+`ab ticket unblock` commands shown above.
+
+When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
+then to `done/` on merge or back to `triage/` if the build aborts or the spec
 bounces.
 
 **Don't hand-move anything out of `doing/`** — a build owns it. If you need to
@@ -105,9 +118,13 @@ stop a build, that's `ab` (or a human), not `mv`.
 
 ## What is not here
 
-No label gate: `ready/` alone decides dispatchability under default config.
-Labels exist as an optional frontmatter field, nothing more.
+No default label gate for the file tracker: labels do not narrow the ready
+listing under default config. That does not make `ready/` sufficient;
+unresolved blockers are an independent dispatch gate.
 
-No Linear. If this repo's `autobuild.toml` sets `[tickets] source = "linear"`,
-none of the above applies — the tracker is Linear, and state and labels live
-there.
+No Linear lifecycle UI. Directory-based lifecycle operations (`ls`, `mv`, and
+the four state directories) are file-tracker-only. If this repo's
+`autobuild.toml` sets `[tickets] source = "linear"`, do not apply that lifecycle
+guidance: state and labels live in Linear. The source-agnostic `ab ticket block`
+and `ab ticket unblock` commands still edit blocker relationships through the
+configured source.
