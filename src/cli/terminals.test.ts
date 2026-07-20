@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { agentActor, humanActor, KERNEL } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
+import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
@@ -24,9 +25,11 @@ import {
   BRANCH,
   BUILD,
   commitFile,
+  initBareOrigin,
   initWorkspaceRepo,
   makeDeps,
   makeEnv,
+  remoteBranchHead,
   runGit,
   seedStore,
   type TestDeps,
@@ -372,6 +375,83 @@ describe('ab done — implement', () => {
     expect(textContent(deposited!)).toBe('implemented rate limiting\n')
   })
 
+  test('detached HEAD publishes the completed commit to the durable build branch', async () => {
+    const remote = join(tmp, 'implement-origin.git')
+    await initBareOrigin(workspace, remote)
+    const attachedTip = await runGit(['rev-parse', BRANCH], workspace)
+    expect(await remoteBranchHead(remote)).toBe(attachedTip)
+
+    await runGit(['checkout', '-q', '--detach', 'HEAD'], workspace)
+    const head = await commitFile(
+      workspace,
+      'detached.ts',
+      'export const detached = true\n',
+      'detached implementation',
+    )
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
+      'HEAD',
+    )
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(attachedTip)
+
+    const notes = await stash('detached-notes.md', 'completed while detached\n')
+    const deps = { ...implementDeps(), forge: new GitHubForge() }
+    const event = await done(deps, { notes })
+
+    expect(event.type).toBe('implement.completed')
+    expect(event.payload).toEqual({
+      round: 1,
+      commits: {
+        base: await runGit(['rev-parse', 'main'], workspace),
+        head,
+      },
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(await remoteBranchHead(remote)).toBe(head)
+    expect(textContent((await store.getArtifact(BUILD, 'implement-notes'))!)).toBe(
+      'completed while detached\n',
+    )
+  })
+
+  test('a detached non-fast-forward update is rejected before the terminal bundle', async () => {
+    const remote = join(tmp, 'divergent-origin.git')
+    await initBareOrigin(workspace, remote)
+    const remoteBase = await remoteBranchHead(remote)
+
+    await runGit(['checkout', '-q', '--detach', remoteBase], workspace)
+    const completedHead = await commitFile(
+      workspace,
+      'completed.ts',
+      'completed head\n',
+      'detached completion',
+    )
+
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    const divergentHead = await commitFile(
+      workspace,
+      'remote.ts',
+      'divergent remote head\n',
+      'advance remote independently',
+    )
+    await runGit(
+      ['push', '-q', 'origin', `${BRANCH}:refs/heads/${BRANCH}`],
+      workspace,
+    )
+    await runGit(['checkout', '-q', '--detach', completedHead], workspace)
+    expect(await remoteBranchHead(remote)).toBe(divergentHead)
+
+    const notes = await stash('non-ff-notes.md', 'must not be deposited\n')
+    const deps = { ...implementDeps(), forge: new GitHubForge() }
+    const error = await done(deps, { notes })
+      .then(() => null)
+      .catch((reason: unknown) => reason as Error)
+
+    expect(error?.message).toContain(`HEAD:refs/heads/${BRANCH}`)
+    expect(error?.message).toContain('non-fast-forward')
+    expect(await remoteBranchHead(remote)).toBe(divergentHead)
+    expect(await eventTypes()).not.toContain('implement.completed')
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+  })
+
   test('push failure leaves NO event and NO notes artifact (push happens first)', async () => {
     class ExplodingForge extends FakeForge {
       override async pushBranch(): Promise<void> {
@@ -516,6 +596,28 @@ describe('ab done — finalize', () => {
       'e2e (attempt 1): skipped — No browser-facing behavior changed',
     )
     expect(comment.body).toContain(`build: ${BUILD}`)
+  })
+
+  test('detached HEAD still opens the PR from the durable build branch', async () => {
+    await runGit(['checkout', '-q', '--detach', 'HEAD'], workspace)
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
+      'HEAD',
+    )
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Detached finalize\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('finalize.completed')
+    expect(deps.forge.opened).toHaveLength(1)
+    expect(deps.forge.opened[0]!.head).toBe(BRANCH)
   })
 
   test('projects exact current dashboard frame refs and escaped monospace text into the PR comment', async () => {
@@ -977,6 +1079,98 @@ describe('ab done — reconcile', () => {
     })
     const deposited = await store.getArtifact(BUILD, 'reconcile-notes')
     expect(textContent(deposited!)).toBe('resolved conflicts against main\n')
+  })
+
+  test('detached merge HEAD publishes to the durable branch before completion', async () => {
+    const remote = join(tmp, 'reconcile-origin.git')
+    await initBareOrigin(workspace, remote)
+    const attachedTip = await runGit(['rev-parse', BRANCH], workspace)
+
+    await runGit(['checkout', '-q', 'main'], workspace)
+    await commitFile(workspace, 'base.ts', 'new base\n', 'advance base')
+    await runGit(['checkout', '-q', '--detach', attachedTip], workspace)
+    await runGit(
+      [
+        '-c',
+        'user.email=ab@test.invalid',
+        '-c',
+        'user.name=ab-test',
+        '-c',
+        'commit.gpgsign=false',
+        'merge',
+        '--no-ff',
+        '-m',
+        'merge main while detached',
+        'main',
+      ],
+      workspace,
+    )
+    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
+      'HEAD',
+    )
+    expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(attachedTip)
+
+    const notes = await stash('detached-rec.md', 'detached merge completed\n')
+    const deps = {
+      ...makeDeps({
+        store,
+        env: makeEnv({ phase: 'reconcile', round: 1 }),
+        workspacePath: workspace,
+      }),
+      forge: new GitHubForge(),
+    }
+    const event = await done(deps, { notes })
+
+    expect(event.type).toBe('reconcile.completed')
+    expect(event.payload).toEqual({
+      mergeCommit: mergeSha,
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    })
+    expect(await remoteBranchHead(remote)).toBe(mergeSha)
+    expect(textContent((await store.getArtifact(BUILD, 'reconcile-notes'))!)).toBe(
+      'detached merge completed\n',
+    )
+  })
+
+  test('push failure leaves NO reconcile event and NO notes artifact', async () => {
+    await runGit(['checkout', '-q', 'main'], workspace)
+    await commitFile(workspace, 'base.ts', 'new base\n', 'advance base')
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    await runGit(
+      [
+        '-c',
+        'user.email=ab@test.invalid',
+        '-c',
+        'user.name=ab-test',
+        '-c',
+        'commit.gpgsign=false',
+        'merge',
+        '--no-ff',
+        '-m',
+        'merge main into branch',
+        'main',
+      ],
+      workspace,
+    )
+    class ExplodingForge extends FakeForge {
+      override async pushBranch(): Promise<void> {
+        throw new Error('remote rejected reconciliation')
+      }
+    }
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+      forge: new ExplodingForge(),
+    })
+    const notes = await stash('failed-rec.md', 'must not be deposited\n')
+
+    await expect(done(deps, { notes })).rejects.toThrow(
+      'remote rejected reconciliation',
+    )
+    expect(await eventTypes()).not.toContain('reconcile.completed')
+    expect(await store.getArtifact(BUILD, 'reconcile-notes')).toBeNull()
   })
 })
 

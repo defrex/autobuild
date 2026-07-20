@@ -129,6 +129,28 @@ export async function initWorkspaceRepo(dir: string, branch = BRANCH): Promise<v
   await runGit(['checkout', '-q', '-b', branch], dir)
 }
 
+/** Attach a throwaway bare origin and seed its build branch at the local tip. */
+export async function initBareOrigin(
+  workspace: string,
+  remote: string,
+  branch = BRANCH,
+): Promise<void> {
+  await mkdir(remote, { recursive: true })
+  await runGit(['init', '-q', '--bare'], remote)
+  await runGit(['remote', 'add', 'origin', remote], workspace)
+  await runGit(
+    ['push', '-q', 'origin', `${branch}:refs/heads/${branch}`],
+    workspace,
+  )
+}
+
+export function remoteBranchHead(
+  remote: string,
+  branch = BRANCH,
+): Promise<string> {
+  return runGit(['rev-parse', `refs/heads/${branch}`], remote)
+}
+
 export async function commitFile(
   dir: string,
   file: string,

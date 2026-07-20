@@ -42,28 +42,44 @@ const PR_VIEW_JSON = JSON.stringify({
 })
 
 describe('GitHubForge.pushBranch', () => {
-  test('runs exactly `git push -u origin <branch>` in the workspace (never force, D1)', async () => {
+  test('publishes HEAD to an explicit destination ref with no rewrite bypass (D1)', async () => {
     const { forge, calls } = makeForge()
     await forge.pushBranch('/ws/build-1', 'ab/fix-login')
     expect(calls).toEqual([
       {
-        cmd: ['git', 'push', '-u', 'origin', 'ab/fix-login'],
+        cmd: [
+          'git',
+          'push',
+          '-u',
+          'origin',
+          'HEAD:refs/heads/ab/fix-login',
+        ],
         cwd: '/ws/build-1',
       },
     ])
+    const argv = calls[0]!.cmd
+    for (const forbidden of ['--force', '--force-with-lease', '--rebase']) {
+      expect(argv).not.toContain(forbidden)
+    }
+    expect(argv.at(-1)?.startsWith('+')).toBe(false)
   })
 
-  test('nonzero exit throws with the command and stderr', async () => {
+  test('a non-fast-forward exit surfaces the exact command and diagnostic', async () => {
     const { forge } = makeForge([
-      { exitCode: 128, stderr: 'remote: permission denied' },
+      {
+        exitCode: 1,
+        stderr: '! [rejected] HEAD -> ab/fix-login (non-fast-forward)',
+      },
     ])
     const error = await forge
       .pushBranch('/ws/build-1', 'ab/fix-login')
       .then(() => null)
       .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain('git push -u origin ab/fix-login')
-    expect(error?.message).toContain('remote: permission denied')
-    expect(error?.message).toContain('exit 128')
+    expect(error?.message).toContain(
+      'git push -u origin HEAD:refs/heads/ab/fix-login',
+    )
+    expect(error?.message).toContain('non-fast-forward')
+    expect(error?.message).toContain('exit 1')
   })
 })
 

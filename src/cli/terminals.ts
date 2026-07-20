@@ -211,8 +211,14 @@ function baseBranchOf(events: AbEvent[]): string {
   )
 }
 
-async function currentBranch(deps: TerminalDeps): Promise<string> {
-  return (await git(deps, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+async function buildBranch(deps: TerminalDeps): Promise<string> {
+  const build = await deps.store.getBuild(deps.env.build)
+  if (build === null) {
+    throw new Error(
+      `build "${deps.env.build}" could not be resolved — cannot determine its durable branch`,
+    )
+  }
+  return build.branch ?? `ab/${build.slug}`
 }
 
 function refOf(meta: ArtifactMeta | undefined): ArtifactRef {
@@ -305,7 +311,7 @@ export async function done(
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
       const baseBranch = baseBranchOf(events)
-      const branch = await currentBranch(deps)
+      const branch = await buildBranch(deps)
       const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
       const base = (await git(deps, ['merge-base', baseBranch, 'HEAD'])).trim()
       // Push BEFORE the event (walkthrough §8.7 order): a push without an
@@ -350,7 +356,7 @@ export async function done(
         )
       }
       const baseBranch = baseBranchOf(events)
-      const branch = await currentBranch(deps)
+      const branch = await buildBranch(deps)
       // §15.3/D7: the kernel opens the PR after the agent's `ab done` — this
       // CLI call IS that kernel plumbing, so the event's actor is KERNEL.
       // openPr runs BEFORE the event (same rationale as implement's push): a
@@ -437,7 +443,7 @@ export async function done(
             'into this branch first (§15.7, D1: never rebase)',
         )
       }
-      const branch = await currentBranch(deps)
+      const branch = await buildBranch(deps)
       // Regular push, NEVER force (D1): the merge commit extends the branch;
       // rewriting it would sever the SHAs recorded in implement.completed.
       await deps.forge.pushBranch(deps.workspacePath, branch)

@@ -159,7 +159,7 @@ export type AutoMergeResult =
 
 export interface Forge {
   readonly name: string
-  /** Push a local branch to the remote (from the workspace's working copy). */
+  /** Publish the workspace's current HEAD to this remote destination branch. */
   pushBranch(workspacePath: string, branch: string): Promise<void>
   openPr(opts: {
     workspacePath: string

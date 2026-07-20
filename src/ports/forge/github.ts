@@ -407,7 +407,10 @@ export class GitHubForge implements Forge {
 
   /** [D1]: rebase is banned and branches are never rewritten — never force. */
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
-    await this.run(['git', 'push', '-u', 'origin', branch], workspacePath)
+    await this.run(
+      ['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+      workspacePath,
+    )
   }
 
   async openPr(opts: {
