@@ -1,5 +1,5 @@
 import { describe } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -177,6 +177,43 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
 
   const cleanup = async (): Promise<void> => {
     const failures: unknown[] = []
+    // openPr creates before its follow-up view. If that view fails, the shared
+    // helper never receives a number to track, so discover the namespaced head
+    // as well as using the normal explicit registrations.
+    if (cloneReady) {
+      const listed = await execute(
+        [
+          'gh',
+          'pr',
+          'list',
+          '--head',
+          head,
+          '--state',
+          'open',
+          '--json',
+          'number',
+        ],
+        workspacePath,
+      )
+      if (listed.exitCode === 0) {
+        try {
+          for (const pr of parseJson<Array<{ number: number }>>(
+            listed.stdout,
+            'GitHub cleanup PR discovery',
+          )) {
+            trackedPrs.add(pr.number)
+          }
+        } catch (error) {
+          failures.push(error)
+        }
+      } else {
+        failures.push(
+          new Error(
+            `GitHub cleanup could not discover PRs for ${head}: ${listed.stderr.trim()}`,
+          ),
+        )
+      }
+    }
     for (const number of trackedPrs) {
       try {
         const pr = await prProbe(number)

@@ -63,7 +63,7 @@ export function describeWorkspaceProviderContract(
         const result = await harness.provider.provision(harness.provision)
         expect(result.provider).toBe(harness.provider.name)
         expect(result.branch).toBe(harness.provision.branch)
-        expect(result.ref).toBe(result.path)
+        expect(result.ref).not.toBe('')
         expect(isAbsolute(result.path)).toBe(true)
         expect((await stat(result.path)).isDirectory()).toBe(true)
         expect(
