@@ -507,11 +507,35 @@ export class GitHubForge implements Forge {
     }
   }
 
+  /** Read the provider's projected native desired state. Mutations are not
+   * acknowledgements: only this independent follow-up observation can make an
+   * `applied` result durable. */
+  private async nativeAutoMergeEnabled(
+    workspacePath: string,
+    number: number,
+  ): Promise<boolean> {
+    const cmd = [
+      'gh',
+      'pr',
+      'view',
+      String(number),
+      '--json',
+      'autoMergeRequest',
+    ]
+    const view = this.parseJson(
+      nativeAutoMergeJson,
+      await this.run(cmd, workspacePath),
+      cmd,
+    )
+    return view.autoMergeRequest !== null
+  }
+
   /**
    * Reconcile native auto-merge state. A native idempotent hit is acknowledged
    * immediately. Otherwise enabling is classified from authoritative gate
    * existence plus the complete current merge-state enum; only a proved
-   * ungated stable PR is returned as a direct candidate.
+   * ungated stable PR is returned as a direct candidate. A successful mutation
+   * is confirmed with a second native-state read before returning `applied`.
    */
   async setAutoMerge(
     workspacePath: string,
@@ -521,26 +545,16 @@ export class GitHubForge implements Forge {
     // Cancellation must remain usable when GitHub adds a merge-state enum:
     // inspect only the one field disabling actually needs.
     if (!enabled) {
-      const disableViewCmd = [
-        'gh',
-        'pr',
-        'view',
-        String(number),
-        '--json',
-        'autoMergeRequest',
-      ]
-      const disableView = this.parseJson(
-        nativeAutoMergeJson,
-        await this.run(disableViewCmd, workspacePath),
-        disableViewCmd,
-      )
-      if (disableView.autoMergeRequest !== null) {
-        await this.run(
-          ['gh', 'pr', 'merge', String(number), '--disable-auto'],
-          workspacePath,
-        )
+      if (!(await this.nativeAutoMergeEnabled(workspacePath, number))) {
+        return { kind: 'applied' }
       }
-      return { kind: 'applied' }
+      await this.run(
+        ['gh', 'pr', 'merge', String(number), '--disable-auto'],
+        workspacePath,
+      )
+      return (await this.nativeAutoMergeEnabled(workspacePath, number))
+        ? { kind: 'deferred' }
+        : { kind: 'applied' }
     }
 
     const viewCmd = [
@@ -566,7 +580,9 @@ export class GitHubForge implements Forge {
           ['gh', 'pr', 'merge', String(number), '--auto', '--squash'],
           workspacePath,
         )
-        return { kind: 'applied' }
+        return (await this.nativeAutoMergeEnabled(workspacePath, number))
+          ? { kind: 'applied' }
+          : { kind: 'deferred' }
       case 'direct':
         return { kind: 'ungated', headSha: view.headRefOid }
       case 'deferred':

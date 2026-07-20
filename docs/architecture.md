@@ -296,8 +296,54 @@ keyboard handling, or build-runner code still require a restart. Ctrl-C follows
 the normal CLI teardown path, including raw-mode cleanup and cursor restoration.
 The installed `ab` binary remains the non-watching production entry.
 
-The seams are the contract: every `BuildStore` adapter must pass the suite
-in `src/store/contract.ts`; every event write passes
-`validateEventWrite` or `validateHarvestEventWrite`; phase behavior derives from the table in
-`src/kernel/phases.ts`. When adding an adapter, start from the contract
-tests, not the interface.
+The seams are the contract. Four reusable contract families run the same
+behavioral assertions against every implementation:
+
+- `src/store/contract.ts` — `BuildStore` and `BlobStore`;
+- `src/ports/tickets/contract.ts` — `TicketSource`;
+- `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
+- `src/ports/forge/contract.ts` — `Forge`.
+
+A normal `bun test` runs the memory/fake/local registrations, including the
+real filesystem and real local-git adapters. The Linear and GitHub
+registrations are present in the same test run but reported as skipped: live
+provider mutation requires both credentials and an explicit opt-in.
+
+To run the Linear contract manually against a destructive scratch target:
+
+```sh
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+LINEAR_API_KEY=… \
+AB_LINEAR_CONTRACT_TEAM_KEY=SCRATCH \
+AB_LINEAR_CONTRACT_PROJECT_ID=… \
+bun test src/ports/tickets/linear.live.test.ts
+```
+
+The token must be able to create, update, relate, and archive issues in the
+configured project. The team needs a claimable `unstarted` or `backlog` state,
+a `started` state, and a `completed` or `canceled` state. Every issue gets a
+reserved UUID, is attached to that project, and is archived during best-effort
+cleanup. Use a project with no real work in it.
+
+To run the GitHub contract manually:
+
+```sh
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+GH_TOKEN=… \
+AB_GITHUB_CONTRACT_REPO=owner/destructive-scratch-repo \
+bun test src/ports/forge/github.live.test.ts
+```
+
+`GITHUB_TOKEN` may be used instead of `GH_TOKEN`. The repository must have
+native auto-merge enabled, an initialized default branch, no inherited
+merge-blocking rule that catches the UUID-namespaced contract branches, and a
+token with repository admin, contents, pull-request, comment, and branch
+protection permissions. The fixture creates and deletes temporary branches,
+PRs, comments, and a required-check protection rule; it never pushes to or
+merges into the default branch. Use a dedicated scratch repository only.
+
+Provisioning or scheduling these credentials/resources in CI is deliberately
+out of scope; live runs remain explicit. Every event write still passes
+`validateEventWrite` or `validateHarvestEventWrite`, and phase behavior derives
+from `src/kernel/phases.ts`. When adding an adapter, start from its contract
+suite, not only the interface.
