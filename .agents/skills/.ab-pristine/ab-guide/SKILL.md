@@ -151,6 +151,32 @@ set) are exempt by construction, because their keys are user-chosen names.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 
+### `[dashboardFrames]`
+
+Optional and **off by default**. When configured, finalize copies the exact PNGs
+from a successful current-cycle `verify:dashboard` report to an existing public
+GitHub release and embeds their `browser_download_url` values in the PR summary.
+The release must already be published and mutable; Autobuild creates no release
+or tag. A private source repository must name a separate public asset repository
+because GitHub's image proxy cannot fetch authenticated release assets. This is
+an explicit temporary-public-disclosure opt-in.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `provider` | — | required literal `"github-release"` | Selects the only dashboard-frame host implemented in this release. |
+| `repository` | — | required nonblank `"owner/repo"` pair | Public repository that owns the pre-existing release. |
+| `releaseId` | — | required positive integer | Numeric GitHub release id used for upload and deletion. |
+
+The `gh` identity running Autobuild needs Contents write permission on the host
+repository. Obtain an existing release's numeric id with, for example,
+`gh api repos/owner/repo/releases/tags/<tag> --jq .id`. Upload/validation/timeout
+failure records a follow-up observation
+and preserves the complete text-frame comment; it never changes verification.
+Hosted copies are deleted automatically after `build.completed` (404 is already
+clean), so their inline URLs intentionally stop working after the review window.
+The authoritative BuildStore frame artifacts remain queryable under the store's
+separate retention policy.
+
 ### `[commands]`
 
 An **open map** of name → shell string. Both the key and the value must be

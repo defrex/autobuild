@@ -10,6 +10,7 @@
  * exempt by construction: their keys are user-chosen names.
  */
 import { z } from 'zod'
+import { dashboardFrameHostSchema } from '../ontology'
 
 // ── [project] ────────────────────────────────────────────────────────────────
 
@@ -17,6 +18,13 @@ export const projectSchema = z.strictObject({
   baseBranch: z.string().min(1).default('main'),
 })
 export type ProjectConfig = z.infer<typeof projectSchema>
+
+// ── [dashboardFrames] ────────────────────────────────────────────────────────
+
+/** Optional public GitHub release used only for review-window dashboard PNG
+ * copies. Omission is intentionally `undefined`: hosting is off by default. */
+export const dashboardFramesSchema = dashboardFrameHostSchema
+export type DashboardFramesConfig = z.infer<typeof dashboardFramesSchema>
 
 // ── [commands] ───────────────────────────────────────────────────────────────
 //
@@ -308,6 +316,7 @@ export type OuterScheduleConfig = z.infer<typeof outerScheduleSchema>
 
 const configTableSchema = z.strictObject({
   project: projectSchema.prefault({}),
+  dashboardFrames: dashboardFramesSchema.optional(),
   commands: commandsSchema.prefault({}),
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),

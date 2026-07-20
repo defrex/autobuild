@@ -15,10 +15,12 @@ import {
   artifactRefSchema,
   buildOutcomeSchema,
   commitRangeSchema,
+  dashboardFrameHostSchema,
   escalationResolutionSchema,
   escalationSourceSchema,
   feedbackSchema,
   findingSchema,
+  hostedDashboardFrameAssetSchema,
   observationKindSchema,
   phaseSchema,
   reviewVerdictKindSchema,
@@ -106,6 +108,8 @@ export const eventPayloadSchemas = {
     ticket: ticketRefSchema,
     repo: z.string().min(1),
     baseBranch: z.string().min(1),
+    /** Frozen at claim time. Historical logs and disabled installs omit it. */
+    dashboardFrames: dashboardFrameHostSchema.optional(),
   }),
   'build.completed': z.strictObject({ outcome: buildOutcomeSchema }),
   'runner.attached': z.strictObject({
@@ -210,6 +214,24 @@ export const eventPayloadSchemas = {
     step: z.string().min(1),
     ok: z.boolean(),
     note: z.string().optional(),
+  }),
+
+  // Successful external uploads are recorded immediately so retries can
+  // adopt them and terminal-build cleanup never depends on a workspace or the
+  // repository's current config.
+  'dashboard-frame.hosted': z.strictObject({
+    frameId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    artifact: artifactRefSchema,
+    asset: hostedDashboardFrameAssetSchema,
+  }),
+  'dashboard-frame.reclaimed': z.strictObject({
+    /** seq of the correlated dashboard-frame.hosted fact. */
+    hostedSeq: z.number().int().positive(),
+  }),
+  'dashboard-frame.reclaim-failed': z.strictObject({
+    hostedSeq: z.number().int().positive(),
+    attempt,
+    error: z.string().min(1),
   }),
 
   // ── Post-PR (D1: janitor duty of the dispatcher — SPEC §15.7) ─────────────

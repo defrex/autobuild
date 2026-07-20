@@ -3,7 +3,12 @@
  * The kernel and processes depend only on these types; adapters live in
  * `ports/<port>/` and fakes for seam tests in `ports/fakes/`.
  */
-import type { TicketRef, WorkspaceBase } from '../ontology'
+import type {
+  DashboardFrameHostTarget,
+  HostedDashboardFrameAsset,
+  TicketRef,
+  WorkspaceBase,
+} from '../ontology'
 
 // ── TicketSource (SPEC §3.2, §13) ────────────────────────────────────────────
 //
@@ -157,8 +162,36 @@ export type AutoMergeResult =
   | { kind: 'ungated'; headSha: string }
   | { kind: 'deferred' }
 
+/** One existing verifier-produced PNG to copy to a review-window host. `name`
+ * is the stable frame id; providers derive their own collision-safe external
+ * filename from it, the PR URL, and the full content hash. */
+export interface DashboardFrameUploadRequest {
+  workspacePath: string
+  target: DashboardFrameHostTarget
+  prUrl: string
+  name: string
+  content: Uint8Array
+  /** Full lowercase SHA-256 / BuildStore blobRef for `content`. */
+  sha256: string
+}
+
+export interface DashboardFrameReclaimRequest {
+  /** Cleanup deliberately runs from the main repository after workspace removal. */
+  workspacePath: string
+  asset: HostedDashboardFrameAsset
+}
+
+/** Narrow optional Forge capability. Its absence is a supported text-only
+ * path, not a forge error and not a verification outcome. */
+export interface DashboardFrameHosting {
+  upload(request: DashboardFrameUploadRequest): Promise<HostedDashboardFrameAsset>
+  reclaim(request: DashboardFrameReclaimRequest): Promise<void>
+}
+
 export interface Forge {
   readonly name: string
+  /** Optional because another forge may support PRs but not public frame assets. */
+  readonly dashboardFrames?: DashboardFrameHosting
   /** Push a local branch to the remote (from the workspace's working copy). */
   pushBranch(workspacePath: string, branch: string): Promise<void>
   openPr(opts: {

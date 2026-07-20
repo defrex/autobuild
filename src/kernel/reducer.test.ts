@@ -345,6 +345,36 @@ describe('reduceBuild: §15.6 happy path', () => {
     expect(final.openEscalations).toEqual([])
     expect(final.pendingCommands).toEqual([])
   })
+
+  test('post-completion dashboard cleanup facts are audit-only and leave the build done', () => {
+    const cleanupLog = toLog([
+      ...prelude(),
+      ev('dashboard-frame.hosted', {
+        frameId: 'mixed-wide',
+        artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
+        asset: {
+          provider: 'github-release',
+          repository: 'acme/review-assets',
+          releaseId: 42,
+          assetId: 7,
+          url: 'https://github.com/acme/review-assets/releases/download/review/frame.png',
+        },
+      }),
+      ev('build.completed', { outcome: 'merged' }),
+      ev('dashboard-frame.reclaim-failed', {
+        hostedSeq: 5,
+        attempt: 1,
+        error: 'temporary timeout',
+      }),
+      ev('dashboard-frame.reclaimed', { hostedSeq: 5 }),
+    ])
+    const state = reduceBuild(cleanupLog)
+    expect(state.status).toBe('done')
+    expect(state.outcome).toBe('merged')
+    expect(state.phase).toBeUndefined()
+    expect(state.failures).toEqual({})
+    expect(state.lastEvent?.type).toBe('dashboard-frame.reclaimed')
+  })
 })
 
 describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
-import { KERNEL, agentActor } from './envelope'
+import { DISPATCHER, KERNEL, agentActor } from './envelope'
 import { normalizeVerifyCompletion } from './payloads'
 
 function plan(payload: unknown): EventWrite<'plan.completed'> {
@@ -18,6 +18,91 @@ function verify(payload: unknown): EventWrite<'verify.completed'> {
     payload,
   }) as EventWrite<'verify.completed'>
 }
+
+describe('dashboard frame hosting event protocol', () => {
+  const target = {
+    provider: 'github-release' as const,
+    repository: 'acme/review-assets',
+    releaseId: 42,
+  }
+  const asset = {
+    ...target,
+    assetId: 7,
+    url: 'https://github.com/acme/review-assets/releases/download/review/frame.png',
+  }
+
+  test('build.created remains backwards-readable and may freeze a strict target', () => {
+    const base = {
+      ticket: { source: 'linear', id: 'AUT-1' },
+      repo: 'acme/app',
+      baseBranch: 'main',
+    }
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'build.created', payload: base })
+        .payload,
+    ).toEqual(base)
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, dashboardFrames: target },
+      }).payload,
+    ).toEqual({ ...base, dashboardFrames: target })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, dashboardFrames: { ...target, releaseId: 0 } },
+      }),
+    ).toThrow(/invalid payload for "build\.created"/)
+  })
+
+  test('upload and cleanup facts are strict and actor-owned', () => {
+    const hosted = validateEventWrite({
+      actor: KERNEL,
+      type: 'dashboard-frame.hosted',
+      payload: {
+        frameId: 'mixed-wide',
+        artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
+        asset,
+      },
+    })
+    expect(hosted.payload).toEqual({
+      frameId: 'mixed-wide',
+      artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
+      asset,
+    })
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('finalize', 's_bad'),
+        type: 'dashboard-frame.hosted',
+        payload: hosted.payload,
+      }),
+    ).toThrow(/may not emit "dashboard-frame\.hosted"/)
+
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dashboard-frame.reclaimed',
+        payload: { hostedSeq: 9 },
+      }).payload,
+    ).toEqual({ hostedSeq: 9 })
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dashboard-frame.reclaim-failed',
+        payload: { hostedSeq: 9, attempt: 2, error: 'timeout' },
+      }).payload,
+    ).toEqual({ hostedSeq: 9, attempt: 2, error: 'timeout' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dashboard-frame.reclaimed',
+        payload: { hostedSeq: 9, extra: true },
+      }),
+    ).toThrow(/invalid payload for "dashboard-frame\.reclaimed"/)
+  })
+})
 
 describe('plan.completed verify selection compatibility', () => {
   const base = { round: 1, artifact: { kind: 'plan', rev: 0 } }

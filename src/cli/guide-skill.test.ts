@@ -23,6 +23,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
+  dashboardFramesSchema,
   dispatcherSchema,
   finalizeSchema,
   harvestSchema,
@@ -59,6 +60,7 @@ function escapeRegex(literal: string): string {
  */
 const TABLE_FIELDS: Record<string, string[]> = {
   project: Object.keys(projectSchema.shape),
+  dashboardFrames: Object.keys(dashboardFramesSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
   server: Object.keys(serverSchema.shape),

@@ -8,7 +8,16 @@ import {
   type MergeGatePresence,
   type MergeStateStatus,
 } from '../../kernel/auto-merge'
-import type { AutoMergeResult, Forge, PrRef, PrState } from '../types'
+import type {
+  AutoMergeResult,
+  DashboardFrameHosting,
+  DashboardFrameReclaimRequest,
+  DashboardFrameUploadRequest,
+  Forge,
+  PrRef,
+  PrState,
+} from '../types'
+import type { HostedDashboardFrameAsset } from '../../ontology'
 
 export interface PushRecord {
   workspacePath: string
@@ -43,6 +52,9 @@ export interface SquashMergeRecord {
   expectedHeadSha: string
 }
 
+export type DashboardFrameUploadRecord = DashboardFrameUploadRequest
+export type DashboardFrameReclaimRecord = DashboardFrameReclaimRequest
+
 /** Constant sha, or derived from the assigned PR number. */
 export type HeadSha = string | ((number: number) => string)
 export type MergeSha = string | ((number: number) => string)
@@ -51,6 +63,7 @@ type FakeGateState = MergeGatePresence | { error: string }
 
 export class FakeForge implements Forge {
   readonly name = 'fake'
+  readonly dashboardFrames?: DashboardFrameHosting
 
   /** Journals — public so tests assert directly on call order and args. */
   readonly pushes: PushRecord[] = []
@@ -58,8 +71,11 @@ export class FakeForge implements Forge {
   readonly comments: CommentRecord[] = []
   readonly autoMergeCalls: AutoMergeRecord[] = []
   readonly squashMergeCalls: SquashMergeRecord[] = []
+  readonly dashboardFrameUploads: DashboardFrameUploadRecord[] = []
+  readonly dashboardFrameReclaims: DashboardFrameReclaimRecord[] = []
 
   private nextNumber = 1
+  private nextDashboardAssetId = 1
   private headSha: HeadSha
   private mergeSha: MergeSha
   private readonly defaultGatePresence: MergeGatePresence
@@ -70,12 +86,18 @@ export class FakeForge implements Forge {
   private readonly autoMerge = new Map<number, boolean>()
   private readonly nativeErrors = new Map<number, string>()
   private readonly squashErrors = new Map<number, string>()
+  private readonly dashboardAssets = new Map<string, HostedDashboardFrameAsset>()
+  private readonly dashboardUploadErrors: string[] = []
+  private readonly dashboardReclaimErrors: string[] = []
 
   constructor(
     opts: {
       headSha?: HeadSha
       mergeSha?: MergeSha
       gatePresence?: MergeGatePresence
+      /** Hosting is unsupported by default, matching a forge without this
+       * optional capability. Tests opt in explicitly. */
+      dashboardFrames?: boolean
     } = {},
   ) {
     this.headSha = opts.headSha ?? ((n) => `sha-${n}`)
@@ -83,6 +105,12 @@ export class FakeForge implements Forge {
     // Existing tests model the historical, gated native path unless they opt
     // into the ungated repository scenario explicitly.
     this.defaultGatePresence = opts.gatePresence ?? 'present'
+    if (opts.dashboardFrames === true) {
+      this.dashboardFrames = {
+        upload: (request) => this.uploadDashboardFrame(request),
+        reclaim: (request) => this.reclaimDashboardFrame(request),
+      }
+    }
   }
 
   private resolveHeadSha(number: number): string {
@@ -164,6 +192,64 @@ export class FakeForge implements Forge {
   setSquashMergeError(number: number, message: string): void {
     this.assertPr(number)
     this.squashErrors.set(number, message)
+  }
+
+  /** Fail the next opt-in hosting call; queues permit deterministic mid-set failures. */
+  failNextDashboardFrameUpload(message: string): void {
+    this.dashboardUploadErrors.push(message)
+  }
+
+  /** Fail the next cleanup call; the following retry resumes normal behavior. */
+  failNextDashboardFrameReclaim(message: string): void {
+    this.dashboardReclaimErrors.push(message)
+  }
+
+  private dashboardAssetKey(request: DashboardFrameUploadRequest): string {
+    return [
+      request.target.repository,
+      request.target.releaseId,
+      request.prUrl,
+      request.name,
+      request.sha256,
+    ].join('\0')
+  }
+
+  private async uploadDashboardFrame(
+    request: DashboardFrameUploadRequest,
+  ): Promise<HostedDashboardFrameAsset> {
+    this.dashboardFrameUploads.push({
+      ...request,
+      content: request.content.slice(),
+    })
+    const error = this.dashboardUploadErrors.shift()
+    if (error !== undefined) throw new Error(error)
+    const key = this.dashboardAssetKey(request)
+    const existing = this.dashboardAssets.get(key)
+    if (existing !== undefined) return existing
+    const assetId = this.nextDashboardAssetId++
+    const asset: HostedDashboardFrameAsset = {
+      provider: 'github-release',
+      repository: request.target.repository,
+      releaseId: request.target.releaseId,
+      assetId,
+      url:
+        `https://fake.forge/dashboard-frames/${assetId}/` +
+        `${encodeURIComponent(request.name)}.png`,
+    }
+    this.dashboardAssets.set(key, asset)
+    return asset
+  }
+
+  private async reclaimDashboardFrame(
+    request: DashboardFrameReclaimRequest,
+  ): Promise<void> {
+    this.dashboardFrameReclaims.push({ ...request, asset: { ...request.asset } })
+    const error = this.dashboardReclaimErrors.shift()
+    if (error !== undefined) throw new Error(error)
+    for (const [key, asset] of this.dashboardAssets) {
+      if (asset.assetId === request.asset.assetId) this.dashboardAssets.delete(key)
+    }
+    // Missing means it was already deleted: cleanup is idempotent.
   }
 
   /** Move the PR head to exercise --match-head-commit race rejection. */

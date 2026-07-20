@@ -314,4 +314,63 @@ describe('FakeForge', () => {
     )
     expect(forge.comments).toEqual([])
   })
+
+  test('dashboard hosting is unsupported by default and opt-in hosting is adoptable', async () => {
+    expect(new FakeForge().dashboardFrames).toBeUndefined()
+    const forge = new FakeForge({ dashboardFrames: true })
+    const request = {
+      workspacePath: '/ws/a',
+      target: {
+        provider: 'github-release' as const,
+        repository: 'acme/review-assets',
+        releaseId: 42,
+      },
+      prUrl: 'https://fake.forge/pr/1',
+      name: 'mixed-wide',
+      content: new Uint8Array([1, 2, 3]),
+      sha256: 'a'.repeat(64),
+    }
+    const first = await forge.dashboardFrames!.upload(request)
+    const second = await forge.dashboardFrames!.upload(request)
+    expect(second).toEqual(first)
+    expect(forge.dashboardFrameUploads).toHaveLength(2)
+
+    await forge.dashboardFrames!.reclaim({
+      workspacePath: '/repos/main',
+      asset: first,
+    })
+    await forge.dashboardFrames!.reclaim({
+      workspacePath: '/repos/main',
+      asset: first,
+    })
+    expect(forge.dashboardFrameReclaims).toHaveLength(2)
+  })
+
+  test('dashboard upload and reclaim failures are injectable one call at a time', async () => {
+    const forge = new FakeForge({ dashboardFrames: true })
+    const request = {
+      workspacePath: '/ws/a',
+      target: {
+        provider: 'github-release' as const,
+        repository: 'acme/review-assets',
+        releaseId: 42,
+      },
+      prUrl: 'https://fake.forge/pr/1',
+      name: 'mixed-wide',
+      content: new Uint8Array([1]),
+      sha256: 'b'.repeat(64),
+    }
+    forge.failNextDashboardFrameUpload('upload unavailable')
+    await expect(forge.dashboardFrames!.upload(request)).rejects.toThrow(
+      'upload unavailable',
+    )
+    const asset = await forge.dashboardFrames!.upload(request)
+    forge.failNextDashboardFrameReclaim('delete unavailable')
+    await expect(
+      forge.dashboardFrames!.reclaim({ workspacePath: '/repos/main', asset }),
+    ).rejects.toThrow('delete unavailable')
+    await expect(
+      forge.dashboardFrames!.reclaim({ workspacePath: '/repos/main', asset }),
+    ).resolves.toBeUndefined()
+  })
 })

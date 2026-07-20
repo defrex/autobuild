@@ -90,6 +90,7 @@ function harness(
       store: MemoryBuildStore,
     ) => Promise<void> | void
     workspaceBase?: WorkspaceBase
+    dashboardFrames?: boolean
   } = {},
 ) {
   const clock = manualClock()
@@ -101,7 +102,9 @@ function harness(
     mode: 'logical',
     ...(opts.workspaceBase ? { base: opts.workspaceBase } : {}),
   })
-  const forge = new FakeForge()
+  const forge = new FakeForge({
+    ...(opts.dashboardFrames === true ? { dashboardFrames: true } : {}),
+  })
   const launches: string[] = []
   const execCalls: string[][] = []
   const exec: Exec = async (cmd) => {
@@ -194,6 +197,29 @@ async function seedBuild(
     })
   }
   return slug
+}
+
+async function seedHostedDashboardFrame(
+  h: Harness,
+  slug: string,
+  frameId = 'mixed-wide',
+  assetId = 7,
+) {
+  return h.store.append(slug, {
+    actor: KERNEL,
+    type: 'dashboard-frame.hosted',
+    payload: {
+      frameId,
+      artifact: { kind: `dashboard-frame:${frameId}:png`, rev: 0 },
+      asset: {
+        provider: 'github-release',
+        repository: 'acme/review-assets',
+        releaseId: 42,
+        assetId,
+        url: `https://github.com/acme/review-assets/releases/download/review/${frameId}.png`,
+      },
+    },
+  })
 }
 
 /** Happy-path loop prefix: plan and code loops approved at round 1 — enough
@@ -573,6 +599,31 @@ describe('Dispatcher dispatch', () => {
       { id: 'T-1', body: 'build add-rate-limiting dispatched' },
     ])
     expect(h.launches).toEqual(['add-rate-limiting'])
+  })
+
+  test('freezes an enabled dashboard frame destination into build.created', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-host')],
+      toml: `
+[dashboardFrames]
+provider = "github-release"
+repository = "acme/review-assets"
+releaseId = 42
+`,
+    })
+
+    await h.dispatcher.tick()
+
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created?.payload).toMatchObject({
+      dashboardFrames: {
+        provider: 'github-release',
+        repository: 'acme/review-assets',
+        releaseId: 42,
+      },
+    })
   })
 
   test('claim-time auto-merge records the existing human fact before runner launch', async () => {
@@ -2410,6 +2461,89 @@ describe('Dispatcher janitor', () => {
     expect(events.at(-1)?.type).toBe('build.completed')
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     expect(h.workspaces.releases).toHaveLength(1) // released once, tick 1
+  })
+
+  test('hosted dashboard copies are reclaimed after merged, closed, and abandoned completion facts', async () => {
+    for (const scenario of ['merged', 'closed', 'abandoned'] as const) {
+      const h = harness({ dashboardFrames: true })
+      const slug = await seedBuild(h, {
+        slug: `cleanup-${scenario}`,
+        ...(scenario !== 'abandoned' ? { pr: PR } : {}),
+      })
+      const hosted = await seedHostedDashboardFrame(h, slug)
+      if (scenario === 'merged') {
+        h.forge.setPrState(1, { state: 'merged', sha: 'squash-cleanup' })
+      } else if (scenario === 'closed') {
+        h.forge.setPrState(1, { state: 'closed' })
+      } else {
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'build.aborted',
+          payload: {},
+        })
+      }
+
+      const report = await h.dispatcher.tick()
+      expect(report).toEqual({
+        ...emptyTickReport(),
+        ...(scenario === 'merged'
+          ? { merged: 1 }
+          : scenario === 'closed'
+            ? { closed: 1 }
+            : { abandoned: 1 }),
+      })
+      const events = await h.store.getEvents(slug)
+      const completed = events.find((event) => event.type === 'build.completed')!
+      const reclaimed = events.find(
+        (event) => event.type === 'dashboard-frame.reclaimed',
+      )!
+      expect(reclaimed.seq).toBeGreaterThan(completed.seq)
+      expect(reclaimed.payload).toEqual({ hostedSeq: hosted.seq })
+      expect(h.forge.dashboardFrameReclaims).toEqual([
+        {
+          workspacePath: REPO,
+          asset: hosted.payload.asset,
+        },
+      ])
+      expect(reduceBuild(events).status).toBe('done')
+    }
+  })
+
+  test('a done build retries transient reclamation, records attempts, and becomes idempotent', async () => {
+    const h = harness({ dashboardFrames: true })
+    const slug = await seedBuild(h, {
+      slug: 'cleanup-retry',
+      workspace: false,
+    })
+    const hosted = await seedHostedDashboardFrame(h, slug)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    h.forge.failNextDashboardFrameReclaim('temporary delete outage')
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    let events = await h.store.getEvents(slug)
+    const failed = events.find(
+      (event) => event.type === 'dashboard-frame.reclaim-failed',
+    )
+    expect(failed?.payload).toEqual({
+      hostedSeq: hosted.seq,
+      attempt: 1,
+      error: 'temporary delete outage',
+    })
+    expect(reduceBuild(events).status).toBe('done')
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    events = await h.store.getEvents(slug)
+    expect(
+      events.filter((event) => event.type === 'dashboard-frame.reclaimed'),
+    ).toHaveLength(1)
+    expect(h.forge.dashboardFrameReclaims).toHaveLength(2)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.forge.dashboardFrameReclaims).toHaveLength(2)
   })
 })
 

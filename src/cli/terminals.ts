@@ -31,16 +31,18 @@ import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { reduceBuild } from '../kernel/reducer'
 import {
   findingDraftSchema,
+  hostedDashboardFrameAssetSchema,
   isVerifyPhase,
   verifyReportKind,
   verifyStep,
   type ArtifactRef,
+  type DashboardFrameHostTarget,
   type Finding,
   type ReviewVerdictKind,
 } from '../ontology'
 import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { ArtifactMeta, BuildStore } from '../store/types'
+import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
 import {
   extractDashboardFrameManifest,
@@ -365,11 +367,22 @@ export async function done(
         body,
       })
 
-      // A dashboard command may land while finalize is running. Re-read after
-      // openPr so the latest human intent is applied at the first instant a PR
-      // exists. The setter is idempotent: if the forge call succeeds but this
-      // process dies before either event append, retry adopts the PR and safely
-      // applies the same desired state again.
+      // The PR URL is part of each deterministic hosted-asset identity, so PR
+      // adoption/creation must happen before optional publication. Missing,
+      // stale, or malformed capture evidence simply yields no work.
+      let dashboardFrames: PrDashboardFrame[] = []
+      try {
+        dashboardFrames = await currentDashboardFrames(env, events, store)
+      } catch {
+        // Optional presentation evidence can never reverse a green verdict.
+      }
+      await hostDashboardFrames(deps, events, pr.url, dashboardFrames)
+
+      // A dashboard command may land while finalize or optional hosting is
+      // running. Re-read so the latest human intent is applied at the first
+      // instant a PR exists. The setter is idempotent: if the forge call
+      // succeeds but this process dies before either event append, retry adopts
+      // the PR and safely applies the same desired state again.
       const latest = await store.getEvents(env.build)
       const autoMerge = pendingAutoMerge(reduceBuild(latest))
       const autoMergeResult =
@@ -411,7 +424,11 @@ export async function done(
         await deps.forge.commentOnPr(
           deps.workspacePath,
           pr.number,
-          await renderPrSummary(env, latest, store),
+          await renderPrSummary(
+            env,
+            await store.getEvents(env.build),
+            store,
+          ),
         )
       } catch {
         // The audit trail stays queryable in the store (§7.5).
@@ -487,6 +504,127 @@ function shellQuote(value: string): string {
 interface PrDashboardFrame {
   entry: DashboardFrameEntry
   text: string
+  png: Artifact
+}
+
+function frozenDashboardFrameHost(
+  events: AbEvent[],
+): DashboardFrameHostTarget | undefined {
+  for (const event of events) {
+    if (event.type === 'build.created') return event.payload.dashboardFrames
+  }
+  return undefined
+}
+
+function hostedFrameMatches(
+  event: AbEvent,
+  frame: PrDashboardFrame,
+  target: DashboardFrameHostTarget,
+): event is Extract<AbEvent, { type: 'dashboard-frame.hosted' }> {
+  return (
+    event.type === 'dashboard-frame.hosted' &&
+    event.payload.frameId === frame.entry.id &&
+    event.payload.artifact.kind === frame.entry.png.kind &&
+    event.payload.artifact.rev === frame.entry.png.rev &&
+    event.payload.asset.provider === target.provider &&
+    event.payload.asset.repository === target.repository &&
+    event.payload.asset.releaseId === target.releaseId
+  )
+}
+
+function hostedFrameUrls(
+  events: AbEvent[],
+  frames: PrDashboardFrame[],
+): Map<string, string> | undefined {
+  if (frames.length === 0) return undefined
+  const target = frozenDashboardFrameHost(events)
+  if (target === undefined) return undefined
+  const urls = new Map<string, string>()
+  for (const frame of frames) {
+    const hosted = events.findLast((event) =>
+      hostedFrameMatches(event, frame, target),
+    )
+    if (hosted === undefined || hosted.type !== 'dashboard-frame.hosted') {
+      return undefined
+    }
+    urls.set(frame.entry.id, hosted.payload.asset.url)
+  }
+  return urls
+}
+
+function hostingError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Publish only the exact current capture. Provider failures are converted to
+ * a structured observation and stop the set; durable-write failures after a
+ * successful external call deliberately escape so finalize retries before its
+ * terminal fact and can adopt the deterministic asset. */
+async function hostDashboardFrames(
+  deps: TerminalDeps,
+  events: AbEvent[],
+  prUrl: string,
+  frames: PrDashboardFrame[],
+): Promise<void> {
+  const target = frozenDashboardFrameHost(events)
+  if (target === undefined || frames.length === 0) return
+
+  const capability = deps.forge.dashboardFrames
+  if (capability === undefined) return
+
+  for (const frame of frames) {
+    if (events.some((event) => hostedFrameMatches(event, frame, target))) {
+      continue
+    }
+
+    let asset
+    try {
+      asset = hostedDashboardFrameAssetSchema.parse(
+        await capability.upload({
+          workspacePath: deps.workspacePath,
+          target,
+          prUrl,
+          name: frame.entry.id,
+          content: frame.png.content,
+          sha256: frame.png.meta.blobRef,
+        }),
+      )
+      if (
+        asset.provider !== target.provider ||
+        asset.repository !== target.repository ||
+        asset.releaseId !== target.releaseId
+      ) {
+        throw new Error(
+          'dashboard frame host returned a deletion handle for a different target',
+        )
+      }
+    } catch (error) {
+      await deps.store.append(deps.env.build, {
+        actor: agentActor(deps.env.phase, deps.env.session),
+        type: 'observation.recorded',
+        payload: {
+          id: deps.ids('obs'),
+          kind: 'followup',
+          summary:
+            `dashboard frame hosting failed for ${frame.entry.id} ` +
+            `(${frame.entry.png.kind}@${frame.entry.png.rev}): ${hostingError(error)}`,
+          refs: [`${frame.entry.png.kind}@${frame.entry.png.rev}`],
+        },
+      })
+      return
+    }
+
+    const hosted = await deps.store.append(deps.env.build, {
+      actor: KERNEL,
+      type: 'dashboard-frame.hosted',
+      payload: {
+        frameId: frame.entry.id,
+        artifact: frame.entry.png,
+        asset,
+      },
+    })
+    events.push(hosted)
+  }
 }
 
 /** Resolve only the successful dashboard report in the reducer's CURRENT
@@ -532,7 +670,7 @@ async function currentDashboardFrames(
     } catch {
       return []
     }
-    frames.push({ entry, text })
+    frames.push({ entry, text, png: pngArtifact })
   }
   return frames
 }
@@ -540,6 +678,7 @@ async function currentDashboardFrames(
 function renderDashboardFrameSection(
   env: CliEnv,
   frames: PrDashboardFrame[],
+  hostedUrls?: Map<string, string>,
 ): string[] {
   if (frames.length === 0) return []
   const lines = [
@@ -554,10 +693,17 @@ function renderDashboardFrameSection(
     const command =
       `ab artifact download ${shellQuote(env.build)} ${shellQuote(pngRef)} ` +
       `--output ${shellQuote(`${entry.id}.png`)} --store ${shellQuote(env.store)}`
+    const imageUrl = hostedUrls?.get(entry.id)
     lines.push(
       '',
       `#### ${entry.id} (${entry.terminal.columns}x${entry.terminal.rows})`,
       '',
+      ...(imageUrl !== undefined
+        ? [
+            `<img src="${html(imageUrl)}" alt="Dashboard frame ${html(entry.id)} in colour">`,
+            '',
+          ]
+        : []),
       `- text artifact: <code>${html(textRef)}</code>`,
       `- colour PNG artifact: <code>${html(pngRef)}</code>`,
       `<pre><code>${html(command)}</code></pre>`,
@@ -614,7 +760,7 @@ async function renderPrSummary(
     '',
     '### Verify',
     ...(verifies.length > 0 ? verifies : ['- (none)']),
-    ...renderDashboardFrameSection(env, frames),
+    ...renderDashboardFrameSection(env, frames, hostedFrameUrls(events, frames)),
     '',
     '### Store',
     `- store: ${env.store}`,

@@ -8,6 +8,12 @@ import { ConfigError, loadConfig, parseConfig } from './load'
 const SPEC_EXAMPLE = `[project]
 baseBranch = "main"
 
+# Optional; omission is the default text-only behavior.
+[dashboardFrames]
+provider = "github-release"
+repository = "owner/public-review-assets"
+releaseId = 123456
+
 [commands]                      # deterministic verbs the kernel may run
 setup = "bun install"           # after provision / sandbox rehydrate (§15.6-C)
 lint = "bun lint"
@@ -96,6 +102,11 @@ describe('parseConfig — SPEC §16.1 example', () => {
     const config = parseConfig(SPEC_EXAMPLE_WITH_UNIT)
     expect(config).toEqual({
       project: { baseBranch: 'main' },
+      dashboardFrames: {
+        provider: 'github-release',
+        repository: 'owner/public-review-assets',
+        releaseId: 123456,
+      },
       commands: {
         setup: 'bun install',
         lint: 'bun lint',
@@ -205,6 +216,55 @@ describe('parseConfig — defaults', () => {
       maxReconcileAttempts: 3,
       maxReviewRounds: 4,
     })
+  })
+})
+
+describe('parseConfig — optional dashboard frame hosting', () => {
+  test('accepts one explicit public GitHub release target and otherwise stays off', () => {
+    const enabled = parseConfig(`${READY}
+[dashboardFrames]
+provider = "github-release"
+repository = "acme/review-assets"
+releaseId = 123456
+`)
+    expect(enabled.dashboardFrames).toEqual({
+      provider: 'github-release',
+      repository: 'acme/review-assets',
+      releaseId: 123456,
+    })
+    expect(parseConfig(READY).dashboardFrames).toBeUndefined()
+  })
+
+  test('is strict and rejects unsupported providers or unknown keys', () => {
+    for (const table of [
+      '[dashboardFrames]\nprovider = "s3"\nrepository = "acme/assets"\nreleaseId = 1\n',
+      '[dashboardFrames]\nprovider = "github-release"\nrepository = "acme/assets"\nreleaseId = 1\nbucket = "frames"\n',
+    ]) {
+      expect(() => parseConfig(`${READY}${table}`)).toThrow(/dashboardFrames/)
+    }
+  })
+
+  test('rejects malformed repository pairs and non-positive release ids', () => {
+    for (const repository of ['', 'acme', 'acme/assets/extra', 'acme /assets']) {
+      expect(() =>
+        parseConfig(`${READY}
+[dashboardFrames]
+provider = "github-release"
+repository = ${JSON.stringify(repository)}
+releaseId = 1
+`),
+      ).toThrow(/dashboardFrames\.repository/)
+    }
+    for (const releaseId of [0, -1]) {
+      expect(() =>
+        parseConfig(`${READY}
+[dashboardFrames]
+provider = "github-release"
+repository = "acme/assets"
+releaseId = ${releaseId}
+`),
+      ).toThrow(/dashboardFrames\.releaseId/)
+    }
   })
 })
 
@@ -609,7 +669,9 @@ describe('parseConfig — strictness (a typo must not silently disable a verifie
   test('unknown top-level table is rejected, naming the known tables', () => {
     const error = parseError('[polcy]\nstallRounds = 3\n')
     expect(error.message).toContain('"polcy"')
-    expect(error.message).toContain('known tables: project, commands, server, verify')
+    expect(error.message).toContain(
+      'known tables: project, dashboardFrames, commands, server, verify',
+    )
   })
 
   test('unknown key inside [policy] is rejected', () => {

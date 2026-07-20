@@ -154,6 +154,42 @@ export function verifyReportKind(step: string): string {
   return `verify-report:${step}`
 }
 
+// ── Dashboard frame hosting ──────────────────────────────────────────────────
+
+/** Deliberately narrower than GitHub's full repository-name policy: one
+ * non-blank, whitespace-free `owner/repo` pair is enough for deterministic
+ * routing without pretending to validate a remote identifier locally. */
+export const githubRepositorySchema = z
+  .string()
+  .regex(
+    /^[^/\s]+\/[^/\s]+$/,
+    'expected exactly one non-blank GitHub repository pair in "owner/repo" form',
+  )
+export type GitHubRepository = z.infer<typeof githubRepositorySchema>
+
+/** Optional, frozen destination for review-window dashboard PNG copies. */
+export const dashboardFrameHostSchema = z.strictObject({
+  provider: z.literal('github-release'),
+  repository: githubRepositorySchema,
+  releaseId: z.number().int().positive(),
+})
+export type DashboardFrameHostTarget = z.infer<typeof dashboardFrameHostSchema>
+
+/** Durable deletion handle returned by GitHub after one frame is hosted. */
+export const hostedDashboardFrameAssetSchema = z.strictObject({
+  provider: z.literal('github-release'),
+  repository: githubRepositorySchema,
+  releaseId: z.number().int().positive(),
+  assetId: z.number().int().positive(),
+  url: z
+    .string()
+    .url()
+    .refine((url) => url.startsWith('https://'), 'hosted dashboard frame URL must use HTTPS'),
+})
+export type HostedDashboardFrameAsset = z.infer<
+  typeof hostedDashboardFrameAssetSchema
+>
+
 // ── Builds ───────────────────────────────────────────────────────────────────
 
 export const buildOutcomeSchema = z.enum(['merged', 'closed-unmerged', 'abandoned'])

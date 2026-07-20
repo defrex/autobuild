@@ -19,7 +19,17 @@ import {
   mergeStateStatuses,
   type MergeGatePresence,
 } from '../../kernel/auto-merge'
-import type { AutoMergeResult, Forge, PrRef, PrState } from '../types'
+import type {
+  AutoMergeResult,
+  DashboardFrameHosting,
+  Forge,
+  PrRef,
+  PrState,
+} from '../types'
+import {
+  GitHubDashboardFrameHosting,
+  type DashboardFrameTempFileWriter,
+} from './github-dashboard-frames'
 
 export interface ExecResult {
   stdout: string
@@ -30,22 +40,37 @@ export interface ExecResult {
 /** Same seam shape as the workspace module: argv array, cwd, no shell. */
 export type Exec = (
   cmd: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; signal?: AbortSignal },
 ) => Promise<ExecResult>
 
 export const bunExec: Exec = async (cmd, opts) => {
+  if (opts.signal?.aborted === true) {
+    throw new Error(`forge command aborted before launch: ${cmd.join(' ')}`)
+  }
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { stdout, stderr, exitCode }
+  const abort = (): void => {
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      // A process that exited concurrently is already cancelled sufficiently.
+    }
+  }
+  opts.signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { stdout, stderr, exitCode }
+  } finally {
+    opts.signal?.removeEventListener('abort', abort)
+  }
 }
 
 /** Writes `content` somewhere on disk and returns the path. */
@@ -298,13 +323,30 @@ const MERGEABLE_MAP = {
 
 export class GitHubForge implements Forge {
   readonly name = 'github'
+  readonly dashboardFrames: DashboardFrameHosting
 
   private readonly exec: Exec
   private readonly writeTempFile: TempFileWriter
 
-  constructor(opts: { exec?: Exec; writeTempFile?: TempFileWriter } = {}) {
+  constructor(
+    opts: {
+      exec?: Exec
+      writeTempFile?: TempFileWriter
+      writeDashboardFrameTempFile?: DashboardFrameTempFileWriter
+      dashboardFrameTimeoutMs?: number
+    } = {},
+  ) {
     this.exec = opts.exec ?? bunExec
     this.writeTempFile = opts.writeTempFile ?? defaultTempFileWriter
+    this.dashboardFrames = new GitHubDashboardFrameHosting({
+      exec: this.exec,
+      ...(opts.writeDashboardFrameTempFile !== undefined
+        ? { writeTempFile: opts.writeDashboardFrameTempFile }
+        : {}),
+      ...(opts.dashboardFrameTimeoutMs !== undefined
+        ? { commandTimeoutMs: opts.dashboardFrameTimeoutMs }
+        : {}),
+    })
   }
 
   private async run(cmd: string[], cwd: string): Promise<string> {
