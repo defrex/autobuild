@@ -13,10 +13,12 @@
  *   result, advance pristine (`merged`). Conflict → the resolveConflict
  *   agent seam decides, with a standing bias: PREFER THE LOCAL CUSTOMIZATION
  *   — upstream is adopted only where it doesn't collide with what the repo
- *   deliberately changed (`resolved`). A null result (or no resolver)
- *   escalates to a human: the LOCAL file is left byte-untouched and the
- *   report carries the merge-markered text (`conflicted`). Conflict markers
- *   are never written into the live skill.
+ *   deliberately changed (`resolved`). The returned full file is untrusted:
+ *   deterministic validation protects the installed skill identity, rejects
+ *   marker/wrapper output, and preserves every already-clean merge region. A
+ *   missing, declined, failed, or invalid resolution escalates to a human: the
+ *   LOCAL file is left byte-untouched and the report carries the merge-markered
+ *   text (`conflicted`). Conflict markers are never written into the live skill.
  * - missing pristine record (pre-record install) → ambiguous: adopt only
  *   when local == new (provably no divergence), otherwise `conflicted` —
  *   never silently clobber a file whose edit history is unknowable.
@@ -111,6 +113,145 @@ async function mergeFile(
   }
 }
 
+const CONFLICT_MARKER_LINE = /^(?:<{7,}|={7,}|>{7,}|\|{7,})(?:[ \t].*)?\r?$/m
+
+/** Split text into lines while retaining exact line endings. */
+function linesWithEndings(text: string): string[] {
+  const lines = text.match(/[^\n]*(?:\n|$)/g) ?? []
+  if (lines.at(-1) === '') lines.pop()
+  return lines
+}
+
+/**
+ * The failed merge already contains every non-colliding local and incoming
+ * edit. Extract the exact regions outside its conflict hunks; a resolver may
+ * replace the hunks, but it has no authority to rewrite these regions.
+ */
+function cleanMergeRegions(marked: string): string[] {
+  const regions: string[] = []
+  let current = ''
+  let conflict = false
+  let separator = false
+  let sawConflict = false
+
+  for (const line of linesWithEndings(marked)) {
+    const marker = line.replace(/\r?\n$/, '')
+    if (!conflict && marker === '<<<<<<< local') {
+      regions.push(current)
+      current = ''
+      conflict = true
+      separator = false
+      sawConflict = true
+      continue
+    }
+    if (conflict && marker === '=======') {
+      separator = true
+      continue
+    }
+    if (conflict && marker === '>>>>>>> upstream') {
+      if (!separator) {
+        throw new Error('git merge-file produced a malformed conflict without a separator')
+      }
+      conflict = false
+      continue
+    }
+    if (!conflict) current += line
+  }
+
+  if (conflict) {
+    throw new Error('git merge-file produced an unterminated conflict')
+  }
+  if (!sawConflict) {
+    throw new Error('git merge-file reported a conflict without conflict markers')
+  }
+  regions.push(current)
+  return regions
+}
+
+function frontmatterName(candidate: string): { name?: string; error?: string } {
+  const lines = candidate.split('\n')
+  if (lines[0]?.replace(/\r$/, '') !== '---') {
+    return { error: "output must begin at byte 0 with YAML frontmatter ('---')" }
+  }
+  const close = lines.findIndex(
+    (line, index) => index > 0 && line.replace(/\r$/, '') === '---',
+  )
+  if (close === -1) return { error: 'output has unterminated YAML frontmatter' }
+  if (close === 1) return { error: 'output has empty YAML frontmatter' }
+
+  const names: string[] = []
+  for (const rawLine of lines.slice(1, close)) {
+    const match = /^name:\s*(.*?)\s*\r?$/.exec(rawLine)
+    if (match === null) continue
+    let value = match[1] ?? ''
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1)
+    }
+    names.push(value)
+  }
+  if (names.length !== 1 || names[0] === '') {
+    return { error: 'frontmatter must contain exactly one nonempty name field' }
+  }
+  if (lines.slice(close + 1).join('\n').trim() === '') {
+    return { error: 'output must contain a complete nonempty skill body' }
+  }
+  return { name: names[0] }
+}
+
+/** Return an actionable reason when an agent proposal is unsafe. */
+export function validateConflictResolution(input: {
+  skill: string
+  candidate: string
+  markedMerge: string
+}): string | undefined {
+  if (input.candidate.trim() === '') return 'output was empty'
+  if (CONFLICT_MARKER_LINE.test(input.candidate)) {
+    return 'output contains a Git conflict-marker line'
+  }
+
+  const frontmatter = frontmatterName(input.candidate)
+  if (frontmatter.error !== undefined) return frontmatter.error
+  if (frontmatter.name !== input.skill) {
+    return `frontmatter names "${frontmatter.name}" instead of "${input.skill}"`
+  }
+
+  let regions: string[]
+  try {
+    regions = cleanMergeRegions(input.markedMerge)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+
+  const first = regions[0] ?? ''
+  if (first !== '' && !input.candidate.startsWith(first)) {
+    return 'output changed or wrapped the clean region before the first conflict'
+  }
+  let cursor = first.length
+  for (const region of regions.slice(1)) {
+    if (region === '') continue
+    const index = input.candidate.indexOf(region, cursor)
+    if (index === -1) {
+      return 'output omitted or changed an already-clean merge region'
+    }
+    cursor = index + region.length
+  }
+  const last = regions.at(-1) ?? ''
+  if (last !== '' && !input.candidate.endsWith(last)) {
+    return 'output changed or wrapped the clean region after the last conflict'
+  }
+  return undefined
+}
+
+function errorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, ' ')
+    .trim() || 'unknown error'
+}
+
 export async function abUpgrade(opts: {
   targetRepo: string
   distRoot?: string
@@ -192,25 +333,59 @@ export async function abUpgrade(opts: {
       continue
     }
 
-    const resolved =
-      opts.resolveConflict !== undefined
-        ? await opts.resolveConflict({ skill: name, base: pristine, local, incoming })
-        : null
-    if (resolved !== null) {
-      await writeFile(installedSkillPath(targetRepo, name), resolved)
-      await writePristine(targetRepo, name, incoming)
-      report(name, 'resolved')
-      stdout(`${name}: resolved`)
-    } else {
-      // The escalation path: a human decides. The live file stays
-      // byte-untouched (never write conflict markers into it); the report
-      // carries the markered merge text.
-      report(name, 'conflicted', merge.text)
+    // Every agent-side failure converges on this one fail-safe result. Neither
+    // live nor pristine has been touched at this point; the marked merge stays
+    // report-only as a diagnostic for the manual recovery path.
+    const keepConflict = (reason: string): void => {
+      report(
+        name,
+        'conflicted',
+        `${reason}\n\nmarked merge diagnostic (not written):\n${merge.text}`,
+      )
       stdout(
-        `${name}: conflicted — local edits collide with the new default; ` +
-          `kept your local file (merge by hand against .agents/skills/.ab-pristine/${name}/SKILL.md)`,
+        `${name}: conflicted — ${reason}; kept your local file ` +
+          `(merge by hand against .agents/skills/.ab-pristine/${name}/SKILL.md)`,
       )
     }
+
+    if (opts.resolveConflict === undefined) {
+      keepConflict('agent resolution unavailable')
+      continue
+    }
+
+    let resolved: string | null
+    try {
+      resolved = await opts.resolveConflict({
+        skill: name,
+        base: pristine,
+        local,
+        incoming,
+      })
+    } catch (error) {
+      keepConflict(`agent resolution failed: ${errorMessage(error)}`)
+      continue
+    }
+    if (resolved === null) {
+      keepConflict('agent declined because the correct resolution is ambiguous')
+      continue
+    }
+
+    const invalid = validateConflictResolution({
+      skill: name,
+      candidate: resolved,
+      markedMerge: merge.text,
+    })
+    if (invalid !== undefined) {
+      keepConflict(`agent resolution was invalid: ${invalid}`)
+      continue
+    }
+
+    // Validation is complete before either write. Disk failures remain real
+    // command errors; only untrusted agent-resolution failures are downgraded.
+    await writeFile(installedSkillPath(targetRepo, name), resolved)
+    await writePristine(targetRepo, name, incoming)
+    report(name, 'resolved')
+    stdout(`${name}: resolved`)
   }
 
   // Installed ab-* skills absent from the distribution: local additions are

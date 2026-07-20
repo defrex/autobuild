@@ -33,7 +33,7 @@ import { ServerControl } from './server-control'
 import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
 import { abTicket } from './ticket'
-import { abUpgrade } from './upgrade'
+import { abUpgrade, type ResolveConflict } from './upgrade'
 import {
   abHarvestStatus,
   buildHarvestContext,
@@ -123,6 +123,12 @@ export interface SessionlessCliDeps {
   /** Optional per-paint presentation lookup used only by the repo-local dev
    * entry. The published binary never supplies it. */
   resolveDashboardRenderer?: DashboardRendererResolver
+  /** Production supplies the tool-free upgrade agent; tests inject a fake.
+   * Construction is deferred until a skill actually conflicts. */
+  upgradeResolverFactory?: (opts: {
+    targetRepo: string
+    env: Record<string, string | undefined>
+  }) => ResolveConflict
   store?: BuildStore
   env?: CliEnv
   harvestEnv?: HarvestCliEnv
@@ -464,10 +470,27 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (extra.length > 0 || target?.startsWith('--') === true) {
         throw new Error('usage: ab upgrade [target] (§16.3)')
       }
+      const targetRepo = target ?? deps.workspacePath
+      const resolverFactory = deps.upgradeResolverFactory
+      let resolver: ResolveConflict | undefined
+      const resolveConflict: ResolveConflict | undefined =
+        resolverFactory === undefined
+          ? undefined
+          : async (input) => {
+              // Factory/config/runtime work is lazy: a clean upgrade never
+              // needs agent infrastructure. Throws are caught per skill by
+              // abUpgrade and become the byte-preserving conflicted outcome.
+              resolver ??= resolverFactory({
+                targetRepo,
+                env: deps.processEnv ?? {},
+              })
+              return resolver(input)
+            }
       await abUpgrade({
-        targetRepo: target ?? deps.workspacePath,
+        targetRepo,
         stdout,
         ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
+        ...(resolveConflict !== undefined ? { resolveConflict } : {}),
       })
       return 0
     }

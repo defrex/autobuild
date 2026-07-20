@@ -1,10 +1,10 @@
 /**
  * Runtime/model/extension role resolution (SPEC §9, §16.1). The reserved
- * `[roles.default]` entry is the raw inheritance base; every phase role merges
- * over it independently per field.
+ * `[roles.default]` entry is the raw inheritance base; every concrete role
+ * merges over it independently per field (phase and non-phase alike).
  *
  * The resolver is EAGER: `createRuntimeResolver` resolves the default and every
- * declared phase role AT CONSTRUCTION, aggregating every problem into one loud
+ * declared role AT CONSTRUCTION, aggregating every problem into one loud
  * `RuntimeConfigError`. A named runtime/model pair is exact: the runtime must
  * be registered and must serve that model. Resolution never substitutes a
  * runtime-local default for an incompatible configured model and never hunts
@@ -112,7 +112,7 @@ function resolveSpec(
 
 /**
  * Build the resolver, resolving EVERYTHING eagerly (§9). Any problem — in the
- * reserved default or any declared phase role — throws one aggregated
+ * reserved default or any declared role — throws one aggregated
  * `RuntimeConfigError`, so bad config fails before a session launches.
  *
  * @param registry         name → adapter + compatibility data.

@@ -6,6 +6,7 @@
  */
 import { join } from 'node:path'
 import { isSessionlessInvocation, runCli } from './main'
+import { createUpgradeAgentResolver } from './upgrade-agent'
 import { loadDotEnv } from './dotenv'
 import { resolveCliEnv, resolveHarvestCliEnv } from './env'
 import { resolveStore } from './store-ref'
@@ -48,6 +49,7 @@ export async function runBinary(
         // TTY, so a pipe or redirect silently gets plain output.
         terminal: processTerminal(process.stdout),
         input: processTerminalInput(process.stdin),
+        upgradeResolverFactory: createUpgradeAgentResolver,
         ...(resolveDashboardRenderer !== undefined
           ? { resolveDashboardRenderer }
           : {}),

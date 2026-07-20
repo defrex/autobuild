@@ -1,8 +1,8 @@
 /**
- * A narrow pre-build judgment capability. Unlike AgentRunner, one-shot
- * completions have no resumable session, skill invocation, transcript, or
- * typed terminal: callers provide one prompt and consume text as a proposal
- * behind deterministic validation.
+ * A narrow, tool-free, non-phase judgment capability. Unlike AgentRunner,
+ * one-shot completions have no resumable session, skill invocation,
+ * transcript, or typed terminal: callers provide one prompt and consume text
+ * as an untrusted proposal behind deterministic validation.
  */
 
 export interface OneShotCompletionInput {

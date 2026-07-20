@@ -126,7 +126,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     this.queryFn = opts.queryFn ?? sdkQueryFn
   }
 
-  /** Pre-build judgment: one verbatim prompt, one model turn, and no tools.
+  /** Non-phase judgment: one verbatim prompt, one model turn, and no tools.
    * It deliberately creates no resumable AgentRunner session state. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const cancellation = linkAbortSignal(input.signal)
