@@ -503,14 +503,25 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(d.out).toContain('ab-plan: installed')
   })
 
-  test('ab init takes an explicit target and --force', async () => {
+  test('ab init takes an explicit target and --force only overwrites edited skills', async () => {
     const explicit = await mkdtemp(join(tmpdir(), 'ab-init-cli-'))
     try {
       const d = sessionless()
       expect(await runCli(['init', explicit], d)).toBe(0)
-      await writeFile(installedSkillPath(explicit, 'ab-plan'), 'edited\n')
+      const skillPath = installedSkillPath(explicit, 'ab-plan')
+      const defaultSkill = await readFile(skillPath, 'utf8')
+      const configPath = join(explicit, 'autobuild.toml')
+      const existingConfig = '[project]\nbaseBranch = "trunk"\n'
+      await writeFile(skillPath, 'edited\n')
+      await writeFile(configPath, existingConfig)
+      d.out.length = 0
+
       expect(await runCli(['init', explicit, '--force'], d)).toBe(0)
+
+      expect(d.out).toContain('autobuild.toml: skipped')
       expect(d.out).toContain('ab-plan: overwritten')
+      expect(await readFile(skillPath, 'utf8')).toBe(defaultSkill)
+      expect(await readFile(configPath, 'utf8')).toBe(existingConfig)
     } finally {
       await rm(explicit, { recursive: true, force: true })
     }
@@ -522,11 +533,16 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(d.err.join('\n')).toContain('usage: ab init [target] [--force]')
   })
 
-  test('help works without session deps', async () => {
+  test('help distinguishes first-time config creation from forced skill replacement', async () => {
     const d = sessionless()
     expect(await runCli(['--help'], d)).toBe(0)
-    expect(d.out.join('\n')).toContain('ab init [target] [--force]')
-    expect(d.out.join('\n')).toContain('ab upgrade [target]')
+    const help = d.out.join('\n')
+    expect(help).toContain('ab init [target] [--force]')
+    expect(help).toContain('create autobuild.toml only when absent')
+    expect(help).toContain('vendor the default ab-* skills')
+    expect(help).toContain('--force overwrites edited vendored skills only')
+    expect(help).toContain('never overwrites an existing autobuild.toml')
+    expect(help).toContain('ab upgrade [target]')
   })
 
   test('session commands without session deps fail with agent feedback, not a crash', async () => {

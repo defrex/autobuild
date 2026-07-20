@@ -168,7 +168,8 @@ From the repository root:
 ab init
 ```
 
-`ab init [target] [--force]` writes, for the target repo (default: the current
+`ab init [target] [--force]` creates `autobuild.toml` only when absent and
+vendors the default `ab-*` skills for the target repo (default: the current
 directory):
 
 - **`autobuild.toml`**, rendered from the baseline template **only if absent**.
@@ -193,10 +194,11 @@ ab-implement: installed
 ```
 
 Config actions are `written` or `skipped`. Skill actions are `installed`,
-`unchanged`, `kept`, or `overwritten`. **Local edits are never clobbered**: an
-edited skill is reported `kept` unless you pass `--force`, which overwrites
-edited skills (and only skills). `ab init` is idempotent — re-running it is
-safe, and reports `skipped` / `unchanged`.
+`unchanged`, `kept`, or `overwritten`. Without `--force`, an edited vendored
+skill is reported `kept`; on a rerun with `--force`, it is `overwritten`. The
+flag applies only to edited vendored skills: it never overwrites an existing
+`autobuild.toml`. `ab init` is idempotent — re-running it is safe, and reports
+`skipped` / `unchanged`.
 
 ### 2. Configure `autobuild.toml`
 
@@ -837,7 +839,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 
 | Command | What it does |
 |---|---|
-| `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
+| `ab init [target] [--force]` | Create `autobuild.toml` only when absent and vendor the default `ab-*` skills. On reruns, `--force` overwrites edited vendored skills only; it never overwrites an existing `autobuild.toml`. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]` | File a ticket to the configured `[tickets]` source. |
 | `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]` | Partially update editable ticket fields; at least one flag is required and state is excluded. |
