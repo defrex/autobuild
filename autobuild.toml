@@ -24,6 +24,9 @@ test = "bun run test"
 #readyTimeout = 60               # seconds
 
 [verify]
+# These are the configured universe/order. A plan may select either optional
+# step in opening `verifySteps` front matter; `always = true` on a step would
+# make it mandatory. Plans without metadata select both.
 steps = ["types", "unit"]
 
 [verify.types]

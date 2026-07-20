@@ -36,6 +36,37 @@ write product code in this phase.
    it succeeds, and nothing you print matters to the pipeline. If it reports
    a validation error, fix what it names and run it again.
 
+## Verification selection
+
+The plan may select which configured optional verify steps this build warrants.
+Read `autobuild.toml` before writing the plan:
+
+- `[verify].steps` is the complete configured universe and the execution order.
+- A step whose `[verify.<step>]` table has `always = true` is mandatory and must
+  appear in every explicit selection.
+- Every other configured step is selectable. Choose it when the spec's purpose
+  or the planned change warrants that verification; this is judgment, not a
+  path-glob calculation.
+
+Put the selection in an opening TOML front-matter block in the same
+`.ab/plan.md` artifact:
+
+```toml
++++
+verifySteps = ["types", "e2e"]
++++
+```
+
+The array is the complete selected set, including every mandatory step. Its
+written order does not reorder execution; the kernel canonicalizes to
+`[verify].steps` order. With no front matter, all configured steps run, which
+is the compatibility-safe default. An explicit empty array is valid only when
+all configured steps are optional. Unknown, duplicate, blank, malformed, or
+mandatory-omitting selections make `ab done` fail with a correction message;
+deposit a fresh corrected plan revision and retry. `plan-review` sees and
+reviews this block as part of the plan—there is no separate artifact or
+verdict.
+
 ## What a plan contains
 
 - **Approach** — the shape of the change and why this shape, in a few

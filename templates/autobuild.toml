@@ -35,8 +35,10 @@ steps = [
 
 # Agent-verify example — a skill run with a pass|fail|skip verdict (§5).
 # `paths` is optional on either verifier kind: any changed path matching any
-# positive repo-relative glob makes the step apply. Omit it for unconditional;
-# `always = true` explicitly overrides a present paths list.
+# positive repo-relative glob makes the step apply. Omit it for unconditional.
+# `always = true` overrides paths and makes the step mandatory: every explicit
+# plan `verifySteps` selection must include it; without plan metadata all steps
+# remain selected.
 #[verify.e2e]
 #kind = "agent"
 #skill = "ab-verify-e2e"
