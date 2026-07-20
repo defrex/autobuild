@@ -355,7 +355,7 @@ including under `--force`.
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
 | `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
-| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, alternate-screen replacement, and deterministic ANSI-to-PNG/text evidence helpers | §7.5, §14, §15.5 |
+| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, a display-only incremental build poll cache, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, alternate-screen replacement, and deterministic ANSI-to-PNG/text evidence helpers | §7.5, §14, §15.5 |
 | `src/integration/dashboard-capture.ts` | Local scripted dispatch scenario used by `verify:dashboard`; captures fixed-clock wide/narrow paints and deposits exact frame pairs/manifests | §5, §7.5, §8.2 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
@@ -385,6 +385,26 @@ plus the harvest reducer's acknowledged durable gate as explicit ON/OFF tokens.
 Pending harvest commands do not optimistically change that token. Per-build auto-merge
 reduction retains four states, but rendering collapses the three active states to `auto merge` with cyan/green/yellow
 emphasis and omits the token for `off`.
+
+`src/cli/dashboard/poll.ts` is a per-`DispatchLoop`, display-only read cache.
+`listBuilds()` remains the fresh repository-scoped discovery read on every
+store poll. A first-seen build is reduced and projected from its complete log;
+subsequent nonterminal reads use `getEvents(lastSeq)`. Empty deltas preserve the
+same `BuildState` and `DashboardBuild` objects, so `projectBuild` and its
+`phaseIntervals` walk do not rerun. Nonempty deltas extend the retained live log
+and replace both projections. Reducer-confirmed `done`/`aborted` entries compact
+to terminal tombstones and receive no later event reads; absent records are
+pruned. Refreshes serialize and commit transactionally, so a failed or
+overlapping read cannot advance only part of the frame or replace a newer
+sequence with an older one.
+
+`model.ts` keeps `projectBuild` as the only build-row projection and composes
+preprojected rows separately with a freshly reduced repository journal. Thus
+intake, auto-merge default, the Harvest gate/run, and cross-dispatcher controls
+continue to converge on every poll. Build control services also keep their own
+fresh authoritative reads, and dispatcher/runner decisions never consume this
+cache. The append-only logs remain authoritative: cache loss or process restart
+only causes full rehydration.
 
 The dashboard is an operator command producer, not forge plumbing. Its model
 tracks selection as `{kind: 'global'} | {kind: 'harvest'} | {kind: 'build',
@@ -443,8 +463,9 @@ validation; omitted flags append nothing. Global `p`/`m` each re-read immediatel
 before appending the opposite current value. Every serialized tick re-reads the
 journal before supplying `acceptNewWork` and `defaultAutoMerge`, while every
 dashboard projection derives the same values from its poll. Multiple dispatchers
-therefore converge without a process-owned cache, and sequence order gives each
-setting last-write-wins behavior. The values remain outside `autobuild.toml`.
+therefore converge without a process-owned repository-settings cache, and
+sequence order gives each setting last-write-wins behavior. The values remain
+outside `autobuild.toml`.
 When auto-merge default is on, `Dispatcher` appends the existing human-authored
 `build.auto-merge-requested` immediately after `build.created` and before
 provision/runner launch. Resume, adoption, janitor, lease sweep, direct creation,

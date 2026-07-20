@@ -930,6 +930,17 @@ or repository log (§15.2.7): `escalation.answered`,
   and another separates the body from the legend or modal controls. The
   redundant startup banner is omitted. `--plain` (and non-TTY output) remains
   line-oriented, prints every line as before, and reads no keyboard input.
+- Build-row polling uses a process-local, display-only cache. Every normal
+  refresh still calls `listBuilds()` for discovery and fully hydrates each
+  first-seen stream from its append-only event log. Later refreshes call
+  `getEvents(slug, lastSeq)` only for nonterminal builds: an empty delta reuses
+  the exact reduction and timing projection, a nonempty delta replaces them,
+  and a reducer-confirmed `done` or `aborted` stream becomes a terminal
+  tombstone that is no longer polled. Records absent from a later listing are
+  pruned. Cache loss or process restart merely causes full rehydration; event
+  logs remain authoritative. Repository-journal state is reduced fresh on
+  every frame, build actions re-read their authoritative streams, and no
+  dispatcher/runner decision consults the display cache.
 - Up/Down move through one ordered list: the global top section first, optional
   `Harvest` second, then slug-sorted builds. Selection survives repaint,
   re-sort, and body-row appearance/disappearance by tracking a discriminated
@@ -1255,8 +1266,10 @@ escalations as blocked and retains a separate `(paused)` marker. `autoMerge`
 retains the latest human desired value and command seq separately from the
 latest applied `{enabled, commandSeq}` fact. The desired command is settled only when both
 fields match, so a stale acknowledgement cannot erase newer intent. The
-operator UI's build list is exactly this reduction over every build in the
-store.
+operator UI's build list is exactly the active projection of these reductions.
+Its process-local poll cache may retain a nonterminal reduction keyed by its
+last event sequence, but never substitutes a snapshot for the append-only log;
+a cold process rehydrates every listed stream from sequence zero.
 
 The separate dispatcher-settings reducer derives intake and the claim-time
 auto-merge default from their latest independent setting facts; it ignores
