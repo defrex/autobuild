@@ -446,6 +446,15 @@ which commands the phase is authorized to execute.
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> [--findings <json>] [--notes <file>] [--reason …] [--report <file>]` | complete a review/verify phase | **yes** |
 | `ab escalate <question> [--refs …]` | park the build for human input | **yes** |
 
+Argument contracts are command-scoped. Each command or nested subcommand
+supplies its own complete set of value and boolean flags; declaring a flag for
+one form cannot make it syntactically valid on another. Flags may be
+interspersed with positionals without changing positional order, but every flag
+is a singleton. An undeclared or duplicate flag, a missing value, or a
+following `--...` token where a value is required produces an actionable usage
+error before the command handler runs. Explicit empty-string values remain
+valid (for example, `ab ticket update … --labels ''`).
+
 `artifact put` reads bytes without UTF-8 coercion. `artifact download` alone is
 sessionless inside that namespace; `put|get` retain ambient own-build auth. The
 download form applies the normal explicit `--store` > `AB_STORE` > local

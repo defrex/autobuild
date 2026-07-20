@@ -141,6 +141,26 @@ describe('runCli — routing and exit codes', () => {
     }
   })
 
+  test('build-session guidance keeps precedence where it did before argument parsing', async () => {
+    for (const argv of [
+      ['context', '--store', 'state'],
+      ['done', '--json'],
+      ['artifact', 'put', 'plan', 'plan.md', '--output', 'copy'],
+      ['server', 'status', '--json'],
+    ]) {
+      const err: string[] = []
+      expect(
+        await runCli(argv, {
+          workspacePath: tmp,
+          stdout: () => {},
+          stderr: (line) => err.push(line),
+        }),
+      ).toBe(1)
+      expect(err.join('\n')).toContain('runs inside a build session')
+      expect(err.join('\n')).toContain('AB_SESSION')
+    }
+  })
+
   test('dependency-light routing gives harvest commands their own session guard', async () => {
     const err: string[] = []
     expect(
@@ -162,6 +182,202 @@ describe('runCli — routing and exit codes', () => {
       'AB_SESSION',
     ]) {
       expect(feedback).toContain(name)
+    }
+  })
+})
+
+describe('runCli — command-scoped flag contracts', () => {
+  test('a flag accepted by one route is unknown on unrelated phase, nested, and sessionless routes', async () => {
+    const cases: Array<{
+      argv: string[]
+      flag: string
+      usage: string
+    }> = [
+      {
+        argv: ['context', '--store', 'state'],
+        flag: '--store',
+        usage: 'usage: ab context [--json]',
+      },
+      {
+        argv: ['done', '--json'],
+        flag: '--json',
+        usage: 'usage: ab done [--notes <file>]',
+      },
+      {
+        argv: ['artifact', 'put', 'plan', 'plan.md', '--output', 'copy'],
+        flag: '--output',
+        usage: 'usage: ab artifact put <kind> <file>',
+      },
+      {
+        argv: ['harvest', 'context', '--store', 'state'],
+        flag: '--store',
+        usage: 'usage: ab harvest context [--json]',
+      },
+      {
+        argv: ['harvest', 'submit', 'proposals.json', '--json'],
+        flag: '--json',
+        usage: 'usage: ab harvest submit <proposals.json>',
+      },
+      {
+        argv: [
+          'harvest',
+          'verdict',
+          'approve',
+          '--notes',
+          'review.md',
+          '--report',
+          'report.md',
+        ],
+        flag: '--report',
+        usage: 'usage: ab harvest verdict',
+      },
+      {
+        argv: ['builds', '--notes', 'notes.md'],
+        flag: '--notes',
+        usage: 'usage: ab builds',
+      },
+      {
+        argv: ['build', 'status', 'build-1', '--queued'],
+        flag: '--queued',
+        usage: 'usage: ab build status',
+      },
+      {
+        argv: ['pause', 'build-1', '--events', '2'],
+        flag: '--events',
+        usage: 'usage: ab pause',
+      },
+      {
+        argv: [
+          'artifact',
+          'download',
+          'build-1',
+          'plan',
+          '--output',
+          'plan.md',
+          '--json',
+        ],
+        flag: '--json',
+        usage: 'usage: ab artifact download',
+      },
+      {
+        argv: ['harvest', 'status', '--reason', 'why'],
+        flag: '--reason',
+        usage: 'usage: ab harvest status',
+      },
+      {
+        argv: ['dispatch', '--json'],
+        flag: '--json',
+        usage: 'usage: ab dispatch',
+      },
+    ]
+
+    for (const { argv, flag, usage } of cases) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      const feedback = d.err.join('\n')
+      expect(feedback).toContain(`unknown flag ${flag}`)
+      expect(feedback).toContain(usage)
+      expect(d.out).toEqual([])
+    }
+  })
+
+  test('duplicate singleton flags use the same usage-bearing error across routes', async () => {
+    const cases: Array<{ argv: string[]; diagnostic: string; usage: string }> = [
+      {
+        argv: ['done', '--notes', 'one.md', '--notes', 'two.md'],
+        diagnostic: '--notes may be supplied only once',
+        usage: 'usage: ab done',
+      },
+      {
+        argv: ['context', '--json', '--json'],
+        diagnostic: '--json may be supplied only once',
+        usage: 'usage: ab context',
+      },
+      {
+        argv: ['builds', '--all', '--all'],
+        diagnostic: '--all may be supplied only once',
+        usage: 'usage: ab builds',
+      },
+      {
+        argv: [
+          'artifact',
+          'download',
+          'build-1',
+          'plan',
+          '--output',
+          'one.md',
+          '--output',
+          'two.md',
+        ],
+        diagnostic: '--output may be supplied only once',
+        usage: 'usage: ab artifact download',
+      },
+      {
+        argv: ['dispatch', '--once', '--once'],
+        diagnostic: '--once may be supplied only once',
+        usage: 'usage: ab dispatch',
+      },
+    ]
+
+    for (const { argv, diagnostic, usage } of cases) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain(diagnostic)
+      expect(d.err.join('\n')).toContain(usage)
+      expect(d.out).toEqual([])
+    }
+  })
+
+  test('flag-shaped values are rejected consistently before any handler runs', async () => {
+    const cases: Array<{ argv: string[]; diagnostic: string; usage: string }> = [
+      {
+        argv: ['done', '--notes', '--report'],
+        diagnostic: '--notes requires a value, got "--report"',
+        usage: 'usage: ab done',
+      },
+      {
+        argv: ['builds', '--store', '--json'],
+        diagnostic: '--store requires a value, got "--json"',
+        usage: 'usage: ab builds',
+      },
+      {
+        argv: ['harvest', 'status', '--events', '--json'],
+        diagnostic: '--events requires a value, got "--json"',
+        usage: 'usage: ab harvest status',
+      },
+    ]
+
+    for (const { argv, diagnostic, usage } of cases) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain(diagnostic)
+      expect(d.err.join('\n')).toContain(usage)
+      expect(d.out).toEqual([])
+    }
+  })
+
+  test('no-flag forms reject flags and undocumented extra positionals', async () => {
+    const cases = [
+      { argv: ['help', 'extra'], usage: 'usage: ab help' },
+      {
+        argv: ['artifact', 'get', 'plan', 'extra'],
+        usage: 'usage: ab artifact get',
+      },
+      {
+        argv: ['server', 'status', 'extra'],
+        usage: 'usage: ab server',
+      },
+      {
+        argv: ['harvest', 'submit', 'proposals.json', 'extra'],
+        usage: 'usage: ab harvest submit',
+      },
+    ]
+
+    for (const { argv, usage } of cases) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain(usage)
+      expect(d.out).toEqual([])
     }
   })
 })
@@ -271,7 +487,8 @@ describe('runCli — builds / build status routing', () => {
   test('--events with no value is a usage error', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['build', 'status', 'b1', '--events'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('--events requires a positive integer')
+    expect(d.err.join('\n')).toContain('--events requires a value')
+    expect(d.err.join('\n')).toContain('usage: ab build status')
   })
 
   test('--store with no value is a usage error', async () => {
@@ -303,18 +520,20 @@ describe('runCli — builds / build status routing', () => {
   test('--events followed by another flag is an error', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['build', 'status', 'b1', '--events', '--json'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('--events requires a positive integer')
+    expect(d.err.join('\n')).toContain(
+      '--events requires a value, got "--json"',
+    )
     expect(d.out).toEqual([])
   })
 
   test('an unknown flag on either command exits 1', async () => {
     const d1 = sessionlessDeps()
     expect(await runCli(['builds', '--frobnicate'], d1)).toBe(1)
-    expect(d1.err.join('\n')).toContain('unknown argument "--frobnicate"')
+    expect(d1.err.join('\n')).toContain('unknown flag --frobnicate')
 
     const d2 = sessionlessDeps()
     expect(await runCli(['build', 'status', 'b1', '--frobnicate'], d2)).toBe(1)
-    expect(d2.err.join('\n')).toContain('unknown argument "--frobnicate"')
+    expect(d2.err.join('\n')).toContain('unknown flag --frobnicate')
   })
 
   test('ab build with no or unknown subcommand prints usage', async () => {
@@ -333,9 +552,8 @@ describe('runCli — builds / build status routing', () => {
     expect(d.err.join('\n')).toContain('usage: ab build status <slug>')
   })
 
-  // The flag-set leakage guard: --store/--events are parsed locally by these
-  // commands, so they must NOT have become legal on session commands via
-  // main's module-global VALUE_FLAGS.
+  // The flag-set leakage guard: status and phase routes supply independent
+  // contracts to the shared parser, so status/ticket flags stay invalid here.
   test('sessionless and ticket-only flags did not leak into phase commands', async () => {
     const cases: Array<{ argv: string[]; flag: string }> = [
       { argv: ['done', '--store', '/tmp/x'], flag: '--store' },
@@ -1009,7 +1227,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     const d = deps()
     expect(await runCli(['dispatch', '--dashboard'], { ...d, workspacePath: tmp })).toBe(1)
     const err = d.err.join('\n')
-    expect(err).toContain('unknown argument "--dashboard"')
+    expect(err).toContain('unknown flag --dashboard')
     expect(err).toContain('[--plain]')
     expect(err).toContain('[--intake | --no-intake]')
     expect(err).toContain('[--auto-merge | --no-auto-merge]')

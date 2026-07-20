@@ -272,6 +272,13 @@ to the front of `PATH`. `bin/agent/ab` is a private executable launcher that
 imports the canonical `bin/ab.ts`, so agent tools use the same CLI wiring as the
 operator binary even when the inherited host path contains another `ab`.
 
+`src/cli/args.ts` is the local argument-contract boundary. Its pure parser has
+no global flag vocabulary: `main.ts` and `ticket.ts` pass the exact value and
+boolean flags for the command or nested subcommand being routed. It preserves
+interspersed positional order and rejects unknown, duplicate, missing-value,
+and flag-shaped-value syntax with the receiving command's usage before a
+handler runs. Positional arity and semantic validation remain in each route.
+
 `src/cli/binary.ts` classifies sessionless invocations before phase wiring. For
 a phase-only invocation, a complete build or harvest tuple is parsed strictly
 and its scoped store is resolved as before. An absent or empty required value
@@ -397,7 +404,7 @@ loads target config or calls agent infrastructure.
 | `src/kernel/` | Phase table/build reducer/engine plus pure repository harvest and dispatcher-settings reducers; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `production.ts` (shared shipped registrations), `one-shot.ts` (optional non-phase completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
 | `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
-| `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering, while `upgrade.ts` owns merge validation/writes and `upgrade-agent.ts` owns the optional one-shot proposal | §8, §16.3 |
+| `src/cli/` | The `ab` CLI — the only agent↔store channel; `args.ts` owns command-scoped syntax contracts, `init.ts` owns first-config package-script detection/rendering, and `upgrade.ts` plus `upgrade-agent.ts` own skill merge writes and optional resolution proposals | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, a display-only incremental build poll cache, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, alternate-screen replacement, and deterministic ANSI-to-PNG/text evidence helpers | §7.5, §14, §15.5 |
 | `src/integration/dashboard-capture.ts` | Local scripted dispatch scenario used by `verify:dashboard`; captures fixed-clock wide/narrow paints and deposits exact frame pairs/manifests | §5, §7.5, §8.2 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |

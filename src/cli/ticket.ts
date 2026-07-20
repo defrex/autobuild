@@ -16,6 +16,7 @@ import type {
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { readyCriteria } from '../processes/dispatcher'
+import { parseArgs, stringFlag } from './args'
 import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
 
 export type TicketSourceFactory = (
@@ -336,57 +337,6 @@ export const TICKET_USAGE = [
   MOVE_USAGE,
 ].join('\n')
 
-type TicketFlagKind = 'value' | 'boolean'
-
-interface ParsedTicketArgs {
-  positionals: string[]
-  flags: Map<string, string | true>
-}
-
-function parseTicketArgs(
-  args: string[],
-  allowedFlags: Readonly<Record<string, TicketFlagKind>>,
-  usage: string,
-): ParsedTicketArgs {
-  const positionals: string[] = []
-  const flags = new Map<string, string | true>()
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!
-    if (!arg.startsWith('--')) {
-      positionals.push(arg)
-      continue
-    }
-
-    const name = arg.slice(2)
-    const kind = allowedFlags[name]
-    if (kind === undefined) {
-      throw new Error(`unknown argument "${arg}" — ${usage}`)
-    }
-    if (flags.has(name)) {
-      throw new Error(`--${name} may be supplied only once — ${usage}`)
-    }
-    if (kind === 'boolean') {
-      flags.set(name, true)
-      continue
-    }
-
-    const value = args[index + 1]
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(
-        `--${name} requires a value${value !== undefined ? `, got "${value}"` : ''} — ${usage}`,
-      )
-    }
-    flags.set(name, value)
-    index += 1
-  }
-  return { positionals, flags }
-}
-
-function stringFlag(parsed: ParsedTicketArgs, name: string): string | undefined {
-  const value = parsed.flags.get(name)
-  return typeof value === 'string' ? value : undefined
-}
-
 function commaList(value: string): string[] {
   return value
     .split(',')
@@ -399,8 +349,8 @@ interface TicketCliOpts extends TicketCommandOpts {
   stderr: (line: string) => void
 }
 
-/** Parse and execute the complete ticket argv tail. Ticket-only flags stay out
- * of the phase-command parser in main.ts. */
+/** Parse and execute the complete ticket argv tail. Each subcommand supplies
+ * only its own flags to the shared command-scoped parser. */
 export async function abTicket(
   argv: string[],
   opts: TicketCliOpts,
@@ -408,7 +358,7 @@ export async function abTicket(
   const [command, ...args] = argv
   switch (command) {
     case 'create': {
-      const parsed = parseTicketArgs(
+      const parsed = parseArgs(
         args,
         { body: 'value', labels: 'value', 'blocked-by': 'value' },
         TICKET_USAGE,
@@ -437,7 +387,7 @@ export async function abTicket(
     }
 
     case 'update': {
-      const parsed = parseTicketArgs(
+      const parsed = parseArgs(
         args,
         { title: 'value', body: 'value', labels: 'value' },
         TICKET_USAGE,
@@ -469,7 +419,7 @@ export async function abTicket(
 
     case 'block':
     case 'unblock': {
-      const parsed = parseTicketArgs(args, {}, TICKET_USAGE)
+      const parsed = parseArgs(args, {}, TICKET_USAGE)
       const [id, blockerId, ...extra] = parsed.positionals
       if (
         id === undefined ||
@@ -487,7 +437,7 @@ export async function abTicket(
     }
 
     case 'list': {
-      const parsed = parseTicketArgs(
+      const parsed = parseArgs(
         args,
         { state: 'value', labels: 'value', json: 'boolean' },
         TICKET_USAGE,
@@ -506,7 +456,7 @@ export async function abTicket(
     }
 
     case 'show': {
-      const parsed = parseTicketArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
       const [id, ...extra] = parsed.positionals
       if (id === undefined || id.trim() === '' || extra.length > 0) {
         throw new Error(TICKET_USAGE)
@@ -520,7 +470,7 @@ export async function abTicket(
     }
 
     case 'move': {
-      const parsed = parseTicketArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
       const [id, state, ...extra] = parsed.positionals
       if (
         id === undefined ||

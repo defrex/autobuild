@@ -1023,6 +1023,40 @@ describe('runCli — ticket routing', () => {
     }
   })
 
+  test('ticket subcommands share diagnostics without sharing flag vocabularies', async () => {
+    const cases: Array<{ argv: string[]; diagnostic: string }> = [
+      {
+        argv: ['ticket', 'list', '--json', '--json'],
+        diagnostic: '--json may be supplied only once',
+      },
+      {
+        argv: ['ticket', 'create', 'Title', '--body', '--labels', 'api'],
+        diagnostic: '--body requires a value, got "--labels"',
+      },
+      {
+        argv: ['ticket', 'show', 'file-1', '--state', 'Ready'],
+        diagnostic: 'unknown flag --state',
+      },
+      {
+        argv: ['ticket', 'update', 'file-1', '--json'],
+        diagnostic: 'unknown flag --json',
+      },
+      {
+        argv: ['ticket', 'block', 'file-1', 'file-2', '--force'],
+        diagnostic: 'unknown flag --force',
+      },
+    ]
+
+    for (const { argv, diagnostic } of cases) {
+      const { deps, err, out } = sessionlessDeps()
+      expect(await runCli(argv, deps)).toBe(1)
+      expect(err.join('\n')).toContain(diagnostic)
+      expect(err.join('\n')).toContain('usage: ab ticket create')
+      expect(err.join('\n')).toContain('usage: ab ticket move')
+      expect(out).toEqual([])
+    }
+  })
+
   test('malformed argv and unknown subcommands print every ticket form', async () => {
     const cases = [
       ['ticket', 'frobnicate'],
