@@ -1184,7 +1184,7 @@ describe('Dispatcher harvest coordination', () => {
     expect(h.launches).toEqual([])
   })
 
-  test('an errored run is selected for automatic recovery on every eligible tick', async () => {
+  test('a shadowed errored run is selected for automatic recovery on every eligible tick', async () => {
     let calls = 0
     const h = harness({
       startHarvest: () => {
@@ -1212,6 +1212,30 @@ describe('Dispatcher harvest coordination', () => {
         attempt: 2,
         error: 'ticket provider unavailable',
         willRetry: false,
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_completed',
+        observations: [{ build: 'later-build', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 1 },
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_later_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'later-build', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'later-completed',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
       },
     })
 
@@ -1286,6 +1310,30 @@ describe('Dispatcher harvest coordination', () => {
         },
       })
     }
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_terminal',
+        observations: [{ build: 'later-build', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 1 },
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_later_terminal',
+        dispositions: [
+          {
+            occurrence: { build: 'later-build', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'later-terminal',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
+      },
+    })
     await h.store.appendRepo(REPO, {
       actor: KERNEL,
       type: 'harvest.recovery-exhausted',

@@ -707,6 +707,139 @@ describe('HarvestRunner', () => {
     ])
   })
 
+  test('recovers a shadowed historical file failure without repeating completed work', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-shadowed-file-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    let creates = 0
+    class CountingTickets extends FakeTicketSource {
+      override async create(...args: Parameters<FakeTicketSource['create']>) {
+        creates += 1
+        return super.create(...args)
+      }
+    }
+    const tickets = new CountingTickets()
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'filed',
+    })
+    const reservation = crypto.randomUUID()
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: {
+        run: seeded.run,
+        proposalKey: harvestProposalKey(seeded.proposals.proposals[0]!),
+        id: reservation,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: seeded.run,
+        step: 'file',
+        attempt: 2,
+        error: 'historical file failure',
+        willRetry: false,
+      },
+    })
+    const before = reduceHarvest(await store.getRepoEvents('/repo')).runs.find(
+      (run) => run.run === seeded.run,
+    )!
+    const preserved = structuredClone({
+      scan: before.scan,
+      proposals: before.proposals,
+      reviews: before.reviews,
+      reservations: before.reservations,
+      filed: before.filed,
+    })
+
+    // This later terminal run is the historical shape that used to hide the
+    // parked file boundary from every control/status path.
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_completed',
+        observations: [{ build: 'later', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 99 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_later_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'later', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'later-suppressed',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 99 },
+      },
+    })
+    await seedObservation(store, 'fresh-pending', 'must wait for old recovery')
+
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('approved shadowed recovery must not start an agent')
+      },
+    })
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        defaultRuntime: 'scripted',
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: 'shadowed-file-recovery',
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+
+    const state = reduceHarvest(await store.getRepoEvents('/repo'))
+    const recovered = state.runs.find((run) => run.run === seeded.run)!
+    expect(recovered).toMatchObject({
+      status: 'completed',
+      recoveryRequests: [
+        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
+      ],
+    })
+    expect({
+      scan: recovered.scan,
+      proposals: recovered.proposals,
+      reviews: recovered.reviews,
+      reservations: recovered.reservations,
+      filed: recovered.filed,
+    }).toEqual(preserved)
+    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe(
+      'completed',
+    )
+    expect(
+      (await store.getRepoEvents('/repo')).filter(
+        (event) => event.type === 'harvest.started',
+      ),
+    ).toHaveLength(2)
+    expect(
+      (await scanUnclaimedObservations(store, '/repo')).observations.map(
+        (observation) => observation.occurrence.build,
+      ),
+    ).toEqual(['fresh-pending'])
+    expect(creates).toBe(1)
+  })
+
   test('automatic recovery at review reuses the submitted proposal artifact', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-review-recovery-'))
     roots.push(workspace)

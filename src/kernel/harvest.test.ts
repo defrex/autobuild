@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, agentActor, humanActor, KERNEL } from '../events/envelope'
 import {
+  actionableHarvestRun,
   claimedOccurrenceKeys,
   decideHarvestControl,
   openHarvestRun,
+  parkedHarvestRuns,
   reduceHarvest,
+  unresolvedHarvestAttentionRuns,
 } from './harvest'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -418,6 +421,284 @@ describe('reduceHarvest', () => {
     })
     expect(state.latest?.failure).toBeUndefined()
     expect([...claimedOccurrenceKeys(state)]).toEqual(['a:2'])
+  })
+
+  test('recovers the historical shadowed shape before later open and terminal runs', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_shadowed',
+        observations: [{ build: 'old', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 7 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: {
+        run: 'h_shadowed',
+        proposalKey: 'old-proposal',
+        id: crypto.randomUUID(),
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.filed',
+      payload: {
+        run: 'h_shadowed',
+        proposalKey: 'old-proposal',
+        ticket: { source: 'fake', id: 'T-old' },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_shadowed',
+        step: 'file',
+        attempt: 2,
+        error: 'historical provider failure',
+        willRetry: false,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_running',
+        observations: [{ build: 'new', seq: 2 }],
+        scan: { kind: 'harvest-scan', rev: 8 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_completed',
+        observations: [{ build: 'done', seq: 3 }],
+        scan: { kind: 'harvest-scan', rev: 9 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_later_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'done', seq: 3 },
+            action: 'suppressed',
+            proposalKey: 'done-proposal',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_escalated',
+        observations: [{ build: 'escalated', seq: 4 }],
+        scan: { kind: 'harvest-scan', rev: 10 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'h_later_escalated',
+        source: 'agent',
+        reason: 'deliberate terminal',
+        observations: [{ build: 'escalated', seq: 4 }],
+      },
+    })
+
+    let state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.latest?.run).toBe('h_later_escalated')
+    expect(parkedHarvestRuns(state).map((run) => run.run)).toEqual([
+      'h_shadowed',
+    ])
+    expect(actionableHarvestRun(state)?.run).toBe('h_shadowed')
+    expect(decideHarvestControl(state)).toEqual({
+      kind: 'request-recovery',
+      run: 'h_shadowed',
+      attempt: 1,
+      limit: 2,
+    })
+
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_shadowed', attempt: 1, limit: 2 },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(openHarvestRun(state)?.run).toBe('h_shadowed')
+    expect(state.runs.find((run) => run.run === 'h_shadowed')).toMatchObject({
+      status: 'running',
+      scan: { kind: 'harvest-scan', rev: 7 },
+      reservations: [{ proposalKey: 'old-proposal' }],
+      filed: [{ proposalKey: 'old-proposal', ticket: { id: 'T-old' } }],
+      recoveryRequests: [
+        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
+      ],
+    })
+    expect(state.runs.find((run) => run.run === 'h_later_running')?.status).toBe(
+      'running',
+    )
+    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe(
+      'completed',
+    )
+    expect(state.runs.find((run) => run.run === 'h_later_escalated')?.status).toBe(
+      'escalated',
+    )
+  })
+
+  test('one human acknowledgement reopens every ordinary failure and settles every exhaustion barrier', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    const start = async (run: string, build: string) => {
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run,
+          observations: [{ build, seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+    }
+    const fail = async (run: string, error: string, attempt: number) => {
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.failed',
+        payload: {
+          run,
+          step: 'file',
+          attempt,
+          error,
+          willRetry: false,
+        },
+      })
+    }
+
+    await start('h_first_failed', 'first')
+    await fail('h_first_failed', 'first stopped', 1)
+    await start('h_exhausted', 'released')
+    await fail('h_exhausted', 'exhausted stopped', 1)
+    await start('h_completed', 'completed')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'completed', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'completed-proposal',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 0 },
+      },
+    })
+    for (const attempt of [1, 2]) {
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.recovery-requested',
+        payload: { run: 'h_exhausted', attempt, limit: 2 },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.resumed',
+        payload: {},
+      })
+      await fail('h_exhausted', 'exhausted stopped', attempt + 1)
+    }
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-exhausted',
+      payload: {
+        run: 'h_exhausted',
+        step: 'file',
+        error: 'exhausted stopped',
+        attempts: 2,
+        limit: 2,
+        releasedObservations: [{ build: 'released', seq: 1 }],
+        committedDispositions: [],
+        pendingProposals: [
+          {
+            proposalKey: 'released-proposal',
+            action: 'create',
+            observations: [{ build: 'released', seq: 1 }],
+          },
+        ],
+      },
+    })
+    await start('h_second_failed', 'second')
+    await fail('h_second_failed', 'second stopped', 1)
+    await start('h_escalated', 'escalated')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'h_escalated',
+        source: 'agent',
+        reason: 'leave terminal',
+        observations: [{ build: 'escalated', seq: 1 }],
+      },
+    })
+
+    let state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(unresolvedHarvestAttentionRuns(state).map((run) => run.run)).toEqual([
+      'h_exhausted',
+    ])
+    expect(decideHarvestControl(state)).toEqual({ kind: 'park' })
+
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(
+      state.runs
+        .filter((run) => ['h_first_failed', 'h_second_failed'].includes(run.run))
+        .map((run) => [run.run, run.status]),
+    ).toEqual([
+      ['h_first_failed', 'running'],
+      ['h_second_failed', 'running'],
+    ])
+    expect(
+      state.runs.find((run) => run.run === 'h_exhausted')?.recoveryExhaustion
+        ?.attentionAcknowledgedSeq,
+    ).toEqual(expect.any(Number))
+    expect(state.runs.find((run) => run.run === 'h_completed')?.status).toBe(
+      'completed',
+    )
+    expect(state.runs.find((run) => run.run === 'h_escalated')?.status).toBe(
+      'escalated',
+    )
+    expect(openHarvestRun(state)?.run).toBe('h_first_failed')
+    expect([...claimedOccurrenceKeys(state)].sort()).toEqual([
+      'completed:1',
+      'escalated:1',
+      'first:1',
+      'second:1',
+    ])
   })
 
   test('exhaustion selectively releases pending work and requires one human acknowledgement', async () => {

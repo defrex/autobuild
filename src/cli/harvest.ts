@@ -19,8 +19,11 @@ import {
 import type { IdSource } from '../ids'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  openHarvestRuns,
+  parkedHarvestRuns,
   proposalArtifactForRound,
   reduceHarvest,
+  unresolvedHarvestAttentionRuns,
   type HarvestPendingCommand,
   type HarvestRunState,
 } from '../kernel/harvest'
@@ -427,17 +430,36 @@ export interface HarvestRecoveryStatus {
   }
 }
 
+export interface HarvestRunStatusView {
+  run: string
+  status: HarvestRunState['status']
+  startedSeq: number
+  startedAt: string
+  observations: number
+  steps: HarvestRunState['steps']
+  rounds: number
+  filed: Array<{ proposalKey: string; ticket: { source: string; id: string } }>
+  escalation?: HarvestRunState['escalation']
+  failure?: HarvestRunState['failure']
+  recovery: HarvestRecoveryStatus
+}
+
 export interface HarvestStatusView {
   repo: string
   run?: string
   /** Repository control takes display precedence while paused; runStatus keeps
-   * the underlying run lifecycle queryable without making pause terminal. */
+   * the primary run lifecycle queryable without making pause terminal. */
   status: 'idle' | 'paused' | HarvestRunState['status']
   runStatus?: HarvestRunState['status']
   paused: boolean
   pausedSeq?: number
   pausedAt?: string
   pendingCommands: HarvestPendingCommand[]
+  /** Every unresolved failed run plus all open runs and the latest historical
+   * summary, in durable start order and without duplicate entries. */
+  runs: HarvestRunStatusView[]
+  /** Backward-compatible primary-run fields. `runs` is authoritative when
+   * more than one workflow needs to be reported. */
   observations: number
   steps: HarvestRunState['steps']
   rounds: number
@@ -488,14 +510,37 @@ function projectRecovery(
         exhaustion?.attentionAcknowledgedSeq !== undefined,
     },
     pending: {
+      // Before give-up the immutable claimed snapshot is the exact retained
+      // work. Exhaustion classifies it atomically, after which only the
+      // selectively released subset remains pending.
       observations: structuredClone(
-        exhaustion?.releasedObservations ?? [],
+        exhaustion?.releasedObservations ??
+          (run?.status === 'failed' ? run.observations : []),
       ),
       proposalKeys:
         exhaustion?.pendingProposals.map(
           (proposal) => proposal.proposalKey,
         ) ?? [],
     },
+  }
+}
+
+function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
+  return {
+    run: run.run,
+    status: run.status,
+    startedSeq: run.startedSeq,
+    startedAt: run.startedAt,
+    observations: run.observations.length,
+    steps: run.steps,
+    rounds: Math.max(0, ...run.reviews.map((review) => review.round)),
+    filed: run.filed.map((entry) => ({
+      proposalKey: entry.proposalKey,
+      ticket: { source: entry.ticket.source, id: entry.ticket.id },
+    })),
+    ...(run.escalation !== undefined ? { escalation: run.escalation } : {}),
+    ...(run.failure !== undefined ? { failure: run.failure } : {}),
+    recovery: projectRecovery(run),
   }
 }
 
@@ -509,126 +554,161 @@ export function projectHarvestStatus(
     newestEvents === undefined
       ? undefined
       : events.filter(isHarvestEvent).slice(-newestEvents)
-  const latest = state.latest
-  if (!latest) {
+  const unresolved = [
+    ...parkedHarvestRuns(state),
+    ...unresolvedHarvestAttentionRuns(state),
+  ]
+  const open = openHarvestRuns(state)
+  const included = new Set(
+    [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map(
+      (run) => run.run,
+    ),
+  )
+  const runs = state.runs
+    .filter((run) => included.has(run.run))
+    .map(projectHarvestRunStatus)
+  const unresolvedIds = new Set(unresolved.map((run) => run.run))
+  const primary =
+    runs.find((run) => unresolvedIds.has(run.run)) ??
+    runs.find((run) => run.status === 'running') ??
+    runs.at(-1)
+
+  const control = {
+    paused: state.paused,
+    ...(state.pausedSeq !== undefined ? { pausedSeq: state.pausedSeq } : {}),
+    ...(state.pausedAt !== undefined ? { pausedAt: state.pausedAt } : {}),
+    pendingCommands: state.pendingCommands,
+    runs,
+    ...(history !== undefined ? { events: history } : {}),
+  }
+  if (primary === undefined) {
     return {
       repo,
       status: state.paused ? 'paused' : 'idle',
-      paused: state.paused,
-      ...(state.pausedSeq !== undefined ? { pausedSeq: state.pausedSeq } : {}),
-      ...(state.pausedAt !== undefined ? { pausedAt: state.pausedAt } : {}),
-      pendingCommands: state.pendingCommands,
+      ...control,
       observations: 0,
       steps: [],
       rounds: 0,
       filed: [],
       recovery: projectRecovery(undefined),
-      ...(history !== undefined ? { events: history } : {}),
     }
   }
+
+  const { status: runStatus, startedSeq: _startedSeq, startedAt: _startedAt, ...summary } =
+    primary
   return {
     repo,
-    run: latest.run,
-    status: state.paused ? 'paused' : latest.status,
-    runStatus: latest.status,
-    paused: state.paused,
-    ...(state.pausedSeq !== undefined ? { pausedSeq: state.pausedSeq } : {}),
-    ...(state.pausedAt !== undefined ? { pausedAt: state.pausedAt } : {}),
-    pendingCommands: state.pendingCommands,
-    observations: latest.observations.length,
-    steps: latest.steps,
-    rounds: Math.max(0, ...latest.reviews.map((review) => review.round)),
-    filed: latest.filed.map((entry) => ({
-      proposalKey: entry.proposalKey,
-      ticket: { source: entry.ticket.source, id: entry.ticket.id },
-    })),
-    ...(latest.escalation !== undefined
-      ? { escalation: latest.escalation }
-      : {}),
-    ...(latest.failure !== undefined ? { failure: latest.failure } : {}),
-    recovery: projectRecovery(latest),
-    ...(history !== undefined ? { events: history } : {}),
+    status: state.paused ? 'paused' : runStatus,
+    runStatus,
+    ...control,
+    ...summary,
   }
 }
 
+function renderHarvestRunStatus(
+  run: HarvestRunStatusView,
+  paused: boolean,
+): string[] {
+  const displayStatus = paused ? 'paused' : run.status
+  const lines = [
+    `harvest ${run.run} — ${displayStatus}${
+      paused ? ` (run ${run.status})` : ''
+    }`,
+    `observations: ${run.observations}`,
+    `review rounds: ${run.rounds}`,
+    'steps:',
+  ]
+  for (const step of run.steps) {
+    lines.push(
+      `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +
+        `${step.outcome ?? (step.completedSeq === undefined ? 'running' : 'done')}`,
+    )
+  }
+  if (run.recovery.stopped !== undefined) {
+    lines.push(
+      `stopped at: ${run.recovery.stopped.step}${
+        run.recovery.stopped.round !== undefined
+          ? ` r${run.recovery.stopped.round}`
+          : ''
+      }`,
+    )
+  }
+  if (
+    run.recovery.recoverable ||
+    run.recovery.automatic.attempts > 0 ||
+    run.recovery.automatic.exhausted
+  ) {
+    lines.push(
+      `automatic recovery: ${run.recovery.automatic.attempts}/${run.recovery.automatic.limit}${
+        run.recovery.automatic.exhausted
+          ? ' exhausted'
+          : run.recovery.recoverable
+            ? ' available'
+            : ' resumed'
+      }`,
+    )
+  }
+  const observations = run.recovery.pending.observations.map(
+    (occurrence) => `${occurrence.build}:${occurrence.seq}`,
+  )
+  const proposals = run.recovery.pending.proposalKeys
+  if (observations.length > 0 || proposals.length > 0) {
+    lines.push(
+      `pending: ${observations.length} observation${observations.length === 1 ? '' : 's'}` +
+        `${observations.length > 0 ? ` (${observations.join(', ')})` : ''}` +
+        `${proposals.length > 0 ? `; proposals ${proposals.join(', ')}` : ''}`,
+    )
+  }
+  if (run.recovery.automatic.exhausted) {
+    lines.push(
+      run.recovery.attention.required
+        ? 'attention: human acknowledgement required'
+        : 'attention: acknowledged',
+    )
+  }
+  if (run.escalation) lines.push(`escalation: ${run.escalation.reason}`)
+  if (run.failure) lines.push(`failure: ${run.failure.error}`)
+  if (run.filed.length > 0) {
+    lines.push('filed:')
+    for (const entry of run.filed) {
+      lines.push(`  ${entry.proposalKey} -> ${entry.ticket.source}:${entry.ticket.id}`)
+    }
+  }
+  return lines
+}
+
 export function renderHarvestStatus(view: HarvestStatusView): string[] {
-  const noRun = view.run === undefined
-  const lines = noRun
-    ? [
-        `harvest ${view.repo}: ${
-          view.status === 'paused' ? 'paused' : 'idle'
-        } (no runs)`,
-      ]
-    : [
-        `harvest ${view.run} — ${view.status}${
-          view.status === 'paused' && view.runStatus !== undefined
-            ? ` (run ${view.runStatus})`
-            : ''
-        }`,
-        `observations: ${view.observations}`,
-        `review rounds: ${view.rounds}`,
-        'steps:',
-      ]
+  if (view.runs.length === 0) {
+    const lines = [
+      `harvest ${view.repo}: ${
+        view.status === 'paused' ? 'paused' : 'idle'
+      } (no runs)`,
+    ]
+    if (view.pendingCommands.length > 0) {
+      lines.push(
+        `control pending: ${view.pendingCommands.map((command) => command.command).join(', ')}`,
+      )
+    }
+    if (view.events !== undefined) {
+      lines.push('events:')
+      for (const event of view.events) {
+        lines.push(`  ${event.seq} ${event.ts} ${event.type}`)
+      }
+    }
+    return lines
+  }
+
+  const lines: string[] = []
+  for (const run of view.runs) {
+    if (lines.length > 0) lines.push('')
+    lines.push(...renderHarvestRunStatus(run, view.paused))
+  }
   if (view.pendingCommands.length > 0) {
     lines.splice(
       1,
       0,
       `control pending: ${view.pendingCommands.map((command) => command.command).join(', ')}`,
     )
-  }
-  for (const step of view.steps) {
-    lines.push(
-      `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +
-        `${step.outcome ?? (step.completedSeq === undefined ? 'running' : 'done')}`,
-    )
-  }
-  if (view.recovery.stopped !== undefined) {
-    lines.push(
-      `stopped at: ${view.recovery.stopped.step}${
-        view.recovery.stopped.round !== undefined
-          ? ` r${view.recovery.stopped.round}`
-          : ''
-      }`,
-    )
-  }
-  if (
-    view.recovery.recoverable ||
-    view.recovery.automatic.attempts > 0 ||
-    view.recovery.automatic.exhausted
-  ) {
-    lines.push(
-      `automatic recovery: ${view.recovery.automatic.attempts}/${view.recovery.automatic.limit}${
-        view.recovery.automatic.exhausted
-          ? ' exhausted'
-          : view.recovery.recoverable
-            ? ' available'
-            : ' resumed'
-      }`,
-    )
-  }
-  if (view.recovery.automatic.exhausted) {
-    const observations = view.recovery.pending.observations.map(
-      (occurrence) => `${occurrence.build}:${occurrence.seq}`,
-    )
-    const proposals = view.recovery.pending.proposalKeys
-    lines.push(
-      `pending: ${observations.length} observation${observations.length === 1 ? '' : 's'}` +
-        `${observations.length > 0 ? ` (${observations.join(', ')})` : ''}` +
-        `${proposals.length > 0 ? `; proposals ${proposals.join(', ')}` : ''}`,
-    )
-    lines.push(
-      view.recovery.attention.required
-        ? 'attention: human acknowledgement required'
-        : 'attention: acknowledged',
-    )
-  }
-  if (view.escalation) lines.push(`escalation: ${view.escalation.reason}`)
-  if (view.failure) lines.push(`failure: ${view.failure.error}`)
-  if (view.filed.length > 0) {
-    lines.push('filed:')
-    for (const entry of view.filed) {
-      lines.push(`  ${entry.proposalKey} -> ${entry.ticket.source}:${entry.ticket.id}`)
-    }
   }
   if (view.events !== undefined) {
     lines.push('events:')

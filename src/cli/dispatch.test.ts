@@ -2542,6 +2542,30 @@ describe('abDispatch interactive keyboard controls', () => {
           willRetry: false,
         },
       })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'harvest_later_completed',
+          observations: [{ build: 'later-build', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 1 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.completed',
+        payload: {
+          run: 'harvest_later_completed',
+          dispositions: [
+            {
+              occurrence: { build: 'later-build', seq: 1 },
+              action: 'suppressed',
+              proposalKey: 'later-completed',
+            },
+          ],
+          report: { kind: 'harvest-report', rev: 1 },
+        },
+      })
       expect(
         await fx.store.claimRepoLease(
           fx.origin,
@@ -2660,6 +2684,30 @@ describe('abDispatch interactive keyboard controls', () => {
           releasedObservations: [{ build: 'observed-build', seq: 1 }],
           committedDispositions: [],
           pendingProposals: [],
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'harvest_after_exhaustion',
+          observations: [{ build: 'later-exhausted', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 1 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.completed',
+        payload: {
+          run: 'harvest_after_exhaustion',
+          dispositions: [
+            {
+              occurrence: { build: 'later-exhausted', seq: 1 },
+              action: 'suppressed',
+              proposalKey: 'later-exhausted',
+            },
+          ],
+          report: { kind: 'harvest-report', rev: 1 },
         },
       })
       const before = (await fx.store.getRepoEvents(fx.origin)).length

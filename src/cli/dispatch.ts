@@ -650,10 +650,11 @@ class DispatchLoop {
       type: 'harvest.resume-requested',
       payload: {},
     })
+    const selectedRun = state.runs.find((run) => run.run === projected.run)
     this.say(
       projected.action === 'resume'
         ? 'harvest: error resume requested'
-        : state.latest?.recoveryExhaustion !== undefined
+        : selectedRun?.recoveryExhaustion !== undefined
           ? 'harvest: exhausted recovery attention acknowledgement requested'
           : 'harvest: escalation acknowledgement requested',
     )

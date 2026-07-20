@@ -222,7 +222,7 @@ const HELP = [
   '                                         answer every open escalation: guidance with text, bare retry without; resumes a paused build last (sessionless)',
   '  ab abort <slug> [--store <ref>]        request that an active build abort (sessionless)',
   '  ab harvest status [--events <n>] [--json] [--store <ref>]',
-  '                                         latest repository harvest workflow and paper trail (read-only)',
+  '                                         all unresolved repository harvest workflows and paper trail (read-only)',
   '  ab harvest context [--json]            hydrate harvest session inputs',
   '  ab harvest submit <proposals.json>     synthesize terminal: validate and deposit proposals',
   '  ab harvest verdict <approve|revise|escalate> --notes <file> [--findings <json>] [--reason <text>]',

@@ -146,6 +146,18 @@ function cloneRef(ref: ArtifactRef): ArtifactRef {
   return { kind: ref.kind, rev: ref.rev }
 }
 
+function isOrdinaryParkedRun(run: HarvestRunState): boolean {
+  return run.status === 'failed' && run.recoveryExhaustion === undefined
+}
+
+function hasUnresolvedExhaustion(run: HarvestRunState): boolean {
+  return (
+    run.status === 'failed' &&
+    run.recoveryExhaustion !== undefined &&
+    run.recoveryExhaustion.attentionAcknowledgedSeq === undefined
+  )
+}
+
 function requireRun(
   runs: Map<string, HarvestRunState>,
   run: string,
@@ -210,46 +222,44 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         pausedSeq = undefined
         pausedAt = undefined
         pending.resume = []
-        const latest = order.at(-1)
-        if (latest?.recoveryExhaustion !== undefined) {
-          // After give-up, the same human acknowledgement removes only the
-          // repository attention barrier. The old run remains terminal and
-          // its selectively released work may be claimed by a future run.
-          if (
-            hadHumanResume &&
-            latest.recoveryExhaustion.attentionAcknowledgedSeq === undefined
-          ) {
-            latest.recoveryExhaustion.attentionAcknowledgedSeq = event.seq
-            latest.recoveryExhaustion.attentionAcknowledgedAt = event.ts
+        for (const run of order) {
+          const exhaustion = run.recoveryExhaustion
+          if (exhaustion !== undefined) {
+            // Give-up is terminal. A human acknowledgement removes every
+            // outstanding repository attention barrier without resurrecting
+            // a run or changing its selectively retained claims.
+            if (
+              hadHumanResume &&
+              exhaustion.attentionAcknowledgedSeq === undefined
+            ) {
+              exhaustion.attentionAcknowledgedSeq = event.seq
+              exhaustion.attentionAcknowledgedAt = event.ts
+            }
+            continue
           }
-          break
-        }
-        if (latest?.status === 'failed') {
-          const automatic = [...latest.recoveryRequests]
+          if (!isOrdinaryParkedRun(run)) continue
+
+          const automatic = [...run.recoveryRequests]
             .reverse()
             .find((request) => request.acknowledgedSeq === undefined)
           if (automatic !== undefined) {
             automatic.acknowledgedSeq = event.seq
             automatic.acknowledgedAt = event.ts
           }
-          // Human and automatic requests converge here. A bare, uncorrelated
-          // resumed fact cannot silently bypass the outer recovery budget.
+          // One human acknowledgement is repository-wide and reopens every
+          // ordinary parked run. Without human intent, the unscoped resumed
+          // fact correlates only to runs with durable automatic requests.
           if (hadHumanResume || automatic !== undefined) {
-            latest.status = 'running'
-            delete latest.failure
-            delete latest.terminalSeq
-            delete latest.terminalAt
+            run.status = 'running'
+            delete run.failure
+            delete run.terminalSeq
+            delete run.terminalAt
           }
         }
         break
       }
       case 'harvest.recovery-requested': {
         const run = requireRun(runs, event.payload.run, event)
-        if (order.at(-1) !== run) {
-          throw new Error(
-            `harvest.recovery-requested at repo seq ${event.seq} must target the latest run`,
-          )
-        }
         if (run.status !== 'failed' || run.recoveryExhaustion !== undefined) {
           throw new Error(
             `harvest.recovery-requested at repo seq ${event.seq} requires an ` +
@@ -298,11 +308,6 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
       }
       case 'harvest.recovery-exhausted': {
         const run = requireRun(runs, event.payload.run, event)
-        if (order.at(-1) !== run) {
-          throw new Error(
-            `harvest.recovery-exhausted at repo seq ${event.seq} must target the latest run`,
-          )
-        }
         if (run.recoveryExhaustion !== undefined) {
           throw new Error(
             `duplicate harvest.recovery-exhausted for run "${run.run}" at repo seq ${event.seq}`,
@@ -677,11 +682,40 @@ export function claimedOccurrenceKeys(state: HarvestState): Set<string> {
   return new Set(state.claimed.map(occurrenceKey))
 }
 
+/** Runs are always returned in durable start order. `latest` remains useful for
+ * history, but recovery and execution must never use it as an authority. */
+export function parkedHarvestRuns(state: HarvestState): HarvestRunState[] {
+  return state.runs.filter(isOrdinaryParkedRun)
+}
+
+export function unresolvedHarvestAttentionRuns(
+  state: HarvestState,
+): HarvestRunState[] {
+  return state.runs.filter(hasUnresolvedExhaustion)
+}
+
+export function openHarvestRuns(state: HarvestState): HarvestRunState[] {
+  return state.runs.filter((run) => run.status === 'running')
+}
+
+/** The concrete run a control boundary should report if it parks. Exhaustion
+ * barriers are repository-global, then ordinary parked work takes priority,
+ * then the oldest open workflow is the run execution should continue. */
+export function actionableHarvestRun(
+  state: HarvestState,
+): HarvestRunState | undefined {
+  return (
+    unresolvedHarvestAttentionRuns(state)[0] ??
+    parkedHarvestRuns(state)[0] ??
+    openHarvestRuns(state)[0]
+  )
+}
+
 /** Pure repository-control routing shared by dispatcher and harvest runner.
- * Human commands settle first. An already-recorded automatic request is then
- * acknowledged through the common harvest.resumed transition; only after that
- * boundary may a new attempt be selected. Exhaustion is a separate durable
- * settlement, never an inferred terminal state. */
+ * Human commands settle first. Recorded exhaustion is a global barrier; then
+ * every durable automatic request is acknowledged before the oldest ordinary
+ * parked run receives its next run-local attempt. Only a journal with no
+ * unresolved failure may proceed to open work or a new scan. */
 export function decideHarvestControl(
   state: HarvestState,
   maxRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
@@ -699,50 +733,50 @@ export function decideHarvestControl(
   if (state.pendingCommands.some((command) => command.command === 'pause')) {
     return { kind: 'acknowledge', command: 'pause' }
   }
-  // A stale/racing human resume is still a command and must be consumed. On an
-  // exhausted run its acknowledgement clears attention without resurrection.
+  // A stale/racing human resume is still a command and must be consumed. It
+  // reopens all ordinary failures and acknowledges all exhaustion barriers.
   if (wantsResume) return { kind: 'acknowledge', command: 'resume' }
 
-  const latest = state.latest
-  if (latest?.status === 'failed') {
-    const exhaustion = latest.recoveryExhaustion
-    if (exhaustion !== undefined) {
-      return exhaustion.attentionAcknowledgedSeq === undefined
-        ? { kind: 'park' }
-        : { kind: 'proceed' }
-    }
-    if (
-      latest.recoveryRequests.some(
+  if (unresolvedHarvestAttentionRuns(state).length > 0) {
+    return { kind: 'park' }
+  }
+
+  const parked = parkedHarvestRuns(state)
+  if (
+    parked.some((run) =>
+      run.recoveryRequests.some(
         (request) => request.acknowledgedSeq === undefined,
-      )
-    ) {
-      return { kind: 'acknowledge', command: 'resume' }
-    }
-    const attempts = latest.recoveryRequests.length
-    // Once the first request records the applied policy, replacements honor
-    // that durable limit even if a later process ships a different default.
-    const appliedLimit =
-      latest.recoveryRequests[0]?.limit ?? maxRecoveryAttempts
-    if (attempts < appliedLimit) {
-      return {
-        kind: 'request-recovery',
-        run: latest.run,
-        attempt: attempts + 1,
-        limit: appliedLimit,
-      }
-    }
+      ),
+    )
+  ) {
+    return { kind: 'acknowledge', command: 'resume' }
+  }
+
+  const run = parked[0]
+  if (run === undefined) return { kind: 'proceed' }
+
+  const attempts = run.recoveryRequests.length
+  // Once the first request records the applied policy, replacements honor
+  // that durable limit even if a later process ships a different default.
+  const appliedLimit = run.recoveryRequests[0]?.limit ?? maxRecoveryAttempts
+  if (attempts < appliedLimit) {
     return {
-      kind: 'exhaust-recovery',
-      run: latest.run,
-      attempts,
+      kind: 'request-recovery',
+      run: run.run,
+      attempt: attempts + 1,
       limit: appliedLimit,
     }
   }
-  return { kind: 'proceed' }
+  return {
+    kind: 'exhaust-recovery',
+    run: run.run,
+    attempts,
+    limit: appliedLimit,
+  }
 }
 
 export function openHarvestRun(state: HarvestState): HarvestRunState | undefined {
-  return [...state.runs].reverse().find((run) => run.status === 'running')
+  return openHarvestRuns(state)[0]
 }
 
 export function proposalArtifactForRound(
