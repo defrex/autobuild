@@ -744,6 +744,21 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
   test('context → (work, commit) → observe → done, asserting the final event sequence', async () => {
     const workspace = join(tmp, 'ws-walk')
     await initWorkspaceRepo(workspace)
+    const base = await runGit(['rev-parse', 'main'], workspace)
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: {
+          source: 'local',
+          sha: base,
+          remoteError: 'walkthrough fixture has no remote',
+        },
+      },
+    })
     await store.append(BUILD, {
       actor: KERNEL,
       type: 'implement.started',
@@ -761,7 +776,6 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
 
     // (work, commit) — .ab/ is gitignored, so notes there keep the tree clean.
     const head = await commitFile(workspace, 'limiter.ts', 'export {}\n', 'add limiter')
-    const base = await runGit(['rev-parse', 'main'], workspace)
     await writeFile(join(workspace, '.ab', 'implement-notes.md'), 'added the limiter\n')
 
     // ab observe — structured, mid-phase, not a terminal.
@@ -780,6 +794,7 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
     expect(events.map((event) => event.type)).toEqual([
       'build.created',
       'spec.imported',
+      'workspace.provisioned',
       'implement.started',
       'observation.recorded',
       'implement.completed',

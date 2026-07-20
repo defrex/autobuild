@@ -372,9 +372,26 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   expect(reduceBuild(events).prState).toBe('open')
 }, 30_000)
 
-test('a1. dispatch cuts a new branch from remote main while local main is stale', async () => {
+test('a1. code review starts at the remote branch-cut SHA while local main is stale', async () => {
+  const handlers = happyHandlers()
+  let codeReviewContext: string | undefined
+  handlers['code-review'] = async (cli) => {
+    await cli.run(['context'])
+    // Capture during code review: later phase contexts intentionally replace
+    // the gitignored .ab/ tree.
+    codeReviewContext = await readFile(
+      join(cli.ws, '.ab', 'context.json'),
+      'utf8',
+    )
+    const notes = await writeFileIn(
+      cli.ws,
+      '.ab/code-review.md',
+      'Diff contains only the implementation commit.\n',
+    )
+    await cli.run(['verdict', 'approve', '--notes', notes])
+  }
   const h = await track(
-    makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }),
+    makeHarness({ handlers, tickets: [readyTicket('T-1')] }),
   )
   const staleLocalSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
   const remoteSha = await h.advanceRemote(
@@ -400,6 +417,44 @@ test('a1. dispatch cuts a new branch from remote main while local main is stale'
   expect(existsSync(join(provisioned.payload.ref, 'remote-only.txt'))).toBe(true)
   // Provisioning uses a private destination ref; operator-owned local refs
   // remain exactly as stale as they were before dispatch.
+  expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
+  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(
+    staleLocalSha,
+  )
+
+  expect((await h.runLatest()).prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+  if (codeReviewContext === undefined) {
+    throw new Error('code-review handler did not capture .ab/context.json')
+  }
+  const context = JSON.parse(codeReviewContext) as {
+    commitRange?: { base: string; head: string }
+  }
+  const completed = ofType(await h.events(SLUG), 'implement.completed')[0]!
+  expect(completed.payload.commits.base).toBe(remoteSha)
+  expect(context.commitRange).toEqual(completed.payload.commits)
+  expect(
+    await git(
+      [
+        'log',
+        '--reverse',
+        '--format=%s',
+        `${completed.payload.commits.base}..${completed.payload.commits.head}`,
+      ],
+      provisioned.payload.ref,
+    ),
+  ).toBe('implement: rate limiting r1')
+  expect(
+    await git(
+      [
+        'log',
+        '--format=%s',
+        `${completed.payload.commits.base}..${completed.payload.commits.head}`,
+      ],
+      provisioned.payload.ref,
+    ),
+  ).not.toContain('base: remote-only change')
+  // Running implementation/review must not mutate the operator-owned refs.
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
   expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(
     staleLocalSha,

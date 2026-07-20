@@ -213,6 +213,18 @@ function baseBranchOf(events: AbEvent[]): string {
   )
 }
 
+/** The first provisioning fact is the immutable branch-cut provenance. Later
+ * `existing` facts record resume tips and must never narrow code review. */
+function implementationBaseOf(events: AbEvent[]): string {
+  for (const event of events) {
+    if (event.type === 'workspace.provisioned') return event.payload.base.sha
+  }
+  throw new Error(
+    "implement's 'ab done' requires a workspace.provisioned base SHA — " +
+      'this build has no workspace.provisioned event (§7.4, §15.3)',
+  )
+}
+
 async function buildBranch(deps: TerminalDeps): Promise<string> {
   const build = await deps.store.getBuild(deps.env.build)
   if (build === null) {
@@ -312,10 +324,9 @@ export async function done(
       const notesPath = requireNotes(opts.notes, "implement's 'ab done' deposits implement-notes")
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
-      const baseBranch = baseBranchOf(events)
+      const base = implementationBaseOf(events)
       const branch = await buildBranch(deps)
       const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
-      const base = (await git(deps, ['merge-base', baseBranch, 'HEAD'])).trim()
       // Push BEFORE the event (walkthrough §8.7 order): a push without an
       // event is a harmless retry — the re-run pushes the same branch again —
       // but an event without a push breaks cross-sandbox resume, which

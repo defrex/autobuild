@@ -313,6 +313,12 @@ separate from `BuildRunner.refreshReconcileBase`: reconcile refreshes an
 in-flight PR's merge target and fails closed, whereas first provisioning falls
 back locally so dispatch remains available.
 
+`src/cli/terminals.ts` treats the earliest provisioning fact as durable branch
+provenance: every `implement.completed` records its `base.sha` as
+`commits.base` and the current `HEAD` as `commits.head`. Later `existing`
+provisioning facts identify sandbox resume tips but do not replace that anchor,
+so every code-review round materializes the complete build-owned range.
+
 ## Agent turn failures
 
 `src/ports/types.ts` makes an agent turn a discriminated completed/failed

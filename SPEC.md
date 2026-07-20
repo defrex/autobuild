@@ -350,6 +350,12 @@ is reused at that branch's current tip before any remote access. It is never
 re-cut, rewound, or rebased from either base ref. This creation-time refresh is
 separate from reconcile's execution-time refresh (§15.7).
 
+The first `workspace.provisioned.base.sha` is also the immutable implementation
+review anchor. Every `implement.completed.commits.base` uses that first
+branch-cut SHA and pairs it with the completion's current `HEAD`, across review
+rounds and sandbox resumption. Later `source: existing` provisioning facts are
+resume-tip evidence and never replace or narrow the review anchor.
+
 ### 7.5 What the PR gets
 
 A summary comment — verdict history, verification results, links into the

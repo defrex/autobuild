@@ -301,10 +301,29 @@ describe('ab done — plan', () => {
 
 describe('ab done — implement', () => {
   let workspace: string
+  let implementationBase: string
 
   beforeEach(async () => {
     workspace = join(tmp, 'ws')
     await initWorkspaceRepo(workspace)
+    // Simulate a branch cut from a freshly fetched remote tip while the
+    // operator-owned local main ref remains one commit behind.
+    implementationBase = await commitFile(
+      workspace,
+      'remote-base.ts',
+      'export const alreadyOnBase = true\n',
+      'base: remote-only work',
+    )
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'remote', sha: implementationBase },
+      },
+    })
     await commitFile(workspace, 'feature.ts', 'export const x = 1\n', 'feature work')
     await store.append(BUILD, {
       actor: KERNEL,
@@ -313,10 +332,13 @@ describe('ab done — implement', () => {
     })
   })
 
-  function implementDeps(forge?: FakeForge): TestDeps {
+  function implementDeps(
+    forge?: FakeForge,
+    overrides: Parameters<typeof makeEnv>[0] = {},
+  ): TestDeps {
     return makeDeps({
       store,
-      env: makeEnv({ phase: 'implement', round: 1 }),
+      env: makeEnv({ phase: 'implement', round: 1, ...overrides }),
       workspacePath: workspace,
       ...(forge !== undefined ? { forge } : {}),
     })
@@ -325,6 +347,24 @@ describe('ab done — implement', () => {
   test('--notes is required', async () => {
     const deps = implementDeps()
     await expect(done(deps)).rejects.toThrow(/--notes <file> is required/)
+  })
+
+  test('missing initial provisioning evidence is rejected before push or deposit', async () => {
+    await store.close()
+    store = await seedStore()
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 1 },
+    })
+    const deps = implementDeps()
+    const notes = await stash('missing-base-notes.md', 'must not be deposited\n')
+
+    await expect(done(deps, { notes })).rejects.toThrow(
+      /requires a workspace\.provisioned base SHA.*no workspace\.provisioned event/,
+    )
+    expect(deps.forge.pushes).toEqual([])
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
   })
 
   test('a dirty worktree is rejected, listing the offending files', async () => {
@@ -356,23 +396,84 @@ describe('ab done — implement', () => {
     expect(await runGit(['ls-files', '.ab'], workspace)).toBe('')
   })
 
-  test('clean worktree: pushes the branch, then appends implement.completed atomically', async () => {
+  test('anchors every review round to the first provisioned base and deposits atomically', async () => {
     const deps = implementDeps()
     const notes = await stash('notes.md', 'implemented rate limiting\n')
-    const head = await runGit(['rev-parse', 'HEAD'], workspace)
-    const base = await runGit(['rev-parse', 'main'], workspace)
+    const firstHead = await runGit(['rev-parse', 'HEAD'], workspace)
+    const staleLocalMain = await runGit(['rev-parse', 'main'], workspace)
 
-    const event = await done(deps, { notes })
+    const first = await done(deps, { notes })
 
+    expect(implementationBase).not.toBe(staleLocalMain)
     expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
-    expect(event.type).toBe('implement.completed')
-    expect(event.payload).toEqual({
+    expect(first.type).toBe('implement.completed')
+    expect(first.payload).toEqual({
       round: 1,
-      commits: { base, head },
+      commits: { base: implementationBase, head: firstHead },
       artifact: { kind: 'implement-notes', rev: 0 },
     })
-    const deposited = await store.getArtifact(BUILD, 'implement-notes')
-    expect(textContent(deposited!)).toBe('implemented rate limiting\n')
+    expect(
+      await runGit(
+        ['log', '--reverse', '--format=%s', `${implementationBase}..${firstHead}`],
+        workspace,
+      ),
+    ).toBe('feature work')
+
+    // A recovered sandbox records the existing branch tip. It is resume
+    // evidence, not a replacement for the original review anchor.
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'existing', sha: firstHead },
+      },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 2 },
+    })
+    const secondHead = await commitFile(
+      workspace,
+      'follow-up.ts',
+      'export const followUp = true\n',
+      'feature follow-up',
+    )
+    const secondNotes = await stash('notes-r2.md', 'addressed review feedback\n')
+    const second = await done(
+      implementDeps(deps.forge, { round: 2, session: 's_r2' }),
+      { notes: secondNotes },
+    )
+
+    expect(second.payload).toEqual({
+      round: 2,
+      commits: { base: implementationBase, head: secondHead },
+      artifact: { kind: 'implement-notes', rev: 1 },
+    })
+    expect(deps.forge.pushes).toEqual([
+      { workspacePath: workspace, branch: BRANCH },
+      { workspacePath: workspace, branch: BRANCH },
+    ])
+    expect(
+      await runGit(
+        ['log', '--reverse', '--format=%s', `${implementationBase}..${secondHead}`],
+        workspace,
+      ),
+    ).toBe('feature work\nfeature follow-up')
+    expect(
+      (await store.getEvents(BUILD))
+        .filter((event) => event.type === 'implement.completed')
+        .map((event) => event.payload.commits.base),
+    ).toEqual([implementationBase, implementationBase])
+    expect(textContent((await store.getArtifact(BUILD, 'implement-notes', 0))!)).toBe(
+      'implemented rate limiting\n',
+    )
+    expect(textContent((await store.getArtifact(BUILD, 'implement-notes'))!)).toBe(
+      'addressed review feedback\n',
+    )
   })
 
   test('detached HEAD publishes the completed commit to the durable build branch', async () => {
@@ -401,7 +502,7 @@ describe('ab done — implement', () => {
     expect(event.payload).toEqual({
       round: 1,
       commits: {
-        base: await runGit(['rev-parse', 'main'], workspace),
+        base: implementationBase,
         head,
       },
       artifact: { kind: 'implement-notes', rev: 0 },
