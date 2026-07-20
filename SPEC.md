@@ -171,9 +171,13 @@ engine. Exactly two extension points:
   non-blank human-readable reason and satisfies only that step in the current
   cycle; it is neither passing evidence nor a failure and consumes no
   `maxVerifyAttempts` budget. Another step's failure still wins. Either an agent
-  may explicitly declare `skip`, or the kernel may produce it when a configured
-  path-applicability rule excludes the build's live diff. Steps without a rule
-  remain unconditional.
+  may explicitly declare `skip`, or the kernel may produce it when the approved
+  plan selection or a configured path-applicability rule excludes the step.
+  Config declares the universe and order. An approved plan may select a complete
+  subset of optional steps in opening TOML front matter; `always = true` steps
+  are mandatory and cannot be deselected. Missing plan metadata means all
+  configured steps. Selection is tested before path applicability, and both
+  must include a step for it to run.
 - **`finalize:*`** — optional post-steps (release notes, changelog,
   screenshots, ticket linking). Independent and failure-tolerant: a failed
   post-step files an observation; it never kills a green build.
@@ -1072,7 +1076,7 @@ what guarantees the analysis corpus)
 | Type | Actor | Payload |
 |---|---|---|
 | `plan.started` | kernel | `{round, feedback?: {findings: [id]} \| {guidance: {escalation, answer}}}` (symmetric with `implement.started` — §15.6-B guidance must reach a fresh producer session) |
-| `plan.completed` | agent | `{round, artifact: {kind: "plan", rev}}` |
+| `plan.completed` | agent | `{round, artifact: {kind: "plan", rev}, verifySteps?: [step]}`; current writers include the validated effective set in config order, omission is historical default-all |
 | `plan-review.started` | kernel | `{round}` |
 | `plan-review.verdict` | agent | `{round, verdict, findings: [Finding], artifact: {kind: "plan-review", rev}}` |
 | `implement.started` | kernel | `{round, feedback?: {findings: [id]} \| {verify: {step, report}}}` |
@@ -1219,7 +1223,7 @@ run):
 
 ```
 build.created → workspace.provisioned{base:{source:remote,sha}} → spec.imported → runner.attached
-plan.started{r1} → plan.completed{plan@1}
+plan.started{r1} → plan.completed{plan@1, verifySteps}
 plan-review.started{r1} → plan-review.verdict{approve}
 implement.started{r1} → implement.completed{commits, notes@1}
 code-review.started{r1} → code-review.verdict{approve}
@@ -1425,7 +1429,7 @@ kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
 skill = "ab-verify-e2e"
 needsServer = true
 paths = ["web/**", "src/routes/**"] # optional positive any-match selectors
-# always = true                 # mandatory-gate guard; overrides paths
+# always = true                 # mandatory/non-deselectable; overrides paths
 
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
@@ -1482,6 +1486,27 @@ shell strings. The removed legacy `[agent]` table is rejected with an error
 that directs its fields to `[roles.default]`; it is not a parsing alias or an
 automatic migration.
 
+A plan may begin with the narrow TOML front-matter contract below; no other
+plan metadata is interpreted:
+
+```toml
++++
+verifySteps = ["types", "e2e"]
++++
+```
+
+This is the complete selected set, not an ordering or configuration channel.
+Names must exist in `[verify].steps` with matching tables; the planner's
+`ab done` rejects malformed metadata, blanks, duplicates, unknown names, and
+omission of an `always = true` step before appending `plan.completed`. New
+writes record the effective list in config order. Missing metadata and
+historical events without the field mean all configured steps. `plan-review`
+reviews the block in the same artifact with the existing verdict vocabulary;
+the completion present when its approving verdict lands is authoritative, not
+the latest or a superseded revision. A `spec.revised` restart replaces the
+selection through a fresh approved plan. Reconcile reuses it for every new
+verify cycle.
+
 Both verify kinds accept optional `paths` and `always`. `paths` is a non-empty
 list of positive repository-relative globs with OR semantics across both rules
 and changed paths. Matching is case-sensitive over Git `/` paths. The grammar
@@ -1489,9 +1514,15 @@ supports literals, segment-local `*`/`?`, and `**` only as a whole segment;
 absolute/traversing/empty segments, negation, escapes, character classes, brace
 expansion, extglobs, and malformed `**` fail strict config validation at the
 named step. No `paths` is unconditional. `always = true` overrides a present
-list (which is still validated); false is equivalent to omission.
+list (which is still validated), is mandatory for plan selection, and false is
+equivalent to omission.
 
-The runner evaluates a conditional step from current `HEAD` using
+For each unsatisfied configured step, the engine checks the approved plan
+selection first. Exclusion writes the ordinary skipped outcome with
+`excluded by approved plan selection (plan@<rev>): verify step "<step>" was not selected`
+and performs no diff, command, server, or session work. A selected step then
+continues to applicability. The runner evaluates a conditional step from
+current `HEAD` using
 `git diff --no-renames --name-only -z`. The base is the initial
 `workspace.provisioned.base.sha`, promoted only by a `reconcile.started.baseSha`
 whose reconcile successfully completed. Thus both rename sides are visible,

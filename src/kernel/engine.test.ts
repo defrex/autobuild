@@ -186,6 +186,29 @@ function planApproved(): EventWrite[] {
   return planRound(1, 'approve')
 }
 
+function selectedPlanRound(
+  round: number,
+  verdict: 'approve' | 'revise',
+  verifySteps: string[],
+  rev = round - 1,
+): EventWrite[] {
+  return [
+    ev('plan.started', { round }),
+    ev('plan.completed', {
+      round,
+      artifact: { kind: 'plan', rev },
+      verifySteps,
+    }),
+    ev('plan-review.started', { round }),
+    ev('plan-review.verdict', {
+      round,
+      verdict,
+      findings: [],
+      artifact: { kind: 'plan-review', rev },
+    }),
+  ]
+}
+
 function implementRound(
   round: number,
   head: string,
@@ -1382,6 +1405,236 @@ paths = ["web/**"]
       ...conditionalDecision,
       attempt: 2,
       action: { ...conditionalDecision.action, attempt: 2 },
+    })
+  })
+})
+
+describe('decideNext: approved-plan verify selection', () => {
+  const selectedConfig = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+types = "bun typecheck"
+dashboard = "bun test dashboard"
+unit = "bun test"
+[verify]
+steps = ["types", "dashboard", "unit"]
+[verify.types]
+kind = "check"
+command = "types"
+always = true
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+[verify.unit]
+kind = "check"
+command = "unit"
+`)
+
+  const optionalConfig = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+unit = "bun test"
+[verify]
+steps = ["dashboard", "unit"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+[verify.unit]
+kind = "check"
+command = "unit"
+`)
+
+  function approved(verifySteps: string[]): EventWrite[] {
+    return [
+      ...prelude(),
+      ...selectedPlanRound(1, 'approve', verifySteps),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+    ]
+  }
+
+  test('selected steps execute in config order while an omitted optional step gets a plan-specific skip', () => {
+    const throughTypes = [...approved(['unit', 'types']), ...verifyRun('types', 1, true)]
+    expect(decideNext(toLog(throughTypes), selectedConfig)).toEqual({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      attempt: 1,
+      reason:
+        'excluded by approved plan selection (plan@0): verify step "dashboard" was not selected',
+    })
+    expect(
+      decideNext(
+        toLog([
+          ...throughTypes,
+          ...verifySkip(
+            'dashboard',
+            1,
+            'excluded by approved plan selection (plan@0): verify step "dashboard" was not selected',
+          ),
+        ]),
+        selectedConfig,
+      ),
+    ).toEqual({ kind: 'run-check', step: 'unit', command: 'bun test', attempt: 1 })
+  })
+
+  test('mandatory always steps run defensively even if a direct event omitted them', () => {
+    expect(decideNext(toLog(approved([])), selectedConfig)).toEqual({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun typecheck',
+      attempt: 1,
+    })
+  })
+
+  test('selection exclusion precedes paths, while a selected conditional step evaluates paths', () => {
+    const typesPass = verifyRun('types', 1, true)
+    expect(decideNext(toLog([...approved(['types']), ...typesPass]), selectedConfig)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'dashboard',
+    })
+    expect(
+      decideNext(toLog([...approved(['types', 'dashboard']), ...typesPass]), selectedConfig),
+    ).toEqual({
+      kind: 'evaluate-verify',
+      step: 'dashboard',
+      attempt: 1,
+      paths: ['src/cli/dashboard/**'],
+      action: {
+        kind: 'run-check',
+        step: 'dashboard',
+        command: 'bun test dashboard',
+        attempt: 1,
+      },
+    })
+  })
+
+  test('an explicit empty set skips every optional step at the same attempt', () => {
+    const start = approved([])
+    expect(decideNext(toLog(start), optionalConfig)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      attempt: 1,
+    })
+    expect(
+      decideNext(
+        toLog([
+          ...start,
+          ...verifySkip('dashboard', 1, 'excluded by approved plan selection'),
+        ]),
+        optionalConfig,
+      ),
+    ).toMatchObject({ kind: 'skip-verify', step: 'unit', attempt: 1 })
+  })
+
+  test('the approved round-2 completion replaces a superseded round-1 selection', () => {
+    const log = [
+      ...prelude(),
+      ...selectedPlanRound(1, 'revise', ['types', 'dashboard']),
+      ...selectedPlanRound(2, 'approve', ['types', 'unit']),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+    ]
+    expect(decideNext(toLog(log), selectedConfig)).toEqual({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      attempt: 1,
+      reason:
+        'excluded by approved plan selection (plan@1): verify step "dashboard" was not selected',
+    })
+  })
+
+  test('a plan completion appended after approval cannot replace the reviewed selection', () => {
+    const log = [
+      ...approved(['types']),
+      ev('plan.completed', {
+        round: 1,
+        artifact: { kind: 'plan', rev: 1 },
+        verifySteps: ['types', 'dashboard', 'unit'],
+      }),
+      ...verifyRun('types', 1, true),
+    ]
+    expect(decideNext(toLog(log), selectedConfig)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      reason: expect.stringContaining('(plan@0)'),
+    })
+  })
+
+  test('legacy plan completions without selection retain default-all behavior', () => {
+    const legacy = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+    ]
+    expect(decideNext(toLog(legacy), selectedConfig)).toMatchObject({
+      kind: 'evaluate-verify',
+      step: 'dashboard',
+    })
+  })
+
+  test('a spec restart takes the fresh approved selection', () => {
+    const restarted = [
+      ...approved(['dashboard']),
+      ev('escalation.raised', {
+        id: 'e_restart',
+        phase: 'implement',
+        round: 2,
+        source: 'agent',
+        question: 'revise the spec',
+      }),
+      ev('escalation.answered', {
+        id: 'e_restart',
+        answer: 'updated',
+        resolution: 'revise-spec',
+      }),
+      ev('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        escalation: 1,
+      }),
+      ...selectedPlanRound(2, 'approve', ['unit']),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'approve'),
+    ]
+    expect(decideNext(toLog(restarted), optionalConfig)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      reason: expect.stringContaining('(plan@1)'),
+    })
+  })
+
+  test('a reconcile cycle reuses the approved selection and re-skips at a fresh attempt', () => {
+    const reason =
+      'excluded by approved plan selection (plan@0): verify step "dashboard" was not selected'
+    const reconciled = [
+      ...approved(['types', 'unit']),
+      ...verifyRun('types', 1, true),
+      ...verifySkip('dashboard', 1, reason),
+      ...verifyRun('unit', 1, true),
+      ev('finalize.started', {}),
+      ev('finalize.completed', { pr: PR }),
+      ev('pr.conflicted', { baseSha: 'sha-main-2' }),
+      ev('reconcile.started', { attempt: 1, baseSha: 'sha-main-2' }),
+      ev('reconcile.completed', {
+        mergeCommit: 'sha-merge-1',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+      ...verifyRun('types', 2, true),
+    ]
+    expect(decideNext(toLog(reconciled), selectedConfig)).toEqual({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      attempt: 2,
+      reason,
     })
   })
 })

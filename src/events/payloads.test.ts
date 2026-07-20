@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
-import { KERNEL } from './envelope'
+import { KERNEL, agentActor } from './envelope'
 import { normalizeVerifyCompletion } from './payloads'
+
+function plan(payload: unknown): EventWrite<'plan.completed'> {
+  return validateEventWrite({
+    actor: agentActor('plan', 's_plan'),
+    type: 'plan.completed',
+    payload,
+  }) as EventWrite<'plan.completed'>
+}
 
 function verify(payload: unknown): EventWrite<'verify.completed'> {
   return validateEventWrite({
@@ -10,6 +18,33 @@ function verify(payload: unknown): EventWrite<'verify.completed'> {
     payload,
   }) as EventWrite<'verify.completed'>
 }
+
+describe('plan.completed verify selection compatibility', () => {
+  const base = { round: 1, artifact: { kind: 'plan', rev: 0 } }
+
+  test('historical payloads without verifySteps remain valid', () => {
+    expect(plan(base).payload).toEqual(base)
+  })
+
+  test('accepts a canonical list, including an explicit empty selection', () => {
+    expect(plan({ ...base, verifySteps: ['types', 'unit'] }).payload).toEqual({
+      ...base,
+      verifySteps: ['types', 'unit'],
+    })
+    expect(plan({ ...base, verifySteps: [] }).payload).toEqual({
+      ...base,
+      verifySteps: [],
+    })
+  })
+
+  test('rejects malformed and duplicate lists', () => {
+    for (const verifySteps of ['types', [1], [''], ['   '], ['types', 'types']]) {
+      expect(() => plan({ ...base, verifySteps })).toThrow(
+        /invalid payload for "plan\.completed"/,
+      )
+    }
+  })
+})
 
 describe('verify.completed payload compatibility', () => {
   test('accepts canonical pass and fail outcomes', () => {

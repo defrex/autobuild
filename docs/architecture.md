@@ -45,15 +45,42 @@ exit-code checks only pass/fail; an agent verifier may explicitly call
 `ab verdict skip --reason ...`, with no fail-report artifact. The kernel may
 also author a skip through the applicability seam below.
 
+## Plan verify-selection boundary
+
+`src/kernel/plan-verify-selection.ts` is the pure parser and config resolver for
+the one supported plan metadata channel: an opening TOML `+++` block with a
+strict `verifySteps: string[]`. Missing metadata resolves to every configured
+step. Explicit metadata rejects malformed/unknown/duplicate names and omission
+of an `always = true` mandatory step, then canonicalizes the durable list to
+`[verify].steps` order.
+
+`src/cli/terminals.ts` applies that helper at the plan's existing `ab done`
+boundary. It fetches the exact fresh plan revision, loads the provisioned
+workspace's normal `autobuild.toml`, validates all-or-nothing, and appends the
+resolved list to `plan.completed`. The payload field remains optional only for
+historical logs, where omission means default-all. Thus artifact content is
+converted once into an event fact; the engine never reads blobs.
+
+`src/kernel/engine.ts` snapshots the plan completion present when
+`plan-review.verdict {approve}` lands. It ignores superseded and post-approval
+orphan completions, replaces the snapshot after a spec restart, and reuses it
+across reconcile cycles. An omitted optional step becomes a `skip-verify`
+decision before applicability or verifier construction; `always = true` is
+also enforced defensively for directly-authored logs. The build runner writes
+that decision through the same kernel `verify.started` + skipped
+`verify.completed` helper used by path exclusion, without Git, command, server,
+or session work.
+
 ## Verify applicability boundary
 
 `src/config/schema.ts` validates the shared `paths`/`always` fields on check and
 agent steps. The accepted selector language is deliberately smaller than a
 shell glob: positive repository-relative literals, `*`, `?`, and whole-segment
 `**`. `src/kernel/verify-applicability.ts` is the pure, case-sensitive OR
-matcher and owns the stable exclusion reason. `src/kernel/engine.ts` wraps only
-the first unsatisfied conditional step in an actionable `evaluate-verify`
-decision; omitted `paths` and `always = true` retain the original direct action.
+matcher and owns the stable exclusion reason. After plan selection includes a
+step, `src/kernel/engine.ts` wraps the first unsatisfied conditional step in an
+actionable `evaluate-verify` decision; omitted `paths` and `always = true`
+retain the original direct action.
 
 `src/processes/build-runner.ts` resolves that decision. It selects the initial
 `workspace.provisioned.base.sha`, promoted by the latest successfully completed

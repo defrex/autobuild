@@ -151,7 +151,11 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   // Rule-boundary payloads.
   expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(3)
   const planCompleted = ofType(events, 'plan.completed')[0]!
-  expect(planCompleted.payload).toEqual({ round: 1, artifact: { kind: 'plan', rev: 0 } })
+  expect(planCompleted.payload).toEqual({
+    round: 1,
+    artifact: { kind: 'plan', rev: 0 },
+    verifySteps: ['unit'],
+  })
   expect(agentSession(planCompleted)).toBe('s_1')
   const implemented = ofType(events, 'implement.completed')[0]!
   const head = await git(['rev-parse', 'HEAD'], ws)
@@ -256,6 +260,116 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const reduced = reduceBuild(final)
   expect(reduced.status).toBe('done')
   expect(reduced.outcome).toBe('merged')
+}, 30_000)
+
+const PLAN_SELECTION_TOML = `
+[project]
+baseBranch = "main"
+[commands]
+mandatory = "echo mandatory >> verify-order.log"
+omitted = "echo OMITTED >> verify-order.log"
+selected = "echo selected >> verify-order.log"
+[verify]
+steps = ["mandatory", "omitted-check", "omitted-agent", "selected"]
+[verify.mandatory]
+kind = "check"
+command = "mandatory"
+always = true
+[verify.omitted-check]
+kind = "check"
+command = "omitted"
+[verify.omitted-agent]
+kind = "agent"
+skill = "ab-verify-never"
+[verify.selected]
+kind = "check"
+command = "selected"
+[dispatcher]
+capacity = 1
+[tickets]
+source = "file"
+readyLabels = ["autobuild"]
+readyState = "Ready"
+`
+
+test('a0. approved plan selects optional verification while mandatory gates remain', async () => {
+  const handlers = happyHandlers()
+  handlers.plan = async (cli) => {
+    await cli.run(['context'])
+    const plan = await writeFileIn(
+      cli.ws,
+      '.ab/plan.md',
+      [
+        '+++',
+        'verifySteps = ["selected", "mandatory"]',
+        '+++',
+        '# Plan',
+        '',
+        '1. Implement and verify the rate limiter.',
+        '',
+      ].join('\n'),
+    )
+    await cli.run(['artifact', 'put', 'plan', plan])
+    await cli.run(['done'])
+  }
+
+  const h = await track(
+    makeHarness({
+      handlers,
+      tickets: [readyTicket('T-1')],
+      configToml: PLAN_SELECTION_TOML,
+    }),
+  )
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  await h.runLatest()
+  expect(h.cliErrors).toEqual([])
+
+  const events = await h.events(SLUG)
+  expect(ofType(events, 'plan.completed')[0]!.payload).toEqual({
+    round: 1,
+    artifact: { kind: 'plan', rev: 0 },
+    // Authored order cannot reorder execution.
+    verifySteps: ['mandatory', 'selected'],
+  })
+  expect(ofType(events, 'verify.started').map((event) => event.payload.step)).toEqual([
+    'mandatory',
+    'omitted-check',
+    'omitted-agent',
+    'selected',
+  ])
+  expect(
+    ofType(events, 'verify.completed').map((event) =>
+      normalizeVerifyCompletion(event.payload),
+    ),
+  ).toEqual([
+    { step: 'mandatory', attempt: 1, outcome: 'pass' },
+    {
+      step: 'omitted-check',
+      attempt: 1,
+      outcome: 'skipped',
+      reason:
+        'excluded by approved plan selection (plan@0): verify step "omitted-check" was not selected',
+    },
+    {
+      step: 'omitted-agent',
+      attempt: 1,
+      outcome: 'skipped',
+      reason:
+        'excluded by approved plan selection (plan@0): verify step "omitted-agent" was not selected',
+    },
+    { step: 'selected', attempt: 1, outcome: 'pass' },
+  ])
+
+  const ws = ofType(events, 'workspace.provisioned')[0]!.payload.ref
+  expect(await readFile(join(ws, 'verify-order.log'), 'utf8')).toBe(
+    'mandatory\nselected\n',
+  )
+  expect(
+    ofType(events, 'session.started').some(
+      (event) => event.payload.phase === 'verify:omitted-agent',
+    ),
+  ).toBe(false)
+  expect(reduceBuild(events).prState).toBe('open')
 }, 30_000)
 
 test('a1. dispatch cuts a new branch from remote main while local main is stale', async () => {
@@ -1134,6 +1248,9 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     const conflictBin = join(tmp, 'host-bin')
     await mkdir(ws, { recursive: true })
     await mkdir(conflictBin, { recursive: true })
+    // `ab done` validates the exact plan against the provisioned workspace's
+    // normal config and records the effective default selection.
+    await writeFile(join(ws, 'autobuild.toml'), CONFIG_TOML)
     await writeFile(
       join(conflictBin, 'ab'),
       '#!/bin/sh\necho host-conflicting-ab\nexit 91\n',
@@ -1274,6 +1391,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
         expect(completed.payload).toEqual({
           round: 1,
           artifact: { kind: 'plan', rev: 0 },
+          verifySteps: ['unit'],
         })
       }
     } finally {

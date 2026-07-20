@@ -207,7 +207,11 @@ describe('D8 scope enforcement over the wire', () => {
           (deposited) => ({
             actor: agentActor('plan', 's_two'),
             type: 'plan.completed',
-            payload: { round: 1, artifact: { kind: 'plan', rev: deposited[0]!.revision } },
+            payload: {
+              round: 1,
+              artifact: { kind: 'plan', rev: deposited[0]!.revision },
+              verifySteps: ['types', 'unit'],
+            },
           }),
         )
         .catch((e: unknown) => e)

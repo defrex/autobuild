@@ -29,12 +29,35 @@ import {
 
 let tmp: string
 let filesDir: string
+let planWorkspace: string
 let store: MemoryBuildStore
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), 'ab-terminals-'))
   filesDir = join(tmp, 'files')
+  planWorkspace = join(tmp, 'plan-workspace')
   await mkdir(filesDir)
+  await mkdir(planWorkspace)
+  await writeFile(
+    join(planWorkspace, 'autobuild.toml'),
+    [
+      '[tickets]',
+      'source = "file"',
+      'readyState = "ready"',
+      '[commands]',
+      'types = "bun typecheck"',
+      'unit = "bun test"',
+      '[verify]',
+      'steps = ["types", "unit"]',
+      '[verify.types]',
+      'kind = "check"',
+      'command = "types"',
+      '[verify.unit]',
+      'kind = "check"',
+      'command = "unit"',
+      '',
+    ].join('\n'),
+  )
   store = await seedStore()
 })
 
@@ -59,6 +82,14 @@ function finding(id: string, persists: string[] = []): Finding {
 
 const agent = (role: string) => agentActor(role, 's_seed')
 
+function planDeps(overrides: Parameters<typeof makeEnv>[0] = {}): TestDeps {
+  return makeDeps({
+    store,
+    env: makeEnv({ phase: 'plan', ...overrides }),
+    workspacePath: planWorkspace,
+  })
+}
+
 // ── ab done — phase-kind and second-terminal discipline (D5) ─────────────────
 
 describe('ab done — discipline (D5)', () => {
@@ -81,7 +112,7 @@ describe('ab done — discipline (D5)', () => {
       type: 'plan.completed',
       payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
     })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     await expect(done(deps)).rejects.toThrow(
       /second terminal call rejected \(D5\): plan\.completed for plan@1 already recorded at seq \d+/,
     )
@@ -107,7 +138,7 @@ describe('ab done — discipline (D5)', () => {
       payload: { id: 'esc_9', phase: 'plan', round: 1, source: 'agent', question: 'stuck' },
     })
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     await expect(done(deps)).rejects.toThrow(
       /this session already escalated.*esc_9/s,
     )
@@ -120,7 +151,7 @@ describe('ab done — discipline (D5)', () => {
       payload: { id: 'esc_1', phase: 'plan', round: 1, source: 'agent', question: 'was stuck' },
     })
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     const event = await done(deps)
     expect(event.type).toBe('plan.completed')
   })
@@ -130,7 +161,7 @@ describe('ab done — discipline (D5)', () => {
 
 describe('ab done — plan', () => {
   test('rejected without this round’s deposit, naming the fix', async () => {
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     await expect(done(deps)).rejects.toThrow(
       /requires this round's plan deposit.*found 0.*ab artifact put plan/s,
     )
@@ -143,7 +174,7 @@ describe('ab done — plan', () => {
       type: 'plan.completed',
       payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
     })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 2, session: 's_r2' }) })
+    const deps = planDeps({ round: 2, session: 's_r2' })
     await expect(done(deps)).rejects.toThrow(
       /requires this round's plan deposit.*no plan revision newer than rev 0/s,
     )
@@ -160,7 +191,7 @@ describe('ab done — plan', () => {
       type: 'plan.completed',
       payload: { round: 1, artifact: { kind: 'plan', rev: 1 } },
     })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 2, session: 's_r2' }) })
+    const deps = planDeps({ round: 2, session: 's_r2' })
     await expect(done(deps)).rejects.toThrow(
       /requires this round's plan deposit.*no plan revision newer than rev 1.*already cited/s,
     )
@@ -168,16 +199,93 @@ describe('ab done — plan', () => {
     // Depositing this round's revision unblocks it, citing the NEW rev.
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan revised for r2\n' })
     const event = await done(deps)
-    expect(event.payload).toEqual({ round: 2, artifact: { kind: 'plan', rev: 2 } })
+    expect(event.payload).toEqual({
+      round: 2,
+      artifact: { kind: 'plan', rev: 2 },
+      verifySteps: ['types', 'unit'],
+    })
   })
 
   test('with the deposit, emits plan.completed carrying the latest plan ref and agent actor', async () => {
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan v1\n' })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     const event = await done(deps)
     expect(event.type).toBe('plan.completed')
-    expect(event.payload).toEqual({ round: 1, artifact: { kind: 'plan', rev: 0 } })
+    expect(event.payload).toEqual({
+      round: 1,
+      artifact: { kind: 'plan', rev: 0 },
+      verifySteps: ['types', 'unit'],
+    })
     expect(event.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_test' })
+  })
+
+  test('records an explicit selection in config order, including an empty optional set', async () => {
+    await store.putArtifact(BUILD, {
+      kind: 'plan',
+      content: '+++\nverifySteps = ["unit", "types"]\n+++\n# Plan\n',
+    })
+    const first = await done(planDeps({ round: 1 }))
+    expect(first.payload).toEqual({
+      round: 1,
+      artifact: { kind: 'plan', rev: 0 },
+      verifySteps: ['types', 'unit'],
+    })
+
+    await store.putArtifact(BUILD, {
+      kind: 'plan',
+      content: '+++\nverifySteps = []\n+++\n# Revised plan\n',
+    })
+    const second = await done(planDeps({ round: 2, session: 's_r2' }))
+    expect(second.payload).toEqual({
+      round: 2,
+      artifact: { kind: 'plan', rev: 1 },
+      verifySteps: [],
+    })
+  })
+
+  test('rejects malformed, duplicate, and unknown metadata before appending a terminal fact', async () => {
+    const deps = planDeps({ round: 1 })
+    const invalidPlans = [
+      ['+++\nverifySteps = "types"\n+++\n', /front matter is invalid/],
+      ['+++\nverifySteps = ["types", "types"]\n+++\n', /duplicate step "types"/],
+      ['+++\nverifySteps = ["ghost"]\n+++\n', /unknown step "ghost".*verify\.ghost/s],
+      ['+++\nverifySteps = ["types"]\n', /missing its closing/],
+    ] as const
+
+    for (const [content, error] of invalidPlans) {
+      await store.putArtifact(BUILD, { kind: 'plan', content })
+      await expect(done(deps)).rejects.toThrow(error)
+      expect(await eventTypes()).not.toContain('plan.completed')
+    }
+  })
+
+  test('rejects omission of a mandatory step, then accepts a corrected fresh revision', async () => {
+    await writeFile(
+      join(planWorkspace, 'autobuild.toml'),
+      (await Bun.file(join(planWorkspace, 'autobuild.toml')).text()).replace(
+        'command = "types"',
+        'command = "types"\nalways = true',
+      ),
+    )
+    const deps = planDeps({ round: 1 })
+    await store.putArtifact(BUILD, {
+      kind: 'plan',
+      content: '+++\nverifySteps = ["unit"]\n+++\n# Invalid plan\n',
+    })
+    await expect(done(deps)).rejects.toThrow(/omits mandatory step "types"/)
+    expect(await eventTypes()).not.toContain('plan.completed')
+
+    await store.putArtifact(BUILD, {
+      kind: 'plan',
+      content: '+++\nverifySteps = ["unit", "types"]\n+++\n# Corrected plan\n',
+    })
+    const event = await done(deps)
+    expect(event.payload).toEqual({
+      round: 1,
+      artifact: { kind: 'plan', rev: 1 },
+      verifySteps: ['types', 'unit'],
+    })
+    expect((await store.getEvents(BUILD)).filter((item) => item.type === 'plan.completed')).toHaveLength(1)
   })
 })
 
@@ -1041,7 +1149,7 @@ describe('terminals — zombie sessions (D5)', () => {
         usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
       },
     })
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const deps = planDeps({ round: 1 })
     await expect(done(deps)).rejects.toThrow(
       /session "s_test" already ended.*only the live retry/s,
     )
@@ -1072,16 +1180,13 @@ describe('terminals — zombie sessions (D5)', () => {
       payload: { session: 's_retry', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
     })
 
-    const zombie = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
+    const zombie = planDeps({ round: 1 })
     await expect(done(zombie)).rejects.toThrow(
       /plan@1 already failed after this session started.*retry session owns this round/s,
     )
 
     // The retry (started AFTER the failure) completes the round normally.
-    const retry = makeDeps({
-      store,
-      env: makeEnv({ phase: 'plan', round: 1, session: 's_retry' }),
-    })
+    const retry = planDeps({ round: 1, session: 's_retry' })
     const event = await done(retry)
     expect(event.type).toBe('plan.completed')
     expect(event.actor).toEqual({ kind: 'agent', role: 'plan', session: 's_retry' })

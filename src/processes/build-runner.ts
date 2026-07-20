@@ -137,6 +137,7 @@ type RunPhaseDecision = Extract<Decision, { kind: 'run-phase' }>
 type RunCheckDecision = Extract<Decision, { kind: 'run-check' }>
 type RunAgentVerifyDecision = Extract<Decision, { kind: 'run-agent-verify' }>
 type EvaluateVerifyDecision = Extract<Decision, { kind: 'evaluate-verify' }>
+type SkipVerifyDecision = Extract<Decision, { kind: 'skip-verify' }>
 type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 
@@ -390,6 +391,9 @@ export class BuildRunner {
       case 'evaluate-verify':
         await this.evaluateVerify(decision, events)
         return decision
+      case 'skip-verify':
+        await this.skipVerify(decision)
+        return decision
       case 'run-finalize-step':
         await this.runFinalizeStep(decision)
         return decision
@@ -583,7 +587,7 @@ export class BuildRunner {
     decision: EvaluateVerifyDecision,
     events: AbEvent[],
   ): Promise<void> {
-    const { exec, workspacePath, store, slug } = this.deps
+    const { exec, workspacePath } = this.deps
     const baseSha = selectVerifyDiffBase(events)
     const args = [
       'git',
@@ -608,21 +612,12 @@ export class BuildRunner {
       changedPaths,
     )
     if (!applicability.applies) {
-      await store.append(slug, {
-        actor: KERNEL,
-        type: 'verify.started',
-        payload: { step: decision.step, attempt: decision.attempt },
-      } satisfies EventWrite<'verify.started'>)
-      await store.append(slug, {
-        actor: KERNEL,
-        type: 'verify.completed',
-        payload: {
-          step: decision.step,
-          attempt: decision.attempt,
-          outcome: 'skipped',
-          reason: applicability.reason,
-        },
-      } satisfies EventWrite<'verify.completed'>)
+      await this.skipVerify({
+        kind: 'skip-verify',
+        step: decision.step,
+        attempt: decision.attempt,
+        reason: applicability.reason,
+      })
       return
     }
 
@@ -631,6 +626,27 @@ export class BuildRunner {
     } else {
       await this.runAgentVerify(decision.action, events)
     }
+  }
+
+  /** Shared writer for every deterministic exclusion mechanism. A skip is a
+   * queryable two-fact phase occurrence and launches no command or session. */
+  private async skipVerify(decision: SkipVerifyDecision): Promise<void> {
+    const { store, slug } = this.deps
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: decision.step, attempt: decision.attempt },
+    } satisfies EventWrite<'verify.started'>)
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: {
+        step: decision.step,
+        attempt: decision.attempt,
+        outcome: 'skipped',
+        reason: decision.reason,
+      },
+    } satisfies EventWrite<'verify.completed'>)
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the

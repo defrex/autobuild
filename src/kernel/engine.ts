@@ -73,6 +73,13 @@ export type Decision =
       paths: string[]
       action: VerifyAction
     }
+  | {
+      /** Kernel-authored exclusion that launches no verifier work. */
+      kind: 'skip-verify'
+      step: string
+      attempt: number
+      reason: string
+    }
   | { kind: 'run-finalize-step'; step: string }
   | {
       kind: 'raise-escalation'
@@ -100,9 +107,17 @@ interface VerdictRecord {
   reason?: string
 }
 
+interface PlanCompletionRecord {
+  seq: number
+  artifact: ArtifactRef
+  verifySteps?: string[]
+}
+
 interface RoundRecord {
   startedSeq?: number
   completedSeq?: number
+  /** Plan only. Kept separately so approval snapshots this exact completion. */
+  planCompletion?: PlanCompletionRecord
   verdict?: VerdictRecord
 }
 
@@ -122,6 +137,9 @@ interface LoopIndex {
   latestRevise?: VerdictRecord
   /** seq of the latest post-restart approve verdict (verify cycle boundary). */
   latestApproveSeq: number
+  /** Plan only: the completion present when the latest approve verdict landed.
+   * A later orphan or superseded completion cannot replace this snapshot. */
+  approvedPlan?: PlanCompletionRecord
   /** Findings per round (index round-1), post-restart — stalledChains input.
    * The reducer's reviewFindings spans restarts; this one must not. */
   findingsByRound: Finding[][]
@@ -383,6 +401,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   const cycleAttempts = [...cycleResults, ...cycleStarted].map((v) => v.attempt)
   const attempt =
     cycleAttempts.length > 0 ? Math.max(...cycleAttempts) : log.maxVerifyAttemptEver + 1
+  const approvedPlan = log.plan.approvedPlan
+  const approvedSelection =
+    approvedPlan?.verifySteps === undefined
+      ? undefined
+      : {
+          steps: new Set(approvedPlan.verifySteps),
+          planRev: approvedPlan.artifact.rev,
+        }
   for (const step of config.verify.steps) {
     // First unsatisfied step in the current cycle runs next — only an explicit
     // pass or skip satisfies that step. A failure anywhere was handled above
@@ -396,6 +422,26 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     }
     const stepConfig = config.verify.stepConfigs[step]
     if (stepConfig === undefined) continue // unreachable: configSchema cross-validates (§16.1)
+
+    // Missing selection data is the historical default-all behavior. For a
+    // current explicit selection, exclusion precedes path evaluation and any
+    // verifier construction. Mandatory gates remain selected defensively even
+    // if a directly-authored event bypassed the CLI's deposit validation.
+    if (
+      approvedSelection !== undefined &&
+      !approvedSelection.steps.has(step) &&
+      stepConfig.always !== true
+    ) {
+      return {
+        kind: 'skip-verify',
+        step,
+        attempt,
+        reason:
+          `excluded by approved plan selection (plan@${approvedSelection.planRev}): ` +
+          `verify step ${JSON.stringify(step)} was not selected`,
+      }
+    }
+
     const action: VerifyAction =
       stepConfig.kind === 'check'
         ? {
@@ -672,7 +718,12 @@ function indexLog(events: AbEvent[]): LogIndex {
     }
     record.verdict = verdict
     if (payload.verdict === 'revise') loop.latestRevise = verdict
-    if (payload.verdict === 'approve') loop.latestApproveSeq = seq
+    if (payload.verdict === 'approve') {
+      loop.latestApproveSeq = seq
+      // Snapshot at verdict time. A plan.completed appended later — even for
+      // this round — was never reviewed and therefore has no authority.
+      if (loop === plan) loop.approvedPlan = record.planCompletion
+    }
     // Findings per round, reducer-style padding (rounds without verdicts stay
     // empty — including every pre-restart round, which is the point).
     while (loop.findingsByRound.length < payload.round) loop.findingsByRound.push([])
@@ -693,7 +744,16 @@ function indexLog(events: AbEvent[]): LogIndex {
       }
       case 'plan.completed': {
         const record = roundRecord(plan, event.payload.round, post)
-        if (record !== undefined) record.completedSeq = event.seq
+        if (record !== undefined) {
+          record.completedSeq = event.seq
+          record.planCompletion = {
+            seq: event.seq,
+            artifact: event.payload.artifact,
+            ...(event.payload.verifySteps !== undefined
+              ? { verifySteps: [...event.payload.verifySteps] }
+              : {}),
+          }
+        }
         break
       }
       case 'plan-review.started':

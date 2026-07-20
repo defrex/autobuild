@@ -425,12 +425,19 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
 
 // ── Seed helpers (dead-sandbox logs, engine-state shortcuts) ─────────────────
 
-async function seedPlanApproved(store: BuildStore): Promise<void> {
+async function seedPlanApproved(
+  store: BuildStore,
+  verifySteps?: string[],
+): Promise<void> {
   await store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
   await store.append(SLUG, {
     actor: agentActor('plan', 's_seed'),
     type: 'plan.completed',
-    payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    payload: {
+      round: 1,
+      artifact: { kind: 'plan', rev: 0 },
+      ...(verifySteps !== undefined ? { verifySteps } : {}),
+    },
   })
   await store.append(SLUG, { actor: KERNEL, type: 'plan-review.started', payload: { round: 1 } })
   await store.append(SLUG, {
@@ -1721,6 +1728,78 @@ describe('checks', () => {
       round: 2,
       feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
     })
+  })
+})
+
+// ── Approved-plan verify selection ───────────────────────────────────────────
+
+describe('approved-plan verify selection', () => {
+  const conditionalOptional = `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+`
+
+  test('an omitted step records a kernel skip without diff, command, server, or session work', async () => {
+    const h = await makeHarness({
+      configToml: conditionalOptional,
+      verifyDiffs: [{ error: 'selection must precede path inspection' }],
+    })
+    await seedPlanApproved(h.store, [])
+    await seedCodeApproved(h.store)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'skip-verify',
+      step: 'dashboard',
+      attempt: 1,
+      reason:
+        'excluded by approved plan selection (plan@0): verify step "dashboard" was not selected',
+    })
+    expect(h.execCalls).toEqual([])
+    expect(h.ops).toEqual([])
+    expect(h.runner.sessions.size).toBe(0)
+    const events = await h.store.getEvents(SLUG)
+    expect(events.slice(-2).map((event) => event.type)).toEqual([
+      'verify.started',
+      'verify.completed',
+    ])
+    expect(ofType(events, 'verify.completed').at(-1)?.payload).toEqual({
+      step: 'dashboard',
+      attempt: 1,
+      outcome: 'skipped',
+      reason:
+        'excluded by approved plan selection (plan@0): verify step "dashboard" was not selected',
+    })
+  })
+
+  test('an always = true gate executes defensively despite a malformed direct selection fact', async () => {
+    const h = await makeHarness({
+      configToml: conditionalOptional.replace(
+        'paths = ["src/cli/dashboard/**"]',
+        'paths = ["src/cli/dashboard/**"]\nalways = true',
+      ),
+      verifyDiffs: [{ error: 'mandatory gate must not inspect paths' }],
+    })
+    await seedPlanApproved(h.store, [])
+    await seedCodeApproved(h.store)
+
+    expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'dashboard' })
+    expect(h.execCalls).toEqual([
+      { cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath },
+    ])
+    expect(
+      normalizeVerifyCompletion(
+        ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)!.payload,
+      ).outcome,
+    ).toBe('pass')
   })
 })
 

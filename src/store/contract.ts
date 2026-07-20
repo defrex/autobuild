@@ -124,7 +124,11 @@ export function planCompletedWrite(
   return {
     actor: agentActor('plan', 's_plan'),
     type: 'plan.completed',
-    payload: { round, artifact: { kind: 'plan', rev } },
+    payload: {
+      round,
+      artifact: { kind: 'plan', rev },
+      verifySteps: ['types', 'unit'],
+    },
   }
 }
 
@@ -633,7 +637,11 @@ export function describeBuildStoreContract(
             ['transcript', 0],
           ])
           expect(event.type).toBe('plan.completed')
-          expect(event.payload.artifact).toEqual({ kind: 'plan', rev: 0 })
+          expect(event.payload).toEqual({
+            round: 1,
+            artifact: { kind: 'plan', rev: 0 },
+            verifySteps: ['types', 'unit'],
+          })
 
           const log = await store.getEvents('bundle')
           expect(log.map((e) => e.type)).toEqual(['plan.completed'])

@@ -32,6 +32,12 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
      mid-sequence?
    - **Testing** — does the testing section cover the seams the change
      touches?
+   - **Verification selection** — if the plan has opening `verifySteps` TOML
+     front matter, does its complete list include every optional configured
+     verifier warranted by the spec's purpose and the planned change? Treat an
+     unjustified omission or addition like any other plan defect. Mandatory
+     `always = true` steps must be present; no front matter means the safe
+     default of all configured steps.
 3. Write your review notes to `.ab/plan-review.md`, then deliver exactly one
    verdict:
 

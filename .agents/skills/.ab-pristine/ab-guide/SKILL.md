@@ -54,9 +54,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
-- **`plan ⇄ plan-review`** — the planner turns the spec into a plan; a fresh
-  reviewer (no memory of prior rounds, by design) approves, asks for a
-  revision, or escalates. The loop repeats until approval or a policy limit.
+- **`plan ⇄ plan-review`** — the planner turns the spec into a plan and may
+  select configured optional verify steps in its opening front matter; a fresh
+  reviewer (no memory of prior rounds, by design) reviews both together and
+  approves, asks for a revision, or escalates. The loop repeats until approval
+  or a policy limit.
 - **`implement ⇄ code-review`** — the implementer executes the approved plan,
   committing locally; a fresh reviewer reads the diff against spec and plan.
   Same loop shape.
@@ -196,13 +198,32 @@ subtables are part of this section — their fields are listed here.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `steps` | `[]` | array of nonempty strings | Ordered list of verify phases. Each name must have a matching `[verify.<step>]` table. |
+| `steps` | `[]` | array of nonempty strings | Ordered configured universe of verify phases. Each name must have a matching `[verify.<step>]` table. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. `"ab-verify-e2e"`). |
 | `needsServer` | `false` | boolean, `kind = "agent"` only | `true` ⇒ the kernel starts `[server]` and waits for readiness before the session. |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
-| `always` | — | optional boolean | `true` explicitly makes the step unconditional even when `paths` is present; `false` is equivalent to omission. |
+| `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
+
+A plan may begin with strict TOML front matter selecting the complete set of
+optional verification it warrants:
+
+```toml
++++
+verifySteps = ["types", "e2e"]
++++
+```
+
+Names must already exist in `[verify].steps` with matching tables; duplicates,
+blanks, unknown names, malformed metadata, and omission of an `always = true`
+step make the planner's `ab done` fail before `plan.completed` is appended.
+Written order never reorders execution: the event records the canonical config
+order. No front matter means all configured steps, preserving old plans and
+logs; an explicit empty list is valid only when all steps are optional. The
+selection from the exact plan completion approved by `plan-review` is
+authoritative. A spec restart replaces it with the newly approved plan; a
+reconcile reuses it.
 
 Cross-field rules the validator actually enforces — each is an **error**:
 
@@ -218,9 +239,12 @@ Cross-field rules the validator actually enforces — each is an **error**:
   character classes, brace expansion, extglobs, and malformed `**` are errors.
   `always = true` does not hide selector errors.
 
-The kernel evaluates `paths` immediately before the step against current
-`HEAD`, relative to the initial branch-cut SHA or the refreshed base from the
-latest completed reconcile. It uses a NUL-delimited, no-rename Git diff, so
+For each step, the kernel evaluates the approved plan selection first, then
+`paths`: both must include the step for it to run. A selection exclusion records
+`excluded by approved plan selection (plan@<rev>): verify step "<step>" was not selected`.
+A selected step's `paths` are evaluated immediately before the step against
+current `HEAD`, relative to the initial branch-cut SHA or the refreshed base
+from the latest completed reconcile. It uses a NUL-delimited, no-rename Git diff, so
 adds/modifications/deletions and both rename sides participate. A reconcile
 starts a fresh cycle and evaluation repeats; upstream-only merged paths are
 excluded while build-owned resolutions remain visible. A miss starts no

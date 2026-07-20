@@ -90,7 +90,8 @@ const verifyApplicabilityShape = {
     .array(verifyPathGlobSchema)
     .min(1, 'paths must contain at least one repository-relative glob')
     .optional(),
-  /** Explicit mandatory-gate guard; true takes precedence over paths. */
+  /** Explicit mandatory-gate guard: true takes precedence over paths and a
+   * plan may not deselect the step. */
   always: z.boolean().optional(),
 }
 

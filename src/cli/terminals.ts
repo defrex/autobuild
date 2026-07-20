@@ -15,7 +15,9 @@
  * plumbing triggered by the terminal. Forge credentials never enter the
  * agent's own toolbox; this CLI call IS the kernel plumbing.
  */
+import { join } from 'node:path'
 import { z } from 'zod'
+import { loadConfig } from '../config/load'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import { normalizeVerifyCompletion } from '../events/payloads'
@@ -25,6 +27,7 @@ import {
   pendingAutoMerge,
 } from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
+import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { reduceBuild } from '../kernel/reducer'
 import {
   findingDraftSchema,
@@ -270,10 +273,25 @@ export async function done(
             ` — run 'ab artifact put plan <file>' first (D5)`,
         )
       }
+      // The event, not a later artifact read, is the engine's durable input.
+      // Validate the exact fresh revision before appending so an invalid plan
+      // can be corrected with another immutable deposit and no partial fact.
+      const plan = await store.getArtifact(env.build, 'plan', latest.revision)
+      if (plan === null) {
+        throw new Error(
+          `plan@${latest.revision} was listed but could not be fetched — this is a store bug`,
+        )
+      }
+      const config = await loadConfig(join(deps.workspacePath, 'autobuild.toml'))
+      const verifySteps = resolvePlanVerifySteps(textContent(plan), config)
       return store.append(env.build, {
         actor,
         type: 'plan.completed',
-        payload: { round: env.round, artifact: { kind: 'plan', rev: latest.revision } },
+        payload: {
+          round: env.round,
+          artifact: { kind: 'plan', rev: latest.revision },
+          verifySteps,
+        },
       })
     }
 

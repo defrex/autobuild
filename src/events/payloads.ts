@@ -33,6 +33,27 @@ const reasonOnly = z.strictObject({ reason: z.string().optional() })
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 
+const verifyStepSelectionSchema = z
+  .array(
+    z
+      .string()
+      .min(1, 'verify step names must be nonempty')
+      .refine((step) => step.trim().length > 0, 'verify step names must not be blank'),
+  )
+  .superRefine((steps, ctx) => {
+    const seen = new Set<string>()
+    steps.forEach((step, index) => {
+      if (seen.has(step)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index],
+          message: `duplicate verify step ${JSON.stringify(step)}`,
+        })
+      }
+      seen.add(step)
+    })
+  })
+
 const verifyCompletionBase = {
   step: z.string().min(1),
   attempt,
@@ -153,7 +174,13 @@ export const eventPayloadSchemas = {
      * the carrier `ab context` materializes from. */
     feedback: feedbackSchema.optional(),
   }),
-  'plan.completed': z.strictObject({ round, artifact: artifactRefSchema }),
+  'plan.completed': z.strictObject({
+    round,
+    artifact: artifactRefSchema,
+    /** Effective plan-selected verify set in config order. Optional only so
+     * historical logs retain their default-all meaning. */
+    verifySteps: verifyStepSelectionSchema.optional(),
+  }),
   'plan-review.started': z.strictObject({ round }),
   'plan-review.verdict': reviewVerdictPayload,
   'implement.started': z.strictObject({

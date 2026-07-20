@@ -78,8 +78,9 @@ separate repository-scoped outer workflow owned by dispatch, not a build phase:
 A skipped verification is recorded separately from a pass, satisfies that step
 for the current cycle, and consumes no verify-failure attempt. It requires a
 human-readable reason and never hides another step's failure. Agent verifiers
-may explicitly skip; the kernel also skips a step when its configured `paths`
-do not match the build's live diff.
+may explicitly skip; the kernel also skips a step when the approved plan did
+not select it or when its configured `paths` do not match the build's live
+diff.
 
 ---
 
@@ -206,8 +207,8 @@ is an error, so a typo cannot silently disable a verifier.
 |---|---|---|
 | `[project]` | `baseBranch` — what PRs target | `"main"` |
 | `[commands]` | Free-form map of verb → shell string. `setup` runs after provision and after a rehydrate; others are referenced by name from verify steps. | — |
-| `[verify]` | `steps = [...]` — the ordered verify phases | `[]` |
-| `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer`; both kinds accept `paths` and `always` | `needsServer = false`; no `paths` ⇒ unconditional |
+| `[verify]` | `steps = [...]` — the ordered configured universe of verify phases | `[]` |
+| `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer`; both kinds accept `paths`; `always = true` makes a step unconditional and mandatory | `needsServer = false`; no `paths` ⇒ unconditional; no `always` ⇒ plan-selectable |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
 | `[roles]` | Role → `{ runtime?, model?, extensions? }`. Reserved `default` is the optional inheritance base; concrete entries include pipeline roles and optional pre-build `slug` naming. | absent `default` ⇒ the wiring-fallback runtime + its own default model; extensions hermetic |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `4` |
@@ -217,8 +218,44 @@ is an error, so a typo cannot silently disable a verifier.
 | `[harvest]` | Observation-count back-pressure for the staged harvester: positive `threshold` | `threshold = 10` |
 | `[outer]` | Map of other scheduled ingesters → `{ cron = "…" }`; the exact `harvest` key is rejected | — |
 
-**Path-conditional verify steps.** Both verifier kinds may narrow themselves to
-actual changed paths:
+**Plan-selected verify steps.** A plan may begin with strict TOML front matter
+that names the complete set of optional verification warranted by the spec and
+planned work:
+
+```toml
++++
+verifySteps = ["types", "e2e"]
++++
+```
+
+The selectable names are the entries in this repository's `[verify].steps`
+whose matching `[verify.<step>]` table does not set `always = true`. An explicit
+list must also include every `always = true` mandatory step. It cannot invent a
+step or alter its command, skill, server need, or path selectors. Written order
+does not reorder execution: `plan.completed` records the effective names in
+config order. No front matter means all configured steps, so historical plans
+and builds keep their behavior; `verifySteps = []` is valid only when every
+configured step is optional.
+
+The planner's `ab done` reads the exact new plan revision and the provisioned
+`autobuild.toml` before recording the event fact. Malformed metadata, unknown,
+blank, or duplicate names, and omission of a mandatory step are all-or-nothing
+errors naming the problem; the planner deposits a fresh corrected revision and
+retries. `plan-review` sees the front matter in the same plan and uses its
+existing approve/revise/escalate vocabulary. Only the selection paired with the
+approving verdict is authoritative—not a superseded or later orphan revision.
+A spec restart gets a fresh approved selection; reconcile cycles reuse the
+approved selection.
+
+A step runs only when the approved plan selected it **and** its applicability
+rule includes the live diff. Plan exclusion is checked first and records:
+
+```text
+excluded by approved plan selection (plan@<rev>): verify step "<step>" was not selected
+```
+
+**Path-conditional verify steps.** Both verifier kinds may narrow selected steps
+to actual changed paths:
 
 ```toml
 [verify.dashboard]
@@ -236,8 +273,8 @@ segment. Absolute paths, `.`/`..` or empty segments, negation, escapes,
 character classes, brace expansion, extglobs, and malformed `**` are config
 errors naming the step. `paths` omitted means unconditional; `always = false`
 does not change that. `always = true` takes precedence even when `paths` is
-present (the selectors are still validated), so a mandatory gate cannot be
-accidentally narrowed later.
+present (the selectors are still validated) and makes the step non-deselectable,
+so a mandatory gate cannot be accidentally narrowed or omitted later.
 
 The kernel evaluates this rule immediately before the step. It diffs current
 `HEAD` against the build's durable branch-cut tree, or against the refreshed
