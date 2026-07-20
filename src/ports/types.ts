@@ -57,6 +57,17 @@ export interface TicketCreateOptions {
   idempotencyKey?: string
 }
 
+/** Editable ticket fields. Omitted fields are preserved; state is deliberately
+ * absent because `transition()` exclusively owns lifecycle changes. */
+export interface TicketUpdate {
+  /** Required when named: an update cannot clear the ticket's title. */
+  title?: string
+  /** Required when named: pre-build, this is the spec (§6.3). */
+  body?: string
+  /** A complete label replacement. An explicit empty array clears labels. */
+  labels?: string[]
+}
+
 export interface TicketSource {
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3). */
@@ -67,6 +78,15 @@ export interface TicketSource {
   comment(id: string, body: string): Promise<void>
   transition(id: string, state: string): Promise<void>
   create(draft: TicketDraft, opts?: TicketCreateOptions): Promise<Ticket>
+  /** Partially replace editable fields. The patch must be nonempty and strict;
+   * omitted fields (including unmodeled provider metadata) remain untouched. */
+  update(id: string, patch: TicketUpdate): Promise<void>
+  /** Add one same-source blocker. Retries are idempotent; the target and
+   * blocker must exist, and a ticket may not block itself. */
+  addBlocker(id: string, blockerId: string): Promise<void>
+  /** Remove one same-source blocker. Missing relations are successful no-ops;
+   * only the target ticket is required to still exist. */
+  removeBlocker(id: string, blockerId: string): Promise<void>
   /**
    * Dependency-graph nodes for `ids`. The result covers EVERY requested id, in
    * request order; a missing id comes back `{exists: false, resolved: false,

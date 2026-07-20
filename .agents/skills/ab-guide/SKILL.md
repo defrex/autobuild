@@ -161,6 +161,16 @@ likes.
 sandbox rehydrate. Values are never evaluated as config — they are handed to a
 shell as written.
 
+For first config creation, `ab init` starts with `setup = "bun install"` and
+recognizes only exact own keys in the root `package.json` scripts map: `lint`
+adds `lint = "bun run lint"`; `type-check` adds
+`typecheck = "bun run type-check"` and the `types` verify check; `test` adds
+`test = "bun run test"` and the `unit` check. Lint remains command-only.
+Missing scripts add nothing (`typecheck` is not an alias for `type-check`), so
+every generated package command names a script that exists and every generated
+check has a backing command. This detection does not restrict later manual
+configuration: commands remain an open map.
+
 ### `[server]`
 
 Optional table. Config **declares**; the kernel **owns** the lifecycle. Agents
@@ -334,8 +344,9 @@ claim is a rename — frontmatter carries no `state`/`claimedBy`, and a ticket
 body survives byte-exactly because a move never rewrites the file. The same id
 in two state dirs is a loud error naming both paths. When `dir` is defaulted,
 the backlog writes its own `.gitignore` of `*`, so git never sees it; an
-explicit `dir` is the user's and is left alone. Agents drive this tracker
-through `ab-tickets` rather than running `mv` by hand.
+explicit `dir` is the user's and is left alone. Agents and operators drive it
+through the source-agnostic `ab ticket` commands rather than running `mv` by
+hand.
 
 **Secrets never live in this file.** `LINEAR_API_KEY` is an environment
 variable (a local `.env` works). If a user asks you to put an API key in
@@ -372,8 +383,13 @@ the user to `[harvest].threshold`; other scheduled ingesters are unaffected.
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a
 repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
-- Writes `autobuild.toml` from the template, and **never overwrites an existing
-  one**. The repo's config is the repo's from the first re-run onward.
+- If `autobuild.toml` is absent, renders the valid setup-only template using
+  the target's root `package.json`: exact `lint`, `type-check`, and `test`
+  scripts add the command/check fragments described above. Missing package
+  metadata means no package-backed commands or checks; malformed JSON or an
+  invalid recognized declaration fails with the manifest path. It **never
+  inspects package scripts or overwrites config once the file exists**, even
+  with `--force`; the repo's config is the repo's from the first re-run onward.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
   preserving every existing byte/rule and handling a missing trailing newline.
 - **Copies** each canonical skill to `.agents/skills/ab-<name>/SKILL.md` —
@@ -436,6 +452,52 @@ remains repo-relative. An HTTP(S) URL still selects the remote store unchanged,
 while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
+
+## Source-agnostic ticket operations
+
+The sessionless `ab ticket` namespace constructs whichever TicketSource the
+repository's `[tickets]` table selects. These forms therefore work unchanged
+with Linear and the file tracker, without provider-specific API/MCP calls:
+
+- `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]`
+  files a ticket. Blocker ids belong to the same source and are checked before
+  creation.
+- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]`
+  partially replaces editable fields. At least one flag is required.
+- `ab ticket block <id> <blocker-id>` adds one blocking relationship.
+- `ab ticket unblock <id> <blocker-id>` removes one blocking relationship.
+- `ab ticket list [--state <state>] [--labels a,b] [--json]` lists tickets. With
+  no filters it uses exactly dispatch's configured ready state and source-aware
+  default labels. If either filter is present, only explicitly supplied
+  criteria apply; every requested label must match.
+- `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
+  labeled metadata and the body verbatim, so it can read a stored spec back.
+- `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
+  post-transition value.
+
+State names and ids are source-local. For block and unblock, the first id is the ticket being changed
+and the second is its blocker. Create validates every
+`--blocked-by` id before filing. A later block requires both tickets to exist
+and rejects a direct self-block; unblock only requires the target. Adding an
+existing relationship and removing an absent one both succeed as no-ops, so
+either command is safe to retry.
+
+Update is partial: omitted fields remain untouched, including labels, assignee,
+and provider metadata. `--labels` is a complete replacement and an explicitly
+empty value (`--labels ''`) clears the list. Supplied title/body values must be
+nonblank. State is intentionally not an update field — `transition()` remains its sole owner —
+and every validation or unknown-ticket error occurs before
+mutation and names the offending field or id. `--body` always names a file; a
+missing file fails before a source write.
+
+Quote multiword Linear states, for example `"In Progress"`; file states are
+case-insensitive on input and canonical on output. The adapters validate
+transitions, so an invalid state fails with the
+source's known states. A missing id fails nonzero with an error naming both the
+id and configured source.
+
+Human-readable output is the default. `--json` emits one bare JSON value and no
+prose: a `Ticket[]` for `list`, and the complete `Ticket` for `show` or `move`.
 
 ## Dispatch dashboard
 

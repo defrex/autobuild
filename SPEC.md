@@ -60,7 +60,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create tickets; resolve declared dependencies | file-based (default directory); Linear; later GitHub Issues |
+| `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
 | `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub |
@@ -207,7 +207,8 @@ a ticket rather than a build slug, because it runs before a build exists:
 - `/spec` (no args) — design a feature through conversation, spec-first; on
   completion it creates the ticket via the TicketSource.
 - `/spec <ticket>` — flesh out a thin existing ticket into conforming shape,
-  syncing back.
+  then sync the body back through `ab ticket update <id> --body <file>` so
+  unrelated labels, assignee, state, and provider metadata remain untouched.
 
 ### 6.3 The spec artifact
 
@@ -533,8 +534,18 @@ implementer:  ab context   (findings.json now materialized) → …
 
 ### 8.8 Outer-loop namespace
 
-Human/pre-build ticket creation remains `ab ticket create`. Observation harvest
-uses a typed, repository-scoped namespace:
+Human/pre-build ticket grooming uses one configured-source namespace. These
+commands are sessionless, source-agnostic, and never available as a mid-build
+spec mutation path:
+
+| Command | Scope | Purpose |
+|---|---|---|
+| `ab ticket create <title> --body <file> [--labels …] [--blocked-by …]` | human/pre-build | create a ticket in the configured source |
+| `ab ticket update <id> [--title …] [--body <file>] [--labels …]` | human/pre-build | partially replace editable fields; omitted fields survive and state is excluded |
+| `ab ticket block <id> <blocker-id>` | human/pre-build | idempotently add one same-source blocker to an existing ticket |
+| `ab ticket unblock <id> <blocker-id>` | human/pre-build | idempotently remove one same-source blocker from an existing ticket |
+
+Observation harvest uses a separate typed, repository-scoped namespace:
 
 | Command | Scope | Purpose |
 |---|---|---|
@@ -798,19 +809,30 @@ posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
 
+**Pre-build edits.** `update(id, patch)` partially replaces the modeled
+editable fields `title`, `body`, and `labels`. A patch is strict and must name
+at least one field; supplied title/body values cannot be blank, while an
+explicit empty label list clears labels. Omitted fields — including state,
+assignee, and provider metadata — remain untouched. `transition()` exclusively
+owns state changes; state is not an update field. Unknown tickets and invalid
+patches fail before mutation and name the problem.
+
 **Ticket dependencies.** A ticket may declare that it is blocked by other
-tickets of the same source, at creation (`ab ticket create --blocked-by`).
-The source owns both halves of what a provider-neutral caller cannot know:
-how a blocker relationship is *represented* (Linear issue relations; the file
-source's TOML `blockedBy`) and what *complete* means for one (Linear's
-`state.type`; the file source's `Done`). The dispatcher owns the decision
-built on those facts — an unresolved blocker means the ticket is not claimed
-and not dispatched, and it creates no build. Dependencies are written at
-creation and read at dispatch time, both of which are **initiation**, so the
-rule above — never consulted mid-build — is untouched. A dependency-blocked
-ticket stays queued source work rather than becoming a blocked build: the
-runtime `blocked` status is for builds awaiting a human, not for work that
-has not started.
+tickets of the same source at creation (`ab ticket create --blocked-by`) or
+amend one relationship later (`ab ticket block` / `ab ticket unblock`). Adds
+require both tickets to exist, reject a direct self-block, and succeed as a
+no-op when already present. Removes require the target ticket but succeed when
+the relation or blocker is absent. The source owns both halves of what a
+provider-neutral caller cannot know: how a blocker relationship is
+*represented* (Linear issue relations; the file source's TOML `blockedBy`) and
+what *complete* means for one (Linear's `state.type`; the file source's
+`Done`). The dispatcher owns the decision built on those facts — an unresolved
+blocker means the ticket is not claimed and not dispatched, and it creates no
+build. Dependencies are written during grooming and read at dispatch time,
+both of which are **initiation**, so the rule above — never consulted
+mid-build — is untouched. A dependency-blocked ticket stays queued source work
+rather than becoming a blocked build: the runtime `blocked` status is for
+builds awaiting a human, not for work that has not started.
 
 `create(draft, {state?, idempotencyKey?})` supports crash-safe outer-loop
 filing. A state override lets harvest target Triage even when ordinary user

@@ -1075,6 +1075,55 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
   }
 }, 30_000)
 
+/** Relationships added after creation flow through the same native file
+ * projection and dispatcher gate, and removing one makes the next tick
+ * eligible even while the former blocker remains unresolved. */
+test('d3. post-create blocker writes immediately govern file-source dispatch (§13)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-file-ticket-edits-'))
+  try {
+    const source = new FileTicketSource({ dir, createState: 'Ready' })
+    const blocker = await source.create({
+      title: 'Still unresolved',
+      body: CONFORMING_BODY,
+      labels: ['autobuild'],
+    })
+    await source.transition(blocker.ref.id, 'Doing')
+    const dependent = await source.create({
+      title: 'Initially independent',
+      body: CONFORMING_BODY,
+      labels: ['autobuild'],
+    })
+
+    await source.addBlocker(dependent.ref.id, blocker.ref.id)
+    expect(
+      await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8'),
+    ).toContain(`blockedBy = [ "${blocker.ref.id}" ]`)
+
+    const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
+    const held = await h.dispatcher.tick()
+    expect(held.dependencyBlocked).toBe(1)
+    expect(held.dispatched).toBe(0)
+    expect((await source.get(dependent.ref.id))?.state).toBe('Ready')
+
+    await source.removeBlocker(dependent.ref.id, blocker.ref.id)
+    const unblockedFile = await readFile(
+      join(dir, 'ready', `${dependent.ref.id}.md`),
+      'utf8',
+    )
+    expect(unblockedFile).not.toContain('blockedBy')
+    expect((await source.get(blocker.ref.id))?.state).toBe('Doing')
+
+    const released = await h.dispatcher.tick()
+    expect(released.dependencyBlocked).toBe(0)
+    expect(released.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toContain(
+      dependent.ref.id,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 30_000)
+
 // ── e. The real binary over the real local store (§7.2.1, §8.1) ──────────────
 
 test('e. runner PATH uses the real `ab` for context through a validated terminal', async () => {

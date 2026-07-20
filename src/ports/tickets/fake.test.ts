@@ -20,6 +20,7 @@ describeTicketSourceContract('FakeTicketSource', async () => ({
     doneState: 'Done',
   }),
   states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+  editableLabel: 'contract-editable',
 }))
 
 describe('FakeTicketSource', () => {
@@ -127,6 +128,46 @@ describe('FakeTicketSource', () => {
     expect(second.ref.id).toBe('fake-2')
     expect(second.labels).toEqual(['autobuild'])
     expect((await source.get('fake-1'))?.body).toBe('a-body')
+  })
+
+  // ── Editable fields and blocker writes ─────────────────────────────────────
+
+  test('update keeps title/ref consistent and defensively copies labels and journals', async () => {
+    const source = new FakeTicketSource([ticket('t-1', { labels: ['old'] })])
+    const labels = ['new']
+
+    await source.update('t-1', { title: 'Renamed', labels })
+    labels.push('mutated-after-call')
+
+    expect(await source.get('t-1')).toMatchObject({
+      ref: { title: 'Renamed' },
+      title: 'Renamed',
+      labels: ['new'],
+      state: 'Ready',
+    })
+    expect(source.updates).toEqual([
+      { id: 't-1', patch: { title: 'Renamed', labels: ['new'] } },
+    ])
+  })
+
+  test('blocker journals include idempotent retries but rejected calls are absent', async () => {
+    const source = new FakeTicketSource([ticket('t-1'), ticket('t-2')])
+
+    await source.addBlocker('t-1', 't-2')
+    await source.addBlocker('t-1', 't-2')
+    await source.removeBlocker('t-1', 'missing')
+    await source.removeBlocker('t-1', 't-2')
+    await expect(source.addBlocker('t-1', 'unknown')).rejects.toThrow('unknown')
+
+    expect(source.blockerAdds).toEqual([
+      { id: 't-1', blockerId: 't-2' },
+      { id: 't-1', blockerId: 't-2' },
+    ])
+    expect(source.blockerRemovals).toEqual([
+      { id: 't-1', blockerId: 'missing' },
+      { id: 't-1', blockerId: 't-2' },
+    ])
+    expect((await source.get('t-1'))?.blockedBy).toBeUndefined()
   })
 
   // ── Dependencies (§13) ─────────────────────────────────────────────────────

@@ -10,14 +10,13 @@
  * A ticket's state IS the directory it sits in. There is no `state` field to
  * disagree with the filesystem, `transition` and `claim` are rename(2), and
  * `ls ready/` is an accurate answer to "what's dispatchable" — which is what
- * lets `mv triage/x.md ready/` be the whole grooming UX.
+ * lets `mv triage/x.md ready/` be the whole lifecycle-state grooming UX.
  *
- * Concurrency: claim (and every other write) is locate-check-rename, not a
- * filesystem lock. That is atomic *enough* by design — the dispatcher is the
- * single writer (SPEC §12 single-writer discipline), so the guard defends
- * against re-dispatch across runs, not against concurrent writers. The rename
- * never crosses a filesystem: `<dir>/ready` → `<dir>/doing` is one mount by
- * construction.
+ * Concurrency: writes locate and validate immediately before a same-path
+ * rewrite or same-filesystem rename; there is no filesystem lock. The
+ * dispatcher remains the lifecycle single writer (SPEC §12), and concurrent
+ * human edits are explicitly last-write-wins. State renames never cross a
+ * filesystem: `<dir>/ready` → `<dir>/doing` is one mount by construction.
  */
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -30,7 +29,9 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketSource,
+  TicketUpdate,
 } from '../types'
+import { validateTicketUpdate } from './update'
 
 /**
  * The canonical states, in workflow order. This set is closed: the states are
@@ -291,6 +292,64 @@ export class FileTicketSource implements TicketSource {
     return this.toTicket(front, draft.body, targetState)
   }
 
+  async update(id: string, patch: TicketUpdate): Promise<void> {
+    const validated = validateTicketUpdate(patch)
+    await this.ensureLayout()
+    const loaded = await this.requireForWrite(id, 'update')
+    const front: Frontmatter = {
+      ...loaded.front,
+      ...(validated.title !== undefined ? { title: validated.title } : {}),
+      ...(validated.labels !== undefined
+        ? { labels: [...validated.labels] }
+        : {}),
+    }
+    await this.rewriteAt(
+      loaded.found,
+      front,
+      validated.body ?? loaded.body,
+    )
+  }
+
+  async addBlocker(id: string, blockerId: string): Promise<void> {
+    await this.ensureLayout()
+    const loaded = await this.requireForWrite(id, 'addBlocker')
+    if (id === blockerId) {
+      throw new Error(`file ticket source: ticket "${id}" cannot block itself`)
+    }
+
+    const blocker = await this.locate(blockerId)
+    if (blocker === null) {
+      throw new Error(
+        `file ticket source: addBlocker on ticket "${id}" names unknown blocker "${blockerId}"`,
+      )
+    }
+    await this.loadAt(blocker) // Existence means a valid ticket, not only a path.
+
+    if (loaded.front.blockedBy?.includes(blockerId)) return
+    await this.rewriteAt(
+      loaded.found,
+      {
+        ...loaded.front,
+        blockedBy: [...(loaded.front.blockedBy ?? []), blockerId],
+      },
+      loaded.body,
+    )
+  }
+
+  async removeBlocker(id: string, blockerId: string): Promise<void> {
+    await this.ensureLayout()
+    const loaded = await this.requireForWrite(id, 'removeBlocker')
+    const remaining = (loaded.front.blockedBy ?? []).filter(
+      (candidate) => candidate !== blockerId,
+    )
+    if (remaining.length === (loaded.front.blockedBy ?? []).length) return
+
+    const front: Frontmatter = { ...loaded.front }
+    if (remaining.length === 0) delete front.blockedBy
+    else front.blockedBy = remaining
+    await this.rewriteAt(loaded.found, front, loaded.body)
+  }
+
   /**
    * Dependency nodes (§13). Resolution is this source's own lifecycle, and
    * this source's lifecycle is the filesystem: a blocker is complete when its
@@ -422,6 +481,29 @@ export class FileTicketSource implements TicketSource {
       )
     }
     return loaded
+  }
+
+  private async requireForWrite(
+    id: string,
+    operation: string,
+  ): Promise<{ found: Located; front: Frontmatter; body: string }> {
+    const found = await this.locate(id)
+    if (found === null) {
+      throw new Error(
+        `file ticket source: ${operation} on unknown ticket "${id}"`,
+      )
+    }
+    return { found, ...(await this.loadAt(found)) }
+  }
+
+  /** Rewrite only the located file: editable writes can never move lifecycle
+   * state because the existing state-directory path remains authoritative. */
+  private async rewriteAt(
+    found: Located,
+    front: Frontmatter,
+    body: string,
+  ): Promise<void> {
+    await writeFile(found.path, serializeTicketFile(front, body))
   }
 
   private async listAll(): Promise<Ticket[]> {

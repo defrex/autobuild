@@ -1,8 +1,8 @@
 /**
  * In-memory TicketSource for seam tests (SPEC §3.2, §13). Mirrors the policy
- * shape of the real adapters: initiation (listReady/get/claim/create) plus
- * outward-only projections (comment/transition), which it journals so tests
- * can assert exactly what flowed to the tracker.
+ * shape of the real adapters: initiation (listReady/get/claim/create),
+ * pre-build grooming writes (update/blockers), and outward projections
+ * (comment/transition), all journaled where seam tests need exact evidence.
  */
 import type {
   DependencyState,
@@ -10,7 +10,9 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketSource,
+  TicketUpdate,
 } from '../types'
+import { validateTicketUpdate } from './update'
 
 function cloneTicket(ticket: Ticket): Ticket {
   return {
@@ -31,6 +33,10 @@ export class FakeTicketSource implements TicketSource {
   /** Journal of every projection sent outward (§13), in call order. */
   readonly comments: Array<{ id: string; body: string }> = []
   readonly transitions: Array<{ id: string; state: string }> = []
+  /** Every accepted grooming write, including idempotent blocker retries. */
+  readonly updates: Array<{ id: string; patch: TicketUpdate }> = []
+  readonly blockerAdds: Array<{ id: string; blockerId: string }> = []
+  readonly blockerRemovals: Array<{ id: string; blockerId: string }> = []
   /** Ids claimed, in call order — lets tests assert a blocked ticket was
    * never claimed (§12: gating precedes claim-before-launch). */
   readonly claims: string[] = []
@@ -136,6 +142,43 @@ export class FakeTicketSource implements TicketSource {
     return cloneTicket(ticket)
   }
 
+  async update(id: string, patch: TicketUpdate): Promise<void> {
+    const validated = validateTicketUpdate(patch)
+    const ticket = this.require(id, 'update')
+
+    if (validated.title !== undefined) {
+      ticket.title = validated.title
+      ticket.ref.title = validated.title
+    }
+    if (validated.body !== undefined) ticket.body = validated.body
+    if (validated.labels !== undefined) ticket.labels = [...validated.labels]
+
+    this.updates.push({ id, patch: cloneUpdate(validated) })
+  }
+
+  async addBlocker(id: string, blockerId: string): Promise<void> {
+    const ticket = this.require(id, 'addBlocker')
+    if (id === blockerId) {
+      throw new Error(`fake ticket source: ticket "${id}" cannot block itself`)
+    }
+    this.require(blockerId, 'addBlocker')
+
+    this.blockerAdds.push({ id, blockerId })
+    if (ticket.blockedBy?.includes(blockerId)) return
+    ticket.blockedBy = [...(ticket.blockedBy ?? []), blockerId]
+  }
+
+  async removeBlocker(id: string, blockerId: string): Promise<void> {
+    const ticket = this.require(id, 'removeBlocker')
+    this.blockerRemovals.push({ id, blockerId })
+
+    const remaining = (ticket.blockedBy ?? []).filter(
+      (candidate) => candidate !== blockerId,
+    )
+    if (remaining.length === 0) delete ticket.blockedBy
+    else ticket.blockedBy = remaining
+  }
+
   /** Resolution is this fake's own lifecycle: `doneState` and nothing else. */
   async dependencyStates(ids: string[]): Promise<DependencyState[]> {
     this.dependencyQueries.push([...ids])
@@ -157,5 +200,13 @@ export class FakeTicketSource implements TicketSource {
       throw new Error(`fake ticket source: ${operation} on unknown ticket "${id}"`)
     }
     return ticket
+  }
+}
+
+function cloneUpdate(patch: TicketUpdate): TicketUpdate {
+  return {
+    ...(patch.title !== undefined ? { title: patch.title } : {}),
+    ...(patch.body !== undefined ? { body: patch.body } : {}),
+    ...(patch.labels !== undefined ? { labels: [...patch.labels] } : {}),
   }
 }

@@ -29,6 +29,7 @@ describeTicketSourceContract('FileTicketSource', async () => {
   return {
     source: new FileTicketSource({ dir: contractDir }),
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+    editableLabel: 'contract-editable',
     cleanup: () => rm(contractDir, { recursive: true, force: true }),
   }
 })
@@ -450,6 +451,86 @@ describe('FileTicketSource', () => {
 
   test('ids that escape the ticket directory are rejected', async () => {
     await expect(source().get('../escape')).rejects.toThrow('invalid ticket id')
+  })
+
+  // ── Editable fields and blocker writes ─────────────────────────────────────
+
+  test('update rewrites in place while preserving state, blockers, body, and idempotency metadata', async () => {
+    const tickets = source()
+    const blocker = await tickets.create(
+      { title: 'Blocker', body: 'blocker body' },
+      { state: 'Doing', idempotencyKey: 'blocker-key' },
+    )
+    const created = await tickets.create(
+      {
+        title: 'Original',
+        body: SPEC_BODY,
+        labels: ['old'],
+        blockedBy: [blocker.ref.id],
+      },
+      { state: 'Ready', idempotencyKey: 'dependent-key' },
+    )
+    await tickets.comment(created.ref.id, 'preserve this comment')
+    const bodyBefore = (await tickets.get(created.ref.id))?.body
+
+    await tickets.update(created.ref.id, {
+      title: 'Renamed',
+      labels: ['new'],
+    })
+
+    expect(await readdir(join(dir, 'ready'))).toEqual([`${created.ref.id}.md`])
+    expect(await tickets.get(created.ref.id)).toMatchObject({
+      ref: { title: 'Renamed' },
+      title: 'Renamed',
+      body: bodyBefore,
+      state: 'Ready',
+      labels: ['new'],
+      blockedBy: [blocker.ref.id],
+    })
+    const written = await readFile(path('ready', created.ref.id), 'utf8')
+    expect(written).toContain('idempotencyKey = "dependent-key"')
+    expect(written).toContain('preserve this comment')
+  })
+
+  test('a body-only update preserves frontmatter and does not move the ticket', async () => {
+    const tickets = source()
+    const created = await tickets.create(
+      { title: 'Original', body: SPEC_BODY, labels: ['autobuild'] },
+      { state: 'Doing', idempotencyKey: 'body-sync-key' },
+    )
+
+    await tickets.update(created.ref.id, { body: '# Replacement\n' })
+
+    expect((await tickets.get(created.ref.id))?.body).toBe('# Replacement\n')
+    expect((await tickets.get(created.ref.id))?.labels).toEqual(['autobuild'])
+    expect(await readdir(join(dir, 'doing'))).toEqual([`${created.ref.id}.md`])
+    expect(await readFile(path('doing', created.ref.id), 'utf8')).toContain(
+      'idempotencyKey = "body-sync-key"',
+    )
+  })
+
+  test('blocker retries do not duplicate entries and final removal omits blockedBy', async () => {
+    const tickets = source()
+    const blocker = await tickets.create(
+      { title: 'Blocker', body: 'blocker body' },
+      { state: 'Doing' },
+    )
+    const dependent = await tickets.create(
+      { title: 'Dependent', body: SPEC_BODY },
+      { state: 'Ready', idempotencyKey: 'dependent-key' },
+    )
+
+    await tickets.addBlocker(dependent.ref.id, blocker.ref.id)
+    const once = await readFile(path('ready', dependent.ref.id), 'utf8')
+    await tickets.addBlocker(dependent.ref.id, blocker.ref.id)
+    expect(await readFile(path('ready', dependent.ref.id), 'utf8')).toBe(once)
+    expect((once.match(new RegExp(blocker.ref.id, 'g')) ?? [])).toHaveLength(1)
+
+    await tickets.removeBlocker(dependent.ref.id, blocker.ref.id)
+    const removed = await readFile(path('ready', dependent.ref.id), 'utf8')
+    expect(removed).not.toContain('blockedBy')
+    expect(removed).toContain('idempotencyKey = "dependent-key"')
+    expect(removed).toContain(SPEC_BODY)
   })
 
   // ── Dependencies (§13) ─────────────────────────────────────────────────────

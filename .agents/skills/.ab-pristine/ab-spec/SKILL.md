@@ -61,15 +61,24 @@ unclaimed until every blocker completes.
 
 Fetch the ticket. Diff it against the standard: which of the four parts are
 missing or unverifiable? Interview the user only on the gaps — don't
-re-litigate what the ticket already answers. Sync the conforming spec back
-to the ticket body, preserving anything the ticket carried that the standard
-doesn't structure (assignee, labels, discussion links).
+re-litigate what the ticket already answers. Write the accepted conforming
+spec to a file, then sync only the body:
 
-`--blocked-by` is a creation-time affordance, so `ab` cannot amend an existing
-ticket's dependencies. If the user asks to add a dependency the ticket lacks
-or remove one it should drop, that operation is outside the CLI surface. Use
-the ticket tooling available in the current environment to make the requested
-amendment, then tell the user what you changed.
+```
+ab ticket update <ticket> --body spec.md
+```
+
+Omitted metadata is preserved, including title, labels, assignee, state, and
+provider-specific fields. If grooming changes dependencies, use the same
+configured-source surface rather than a provider API or MCP call:
+
+```
+ab ticket block <ticket> <blocker-id>
+ab ticket unblock <ticket> <blocker-id>
+```
+
+The first id is the ticket being amended. Both relationship operations are
+idempotent; adding validates the blocker exists and rejects a self-block.
 
 ## Rules
 

@@ -5,6 +5,7 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketSource,
+  TicketUpdate,
 } from '../types'
 
 /** Lifecycle names supplied by an adapter's contract fixture. */
@@ -20,6 +21,8 @@ export interface TicketSourceContractStates {
 export interface TicketSourceContractHarness {
   source: TicketSource
   states: TicketSourceContractStates
+  /** A fixture label known to be writable in this source/team. */
+  editableLabel: string
   /** Called before a reserved external id is used, so live cleanup remains
    * possible even if creation commits and the adapter call then fails. */
   beforeCreate?: (idempotencyKey: string) => Promise<void> | void
@@ -216,6 +219,220 @@ export function describeTicketSourceContract(
         expect(
           await harness.source.dependencyStates(expected.map((state) => state.id)),
         ).toEqual(expected)
+      })
+    })
+
+    test('partial updates replace only named editable fields and never state or blockers', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const blocker = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('update blocker'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const originalTitle = contractTicketTitle('partial update')
+        const created = await createTracked(
+          harness,
+          {
+            title: originalTitle,
+            body: CONTRACT_TICKET_BODY,
+            labels: [harness.editableLabel],
+            blockedBy: [blocker.ref.id],
+          },
+          { state: harness.states.ready },
+        )
+
+        const replacementBody = `${CONTRACT_TICKET_BODY}\nUpdated body.\n`
+        await harness.source.update(created.ref.id, { body: replacementBody })
+        expect(await harness.source.get(created.ref.id)).toMatchObject({
+          ref: { title: originalTitle },
+          title: originalTitle,
+          body: replacementBody,
+          state: harness.states.ready,
+          labels: [harness.editableLabel],
+          blockedBy: [blocker.ref.id],
+        })
+
+        const replacementTitle = contractTicketTitle('renamed')
+        await harness.source.update(created.ref.id, { title: replacementTitle })
+        expect(await harness.source.get(created.ref.id)).toMatchObject({
+          ref: { title: replacementTitle },
+          title: replacementTitle,
+          body: replacementBody,
+          state: harness.states.ready,
+          labels: [harness.editableLabel],
+          blockedBy: [blocker.ref.id],
+        })
+
+        // An explicit empty list is a replacement, not omission.
+        await harness.source.update(created.ref.id, { labels: [] })
+        expect(await harness.source.get(created.ref.id)).toMatchObject({
+          title: replacementTitle,
+          body: replacementBody,
+          state: harness.states.ready,
+          labels: [],
+          blockedBy: [blocker.ref.id],
+        })
+        expect(await harness.source.dependencyStates([created.ref.id])).toEqual([
+          {
+            id: created.ref.id,
+            exists: true,
+            resolved: false,
+            blockedBy: [blocker.ref.id],
+          },
+        ])
+      })
+    })
+
+    test('update rejects empty/unknown/state patches without changing the ticket', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('strict update'),
+            body: CONTRACT_TICKET_BODY,
+            labels: [harness.editableLabel],
+          },
+          { state: harness.states.ready },
+        )
+        const before = await harness.source.get(created.ref.id)
+
+        await expect(harness.source.update(created.ref.id, {})).rejects.toThrow(
+          'at least one',
+        )
+        await expect(
+          harness.source.update(created.ref.id, {
+            state: harness.states.completed,
+          } as unknown as TicketUpdate),
+        ).rejects.toThrow('state')
+        expect(await harness.source.get(created.ref.id)).toEqual(before)
+      })
+    })
+
+    test('update failures name unknown tickets and blank required fields and are atomic', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('required update fields'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const before = await harness.source.get(created.ref.id)
+
+        for (const [field, patch] of [
+          ['title', { title: '   ' }],
+          ['body', { body: '\n\t' }],
+        ] as const) {
+          await expect(
+            harness.source.update(created.ref.id, patch),
+          ).rejects.toThrow(field)
+          expect(await harness.source.get(created.ref.id)).toEqual(before)
+        }
+
+        const unknown = contractIdempotencyKey()
+        await expect(
+          harness.source.update(unknown, { title: contractTicketTitle('unknown') }),
+        ).rejects.toThrow(unknown)
+        expect(await harness.source.get(created.ref.id)).toEqual(before)
+      })
+    })
+
+    test('blocker add/remove round-trips through get and dependencyStates and retries are no-ops', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const blocker = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('post-create blocker'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const dependent = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('post-create dependent'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+
+        await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
+        await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
+        expect((await harness.source.get(dependent.ref.id))?.blockedBy).toEqual([
+          blocker.ref.id,
+        ])
+        expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
+          {
+            id: dependent.ref.id,
+            exists: true,
+            resolved: false,
+            blockedBy: [blocker.ref.id],
+          },
+        ])
+
+        await harness.source.removeBlocker(dependent.ref.id, blocker.ref.id)
+        await harness.source.removeBlocker(dependent.ref.id, blocker.ref.id)
+        // Removing an unrelated/missing blocker has the same intended state.
+        await harness.source.removeBlocker(
+          dependent.ref.id,
+          contractIdempotencyKey(),
+        )
+        expect((await harness.source.get(dependent.ref.id))?.blockedBy).toBeUndefined()
+        expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
+          {
+            id: dependent.ref.id,
+            exists: true,
+            resolved: false,
+            blockedBy: [],
+          },
+        ])
+      })
+    })
+
+    test('addBlocker rejects self-blocks and unknown blockers without changing dependencies', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const dependent = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('invalid blocker'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+
+        await expect(
+          harness.source.addBlocker(dependent.ref.id, dependent.ref.id),
+        ).rejects.toThrow(dependent.ref.id)
+        const missing = contractIdempotencyKey()
+        await expect(
+          harness.source.addBlocker(dependent.ref.id, missing),
+        ).rejects.toThrow(missing)
+        expect((await harness.source.get(dependent.ref.id))?.blockedBy).toBeUndefined()
+      })
+    })
+
+    test('blocker writes require the target ticket and name it when unknown', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const blocker = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('known blocker'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const missingTarget = contractIdempotencyKey()
+
+        await expect(
+          harness.source.addBlocker(missingTarget, blocker.ref.id),
+        ).rejects.toThrow(missingTarget)
+        await expect(
+          harness.source.removeBlocker(missingTarget, blocker.ref.id),
+        ).rejects.toThrow(missingTarget)
       })
     })
 

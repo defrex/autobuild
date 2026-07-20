@@ -1,15 +1,19 @@
 /**
- * Source-agnostic ticket operations (SPEC §8.8). These commands run outside
- * build sessions and resolve the repository's configured TicketSource, so the
- * same CLI works for Linear and the file tracker. Adapter secrets come from
- * the process environment (for example LINEAR_API_KEY), never from config.
+ * Source-agnostic pre-build ticket operations (SPEC §8.8). These commands run
+ * outside build sessions and resolve the repository's configured TicketSource,
+ * so the same CLI works for Linear and the file tracker. Adapter secrets come
+ * from the process environment (for example LINEAR_API_KEY), never from config.
  */
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { Config, TicketsConfig } from '../config/schema'
 import { createTicketSource } from '../ports/tickets/create'
-import type { Ticket, TicketSource } from '../ports/types'
+import type {
+  Ticket,
+  TicketSource,
+  TicketUpdate,
+} from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { readyCriteria } from '../processes/dispatcher'
 import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
@@ -42,6 +46,20 @@ export interface TicketCreateOpts extends TicketCommandOpts {
   blockedBy?: string[]
 }
 
+export interface TicketUpdateOpts extends TicketCommandOpts {
+  id: string
+  title?: string
+  /** Replacement body file. Omission preserves the current body. */
+  bodyFile?: string
+  /** Complete label replacement. An explicit [] clears labels. */
+  labels?: string[]
+}
+
+export interface TicketBlockerOpts extends TicketCommandOpts {
+  id: string
+  blockerId: string
+}
+
 export interface TicketListOpts extends TicketCommandOpts {
   /** Source-local workflow state. Omitted with labels means any state. */
   state?: string
@@ -62,6 +80,15 @@ export interface TicketMoveOpts extends TicketCommandOpts {
   json?: boolean
 }
 
+type TicketCommandName =
+  | 'create'
+  | 'update'
+  | 'block'
+  | 'unblock'
+  | 'list'
+  | 'show'
+  | 'move'
+
 interface ResolvedTicketCommand {
   config: Config
   source: TicketSource
@@ -71,7 +98,7 @@ interface ResolvedTicketCommand {
  * exactly once for one ticket command. */
 async function resolveTicketCommand(
   opts: TicketCommandOpts,
-  command: 'create' | 'list' | 'show' | 'move',
+  command: TicketCommandName,
 ): Promise<ResolvedTicketCommand> {
   const targetRepo =
     opts.exec === undefined
@@ -106,6 +133,19 @@ async function resolveTicketCommand(
       targetRepo,
       repoState.localStateRoot,
     ),
+  }
+}
+
+async function readBody(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        `--body ${path}: file not found — expected a file holding the ticket body`,
+      )
+    }
+    throw error
   }
 }
 
@@ -152,18 +192,9 @@ async function requireTicket(source: TicketSource, id: string): Promise<Ticket> 
 }
 
 export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
+  // Read the complete body before constructing or calling a mutable source.
+  const body = await readBody(opts.bodyFile)
   const { source } = await resolveTicketCommand(opts, 'create')
-  let body: string
-  try {
-    body = await readFile(opts.bodyFile, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(
-        `--body ${opts.bodyFile}: file not found — expected a file holding the ticket body`,
-      )
-    }
-    throw error
-  }
 
   // Validate blockers BEFORE creating: a ticket referencing a nonexistent
   // blocker would never dispatch, and failing here costs nothing, whereas
@@ -171,7 +202,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   const blockedBy = [...new Set(opts.blockedBy ?? [])]
   if (blockedBy.length > 0) {
     const states = await source.dependencyStates(blockedBy)
-    const unknown = states.filter((state) => !state.exists).map((s) => s.id)
+    const unknown = states.filter((state) => !state.exists).map((state) => state.id)
     if (unknown.length > 0) {
       throw new Error(
         `--blocked-by: no ticket ${unknown.map((id) => `"${id}"`).join(', ')} ` +
@@ -195,6 +226,35 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       : ''
   opts.stdout(
     `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${url}`,
+  )
+}
+
+export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
+  const body =
+    opts.bodyFile === undefined ? undefined : await readBody(opts.bodyFile)
+  const { source } = await resolveTicketCommand(opts, 'update')
+  const patch: TicketUpdate = {
+    ...(opts.title !== undefined ? { title: opts.title } : {}),
+    ...(body !== undefined ? { body } : {}),
+    ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
+  }
+  await source.update(opts.id, patch)
+  opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
+}
+
+export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(opts, 'block')
+  await source.addBlocker(opts.id, opts.blockerId)
+  opts.stdout(
+    `ticket blocker added: ${source.name}:${opts.id} — blocked by ${opts.blockerId}`,
+  )
+}
+
+export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(opts, 'unblock')
+  await source.removeBlocker(opts.id, opts.blockerId)
+  opts.stdout(
+    `ticket blocker removed: ${source.name}:${opts.id} — no longer blocked by ${opts.blockerId}`,
   )
 }
 
@@ -251,4 +311,228 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
     return
   }
   opts.stdout(`ticket moved: ${ticketSummary(moved)}`)
+}
+
+const CREATE_USAGE =
+  'usage: ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id] (§8.8)'
+const UPDATE_USAGE =
+  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] (§8.8)'
+const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id> (§8.8)'
+const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id> (§8.8)'
+const LIST_USAGE =
+  'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
+const SHOW_USAGE = 'usage: ab ticket show <id> [--json] (§8.8)'
+const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
+export const TICKET_USAGE = [
+  CREATE_USAGE,
+  UPDATE_USAGE,
+  BLOCK_USAGE,
+  UNBLOCK_USAGE,
+  LIST_USAGE,
+  SHOW_USAGE,
+  MOVE_USAGE,
+].join('\n')
+
+type TicketFlagKind = 'value' | 'boolean'
+
+interface ParsedTicketArgs {
+  positionals: string[]
+  flags: Map<string, string | true>
+}
+
+function parseTicketArgs(
+  args: string[],
+  allowedFlags: Readonly<Record<string, TicketFlagKind>>,
+  usage: string,
+): ParsedTicketArgs {
+  const positionals: string[] = []
+  const flags = new Map<string, string | true>()
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!
+    if (!arg.startsWith('--')) {
+      positionals.push(arg)
+      continue
+    }
+
+    const name = arg.slice(2)
+    const kind = allowedFlags[name]
+    if (kind === undefined) {
+      throw new Error(`unknown argument "${arg}" — ${usage}`)
+    }
+    if (flags.has(name)) {
+      throw new Error(`--${name} may be supplied only once — ${usage}`)
+    }
+    if (kind === 'boolean') {
+      flags.set(name, true)
+      continue
+    }
+
+    const value = args[index + 1]
+    if (value === undefined || value.startsWith('--')) {
+      throw new Error(
+        `--${name} requires a value${value !== undefined ? `, got "${value}"` : ''} — ${usage}`,
+      )
+    }
+    flags.set(name, value)
+    index += 1
+  }
+  return { positionals, flags }
+}
+
+function stringFlag(parsed: ParsedTicketArgs, name: string): string | undefined {
+  const value = parsed.flags.get(name)
+  return typeof value === 'string' ? value : undefined
+}
+
+function commaList(value: string): string[] {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+}
+
+/** Parse and execute the complete ticket argv tail. Ticket-only flags stay out
+ * of the phase-command parser in main.ts. */
+export async function abTicket(
+  argv: string[],
+  opts: TicketCommandOpts,
+): Promise<void> {
+  const [command, ...args] = argv
+  switch (command) {
+    case 'create': {
+      const parsed = parseTicketArgs(
+        args,
+        { body: 'value', labels: 'value', 'blocked-by': 'value' },
+        TICKET_USAGE,
+      )
+      const title = parsed.positionals.join(' ')
+      const bodyFile = stringFlag(parsed, 'body')
+      if (
+        title.trim() === '' ||
+        bodyFile === undefined ||
+        bodyFile.trim() === ''
+      ) {
+        throw new Error(TICKET_USAGE)
+      }
+      const labels = stringFlag(parsed, 'labels')
+      const blockedBy = stringFlag(parsed, 'blocked-by')
+      await abTicketCreate({
+        ...opts,
+        title,
+        bodyFile,
+        ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        ...(blockedBy !== undefined
+          ? { blockedBy: commaList(blockedBy) }
+          : {}),
+      })
+      return
+    }
+
+    case 'update': {
+      const parsed = parseTicketArgs(
+        args,
+        { title: 'value', body: 'value', labels: 'value' },
+        TICKET_USAGE,
+      )
+      const [id, ...extra] = parsed.positionals
+      if (
+        id === undefined ||
+        id.trim() === '' ||
+        extra.length > 0 ||
+        parsed.flags.size === 0
+      ) {
+        throw new Error(TICKET_USAGE)
+      }
+      const title = stringFlag(parsed, 'title')
+      const bodyFile = stringFlag(parsed, 'body')
+      const labels = stringFlag(parsed, 'labels')
+      if (bodyFile !== undefined && bodyFile.trim() === '') {
+        throw new Error(TICKET_USAGE)
+      }
+      await abTicketUpdate({
+        ...opts,
+        id,
+        ...(title !== undefined ? { title } : {}),
+        ...(bodyFile !== undefined ? { bodyFile } : {}),
+        ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+      })
+      return
+    }
+
+    case 'block':
+    case 'unblock': {
+      const parsed = parseTicketArgs(args, {}, TICKET_USAGE)
+      const [id, blockerId, ...extra] = parsed.positionals
+      if (
+        id === undefined ||
+        id.trim() === '' ||
+        blockerId === undefined ||
+        blockerId.trim() === '' ||
+        extra.length > 0
+      ) {
+        throw new Error(TICKET_USAGE)
+      }
+      const blockerOpts = { ...opts, id, blockerId }
+      if (command === 'block') await abTicketBlock(blockerOpts)
+      else await abTicketUnblock(blockerOpts)
+      return
+    }
+
+    case 'list': {
+      const parsed = parseTicketArgs(
+        args,
+        { state: 'value', labels: 'value', json: 'boolean' },
+        TICKET_USAGE,
+      )
+      if (parsed.positionals.length !== 0) throw new Error(TICKET_USAGE)
+      const state = stringFlag(parsed, 'state')
+      if (state !== undefined && state.trim() === '') throw new Error(TICKET_USAGE)
+      const labels = stringFlag(parsed, 'labels')
+      await abTicketList({
+        ...opts,
+        ...(state !== undefined ? { state } : {}),
+        ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        json: parsed.flags.has('json'),
+      })
+      return
+    }
+
+    case 'show': {
+      const parsed = parseTicketArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const [id, ...extra] = parsed.positionals
+      if (id === undefined || id.trim() === '' || extra.length > 0) {
+        throw new Error(TICKET_USAGE)
+      }
+      await abTicketShow({
+        ...opts,
+        id,
+        json: parsed.flags.has('json'),
+      })
+      return
+    }
+
+    case 'move': {
+      const parsed = parseTicketArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const [id, state, ...extra] = parsed.positionals
+      if (
+        id === undefined ||
+        id.trim() === '' ||
+        state === undefined ||
+        state.trim() === '' ||
+        extra.length > 0
+      ) {
+        throw new Error(TICKET_USAGE)
+      }
+      await abTicketMove({
+        ...opts,
+        id,
+        state,
+        json: parsed.flags.has('json'),
+      })
+      return
+    }
+
+    default:
+      throw new Error(TICKET_USAGE)
+  }
 }

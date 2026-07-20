@@ -64,6 +64,9 @@ describe('runCli — routing and exit codes', () => {
     const help = d.out.join('\n')
     for (const form of [
       'ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
+      'ab ticket block <id> <blocker-id>',
+      'ab ticket unblock <id> <blocker-id>',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
       'ab ticket show <id> [--json]',
       'ab ticket move <id> <state> [--json]',
@@ -72,6 +75,7 @@ describe('runCli — routing and exit codes', () => {
     }
     expect(help).toContain('same ready criteria as dispatch')
     expect(help).toContain('show one ticket, including its body/spec')
+    expect(help).toContain('the first id is always the ticket being changed')
   })
 
   test('help documents status and every sessionless build-control command', async () => {

@@ -373,7 +373,8 @@ title = "Throttle repeated failed logins"
 
 `ab ticket create` names the files it writes `file-<n>.md` and files them into
 `triage/`; hand-written tickets can use any id, as long as the filename matches
-it. Claiming a ticket renames it into `doing/`.
+it. `ab ticket update|block|unblock` rewrites that same file in place, so edits
+cannot change its state directory. Claiming a ticket renames it into `doing/`.
 
 To put the tracker somewhere else — note that an **explicit `dir` is your
 directory**, so autobuild does not gitignore it for you:
@@ -478,6 +479,25 @@ so the spec can be read back. Add `--json` to `list`, `show`, or `move` for a
 bare `Ticket[]` or complete `Ticket` value with no surrounding prose. Moves
 render the post-transition ticket, including a canonicalized file state such as
 `Ready`. Unknown ids fail nonzero and name both the id and configured source.
+
+Existing tickets can also be groomed without opening the provider UI:
+
+```sh
+ab ticket update file-1 --body spec.md
+ab ticket update file-1 --title "Throttle failed logins" --labels security,auth
+ab ticket update file-1 --labels ''       # explicitly clear labels
+ab ticket block file-1 file-8             # file-1 is blocked by file-8
+ab ticket unblock file-1 file-8
+```
+
+The ids are local to the configured source (`AUT-8` for Linear, `file-8` for
+the file tracker), and for block/unblock the first id is always the ticket being
+changed. Update is partial: fields whose flags are omitted survive, including
+assignee and other provider metadata. `--labels` is a complete replacement,
+with an empty value meaning clear. State changes remain the separate `move`
+operation; `update` never changes state. Block/unblock are idempotent, reject a
+direct self-block, and validate a newly added blocker exists. The dispatcher
+honors relationships added after creation exactly like `create --blocked-by`.
 
 ### The dispatcher
 
@@ -707,6 +727,9 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]` | File a ticket to the configured `[tickets]` source. |
+| `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]` | Partially update editable ticket fields; at least one flag is required and state is excluded. |
+| `ab ticket block <id> <blocker-id>` | Idempotently add a same-source blocker to an existing ticket. |
+| `ab ticket unblock <id> <blocker-id>` | Idempotently remove a same-source blocker from an existing ticket. |
 | `ab ticket list [--state <state>] [--labels a,b] [--json]` | List tickets; no filters uses dispatch's ready criteria. Explicit labels all must match. |
 | `ab ticket show <id> [--json]` | Show one ticket, including its complete body/spec. |
 | `ab ticket move <id> <state> [--json]` | Move a ticket to a source-local state; invalid states list the source's known states. |

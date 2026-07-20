@@ -4,9 +4,9 @@
  * minimal — only the fields the Ticket shape needs — and responses are typed
  * as small structural types rather than a generated client.
  *
- * Policy (§13): initiation and outward projections only. Nothing here is
- * called mid-build; comments and transitions flow outward, and the build
- * never reads Linear again after dispatch imports the spec.
+ * Policy (§13): initiation, pre-build grooming, and outward projections only.
+ * Nothing here is called mid-build; the build never reads or edits Linear
+ * after dispatch imports the spec.
  */
 import { z } from 'zod'
 import type {
@@ -15,7 +15,9 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketSource,
+  TicketUpdate,
 } from '../types'
+import { validateTicketUpdate } from './update'
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql'
 
@@ -72,6 +74,12 @@ export type LinearFetch = (
 
 // ── Wire shapes (small structural types per operation) ───────────────────────
 
+interface GqlIssueRelation {
+  id?: string
+  type: string
+  issue: { id?: string; identifier: string } | null
+}
+
 interface GqlIssue {
   id?: string
   identifier: string
@@ -83,10 +91,8 @@ interface GqlIssue {
   /** Relations where THIS issue is the `relatedIssue` side. A relation
    * `{issue: A, relatedIssue: B, type: "blocks"}` reads "A blocks B", so an
    * issue's blockers are its inverse `blocks` relations, and the blocker is
-   * each relation's `issue`. */
-  inverseRelations?: {
-    nodes: Array<{ type: string; issue: { identifier: string } | null }>
-  }
+   * each relation's `issue`. Relation ids are required by the delete API. */
+  inverseRelations?: { nodes: GqlIssueRelation[] }
 }
 
 /**
@@ -99,14 +105,20 @@ interface GqlIssue {
  */
 const RESOLVED_STATE_TYPES = new Set(['completed', 'canceled'])
 
-/** The identifiers blocking `issue`: inverse relations of type `blocks`,
- * taking each relation's `issue` side. Relations of any other type
- * (`related`, `duplicate`, …) are not dependencies and are ignored. */
+/** Native inverse `blocks` relations for one blocked issue. */
+function blockerRelationsOf(issue: GqlIssue): GqlIssueRelation[] {
+  return (issue.inverseRelations?.nodes ?? []).filter(
+    (relation) => relation.type === 'blocks' && relation.issue !== null,
+  )
+}
+
+/** The identifiers blocking `issue`; unrelated relation kinds are ignored. */
 function blockersOf(issue: GqlIssue): string[] {
-  const blockers = (issue.inverseRelations?.nodes ?? [])
-    .filter((relation) => relation.type === 'blocks' && relation.issue !== null)
-    .map((relation) => relation.issue!.identifier)
-  return [...new Set(blockers)]
+  return [
+    ...new Set(
+      blockerRelationsOf(issue).map((relation) => relation.issue!.identifier),
+    ),
+  ]
 }
 
 function errorMessage(error: unknown): string {
@@ -153,9 +165,14 @@ interface GqlTeamInfo {
   }
 }
 
+/** Autobuild blocker sets are intentionally small, but Linear's implicit
+ * connection default is only 50. Make the practical bound explicit so reads,
+ * idempotency preflight, and deletion all see the same relation window. */
+export const LINEAR_RELATION_PAGE_SIZE = 250
+
 const ISSUE_FIELDS =
-  'identifier title description url state { name type } labels { nodes { name } } ' +
-  'inverseRelations { nodes { type issue { identifier } } }'
+  'id identifier title description url state { name type } labels { nodes { name } } ' +
+  `inverseRelations(first: ${LINEAR_RELATION_PAGE_SIZE}) { nodes { id type issue { id identifier } } }`
 
 const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!) { issues(filter: $filter) { nodes { ${ISSUE_FIELDS} } } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
@@ -164,8 +181,10 @@ const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id 
 const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key: { eq: $teamKey } }) { nodes { id states { nodes { id name } } labels { nodes { id name } } } } }`
 const UPDATE_STATE_MUTATION = `mutation UpdateState($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`
 const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
-const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id ${ISSUE_FIELDS} } } }`
+const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { ${ISSUE_FIELDS} } } }`
+const UPDATE_ISSUE_MUTATION = `mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`
 const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: blocks }) { success } }`
+const DELETE_RELATION_MUTATION = `mutation DeleteRelation($id: String!) { issueRelationDelete(id: $id) { success } }`
 const linearReservedIssueIdSchema = z.uuidv4()
 
 export class LinearTicketSource implements TicketSource {
@@ -383,6 +402,111 @@ export class LinearTicketSource implements TicketSource {
     return this.toTicket(issue)
   }
 
+  async update(id: string, patch: TicketUpdate): Promise<void> {
+    const validated = validateTicketUpdate(patch)
+    const issueId = await this.resolveIssueId('update', id)
+    const input: Record<string, unknown> = {}
+
+    if (validated.title !== undefined) input['title'] = validated.title
+    if (validated.body !== undefined) input['description'] = validated.body
+    if (validated.labels !== undefined) {
+      if (validated.labels.length === 0) {
+        input['labelIds'] = []
+      } else {
+        const team = await this.getTeamInfo('update')
+        input['labelIds'] = validated.labels.map((label) => {
+          const labelId = team.labelIds.get(label)
+          if (!labelId) {
+            throw new Error(
+              `linear update: no label "${label}" in team ${this.teamKey} ` +
+                `(known: ${[...team.labelIds.keys()].join(', ') || 'none'})`,
+            )
+          }
+          return labelId
+        })
+      }
+    }
+
+    const data = await this.gql<{ issueUpdate: { success: boolean } }>(
+      'update',
+      UPDATE_ISSUE_MUTATION,
+      { id: issueId, input },
+    )
+    if (!data.issueUpdate.success) {
+      throw new Error(`linear update: issueUpdate failed for "${id}"`)
+    }
+  }
+
+  async addBlocker(id: string, blockerId: string): Promise<void> {
+    const target = await this.lookupIssue('addBlocker', id)
+    if (id === blockerId) {
+      throw new Error(`linear addBlocker: ticket "${id}" cannot block itself`)
+    }
+
+    if (
+      blockerRelationsOf(target).some(
+        (relation) =>
+          relation.issue?.identifier === blockerId ||
+          relation.issue?.id === blockerId,
+      )
+    ) {
+      return
+    }
+
+    const targetId = this.requiredIssueId('addBlocker', id, target)
+    const blockerUuid = await this.resolveIssueId('addBlocker', blockerId)
+    // Identifiers and UUIDs are both accepted by Linear's issue lookup. Catch
+    // aliases that refer to the same issue, not only equal CLI strings.
+    if (targetId === blockerUuid) {
+      throw new Error(`linear addBlocker: ticket "${id}" cannot block itself`)
+    }
+
+    const data = await this.gql<{
+      issueRelationCreate: { success: boolean }
+    }>('addBlocker', CREATE_RELATION_MUTATION, {
+      issueId: blockerUuid,
+      relatedIssueId: targetId,
+    })
+    if (!data.issueRelationCreate.success) {
+      throw new Error(
+        `linear addBlocker: issueRelationCreate failed — "${blockerId}" was ` +
+          `not recorded as blocking "${id}"`,
+      )
+    }
+  }
+
+  async removeBlocker(id: string, blockerId: string): Promise<void> {
+    const target = await this.lookupIssue('removeBlocker', id)
+    const matches = blockerRelationsOf(target).filter(
+      (relation) =>
+        relation.issue?.identifier === blockerId ||
+        relation.issue?.id === blockerId,
+    )
+    if (matches.length === 0) return
+
+    // Validate every deletion identity before the first mutation so a malformed
+    // provider projection cannot produce an avoidable partial removal.
+    const relationIds = matches.map((relation) => {
+      if (relation.id === undefined) {
+        throw new Error(
+          `linear removeBlocker: relation for "${blockerId}" blocking "${id}" has no id`,
+        )
+      }
+      return relation.id
+    })
+    for (const relationId of relationIds) {
+      const data = await this.gql<{
+        issueRelationDelete: { success: boolean }
+      }>('removeBlocker', DELETE_RELATION_MUTATION, { id: relationId })
+      if (!data.issueRelationDelete.success) {
+        throw new Error(
+          `linear removeBlocker: issueRelationDelete failed for relation "${relationId}" ` +
+            `("${blockerId}" blocking "${id}")`,
+        )
+      }
+    }
+  }
+
   /**
    * Dependency nodes (§13). One query per id — Linear's `IssueFilter` has no
    * identifier-`in` filter, and the id sets here are small (the ready set's
@@ -425,6 +549,49 @@ export class LinearTicketSource implements TicketSource {
   }
 
   // ── Plumbing ───────────────────────────────────────────────────────────────
+
+  private async lookupIssue(operation: string, id: string): Promise<GqlIssue> {
+    let data: { issue: GqlIssue | null }
+    try {
+      data = await this.gql<{ issue: GqlIssue | null }>(
+        operation,
+        GET_ISSUE_QUERY,
+        { id },
+      )
+    } catch (error) {
+      if (isEntityNotFound(error)) {
+        throw new Error(`linear ${operation}: unknown ticket "${id}"`)
+      }
+      throw error
+    }
+    if (data.issue === null) {
+      throw new Error(`linear ${operation}: unknown ticket "${id}"`)
+    }
+
+    if (data.issue.id !== undefined) {
+      this.issueIds.set(id, data.issue.id)
+      this.issueIds.set(data.issue.identifier, data.issue.id)
+      for (const relation of data.issue.inverseRelations?.nodes ?? []) {
+        if (relation.issue?.id !== undefined) {
+          this.issueIds.set(relation.issue.identifier, relation.issue.id)
+        }
+      }
+    }
+    return data.issue
+  }
+
+  private requiredIssueId(
+    operation: string,
+    requestedId: string,
+    issue: GqlIssue,
+  ): string {
+    if (issue.id === undefined) {
+      throw new Error(
+        `linear ${operation}: ticket "${requestedId}" response has no issue id`,
+      )
+    }
+    return issue.id
+  }
 
   private async adoptCreatedIssue(id: string): Promise<Ticket | null> {
     try {

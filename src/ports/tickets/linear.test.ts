@@ -66,8 +66,16 @@ function gqlIssue(over: Record<string, unknown> = {}) {
 
 /** A `blocks` relation as it appears on the BLOCKED issue: the relation's
  * `issue` side is the blocker. */
-function blocksRelation(blockerIdentifier: string) {
-  return { type: 'blocks', issue: { identifier: blockerIdentifier } }
+function blocksRelation(
+  blockerIdentifier: string,
+  relationId = `relation-${blockerIdentifier}`,
+  blockerId = `uuid-${blockerIdentifier}`,
+) {
+  return {
+    id: relationId,
+    type: 'blocks',
+    issue: { id: blockerId, identifier: blockerIdentifier },
+  }
 }
 
 const TEAM_INFO_RESPONSE = {
@@ -950,5 +958,235 @@ describe('LinearTicketSource', () => {
 
     expect((await source.dependencyStates(['ENG-42']))[0]?.resolved).toBe(false)
     expect((await source.dependencyStates(['ENG-42']))[0]?.resolved).toBe(true)
+  })
+
+  // ── Post-create grooming writes ───────────────────────────────────────────
+
+  test('every full issue selection explicitly requests 250 inverse relations and relation ids', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: gqlIssue() } } },
+    ])
+
+    await makeSource(fetchFn).get('ENG-42')
+
+    expect(calls[0]?.query).toContain('inverseRelations(first: 250)')
+    expect(calls[0]?.query).toContain('nodes { id type issue { id identifier } }')
+  })
+
+  test('update maps a missing target to an id-specific error before mutation', async () => {
+    const { fetchFn, calls } = fakeLinear([ENTITY_NOT_FOUND])
+
+    await expect(
+      makeSource(fetchFn).update('ENG-404', { title: 'Renamed' }),
+    ).rejects.toThrow('unknown ticket "ENG-404"')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('update sends one exact partial IssueUpdateInput and never state or assignee', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: { id: 'uuid-42' } } } },
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issueUpdate: { success: true } } } },
+    ])
+
+    await makeSource(fetchFn).update('ENG-42', {
+      title: 'Renamed',
+      body: '# Replacement spec',
+      labels: ['bug'],
+    })
+
+    expect(calls).toHaveLength(3)
+    expect(calls[2]?.query).toContain('$input: IssueUpdateInput!')
+    expect(calls[2]?.variables).toEqual({
+      id: 'uuid-42',
+      input: {
+        title: 'Renamed',
+        description: '# Replacement spec',
+        labelIds: ['lb-bug'],
+      },
+    })
+    expect(JSON.stringify(calls[2]?.variables)).not.toContain('stateId')
+    expect(JSON.stringify(calls[2]?.variables)).not.toContain('assignee')
+  })
+
+  test('a body-only update does not query team metadata or send unnamed fields', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issueUpdate: { success: true } } } },
+    ])
+
+    await makeSource(fetchFn).update('ENG-42', { body: 'New body' })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.variables).toEqual({
+      id: 'uuid-42',
+      input: { description: 'New body' },
+    })
+  })
+
+  test('an explicit empty label replacement clears without a team lookup', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: { id: 'uuid-42' } } } },
+      { body: { data: { issueUpdate: { success: true } } } },
+    ])
+
+    await makeSource(fetchFn).update('ENG-42', { labels: [] })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.variables).toEqual({
+      id: 'uuid-42',
+      input: { labelIds: [] },
+    })
+  })
+
+  test('update validates label names before the mutation', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: { id: 'uuid-42' } } } },
+      TEAM_INFO_RESPONSE,
+    ])
+
+    await expect(
+      makeSource(fetchFn).update('ENG-42', { labels: ['urgent'] }),
+    ).rejects.toThrow('no label "urgent"')
+    expect(calls).toHaveLength(2)
+    expect(calls.some((call) => call.query.includes('mutation UpdateIssue'))).toBe(
+      false,
+    )
+  })
+
+  test('addBlocker creates a native blocks relation in the correct direction', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: { issue: gqlIssue({ id: 'uuid-target', identifier: 'ENG-42' }) },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-blocker' } } } },
+      { body: { data: { issueRelationCreate: { success: true } } } },
+    ])
+
+    await makeSource(fetchFn).addBlocker('ENG-42', 'ENG-8')
+
+    expect(calls).toHaveLength(3)
+    expect(calls[0]?.query).toContain('inverseRelations(first: 250)')
+    expect(calls[2]?.query).toContain('type: blocks')
+    expect(calls[2]?.variables).toEqual({
+      issueId: 'uuid-blocker',
+      relatedIssueId: 'uuid-target',
+    })
+  })
+
+  test('addBlocker retries return without resolving or recreating an existing relation', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: {
+            issue: gqlIssue({
+              id: 'uuid-target',
+              inverseRelations: {
+                nodes: [blocksRelation('ENG-8', 'relation-8', 'uuid-blocker')],
+              },
+            }),
+          },
+        },
+      },
+    ])
+
+    await makeSource(fetchFn).addBlocker('ENG-42', 'ENG-8')
+
+    expect(calls).toHaveLength(1)
+    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(
+      false,
+    )
+  })
+
+  test('addBlocker maps a missing blocker to an id-specific error before mutation', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
+      ENTITY_NOT_FOUND,
+    ])
+
+    await expect(
+      makeSource(fetchFn).addBlocker('ENG-42', 'ENG-404'),
+    ).rejects.toThrow('unknown ticket "ENG-404"')
+    expect(calls).toHaveLength(2)
+    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(
+      false,
+    )
+  })
+
+  test('addBlocker rejects direct and UUID-alias self-blocks', async () => {
+    const direct = fakeLinear([
+      { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
+    ])
+    await expect(
+      makeSource(direct.fetchFn).addBlocker('ENG-42', 'ENG-42'),
+    ).rejects.toThrow('ENG-42')
+    expect(direct.calls).toHaveLength(1)
+
+    const alias = fakeLinear([
+      { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
+      { body: { data: { issue: { id: 'uuid-target' } } } },
+    ])
+    await expect(
+      makeSource(alias.fetchFn).addBlocker('ENG-42', 'alias-for-42'),
+    ).rejects.toThrow('ENG-42')
+    expect(alias.calls).toHaveLength(2)
+  })
+
+  test('removeBlocker deletes every matching native relation id', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: {
+            issue: gqlIssue({
+              id: 'uuid-target',
+              inverseRelations: {
+                nodes: [
+                  blocksRelation('ENG-8', 'relation-a', 'uuid-blocker'),
+                  blocksRelation('ENG-8', 'relation-b', 'uuid-blocker'),
+                  blocksRelation('ENG-9', 'relation-c', 'uuid-other'),
+                ],
+              },
+            }),
+          },
+        },
+      },
+      { body: { data: { issueRelationDelete: { success: true } } } },
+      { body: { data: { issueRelationDelete: { success: true } } } },
+    ])
+
+    await makeSource(fetchFn).removeBlocker('ENG-42', 'ENG-8')
+
+    expect(calls.slice(1).map((call) => call.variables)).toEqual([
+      { id: 'relation-a' },
+      { id: 'relation-b' },
+    ])
+    expect(
+      calls.slice(1).every((call) => call.query.includes('issueRelationDelete')),
+    ).toBe(true)
+  })
+
+  test('removeBlocker is a no-op when the relation or blocker issue is absent', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
+    ])
+
+    await makeSource(fetchFn).removeBlocker('ENG-42', 'ENG-404')
+
+    expect(calls).toHaveLength(1)
+  })
+
+  test('new writes map an unknown target to operation-specific errors', async () => {
+    for (const operation of ['add', 'remove'] as const) {
+      const { fetchFn, calls } = fakeLinear([ENTITY_NOT_FOUND])
+      const source = makeSource(fetchFn)
+      const promise =
+        operation === 'add'
+          ? source.addBlocker('ENG-404', 'ENG-8')
+          : source.removeBlocker('ENG-404', 'ENG-8')
+      await expect(promise).rejects.toThrow('unknown ticket "ENG-404"')
+      expect(calls).toHaveLength(1)
+    }
   })
 })

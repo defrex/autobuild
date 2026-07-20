@@ -22,6 +22,7 @@ interface ScratchLinearConfig {
   readyState: string
   claimedState: string
   completedState: string
+  editableLabel: string
 }
 
 function nonblank(value: string | undefined): value is string {
@@ -80,13 +81,24 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
     const teamKey = requiredEnv('AB_LINEAR_CONTRACT_TEAM_KEY')
     const projectId = requiredEnv('AB_LINEAR_CONTRACT_PROJECT_ID')
     const data = await linearRequest<{
-      teams: { nodes: Array<{ id: string; key: string; states: { nodes: WorkflowState[] } }> }
+      teams: {
+        nodes: Array<{
+          id: string
+          key: string
+          states: { nodes: WorkflowState[] }
+          labels: { nodes: Array<{ name: string }> }
+        }>
+      }
       project: { id: string; name: string } | null
     }>(
       apiKey,
       `query PortContractSetup($teamKey: String!, $projectId: String!) {
         teams(filter: { key: { eq: $teamKey } }) {
-          nodes { id key states { nodes { id name type } } }
+          nodes {
+            id key
+            states { nodes { id name type } }
+            labels { nodes { name } }
+          }
         }
         project(id: $projectId) { id name }
       }`,
@@ -122,6 +134,14 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
       return state
     }
 
+    const editableLabel = team.labels.nodes[0]?.name
+    if (editableLabel === undefined) {
+      throw new Error(
+        `Linear scratch team ${teamKey} needs at least one issue label for ` +
+          'TicketSource update contract coverage',
+      )
+    }
+
     return {
       apiKey,
       teamKey,
@@ -129,6 +149,7 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
       readyState: findState('claimable', ['unstarted', 'backlog']).name,
       claimedState: findState('claimed', ['started']).name,
       completedState: findState('completed', ['completed', 'canceled']).name,
+      editableLabel,
     }
   })()
   return scratchConfig
@@ -149,6 +170,7 @@ async function linearHarness(): Promise<TicketSourceContractHarness> {
       claimed: config.claimedState,
       completed: config.completedState,
     },
+    editableLabel: config.editableLabel,
     beforeCreate: (idempotencyKey) => {
       reservedIds.add(idempotencyKey)
     },
