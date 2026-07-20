@@ -182,8 +182,33 @@ describe('dashboard harvest row', () => {
         pendingProposals: [],
       },
     })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_completed',
+        observations: [{ build: 'later', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 1 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_later_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'later', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'later-completed',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
+      },
+    })
     let projected = projectHarvest(await store.getRepoEvents('/repo'))!
     expect(projected).toMatchObject({
+      run: 'h_recovery',
       status: 'failed',
       action: 'acknowledge',
       detail:
@@ -412,7 +437,17 @@ describe('dashboard harvest row', () => {
         observations: [{ build: 'a', seq: 1 }],
       },
     })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_later_running',
+        observations: [{ build: 'b', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 1 },
+      },
+    })
     expect(projectHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      run: 'h_escalated',
       status: 'escalated',
       action: 'acknowledge',
       detail: 'operator judgment required',
@@ -444,7 +479,10 @@ describe('dashboard harvest row', () => {
       type: 'harvest.resumed',
       payload: {},
     })
-    expect(projectHarvest(await store.getRepoEvents('/repo'))).toBeUndefined()
+    expect(projectHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      run: 'h_later_running',
+      status: 'running',
+    })
   })
 
   test('an ordinary failed run stays visible while resume is pending and reopens on acknowledgement', async () => {
@@ -470,9 +508,34 @@ describe('dashboard harvest row', () => {
         willRetry: false,
       },
     })
-    expect(projectHarvest(await store.getRepoEvents('/repo'))?.action).toBe(
-      'resume',
-    )
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_newer_completed',
+        observations: [{ build: 'b', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 1 },
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_newer_completed',
+        dispositions: [
+          {
+            occurrence: { build: 'b', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'newer-completed',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 1 },
+      },
+    })
+    expect(projectHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      run: 'h_resume',
+      action: 'resume',
+    })
     await store.appendRepo('/repo', {
       actor: humanActor('operator'),
       type: 'harvest.resume-requested',
@@ -485,6 +548,7 @@ describe('dashboard harvest row', () => {
       payload: {},
     })
     expect(projectHarvest(await store.getRepoEvents('/repo'))).toMatchObject({
+      run: 'h_resume',
       status: 'running',
     })
   })

@@ -140,6 +140,128 @@ describe('harvest status', () => {
     expect(renderHarvestStatus(view).join('\n')).not.toContain('dispatcher.')
   })
 
+  test('reports every shadowed failure alongside the latest run', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_1',
+        step: 'review',
+        round: 1,
+        attempt: 2,
+        error: 'first failure',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_1', attempt: 1, limit: 2 },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_1',
+        step: 'review',
+        round: 1,
+        attempt: 3,
+        error: 'first failure again',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_2',
+        observations: [{ build: 'build-b', seq: 8 }],
+        scan: { kind: 'harvest-scan', rev: 2 },
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_2',
+        step: 'file',
+        attempt: 2,
+        error: 'second failure',
+        willRetry: false,
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_3',
+        observations: [{ build: 'build-c', seq: 9 }],
+        scan: { kind: 'harvest-scan', rev: 3 },
+      },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_3',
+        dispositions: [
+          {
+            occurrence: { build: 'build-c', seq: 9 },
+            action: 'suppressed',
+            proposalKey: 'completed-c',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 0 },
+      },
+    })
+
+    const view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+    )
+    expect(view).toMatchObject({
+      status: 'failed',
+      run: 'h_1',
+      runs: [
+        {
+          run: 'h_1',
+          status: 'failed',
+          recovery: {
+            automatic: { attempts: 1, limit: 2 },
+            stopped: { step: 'review', round: 1 },
+            pending: {
+              observations: [{ build: 'build-a', seq: 4 }],
+            },
+          },
+        },
+        {
+          run: 'h_2',
+          status: 'failed',
+          recovery: {
+            automatic: { attempts: 0, limit: 2 },
+            stopped: { step: 'file' },
+            pending: {
+              observations: [{ build: 'build-b', seq: 8 }],
+            },
+          },
+        },
+        { run: 'h_3', status: 'completed' },
+      ],
+    })
+    const rendered = renderHarvestStatus(view).join('\n')
+    expect(rendered).toContain('harvest h_1 — failed')
+    expect(rendered).toContain('harvest h_2 — failed')
+    expect(rendered).toContain('harvest h_3 — completed')
+    expect(rendered).toContain('pending: 1 observation (build-a:4)')
+    expect(rendered).toContain('pending: 1 observation (build-b:8)')
+  })
+
   test('projects an infrastructure stop before resume and the same running run after acknowledgement', async () => {
     const deps = await fixture()
     await deps.store.appendRepo('/repo', {

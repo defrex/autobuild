@@ -86,18 +86,21 @@ artifact stream, dedup ledger, and lease make every step queryable and
 crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
 idle ticks launch no harvest agent. A non-retrying infrastructure failure parks
-the same run at its durable
-boundary. Before any new scan, dispatch automatically reopens that run at most
-twice through durable request facts and the same `harvest.resumed`
-acknowledgement used by manual resume. Claims, artifacts, attempts,
-reservations, and filing facts stay intact, so completed work is not repeated.
-After the bound, one atomic fact commits only classifiable filed creates,
-still-valid frozen joins, and suppressions; missing creates, tombstone/unknown
-joins, and otherwise unclassifiable members are released as pending. A rejected
-store read remains retryable infrastructure, while successfully read malformed
-content fails safe toward release. The same fact raises a human-attention
-barrier. Acknowledging that barrier permits a future scan but never resurrects
-the old run. Completed and deliberate escalated runs remain terminal.
+its run at the durable boundary. Before any new scan, dispatch recovers every
+ordinary parked run in start order, even when later runs shadow it, with a
+fixed two-attempt budget applied independently per run. Automatic and human
+reopening share `harvest.resumed`; one human acknowledgement reopens every
+ordinary parked run and acknowledges every exhaustion barrier. Claims,
+artifacts, attempts, reservations, and filing facts stay intact, so completed
+work is not repeated. After a run's bound, one atomic fact commits only
+classifiable filed creates, still-valid frozen joins, and suppressions; missing
+creates, tombstone/unknown joins, and otherwise unclassifiable members are
+released as pending. A rejected store read remains retryable infrastructure,
+while successfully read malformed content fails safe toward release. The same
+fact raises a human-attention barrier. Acknowledging it permits a future scan
+but never resurrects an exhausted run. Existing journals gain these semantics
+on replay without migration; completed and deliberate escalated runs remain
+terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
@@ -389,9 +392,9 @@ default. Harvest remains independent of build capacity and of repository
 intake. Dispatch tracks the workflow in-flight without awaiting it on
 watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
 it before exit. The repository lease remains the cross-process single-flight
-gate. A fixed two-attempt automatic recovery budget applies before any new run;
-it is deliberately not configurable and is separate from retry policy inside
-one harvest step.
+gate. Every parked failure is settled before any new scan; the oldest receives
+a fixed two-attempt automatic recovery budget applied per run. It is deliberately
+not configurable and is separate from retry policy inside one harvest step.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -592,20 +595,21 @@ rapid presses issue opposing requests; the token changes only after the kernel's
 `harvest.paused`/`harvest.resumed` acknowledgement.
 
 `Harvest` uses the same marker, right-aligned status column, and status colors
-as builds; its internal run id is not shown. It appears only for an open run or
-unresolved failed/escalated attention. Completed runs, an idle paused
-repository, acknowledged recovery exhaustion, and dismissed escalation have no
-row. A paused open run freezes and reads `PAUSED`. Ordinary failure reads red
-`FAILED`, marks the stopped step, shows automatic progress, and offers `p
-resume`. Exhaustion remains red, says `recovery exhausted — human attention
-required`, shows stopped step/pending count, and offers `p acknowledge`;
-escalation also offers `p acknowledge`. A request awaiting acknowledgement has
-no duplicate action. Row `p` never pauses the gate. When the gate is off it
-writes nothing and directs the operator to global `h`; the eventual shared
-resume acknowledgement intentionally also reopens ordinary failure or settles
-attention. Exhaustion and escalation remain terminal. Escalation's row is
-dismissed only by a post-terminal human resume request followed by its later
-kernel acknowledgement, never by the request alone.
+as builds; its internal run id is not shown. One row selects the oldest
+unresolved ordinary failure, exhaustion, or escalation attention before the
+oldest open run, so later running/completed work cannot hide it. Completed runs,
+an idle paused repository, acknowledged recovery exhaustion, and dismissed
+escalation have no row. A paused open run freezes and reads `PAUSED`. Ordinary
+failure reads red `FAILED`, marks the stopped step, shows automatic progress,
+and offers `p resume`. Exhaustion remains red, says `recovery exhausted — human
+attention required`, shows stopped step/pending count, and offers `p
+acknowledge`; escalation also offers `p acknowledge`. A request awaiting
+acknowledgement has no duplicate action. Row `p` never pauses the gate. When the
+gate is off it writes nothing and directs the operator to global `h`; the
+eventual shared human acknowledgement reopens every ordinary parked run and
+settles every exhaustion barrier. Exhaustion and escalation remain terminal.
+Escalation's row is dismissed only by a post-terminal human resume request
+followed by its later kernel acknowledgement, never by the request alone.
 
 A build with auto-merge off has no auto-merge token. Requested, enabled, and
 cancelling states all read `auto merge`: cyan means requested locally but not
@@ -703,16 +707,18 @@ JSON exposes `outcome: "skipped"` and `reason`, never a synthetic pass.
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
-durable repository gate and latest harvest run from the same journal the runner
-resumes. It distinguishes recoverable from terminal, shows automatic
-attempts/limit, stopped step/round, attention state, exact pending observation
-and proposal keys, each workflow occurrence, review rounds, filed ticket refs,
-and any escalation or infrastructure failure. It is read-only and also reports
-an idle or paused repository with no run. The dispatch header always shows its
-acknowledged `harvest ON/OFF` gate and global `h` controls it. The optional,
-non-color-only `Harvest` row omits the internal run id and represents only an
-open run or unresolved attention; its contextual `p` resumes or acknowledges
-that run, and `m` remains the build-only no-op.
+durable repository gate and an ordered collection of every unresolved failed
+run plus relevant open/latest context from the same journal the runner resumes.
+Each section distinguishes recoverable from terminal and shows that run's
+automatic attempts/limit, stopped step/round, attention, exact retained snapshot
+before exhaustion or released observation/proposal keys afterward, workflow
+occurrences, review rounds, and filed ticket refs. Repository event history is
+shown once. It is read-only and also reports an idle or paused repository with
+no run. The dispatch header always shows its acknowledged `harvest ON/OFF` gate
+and global `h` controls it. The optional, non-color-only `Harvest` row omits the
+internal run id and represents one deterministically selected open run or
+unresolved attention; its contextual `p` issues the repository-wide resume or
+acknowledgement, and `m` remains the build-only no-op.
 
 ### Lease health is not build status
 

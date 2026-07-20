@@ -252,6 +252,31 @@ describe('harvest deterministic scan and ledger', () => {
         willRetry: false,
       },
     })
+    // A later terminal run must not hide this older run from recovery or make
+    // its selective release invalid.
+    await observation(store, 'later-completed', 'later-observation')
+    await claim(store, 'h_later_completed', [
+      { build: 'later-completed', seq: 1 },
+    ])
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-report', content: '{}' }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.completed',
+        payload: {
+          run: 'h_later_completed',
+          dispositions: [
+            {
+              occurrence: { build: 'later-completed', seq: 1 },
+              action: 'suppressed',
+              proposalKey: 'later-completed',
+            },
+          ],
+          report: artifactRef(deposited[0]!),
+        },
+      }),
+    )
     for (const attempt of [1, 2]) {
       await store.appendRepo('/repo', {
         actor: KERNEL,
@@ -294,11 +319,11 @@ describe('harvest deterministic scan and ledger', () => {
       byBuild.get('tombstone')!.occurrence,
     ])
     state = reduceHarvest(await store.getRepoEvents('/repo'))
-    expect(state.ledger.map((item) => item.action)).toEqual([
-      'filed',
-      'joined',
-      'suppressed',
-    ])
+    expect(
+      state.ledger
+        .filter((item) => item.run === 'h_partial')
+        .map((item) => item.action),
+    ).toEqual(['filed', 'joined', 'suppressed'])
     const nextPacket = await makeHarvestScanPacket({
       store,
       tickets: new FakeTicketSource(),

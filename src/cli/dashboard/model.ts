@@ -44,7 +44,9 @@ import type { BuildRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  openHarvestRun,
   reduceHarvest,
+  type HarvestRunState,
   type HarvestState,
 } from '../../kernel/harvest'
 
@@ -686,28 +688,35 @@ function escalationAttentionDismissed(
   return false
 }
 
-/** Project only a concrete run that is open or still needs human attention.
- * The repository gate is projected separately into the header. */
+function selectDashboardHarvestRun(
+  events: RepositoryEvent[],
+  state: HarvestState,
+): HarvestRunState | undefined {
+  const attention = state.runs.find((run) => {
+    if (run.status === 'failed') {
+      return (
+        run.recoveryExhaustion?.attentionAcknowledgedSeq === undefined
+      )
+    }
+    if (run.status !== 'escalated') return false
+    return (
+      run.terminalSeq === undefined ||
+      !escalationAttentionDismissed(events, run.terminalSeq)
+    )
+  })
+  return attention ?? openHarvestRun(state)
+}
+
+/** Project one deterministic concrete run. The oldest unresolved failed,
+ * exhausted, or escalated attention outranks merely open work; completed and
+ * acknowledged terminal history never hides an older actionable run. */
 function projectHarvestRun(
   events: RepositoryEvent[],
   state: HarvestState,
 ): DashboardHarvest | undefined {
-  const run = state.latest
+  const run = selectDashboardHarvestRun(events, state)
   if (run === undefined || run.status === 'completed') return undefined
   const exhaustion = run.recoveryExhaustion
-  if (
-    run.status === 'failed' &&
-    exhaustion?.attentionAcknowledgedSeq !== undefined
-  ) {
-    return undefined
-  }
-  if (
-    run.status === 'escalated' &&
-    run.terminalSeq !== undefined &&
-    escalationAttentionDismissed(events, run.terminalSeq)
-  ) {
-    return undefined
-  }
 
   const occurrences = run.steps
   const stopped = run.status !== 'running'

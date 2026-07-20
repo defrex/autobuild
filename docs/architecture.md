@@ -173,11 +173,13 @@ loop starts it fire-and-forget, keeps one process-local in-flight handle, and
 drains that handle only for `--once`, so watch ticks and SIGINT remain
 responsive. `src/events/repository.ts` defines the mixed repository catalog;
 `src/kernel/harvest.ts` reduces only its harvest subset, including human
-pause/resume requests, kernel boundary acknowledgements, automatic recovery
-request/ack history, claims,
-UUID-v4 reservation facts written before external creates, per-proposal filing
-facts, recovery exhaustion/attention, and the committed dedup ledger. Build
-reducers therefore never interpret repository state. The BuildStore repository
+pause/resume requests, kernel boundary acknowledgements, per-run automatic
+recovery request/ack history, ordered parked/exhaustion/open run selectors,
+claims, UUID-v4 reservation facts written before external creates,
+per-proposal filing facts, recovery exhaustion/attention, and the committed
+dedup ledger. `latest` remains informational; control never treats it as the
+only recoverable run. Build reducers therefore never interpret repository
+state. The BuildStore repository
 methods, memory/SQLite adapters, and remote protocol use generic
 `RepositoryEvent*` types and validate every write through that catalog. Existing
 `repo_events` rows already store generic type/payload JSON, so adding the strict
@@ -185,14 +187,18 @@ human-only `dispatcher.*-set` facts requires no DDL migration. Harvest reducers
 and `ab harvest status --events` ignore/filter those setting facts explicitly.
 
 The dispatcher asks the shared pure control decision what is due before any new
-scan. An ordinary failed run selects a kernel-only monotonic automatic request;
-the runner records it under the repository lease and settles it through the
-same `harvest.resumed` fact used by manual resume. Request and acknowledgement
-are distinct crash-safe boundaries, and the fixed outer budget of two reopen
-attempts is independent of within-step attempts. Parking and reopening preserve
-the run id, immutable claim, artifacts, attempt history, reservations, and
-filing facts, so recovery skips every completed unit rather than rescanning or
-re-filing.
+scan. Any unacknowledged exhaustion is a global barrier; otherwise the oldest
+ordinary failed run selects a kernel-only monotonic automatic request even when
+later runs exist. The runner records it under the repository lease and settles
+it through the same unscoped `harvest.resumed` fact used by manual resume.
+Automatic acknowledgement reopens runs with pending requests; a human
+acknowledgement reopens every ordinary parked run and acknowledges every
+exhaustion barrier. Request and acknowledgement are distinct crash-safe
+boundaries, and the fixed outer budget of two reopen attempts is applied per run
+independently of within-step attempts. Parking and reopening preserve the run
+id, immutable claim, artifacts, attempt history, reservations, and filing facts,
+so recovery skips every completed unit rather than rescanning or re-filing.
+Existing journals replay into these selectors without schema or data migration.
 
 After the second automatic reopen fails, `src/processes/harvest.ts` derives a
 provider-free partition from frozen scan/proposal artifacts plus filing facts.
@@ -201,15 +207,18 @@ suppressions; missing creates, tombstone/unknown joins, and malformed or
 otherwise unclassifiable content fail safe to pending release. Rejected store
 reads propagate as retryable infrastructure rather than being classified as
 content. `harvest.recovery-exhausted` records that exact partition and raises an
-attention barrier. Dispatcher launch is suppressed until a human resume
-acknowledgement clears that barrier;
-the acknowledgement does not reopen the exhausted run. Completed and deliberate
-escalated runs remain terminal, with escalation snapshots still claimed. Typed
-session deposits live under `ab harvest context|submit|verdict`; `ab harvest
-status` projects full history, while the dashboard separates the durable gate
-into its always-present header token and projects a selectable `Harvest` row
-only for an open run or unresolved failure/escalation attention. The row omits
-the internal run id; status retains it.
+attention barrier. New scanning is suppressed while any barrier or ordinary
+parked failure remains unresolved. Dispatcher launches still occur to settle
+ordinary recovery; an exhaustion barrier suppresses launch until a human resume
+request makes its acknowledgement actionable. That acknowledgement does not
+reopen exhausted runs. Completed and deliberate escalated runs remain terminal,
+with escalation snapshots still claimed. Typed session deposits live under `ab
+harvest context|submit|verdict`; `ab harvest status` projects an ordered section
+for every unresolved failed run plus relevant open/latest context. The dashboard
+separates the durable gate into its always-present header token and projects one
+selectable `Harvest` row, choosing the oldest unresolved failure/exhaustion/
+escalation attention before the oldest open run. The row omits the internal run
+id; status retains each id.
 
 ## Pre-build identity
 
@@ -277,13 +286,15 @@ deposits the transcript and `session.ended`, writes the provider message to
 `phase.failed`, and derives immediate policy escalation from durable
 `willRetry: false` before another session can start. A completed turn without a
 typed terminal remains the separate `no-terminal` case. `harvest-runner.ts`
-uses the same result contract; its reducer parks `harvest.failed
-{willRetry:false}` at the stopped boundary. A human request or one of the two
-durable automatic recovery requests is acknowledged through `harvest.resumed`.
-Historical within-step attempts remain monotonic, while each acknowledgement
-permits one actual session re-entry even when the old occurrence exhausted its
-ordinary budget. Exhaustion is a separate atomic fact, not inferred from stdout
-or a mutable counter.
+uses the same result contract; its reducer parks each targeted `harvest.failed
+{willRetry:false}` at the stopped boundary. One of that run's two durable
+automatic requests, or a repository-wide human request, is acknowledged through
+`harvest.resumed`. Automatic acknowledgements correlate through pending request
+facts; a human acknowledgement applies across all ordinary parked/exhausted
+runs. Historical within-step attempts remain monotonic, while each per-run
+automatic acknowledgement permits one actual session re-entry even when the old
+occurrence exhausted its ordinary budget. Exhaustion is a separate atomic fact,
+not inferred from stdout or a mutable counter.
 
 ## Repository initialization
 
@@ -364,18 +375,19 @@ run action. `h` is global-only: it re-reduces the repository journal, treats the
 newest pending command as requested state so rapid presses oppose, and appends
 the corresponding pause/resume request. The header remains acknowledged-only.
 
-The harvest projection independently filters the latest run. Running stays
-visible (with timing frozen when the gate is paused), completed is absent,
-ordinary failure is visible until reopened, and exhausted failure is absent
-after `attentionAcknowledgedSeq`. Escalation is absent only after a display-only
-pair: a human resume request with seq after `terminalSeq`, followed by the kernel
-resume that acknowledges it. The request alone remains visible and no reducer
-lifecycle changes. This intentionally means a header resume can both open a
-paused gate and settle visible run attention through the shared event
-vocabulary. `FAILED` stays distinct from `RUNNING`: an ordinary stop names its step and
-automatic progress, while exhaustion clearly names the attention barrier and
-pending count. Exhaustion acknowledgement does not reopen the old run, and
-escalation remains terminal. Build-runner and harvest-runner acknowledge
+The harvest projection scans the complete ordered run set. The oldest unresolved
+ordinary failure, exhaustion, or escalation attention outranks an open run; only
+when no attention exists does the oldest running run supply the row (with timing
+frozen when the gate is paused). Completed is absent, and exhausted failure is
+absent after `attentionAcknowledgedSeq`. Escalation is absent only after a
+display-only pair: a human resume request with seq after `terminalSeq`, followed
+by the kernel resume that acknowledges it. The request alone remains visible and
+no reducer lifecycle changes. This intentionally means a header resume can both
+open a paused gate and settle all run attention through the shared event
+vocabulary. `FAILED` stays distinct from `RUNNING`: an ordinary stop names its
+step and automatic progress, while exhaustion clearly names the attention
+barrier and pending count. Exhaustion acknowledgement does not reopen the old
+run, and escalation remains terminal. Build-runner and harvest-runner acknowledge
 pause/resume at their respective safe boundaries;
 dispatcher code reconciles auto-merge via the `Forge` port. On a blocked build,
 `p` instead opens slug/escalation-bound process state: Enter

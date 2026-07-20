@@ -17,6 +17,7 @@ import { converge } from '../kernel/converge'
 import { stalledChains } from '../kernel/stall'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  actionableHarvestRun,
   decideHarvestControl,
   openHarvestRun,
   proposalArtifactForRound,
@@ -180,14 +181,12 @@ export class HarvestRunner {
       await this.ensureLease()
       let events = await store.getRepoEvents(repo)
       let state = reduceHarvest(events)
-      run = openHarvestRun(state)
+      run = actionableHarvestRun(state)
 
-      // Settle durable operator control before scanning or resuming work. A
-      // failed run is parked here before any scan; a pending resume reopens
-      // that same run and normal durable-state routing continues in this lease.
-      await this.controlBoundary(
-        run?.run ?? (state.latest?.status === 'failed' ? state.latest.run : undefined),
-      )
+      // Settle durable operator control before scanning or resuming work. The
+      // selected run comes from the full journal, so a shadowed failure or
+      // exhaustion barrier is recovered/reported before any later open run.
+      await this.controlBoundary(run?.run)
       events = await store.getRepoEvents(repo)
       state = reduceHarvest(events)
       run = openHarvestRun(state)
@@ -1066,7 +1065,9 @@ export class HarvestRunner {
       )
       const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
-      if (decision.kind === 'park') throw new HarvestParkedSignal(run)
+      if (decision.kind === 'park') {
+        throw new HarvestParkedSignal(actionableHarvestRun(state)?.run ?? run)
+      }
 
       if (decision.kind === 'request-recovery') {
         await this.ensureLease()
