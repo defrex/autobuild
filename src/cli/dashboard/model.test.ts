@@ -336,6 +336,7 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
       break
     case 'run-check':
     case 'run-agent-verify':
+    case 'evaluate-verify':
       notDone(verifyPhase(decision.step))
       break
     case 'run-finalize-step':
@@ -351,7 +352,9 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
   const named =
     decision.kind === 'run-phase'
       ? decision.phase
-      : decision.kind === 'run-check' || decision.kind === 'run-agent-verify'
+      : decision.kind === 'run-check' ||
+          decision.kind === 'run-agent-verify' ||
+          decision.kind === 'evaluate-verify'
         ? verifyPhase(decision.step)
         : undefined
   if (named === undefined) return

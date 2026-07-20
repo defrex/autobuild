@@ -41,11 +41,65 @@ export type ServerConfig = z.infer<typeof serverSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
 
+/**
+ * The intentionally small path-selector grammar (§16.1): positive,
+ * repository-relative globs with literal characters, `*`, `?`, and `**` only
+ * as a complete path segment. Reject every ambiguous/unsafe form at config
+ * load rather than allowing a typo to become a never-running safety gate.
+ */
+export function verifyPathGlobError(pattern: string): string | undefined {
+  if (pattern.length === 0) return 'path selectors must be nonempty'
+  if (pattern.includes('\0')) return 'path selectors must not contain NUL bytes'
+  if (pattern.startsWith('/') || /^[A-Za-z]:\//.test(pattern)) {
+    return 'path selectors must be repository-relative, not absolute'
+  }
+  if (pattern.includes('\\')) {
+    return 'path selectors use Git-style "/" separators; backslashes and escapes are unsupported'
+  }
+  if (pattern.startsWith('!')) {
+    return 'path selectors are positive globs; negation is unsupported'
+  }
+  if (/[\[\]{}]/.test(pattern)) {
+    return 'path selectors support only literal characters, *, ?, and whole-segment **; character classes and brace expansion are unsupported'
+  }
+  if (/[?*+@!]\(/.test(pattern)) {
+    return 'path selectors support only literal characters, *, ?, and whole-segment **; extglobs are unsupported'
+  }
+
+  const segments = pattern.split('/')
+  if (segments.some((segment) => segment.length === 0)) {
+    return 'path selectors must not contain empty path segments'
+  }
+  if (segments.some((segment) => segment === '.' || segment === '..')) {
+    return 'path selectors must not contain "." or ".." traversal segments'
+  }
+  if (segments.some((segment) => segment.includes('**') && segment !== '**')) {
+    return 'the ** wildcard must occupy a complete path segment'
+  }
+  return undefined
+}
+
+export const verifyPathGlobSchema = z.string().superRefine((pattern, ctx) => {
+  const message = verifyPathGlobError(pattern)
+  if (message !== undefined) ctx.addIssue({ code: 'custom', message })
+})
+
+const verifyApplicabilityShape = {
+  /** Any-match positive path selectors; absent means unconditional. */
+  paths: z
+    .array(verifyPathGlobSchema)
+    .min(1, 'paths must contain at least one repository-relative glob')
+    .optional(),
+  /** Explicit mandatory-gate guard; true takes precedence over paths. */
+  always: z.boolean().optional(),
+}
+
 export const verifyCheckStepSchema = z.strictObject({
   /** Deterministic: command + pass/fail (§16.1). */
   kind: z.literal('check'),
   /** Ref into [commands] — cross-validated below. */
   command: z.string().min(1),
+  ...verifyApplicabilityShape,
 })
 
 export const verifyAgentStepSchema = z.strictObject({
@@ -54,6 +108,7 @@ export const verifyAgentStepSchema = z.strictObject({
   skill: z.string().min(1),
   /** true ⇒ the kernel starts the [server] before the session (§16.2). */
   needsServer: z.boolean().default(false),
+  ...verifyApplicabilityShape,
 })
 
 export const verifyStepConfigSchema = z.discriminatedUnion('kind', [

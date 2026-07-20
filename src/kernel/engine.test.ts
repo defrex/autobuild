@@ -1255,6 +1255,137 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   })
 })
 
+describe('decideNext: conditional verify selection', () => {
+  const conditional = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts"]
+`)
+  const approved = [
+    ...prelude(),
+    ...planApproved(),
+    ...implementRound(1, 'sha-r1'),
+    ...codeReview(1, 'approve'),
+  ]
+
+  const conditionalDecision: Decision = {
+    kind: 'evaluate-verify',
+    step: 'dashboard',
+    attempt: 1,
+    paths: ['src/cli/dashboard/**', 'src/cli/dispatch.ts'],
+    action: {
+      kind: 'run-check',
+      step: 'dashboard',
+      command: 'bun test dashboard',
+      attempt: 1,
+    },
+  }
+
+  test('wraps only the first unsatisfied conditional step with its resolved action', () => {
+    expect(decideNext(toLog(approved), conditional)).toEqual(conditionalDecision)
+    expect(
+      decideNext(
+        toLog([...approved, ev('verify.started', { step: 'dashboard', attempt: 1 })]),
+        conditional,
+      ),
+    ).toEqual(conditionalDecision)
+  })
+
+  test('an existing skip satisfies the current cycle without becoming a pass', () => {
+    expect(
+      decideNext(
+        toLog([
+          ...approved,
+          ...verifySkip(
+            'dashboard',
+            1,
+            'excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**","src/cli/dispatch.ts"]',
+          ),
+        ]),
+        conditional,
+      ),
+    ).toEqual(runPhase('finalize', 1))
+  })
+
+  test('always = true takes precedence over valid selectors and stays on the old action path', () => {
+    const mandatory = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+always = true
+`)
+    expect(decideNext(toLog(approved), mandatory)).toEqual({
+      kind: 'run-check',
+      step: 'dashboard',
+      command: 'bun test dashboard',
+      attempt: 1,
+    })
+  })
+
+  test('agent verifiers carry their normal execution details inside the conditional decision', () => {
+    const agent = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = ["browser"]
+[verify.browser]
+kind = "agent"
+skill = "ab-verify-browser"
+paths = ["web/**"]
+`)
+    expect(decideNext(toLog(approved), agent)).toEqual({
+      kind: 'evaluate-verify',
+      step: 'browser',
+      attempt: 1,
+      paths: ['web/**'],
+      action: {
+        kind: 'run-agent-verify',
+        step: 'browser',
+        skill: 'ab-verify-browser',
+        needsServer: false,
+        attempt: 1,
+      },
+    })
+  })
+
+  test('reconcile starts a fresh cycle that evaluates a previously skipped rule again', () => {
+    const afterReconcile = [
+      ...approved,
+      ...verifySkip('dashboard', 1, 'excluded before reconcile'),
+      ev('finalize.started', {}),
+      ev('finalize.completed', { pr: PR }),
+      ev('pr.conflicted', { baseSha: 'sha-main-2' }),
+      ev('reconcile.started', { attempt: 1, baseSha: 'sha-main-2' }),
+      ev('reconcile.completed', {
+        mergeCommit: 'sha-merge-1',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+    ]
+    expect(decideNext(toLog(afterReconcile), conditional)).toEqual({
+      ...conditionalDecision,
+      attempt: 2,
+      action: { ...conditionalDecision.action, attempt: 2 },
+    })
+  })
+})
+
 // ── Rule 8: finalize ─────────────────────────────────────────────────────────
 
 describe('decideNext: rule 8 — finalize', () => {

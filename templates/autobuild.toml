@@ -33,11 +33,16 @@ steps = [
 # Check tables are rendered only when their backing command was detected.
 # @ab-init/package-script-verify-tables
 
-# Agent-verify example — a skill run with a pass|fail|skip verdict (§5):
+# Agent-verify example — a skill run with a pass|fail|skip verdict (§5).
+# `paths` is optional on either verifier kind: any changed path matching any
+# positive repo-relative glob makes the step apply. Omit it for unconditional;
+# `always = true` explicitly overrides a present paths list.
 #[verify.e2e]
 #kind = "agent"
 #skill = "ab-verify-e2e"
 #needsServer = true
+#paths = ["web/**", "src/routes/**"]
+#always = true
 
 # Optional post-steps; failure-tolerant — a failed step files an observation,
 # it never kills a green build (§5).

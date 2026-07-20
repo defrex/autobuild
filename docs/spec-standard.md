@@ -31,6 +31,10 @@ intention. These become the contract that `plan-review`, `code-review`, and
 - Each criterion is a single observable fact ("a sixth failed login within
   five minutes returns 429 with a Retry-After header").
 - Avoid criteria that cannot fail ("code is clean").
+- Do not predict which repository paths implementation will touch. Tickets
+  describe observable behavior; any repository-configured path applicability
+  is evaluated later by the kernel from the build's actual diff in each verify
+  cycle.
 
 ## 3. Out of scope — explicit
 

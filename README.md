@@ -77,9 +77,9 @@ separate repository-scoped outer workflow owned by dispatch, not a build phase:
 
 A skipped verification is recorded separately from a pass, satisfies that step
 for the current cycle, and consumes no verify-failure attempt. It requires a
-human-readable reason and never hides another step's failure. Autobuild does not
-decide applicability yet: every configured step still runs unless the step
-itself explicitly skips.
+human-readable reason and never hides another step's failure. Agent verifiers
+may explicitly skip; the kernel also skips a step when its configured `paths`
+do not match the build's live diff.
 
 ---
 
@@ -207,7 +207,7 @@ is an error, so a typo cannot silently disable a verifier.
 | `[project]` | `baseBranch` — what PRs target | `"main"` |
 | `[commands]` | Free-form map of verb → shell string. `setup` runs after provision and after a rehydrate; others are referenced by name from verify steps. | — |
 | `[verify]` | `steps = [...]` — the ordered verify phases | `[]` |
-| `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer` | `needsServer = false` |
+| `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer`; both kinds accept `paths` and `always` | `needsServer = false`; no `paths` ⇒ unconditional |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
 | `[roles]` | Role → `{ runtime?, model?, extensions? }`. Reserved `default` is the optional inheritance base; concrete entries include pipeline roles and optional pre-build `slug` naming. | absent `default` ⇒ the wiring-fallback runtime + its own default model; extensions hermetic |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `4` |
@@ -216,6 +216,45 @@ is an error, so a typo cannot silently disable a verifier.
 | `[tickets]` | Required. Ticket source and lifecycle/readiness fields, including **required `readyState`** and optional `readyLabels` — see below | `readyState` has no default; file `dir` defaults to `.autobuild/tickets` |
 | `[harvest]` | Observation-count back-pressure for the staged harvester: positive `threshold` | `threshold = 10` |
 | `[outer]` | Map of other scheduled ingesters → `{ cron = "…" }`; the exact `harvest` key is rejected | — |
+
+**Path-conditional verify steps.** Both verifier kinds may narrow themselves to
+actual changed paths:
+
+```toml
+[verify.dashboard]
+kind = "agent"
+skill = "ab-verify-dashboard"
+paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts"]
+# always = true
+```
+
+`paths` must be a non-empty array of positive repository-relative globs. A step
+applies when **any** changed path matches **any** selector. Matching is
+case-sensitive against Git's `/`-separated paths. The supported grammar is
+literal path characters, `*` and `?` within a segment, and `**` only as a whole
+segment. Absolute paths, `.`/`..` or empty segments, negation, escapes,
+character classes, brace expansion, extglobs, and malformed `**` are config
+errors naming the step. `paths` omitted means unconditional; `always = false`
+does not change that. `always = true` takes precedence even when `paths` is
+present (the selectors are still validated), so a mandatory gate cannot be
+accidentally narrowed later.
+
+The kernel evaluates this rule immediately before the step. It diffs current
+`HEAD` against the build's durable branch-cut tree, or against the refreshed
+base recorded by the latest completed reconcile. It uses a NUL-delimited
+`git diff --no-renames --name-only`, so additions, modifications, deletions,
+and both sides of renames participate without filename parsing bugs. An
+upstream-only path merged during reconcile is excluded by the refreshed base;
+a build-owned conflict resolution remains included. Every verify cycle repeats
+the evaluation. A miss launches no command, agent, server, or session and
+records:
+
+```text
+excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**","src/cli/dispatch.ts"]
+```
+
+The outcome is the ordinary queryable `skipped` result. A Git/base lookup
+failure fails closed as infrastructure; it is never turned into a skip.
 
 A fresh config always includes `setup = "bun install"`. During that first
 init only, Autobuild recognizes these exact root-package script names:
@@ -839,6 +878,9 @@ Each line is `  <path>: <message>`. Common causes:
   not a shell string.
 - **`needsServer` with no server** — `[verify.<s>].needsServer = true requires a
   [server] table (start, url)…`. Add `[server]` or set `needsServer = false`.
+- **A malformed path condition** — errors under `verify.<s>.paths[...]` name the
+  unsupported or unsafe glob form. Use positive repository-relative selectors
+  with only literals, `*`, `?`, and whole-segment `**`.
 
 ### I omitted `[tickets]` — why does config validation fail?
 

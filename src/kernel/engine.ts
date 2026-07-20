@@ -43,6 +43,16 @@ import { stalledChains, type FindingChain } from './stall'
 
 export type WaitReason = 'blocked' | 'paused' | 'awaiting-spec' | 'awaiting-pr' | 'done' | 'aborted'
 
+export type VerifyAction =
+  | { kind: 'run-check'; step: string; command: string; attempt: number }
+  | {
+      kind: 'run-agent-verify'
+      step: string
+      skill: string
+      needsServer: boolean
+      attempt: number
+    }
+
 export type Decision =
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
@@ -54,8 +64,15 @@ export type Decision =
       /** Present iff phase === 'reconcile'; execution resolves its base (§15.7). */
       reconcile?: { attempt: number }
     }
-  | { kind: 'run-check'; step: string; command: string; attempt: number }
-  | { kind: 'run-agent-verify'; step: string; skill: string; needsServer: boolean; attempt: number }
+  | VerifyAction
+  | {
+      /** Kernel-side path gating to resolve against the live Git diff. */
+      kind: 'evaluate-verify'
+      step: string
+      attempt: number
+      paths: string[]
+      action: VerifyAction
+    }
   | { kind: 'run-finalize-step'; step: string }
   | {
       kind: 'raise-escalation'
@@ -379,22 +396,34 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     }
     const stepConfig = config.verify.stepConfigs[step]
     if (stepConfig === undefined) continue // unreachable: configSchema cross-validates (§16.1)
-    if (stepConfig.kind === 'check') {
-      // Resolve the [commands] ref (§16.1) — config validation guarantees it
-      // exists; the raw-ref fallback only keeps decideNext total.
-      return {
-        kind: 'run-check',
-        step,
-        command: config.commands[stepConfig.command] ?? stepConfig.command,
-        attempt,
-      }
-    }
+    const action: VerifyAction =
+      stepConfig.kind === 'check'
+        ? {
+            // Resolve the [commands] ref (§16.1) — config validation guarantees
+            // it exists; the raw-ref fallback only keeps decideNext total.
+            kind: 'run-check',
+            step,
+            command: config.commands[stepConfig.command] ?? stepConfig.command,
+            attempt,
+          }
+        : {
+            kind: 'run-agent-verify',
+            step,
+            skill: stepConfig.skill,
+            needsServer: stepConfig.needsServer,
+            attempt,
+          }
+
+    // Omitted paths preserve the historical unconditional behavior. Explicit
+    // `always = true` wins even when selectors are present, making the
+    // mandatory-gate guard structural rather than dependent on truthiness.
+    if (stepConfig.paths === undefined || stepConfig.always === true) return action
     return {
-      kind: 'run-agent-verify',
+      kind: 'evaluate-verify',
       step,
-      skill: stepConfig.skill,
-      needsServer: stepConfig.needsServer,
       attempt,
+      paths: stepConfig.paths,
+      action,
     }
   }
 

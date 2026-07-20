@@ -40,10 +40,32 @@ invalid.
 `src/kernel/engine.ts` uses exact predicates: only `fail` routes to implement or
 consumes `maxVerifyAttempts`, while `pass` and `skipped` satisfy that one step.
 A failure anywhere in the cycle wins. Skips retain cycle attempt identity but
-are not passing evidence. `src/processes/build-runner.ts` still gives
-exit-code checks only pass/fail; only an agent verifier can explicitly call
-`ab verdict skip --reason ...`, with no fail-report artifact. No code in this
-boundary decides that a step is inapplicable.
+are not passing evidence. `src/processes/build-runner.ts` still gives executed
+exit-code checks only pass/fail; an agent verifier may explicitly call
+`ab verdict skip --reason ...`, with no fail-report artifact. The kernel may
+also author a skip through the applicability seam below.
+
+## Verify applicability boundary
+
+`src/config/schema.ts` validates the shared `paths`/`always` fields on check and
+agent steps. The accepted selector language is deliberately smaller than a
+shell glob: positive repository-relative literals, `*`, `?`, and whole-segment
+`**`. `src/kernel/verify-applicability.ts` is the pure, case-sensitive OR
+matcher and owns the stable exclusion reason. `src/kernel/engine.ts` wraps only
+the first unsatisfied conditional step in an actionable `evaluate-verify`
+decision; omitted `paths` and `always = true` retain the original direct action.
+
+`src/processes/build-runner.ts` resolves that decision. It selects the initial
+`workspace.provisioned.base.sha`, promoted by the latest successfully completed
+reconcile's refreshed start SHA, then executes a NUL-delimited
+`git diff --no-renames --name-only -z <base> HEAD --`. A match delegates to the
+existing check/agent path. A miss appends kernel `verify.started` and
+`verify.completed {outcome:"skipped", reason}` without launching a command,
+agent, server, or session. Diff/base failure throws as infrastructure before a
+skip can be written. Because reconcile already resets the engine's verify-cycle
+boundary, the same rule is reached and the live diff is read again each cycle;
+the promoted base excludes upstream-only merged paths while retaining
+build-owned resolutions.
 
 `src/cli/status.ts` exposes canonical outcomes and skip reasons in the detailed
 text/JSON projection, `src/cli/terminals.ts` includes them in the PR audit

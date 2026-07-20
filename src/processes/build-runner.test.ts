@@ -29,7 +29,13 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import type { ArtifactMeta, BuildStore, Clock } from '../store/types'
 import { manualClock, steppingClock } from '../testing/fixed'
-import { BuildRunner, LeaseHeldError, type ServerLifecycle } from './build-runner'
+import {
+  BuildRunner,
+  LeaseHeldError,
+  parseNulChangedPaths,
+  selectVerifyDiffBase,
+  type ServerLifecycle,
+} from './build-runner'
 
 const SLUG = 'auth-rate-limit'
 const BRANCH = 'ab/auth-rate-limit'
@@ -248,6 +254,11 @@ type ReconcileRefresh =
   | { fetchError: string }
   | { resolveError: string }
 
+type VerifyDiffResult =
+  | { paths: string[] }
+  | { stdout: string }
+  | { error: string }
+
 interface HarnessOptions {
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   noServer?: boolean
@@ -256,6 +267,9 @@ interface HarnessOptions {
   /** Results for successive reconcile-time remote-base refreshes. The final
    * entry repeats when more refreshes occur. */
   reconcileRefreshes?: ReconcileRefresh[]
+  /** Results for successive conditional-verify Git diffs. The final entry
+   * repeats; omitted defaults to an empty changed-path set. */
+  verifyDiffs?: VerifyDiffResult[]
   sessionEnv?: Record<string, string>
   runnerOpts?: { maxPhaseAttempts?: number; heartbeatMs?: number; leaseTtlMs?: number }
   clock?: Clock
@@ -330,9 +344,30 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     refreshes[Math.min(Math.max(refreshIndex, 0), refreshes.length - 1)] ?? {
       fetchError: 'no reconcile refresh result configured',
     }
+  const verifyDiffs = options.verifyDiffs ?? [{ paths: [] }]
+  let verifyDiffIndex = 0
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
+    if (cmd[0] === 'git' && cmd[1] === 'diff') {
+      const diff =
+        verifyDiffs[Math.min(verifyDiffIndex, verifyDiffs.length - 1)] ?? {
+          error: 'no conditional verify diff configured',
+        }
+      verifyDiffIndex += 1
+      if ('error' in diff) {
+        return { stdout: '', stderr: diff.error, exitCode: 128 }
+      }
+      if ('stdout' in diff) {
+        return { stdout: diff.stdout, stderr: '', exitCode: 0 }
+      }
+      return {
+        stdout:
+          diff.paths.length === 0 ? '' : `${diff.paths.join('\0')}\0`,
+        stderr: '',
+        exitCode: 0,
+      }
+    }
     if (cmd[0] === 'git' && cmd[1] === 'fetch') {
       refreshIndex += 1
       const refresh = currentRefresh()
@@ -1686,6 +1721,282 @@ describe('checks', () => {
       round: 2,
       feedback: { verify: { step: 'types', report: { kind: 'verify-report:types', rev: 0 } } },
     })
+  })
+})
+
+// ── Conditional verify applicability (§16.1) ─────────────────────────────────
+
+describe('conditional verify applicability', () => {
+  const conditionalCheck = `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+`
+
+  async function seedApproved(store: BuildStore): Promise<void> {
+    await seedPlanApproved(store)
+    await seedCodeApproved(store)
+  }
+
+  test('a matching path runs the wrapped check after the exact NUL Git diff', async () => {
+    const h = await makeHarness({
+      configToml: conditionalCheck,
+      verifyDiffs: [{ paths: ['README.md', 'src/cli/dashboard/model.ts'] }],
+    })
+    await seedApproved(h.store)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'evaluate-verify',
+      step: 'dashboard',
+      attempt: 1,
+      paths: ['src/cli/dashboard/**'],
+      action: {
+        kind: 'run-check',
+        step: 'dashboard',
+        command: 'bun test dashboard',
+        attempt: 1,
+      },
+    })
+    expect(h.execCalls).toEqual([
+      {
+        cmd: [
+          'git',
+          'diff',
+          '--no-renames',
+          '--name-only',
+          '-z',
+          'fake-base-sha',
+          'HEAD',
+          '--',
+        ],
+        cwd: h.workspacePath,
+      },
+      { cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath },
+    ])
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)?.payload).toEqual({
+      step: 'dashboard',
+      attempt: 1,
+      outcome: 'pass',
+    })
+  })
+
+  test('a nonmatching check records a kernel skip and launches no command', async () => {
+    const h = await makeHarness({
+      configToml: conditionalCheck,
+      verifyDiffs: [{ paths: ['README.md', 'docs/guide.md'] }],
+    })
+    await seedApproved(h.store)
+    await h.br.step()
+
+    expect(h.execCalls).toHaveLength(1)
+    expect(h.execCalls[0]?.cmd.slice(0, 2)).toEqual(['git', 'diff'])
+    const events = await h.store.getEvents(SLUG)
+    expect(events.slice(-2).map((event) => event.type)).toEqual([
+      'verify.started',
+      'verify.completed',
+    ])
+    expect(ofType(events, 'verify.completed').at(-1)?.actor).toEqual(KERNEL)
+    expect(ofType(events, 'verify.completed').at(-1)?.payload).toEqual({
+      step: 'dashboard',
+      attempt: 1,
+      outcome: 'skipped',
+      reason:
+        'excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**"]',
+    })
+  })
+
+  test('a generated skip advances to the next verifier at the same attempt', async () => {
+    const h = await makeHarness({
+      configToml: `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+dashboard = "bun test dashboard"
+unit = "bun test"
+[verify]
+steps = ["dashboard", "unit"]
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+[verify.unit]
+kind = "check"
+command = "unit"
+`,
+      verifyDiffs: [{ paths: ['README.md'] }],
+    })
+    await seedApproved(h.store)
+    await h.br.step()
+    expect(await h.br.step()).toEqual({
+      kind: 'run-check',
+      step: 'unit',
+      command: 'bun test',
+      attempt: 1,
+    })
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'verify.completed').map((event) =>
+        normalizeVerifyCompletion(event.payload),
+      ),
+    ).toEqual([
+      {
+        step: 'dashboard',
+        attempt: 1,
+        outcome: 'skipped',
+        reason:
+          'excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboard/**"]',
+      },
+      { step: 'unit', attempt: 1, outcome: 'pass' },
+    ])
+  })
+
+  test('nonmatching agent steps start neither a server nor a session', async () => {
+    const h = await makeHarness({
+      configToml: `
+[tickets]
+source = "file"
+readyState = "ready"
+[server]
+start = "bun dev"
+url = "http://localhost:3000"
+[verify]
+steps = ["e2e"]
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+needsServer = true
+paths = ["web/**"]
+`,
+      verifyDiffs: [{ paths: ['src/auth.ts'] }],
+    })
+    await seedApproved(h.store)
+    expect((await h.br.step()).kind).toBe('evaluate-verify')
+    expect(h.ops).toEqual([])
+    expect(h.runner.sessions.size).toBe(0)
+    expect(ofType(await h.store.getEvents(SLUG), 'session.started')).toEqual([])
+  })
+
+  test('matching agent steps retain normal server and session execution', async () => {
+    const h = await makeHarness({
+      configToml: `
+[tickets]
+source = "file"
+readyState = "ready"
+[server]
+start = "bun dev"
+url = "http://localhost:3000"
+[verify]
+steps = ["e2e"]
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+needsServer = true
+paths = ["web/**"]
+`,
+      verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
+    })
+    await seedApproved(h.store)
+    await h.br.step()
+    expect(h.ops).toEqual([
+      'server:ensureStarted',
+      'session:ab-verify-e2e',
+      'server:stop',
+    ])
+    expect(normalizeVerifyCompletion(
+      ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)!.payload,
+    ).outcome).toBe('pass')
+  })
+
+  test('always = true bypasses path inspection and runs the mandatory gate', async () => {
+    const h = await makeHarness({
+      configToml: conditionalCheck.replace(
+        'paths = ["src/cli/dashboard/**"]',
+        'paths = ["src/cli/dashboard/**"]\nalways = true',
+      ),
+      verifyDiffs: [{ error: 'must not inspect paths' }],
+    })
+    await seedApproved(h.store)
+    expect((await h.br.step()).kind).toBe('run-check')
+    expect(h.execCalls).toEqual([
+      { cmd: ['sh', '-c', 'bun test dashboard'], cwd: h.workspacePath },
+    ])
+  })
+
+  test('Git diff failures fail closed without a skip outcome', async () => {
+    const h = await makeHarness({
+      configToml: conditionalCheck,
+      verifyDiffs: [{ error: 'fatal: bad object fake-base-sha' }],
+    })
+    await seedApproved(h.store)
+    await expect(h.br.step()).rejects.toThrow('fatal: bad object fake-base-sha')
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.started')).toEqual([])
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.completed')).toEqual([])
+  })
+
+  test('NUL parsing preserves whitespace/newlines and rejects malformed output', () => {
+    expect(parseNulChangedPaths('old name.ts\0new\nname.ts\0')).toEqual([
+      'old name.ts',
+      'new\nname.ts',
+    ])
+    expect(parseNulChangedPaths('')).toEqual([])
+    expect(() => parseNulChangedPaths('src/file.ts\n')).toThrow(
+      'non-NUL-terminated',
+    )
+    expect(() => parseNulChangedPaths('src/file.ts\0\0')).toThrow(
+      'empty path entry',
+    )
+  })
+
+  test('the diff base advances only after a completed reconcile', async () => {
+    const h = await makeHarness()
+    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe('fake-base-sha')
+
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-after-first' },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('reconcile', 's_reconcile_1'),
+      type: 'reconcile.completed',
+      payload: {
+        mergeCommit: 'merge-1',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 2, baseSha: 'dangling-base' },
+    })
+    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe(
+      'base-after-first',
+    )
+
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 2, baseSha: 'refreshed-base' },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('reconcile', 's_reconcile_2'),
+      type: 'reconcile.completed',
+      payload: {
+        mergeCommit: 'merge-2',
+        artifact: { kind: 'reconcile-notes', rev: 1 },
+      },
+    })
+    expect(selectVerifyDiffBase(await h.store.getEvents(SLUG))).toBe(
+      'refreshed-base',
+    )
   })
 })
 

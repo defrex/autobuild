@@ -47,6 +47,7 @@ import type { IdSource } from '../ids'
 import { decideNext, type Decision } from '../kernel/engine'
 import { PHASE_SPECS } from '../kernel/phases'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
 import {
   verifyPhase,
   verifyReportKind,
@@ -135,6 +136,7 @@ export interface BuildRunnerDeps {
 type RunPhaseDecision = Extract<Decision, { kind: 'run-phase' }>
 type RunCheckDecision = Extract<Decision, { kind: 'run-check' }>
 type RunAgentVerifyDecision = Extract<Decision, { kind: 'run-agent-verify' }>
+type EvaluateVerifyDecision = Extract<Decision, { kind: 'evaluate-verify' }>
 type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 
@@ -174,6 +176,46 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Select the durable tree against which a conditional verifier evaluates the
+ * branch's current HEAD. The initial branch-cut SHA is authoritative until a
+ * successful reconcile; each completed reconcile promotes the latest start's
+ * refreshed base SHA. A dangling start is intentionally ignored.
+ */
+export function selectVerifyDiffBase(events: readonly AbEvent[]): string {
+  const provisioned = events.find((event) => event.type === 'workspace.provisioned')
+  if (provisioned === undefined || provisioned.type !== 'workspace.provisioned') {
+    throw new Error(
+      'conditional verify requires a workspace.provisioned base SHA, but this build has none',
+    )
+  }
+
+  let baseSha = provisioned.payload.base.sha
+  let pendingReconcileBase: string | undefined
+  for (const event of events) {
+    if (event.type === 'reconcile.started') {
+      pendingReconcileBase = event.payload.baseSha
+    } else if (event.type === 'reconcile.completed') {
+      if (pendingReconcileBase !== undefined) baseSha = pendingReconcileBase
+      pendingReconcileBase = undefined
+    }
+  }
+  return baseSha
+}
+
+/** Parse `git diff --name-only -z`; malformed output fails closed. */
+export function parseNulChangedPaths(output: string): string[] {
+  if (output.length === 0) return []
+  if (!output.endsWith('\0')) {
+    throw new Error('git diff --name-only -z returned non-NUL-terminated output')
+  }
+  const paths = output.slice(0, -1).split('\0')
+  if (paths.some((path) => path.length === 0)) {
+    throw new Error('git diff --name-only -z returned an empty path entry')
+  }
+  return paths
 }
 
 /** Terminal events of loop phases carry `round`; finalize.completed and
@@ -344,6 +386,9 @@ export class BuildRunner {
         return decision
       case 'run-agent-verify':
         await this.runAgentVerify(decision, events)
+        return decision
+      case 'evaluate-verify':
+        await this.evaluateVerify(decision, events)
         return decision
       case 'run-finalize-step':
         await this.runFinalizeStep(decision)
@@ -527,6 +572,65 @@ export class BuildRunner {
       )
     }
     return sha
+  }
+
+  /**
+   * Resolve a conditional verifier against the live branch diff. Exclusion is
+   * a canonical kernel-authored skip and launches no command, session, or
+   * server. Inclusion delegates to the existing verifier path unchanged.
+   */
+  private async evaluateVerify(
+    decision: EvaluateVerifyDecision,
+    events: AbEvent[],
+  ): Promise<void> {
+    const { exec, workspacePath, store, slug } = this.deps
+    const baseSha = selectVerifyDiffBase(events)
+    const args = [
+      'git',
+      'diff',
+      '--no-renames',
+      '--name-only',
+      '-z',
+      baseSha,
+      'HEAD',
+      '--',
+    ]
+    const result = await exec(args, { cwd: workspacePath })
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `${args.join(' ')} exited ${result.exitCode}: ` +
+          `${result.stderr.trim() || result.stdout.trim() || '(no output)'}`,
+      )
+    }
+    const changedPaths = parseNulChangedPaths(result.stdout)
+    const applicability = evaluateVerifyApplicability(
+      { kind: 'paths', step: decision.step, paths: decision.paths },
+      changedPaths,
+    )
+    if (!applicability.applies) {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { step: decision.step, attempt: decision.attempt },
+      } satisfies EventWrite<'verify.started'>)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: {
+          step: decision.step,
+          attempt: decision.attempt,
+          outcome: 'skipped',
+          reason: applicability.reason,
+        },
+      } satisfies EventWrite<'verify.completed'>)
+      return
+    }
+
+    if (decision.action.kind === 'run-check') {
+      await this.runCheck(decision.action)
+    } else {
+      await this.runAgentVerify(decision.action, events)
+    }
   }
 
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the

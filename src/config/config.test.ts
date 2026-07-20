@@ -28,6 +28,8 @@ command = "typecheck"           # ref into [commands]
 kind = "agent"                  # agent-verify: skill + verdict schema
 skill = "ab-verify-e2e"
 needsServer = true
+paths = ["web/**", "src/routes/**"] # optional positive any-match selectors
+# always = true                 # mandatory-gate guard; overrides paths
 
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
@@ -106,7 +108,12 @@ describe('parseConfig — SPEC §16.1 example', () => {
         stepConfigs: {
           types: { kind: 'check', command: 'typecheck' },
           unit: { kind: 'check', command: 'test' },
-          e2e: { kind: 'agent', skill: 'ab-verify-e2e', needsServer: true },
+          e2e: {
+            kind: 'agent',
+            skill: 'ab-verify-e2e',
+            needsServer: true,
+            paths: ['web/**', 'src/routes/**'],
+          },
         },
       },
       finalize: { steps: ['release-notes'] },
@@ -198,6 +205,151 @@ describe('parseConfig — defaults', () => {
       maxReconcileAttempts: 3,
       maxReviewRounds: 4,
     })
+  })
+})
+
+describe('parseConfig — verify path applicability', () => {
+  test('check and agent steps accept any-match paths and an explicit always guard', () => {
+    const parsed = parseConfig(`${READY}
+[commands]
+test = "bun test"
+
+[verify]
+steps = ["unit", "dashboard"]
+
+[verify.unit]
+kind = "check"
+command = "test"
+paths = ["src/**/*.ts", "package.json"]
+always = false
+
+[verify.dashboard]
+kind = "agent"
+skill = "ab-verify-dashboard"
+paths = ["src/cli/dashboard/**"]
+always = true
+`)
+    expect(parsed.verify.stepConfigs).toEqual({
+      unit: {
+        kind: 'check',
+        command: 'test',
+        paths: ['src/**/*.ts', 'package.json'],
+        always: false,
+      },
+      dashboard: {
+        kind: 'agent',
+        skill: 'ab-verify-dashboard',
+        needsServer: false,
+        paths: ['src/cli/dashboard/**'],
+        always: true,
+      },
+    })
+  })
+
+  test('old step tables retain their exact output shape when conditions are absent', () => {
+    const parsed = parseConfig(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["unit", "e2e"]
+[verify.unit]
+kind = "check"
+command = "test"
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+`)
+    expect(parsed.verify.stepConfigs).toEqual({
+      unit: { kind: 'check', command: 'test' },
+      e2e: { kind: 'agent', skill: 'ab-verify-e2e', needsServer: false },
+    })
+  })
+
+  test('rejects empty, unsafe, malformed, and unsupported selectors at the named step', () => {
+    const invalid: Array<[string, string]> = [
+      ['[]', 'at least one'],
+      ['[""]', 'nonempty'],
+      ['["/src/**"]', 'repository-relative'],
+      ['["C:/src/**"]', 'repository-relative'],
+      ['["src/../secret"]', 'traversal'],
+      ['["src//file.ts"]', 'empty path segments'],
+      ['["src/**file.ts"]', 'complete path segment'],
+      ['["src/***/file.ts"]', 'complete path segment'],
+      ['["src/[ab].ts"]', 'character classes'],
+      ['["src/{a,b}.ts"]', 'brace expansion'],
+      ['["!src/**"]', 'negation'],
+      ['["src/@(a|b).ts"]', 'extglobs'],
+      ['["src\\\\file.ts"]', 'backslashes'],
+    ]
+    for (const [value, expected] of invalid) {
+      const error = parseError(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "test"
+paths = ${value}
+`)
+      expect(error.message).toContain('verify.dashboard')
+      expect(error.message).toContain(expected)
+    }
+  })
+
+  test('always does not hide a malformed paths declaration', () => {
+    const error = parseError(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["dashboard"]
+[verify.dashboard]
+kind = "check"
+command = "test"
+always = true
+paths = ["../dashboard/**"]
+`)
+    expect(error.message).toContain('verify.dashboard.paths[0]')
+    expect(error.message).toContain('traversal')
+  })
+
+  test('rejects wrong condition types and misspelled keys instead of disabling a gate', () => {
+    const wrongPaths = parseError(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "test"
+paths = "src/**"
+`)
+    expect(wrongPaths.message).toContain('verify.unit.paths')
+
+    const wrongAlways = parseError(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "test"
+always = "yes"
+`)
+    expect(wrongAlways.message).toContain('verify.unit.always')
+
+    const typo = parseError(`${READY}
+[commands]
+test = "bun test"
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "test"
+path = ["src/**"]
+`)
+    expect(typo.message).toContain('verify.unit')
+    expect(typo.message).toContain('Unrecognized key')
   })
 })
 

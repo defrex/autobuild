@@ -169,9 +169,10 @@ engine. Exactly two extension points:
   to `implement` with the report, re-entering the code loop. A skip requires a
   non-blank human-readable reason and satisfies only that step in the current
   cycle; it is neither passing evidence nor a failure and consumes no
-  `maxVerifyAttempts` budget. Another step's failure still wins. This vocabulary
-  adds no applicability rule: every configured step still runs unless that
-  step explicitly declares `skip`.
+  `maxVerifyAttempts` budget. Another step's failure still wins. Either an agent
+  may explicitly declare `skip`, or the kernel may produce it when a configured
+  path-applicability rule excludes the build's live diff. Steps without a rule
+  remain unconditional.
 - **`finalize:*`** — optional post-steps (release notes, changelog,
   screenshots, ticket linking). Independent and failure-tolerant: a failed
   post-step files an observation; it never kills a green build.
@@ -1191,6 +1192,16 @@ reason}` leaves the reason queryable and advances to the next configured step
 not increment the failure budget, count as a pass, or hide a failure from any
 other step.
 
+**A3 — path applicability:** for a step with `paths`, the kernel diffs current
+`HEAD` against the durable branch-cut base immediately before that step. No
+match produces `verify.started` then a kernel-authored skipped completion whose
+reason names `[verify.<step>].paths`; neither command nor agent/server/session
+starts. A reconcile promotes its successfully refreshed base SHA and begins a
+new verify cycle, so rules are evaluated again: upstream-only merged paths are
+subtracted while build-owned conflict resolutions can bring a previously
+skipped step into scope. Diff/base infrastructure failure produces no skip and
+fails closed for retry.
+
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 `escalation.raised {source: "stall", refs: [chain]}`; status → `blocked`.
@@ -1364,6 +1375,8 @@ command = "test"
 kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
 skill = "ab-verify-e2e"
 needsServer = true
+paths = ["web/**", "src/routes/**"] # optional positive any-match selectors
+# always = true                 # mandatory-gate guard; overrides paths
 
 [finalize]
 steps = ["release-notes"]       # optional post-steps, failure-tolerant (§5)
@@ -1419,6 +1432,25 @@ any future tooling parse it without evaluating anything; commands are plain
 shell strings. The removed legacy `[agent]` table is rejected with an error
 that directs its fields to `[roles.default]`; it is not a parsing alias or an
 automatic migration.
+
+Both verify kinds accept optional `paths` and `always`. `paths` is a non-empty
+list of positive repository-relative globs with OR semantics across both rules
+and changed paths. Matching is case-sensitive over Git `/` paths. The grammar
+supports literals, segment-local `*`/`?`, and `**` only as a whole segment;
+absolute/traversing/empty segments, negation, escapes, character classes, brace
+expansion, extglobs, and malformed `**` fail strict config validation at the
+named step. No `paths` is unconditional. `always = true` overrides a present
+list (which is still validated); false is equivalent to omission.
+
+The runner evaluates a conditional step from current `HEAD` using
+`git diff --no-renames --name-only -z`. The base is the initial
+`workspace.provisioned.base.sha`, promoted only by a `reconcile.started.baseSha`
+whose reconcile successfully completed. Thus both rename sides are visible,
+filenames are NUL-safe, and newly merged upstream-only work is not attributed
+to the build. Evaluation repeats in each cycle. No match records the canonical
+skipped outcome with
+`excluded by [verify.<step>].paths: no changed path matched <JSON paths>` and
+launches nothing; Git/base failure is infrastructure, never a synthetic skip.
 
 ### 16.2 Server lifecycle [D10]
 

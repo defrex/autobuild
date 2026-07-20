@@ -200,6 +200,8 @@ subtables are part of this section — their fields are listed here.
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. `"ab-verify-e2e"`). |
 | `needsServer` | `false` | boolean, `kind = "agent"` only | `true` ⇒ the kernel starts `[server]` and waits for readiness before the session. |
+| `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
+| `always` | — | optional boolean | `true` explicitly makes the step unconditional even when `paths` is present; `false` is equivalent to omission. |
 
 Cross-field rules the validator actually enforces — each is an **error**:
 
@@ -209,16 +211,30 @@ Cross-field rules the validator actually enforces — each is an **error**:
   is never silently tolerated).
 - `command` naming a key that does not exist in `[commands]`.
 - `needsServer = true` with no `[server]` table.
+- An empty or malformed `paths` list. Matching is case-sensitive over Git's
+  `/`-separated paths; supported syntax is literals, `*`, `?`, and `**` only as
+  a whole segment. Absolute/traversing/empty segments, negation, escapes,
+  character classes, brace expansion, extglobs, and malformed `**` are errors.
+  `always = true` does not hide selector errors.
 
-Agent verifiers use `ab verdict pass`, `ab verdict fail --report <file>`, or
-`ab verdict skip --reason <text>`. The skip reason is required and must be
-non-blank; no failure report is required. A skip satisfies that step for the
-current cycle and advances to the next verify step or finalize, but it is not a
-pass and never masks another step's failure. Only failures return the build to
-`implement` and consume `[policy].maxVerifyAttempts`; skipped outcomes retain
-the cycle's attempt number without consuming that budget. Autobuild adds no
-applicability rule here — configured steps still run unless the step explicitly
-chooses `skip`.
+The kernel evaluates `paths` immediately before the step against current
+`HEAD`, relative to the initial branch-cut SHA or the refreshed base from the
+latest completed reconcile. It uses a NUL-delimited, no-rename Git diff, so
+adds/modifications/deletions and both rename sides participate. A reconcile
+starts a fresh cycle and evaluation repeats; upstream-only merged paths are
+excluded while build-owned resolutions remain visible. A miss starts no
+command, agent, server, or session and records `skipped` with
+`excluded by [verify.<step>].paths: no changed path matched <JSON paths>`.
+Git/base failures fail closed as infrastructure rather than becoming skips.
+
+Agent verifiers may also use `ab verdict pass`,
+`ab verdict fail --report <file>`, or `ab verdict skip --reason <text>`. The
+skip reason is required and
+must be non-blank; no failure report is required. Either kind of skip satisfies
+that step for the current cycle and advances, but it is not a pass and never
+masks another step's failure. Only failures return the build to `implement` and
+consume `[policy].maxVerifyAttempts`; skips retain the cycle's attempt number
+without consuming that budget.
 
 ### `[finalize]`
 
