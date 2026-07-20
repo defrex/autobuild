@@ -18,23 +18,27 @@ read the diff for style; you exercise behavior.
 2. For each acceptance criterion, drive the real flow that proves or
    disproves it — real requests, real UI paths, real data. Prefer the
    narrowest honest check that would catch a regression.
-3. Write `.ab/verify-report.md` as you go: criterion → what you did → what
-   you observed → pass/fail. On failure, include the reproduction exactly
-   (commands, inputs, observed vs expected, relevant `ab server logs`
-   excerpts) — this report is routed to the implementer as feedback, and its
-   quality determines whether the fix round succeeds.
+3. When the step applies, write `.ab/verify-report.md` as you go: criterion →
+   what you did → what you observed → pass/fail. On failure, include the
+   reproduction exactly (commands, inputs, observed vs expected, relevant
+   `ab server logs` excerpts) — this report is routed to the implementer as
+   feedback, and its quality determines whether the fix round succeeds.
 4. Exactly one terminal:
 
    ```
    ab verdict pass --notes .ab/verify-report.md
    ab verdict fail --report .ab/verify-report.md
+   ab verdict skip --reason "Why this entire step does not apply"
    ```
 
 ## Rules of the phase
 
-- A criterion you could not exercise is a **fail with explanation**, never a
-  silent pass — "could not verify" routed back is cheap; a false pass ships
-  a broken build.
+- If this entire configured step genuinely does not apply, use `skip` with a
+  specific human-readable reason. That reason is the durable paper trail; a
+  skip needs no report artifact.
+- An applicable criterion you could not exercise is a **fail with
+  explanation**, never a skip or silent pass — "could not verify" routed back
+  is cheap; a false pass ships a broken build.
 - Do not fix anything. Even a one-line fix belongs to the implementer via
   your report; your phase owns observation only.
 - Out-of-scope discoveries (a bug that predates this build, a missing test):

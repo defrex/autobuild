@@ -72,7 +72,14 @@ separate repository-scoped outer workflow owned by dispatch, not a build phase:
 `scan → synthesize ⇄ review → file`. Verify steps come in two kinds:
 
 - **`check`** — a deterministic shell command; pass/fail is its exit code.
-- **`agent`** — a skill that runs and returns a `pass` or `fail` verdict.
+- **`agent`** — a skill that returns `pass`, `fail`, or an explicit
+  `skip --reason` verdict.
+
+A skipped verification is recorded separately from a pass, satisfies that step
+for the current cycle, and consumes no verify-failure attempt. It requires a
+human-readable reason and never hides another step's failure. Autobuild does not
+decide applicability yet: every configured step still runs unless the step
+itself explicitly skips.
 
 ---
 
@@ -436,7 +443,9 @@ harvest outcome, action confirmation, or warning replaces that slot instead of
 scrolling above the frame. A blank line separates this section from `Harvest`
 or the first build, matching the blank lines between body rows and before the
 bottom legend (or active feedback field). `--plain` and non-TTY output remain
-line-oriented and unchanged.
+line-oriented and unchanged. Verify skips remain visible without color as a
+literal qualifier such as `[x] verify:e2e(skipped)`; `ab build status` renders
+`SKIP` with the reason and exposes `{outcome: "skipped", reason}` in JSON.
 
 The legend changes with the selected row and lists only meaningful actions:
 
@@ -647,7 +656,7 @@ ambient auth for every session (D8, SPEC §8.1).
 | `ab observe --kind <followup\|refactor\|latent-bug> [--files a,b] [--refs x,y] <summary>` | Record a structured observation. Not a terminal. |
 | `ab server <start\|stop\|restart\|status\|logs> [n]` | Dev-server lifecycle, driven by `[server]`. |
 | `ab done [--notes <file>]` | **Terminal.** Complete a producer phase. |
-| `ab verdict <approve\|revise\|escalate\|pass\|fail> [--findings <json>] [--notes <file>] [--reason <text>] [--report <file>]` | **Terminal.** Complete a review or verify phase; the vocabulary is phase-dependent. |
+| `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> [--findings <json>] [--notes <file>] [--reason <text>] [--report <file>]` | **Terminal.** Complete a review or verify phase; `fail` requires a report and `skip` requires a reason. |
 | `ab escalate <question> [--refs a,b]` | **Terminal.** Park the build for human input. |
 
 ---

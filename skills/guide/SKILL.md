@@ -61,7 +61,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   committing locally; a fresh reviewer reads the diff against spec and plan.
   Same loop shape.
 - **`verify:*`** — each step in `[verify].steps` runs as its own phase, in
-  order. A failing step sends the build back to `implement` with the report.
+  order. A failing step sends the build back to `implement` with the report;
+  an explicit skip records why the step did not apply and advances.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
   PR. `[finalize].steps` run afterward and are failure-tolerant.
 - **Epilogue.** If main moves and the PR conflicts, `pr.conflicted` sends the
@@ -195,7 +196,7 @@ subtables are part of this section — their fields are listed here.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `steps` | `[]` | array of nonempty strings | Ordered list of verify phases. Each name must have a matching `[verify.<step>]` table. |
-| `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns a `pass`/`fail` verdict. |
+| `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. `"ab-verify-e2e"`). |
 | `needsServer` | `false` | boolean, `kind = "agent"` only | `true` ⇒ the kernel starts `[server]` and waits for readiness before the session. |
@@ -209,8 +210,15 @@ Cross-field rules the validator actually enforces — each is an **error**:
 - `command` naming a key that does not exist in `[commands]`.
 - `needsServer = true` with no `[server]` table.
 
-A failed verify step returns the build to `implement` with the step's report,
-and repeats up to `[policy].maxVerifyAttempts`.
+Agent verifiers use `ab verdict pass`, `ab verdict fail --report <file>`, or
+`ab verdict skip --reason <text>`. The skip reason is required and must be
+non-blank; no failure report is required. A skip satisfies that step for the
+current cycle and advances to the next verify step or finalize, but it is not a
+pass and never masks another step's failure. Only failures return the build to
+`implement` and consume `[policy].maxVerifyAttempts`; skipped outcomes retain
+the cycle's attempt number without consuming that budget. Autobuild adds no
+applicability rule here — configured steps still run unless the step explicitly
+chooses `skip`.
 
 ### `[finalize]`
 
@@ -438,7 +446,8 @@ harvest outcomes, action confirmations, and warnings replace that slot instead
 of scrolling above the frame. A blank line separates the global section from
 the first body row, and another separates the body from the legend or feedback
 controls. The duplicate startup banner is suppressed; `--plain` and non-TTY
-output remain line-oriented and unchanged.
+output remain line-oriented and unchanged. A satisfied verify skip carries the
+literal `skipped` qualifier, so it remains distinct from a pass without color.
 
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
@@ -569,7 +578,8 @@ Verify progress covers the **current cycle** — the results since the latest
 code-review approve or reconcile. Implement and reconcile change the code, so a
 new cycle re-runs from the first step and earlier results describe code that no
 longer exists. An empty step list next to `attempt 1` therefore means the cycle
-restarted, not that verify never ran.
+restarted, not that verify never ran. A skip renders as `SKIP` with its reason;
+JSON exposes `outcome: "skipped"` and `reason`, never a synthetic pass.
 `--json` and `--store <ref>` work the same here.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.
