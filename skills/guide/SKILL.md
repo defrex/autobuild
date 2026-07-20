@@ -427,6 +427,34 @@ while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
 
+## Ticket grooming commands
+
+The sessionless `ab ticket` namespace always constructs the TicketSource named
+by this repository's `[tickets]` table. The same forms therefore target Linear
+or the file tracker without provider-specific API/MCP calls:
+
+```text
+ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]
+ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]
+ab ticket block <id> <blocker-id>
+ab ticket unblock <id> <blocker-id>
+```
+
+Ids are source-local (`AUT-8` for Linear, `file-1` for file). For block and
+unblock, the first id is the ticket being changed and the second is its
+blocker. Create validates every `--blocked-by` id before filing. A later block
+requires both tickets to exist and rejects a direct self-block; unblock only
+requires the target. Adding an existing relationship and removing an absent
+one both succeed as no-ops, so either command is safe to retry.
+
+Update requires at least one flag and is partial: omitted fields remain
+untouched, including labels, assignee, and provider metadata. `--labels` is a
+complete replacement and an explicitly empty value (`--labels ''`) clears the
+list. Supplied title/body values must be nonblank. State is intentionally not
+an update field — `transition()` remains its sole owner — and every validation
+or unknown-ticket error occurs before mutation and names the offending field
+or id. `--body` always names a file; a missing file fails before a source write.
+
 ## Dispatch dashboard
 
 On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two

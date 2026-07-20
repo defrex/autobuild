@@ -127,6 +127,22 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
   })
 })
 
+describe('ab-guide — ticket grooming coverage', () => {
+  test('documents every configured-source write form and its state boundary', () => {
+    for (const form of [
+      'ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
+      'ab ticket block <id> <blocker-id>',
+      'ab ticket unblock <id> <blocker-id>',
+    ]) {
+      expect(guide).toContain(form)
+    }
+    expect(guide).toContain('the first id is the ticket being changed')
+    expect(guide).toContain('`transition()` remains its sole owner')
+    expect(guide).toContain("`--labels ''`)")
+  })
+})
+
 describe('ab-guide — durable build-control coverage', () => {
   test('documents every sessionless command form beside the dashboard controls', () => {
     const missing: string[] = []

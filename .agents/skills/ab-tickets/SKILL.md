@@ -1,13 +1,13 @@
 ---
 name: ab-tickets
-description: Work this repo's local ticket tracker — create a ticket, report what's in the backlog, groom or move a ticket between states (triage/ready/doing/done), or answer "what's the status of ticket X". Use whenever the user asks about tickets, the backlog, or wants something queued for autobuild to build.
+description: Work this repo's local ticket tracker — create or edit a ticket, amend blockedBy dependencies, report the backlog, move work between triage/ready/doing/done, or answer "what's the status of ticket X". Use whenever the user asks about tickets, blockers, the backlog, or wants something queued for autobuild to build.
 ---
 
 # /tickets
 
-The local ticket tracker is a directory of markdown files. Its whole UI is
-`ls` and `mv` — there is no API, no label to set, no secret, and nothing to
-configure.
+The local ticket tracker is a directory of markdown files. `ls` and `mv` are
+the state/backlog UI; source-agnostic `ab ticket` commands create and edit
+content and blocker relationships. The default file source needs no secret.
 
 ## Where it lives
 
@@ -26,19 +26,38 @@ that directory instead), holding exactly four state directories:
 anywhere. Do not try to change a ticket's state by editing the file.
 
 Each ticket is `<id>.md`: TOML frontmatter between `+++` fences carrying `id`
-and `title` (and optional `labels`), then the body — which is the spec.
+and `title` (and optional `labels` and `blockedBy`), then the body — which is
+the spec.
 
 ## Create a ticket
 
 ```
-ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api]
+ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2]
 ```
 
 It lands in `triage/` and prints the new id. `--body` is a file, and its
 contents are the spec — write it to the spec standard first
 (`docs/spec-standard.md`; `/ab-spec` is the conversational way to get there).
 A ticket whose body isn't a conforming spec gets bounced back to `triage/` by
-the dispatcher rather than built.
+the dispatcher rather than built. Blocker ids are source-local; every blocker
+must exist before creation succeeds.
+
+## Edit content or blockers
+
+Use the configured TicketSource rather than hand-editing frontmatter/body:
+
+```
+ab ticket update file-3 --body spec.md
+ab ticket update file-3 --title "New title" --labels bug,api
+ab ticket update file-3 --labels ''
+ab ticket block file-3 file-1
+ab ticket unblock file-3 file-1
+```
+
+Update is partial: omitted fields stay untouched, while an explicitly empty
+`--labels` clears labels. It cannot change state. For block/unblock the first
+id is the ticket being edited; the second is its blocker. Both are safe to
+retry, and adding validates the blocker exists and is not the ticket itself.
 
 ## Report the backlog
 
@@ -75,6 +94,8 @@ stop a build, that's `ab` (or a human), not `mv`.
 ## Rules
 
 - Never edit frontmatter to change state — the directory is the state.
+- Use `ab ticket update|block|unblock` for body, title, label, and `blockedBy`
+  changes; do not hand-edit those fields.
 - Never `git add` the tracker. The backlog is local-machine state, not shared
   work; nothing here is published by committing it. (The default tracker
   carries its own `.gitignore`, so git does not see it at all. Under an

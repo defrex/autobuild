@@ -29,10 +29,8 @@ in order, but as a conversation, not a form:
    prior discussion.
 
 Draft the spec in full, show it, iterate until the user accepts. Then create
-the ticket with the spec as its body (`ab ticket create` when available in
-this install; otherwise create it via the repo's ticket tracker and say
-where). The ticket lands in Triage — a human grooms it to Ready; creation is
-not dispatch.
+the ticket with the spec as its body via `ab ticket create`. The ticket lands
+in Triage — a human grooms it to Ready; creation is not dispatch.
 
 If grooming established that this work is blocked by other tickets, pass them
 at creation:
@@ -51,14 +49,24 @@ every blocker completes.
 
 Fetch the ticket. Diff it against the standard: which of the four parts are
 missing or unverifiable? Interview the user only on the gaps — don't
-re-litigate what the ticket already answers. Sync the conforming spec back
-to the ticket body, preserving anything the ticket carried that the standard
-doesn't structure (assignee, labels, discussion links).
+re-litigate what the ticket already answers. Write the accepted conforming
+spec to a file, then sync only the body:
 
-*Changing* an existing ticket's dependencies is not available through `ab` —
-`--blocked-by` is a creation-time affordance. If the conversation turns up a
-dependency the ticket lacks (or one it should drop), say so and let the human
-add or remove it in the tracker. Do not invent a workaround.
+```
+ab ticket update <ticket> --body spec.md
+```
+
+Omitted metadata is preserved, including title, labels, assignee, state, and
+provider-specific fields. If grooming changes dependencies, use the same
+configured-source surface rather than a provider API or MCP call:
+
+```
+ab ticket block <ticket> <blocker-id>
+ab ticket unblock <ticket> <blocker-id>
+```
+
+The first id is the ticket being amended. Both relationship operations are
+idempotent; adding validates the blocker exists and rejects a self-block.
 
 ## Rules
 
