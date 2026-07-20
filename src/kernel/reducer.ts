@@ -88,11 +88,11 @@ export interface OpenSession {
   seq: number
 }
 
-/** One `verify.completed` fact. Results accumulate across attempts; the
- * current cycle is `results.filter(r => r.seq > verify.cycleSince)` — see
- * `cycleSince`. (`attempt === verify.attempt` is NOT the cycle test: it is
- * stale for the whole window between a verify failure and the next
- * `verify.started`, where `verify.attempt` still names the failed cycle.) */
+/** One `verify.completed` fact. Results accumulate across attempts; membership
+ * in the current cycle is solely
+ * `results.filter(r => r.seq > verify.cycleSince)`. `maxAttemptSeen` is only
+ * the aggregate attempt high-water and cannot identify the current cycle in
+ * the window between a verify failure and the next `verify.started`. */
 export interface VerifyResult {
   step: string
   attempt: number
@@ -218,9 +218,10 @@ export interface BuildState {
    * produced a verdict are empty. Stall detection walks `persists` chains
    * across these (§15.4); reviewers get all prior rounds as context (§8.3). */
   reviewFindings: { planReview: Finding[][]; codeReview: Finding[][] }
-  /** `attempt` is the highest attempt seen; `results` accumulate across
-   * attempts (filter by `cycleSince` for the current cycle — see
-   * VerifyResult); `currentStep` is a `verify.started` without its
+  /** `maxAttemptSeen` is the highest verify attempt seen across the full log;
+   * it is a high-water mark, not a current-cycle identifier. `results`
+   * accumulate across attempts (filter by `cycleSince` for the current cycle
+   * — see VerifyResult); `currentStep` is a `verify.started` without its
    * `verify.completed`.
    *
    * `cycleSince` is the seq after which results describe the CURRENT code
@@ -230,7 +231,7 @@ export interface BuildState {
    * from the FIRST step. 0 before any boundary lands. This is the same filter
    * engine.ts:275-276 applies over its post-restart index. */
   verify: {
-    attempt: number
+    maxAttemptSeen: number
     results: VerifyResult[]
     currentStep?: string
     cycleSince: number
@@ -272,7 +273,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   let codeReviewApproval: BuildState['codeReviewApproval']
   const planReviewFindings: Finding[][] = []
   const codeReviewFindings: Finding[][] = []
-  const verify: BuildState['verify'] = { attempt: 0, results: [], cycleSince: 0 }
+  const verify: BuildState['verify'] = { maxAttemptSeen: 0, results: [], cycleSince: 0 }
   let reconcileAttempts = 0
   const observations: ObservationRecord[] = []
   const pending: Record<PendingCommand['command'], PendingCommand[]> = {
@@ -460,7 +461,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         break
 
       case 'verify.started':
-        verify.attempt = Math.max(verify.attempt, event.payload.attempt)
+        verify.maxAttemptSeen = Math.max(verify.maxAttemptSeen, event.payload.attempt)
         verify.currentStep = event.payload.step
         start({
           phase: verifyPhase(event.payload.step),
@@ -470,7 +471,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         break
       case 'verify.completed': {
         const result = normalizeVerifyCompletion(event.payload)
-        verify.attempt = Math.max(verify.attempt, result.attempt)
+        verify.maxAttemptSeen = Math.max(verify.maxAttemptSeen, result.attempt)
         verify.results.push({
           step: result.step,
           attempt: result.attempt,

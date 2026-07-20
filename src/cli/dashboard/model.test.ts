@@ -902,10 +902,11 @@ describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () 
   const postApprove = [...failedCycleWrites(), ...codeRound(2, 'approve')]
 
   test('no attempt count on the verify steps after a boundary move, before the fresh cycle starts', () => {
-    // `verify.attempt` is still 1 here and would name the PREVIOUS cycle; the
-    // current cycle is empty, so the verify steps carry no count.
+    // `verify.maxAttemptSeen` is still 1 here and names the PREVIOUS cycle;
+    // the current cycle is empty, so the verify steps carry no count or
+    // completed state.
     const build = project(toLog(postApprove))
-    expect(reduceBuild(toLog(postApprove)).verify.attempt).toBe(1)
+    expect(reduceBuild(toLog(postApprove)).verify.maxAttemptSeen).toBe(1)
     expect(stepFor(build, 'verify:lint')?.count).toBeUndefined()
     expect(stepFor(build, 'verify:test')?.count).toBeUndefined()
   })

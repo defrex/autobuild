@@ -167,8 +167,8 @@ interface LogIndex {
   lastAbortedSeq: number
   plan: LoopIndex
   code: LoopIndex
-  /** Post-restart `verify.completed` facts WITH seq (the reducer's
-   * verify.results lack it, and the cycle boundary is seq-based §15.6-A). */
+  /** Post-restart `verify.completed` facts with seq, for the same sequence-based
+   * cycle boundary query exposed by the reducer (§15.6-A). */
   verifyCompleted: VerifyRecord[]
   /** Post-restart `verify.started` facts — a crashed step re-runs at the SAME
    * attempt (§15.6-C), so the current cycle's attempt must be readable from
@@ -178,10 +178,10 @@ interface LogIndex {
    * Max verify attempt in any `verify.started`/`verify.completed` over the
    * FULL log. Attempt numbers continue monotonically across spec restarts and
    * reconcile cycles — the same rationale as LoopIndex.maxRoundEver: the log
-   * stays unambiguous ("verify attempt 2" names exactly one cycle), the
-   * reducer's documented current-cycle projection (attempt === max attempt)
-   * never returns stale pre-restart results, and D5 failure keys
-   * (verify:<step>, round = attempt) never collide across cycles.
+   * stays unambiguous ("verify attempt 2" names exactly one cycle) and D5
+   * failure keys (verify:<step>, round = attempt) never collide across cycles.
+   * This high-water allocates attempt numbers; current-cycle membership is
+   * independently sequence-based.
    */
   maxVerifyAttemptEver: number
   /** seq of the latest post-restart `reconcile.completed` — cycle boundary

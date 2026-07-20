@@ -87,8 +87,9 @@ export interface BuildSummary {
 }
 
 export interface VerifyProgress {
+  /** Full-log attempt high-water retained for status-output compatibility. */
   attempt: number
-  /** Current cycle only — earlier attempts' results never count (§15.6-A). */
+  /** Current cycle only — selected by sequence boundary, never attempt. */
   steps: { step: string; outcome: VerifyOutcome; reason?: string }[]
   currentStep?: string
 }
@@ -200,13 +201,13 @@ export function detail(
   // Without this filter an earlier cycle's passes read as current — wrong, and
   // wrong in the reassuring direction.
   //
-  // The cycle test is `seq > verify.cycleSince`, NOT `attempt ===
-  // verify.attempt`: the latter is stale for the whole window between a verify
-  // failure and the next `verify.started`, where `verify.attempt` still names
-  // the failed cycle. `cycleSince` is the authoritative boundary the reducer
-  // and engine.ts already agree on (max of restart, code-review approve, and
-  // reconcile) — reading it here is what keeps this command's report equal to
-  // the projection used elsewhere rather than a second, drifting opinion.
+  // The cycle test is `seq > verify.cycleSince`, never result attempt equality:
+  // `maxAttemptSeen` is the full-log high-water and still names the failed
+  // cycle in the window before the next `verify.started`. `cycleSince` is the
+  // authoritative boundary the reducer and engine.ts already agree on (max of
+  // restart, code-review approve, and reconcile) — reading it here is what
+  // keeps this command's report equal to the projection used elsewhere rather
+  // than a second, drifting opinion.
   const steps = state.verify.results
     .filter((result) => result.seq > state.verify.cycleSince)
     .map((result) => ({
@@ -219,7 +220,9 @@ export function detail(
     openEscalations: state.openEscalations,
     openSessions: state.sessions.open,
     verify: {
-      attempt: state.verify.attempt,
+      // Preserve the status API's display counter while sourcing it explicitly
+      // from the reducer's full-log high-water, never from cycle membership.
+      attempt: state.verify.maxAttemptSeen,
       steps,
       ...(state.verify.currentStep !== undefined
         ? { currentStep: state.verify.currentStep }

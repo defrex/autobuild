@@ -528,10 +528,10 @@ export function projectBuild(
     const stepResults = cycle.filter((r) => r.step === s)
     // The attempt COUNT comes from `currentPhase.attempt` for the running step
     // — the attempt ACTUALLY running (`verify.started` populates it directly),
-    // never `verify.attempt`, which is the max attempt SEEN and names the
-    // previous cycle in the window after a boundary move. A non-running step
-    // takes the max attempt among its results IN THE CURRENT CYCLE, so a past
-    // cycle's attempt can never leak. Rendered as `/n` only when > 1.
+    // never `verify.maxAttemptSeen`, which is a full-log high-water and names
+    // the previous cycle in the window after a boundary move. A non-running
+    // step takes the max attempt among its results IN THE CURRENT CYCLE, so a
+    // past cycle's attempt can never leak. Rendered as `/n` only when > 1.
     const maxAttempt =
       current && activePhase?.attempt !== undefined
         ? activePhase.attempt

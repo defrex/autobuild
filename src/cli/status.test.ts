@@ -343,11 +343,11 @@ describe('detail', () => {
     expect(d.verify.currentStep).toBeUndefined()
   })
 
-  // The window where `attempt === verify.attempt` and the real cycle test
-  // disagree: after the approve that opens a new cycle, but before
-  // `verify.started` bumps the attempt. Here `verify.attempt` is still 1 — the
-  // FAILED cycle — so an attempt-keyed filter republishes attempt 1's pass as
-  // current progress, reporting a green step for code that no longer exists.
+  // The window where result-attempt equality with `maxAttemptSeen` and the
+  // real cycle test disagree: after the approve that opens a new cycle, but
+  // before `verify.started` bumps the high-water. It is still 1 — the FAILED
+  // cycle — so an attempt-keyed filter republishes attempt 1's pass as current
+  // progress, reporting a green step for code that no longer exists.
   test('a cycle-opening approve retires the previous cycle before the next attempt starts', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -372,7 +372,8 @@ describe('detail', () => {
       },
     })
     const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
-    // Still the failed cycle's attempt number — precisely why it can't be the filter.
+    // The outward status field still displays the full-log high-water for
+    // compatibility — precisely why it cannot be the steps filter.
     expect(d.verify.attempt).toBe(1)
     expect(d.verify.steps).toEqual([])
   })

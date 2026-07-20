@@ -181,7 +181,7 @@ describe('reduceBuild: empty log', () => {
     expect(state.implement).toEqual({ round: 0 })
     expect(state.codeReviewApproved).toBe(false)
     expect(state.reviewFindings).toEqual({ planReview: [], codeReview: [] })
-    expect(state.verify).toEqual({ attempt: 0, results: [], cycleSince: 0 })
+    expect(state.verify).toEqual({ maxAttemptSeen: 0, results: [], cycleSince: 0 })
     expect(state.restartSince).toBe(0)
     expect(state.finalizeCompletedSeq).toBe(0)
     expect(state.finalizeSteps).toEqual([])
@@ -312,7 +312,7 @@ describe('reduceBuild: §15.6 happy path', () => {
     ])
 
     const allDone = stateAfter(log, 'verify.completed', 3)
-    expect(allDone.verify.attempt).toBe(1)
+    expect(allDone.verify.maxAttemptSeen).toBe(1)
     expect(allDone.verify.currentStep).toBeUndefined()
     expect(allDone.verify.results.map((r) => [r.step, r.outcome])).toEqual([
       ['types', 'pass'],
@@ -390,13 +390,13 @@ describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)',
 
   test('verify re-runs from the FIRST step with attempt 2', () => {
     const rerun = stateAfter(log, 'verify.started', 3)
-    expect(rerun.verify.attempt).toBe(2)
+    expect(rerun.verify.maxAttemptSeen).toBe(2)
     expect(rerun.verify.currentStep).toBe('types')
     expect(rerun.currentPhase?.phase).toBe('verify:types')
     expect(rerun.currentPhase?.attempt).toBe(2)
 
     const final = reduceBuild(log)
-    expect(final.verify.attempt).toBe(2)
+    expect(final.verify.maxAttemptSeen).toBe(2)
     // The current cycle is seq-based, not attempt-based (§15.6-A): the round-2
     // code-review approve moved `cycleSince` past attempt 1's results.
     const currentCycle = final.verify.results.filter((r) => r.seq > final.verify.cycleSince)
@@ -863,7 +863,7 @@ describe('reduceBuild: reconcile cycle (§15.7)', () => {
     expect(final.prState).toBe('merged')
     expect(final.status).toBe('done')
     expect(final.outcome).toBe('merged')
-    expect(final.verify.attempt).toBe(3)
+    expect(final.verify.maxAttemptSeen).toBe(3)
   })
 })
 
@@ -1150,6 +1150,28 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
     expect(state.verify.results).toEqual([
       { step: 'types', attempt: 1, outcome: 'pass', report: undefined, seq: 14 },
     ])
+  })
+
+  test('a new approval retires a failed cycle before the next verify attempt starts', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+      ...verifyRun('e2e', 1, false, { kind: 'verify-report:e2e', rev: 0 }),
+      ...implementRound(2, 'sha-r2'),
+      ...codeReview(2, 'approve'),
+    ])
+    const state = reduceBuild(log)
+
+    // No attempt-2 start exists yet: the full-log high-water still describes
+    // the failed cycle, while the sequence boundary already describes the new
+    // code. Attempt equality would therefore report attempt 1's pass as fresh.
+    expect(state.verify.maxAttemptSeen).toBe(1)
+    expect(state.verify.results).toHaveLength(2)
+    expect(state.verify.cycleSince).toBe(20)
+    expect(state.verify.results.filter((r) => r.seq > state.verify.cycleSince)).toEqual([])
   })
 
   test('cycleSince is 0 before any boundary, then moves to the code-review approve', () => {

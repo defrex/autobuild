@@ -1769,10 +1769,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
 
   test('after reconcile.completed, verify re-runs in full from the first step at a FRESH attempt', () => {
     // Regression: the re-run used to reuse the mainline's attempt number, so
-    // the reducer's current-cycle projection (attempt === verify.attempt)
-    // mixed the pre-finalize cycle into the post-reconcile one and D5 failure
-    // keys (verify:<step>, round = attempt) collided across the cycles.
-    // Attempt numbers are monotonic over the full log, like loop rounds.
+    // attempt-keyed consumers could mix the pre-finalize cycle into the
+    // post-reconcile one and D5 failure keys (verify:<step>, round = attempt)
+    // collided across the cycles. Attempt numbers are monotonic over the full
+    // log, like loop rounds; cycle membership remains sequence-based.
     expect(
       decide([
         ...throughFinalize, // mainline cycle ran at attempt 1
@@ -1910,8 +1910,8 @@ describe('decideNext: spec revision restart (§6.3)', () => {
     // The pre-restart failure neither counts toward exhaustion nor routes
     // (§6.3) — but its attempt NUMBER is taken: the post-restart cycle runs
     // at attempt 2, monotonic like loop rounds, so "attempt 1" still names
-    // exactly one run and the reducer's current-cycle projection (attempt ===
-    // verify.attempt) can never resurrect the stale pre-restart failure.
+    // exactly one run. The independent sequence boundary prevents stale
+    // pre-restart results from becoming current.
     expect(
       decide([
         ...revised,
@@ -1925,9 +1925,9 @@ describe('decideNext: spec revision restart (§6.3)', () => {
   test('attempts stay collision-free across a restart with MULTIPLE pre-restart cycles', () => {
     // Regression: attempt used to be 1 + post-restart failure count, so this
     // rebuilt cycle re-ran at attempt 1 — colliding with the pre-restart
-    // attempt-1 events (and any phase.failed keyed round=1, D5) — and the
-    // reducer's documented current-cycle filter returned the stale attempt-2
-    // FAILURE on a green build.
+    // attempt-1 events (and any phase.failed keyed round=1, D5) — while legacy
+    // attempt-keyed consumers could return the stale attempt-2 FAILURE on a
+    // green build.
     const twoFailCycles: EventWrite[] = [
       ...prelude(), // 1-4
       ...planApproved(), // 5-8
