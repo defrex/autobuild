@@ -391,6 +391,16 @@ describe('ab done — implement', () => {
 
 describe('ab done — finalize', () => {
   let workspace: string
+  const DASHBOARD_HOST = {
+    provider: 'github-release' as const,
+    repository: 'acme/review-assets',
+    releaseId: 42,
+  }
+
+  async function resetStoreWithDashboardHost(): Promise<void> {
+    await store.close()
+    store = await seedStore({ dashboardFrames: DASHBOARD_HOST })
+  }
 
   beforeEach(async () => {
     workspace = join(tmp, 'ws-finalize')
@@ -428,32 +438,35 @@ describe('ab done — finalize', () => {
     })
   })
 
-  async function seedDashboardCapture(
-    label: string,
-    text = `Auto Build ${label}\nHarvest PAUSED\n`,
+  async function seedDashboardCaptureFrames(
+    inputs: { id: string; text: string; columns?: number; rows?: number }[],
   ): Promise<void> {
-    const id = 'mixed-wide'
-    const textKind = dashboardFrameArtifactKind(id, 'text')
-    const pngKind = dashboardFrameArtifactKind(id, 'png')
-    const textMeta = await store.putArtifact(BUILD, {
-      kind: textKind,
-      content: text,
-    })
-    const pngMeta = await store.putArtifact(BUILD, {
-      kind: pngKind,
-      content: new Uint8Array([137, 80, 78, 71, textMeta.revision]),
-    })
+    const frames: DashboardFrameManifest['frames'] = []
+    for (const input of inputs) {
+      const textKind = dashboardFrameArtifactKind(input.id, 'text')
+      const pngKind = dashboardFrameArtifactKind(input.id, 'png')
+      const textMeta = await store.putArtifact(BUILD, {
+        kind: textKind,
+        content: input.text,
+      })
+      const pngMeta = await store.putArtifact(BUILD, {
+        kind: pngKind,
+        content: new Uint8Array([137, 80, 78, 71, textMeta.revision]),
+      })
+      frames.push({
+        id: input.id,
+        terminal: {
+          columns: input.columns ?? 140,
+          rows: input.rows ?? 40,
+        },
+        text: { kind: textKind, rev: textMeta.revision },
+        png: { kind: pngKind, rev: pngMeta.revision },
+      })
+    }
     const manifest: DashboardFrameManifest = {
       version: 1,
       renderer: 'dashboard-ansi-png-v1',
-      frames: [
-        {
-          id,
-          terminal: { columns: 140, rows: 40 },
-          text: { kind: textKind, rev: textMeta.revision },
-          png: { kind: pngKind, rev: pngMeta.revision },
-        },
-      ],
+      frames,
     }
     const report = await store.putArtifact(BUILD, {
       kind: 'verify-report:dashboard',
@@ -469,6 +482,13 @@ describe('ab done — finalize', () => {
         report: { kind: report.kind, rev: report.revision },
       },
     })
+  }
+
+  async function seedDashboardCapture(
+    label: string,
+    text = `Auto Build ${label}\nHarvest PAUSED\n`,
+  ): Promise<void> {
+    await seedDashboardCaptureFrames([{ id: 'mixed-wide', text }])
   }
 
   test('rejected without a pr-description artifact', async () => {
@@ -553,6 +573,206 @@ describe('ab done — finalize', () => {
     expect(comment).not.toContain('<dashboard & row>')
   })
 
+  test('configured hosting embeds the exact colour image while retaining text and writes nothing to Git', async () => {
+    await resetStoreWithDashboardHost()
+    await seedDashboardCapture(
+      'HOSTED',
+      '\x1b[32mHosted dashboard colour fallback\x1b[0m\n',
+    )
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Hosted dashboard evidence\n\nBody.\n',
+    })
+    const forge = new FakeForge({ dashboardFrames: true })
+    const fakeUpload = forge.dashboardFrames!.upload.bind(forge.dashboardFrames)
+    forge.dashboardFrames!.upload = async (request) => ({
+      ...(await fakeUpload(request)),
+      url: 'https://fake.forge/dashboard-frames/1/mixed-wide.png?a=1&b=2',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge,
+    })
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('finalize.completed')
+    expect(forge.dashboardFrameUploads).toHaveLength(1)
+    expect([...forge.dashboardFrameUploads[0]!.content]).toEqual([
+      137, 80, 78, 71, 0,
+    ])
+    const events = await store.getEvents(BUILD)
+    const hosted = events.find((item) => item.type === 'dashboard-frame.hosted')
+    expect(hosted?.actor).toEqual(KERNEL)
+    expect(hosted?.payload).toMatchObject({
+      frameId: 'mixed-wide',
+      artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
+      asset: DASHBOARD_HOST,
+    })
+    expect(events.map((item) => item.type).indexOf('dashboard-frame.hosted')).toBeLessThan(
+      events.map((item) => item.type).indexOf('finalize.completed'),
+    )
+
+    const comment = forge.comments[0]!.body
+    expect(comment).toContain(
+      '<img src="https://fake.forge/dashboard-frames/1/mixed-wide.png?a=1&amp;b=2" alt="Dashboard frame mixed-wide in colour">',
+    )
+    expect(comment).toContain('Hosted dashboard colour fallback')
+    expect(comment).toContain('<code>dashboard-frame:mixed-wide:png@0</code>')
+    expect(await runGit(['status', '--porcelain'], workspace)).toBe('')
+    expect(await runGit(['ls-files', '*.png'], workspace)).toBe('')
+  })
+
+  test('a finalize store failure retries by reusing the prior hosted fact instead of uploading again', async () => {
+    await resetStoreWithDashboardHost()
+    await seedDashboardCapture('RETRY-HOSTED')
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Retry hosted dashboard evidence\n\nBody.\n',
+    })
+    const forge = new FakeForge({ dashboardFrames: true })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge,
+    })
+    const append = store.append.bind(store)
+    let failFinalizeOnce = true
+    store.append = (async (slug, event) => {
+      if (event.type === 'finalize.completed' && failFinalizeOnce) {
+        failFinalizeOnce = false
+        throw new Error('store unavailable at finalize commit')
+      }
+      return append(slug, event)
+    }) as typeof store.append
+
+    await expect(done(deps)).rejects.toThrow('store unavailable at finalize commit')
+    expect(forge.dashboardFrameUploads).toHaveLength(1)
+    expect(
+      (await store.getEvents(BUILD)).filter(
+        (event) => event.type === 'dashboard-frame.hosted',
+      ),
+    ).toHaveLength(1)
+
+    const event = await done(deps)
+    expect(event.type).toBe('finalize.completed')
+    expect(forge.opened).toHaveLength(1)
+    expect(forge.dashboardFrameUploads).toHaveLength(1)
+    expect(forge.comments[0]!.body).toContain('<img ')
+  })
+
+  test('a configured forge without hosting support silently keeps the complete text fallback', async () => {
+    await resetStoreWithDashboardHost()
+    await seedDashboardCapture('UNSUPPORTED')
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Text-only dashboard evidence\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge: new FakeForge(),
+    })
+
+    await done(deps)
+
+    const events = await store.getEvents(BUILD)
+    expect(events.some((item) => item.type === 'dashboard-frame.hosted')).toBe(false)
+    expect(events.some((item) => item.type === 'observation.recorded')).toBe(false)
+    expect(deps.forge.comments[0]!.body).toContain('UNSUPPORTED')
+    expect(deps.forge.comments[0]!.body).not.toContain('<img ')
+  })
+
+  test('an upload failure records a follow-up but finalizes with all-text evidence and no verify failure', async () => {
+    await resetStoreWithDashboardHost()
+    await seedDashboardCapture('UPLOAD-FAILED')
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Degraded dashboard evidence\n\nBody.\n',
+    })
+    const forge = new FakeForge({ dashboardFrames: true })
+    forge.failNextDashboardFrameUpload('release upload unavailable')
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge,
+    })
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('finalize.completed')
+    const events = await store.getEvents(BUILD)
+    const observation = events.findLast(
+      (item) => item.type === 'observation.recorded',
+    )
+    expect(observation?.actor).toEqual({
+      kind: 'agent',
+      role: 'finalize',
+      session: 's_test',
+    })
+    expect(observation?.payload.summary).toContain('release upload unavailable')
+    expect(events.some((item) => item.type === 'dashboard-frame.hosted')).toBe(false)
+    expect(
+      events.some(
+        (item) =>
+          item.type === 'verify.completed' &&
+          item.payload.step === 'dashboard' &&
+          'outcome' in item.payload &&
+          item.payload.outcome === 'fail',
+      ),
+    ).toBe(false)
+    expect(forge.comments[0]!.body).toContain('UPLOAD-FAILED')
+    expect(forge.comments[0]!.body).not.toContain('<img ')
+  })
+
+  test('a mid-set upload failure retains cleanup handles but renders no partial image set', async () => {
+    await resetStoreWithDashboardHost()
+    await seedDashboardCaptureFrames([
+      { id: 'mixed-wide', text: 'FIRST FRAME TEXT\n' },
+      { id: 'mixed-narrow', text: 'SECOND FRAME TEXT\n', columns: 72 },
+    ])
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Partial hosted dashboard evidence\n\nBody.\n',
+    })
+    const forge = new FakeForge({ dashboardFrames: true })
+    const upload = forge.dashboardFrames!.upload.bind(forge.dashboardFrames)
+    let calls = 0
+    forge.dashboardFrames!.upload = async (request) => {
+      calls += 1
+      if (calls === 2) throw new Error('second frame upload failed')
+      return upload(request)
+    }
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+      forge,
+    })
+
+    await done(deps)
+
+    const events = await store.getEvents(BUILD)
+    expect(
+      events.filter((event) => event.type === 'dashboard-frame.hosted'),
+    ).toHaveLength(1)
+    expect(
+      events.findLast((event) => event.type === 'observation.recorded')?.payload,
+    ).toMatchObject({
+      kind: 'followup',
+      summary: expect.stringContaining('second frame upload failed'),
+    })
+    const comment = forge.comments[0]!.body
+    expect(comment).toContain('FIRST FRAME TEXT')
+    expect(comment).toContain('SECOND FRAME TEXT')
+    expect(comment).not.toContain('<img ')
+  })
+
   test('uses only a successful dashboard report after the latest reconcile cycle boundary', async () => {
     await seedDashboardCapture('STALE-CAPTURE')
     await store.append(BUILD, {
@@ -588,6 +808,7 @@ describe('ab done — finalize', () => {
   })
 
   test('a current-cycle dashboard skip suppresses stale captures', async () => {
+    await resetStoreWithDashboardHost()
     await seedDashboardCapture('STALE-CAPTURE')
     await store.append(BUILD, {
       actor: KERNEL,
@@ -620,11 +841,13 @@ describe('ab done — finalize', () => {
       store,
       env: makeEnv({ phase: 'finalize' }),
       workspacePath: workspace,
+      forge: new FakeForge({ dashboardFrames: true }),
     })
 
     const event = await done(deps)
 
     expect(event.type).toBe('finalize.completed')
+    expect(deps.forge.dashboardFrameUploads).toEqual([])
     expect(deps.forge.comments[0]!.body).not.toContain('### Dashboard frames')
     expect(deps.forge.comments[0]!.body).not.toContain('STALE-CAPTURE')
   })
