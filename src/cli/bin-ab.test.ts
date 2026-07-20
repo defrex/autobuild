@@ -148,6 +148,43 @@ test('a real sessionless control command reaches the store and writes a human ev
   await reopened.close()
 })
 
+test('artifact download alone is sessionless and preserves binary bytes', async () => {
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.createBuild({ slug: 'finished', repo: await realpath(tmp) })
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255])
+  await local.putArtifact('finished', {
+    kind: 'dashboard-frame:mixed-wide:png',
+    content: bytes,
+  })
+  await local.close()
+
+  const result = await runBin([
+    'artifact',
+    'download',
+    'finished',
+    'dashboard-frame:mixed-wide:png@0',
+    '--output',
+    'downloads/frame.png',
+  ])
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(result.stdout).toContain('dashboard-frame:mixed-wide:png@0')
+  expect(await Bun.file(join(tmp, 'downloads', 'frame.png')).bytes()).toEqual(
+    bytes,
+  )
+})
+
+test('artifact put/get still route through ambient phase auth', async () => {
+  for (const argv of [
+    ['artifact', 'put', 'kind', 'file'],
+    ['artifact', 'get', 'kind'],
+  ]) {
+    const result = await runBin(argv)
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('AB_BUILD')
+  }
+})
+
 test('the real binary rejects an own-phase control without changing the log', async () => {
   const local = openLocalStore(join(tmp, 'store'))
   await local.createBuild({ slug: 'self-controlled', repo: await realpath(tmp) })

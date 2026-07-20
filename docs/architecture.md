@@ -100,6 +100,39 @@ summary, and `src/cli/dashboard/model.ts` treats skip as satisfied while
 attaching a literal `skipped` qualifier. The renderer therefore remains
 non-color-only without inventing a new pipeline lifecycle state.
 
+## Dashboard frame evidence
+
+The repository's `verify:dashboard` is a consumer of the applicability boundary,
+not another selector. `src/integration/dashboard-capture.ts` reuses
+`makeHarness()` and its shared memory store, real worktrees, scripted CLI-driven
+agents, fake tickets/forge, deterministic ids/UUIDs, and stepping clock. It
+prepares blocked plan/implement builds, a finalized build waiting on its fake
+PR, and an open Harvest run at an acknowledged pause. The real `abDispatch`
+composition then paints through injected terminal/input and renderer seams at
+fixed wide/narrow dimensions and a fixed render clock. No network, live agent
+adapter, or production forge is reachable.
+
+`src/cli/dashboard/frame-image.ts` strictly parses only the SGR and OSC traffic
+emitted by `render.ts`, derives escape-free text from those same cells, emits a
+fixed-grid SVG, and rasterizes it through pinned Resvg with packaged DejaVu Mono
+regular/bold fonts and system fonts disabled. Unsupported controls and width
+overflow fail capture. `frame-artifacts.ts` validates the versioned manifest
+linking each frame to exact `dashboard-frame:<id>:text|png` revisions. Generated
+files remain under `.ab/dashboard-frames/`; production deposits use the managed
+`ab artifact put` command.
+
+The verifier skill opens every PNG and judges visible layout, with no diff
+inspection, self-skip, historical snapshot comparison, or golden-frame gate.
+On pass, its report atomically carries the manifest in
+`verify-report:dashboard`. Finalize reads only a successful dashboard report
+after `reduceBuild(events).verify.cycleSince`, resolves every exact text/PNG
+ref, and adds escaped monospace text plus shell-safe download commands to the
+best-effort PR summary. Any skip, stale cycle, malformed report, or missing
+artifact omits the whole optional section. Images are never uploaded or hosted.
+`src/cli/artifact.ts` keeps deposits binary-safe and provides the read-only
+sessionless `artifact download` shell with ordinary repository/store/token
+resolution, allowing exact PNG retrieval after terminal builds.
+
 The reconcile boundary intentionally has two durable snapshots.
 `pr.conflicted.baseSha` is what the janitor observed at conflict detection;
 the pure engine uses it only as conflict sequence evidence. Immediately before
@@ -281,7 +314,8 @@ including under `--force`.
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
 | `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
-| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, and alternate-screen replacement | §14, §15.5 |
+| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, alternate-screen replacement, and deterministic ANSI-to-PNG/text evidence helpers | §7.5, §14, §15.5 |
+| `src/integration/dashboard-capture.ts` | Local scripted dispatch scenario used by `verify:dashboard`; captures fixed-clock wide/narrow paints and deposits exact frame pairs/manifests | §5, §7.5, §8.2 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/config/` | `autobuild.toml` parsing and validation | §16.1 |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` (Pi/Agent Skills) and links `.claude/skills/ab-*` | §16.3 |

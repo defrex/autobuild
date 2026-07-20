@@ -33,3 +33,13 @@ export function sequentialIds(): IdSource {
     return `${prefix}_${next}`
   }
 }
+
+/** Deterministic UUID v4 values for integration harnesses. The version and
+ * variant nibbles remain valid while the final 48 bits carry the sequence. */
+export function sequentialUuids(): UuidSource {
+  let next = 0
+  return () => {
+    next += 1
+    return `00000000-0000-4000-8000-${next.toString(16).padStart(12, '0')}`
+  }
+}

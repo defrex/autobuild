@@ -22,16 +22,17 @@
  * agents never touch the remote, so a journal IS the remote) and
  * FakeTicketSource (§13 — projections flow outward only).
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { DispatchWiring } from '../cli/dispatch'
 import { resolveCliEnv, type CliEnv } from '../cli/env'
 import { runCli } from '../cli/main'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
-import { sequentialIds, type IdSource } from '../ids'
+import { sequentialIds, sequentialUuids, type IdSource } from '../ids'
 import type { BuildState } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
 import {
@@ -252,6 +253,9 @@ export interface E2eHarness {
   workspaces: GitWorktreeProvider
   agents: ScriptedAgentRunner
   dispatcher: Dispatcher
+  /** The same fakes, store, clocks, ids, workspaces, and scripted runtime as a
+   * DispatchWiring so callers can drive the real `abDispatch` composition. */
+  wiring: DispatchWiring
   config: Config
   /** BuildRunners constructed by the dispatcher's launchRunner, in order.
    * launchRunner only CONSTRUCTS (the dispatcher never awaits a pipeline);
@@ -283,14 +287,18 @@ export async function makeHarness(opts: {
   gatePresence?: 'present' | 'absent'
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
-  const origin = join(tmp, 'origin')
+  const originPath = join(tmp, 'origin')
   const configToml = opts.configToml ?? CONFIG_TOML
-  const remote = await initOrigin(origin, configToml)
+  const remote = await initOrigin(originPath, configToml)
+  // Git canonicalizes temporary paths on macOS (`/var` → `/private/var`).
+  // Records and every dispatch caller must use that same repository identity.
+  const origin = await realpath(originPath)
   const remoteUpdater = join(tmp, 'remote-updater')
   await git(['clone', '-q', remote, remoteUpdater], tmp)
 
   const clock = steppingClock()
   const ids = sequentialIds()
+  const uuids = sequentialUuids()
   const store = new MemoryBuildStore({ clock })
   const forge = new FakeForge({ gatePresence: opts.gatePresence ?? 'present' })
   const tickets = new FakeTicketSource(opts.tickets ?? [])
@@ -350,6 +358,15 @@ export async function makeHarness(opts: {
     return { run, ws, round: env.round, env, ctx }
   }
 
+  // Both direct harness runners and injected abDispatch wiring use this one
+  // registry, so capture scenarios cannot accidentally exercise a second fake
+  // pipeline implementation.
+  const runtimes = {
+    scripted: { runner: agents, servesModels: [] },
+    claude: { runner: agents, servesModels: ['claude-'] },
+    pi: { runner: agents, servesModels: ['kimi-'] },
+  }
+
   // launchRunner (§3.3, §15.6-C, §15.7): construct a REAL BuildRunner over
   // the SAME store and the provisioned workspace path; the dispatcher never
   // runs agents itself.
@@ -371,11 +388,7 @@ export async function makeHarness(opts: {
         // is preserved regardless of which runtime a role selects. `scripted`
         // is the fallback and runs only with its un-named built-in model; `pi`
         // serves the Kimi family for exact configured-pair validation.
-        runtimes: {
-          scripted: { runner: agents, servesModels: [] },
-          claude: { runner: agents, servesModels: ['claude-'] },
-          pi: { runner: agents, servesModels: ['kimi-'] },
-        },
+        runtimes,
         defaultRuntime: 'scripted',
         workspacePath: wsRef,
         branch: record.branch ?? `ab/${slug}`,
@@ -405,6 +418,20 @@ export async function makeHarness(opts: {
     ids,
     clock,
   })
+  const wiring: DispatchWiring = {
+    store,
+    tickets: ticketSource,
+    forge,
+    workspaces,
+    runtimes,
+    defaultRuntime: 'scripted',
+    // Scripted agents resolve this ambient value, then invoke runCli against
+    // the injected shared store. It is an identity label, never opened.
+    storeRef: 'memory://e2e',
+    ids,
+    uuids,
+    clock,
+  }
 
   return {
     tmp,
@@ -418,6 +445,7 @@ export async function makeHarness(opts: {
     workspaces,
     agents,
     dispatcher,
+    wiring,
     config,
     launched,
     cliErrors,

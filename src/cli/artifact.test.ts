@@ -3,12 +3,18 @@
  * §6.3), latest-vs-@rev fetches, and feedback-quality errors.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
-import { artifactGet, artifactPut, parseArtifactSpec } from './artifact'
+import {
+  artifactDownload,
+  artifactGet,
+  artifactPut,
+  parseArtifactSpec,
+} from './artifact'
 import { makeEnv, seedStore } from './testkit'
 
 let tmp: string
@@ -64,6 +70,20 @@ describe('artifact put/get', () => {
     expect(textContent(pinned)).toBe('# Plan v1\n')
   })
 
+  test('put preserves arbitrary binary bytes instead of UTF-8 coercing them', async () => {
+    const path = join(tmp, 'frame.png')
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 254, 1])
+    await writeFile(path, bytes)
+
+    const meta = await artifactPut(deps(), 'dashboard-frame:test:png', path)
+    const artifact = await store.getArtifact(
+      'auth-rate-limit',
+      'dashboard-frame:test:png',
+      meta.revision,
+    )
+    expect(artifact?.content).toEqual(bytes)
+  })
+
   test('put with a missing file names the path', async () => {
     await expect(artifactPut(deps(), 'plan', join(tmp, 'nope.md'))).rejects.toThrow(
       /file not found: .*nope\.md/,
@@ -100,5 +120,108 @@ describe('artifact put/get', () => {
     await expect(artifactGet(deps(), 'spec@7')).rejects.toThrow(
       /no "spec" artifact at rev 7/,
     )
+  })
+})
+
+describe('artifact download', () => {
+  test('selects the explicit store, forwards the token, pins revisions, and writes exact bytes', async () => {
+    const build = 'finished-build'
+    await store.createBuild({ slug: build, repo: resolve(tmp) })
+    const first = new Uint8Array([137, 80, 78, 71, 0, 255])
+    const second = new Uint8Array([1, 2, 3])
+    await store.putArtifact(build, {
+      kind: 'dashboard-frame:wide:png',
+      content: first,
+    })
+    await store.putArtifact(build, {
+      kind: 'dashboard-frame:wide:png',
+      content: second,
+    })
+    const opens: Array<{ ref: string; token?: string }> = []
+    const output = join(tmp, 'downloads', 'wide.png')
+
+    const result = await artifactDownload({
+      targetRepo: tmp,
+      env: {
+        AB_STORE: 'https://ignored.invalid',
+        AB_TOKEN: 'scoped-token',
+      },
+      exec: spawnExec,
+      build,
+      spec: 'dashboard-frame:wide:png@0',
+      outputPath: output,
+      storeRef: 'explicit-store',
+      openStore: (ref, token) => {
+        opens.push({ ref, ...(token !== undefined ? { token } : {}) })
+        return store
+      },
+    })
+
+    expect(opens).toEqual([
+      { ref: resolve(tmp, 'explicit-store'), token: 'scoped-token' },
+    ])
+    expect(result.artifact.meta.revision).toBe(0)
+    expect(result.outputPath).toBe(output)
+    expect(new Uint8Array(await readFile(output))).toEqual(first)
+
+    const remoteOutput = join(tmp, 'downloads', 'latest.png')
+    await artifactDownload({
+      targetRepo: tmp,
+      env: {
+        AB_STORE: 'https://store.example.invalid/api',
+        AB_TOKEN: 'remote-token',
+      },
+      exec: spawnExec,
+      build,
+      spec: 'dashboard-frame:wide:png',
+      outputPath: remoteOutput,
+      openStore: (ref, token) => {
+        opens.push({ ref, ...(token !== undefined ? { token } : {}) })
+        return store
+      },
+    })
+    expect(opens.at(-1)).toEqual({
+      ref: 'https://store.example.invalid/api',
+      token: 'remote-token',
+    })
+    expect(new Uint8Array(await readFile(remoteOutput))).toEqual(second)
+  })
+
+  test('rejects unknown builds, wrong-repository builds, and absent refs without creating output', async () => {
+    const output = join(tmp, 'should-not-exist.bin')
+    const common = {
+      targetRepo: tmp,
+      env: {},
+      exec: spawnExec,
+      outputPath: output,
+      openStore: () => store,
+    }
+    await expect(
+      artifactDownload({
+        ...common,
+        build: 'missing',
+        spec: 'frame@0',
+      }),
+    ).rejects.toThrow('no build "missing"')
+
+    await store.createBuild({ slug: 'other-repo', repo: '/somewhere/else' })
+    await expect(
+      artifactDownload({
+        ...common,
+        build: 'other-repo',
+        spec: 'frame@0',
+      }),
+    ).rejects.toThrow('belongs to repository')
+
+    await store.createBuild({ slug: 'no-frame', repo: resolve(tmp) })
+    await store.putArtifact('no-frame', { kind: 'text', content: 'hello' })
+    await expect(
+      artifactDownload({
+        ...common,
+        build: 'no-frame',
+        spec: 'frame@7',
+      }),
+    ).rejects.toThrow(/no "frame" artifact at rev 7.*available refs: text@0/s)
+    expect(await Bun.file(output).exists()).toBe(false)
   })
 })

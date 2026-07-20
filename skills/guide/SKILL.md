@@ -523,6 +523,17 @@ id and configured source.
 Human-readable output is the default. `--json` emits one bare JSON value and no
 prose: a `Ticket[]` for `list`, and the complete `Ticket` for `show` or `move`.
 
+## Retrieving build artifacts
+
+`ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]`
+is the read-only, sessionless binary retrieval form. It works after a build is
+terminal, writes exact bytes (creating parent directories), verifies that the
+build belongs to this repository, and uses the standard explicit `--store` >
+nonblank `AB_STORE` > repository-local selection. Use an exact `@rev` from a
+verify report or PR comment when retrieving dashboard PNG evidence. In-session
+`ab artifact put|get` remain own-build commands and still require ambient phase
+auth.
+
 ## Dispatch dashboard
 
 On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
@@ -736,6 +747,7 @@ default, when you need to know what this repo's version says).
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
+| `ab-verify-dashboard` | repository `verify:dashboard` phase | Drive the deterministic local dispatch simulation and inspect every colour PNG frame; path applicability is kernel-owned and the skill never self-skips. |
 | `ab-verify-e2e` | a `verify:<step>` phase | **Sample** agent-verify skill: drive the running app and check acceptance criteria. Runs only if a `[verify.<step>]` table names it. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |

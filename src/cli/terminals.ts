@@ -42,6 +42,11 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
+import {
+  extractDashboardFrameManifest,
+  type DashboardFrameEntry,
+} from './dashboard/frame-artifacts'
+import { stripAnsi } from './dashboard/render'
 import type { CliEnv } from './env'
 
 /** Structural subset of CliDeps (src/cli/main.ts) — what terminals need. */
@@ -406,7 +411,7 @@ export async function done(
         await deps.forge.commentOnPr(
           deps.workspacePath,
           pr.number,
-          renderPrSummary(env, events),
+          await renderPrSummary(env, latest, store),
         )
       } catch {
         // The audit trail stays queryable in the store (§7.5).
@@ -453,8 +458,122 @@ export async function done(
   }
 }
 
-/** The §7.5 summary comment, rendered from events — never from scraped output. */
-function renderPrSummary(env: CliEnv, events: AbEvent[]): string {
+/** Replace controls that could alter a forge-rendered comment, while retaining
+ * newlines in the terminal frame. */
+function printableCommentText(value: string): string {
+  let out = ''
+  for (const character of value) {
+    const code = character.codePointAt(0)!
+    if (character === '\n') out += character
+    else if (code < 0x20 || code === 0x7f) out += `\\u{${code.toString(16)}}`
+    else out += character
+  }
+  return out
+}
+
+function html(value: string): string {
+  return printableCommentText(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+interface PrDashboardFrame {
+  entry: DashboardFrameEntry
+  text: string
+}
+
+/** Resolve only the successful dashboard report in the reducer's CURRENT
+ * verify cycle. Exact refs in that report prevent a failed/reconciled cycle's
+ * stale captures from leaking into a later PR. */
+async function currentDashboardFrames(
+  env: CliEnv,
+  events: AbEvent[],
+  store: BuildStore,
+): Promise<PrDashboardFrame[]> {
+  const state = reduceBuild(events)
+  const dashboardEvents = events.filter(
+    (event) =>
+      event.seq > state.verify.cycleSince &&
+      event.type === 'verify.completed' &&
+      event.payload.step === 'dashboard',
+  )
+  const latest = dashboardEvents.at(-1)
+  if (latest === undefined || latest.type !== 'verify.completed') return []
+  const completion = normalizeVerifyCompletion(latest.payload)
+  if (completion.outcome !== 'pass' || completion.report === undefined) return []
+
+  const report = await store.getArtifact(
+    env.build,
+    completion.report.kind,
+    completion.report.rev,
+  )
+  if (report === null) return []
+  const manifest = extractDashboardFrameManifest(textContent(report))
+  const frames: PrDashboardFrame[] = []
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (const entry of manifest.frames) {
+    const [textArtifact, pngArtifact] = await Promise.all([
+      store.getArtifact(env.build, entry.text.kind, entry.text.rev),
+      store.getArtifact(env.build, entry.png.kind, entry.png.rev),
+    ])
+    // Projection is all-or-nothing: a partial set gives a human false
+    // confidence about what the verifier actually inspected.
+    if (textArtifact === null || pngArtifact === null) return []
+    let text: string
+    try {
+      text = decoder.decode(textArtifact.content)
+    } catch {
+      return []
+    }
+    frames.push({ entry, text })
+  }
+  return frames
+}
+
+function renderDashboardFrameSection(
+  env: CliEnv,
+  frames: PrDashboardFrame[],
+): string[] {
+  if (frames.length === 0) return []
+  const lines = [
+    '',
+    '### Dashboard frames',
+    '',
+    'The text frames are inline below. Download the exact colour PNG artifacts with the listed commands.',
+  ]
+  for (const { entry, text } of frames) {
+    const pngRef = `${entry.png.kind}@${entry.png.rev}`
+    const textRef = `${entry.text.kind}@${entry.text.rev}`
+    const command =
+      `ab artifact download ${shellQuote(env.build)} ${shellQuote(pngRef)} ` +
+      `--output ${shellQuote(`${entry.id}.png`)} --store ${shellQuote(env.store)}`
+    lines.push(
+      '',
+      `#### ${entry.id} (${entry.terminal.columns}x${entry.terminal.rows})`,
+      '',
+      `- text artifact: <code>${html(textRef)}</code>`,
+      `- colour PNG artifact: <code>${html(pngRef)}</code>`,
+      `<pre><code>${html(command)}</code></pre>`,
+      `<pre><code>${html(stripAnsi(text).replace(/\n$/, ''))}</code></pre>`,
+    )
+  }
+  return lines
+}
+
+/** The §7.5 summary comment, rendered from events/artifacts — never from
+ * scraped agent output. Optional dashboard projection remains best-effort. */
+async function renderPrSummary(
+  env: CliEnv,
+  events: AbEvent[],
+  store: BuildStore,
+): Promise<string> {
   const verdicts: string[] = []
   const verifies: string[] = []
   for (const event of events) {
@@ -480,6 +599,13 @@ function renderPrSummary(env: CliEnv, events: AbEvent[]): string {
       )
     }
   }
+
+  let frames: PrDashboardFrame[] = []
+  try {
+    frames = await currentDashboardFrames(env, events, store)
+  } catch {
+    // Malformed/missing optional evidence cannot reverse finalize.completed.
+  }
   return [
     `## Autobuild: ${env.build}`,
     '',
@@ -488,6 +614,7 @@ function renderPrSummary(env: CliEnv, events: AbEvent[]): string {
     '',
     '### Verify',
     ...(verifies.length > 0 ? verifies : ['- (none)']),
+    ...renderDashboardFrameSection(env, frames),
     '',
     '### Store',
     `- store: ${env.store}`,

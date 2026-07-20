@@ -13,6 +13,11 @@ import { FakeForge } from '../ports/forge/fake'
 import type { Finding } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
+import {
+  dashboardFrameArtifactKind,
+  dashboardVerifyReport,
+  type DashboardFrameManifest,
+} from './dashboard/frame-artifacts'
 import { buildContext } from './context'
 import { done, escalate, verdict } from './terminals'
 import {
@@ -423,6 +428,49 @@ describe('ab done — finalize', () => {
     })
   })
 
+  async function seedDashboardCapture(
+    label: string,
+    text = `Auto Build ${label}\nHarvest PAUSED\n`,
+  ): Promise<void> {
+    const id = 'mixed-wide'
+    const textKind = dashboardFrameArtifactKind(id, 'text')
+    const pngKind = dashboardFrameArtifactKind(id, 'png')
+    const textMeta = await store.putArtifact(BUILD, {
+      kind: textKind,
+      content: text,
+    })
+    const pngMeta = await store.putArtifact(BUILD, {
+      kind: pngKind,
+      content: new Uint8Array([137, 80, 78, 71, textMeta.revision]),
+    })
+    const manifest: DashboardFrameManifest = {
+      version: 1,
+      renderer: 'dashboard-ansi-png-v1',
+      frames: [
+        {
+          id,
+          terminal: { columns: 140, rows: 40 },
+          text: { kind: textKind, rev: textMeta.revision },
+          png: { kind: pngKind, rev: pngMeta.revision },
+        },
+      ],
+    }
+    const report = await store.putArtifact(BUILD, {
+      kind: 'verify-report:dashboard',
+      content: dashboardVerifyReport(manifest),
+    })
+    await store.append(BUILD, {
+      actor: agent('verify:dashboard'),
+      type: 'verify.completed',
+      payload: {
+        step: 'dashboard',
+        attempt: 1,
+        outcome: 'pass',
+        report: { kind: report.kind, rev: report.revision },
+      },
+    })
+  }
+
   test('rejected without a pr-description artifact', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
     await expect(done(deps)).rejects.toThrow(
@@ -468,6 +516,149 @@ describe('ab done — finalize', () => {
       'e2e (attempt 1): skipped — No browser-facing behavior changed',
     )
     expect(comment.body).toContain(`build: ${BUILD}`)
+  })
+
+  test('projects exact current dashboard frame refs and escaped monospace text into the PR comment', async () => {
+    await seedDashboardCapture(
+      'SAFE',
+      '\x1b[31m<dashboard & row>\x1b[0m\ncontrol:\u0001 and ``` markdown\n',
+    )
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Dashboard evidence\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    await done(deps)
+
+    const comment = deps.forge.comments[0]!.body
+    expect(comment).toContain('### Dashboard frames')
+    expect(comment).toContain('#### mixed-wide (140x40)')
+    expect(comment).toContain(
+      '<code>dashboard-frame:mixed-wide:text@0</code>',
+    )
+    expect(comment).toContain(
+      '<code>dashboard-frame:mixed-wide:png@0</code>',
+    )
+    expect(comment).toContain(
+      "ab artifact download &#39;auth-rate-limit&#39; &#39;dashboard-frame:mixed-wide:png@0&#39; --output &#39;mixed-wide.png&#39; --store &#39;/tmp/ab-store&#39;",
+    )
+    expect(comment).toContain('&lt;dashboard &amp; row&gt;')
+    expect(comment).toContain('control:\\u{1} and ``` markdown')
+    expect(comment).not.toContain('\x1b')
+    expect(comment).not.toContain('<dashboard & row>')
+  })
+
+  test('uses only a successful dashboard report after the latest reconcile cycle boundary', async () => {
+    await seedDashboardCapture('STALE-CAPTURE')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-new' },
+    })
+    await store.append(BUILD, {
+      actor: agent('reconcile'),
+      type: 'reconcile.completed',
+      payload: {
+        mergeCommit: 'merge-new',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      },
+    })
+    await seedDashboardCapture('CURRENT-CAPTURE')
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Current dashboard evidence\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    await done(deps)
+
+    const comment = deps.forge.comments[0]!.body
+    expect(comment).toContain('CURRENT-CAPTURE')
+    expect(comment).not.toContain('STALE-CAPTURE')
+    expect(comment).toContain('dashboard-frame:mixed-wide:png@1')
+  })
+
+  test('a current-cycle dashboard skip suppresses stale captures', async () => {
+    await seedDashboardCapture('STALE-CAPTURE')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-new' },
+    })
+    await store.append(BUILD, {
+      actor: agent('reconcile'),
+      type: 'reconcile.completed',
+      payload: {
+        mergeCommit: 'merge-new',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: {
+        step: 'dashboard',
+        attempt: 2,
+        outcome: 'skipped',
+        reason: 'excluded by [verify.dashboard].paths',
+      },
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Skipped dashboard evidence\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('finalize.completed')
+    expect(deps.forge.comments[0]!.body).not.toContain('### Dashboard frames')
+    expect(deps.forge.comments[0]!.body).not.toContain('STALE-CAPTURE')
+  })
+
+  test('malformed current-cycle dashboard evidence is omitted without reversing finalize', async () => {
+    const report = await store.putArtifact(BUILD, {
+      kind: 'verify-report:dashboard',
+      content: '# malformed report with no manifest\n',
+    })
+    await store.append(BUILD, {
+      actor: agent('verify:dashboard'),
+      type: 'verify.completed',
+      payload: {
+        step: 'dashboard',
+        attempt: 1,
+        outcome: 'pass',
+        report: { kind: report.kind, rev: report.revision },
+      },
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Malformed dashboard evidence\n\nBody.\n',
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'finalize' }),
+      workspacePath: workspace,
+    })
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('finalize.completed')
+    expect(deps.forge.comments).toHaveLength(1)
+    expect(deps.forge.comments[0]!.body).not.toContain('### Dashboard frames')
   })
 
   test('a pre-PR auto-merge request on gated CLEAN is applied natively and acknowledged', async () => {

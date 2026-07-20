@@ -293,6 +293,27 @@ excluded by [verify.dashboard].paths: no changed path matched ["src/cli/dashboar
 The outcome is the ordinary queryable `skipped` result. A Git/base lookup
 failure fails closed as infrastructure; it is never turned into a skip.
 
+In this repository, `verify:dashboard` follows `types` and `unit`. When its path
+rule matches, `bun run capture:dashboard` drives a fully local scripted dispatch
+session through several pipeline positions, an open paused Harvest row, and
+fixed wide/narrow terminal sizes. It deposits deterministic plain-text and
+colour PNG pairs. The verifier opens every PNG and judges the images themselves;
+it never inspects the diff or self-skips. This is visual evidence rather than a
+byte-exact golden gate, and it uses no network, live agent runner, browser,
+public repository, forge upload, or hosted asset.
+
+The successful current-cycle capture manifest is projected into the PR comment
+as escaped monospace text. Each colour image remains in the BuildStore and the
+comment gives an exact retrieval command:
+
+```sh
+ab artifact download <build> dashboard-frame:mixed-wide:png@0 --output mixed-wide.png
+```
+
+The revision shown by a real comment is authoritative; use it rather than
+assuming `@0`. Missing, malformed, stale-cycle, or skipped capture evidence is
+safely omitted from the optional PR section.
+
 A fresh config always includes `setup = "bun install"`. During that first
 init only, Autobuild recognizes these exact root-package script names:
 
@@ -773,6 +794,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake] [--auto-merge \| --no-auto-merge]` | Run the outer loop; a TTY gets the interactive dashboard. Explicit control flags persist repository values; omission reuses stored state (fresh repository: intake on, auto-merge default off). |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
+| `ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]` | Retrieve exact artifact bytes for this repository, including terminal builds and dashboard PNG evidence. Read-only. |
 | `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository gate and latest harvest run, including recovery attempts/limit, stopped boundary, attention state, exact pending work, steps, filing, and failures. Read-only. |
 | `ab help` | Print the command surface. |
 

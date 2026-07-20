@@ -15,7 +15,7 @@ import { textContent } from '../store/types'
 import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
-import { artifactGet, artifactPut } from './artifact'
+import { artifactDownload, artifactGet, artifactPut } from './artifact'
 import {
   abBuildControl,
   type BuildControlAction,
@@ -47,12 +47,11 @@ import {
  * commands resolve the cwd; durable controls additionally take a target build
  * slug. None requires the ambient AB_* phase tuple.
  *
- * `src/cli/binary.ts` routes on this set: a command absent from it goes through
- * `resolveCliEnv`, which REQUIRES AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION and
- * exits 1 before routing. It lives here, beside the `switch` that implements
- * these commands, so the next sessionless command has one obvious place to
- * register — and so the list is unit-testable, which a literal inside the
- * binary is not.
+ * `src/cli/binary.ts` routes through `isSessionlessInvocation` below. This set
+ * owns flat command names; that helper additionally owns the few mixed nested
+ * namespaces (`artifact download`, `harvest status`). Everything else goes
+ * through `resolveCliEnv`, which requires the ambient phase tuple. Keeping the
+ * classification here beside the switch makes it unit-testable.
  */
 export const SESSIONLESS_COMMANDS = new Set([
   'init',
@@ -71,6 +70,18 @@ export const SESSIONLESS_COMMANDS = new Set([
   '--help',
   '-h',
 ])
+
+/** Nested namespaces can mix operator and phase forms. In particular only
+ * `artifact download` is sessionless; put/get retain ambient build scoping. */
+export function isSessionlessInvocation(argv: readonly string[]): boolean {
+  const command = argv[0]
+  return (
+    command === undefined ||
+    SESSIONLESS_COMMANDS.has(command) ||
+    (command === 'artifact' && argv[1] === 'download') ||
+    (command === 'harvest' && argv[1] === 'status')
+  )
+}
 
 export interface CliDeps {
   store: BuildStore
@@ -162,6 +173,8 @@ const HELP = [
   '  ab context [--json]                    hydrate .ab/ with the phase\'s inputs; print the manifest',
   '  ab artifact put <kind> <file>          deposit a versioned artifact → prints the assigned rev',
   '  ab artifact get <kind>[@rev]           fetch an artifact within own build (latest when @rev omitted)',
+  '  ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]',
+  '                                         retrieve exact artifact bytes after a build (read-only, sessionless)',
   '  ab observe --kind <followup|refactor|latent-bug> [--files a,b] [--refs x,y] <summary>',
   '                                         structured observation — any phase, any time, not a terminal',
   '  ab server <start|stop|restart|status|logs> [n]',
@@ -846,11 +859,64 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'artifact': {
-      const session = requireSession(command, deps)
       const [sub, ...more] = rest
+      if (sub === 'download') {
+        const usage =
+          'usage: ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>] (§8.2)'
+        const positionals: string[] = []
+        let outputPath: string | undefined
+        let storeRef: string | undefined
+        for (let i = 0; i < more.length; i += 1) {
+          const arg = more[i]!
+          if (arg === '--output') {
+            if (outputPath !== undefined) {
+              throw new Error(`--output may be supplied only once — ${usage}`)
+            }
+            outputPath = flagValue(more[(i += 1)], 'output', usage)
+          } else if (arg === '--store') {
+            if (storeRef !== undefined) {
+              throw new Error(`--store may be supplied only once — ${usage}`)
+            }
+            storeRef = flagValue(more[(i += 1)], 'store', usage)
+          } else if (arg.startsWith('--')) {
+            throw new Error(`unknown argument "${arg}" — ${usage}`)
+          } else {
+            positionals.push(arg)
+          }
+        }
+        const [build, spec] = positionals
+        if (
+          build === undefined ||
+          spec === undefined ||
+          positionals.length !== 2 ||
+          outputPath === undefined
+        ) {
+          throw new Error(usage)
+        }
+        if (deps.exec === undefined) {
+          throw new Error(
+            "'ab artifact download' needs an exec seam — this is a wiring bug in the ab binary",
+          )
+        }
+        const downloaded = await artifactDownload({
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          build,
+          spec,
+          outputPath,
+          ...(storeRef !== undefined ? { storeRef } : {}),
+        })
+        stdout(
+          `downloaded ${downloaded.artifact.meta.kind}@${downloaded.artifact.meta.revision} to ${downloaded.outputPath}`,
+        )
+        return 0
+      }
+
+      const session = requireSession(command, deps)
       if (sub === 'put') {
         const [kind, file] = more
-        if (kind === undefined || file === undefined) {
+        if (kind === undefined || file === undefined || more.length !== 2) {
           throw new Error('usage: ab artifact put <kind> <file> (§8.2)')
         }
         const meta = await artifactPut(session, kind, file)
@@ -860,14 +926,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       }
       if (sub === 'get') {
         const [spec] = more
-        if (spec === undefined) {
+        if (spec === undefined || more.length !== 1) {
           throw new Error('usage: ab artifact get <kind>[@rev] (§8.2)')
         }
         const artifact = await artifactGet(session, spec)
         stdout(textContent(artifact))
         return 0
       }
-      throw new Error('usage: ab artifact <put|get> … (§8.2)')
+      throw new Error('usage: ab artifact <put|get|download> … (§8.2)')
     }
 
     case 'observe': {
