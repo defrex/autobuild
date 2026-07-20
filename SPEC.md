@@ -829,6 +829,21 @@ posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
 
+**Partial listings and source invariants.** `listReady` returns both valid
+matching tickets and diagnostics for individual source records excluded from
+eligibility. The file source discovers `.md` records across all lifecycle
+state directories and enforces tracker-wide structure before decoding any one
+record. Duplicate filename ids across state directories and ticket files at
+the tracker root therefore remain fatal: continuing could permit double
+dispatch or hide state. A record with malformed fences, TOML/frontmatter, or a
+filename/id mismatch is instead diagnosed with its path and validation problem, left
+byte-untouched, and excluded from listing and claim; unrelated valid tickets
+remain eligible. Filesystem failures and unexpected exceptions remain fatal.
+Targeted reads and writes of a malformed record fail loudly. Dispatcher
+warnings and `ab ticket list` stderr repeat these diagnostics until an operator
+repairs the source; `ab ticket list --json` keeps stdout as one bare array of
+valid tickets.
+
 **Pre-build edits.** `update(id, patch)` partially replaces the modeled
 editable fields `title`, `body`, and `labels`. A patch is strict and must name
 at least one field; supplied title/body values cannot be blank, while an

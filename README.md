@@ -411,7 +411,17 @@ Tickets are `<id>.md` files with `+++`-fenced TOML frontmatter — `id`,
 `title`, optional `labels`/`blockedBy`, and an internal harvest idempotency key
 when applicable — followed by the body. There is **no `state`
 field**: the directory is the state. The frontmatter is strict, so an unknown
-key is a parse error. A dispatchable ticket at `.autobuild/tickets/ready/file-1.md`:
+key is a parse error. During a listing, a malformed ticket record in any of the
+four lifecycle directories is reported with its path and validation problem,
+left untouched, and excluded; it does not prevent unrelated valid ready work
+from dispatching. A malformed ready record is never claimed. Tracker-wide
+safety violations still stop the scan: duplicate ids in multiple state
+directories and root-level ticket files with no lifecycle state are loud errors
+rather than warnings.
+`ab ticket list` writes record diagnostics to stderr (including with `--json`),
+while JSON stdout remains one bare array of valid tickets.
+
+A dispatchable ticket at `.autobuild/tickets/ready/file-1.md`:
 
 ```markdown
 +++

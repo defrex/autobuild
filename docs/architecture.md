@@ -323,6 +323,17 @@ including under `--force`.
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
+`TicketSource.listReady` is an explicit partial-listing seam: it returns valid
+`tickets` plus diagnostics for individual records excluded from eligibility,
+while fatal source failures still reject. The file adapter performs complete
+lifecycle-directory discovery and duplicate/root-layout validation before
+per-record decoding, so global invariants remain fail-closed. It contains only
+recognized fence, TOML/frontmatter, and filename/id validation errors; I/O and
+unexpected failures propagate. The dispatcher carries diagnostics and an
+invalid-record count in its tick report, `ab dispatch` routes them through its
+warning/status surface, and `ab ticket list` uses stderr so JSON stdout remains
+a bare valid-ticket array.
+
 The renderer reserves one selectable `Auto Build` title row, one always-present
 status row, a blank separator before the harvest/build body, and another before
 the contextual legend/modal controls. It shares the selection marker and
