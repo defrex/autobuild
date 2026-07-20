@@ -106,9 +106,11 @@ source = "file"
 # users must name their own ready workflow state exactly (case-sensitive).
 readyState = "ready"
 # Absent readyLabels uses the source's label default: none for file, or
-# ["autobuild"] for Linear. Setting it narrows readiness on top of readyState;
-# [] explicitly disables the label gate.
-#readyLabels = ["autobuild"]
+# ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
+# readyState: every configured label must be present. With
+# ["autobuild", "ready"], a ticket carrying only one label does not satisfy the
+# label gate. [] explicitly disables the label gate.
+#readyLabels = ["autobuild", "ready"]
 #dir = "tickets"                 # file only; optional, default ".autobuild/tickets"
 #createState = "Triage"          # optional; absent = provider default
 #triageState = "Triage"          # optional; absent = provider default

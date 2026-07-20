@@ -248,9 +248,14 @@ export type DispatcherConfig = z.infer<typeof dispatcherSchema>
 
 export const ticketsSchema = z.strictObject({
   source: z.enum(['linear', 'file']),
-  /** Ticket labels that additionally narrow the ready gate (§3.3). Absent =
-   * the ticket source's default (linear: ["autobuild"]; file: none). Resolved
-   * by readyCriteria in src/processes/dispatcher.ts. */
+  /**
+   * Ticket labels that additionally narrow the mandatory readyState gate
+   * (§3.3). A nonempty list is conjunctive: every configured label must be
+   * present. For readyLabels = ["autobuild", "ready"], a ticket carrying only
+   * "autobuild" does not satisfy the label gate. An explicit [] disables the
+   * label gate; absent uses the ticket source's default (linear: ["autobuild"];
+   * file: none). Resolved by readyCriteria in src/processes/dispatcher.ts.
+   */
   readyLabels: z.array(z.string().min(1)).optional(),
   /**
    * The single workflow state a ticket must sit in to be dispatchable — the
