@@ -350,6 +350,15 @@ separate from reconcile's execution-time refresh (§15.7).
 A summary comment — verdict history, verification results, links into the
 store. The full audit trail is queryable, not committed to the branch.
 
+A successful current-cycle `verify:dashboard` report may embed the versioned
+manifest of its exact text/PNG frame artifact refs. Finalize resolves only that
+cycle's successful report, validates every referenced artifact, and adds the
+ANSI-stripped frames as escaped monospace text plus exact
+`ab artifact download` commands. Missing, malformed, skipped, or stale-cycle
+capture evidence omits this optional section and cannot reverse the already
+recorded finalize terminal. PNG bytes are not uploaded or linked: no public
+repository, hosted asset URL, or forge upload capability is required.
+
 ## 8. The `ab` CLI
 
 The **only** channel between agents and the store — and the enforcement
@@ -405,11 +414,18 @@ which commands the phase is authorized to execute.
 | `ab context [--json]` | hydrate `.ab/` with the phase's inputs; print the manifest | no |
 | `ab artifact put <kind> <file>` | deposit a versioned artifact → returns rev | no |
 | `ab artifact get <kind>[@rev]` | fetch an artifact within own build | no |
+| `ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]` | sessionless, read-only exact-byte retrieval for this repository; works after build termination | no |
 | `ab observe --kind <followup\|refactor\|latent-bug> [--files …] <summary>` | structured observation, any phase, any time | no |
 | `ab server <start\|stop\|restart\|status\|logs>` | dev-server lifecycle, config-driven (§16.2); `implement` and `verify` phases only | no |
 | `ab done [--notes <file>]` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> [--findings <json>] [--notes <file>] [--reason …] [--report <file>]` | complete a review/verify phase | **yes** |
 | `ab escalate <question> [--refs …]` | park the build for human input | **yes** |
+
+`artifact put` reads bytes without UTF-8 coercion. `artifact download` alone is
+sessionless inside that namespace; `put|get` retain ambient own-build auth. The
+download form applies the normal explicit `--store` > `AB_STORE` > local
+selection, verifies repository ownership, creates output parents, and writes the
+stored bytes exactly. A remote selection forwards `AB_TOKEN`.
 
 The verdict vocabulary is phase-dependent and the CLI enforces it:
 review phases accept `approve|revise|escalate`; agent-verify steps accept
@@ -1501,6 +1517,18 @@ skipped outcome with
 `excluded by [verify.<step>].paths: no changed path matched <JSON paths>` and
 launches nothing; Git/base failure is infrastructure, never a synthetic skip.
 
+This repository installs `dashboard` after its deterministic checks as the first
+consumer of that applicability boundary. `src/integration/dashboard-capture.ts`
+uses the existing scripted-agent integration harness, injected dispatch
+terminal/input, and per-paint renderer hook to prepare several real pipeline
+positions plus an open paused Harvest row, then captures fixed-clock wide and
+narrow frames. The dashboard's limited ANSI/OSC vocabulary is rendered with a
+pinned local DejaVu Mono font and system fonts disabled into deterministic PNG
+and plain-text artifact pairs. The verifier opens every PNG and reaches its
+verdict from those images; it neither inspects the diff nor self-skips. Captures
+are evidence, not byte-exact golden gates, and require no network, live runner,
+forge, browser, or hosted asset.
+
 ### 16.2 Server lifecycle [D10]
 
 **Config declares; the kernel owns.** The dev server matters most for e2e
@@ -1519,7 +1547,8 @@ verification and must work identically local and sandboxed:
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 
 This project ships the **canonical default skills** (`plan`, `plan-review`,
-`implement`, `code-review`, agent-verify steps, `finalize`, `reconcile`,
+`implement`, `code-review`, the dashboard-image and sample e2e agent-verify
+steps, `finalize`, `reconcile`,
 `spec`, `tickets`, `guide`, and the outer-loop skills). `ab init` installs into
 a repo:
 

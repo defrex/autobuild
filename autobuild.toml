@@ -24,7 +24,7 @@ test = "bun run test"
 #readyTimeout = 60               # seconds
 
 [verify]
-steps = ["types", "unit"]
+steps = ["types", "unit", "dashboard"]
 
 [verify.types]
 kind = "check"        # deterministic: command + pass/fail, never an agent
@@ -33,6 +33,13 @@ command = "typecheck" # ref into [commands]
 [verify.unit]
 kind = "check"
 command = "test"
+
+# Visual evidence for dashboard-touching builds. Applicability is evaluated by
+# the kernel from the build-owned diff; the skill never inspects Git or skips.
+[verify.dashboard]
+kind = "agent"
+skill = "ab-verify-dashboard"
+paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts"]
 
 # Agent-verify example — a skill run with a pass|fail|skip verdict (§5):
 #[verify.e2e]

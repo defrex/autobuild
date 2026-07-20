@@ -558,8 +558,8 @@ conditional = "true"
 [verify]
 steps = ["dashboard", "base-only"]
 [verify.dashboard]
-kind = "check"
-command = "conditional"
+kind = "agent"
+skill = "ab-verify-dashboard"
 paths = ["src/cli/dashboard/**"]
 [verify.base-only]
 kind = "check"
@@ -572,6 +572,12 @@ readyState = "Ready"
 `
 
   const handlers = happyHandlers()
+  let dashboardSessions = 0
+  handlers['ab-verify-dashboard'] = async (cli) => {
+    dashboardSessions += 1
+    await cli.run(['context'])
+    await cli.run(['verdict', 'pass'])
+  }
   handlers['reconcile'] = async (cli) => {
     await cli.run(['context'])
     const context = JSON.parse(
@@ -618,6 +624,14 @@ readyState = "Ready"
     { step: 'dashboard', attempt: 1, outcome: 'skipped' },
     { step: 'base-only', attempt: 1, outcome: 'skipped' },
   ])
+  // The kernel-authored skip starts no dashboard agent and consumes no
+  // failure attempt; the first actual session appears only after a path match.
+  expect(dashboardSessions).toBe(0)
+  expect(
+    [...h.agents.sessions.values()].some(
+      (session) => session.opts.skill === 'ab-verify-dashboard',
+    ),
+  ).toBe(false)
 
   // Advance only the remote base with a path covered by base-only's selector.
   // The post-reconcile anchor must subtract it from the build-owned diff.
@@ -642,6 +656,12 @@ readyState = "Ready"
     { step: 'base-only', attempt: 2, outcome: 'skipped' },
   ])
   expect(results[2]?.outcome).toBe('pass')
+  expect(dashboardSessions).toBe(1)
+  expect(
+    [...h.agents.sessions.values()].filter(
+      (session) => session.opts.skill === 'ab-verify-dashboard',
+    ),
+  ).toHaveLength(1)
   expect(results[3]).toMatchObject({
     outcome: 'skipped',
     reason: expect.stringContaining('[verify.base-only].paths'),
