@@ -142,6 +142,23 @@ describe('abInit — fresh install', () => {
     expect(parseConfig(generated).verify).toEqual({ steps: [], stepConfigs: {} })
   })
 
+  test('generated ticket guidance documents the conjunctive readyLabels gate without enabling it', async () => {
+    const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
+    await abInit({ targetRepo: target })
+    const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
+    const guidance = `# Absent readyLabels uses the source's label default: none for file, or
+# ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
+# readyState: every configured label must be present. With
+# ["autobuild", "ready"], a ticket carrying only one label does not satisfy the
+# label gate. [] explicitly disables the label gate.
+#readyLabels = ["autobuild", "ready"]`
+
+    for (const content of [template, generated]) {
+      expect(content).toContain(guidance)
+      expect(parseConfig(content).tickets.readyLabels).toBeUndefined()
+    }
+  })
+
   test('creates a .gitignore containing the repository-local state rule', async () => {
     await abInit({ targetRepo: target })
     expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('.autobuild/\n')
