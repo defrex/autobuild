@@ -9,6 +9,7 @@ import type {
   Ticket,
   TicketCreateOptions,
   TicketDraft,
+  TicketListing,
   TicketSource,
   TicketUpdate,
 } from '../types'
@@ -79,15 +80,18 @@ export class FakeTicketSource implements TicketSource {
   async listReady(criteria: {
     labels?: string[]
     state?: string
-  }): Promise<Ticket[]> {
+  }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
-    return [...this.tickets.values()]
-      .filter(
-        (ticket) =>
-          (criteria.state === undefined || ticket.state === criteria.state) &&
-          labels.every((label) => ticket.labels.includes(label)),
-      )
-      .map(cloneTicket)
+    return {
+      tickets: [...this.tickets.values()]
+        .filter(
+          (ticket) =>
+            (criteria.state === undefined || ticket.state === criteria.state) &&
+            labels.every((label) => ticket.labels.includes(label)),
+        )
+        .map(cloneTicket),
+      diagnostics: [],
+    }
   }
 
   async get(id: string): Promise<Ticket | null> {

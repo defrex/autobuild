@@ -61,6 +61,8 @@ export interface TicketBlockerOpts extends TicketCommandOpts {
 }
 
 export interface TicketListOpts extends TicketCommandOpts {
+  /** Separate diagnostic sink so `--json` stdout remains one bare value. */
+  stderr: (line: string) => void
   /** Source-local workflow state. Omitted with labels means any state. */
   state?: string
   /** Every requested label must match. Omitted with state means no label gate. */
@@ -268,16 +270,17 @@ export async function abTicketList(opts: TicketListOpts): Promise<void> {
           ...(opts.state !== undefined ? { state: opts.state } : {}),
           ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
         }
-  const tickets = await source.listReady(criteria)
+  const listing = await source.listReady(criteria)
+  for (const diagnostic of listing.diagnostics) opts.stderr(diagnostic)
   if (opts.json === true) {
-    opts.stdout(JSON.stringify(tickets, null, 2))
+    opts.stdout(JSON.stringify(listing.tickets, null, 2))
     return
   }
-  if (tickets.length === 0) {
+  if (listing.tickets.length === 0) {
     opts.stdout(`no tickets matched in the configured ${source.name} ticket source`)
     return
   }
-  for (const ticket of tickets) opts.stdout(ticketSummary(ticket))
+  for (const ticket of listing.tickets) opts.stdout(ticketSummary(ticket))
 }
 
 /** `ab ticket show <id>` — complete metadata plus the body/spec. */
@@ -391,11 +394,16 @@ function commaList(value: string): string[] {
     .filter((entry) => entry !== '')
 }
 
+interface TicketCliOpts extends TicketCommandOpts {
+  /** Required because the `list` subcommand can produce record diagnostics. */
+  stderr: (line: string) => void
+}
+
 /** Parse and execute the complete ticket argv tail. Ticket-only flags stay out
  * of the phase-command parser in main.ts. */
 export async function abTicket(
   argv: string[],
-  opts: TicketCommandOpts,
+  opts: TicketCliOpts,
 ): Promise<void> {
   const [command, ...args] = argv
   switch (command) {

@@ -83,9 +83,9 @@ describe('FileTicketSource', () => {
     expect(got).toEqual(created)
 
     expect(
-      (await tickets.listReady({ labels: ['autobuild'], state: 'Ready' })).map(
-        (t) => t.ref.id,
-      ),
+      (
+        await tickets.listReady({ labels: ['autobuild'], state: 'Ready' })
+      ).tickets.map((t) => t.ref.id),
     ).toEqual(['file-1'])
 
     expect(await tickets.claim('file-1')).toBe(true)
@@ -153,9 +153,9 @@ describe('FileTicketSource', () => {
     await seedTicket('file-2', { state: 'triage' })
 
     // No label on either: `mv` into ready/ is sufficient — the headline claim.
-    expect((await source().listReady({ state: 'Ready' })).map((t) => t.ref.id)).toEqual([
-      'file-1',
-    ])
+    expect(
+      (await source().listReady({ state: 'Ready' })).tickets.map((t) => t.ref.id),
+    ).toEqual(['file-1'])
   })
 
   test('transition moves the file and leaves the bytes identical', async () => {
@@ -205,9 +205,9 @@ describe('FileTicketSource', () => {
     // `[tickets] readyState = "ready"` must mean the ready/ directory.
     await tickets.transition('file-1', 'ready')
     expect((await tickets.get('file-1'))?.state).toBe('Ready')
-    expect((await tickets.listReady({ state: 'READY' })).map((t) => t.ref.id)).toEqual([
-      'file-1',
-    ])
+    expect(
+      (await tickets.listReady({ state: 'READY' })).tickets.map((t) => t.ref.id),
+    ).toEqual(['file-1'])
   })
 
   test('an unknown state name is an error listing the four directories', async () => {
@@ -232,7 +232,10 @@ describe('FileTicketSource', () => {
     expect(await readdir(join(dir, 'doing'))).toEqual(['file-1.md'])
 
     expect(await tickets.claim('file-1')).toBe(false)
-    expect(await tickets.listReady({ state: 'Ready' })).toEqual([])
+    expect(await tickets.listReady({ state: 'Ready' })).toEqual({
+      tickets: [],
+      diagnostics: [],
+    })
   })
 
   test('claim succeeds on a ticket in triage/ — readyState = "Triage" must not stall', async () => {
@@ -267,9 +270,10 @@ describe('FileTicketSource', () => {
 
   // ── Duplicates: the failure that would be silent double-dispatch ───────────
 
-  test('the same id in two state dirs is an error naming both paths', async () => {
+  test('the same id in two state dirs is an error naming both paths, even when one copy is malformed', async () => {
     await seedTicket('file-1', { state: 'ready' })
-    await seedTicket('file-1', { state: 'triage' })
+    await mkdir(join(dir, 'triage'), { recursive: true })
+    await writeFile(path('triage', 'file-1'), '# malformed duplicate\n')
     const tickets = source()
 
     for (const op of [
@@ -317,7 +321,7 @@ describe('FileTicketSource', () => {
 
   test('listReady on a tracker that does not exist yet returns []', async () => {
     const tickets = new FileTicketSource({ dir: join(dir, 'missing') })
-    expect(await tickets.listReady({})).toEqual([])
+    expect(await tickets.listReady({})).toEqual({ tickets: [], diagnostics: [] })
   })
 
   // ── listReady filtering ────────────────────────────────────────────────────
@@ -329,8 +333,56 @@ describe('FileTicketSource', () => {
     const tickets = source()
 
     const ready = await tickets.listReady({ labels: ['autobuild', 'bug'], state: 'Ready' })
-    expect(ready.map((t) => t.ref.id)).toEqual(['file-1'])
-    expect(await tickets.listReady({})).toHaveLength(3)
+    expect(ready.tickets.map((t) => t.ref.id)).toEqual(['file-1'])
+    expect(ready.diagnostics).toEqual([])
+    expect((await tickets.listReady({})).tickets).toHaveLength(3)
+  })
+
+  test('a malformed terminal record is diagnosed without hiding valid ready work', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    const malformedPath = path('done', 'notes')
+    const malformed = '+++\nid = "notes"\n+++\nold operator notes\n'
+    await mkdir(join(dir, 'done'), { recursive: true })
+    await writeFile(malformedPath, malformed)
+
+    const listing = await source().listReady({ state: 'Ready' })
+
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual(['file-1'])
+    expect(listing.diagnostics).toHaveLength(1)
+    expect(listing.diagnostics[0]).toContain(malformedPath)
+    expect(listing.diagnostics[0]).toMatch(/invalid frontmatter.*title/s)
+    expect(await readFile(malformedPath, 'utf8')).toBe(malformed)
+  })
+
+  test('filesystem failures still reject the whole listing rather than becoming diagnostics', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    const directoryMasqueradingAsTicket = path('ready', 'unreadable')
+    await mkdir(directoryMasqueradingAsTicket)
+
+    await expect(source().listReady({ state: 'Ready' })).rejects.toThrow()
+  })
+
+  test('a malformed ready record is diagnosed, excluded, and cannot be claimed', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    const malformedPath = path('ready', 'broken')
+    const malformed = '# just markdown\n'
+    await writeFile(malformedPath, malformed)
+    const tickets = source()
+
+    const listing = await tickets.listReady({ state: 'Ready' })
+
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual(['file-1'])
+    expect(listing.diagnostics).toEqual([
+      `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
+    ])
+    await expect(tickets.claim('broken')).rejects.toThrow(
+      /malformed ticket file — missing opening/,
+    )
+    await expect(tickets.transition('broken', 'Ready')).rejects.toThrow(
+      /malformed ticket file — missing opening/,
+    )
+    expect(await readFile(malformedPath, 'utf8')).toBe(malformed)
+    expect(await readdir(join(dir, 'ready'))).toEqual(['broken.md', 'file-1.md'])
   })
 
   // ── Comments ───────────────────────────────────────────────────────────────
@@ -411,13 +463,17 @@ describe('FileTicketSource', () => {
     await expect(source().get('file-1')).rejects.toThrow(path('ready', 'file-1'))
   })
 
-  test('malformed TOML frontmatter throws an error naming the file', async () => {
+  test('malformed TOML stays loud for targeted reads and becomes a listing diagnostic', async () => {
     await mkdir(join(dir, 'ready'), { recursive: true })
     await writeFile(path('ready', 'broken'), '+++\nid = broken oops\n+++\nbody\n')
     const tickets = source()
 
     await expect(tickets.get('broken')).rejects.toThrow(path('ready', 'broken'))
-    await expect(tickets.listReady({})).rejects.toThrow(path('ready', 'broken'))
+    const listing = await tickets.listReady({})
+    expect(listing.tickets).toEqual([])
+    expect(listing.diagnostics).toHaveLength(1)
+    expect(listing.diagnostics[0]).toContain(path('ready', 'broken'))
+    expect(listing.diagnostics[0]).toContain('malformed TOML frontmatter')
   })
 
   test('missing fences and missing required fields also name the file', async () => {
@@ -431,10 +487,17 @@ describe('FileTicketSource', () => {
     )
   })
 
-  test('a frontmatter id that disagrees with the filename is an error naming the file', async () => {
+  test('a frontmatter id that disagrees with the filename is a targeted error and listing diagnostic', async () => {
     await mkdir(join(dir, 'ready'), { recursive: true })
     await writeFile(path('ready', 'file-1'), '+++\nid = "file-9"\ntitle = "x"\n+++\nbody\n')
-    await expect(source().get('file-1')).rejects.toThrow(path('ready', 'file-1'))
+    const tickets = source()
+    await expect(tickets.get('file-1')).rejects.toThrow(path('ready', 'file-1'))
+    expect(await tickets.listReady({ state: 'Ready' })).toEqual({
+      tickets: [],
+      diagnostics: [
+        `${path('ready', 'file-1')}: frontmatter id "file-9" does not match filename`,
+      ],
+    })
   })
 
   // ── Ids ────────────────────────────────────────────────────────────────────

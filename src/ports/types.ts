@@ -22,6 +22,14 @@ export interface Ticket {
   blockedBy?: string[]
 }
 
+/** A partial source scan. Diagnostics name source records that were excluded
+ * from eligibility; infrastructure failures and source-wide invariants still
+ * reject `listReady` rather than appearing here. */
+export interface TicketListing {
+  tickets: Ticket[]
+  diagnostics: string[]
+}
+
 export interface TicketDraft {
   title: string
   body: string
@@ -70,8 +78,10 @@ export interface TicketUpdate {
 
 export interface TicketSource {
   readonly name: string
-  /** Ready tickets matching the dispatch criteria (label/state — §3.3). */
-  listReady(criteria: { labels?: string[]; state?: string }): Promise<Ticket[]>
+  /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
+   * actionable diagnostics for individual source records excluded as invalid.
+   * Fatal source failures and invariants still reject the call. */
+  listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing>
   get(id: string): Promise<Ticket | null>
   /** Claim-before-launch (§12): false means someone else already claimed it. */
   claim(id: string): Promise<boolean>

@@ -365,9 +365,14 @@ Cross-field rules, each an **error**:
 The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md` over
 `triage/ ready/ doing/ done/`. The directory *is* the state, so a transition or
 claim is a rename — frontmatter carries no `state`/`claimedBy`, and a ticket
-body survives byte-exactly because a move never rewrites the file. The same id
-in two state dirs is a loud error naming both paths. When `dir` is defaulted,
-the backlog writes its own `.gitignore` of `*`, so git never sees it; an
+body survives byte-exactly because a move never rewrites the file. A malformed
+record in any lifecycle directory is diagnosed with its path and validation
+problem, left untouched, and excluded from listing/claim so unrelated valid
+ready work can continue. `ab ticket list` sends those diagnostics to stderr and
+keeps JSON stdout as one bare valid-ticket array. Tracker-wide safety checks
+remain fatal: the same id in two state dirs is a loud error naming both paths,
+as are root-level ticket files with no state and filesystem failures. When
+`dir` is defaulted, the backlog writes its own `.gitignore` of `*`, so git never sees it; an
 explicit `dir` is the user's and is left alone. Agents and operators drive it
 through the source-agnostic `ab ticket` commands rather than running `mv` by
 hand.

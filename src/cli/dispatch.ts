@@ -1096,8 +1096,10 @@ class DispatchLoop {
   }
 
   /**
-   * Dependency diagnostics are independent notices (line-oriented in plain
-   * mode, successive replacements of the one dashboard status row on a TTY).
+   * Ticket and dependency diagnostics are independent notices (line-oriented
+   * in plain mode, successive replacements of the one dashboard status row on
+   * a TTY). Invalid ticket records use the warning seam so scripted JSON/stdout
+   * consumers stay clean; dependency holds retain their ordinary notice seam.
    * This is the operator's only view of why a ready ticket is sitting still,
    * and the acceptance criterion is that it needs no provider, filesystem, or
    * database inspection. The counts map guards on `typeof count === 'number'`
@@ -1112,7 +1114,8 @@ class DispatchLoop {
     report: Awaited<ReturnType<Dispatcher['tick']>>,
     printIdle = true,
   ): boolean {
-    const { dependencyDiagnostics, ...counts } = report
+    const { ticketDiagnostics, dependencyDiagnostics, ...counts } = report
+    for (const line of ticketDiagnostics) this.warn(line)
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
       .filter(([, count]) => typeof count === 'number' && count > 0)
@@ -1127,7 +1130,7 @@ class DispatchLoop {
       this.opts.stdout('tick: idle')
       return true
     }
-    return dependencyDiagnostics.length > 0
+    return ticketDiagnostics.length > 0 || dependencyDiagnostics.length > 0
   }
 
   // ── The live region ───────────────────────────────────────────────────────

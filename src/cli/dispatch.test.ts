@@ -674,6 +674,40 @@ model = "gpt-slug-name"
     }
   }, 30_000)
 
+  test('prints invalid-ticket diagnostics to stderr and keeps numeric counts on stdout', async () => {
+    const fx = await makeFixture(readyTicket('T-valid'), happyHandlers())
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    const diagnostic =
+      '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [diagnostic] }
+    }
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toContain(diagnostic)
+      const tick = out.find((line) => line.startsWith('tick: '))
+      expect(tick).toContain('dispatched=1')
+      expect(tick).toContain('invalidTickets=1')
+      expect(tick).not.toContain('ticketDiagnostics')
+      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([
+        'T-valid',
+      ])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('a new invocation retries a current build parked by an infrastructure policy failure', async () => {
     const handlers = happyHandlers()
     const happyPlan = handlers.plan!
@@ -1693,6 +1727,12 @@ describe('abDispatch --once with an interactive terminal', () => {
       ],
       happyHandlers(),
     )
+    const invalid = 'done/notes.md: invalid frontmatter'
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [invalid] }
+    }
     const out: string[] = []
     const term = fakeTerminal()
     const controller = new AbortController()
@@ -1718,21 +1758,26 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const diagnostic = 'ticket T-blocked-tty blocked by T-9 (not complete)'
+      const invalidFrame = term.frames.find((chunk) =>
+        stripAnsi(chunk).includes(invalid),
+      )
       const diagnosticFrame = term.frames.find((chunk) => stripAnsi(chunk).includes(diagnostic))
       const countFrame = term.frames.find((chunk) =>
-        stripAnsi(chunk).includes('tick: dependencyBlocked=1'),
+        stripAnsi(chunk).includes('tick: invalidTickets=1 dependencyBlocked=1'),
       )
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
+      expect(invalidFrame).toBeDefined()
       expect(diagnosticFrame).toBeDefined()
       expect(countFrame).toBeDefined()
+      expect(stripAnsi(invalidFrame!).split('\n')[1]).toBe(invalid)
       const diagnosticLines = stripAnsi(diagnosticFrame!).split('\n').slice(0, -1)
       const countLines = stripAnsi(countFrame!).split('\n').slice(0, -1)
       expect(diagnosticLines[0]).toContain('Auto Build')
       expect(diagnosticLines[0]).toContain('capacity 1 | 0 active')
       expect(diagnosticLines[0]).not.toMatch(/\bwatch\b/)
       expect(diagnosticLines[1]).toBe(diagnostic)
-      expect(countLines[1]).toBe('tick: dependencyBlocked=1')
+      expect(countLines[1]).toBe('tick: invalidTickets=1 dependencyBlocked=1')
       expect(countLines).toHaveLength(diagnosticLines.length)
     } finally {
       await fx.cleanup()
@@ -1779,7 +1824,10 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.cliErrors).toEqual([])
       // T-late really was on offer by the time the pass drained…
       const ready = await fx.tickets.listReady({ labels: ['autobuild'], state: 'Ready' })
-      expect(ready.map((t) => t.ref.id).sort()).toEqual(['T-first', 'T-late'])
+      expect(ready.tickets.map((t) => t.ref.id).sort()).toEqual([
+        'T-first',
+        'T-late',
+      ])
 
       // …and the pass still built only the ticket its ONE tick selected.
       const builds = await fx.store.listBuilds()

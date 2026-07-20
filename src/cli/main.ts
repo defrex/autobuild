@@ -485,6 +485,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         env: deps.processEnv ?? {},
         exec: deps.exec,
         stdout,
+        stderr,
       })
       return 0
     }

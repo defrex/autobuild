@@ -232,10 +232,10 @@ export function validateSlugCandidate(candidate: string | null | undefined): str
 // ── Tick report ──────────────────────────────────────────────────────────────
 
 /** Counts per action, for observability and tests. An idempotent re-run of
- * `tick()` over unchanged state reports all zeroes — except the dependency
- * fields, which are a standing queue report rather than a record of action: a
- * still-blocked ticket re-reports every tick by design, because that is the
- * only place its blockers are visible without provider inspection. */
+ * `tick()` over unchanged state reports all zeroes — except invalid-record and
+ * dependency fields, which are standing queue reports rather than records of
+ * action. They repeat on every ready scan by design, because that is the only
+ * place the source problems are visible without provider inspection. */
 export interface TickReport {
   /** Janitor (§15.7): builds completed as merged. */
   merged: number
@@ -257,6 +257,11 @@ export interface TickReport {
   bounced: number
   /** Claim-before-launch (§12): claims lost to another dispatcher. */
   claimRaces: number
+  /** Invalid source records excluded from this ready listing. Like dependency
+   * fields, this is a standing count and is re-reported until repaired. */
+  invalidTickets: number
+  /** Actionable source diagnostics for each excluded invalid record. */
+  ticketDiagnostics: string[]
   /** Dependency gate (§13): ready tickets held back by unresolved blockers. */
   dependencyBlocked: number
   /** One line per held ticket naming its unresolved blockers — the operator's
@@ -284,6 +289,8 @@ export function emptyTickReport(): TickReport {
     authored: 0,
     bounced: 0,
     claimRaces: 0,
+    invalidTickets: 0,
+    ticketDiagnostics: [],
     dependencyBlocked: 0,
     dependencyDiagnostics: [],
     harvestStarted: 0,
@@ -851,7 +858,10 @@ export class Dispatcher {
     let capacity = config.dispatcher.capacity - active
     if (capacity <= 0) return
 
-    const ready = await tickets.listReady(readyCriteria(config))
+    const listing = await tickets.listReady(readyCriteria(config))
+    const ready = listing.tickets
+    report.invalidTickets += listing.diagnostics.length
+    report.ticketDiagnostics.push(...listing.diagnostics)
     // One dependency-node cache per tick: blockers are commonly shared across
     // the ready set, and a blocker's resolution must be re-read every tick
     // (never cached across them) so a completion lands on the next pass.

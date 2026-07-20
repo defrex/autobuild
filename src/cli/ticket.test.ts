@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
@@ -13,6 +13,7 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import type {
   Ticket,
   TicketDraft,
+  TicketListing,
   TicketSource,
   TicketUpdate,
 } from '../ports/types'
@@ -83,7 +84,7 @@ function fakeFactory(
     created.targetRepo = targetRepo
     return {
       name: 'fake',
-      listReady: () => Promise.resolve([]),
+      listReady: () => Promise.resolve({ tickets: [], diagnostics: [] }),
       get: () => Promise.resolve(null),
       claim: () => Promise.resolve(false),
       comment: () => Promise.resolve(),
@@ -469,16 +470,18 @@ describe('abTicket update/block/unblock', () => {
 
 class CapturingTicketSource extends FakeTicketSource {
   readonly listCriteria: Array<{ labels?: string[]; state?: string }> = []
+  readonly diagnostics: string[] = []
 
   override async listReady(criteria: {
     labels?: string[]
     state?: string
-  }): Promise<Ticket[]> {
+  }): Promise<TicketListing> {
     this.listCriteria.push({
       ...(criteria.labels !== undefined ? { labels: [...criteria.labels] } : {}),
       ...(criteria.state !== undefined ? { state: criteria.state } : {}),
     })
-    return super.listReady(criteria)
+    const listing = await super.listReady(criteria)
+    return { ...listing, diagnostics: [...this.diagnostics] }
   }
 }
 
@@ -515,6 +518,7 @@ describe('abTicketList', () => {
         targetRepo: tmp,
         env: {},
         stdout: () => {},
+        stderr: () => {},
         sourceFactory: () => source,
       })
       expect(source.listCriteria).toEqual([expected])
@@ -530,6 +534,7 @@ describe('abTicketList', () => {
       labels: ['security', 'api'],
       env: {},
       stdout: () => {},
+      stderr: () => {},
       sourceFactory: () => labelsOnly,
     })
     expect(labelsOnly.listCriteria).toEqual([{ labels: ['security', 'api'] }])
@@ -540,6 +545,7 @@ describe('abTicketList', () => {
       state: 'Triage',
       env: {},
       stdout: () => {},
+      stderr: () => {},
       sourceFactory: () => stateOnly,
     })
     expect(stateOnly.listCriteria).toEqual([{ state: 'Triage' }])
@@ -556,6 +562,10 @@ describe('abTicketList', () => {
       }),
     ])
     const out: string[] = []
+    const errors: string[] = []
+    source.diagnostics.push(
+      '/repo/tickets/done/notes.md: invalid frontmatter — title is required',
+    )
 
     await abTicketList({
       targetRepo: tmp,
@@ -563,11 +573,15 @@ describe('abTicketList', () => {
       json: true,
       env: {},
       stdout: (line) => out.push(line),
+      stderr: (line) => errors.push(line),
       sourceFactory: () => source,
     })
 
     const parsed = JSON.parse(out.join('\n')) as Ticket[]
     expect(parsed.map((ticket) => ticket.ref.id)).toEqual(['AUT-1'])
+    expect(errors).toEqual([
+      '/repo/tickets/done/notes.md: invalid frontmatter — title is required',
+    ])
     expect(source.listCriteria).toEqual([{ labels: ['security', 'api'] }])
   })
 
@@ -579,6 +593,7 @@ describe('abTicketList', () => {
       state: 'Ready',
       env: {},
       stdout: (line) => out.push(line),
+      stderr: () => {},
       sourceFactory: () => new FakeTicketSource([seededTicket()]),
     })
     expect(out).toHaveLength(1)
@@ -592,6 +607,7 @@ describe('abTicketList', () => {
       targetRepo: tmp,
       env: {},
       stdout: (line) => empty.push(line),
+      stderr: () => {},
       sourceFactory: () => new FakeTicketSource(),
     })
     expect(empty).toEqual([
@@ -834,6 +850,27 @@ describe('runCli — ticket routing', () => {
 
     expect(await runCli(['ticket', 'move', 'file-1', 'done', '--json'], deps)).toBe(0)
     expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('Done')
+  })
+
+  test('list routes malformed-record diagnostics to stderr while JSON stdout stays bare', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out, err } = sessionlessDeps()
+    await runCli(['ticket', 'create', 'Valid', '--body', bodyFile], deps)
+    await runCli(['ticket', 'move', 'file-1', 'ready'], deps)
+    const malformedPath = join(tmp, 'tickets', 'done', 'notes.md')
+    await mkdir(join(tmp, 'tickets', 'done'), { recursive: true })
+    await writeFile(malformedPath, '# not ticket frontmatter\n')
+
+    expect(await runCli(['ticket', 'list', '--json'], deps)).toBe(0)
+
+    expect((JSON.parse(out.at(-1)!) as Ticket[]).map((ticket) => ticket.ref.id)).toEqual([
+      'file-1',
+    ])
+    expect(err).toContain(
+      `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
+    )
   })
 
   test('update partially replaces a real file ticket and explicit empty labels clear', async () => {

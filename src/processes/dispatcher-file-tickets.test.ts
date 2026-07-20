@@ -30,7 +30,7 @@ import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
-import { Dispatcher } from './dispatcher'
+import { Dispatcher, emptyTickReport } from './dispatcher'
 
 const REPO = '/repos/origin'
 const BASE_SHA = 'base-sha-42'
@@ -122,6 +122,58 @@ describe('minimal config dispatch over the real file tracker', () => {
     // Claiming visibly removes it from ready/ — the move IS the claim record.
     expect(await ls('ready')).toEqual([])
     expect(await ls('doing')).toEqual([`${created.ref.id}.md`])
+  })
+
+  test('malformed terminal content is reported while valid ready work dispatches', async () => {
+    const h = harness()
+    const valid = await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
+    await h.tickets.transition(valid.ref.id, 'Ready')
+    const malformedPath = join(trackerDir(), 'done', 'notes.md')
+    const malformed = '+++\nid = "notes"\n+++\nold operator notes\n'
+    await Bun.write(malformedPath, malformed)
+
+    const report = await h.dispatcher.tick()
+
+    expect(report).toEqual({
+      ...emptyTickReport(),
+      dispatched: 1,
+      invalidTickets: 1,
+      ticketDiagnostics: [expect.stringContaining(malformedPath)],
+    })
+    expect(report.ticketDiagnostics[0]).toMatch(/invalid frontmatter.*title/s)
+    expect(h.launches).toEqual(['add-rate-limiting'])
+    expect(await ls('doing')).toEqual([`${valid.ref.id}.md`])
+    expect(await Bun.file(malformedPath).text()).toBe(malformed)
+  })
+
+  test('malformed ready content stays unclaimed while another ready ticket dispatches', async () => {
+    const h = harness()
+    const valid = await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
+    await h.tickets.transition(valid.ref.id, 'Ready')
+    const malformedPath = join(trackerDir(), 'ready', 'broken.md')
+    const malformed = '# not a ticket record\n'
+    await Bun.write(malformedPath, malformed)
+
+    const report = await h.dispatcher.tick()
+
+    expect(report).toEqual({
+      ...emptyTickReport(),
+      dispatched: 1,
+      invalidTickets: 1,
+      ticketDiagnostics: [
+        `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
+      ],
+    })
+    expect(h.launches).toEqual(['add-rate-limiting'])
+    expect(await ls('doing')).toEqual([`${valid.ref.id}.md`])
+    expect(await ls('ready')).toEqual(['broken.md'])
+    expect(await Bun.file(malformedPath).text()).toBe(malformed)
   })
 
   test('a second tick does not dispatch the same ticket a second time', async () => {

@@ -159,9 +159,10 @@ export function describeTicketSourceContract(
         const initiallyReady = await harness.source.listReady({
           state: harness.states.ready,
         })
-        expect(initiallyReady.some((ticket) => ticket.ref.id === created.ref.id)).toBe(
-          true,
-        )
+        expect(initiallyReady.diagnostics).toEqual([])
+        expect(
+          initiallyReady.tickets.some((ticket) => ticket.ref.id === created.ref.id),
+        ).toBe(true)
 
         await harness.source.transition(created.ref.id, harness.states.completed)
         expect((await harness.source.get(created.ref.id))?.state).toBe(
@@ -170,9 +171,10 @@ export function describeTicketSourceContract(
         const stillReady = await harness.source.listReady({
           state: harness.states.ready,
         })
-        expect(stillReady.some((ticket) => ticket.ref.id === created.ref.id)).toBe(
-          false,
-        )
+        expect(stillReady.diagnostics).toEqual([])
+        expect(
+          stillReady.tickets.some((ticket) => ticket.ref.id === created.ref.id),
+        ).toBe(false)
       })
     })
 
@@ -458,9 +460,13 @@ export function describeTicketSourceContract(
         expect(retry.title).toBe(originalTitle)
         expect(retry.body).toBe(CONTRACT_TICKET_BODY)
         expect(retry.state).toBe(harness.states.ready)
-        const matching = (
-          await harness.source.listReady({ state: harness.states.ready })
-        ).filter((ticket) => ticket.ref.id === first.ref.id)
+        const listing = await harness.source.listReady({
+          state: harness.states.ready,
+        })
+        expect(listing.diagnostics).toEqual([])
+        const matching = listing.tickets.filter(
+          (ticket) => ticket.ref.id === first.ref.id,
+        )
         expect(matching).toHaveLength(1)
       })
     })

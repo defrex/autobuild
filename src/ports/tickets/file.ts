@@ -8,9 +8,10 @@
  * mid-build, never artifact storage.
  *
  * A ticket's state IS the directory it sits in. There is no `state` field to
- * disagree with the filesystem, `transition` and `claim` are rename(2), and
- * `ls ready/` is an accurate answer to "what's dispatchable" — which is what
- * lets `mv triage/x.md ready/` be the whole lifecycle-state grooming UX.
+ * disagree with the filesystem, and `transition` and `claim` are rename(2).
+ * Moving a valid record from `triage/` to `ready/` is the complete
+ * lifecycle-state grooming UX; listing validates every candidate before it can
+ * become eligible.
  *
  * Concurrency: writes locate and validate immediately before a same-path
  * rewrite or same-filesystem rename; there is no filesystem lock. The
@@ -28,6 +29,7 @@ import type {
   Ticket,
   TicketCreateOptions,
   TicketDraft,
+  TicketListing,
   TicketSource,
   TicketUpdate,
 } from '../types'
@@ -81,30 +83,46 @@ type Frontmatter = z.infer<typeof frontmatterSchema>
 const OPEN_FENCE = '+++\n'
 const CLOSE_FENCE = '\n+++\n'
 
+/** A malformed record that a complete tracker scan may safely exclude. This is
+ * deliberately narrower than ordinary Error: filesystem failures, layout
+ * violations, duplicate ids, and unexpected exceptions must still abort the
+ * listing. */
+export class TicketFileValidationError extends Error {
+  override readonly name = 'TicketFileValidationError'
+}
+
 function parseTicketFile(
   path: string,
   raw: string,
 ): { front: Frontmatter; body: string } {
   if (!raw.startsWith(OPEN_FENCE)) {
-    throw new Error(`${path}: malformed ticket file — missing opening "+++" fence`)
+    throw new TicketFileValidationError(
+      `${path}: malformed ticket file — missing opening "+++" fence`,
+    )
   }
   const close = raw.indexOf(CLOSE_FENCE, OPEN_FENCE.length)
   if (close === -1) {
-    throw new Error(`${path}: malformed ticket file — missing closing "+++" fence`)
+    throw new TicketFileValidationError(
+      `${path}: malformed ticket file — missing closing "+++" fence`,
+    )
   }
   let parsed: unknown
   try {
     parsed = parseToml(raw.slice(OPEN_FENCE.length, close))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`${path}: malformed TOML frontmatter — ${message}`)
+    throw new TicketFileValidationError(
+      `${path}: malformed TOML frontmatter — ${message}`,
+    )
   }
   const result = frontmatterSchema.safeParse(parsed)
   if (!result.success) {
     const issues = result.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('; ')
-    throw new Error(`${path}: invalid frontmatter — ${issues}`)
+    throw new TicketFileValidationError(
+      `${path}: invalid frontmatter — ${issues}`,
+    )
   }
   return { front: result.data, body: raw.slice(close + CLOSE_FENCE.length) }
 }
@@ -168,17 +186,25 @@ export class FileTicketSource implements TicketSource {
     this.selfIgnore = opts.selfIgnore ?? false
   }
 
-  async listReady(criteria: { labels?: string[]; state?: string }): Promise<Ticket[]> {
+  async listReady(criteria: {
+    labels?: string[]
+    state?: string
+  }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     const state = criteria.state === undefined ? undefined : stateDir(criteria.state)
-    // Through listAll, not a single readdir: the duplicate-id check has to hold
-    // on the SCAN path, or a `cp` between state dirs is a silent double-dispatch.
-    const tickets = await this.listAll()
-    return tickets.filter(
-      (ticket) =>
-        (state === undefined || ticket.state === state) &&
-        labels.every((label) => ticket.labels.includes(label)),
-    )
+    // Through listAll, not a single readdir: scan completes its layout and
+    // duplicate-id checks before any per-record validation is contained. A
+    // malformed record can never weaken the invariant preventing a `cp`
+    // between state dirs from becoming a silent double-dispatch.
+    const listing = await this.listAll()
+    return {
+      tickets: listing.tickets.filter(
+        (ticket) =>
+          (state === undefined || ticket.state === state) &&
+          labels.every((label) => ticket.labels.includes(label)),
+      ),
+      diagnostics: listing.diagnostics,
+    }
   }
 
   async get(id: string): Promise<Ticket | null> {
@@ -204,6 +230,11 @@ export class FileTicketSource implements TicketSource {
     await this.ensureLayout()
     const found = await this.locate(id)
     if (found === null) return false
+    // Revalidate at the targeted operation boundary, even when lifecycle state
+    // will make the claim a no-op. Besides keeping malformed records loud,
+    // this closes the list→claim window where a human could corrupt a record
+    // after it was listed but before the dispatcher claims it.
+    await this.loadAt(found)
     if (found.state === 'Doing' || found.state === 'Done') return false
     await rename(found.path, this.pathIn('Doing', id))
     return true
@@ -235,6 +266,9 @@ export class FileTicketSource implements TicketSource {
     if (found === null) {
       throw new Error(`file ticket source: transition on unknown ticket "${id}"`)
     }
+    // Targeted writes remain loud for malformed records, including an
+    // otherwise-idempotent transition to the current state.
+    await this.loadAt(found)
     // Idempotent by construction — the dispatcher retries transitions after a
     // crash (file.test.ts explains the window). rename(2) would no-op here
     // anyway, but resting idempotency on that POSIX subtlety would make it a
@@ -476,7 +510,7 @@ export class FileTicketSource implements TicketSource {
   private async loadAt(found: Located): Promise<{ front: Frontmatter; body: string }> {
     const loaded = parseTicketFile(found.path, await readFile(found.path, 'utf8'))
     if (loaded.front.id !== found.id) {
-      throw new Error(
+      throw new TicketFileValidationError(
         `${found.path}: frontmatter id "${loaded.front.id}" does not match filename`,
       )
     }
@@ -506,13 +540,25 @@ export class FileTicketSource implements TicketSource {
     await writeFile(found.path, serializeTicketFile(front, body))
   }
 
-  private async listAll(): Promise<Ticket[]> {
+  private async listAll(): Promise<TicketListing> {
     const tickets: Ticket[] = []
-    for (const found of await this.scan()) {
-      const loaded = await this.loadAt(found)
-      tickets.push(this.toTicket(loaded.front, loaded.body, found.state))
+    const diagnostics: string[] = []
+    // Complete discovery first. Structural failures (including duplicate ids)
+    // therefore win even when one of the discovered records is also malformed.
+    const located = await this.scan()
+    for (const found of located) {
+      try {
+        const loaded = await this.loadAt(found)
+        tickets.push(this.toTicket(loaded.front, loaded.body, found.state))
+      } catch (error) {
+        if (error instanceof TicketFileValidationError) {
+          diagnostics.push(error.message)
+          continue
+        }
+        throw error
+      }
     }
-    return tickets
+    return { tickets, diagnostics }
   }
 
   private toTicket(front: Frontmatter, body: string, state: TicketState): Ticket {

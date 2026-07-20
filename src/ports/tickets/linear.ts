@@ -14,6 +14,7 @@ import type {
   Ticket,
   TicketCreateOptions,
   TicketDraft,
+  TicketListing,
   TicketSource,
   TicketUpdate,
 } from '../types'
@@ -225,7 +226,7 @@ export class LinearTicketSource implements TicketSource {
   async listReady(criteria: {
     labels?: string[]
     state?: string
-  }): Promise<Ticket[]> {
+  }): Promise<TicketListing> {
     const filter: Record<string, unknown> = {
       team: { key: { eq: this.teamKey } },
     }
@@ -243,7 +244,10 @@ export class LinearTicketSource implements TicketSource {
       LIST_READY_QUERY,
       { filter },
     )
-    return data.issues.nodes.map((issue) => this.toTicket(issue))
+    return {
+      tickets: data.issues.nodes.map((issue) => this.toTicket(issue)),
+      diagnostics: [],
+    }
   }
 
   async get(id: string): Promise<Ticket | null> {

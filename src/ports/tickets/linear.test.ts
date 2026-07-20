@@ -133,20 +133,23 @@ describe('LinearTicketSource', () => {
         ],
       },
     })
-    expect(tickets).toEqual([
-      {
-        ref: {
-          source: 'linear',
-          id: 'ENG-42',
-          url: 'https://linear.app/acme/issue/ENG-42',
+    expect(tickets).toEqual({
+      tickets: [
+        {
+          ref: {
+            source: 'linear',
+            id: 'ENG-42',
+            url: 'https://linear.app/acme/issue/ENG-42',
+            title: 'Rate-limit auth',
+          },
           title: 'Rate-limit auth',
+          body: '# Spec\n\nToken bucket on /auth/*.',
+          state: 'Ready',
+          labels: ['autobuild'],
         },
-        title: 'Rate-limit auth',
-        body: '# Spec\n\nToken bucket on /auth/*.',
-        state: 'Ready',
-        labels: ['autobuild'],
-      },
-    ])
+      ],
+      diagnostics: [],
+    })
   })
 
   test('listReady with no criteria sends only the team filter', async () => {
@@ -154,7 +157,10 @@ describe('LinearTicketSource', () => {
       { body: { data: { issues: { nodes: [] } } } },
     ])
 
-    expect(await makeSource(fetchFn).listReady({})).toEqual([])
+    expect(await makeSource(fetchFn).listReady({})).toEqual({
+      tickets: [],
+      diagnostics: [],
+    })
     expect(calls[0]?.variables).toEqual({
       filter: { team: { key: { eq: 'ENG' } } },
     })

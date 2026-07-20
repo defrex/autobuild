@@ -45,7 +45,8 @@ describe('FakeTicketSource', () => {
     ])
 
     const ready = await source.listReady({ labels: ['autobuild', 'bug'] })
-    expect(ready.map((t) => t.ref.id)).toEqual(['t-1'])
+    expect(ready.tickets.map((t) => t.ref.id)).toEqual(['t-1'])
+    expect(ready.diagnostics).toEqual([])
   })
 
   test('listReady filters by state', async () => {
@@ -55,7 +56,8 @@ describe('FakeTicketSource', () => {
     ])
 
     const ready = await source.listReady({ state: 'Ready' })
-    expect(ready.map((t) => t.ref.id)).toEqual(['t-1'])
+    expect(ready.tickets.map((t) => t.ref.id)).toEqual(['t-1'])
+    expect(ready.diagnostics).toEqual([])
   })
 
   test('listReady combines label and state criteria; empty criteria match all', async () => {
@@ -66,8 +68,9 @@ describe('FakeTicketSource', () => {
     ])
 
     const ready = await source.listReady({ state: 'Ready', labels: ['autobuild'] })
-    expect(ready.map((t) => t.ref.id)).toEqual(['t-1'])
-    expect((await source.listReady({})).length).toBe(3)
+    expect(ready.tickets.map((t) => t.ref.id)).toEqual(['t-1'])
+    expect(ready.diagnostics).toEqual([])
+    expect((await source.listReady({})).tickets).toHaveLength(3)
   })
 
   test('journals record every comment and transition, in order', async () => {
@@ -94,7 +97,7 @@ describe('FakeTicketSource', () => {
     await source.transition('t-1', 'Ready')
 
     expect((await source.get('t-1'))?.state).toBe('Ready')
-    expect(await source.listReady({ state: 'Ready' })).toHaveLength(1)
+    expect((await source.listReady({ state: 'Ready' })).tickets).toHaveLength(1)
   })
 
   test('comment and transition throw on unknown tickets', async () => {
@@ -217,7 +220,7 @@ describe('FakeTicketSource', () => {
     const created = await source.create({ title: 'A', body: 'b' })
 
     expect(created.state).toBe('Triage')
-    expect(await source.listReady({ state: 'Ready' })).toHaveLength(0)
+    expect((await source.listReady({ state: 'Ready' })).tickets).toHaveLength(0)
   })
 
   test('get returns a copy — mutating the result does not corrupt the source', async () => {
