@@ -37,7 +37,13 @@ import {
   type OpenSession,
   type PrLifecycle,
 } from '../kernel/reducer'
-import type { BuildOutcome, BuildStatus, Phase, TicketRef } from '../ontology'
+import type {
+  BuildOutcome,
+  BuildStatus,
+  Phase,
+  TicketRef,
+  VerifyOutcome,
+} from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
 import type { BuildRecord, BuildStore } from '../store/types'
@@ -82,8 +88,8 @@ export interface BuildSummary {
 
 export interface VerifyProgress {
   attempt: number
-  /** Current cycle only — earlier attempts' passes never count (§15.6-A). */
-  steps: { step: string; pass: boolean }[]
+  /** Current cycle only — earlier attempts' results never count (§15.6-A). */
+  steps: { step: string; outcome: VerifyOutcome; reason?: string }[]
   currentStep?: string
 }
 
@@ -203,7 +209,11 @@ export function detail(
   // the projection used elsewhere rather than a second, drifting opinion.
   const steps = state.verify.results
     .filter((result) => result.seq > state.verify.cycleSince)
-    .map((result) => ({ step: result.step, pass: result.pass }))
+    .map((result) => ({
+      step: result.step,
+      outcome: result.outcome,
+      ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    }))
   return {
     ...summary,
     openEscalations: state.openEscalations,
@@ -370,7 +380,11 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.verify.attempt > 0) {
     lines.push(`  verify:   attempt ${d.verify.attempt}`)
     for (const step of d.verify.steps) {
-      lines.push(`    ${step.pass ? 'pass' : 'FAIL'}  ${step.step}`)
+      if (step.outcome === 'skipped') {
+        lines.push(`    SKIP  ${step.step} — ${step.reason ?? '(reason unavailable)'}`)
+      } else {
+        lines.push(`    ${step.outcome === 'pass' ? 'pass' : 'FAIL'}  ${step.step}`)
+      }
     }
     if (d.verify.currentStep !== undefined) {
       lines.push(`    running  ${d.verify.currentStep}`)

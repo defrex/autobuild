@@ -231,6 +231,13 @@ function verifyRun(
   ]
 }
 
+function verifySkip(step: string, attempt: number, reason: string): EventWrite[] {
+  return [
+    ev('verify.started', { step, attempt }),
+    ev('verify.completed', { step, attempt, outcome: 'skipped', reason }),
+  ]
+}
+
 function verifyAllPass(attempt: number): EventWrite[] {
   return [
     ...verifyRun('types', attempt, true),
@@ -1086,6 +1093,72 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     expect(decide(failAtUnit)).not.toEqual(
       expect.objectContaining({ kind: 'run-check', step: 'unit' }),
     )
+  })
+
+  test('a skip satisfies its step, advances later steps, and permits finalize', () => {
+    const approved = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+    ]
+    const typesSkipped = [
+      ...approved,
+      ...verifySkip('types', 1, 'No TypeScript files changed'),
+    ]
+    expect(decide(typesSkipped)).toEqual({
+      kind: 'run-check',
+      step: 'unit',
+      command: 'bun test',
+      attempt: 1,
+    })
+
+    const throughUnit = [...typesSkipped, ...verifyRun('unit', 1, true)]
+    expect(decide(throughUnit)).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      needsServer: true,
+      attempt: 1,
+    })
+    expect(
+      decide([...throughUnit, ...verifySkip('e2e', 1, 'No browser-facing behavior changed')]),
+    ).toEqual(runPhase('finalize', 1))
+  })
+
+  test('a failure elsewhere in a cycle still wins over a skipped step', () => {
+    expect(
+      decide([
+        ...prelude(),
+        ...planApproved(),
+        ...implementRound(1, 'sha-r1'),
+        ...codeReview(1, 'approve'),
+        ...verifySkip('types', 1, 'No TypeScript files changed'),
+        ...verifyRun('unit', 1, false, report0),
+      ]),
+    ).toEqual(runPhase('implement', 2, { verify: { step: 'unit', report: report0 } }))
+  })
+
+  test('skips carry attempt identity but do not consume the failure budget', () => {
+    const afterTwoFailures = [
+      ...failAtUnit,
+      ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } }),
+      ...codeReview(2, 'approve'),
+      ...verifyRun('types', 2, true),
+      ...verifyRun('unit', 2, false, report1),
+      ...implementRound(3, 'sha-r3', { verify: { step: 'unit', report: report1 } }),
+      ...codeReview(3, 'approve'),
+      ...verifySkip('types', 3, 'No TypeScript files changed'),
+    ]
+
+    // maxVerifyAttempts is 3. The skip is not a third failure and keeps the
+    // current cycle on attempt 3, so unit runs instead of policy escalation.
+    expect(decide(afterTwoFailures)).toEqual({
+      kind: 'run-check',
+      step: 'unit',
+      command: 'bun test',
+      attempt: 3,
+    })
   })
 
   const exhausted: EventWrite[] = [

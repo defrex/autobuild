@@ -73,9 +73,11 @@ export interface StepTiming {
 export interface PipelineStep {
   label: string
   state: StepState
-  /** A non-load-bearing word — always redundant with `state`. `failed` on a
-   * verify/finalize step, `waiting` on merge. Rendered inside the `(…)` note. */
-  qualifier?: 'failed' | 'waiting'
+  /** Display-only and never consulted for routing. `failed` or `skipped` on
+   * a verify/finalize step preserves its outcome alongside lifecycle `state`;
+   * `waiting` annotates merge. Rendered inside the `(…)` note, so outcome
+   * distinctions never rely on color alone. */
+  qualifier?: 'failed' | 'skipped' | 'waiting'
   /** Round (plan/implement loops) or attempt (verify/reconcile). Rendered as
    * `/n` riding the elapsed time when > 1 — supersedes the old `r2`/`a2`. */
   count?: number
@@ -202,7 +204,7 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
  */
 interface StepExtra {
   producedOutput?: boolean
-  qualifier?: 'failed' | 'waiting'
+  qualifier?: 'failed' | 'skipped' | 'waiting'
   count?: number
   timing?: StepTiming
 }
@@ -433,9 +435,13 @@ export function projectBuild(
   // ── Shared derivations ────────────────────────────────────────────────────
   // ORDER MATTERS: `cycleFailed` must be defined before `codeDone` reads it.
   const cycle = state.verify.results.filter((r) => r.seq > cycleSince)
-  const cycleFailed = cycle.some((r) => !r.pass)
-  const verifyPassed = (s: string): boolean => cycle.some((r) => r.step === s && r.pass)
-  const verifyDrained = !cycleFailed && config.verify.steps.every(verifyPassed)
+  const cycleFailed = cycle.some((r) => r.outcome === 'fail')
+  const verifyPassed = (s: string): boolean =>
+    cycle.some((r) => r.step === s && r.outcome === 'pass')
+  const verifySkipped = (s: string): boolean =>
+    cycle.some((r) => r.step === s && r.outcome === 'skipped')
+  const verifySatisfied = (s: string): boolean => verifyPassed(s) || verifySkipped(s)
+  const verifyDrained = !cycleFailed && config.verify.steps.every(verifySatisfied)
 
   // A loop is settled only if its standing approval survived the last restart
   // AND no later producer round reopened it. `approved` alone is a full-log
@@ -539,9 +545,13 @@ export function projectBuild(
     // qualifier so the operator does not lose the information; completed rows
     // are provisional because they produced output but will genuinely re-run.
     steps.push(
-      step(phase, !cycleFailed && verifyPassed(s), current, {
+      step(phase, !cycleFailed && verifySatisfied(s), current, {
         producedOutput: stepResults.length > 0,
-        qualifier: stepResults.some((r) => !r.pass) ? 'failed' : undefined,
+        qualifier: stepResults.some((r) => r.outcome === 'fail')
+          ? 'failed'
+          : stepResults.some((r) => r.outcome === 'skipped')
+            ? 'skipped'
+            : undefined,
         count,
         timing: timingFor(intervals, phase, cycleSince, frozenNow),
       }),

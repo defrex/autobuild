@@ -203,6 +203,13 @@ function verifyRun(step: string, attempt: number, pass: boolean): EventWrite[] {
   ]
 }
 
+function verifySkip(step: string, attempt: number, reason: string): EventWrite[] {
+  return [
+    ev('verify.started', { step, attempt }),
+    ev('verify.completed', { step, attempt, outcome: 'skipped', reason }),
+  ]
+}
+
 function finalized(): EventWrite[] {
   return [
     ev('finalize.started', {}),
@@ -841,6 +848,34 @@ describe('f_23e76d34: the verify cycle boundary', () => {
     expect(stateOf(build, 'verify:lint')).toBe('done')
     expect(stateOf(build, 'verify:test')).toBe('pending')
   })
+
+  test('a skipped step is satisfied but remains textually distinct from a pass', () => {
+    const log = toLog([
+      ...throughCodeReview(),
+      ...verifySkip('lint', 1, 'No lintable files changed'),
+    ])
+    const build = project(log)
+
+    expect(stateOf(build, 'verify:lint')).toBe('done')
+    expect(stepFor(build, 'verify:lint')?.qualifier).toBe('skipped')
+    expect(stateOf(build, 'verify:test')).toBe('pending')
+    expect(decideNext(log, CONFIG)).toMatchObject({ kind: 'run-check', step: 'test' })
+  })
+
+  test('another step failure makes an earlier skip provisional without hiding its outcome', () => {
+    const build = project(
+      toLog([
+        ...throughCodeReview(),
+        ...verifySkip('lint', 1, 'No lintable files changed'),
+        ...verifyRun('test', 1, false),
+      ]),
+    )
+
+    expect(stateOf(build, 'verify:lint')).toBe('provisional')
+    expect(stepFor(build, 'verify:lint')?.qualifier).toBe('skipped')
+    expect(stateOf(build, 'verify:test')).toBe('provisional')
+    expect(stepFor(build, 'verify:test')?.qualifier).toBe('failed')
+  })
 })
 
 describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () => {
@@ -1100,6 +1135,22 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(stateOf(build, 'merge')).toBe('current')
     expect(stepFor(build, 'merge')?.qualifier).toBe('waiting')
     expect(build.pr).toEqual({ url: 'https://github.com/defrex/app/pull/7', state: 'open' })
+  })
+
+  test('a skipped verify step drains into finalize and merge without becoming a pass', () => {
+    const log = toLog([
+      ...throughCodeReview(),
+      ...verifySkip('lint', 1, 'No lintable files changed'),
+      ...verifyRun('test', 1, true),
+      ...finalized(),
+    ])
+    expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+
+    const build = project(log)
+    expect(stateOf(build, 'verify:lint')).toBe('done')
+    expect(stepFor(build, 'verify:lint')?.qualifier).toBe('skipped')
+    expect(stateOf(build, 'finalize')).toBe('done')
+    expect(stateOf(build, 'merge')).toBe('current')
   })
 
   test('case 1: a finalize post-step still outstanding ⇒ merge not current', () => {

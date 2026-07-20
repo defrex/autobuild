@@ -18,6 +18,7 @@
 import { z } from 'zod'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
+import { normalizeVerifyCompletion } from '../events/payloads'
 import type { IdSource } from '../ids'
 import {
   autoMergeApplicationType,
@@ -449,13 +450,15 @@ function renderPrSummary(env: CliEnv, events: AbEvent[]): string {
       verdicts.push(`- ${phase} r${event.payload.round}: ${event.payload.verdict}${detail}`)
     }
     if (event.type === 'verify.completed') {
-      const report =
-        event.payload.report !== undefined
-          ? ` — ${event.payload.report.kind}@${event.payload.report.rev}`
-          : ''
+      const result = normalizeVerifyCompletion(event.payload)
+      const detail =
+        result.outcome === 'skipped'
+          ? ` — ${result.reason}`
+          : result.report !== undefined
+            ? ` — ${result.report.kind}@${result.report.rev}`
+            : ''
       verifies.push(
-        `- ${event.payload.step} (attempt ${event.payload.attempt}): ` +
-          `${event.payload.pass ? 'pass' : 'fail'}${report}`,
+        `- ${result.step} (attempt ${result.attempt}): ${result.outcome}${detail}`,
       )
     }
   }
@@ -485,7 +488,7 @@ export interface VerdictOpts {
   notes?: string
   /** FindingDraft[] JSON file (revise only). */
   findings?: string
-  /** Escalation question (escalate only). */
+  /** Escalation question, or the required explanation for a verify skip. */
   reason?: string
   /** Failure report file (agent-verify fail — required). */
   report?: string
@@ -518,13 +521,13 @@ export async function verdict(
   }
   // The verdict vocabulary is phase-dependent and enforced here (§8.2):
   // review phases accept approve|revise|escalate; agent-verify steps accept
-  // pass|fail.
+  // pass|fail|skip.
   const vocabulary = spec.verdictVocabulary ?? []
   if (!vocabulary.includes(opts.verdict)) {
     throw new Error(
       `verdict "${opts.verdict}" is not in ${env.phase}'s vocabulary — §8.2: ` +
         'review phases accept approve|revise|escalate; agent-verify steps ' +
-        `accept pass|fail. ${env.phase} accepts: ${vocabulary.join('|')}`,
+        `accept pass|fail|skip. ${env.phase} accepts: ${vocabulary.join('|')}`,
     )
   }
   const events = await store.getEvents(env.build)
@@ -707,7 +710,12 @@ async function agentVerifyVerdict(
         (deposited) => ({
           actor,
           type: 'verify.completed',
-          payload: { step, attempt: env.round, pass: true, report: refOf(deposited[0]) },
+          payload: {
+            step,
+            attempt: env.round,
+            outcome: 'pass',
+            report: refOf(deposited[0]),
+          },
         }),
       )
       return [event]
@@ -716,7 +724,24 @@ async function agentVerifyVerdict(
       await store.append(env.build, {
         actor,
         type: 'verify.completed',
-        payload: { step, attempt: env.round, pass: true },
+        payload: { step, attempt: env.round, outcome: 'pass' },
+      }),
+    ]
+  }
+
+  if (opts.verdict === 'skip') {
+    const reason = opts.reason?.trim()
+    if (reason === undefined || reason === '') {
+      throw new Error(
+        `'ab verdict skip' requires --reason <text> — a skipped verification ` +
+          'must leave a human-readable reason in the event log',
+      )
+    }
+    return [
+      await store.append(env.build, {
+        actor,
+        type: 'verify.completed',
+        payload: { step, attempt: env.round, outcome: 'skipped', reason },
       }),
     ]
   }
@@ -735,7 +760,12 @@ async function agentVerifyVerdict(
     (deposited) => ({
       actor,
       type: 'verify.completed',
-      payload: { step, attempt: env.round, pass: false, report: refOf(deposited[0]) },
+      payload: {
+        step,
+        attempt: env.round,
+        outcome: 'fail',
+        report: refOf(deposited[0]),
+      },
     }),
   )
   return [event]

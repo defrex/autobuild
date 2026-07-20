@@ -354,6 +354,26 @@ describe('renderDashboard: never color-only', () => {
     expect(plain).toContain('BLOCKED')
   })
 
+  test('a skipped verify step is textually distinct from a pass in plain and ANSI output', () => {
+    const passed = build({
+      steps: [{ label: 'verify:e2e', state: 'done' }],
+    })
+    const skipped = build({
+      steps: [{ label: 'verify:e2e', state: 'done', qualifier: 'skipped' }],
+    })
+
+    const plainPass = rd(model([passed]), WIDE).join('\n')
+    const plainSkip = rd(model([skipped]), WIDE).join('\n')
+    expect(plainPass).toContain('[x] verify:e2e')
+    expect(plainPass).not.toContain('skipped')
+    expect(plainSkip).toContain('[x] verify:e2e(skipped)')
+
+    const ansiSkip = stripAnsi(
+      rd(model([skipped]), { color: true, width: 200 }).join('\n'),
+    )
+    expect(ansiSkip).toContain('[x] verify:e2e(skipped)')
+  })
+
   test('auto-merge intent is conveyed by one common token that is absent when off', () => {
     const lines = rd(
       model([

@@ -308,16 +308,16 @@ describe('reduceBuild: §15.6 happy path', () => {
     expect(duringUnit.round).toBe(1) // verify does not reset the loop round
     expect(duringUnit.verify.currentStep).toBe('unit')
     expect(duringUnit.verify.results).toEqual([
-      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 17 },
+      { step: 'types', attempt: 1, outcome: 'pass', report: undefined, seq: 17 },
     ])
 
     const allDone = stateAfter(log, 'verify.completed', 3)
     expect(allDone.verify.attempt).toBe(1)
     expect(allDone.verify.currentStep).toBeUndefined()
-    expect(allDone.verify.results.map((r) => [r.step, r.pass])).toEqual([
-      ['types', true],
-      ['unit', true],
-      ['e2e', true],
+    expect(allDone.verify.results.map((r) => [r.step, r.outcome])).toEqual([
+      ['types', 'pass'],
+      ['unit', 'pass'],
+      ['e2e', 'pass'],
     ])
   })
 
@@ -370,8 +370,8 @@ describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)',
   test('the failed step records its report and closes the verify phase', () => {
     const failed = stateAfter(log, 'verify.completed', 2)
     expect(failed.verify.results).toEqual([
-      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 14 },
-      { step: 'e2e', attempt: 1, pass: false, report, seq: 16 },
+      { step: 'types', attempt: 1, outcome: 'pass', report: undefined, seq: 14 },
+      { step: 'e2e', attempt: 1, outcome: 'fail', report, seq: 16 },
     ])
     expect(failed.verify.currentStep).toBeUndefined()
     expect(failed.currentPhase).toBeUndefined()
@@ -400,9 +400,9 @@ describe('reduceBuild: walkthrough A — verify failure routes back (§15.6-A)',
     // The current cycle is seq-based, not attempt-based (§15.6-A): the round-2
     // code-review approve moved `cycleSince` past attempt 1's results.
     const currentCycle = final.verify.results.filter((r) => r.seq > final.verify.cycleSince)
-    expect(currentCycle.map((r) => [r.step, r.pass])).toEqual([
-      ['types', true],
-      ['e2e', true],
+    expect(currentCycle.map((r) => [r.step, r.outcome])).toEqual([
+      ['types', 'pass'],
+      ['e2e', 'pass'],
     ])
     expect(final.verify.results).toHaveLength(4) // history keeps attempt 1
   })
@@ -1107,6 +1107,37 @@ describe('reduceBuild: finalize projections', () => {
 })
 
 describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
+  test('a skipped completion is queryable with its reason and closes the phase', () => {
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ev('verify.started', { step: 'e2e', attempt: 1 }),
+      ev('verify.completed', {
+        step: 'e2e',
+        attempt: 1,
+        outcome: 'skipped',
+        reason: 'No browser-facing behavior changed',
+      }),
+    ])
+    const state = reduceBuild(log)
+
+    expect(state.verify.results).toEqual([
+      {
+        step: 'e2e',
+        attempt: 1,
+        outcome: 'skipped',
+        report: undefined,
+        reason: 'No browser-facing behavior changed',
+        seq: 14,
+      },
+    ])
+    expect(state.verify.currentStep).toBeUndefined()
+    expect(state.currentPhase).toBeUndefined()
+    expect(state.lastCompletedPhase).toEqual({ phase: 'verify:e2e', attempt: 1, seq: 14 })
+  })
+
   test('verify.results carry the verify.completed seq', () => {
     const log = toLog([
       ...prelude(),
@@ -1117,7 +1148,7 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
     ])
     const state = reduceBuild(log)
     expect(state.verify.results).toEqual([
-      { step: 'types', attempt: 1, pass: true, report: undefined, seq: 14 },
+      { step: 'types', attempt: 1, outcome: 'pass', report: undefined, seq: 14 },
     ])
   })
 

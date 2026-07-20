@@ -33,7 +33,7 @@ steps = [
 # Check tables are rendered only when their backing command was detected.
 # @ab-init/package-script-verify-tables
 
-# Agent-verify example — a skill run with a pass|fail verdict (§5):
+# Agent-verify example — a skill run with a pass|fail|skip verdict (§5):
 #[verify.e2e]
 #kind = "agent"
 #skill = "ab-verify-e2e"

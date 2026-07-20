@@ -79,8 +79,12 @@ export type FindingDraft = z.infer<typeof findingDraftSchema>
 export const reviewVerdictKindSchema = z.enum(['approve', 'revise', 'escalate'])
 export type ReviewVerdictKind = z.infer<typeof reviewVerdictKindSchema>
 
-/** Agent-verify vocabulary (`verify:*` steps of kind "agent"). */
-export const verifyVerdictKindSchema = z.enum(['pass', 'fail'])
+/** Durable outcome of any `verify.completed` fact. */
+export const verifyOutcomeSchema = z.enum(['pass', 'fail', 'skipped'])
+export type VerifyOutcome = z.infer<typeof verifyOutcomeSchema>
+
+/** Agent-verify CLI vocabulary (`verify:*` steps of kind "agent"). */
+export const verifyVerdictKindSchema = z.enum(['pass', 'fail', 'skip'])
 export type VerifyVerdictKind = z.infer<typeof verifyVerdictKindSchema>
 
 /** Structured outcome of a review, as consumed by `converge` (SPEC §10). */

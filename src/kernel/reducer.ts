@@ -9,7 +9,7 @@
  */
 import type { Actor } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
-import type { EventPayload } from '../events/payloads'
+import { normalizeVerifyCompletion, type EventPayload } from '../events/payloads'
 import type {
   ArtifactRef,
   BuildOutcome,
@@ -19,6 +19,7 @@ import type {
   EscalationSource,
   Finding,
   Phase,
+  VerifyOutcome,
 } from '../ontology'
 import { verifyPhase } from '../ontology'
 
@@ -95,8 +96,10 @@ export interface OpenSession {
 export interface VerifyResult {
   step: string
   attempt: number
-  pass: boolean
+  outcome: VerifyOutcome
   report?: ArtifactRef
+  /** Present exactly when `outcome === "skipped"`. */
+  reason?: string
   /** seq of the `verify.completed` event — what `cycleSince` is compared to. */
   seq: number
 }
@@ -465,22 +468,25 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           seq: event.seq,
         })
         break
-      case 'verify.completed':
-        verify.attempt = Math.max(verify.attempt, event.payload.attempt)
+      case 'verify.completed': {
+        const result = normalizeVerifyCompletion(event.payload)
+        verify.attempt = Math.max(verify.attempt, result.attempt)
         verify.results.push({
-          step: event.payload.step,
-          attempt: event.payload.attempt,
-          pass: event.payload.pass,
-          report: event.payload.report,
+          step: result.step,
+          attempt: result.attempt,
+          outcome: result.outcome,
+          report: result.report,
+          ...(result.reason !== undefined ? { reason: result.reason } : {}),
           seq: event.seq,
         })
-        if (verify.currentStep === event.payload.step) {
+        if (verify.currentStep === result.step) {
           verify.currentStep = undefined
         }
-        complete(verifyPhase(event.payload.step), event.seq, {
-          attempt: event.payload.attempt,
+        complete(verifyPhase(result.step), event.seq, {
+          attempt: result.attempt,
         })
         break
+      }
 
       case 'finalize.started':
         start({ phase: 'finalize', seq: event.seq })
