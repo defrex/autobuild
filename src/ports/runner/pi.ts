@@ -344,7 +344,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     this.createSessionFn = opts.createSessionFn ?? piSdkCreateSession
   }
 
-  /** Pre-build judgment: one verbatim prompt, one model turn, and no tools.
+  /** Non-phase judgment: one verbatim prompt, one model turn, and no tools.
    * It deliberately creates no resumable AgentRunner session state. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const model = input.model !== undefined ? parsePiModel(input.model) : undefined
@@ -353,7 +353,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       ...(model !== undefined ? { model } : {}),
       // With no tools, Pi cannot enter a tool loop: this is one model turn.
       tools: [],
-      // One-shot naming is hermetic even if the selected role grants extensions.
+      // One-shot judgment is hermetic even if the selected role grants extensions.
       extensions: [],
     })
     try {

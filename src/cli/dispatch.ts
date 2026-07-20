@@ -57,8 +57,7 @@ import {
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { GitHubForge } from '../ports/forge/github'
-import { ClaudeAgentRunner } from '../ports/runner/claude'
-import { PiAgentRunner } from '../ports/runner/pi'
+import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
@@ -264,10 +263,7 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     opts.targetRepo,
     state.localStateRoot,
   )
-  // One adapter instance carries both capabilities. A one-shot completion is
-  // pre-build judgment, not a second phase runner or a resumable session.
-  const claude = new ClaudeAgentRunner()
-  const pi = new PiAgentRunner()
+  const { runtimes, defaultRuntime } = createProductionRuntimes()
 
   return {
     store,
@@ -276,32 +272,10 @@ async function defaultWire(config: Config, opts: DispatchOpts): Promise<Dispatch
     // A local override relocates the whole tree. Remote stores still need
     // local Git scratch, which stays beneath the repository's default root.
     workspaces: new GitWorktreeProvider({ root: state.worktreeRoot }),
-    // Two registered runtimes (§9): claude serves Claude models (its own SDK
-    // default model ⇒ no `defaultModel`); pi validates configured models against
-    // its provider catalog. Pi model ids are provider-qualified
-    // (`<provider>/<id>`), so pi's prefixes are provider names — no overlap with
-    // claude's bare `claude-*`. Add a provider prefix here to accept more of
-    // Pi's catalog; `ab models` lists the ids. Model ids stay in config, not here.
-    runtimes: {
-      claude: { runner: claude, oneShot: claude, servesModels: ['claude-'] },
-      pi: {
-        runner: pi,
-        oneShot: pi,
-        servesModels: [
-          // OAuth coding providers (what `pi login` writes to auth.json).
-          'openai-codex/',
-          'kimi-coding/',
-          // API-key providers, for keys supplied via env/auth.json.
-          'openai/',
-          'moonshotai/',
-          'cloudflare-workers-ai/',
-          'anthropic/',
-          'openrouter/',
-        ],
-        defaultModel: 'kimi-coding/k3',
-      },
-    },
-    defaultRuntime: 'claude',
+    // Shipped registrations are shared with other non-phase judgment paths.
+    // Model ids stay in config; production.ts owns adapter compatibility data.
+    runtimes,
+    defaultRuntime,
     storeRef,
     ...(token !== undefined && token !== '' ? { token } : {}),
     ids: randomIds(),

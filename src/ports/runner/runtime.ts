@@ -3,7 +3,7 @@
  * a runtime should touch — and ONLY it. Each registration pairs an AgentRunner
  * adapter with its capabilities: model families/default for compatibility
  * validation, plus an
- * optional pre-build one-shot completion. Keeping capabilities HERE, in a
+ * optional tool-free, non-phase one-shot completion. Keeping capabilities HERE, in a
  * wrapper around the adapter, is deliberate: the `AgentRunner` port itself is
  * frozen (spec "out of scope" — no renaming/extending it), so capability data
  * lives beside the registry rather than inside the port. The kernel never
@@ -22,9 +22,9 @@ export interface RuntimeRegistration {
   /** The adapter behind this runtime (§9). */
   runner: AgentRunner
   /**
-   * Optional pre-build, non-resumable completion capability. Its absence is a
-   * normal capability boundary, not a configuration error: deterministic
-   * callers must fall back locally rather than failing dispatch.
+   * Optional tool-free, non-resumable, non-phase completion capability. Its
+   * absence is a normal capability boundary, not a configuration error;
+   * deterministic callers decide their own fail-safe fallback.
    */
   oneShot?: OneShotCompletion
   /**

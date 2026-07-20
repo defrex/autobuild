@@ -115,8 +115,9 @@ Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 The distinctions that change an administrator's answer:
 
 - **Agents supply judgment** — planning, reviewing, implementing, verifying,
-  and narrow pre-build proposals such as slug naming. An agent never decides a
-  transition or whether a naming proposal is valid.
+  and narrow non-phase proposals such as slug naming or skill-conflict text. An
+  agent never decides a transition or whether any proposal is valid enough to
+  apply.
 - **The kernel owns determinism** — phase transitions, gating, deduplication,
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
@@ -309,25 +310,31 @@ mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
 
 The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
 plus each verify/finalize step by name. The repository workflow resolves
-`harvest` and `harvest-review`. The pre-build `slug` role uses the same
-runtime/model resolution for optional one-shot naming; it is not a pipeline
-phase, its extension allowlist is not enabled, and it remains tool-free.
+`harvest` and `harvest-review`. Two non-phase judgments use the same
+runtime/model resolver: `slug` optionally proposes pre-build naming, and
+`upgrade` proposes a resolution only when a vendored skill merge conflicts.
+Both are tool-free one-shots with extensions disabled. Missing slug capability
+uses the deterministic title fallback; unavailable upgrade judgment retains the
+conflict for manual resolution.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runtime` | — | optional, nonempty string | Runtime for this role. A phase role that omits it inherits `[roles.default].runtime`; absent there too ⇒ the wiring fallback. Must name a registered runtime. |
-| `model` | — | optional, nonempty string | Model for this role. A phase role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
+| `runtime` | — | optional, nonempty string | Runtime for this role. A role that omits it inherits `[roles.default].runtime`; absent there too ⇒ the wiring fallback. Must name a registered runtime. |
+| `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
 
-Inheritance is mechanical and **independent per field**: merge each phase role
-over the raw `default` entry, then validate the exact merged runtime/model pair.
+Inheritance is mechanical and **independent per field**: merge each configured
+role over the raw `default` entry, then validate the exact runtime/model pair.
 The named runtime must serve the named model. A model-only role never searches
 for another runtime, and an incompatible inherited model is never replaced by
 the selected runtime's default. The one implicit fill-in is benign: if neither
 the phase role nor `default` names a model, the merged runtime uses its own
 default model. Compatibility failures name the role, runtime, model, and served
 model families; all problems in `default` and every declared role are
-aggregated into one eager load-time failure before any build launches.
+aggregated by one eager resolver construction before judgment runs. Dispatch
+constructs it before any build launches; upgrade constructs it lazily on the
+first conflict and converts a construction failure to the safe `conflicted`
+outcome.
 
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed
@@ -476,13 +483,21 @@ Outcomes:
 | `current` | Local already matches the new default, or the repo's edit stands as-is. Nothing written. |
 | `adopted` | Upstream's version taken; pristine advanced. |
 | `merged` | Clean three-way merge; live file and pristine both advanced. |
-| `resolved` | Merge conflicted, and an agent resolved it (biased local); pristine advanced. |
-| `conflicted` | Genuinely ambiguous. The live skill is left **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
+| `resolved` | Merge conflicted; a local-biased agent proposal passed deterministic validation, so the live skill was resolved and pristine advanced to incoming. |
+| `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Live and pristine stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
-Local customization survives upgrades; divergence is made visible instead of
-silent.
+The agent runs under a fixed caller-owned deadline, and its output is only an
+untrusted proposal. Each merge uses unguessable labels so marker-looking skill
+content cannot impersonate that merge's structure. `ab upgrade` requires a
+complete skill with the same namespaced frontmatter and every region outside the
+uniquely labelled conflict hunks unchanged and in order; standard marker lines
+are rejected in agent-authored hunk gaps but allowed when already protected as
+exact clean content. Validation finishes before either file is written. A
+rejected proposal remains report-only alongside the marked merge diagnostic;
+the CLI prints the exact pristine path to merge by hand. Local customization
+survives upgrades, and divergence is visible instead of silent.
 
 ## Local state and store selection
 

@@ -213,7 +213,7 @@ is an error, so a typo cannot silently disable a verifier.
 | `[verify]` | `steps = [...]` — the ordered configured universe of verify phases | `[]` |
 | `[verify.<step>]` | `kind = "check"` needs `command` (a key in `[commands]`); `kind = "agent"` needs `skill`, optionally `needsServer`; both kinds accept `paths`; `always = true` makes a step unconditional and mandatory | `needsServer = false`; no `paths` ⇒ unconditional; no `always` ⇒ plan-selectable |
 | `[finalize]` | `steps = [...]` — optional post-PR steps, failure-tolerant | `[]` |
-| `[roles]` | Role → `{ runtime?, model?, extensions? }`. Reserved `default` is the optional inheritance base; concrete entries include pipeline roles and optional pre-build `slug` naming. | absent `default` ⇒ the wiring-fallback runtime + its own default model; extensions hermetic |
+| `[roles]` | Role → `{ runtime?, model?, extensions? }`. Reserved `default` is the optional inheritance base; concrete entries include pipeline roles plus non-phase `slug` naming and `upgrade` conflict judgment. | absent `default` ⇒ the wiring-fallback runtime + its own default model; extensions hermetic |
 | `[policy]` | `stallRounds`, `maxVerifyAttempts`, `maxReconcileAttempts`, `maxReviewRounds` | `3`, `3`, `3`, `4` |
 | `[dispatcher]` | `capacity` — concurrent builds for this repo | `1` |
 | `[server]` | Optional. `start` + `url` required; `readyTimeout` in seconds | `readyTimeout = 60` |
@@ -380,6 +380,10 @@ runtime = "claude"                         # no model anywhere ⇒ this runtime'
 runtime = "pi"
 model = "openai/gpt-5.6-sol"               # optional pre-build naming override
 
+[roles.upgrade]
+runtime = "pi"
+model = "openai/gpt-5.6-sol"               # optional skill-conflict resolver override
+
 [roles.code-review]
 runtime = "pi"
 model = "moonshotai/kimi-k3"
@@ -408,10 +412,12 @@ models). Omitting `[roles.default]` preserves the wiring fallback plus its
 built-in model. The removed `[agent]` table fails with a message directing you
 to `[roles.default]`; it is not silently migrated.
 
-Slug naming inherits `default` unless `[roles.slug]` overrides it. Only its
-runtime/model selection applies: naming is a tool-free one-shot completion,
-not a pipeline phase or resumable session. A runtime without that capability
-uses the deterministic title fallback.
+The non-phase `slug` and `upgrade` judgments inherit `default` unless their
+roles override it. Only runtime/model selection applies: both are tool-free
+one-shot completions with extensions disabled, never pipeline phases or
+resumable sessions. A runtime without that capability uses the deterministic
+title fallback for slug naming; for a skill conflict, upgrade keeps both files
+untouched and reports the manual-resolution path.
 
 ### 3. Point at a ticket source and set up auth
 
@@ -909,18 +915,28 @@ It three-way merges each skill with `git merge-file`:
 | `current` | Upstream did not change; your file stands, edited or not. |
 | `adopted` | No local edits; the new default was taken. |
 | `merged` | Both changed and the three-way merge resolved cleanly; your edits and the new default are both in the result. |
-| `conflicted` | Both changed the same lines. **Your local file is kept byte-for-byte** — no conflict markers are ever written into it. |
+| `resolved` | Both changed the same lines; the configured agent returned a local-biased full-file proposal that passed deterministic validation. The resolved live file is written and pristine advances to the incoming default. |
+| `conflicted` | Agent resolution was unavailable, failed, explicitly declined an ambiguous merge, or returned an invalid proposal. **Both live and pristine are kept byte-for-byte** — no conflict markers or failed candidate bytes are ever written into the live skill. |
 | `unknown` | An installed `ab-*` skill that is not in the distribution. Left alone; local additions are legitimate. |
 
-`ab upgrade` never deletes anything.
+`ab upgrade` never deletes anything. It invokes the optional `[roles.upgrade]`
+tool-free one-shot only when `git merge-file` reports a conflict, under a fixed
+caller-owned deadline. The agent's text is an untrusted proposal: Autobuild
+requires the same namespaced skill frontmatter and verifies that every
+already-clean merge region remains exact and ordered before either file is
+written. Per-merge unguessable Git labels keep marker-looking skill content from
+being parsed as merge structure; standard marker lines are rejected only in the
+agent-authored conflict-hunk gaps, so existing documentation examples remain
+protected content rather than making resolution impossible. This is what makes
+`resolved` safe while preserving the standing bias toward local customization.
 
-**Resolving a conflict:** merge by hand against the pristine record —
+**If the outcome is `conflicted`:** merge by hand against the pristine record —
 `.agents/skills/.ab-pristine/ab-<name>/SKILL.md` holds the bytes you started
-from. You only have to reconcile the **colliding** hunks: once the three-way
-merge comes out clean, the next `ab upgrade` reports `merged` and advances the
-pristine record. **Your unrelated local edits survive that** — you are not
-choosing between your customizations and the upgrade, and you do not have to
-make the file match either side in full.
+from, and the CLI names that exact path. You only have to reconcile the
+**colliding** hunks: once the three-way merge comes out clean, the next
+`ab upgrade` reports `merged` and advances the pristine record. **Your unrelated
+local edits survive that** — you are not choosing between your customizations
+and the upgrade, and you do not have to make the file match either side in full.
 
 ---
 
@@ -1100,15 +1116,17 @@ because nothing failed — the gates just didn't match. Work down the gates:
 ### `ab-<name>: conflicted` on upgrade
 
 ```text
-ab-plan: conflicted — local edits collide with the new default; kept your local
-file (merge by hand against .agents/skills/.ab-pristine/ab-plan/SKILL.md)
+ab-plan: conflicted — agent resolution failed: provider authentication failed;
+kept your local file (merge by hand against .agents/skills/.ab-pristine/ab-plan/SKILL.md)
 ```
 
-Nothing was clobbered and no markers were written. Merge by hand against the
-pristine record, then re-run `ab upgrade`. If you see `no pristine record and
-local differs from the new default`, the skill predates the pristine record —
-merge by hand, or run `ab init --force` to take the default and discard your
-edits.
+Nothing was clobbered: live and pristine remain byte-for-byte unchanged, and
+neither merge markers nor rejected agent output was written. The reason says
+whether resolution was unavailable, failed, declined, or failed validation.
+Fix agent runtime/config/auth and retry, or merge by hand against the printed
+pristine path. If you see `no pristine record and local differs from the new
+default`, the skill predates the pristine record — merge by hand, or run
+`ab init --force` to take the default and discard your edits.
 
 ### `runs inside a build session` / `runs inside a harvest agent session`
 

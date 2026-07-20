@@ -8,8 +8,9 @@ operate — see [`README.md`](../README.md).
 ## Constitution
 
 1. **Judgment in skills, determinism in code.** Agents never decide phase
-   transitions, signal identity, or state. Narrow pre-build judgment such as
-   slug naming remains behind deterministic validation and fallback.
+   transitions, signal identity, or state. Narrow non-phase judgment such as
+   slug naming and skill-conflict proposals remains behind deterministic
+   validation and fail-safe fallback.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    current build; each phase resumes as a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
@@ -239,17 +240,28 @@ selectable `Harvest` row, choosing the oldest unresolved failure/exhaustion/
 escalation attention before the oldest open run. The row omits the internal run
 id; status retains each id.
 
-## Pre-build identity
+## Non-phase one-shot judgment
 
-After the spec gate, the dispatcher chooses a build slug once from the final
-spec and then provisions branch `ab/<slug>`. Runtime registrations may expose
-the optional, tool-free one-shot contract in
+Runtime registrations may expose the optional, tool-free one-shot contract in
 `src/ports/runner/one-shot.ts`; this stays separate from the resumable
-`AgentRunner` session contract and is not a phase. `src/cli/dispatch.ts` routes
-the internal `slug` role through the normal runtime/model resolver.
-`src/processes/dispatcher.ts` owns the hard deadline, strict one-to-three-token
-validation, deterministic title fallback, and store-wide numeric collision
-suffix. Existing build records have no mutation path and are never re-slugged.
+`AgentRunner` session contract and is never a phase. `src/ports/runner/production.ts`
+owns the shipped Claude/Pi registrations, model families, and fallback runtime
+used by every production caller, while `routing.ts` applies normal role
+inheritance and compatibility checks.
+
+After the spec gate, `src/cli/dispatch.ts` routes the internal `slug` role
+through that resolver and asks for one naming proposal. The dispatcher then
+owns the hard deadline, strict one-to-three-token validation, deterministic
+title fallback, and store-wide numeric collision suffix. Existing build records
+have no mutation path and are never re-slugged.
+
+On a vendored-skill merge conflict, `src/cli/upgrade-agent.ts` lazily loads the
+target config, resolves the `upgrade` role, and sends pristine/local/incoming
+bytes to the selected one-shot with extensions and tools unavailable. A fixed
+caller-owned timer races the completion and aborts its signal, so an ignored or
+stalled provider cannot hold the command forever. It returns either full-file
+text or one explicit decline token. It owns no files; `src/cli/upgrade.ts`
+treats that output only as an untrusted proposal.
 
 ## Agent session command environment
 
@@ -343,6 +355,31 @@ path. Once config exists, later package changes — or even an unreadable
 manifest — are irrelevant: init skips rendering and never reconciles config,
 including under `--force`.
 
+## Skill upgrade boundary
+
+`src/cli/upgrade.ts` owns the pristine × local × incoming merge and all
+filesystem effects. Every `git merge-file` call gets cryptographically random
+local/pristine/incoming labels; only those exact start/end lines delimit its
+conflicts, so ordinary skill text such as `<<<<<<< local` remains protected
+content. A clean result is deterministic. For a conflict, the optional resolver
+receives the three exact texts but its returned file is accepted only when it
+has nonempty YAML frontmatter naming the same installed `ab-*` skill and retains
+every region outside the uniquely labelled hunks exactly and in order. Standard
+marker lines are rejected in the remaining agent-authored hunk gaps; identical
+marker-looking lines inside protected clean intervals are permitted because
+they predated resolution. Validation runs before either write. A valid
+local-biased proposal writes live and advances pristine to the exact incoming
+bytes as `resolved`.
+
+Resolver absence, explicit decline, provider/config/capability failure, and
+invalid output all converge on `conflicted`. The exception is caught per skill,
+so later skills still upgrade; live and pristine remain byte-identical, the
+marked merge is report-only, and stdout names the pristine hand-merge path.
+Ordinary disk and `git merge-file` failures remain command errors. `main.ts`
+constructs the target-bound resolver lazily through an injected factory, and
+`binary.ts` supplies the production factory, so a no-conflict upgrade never
+loads target config or calls agent infrastructure.
+
 ## Layout
 
 | Path | Contents | SPEC |
@@ -352,9 +389,9 @@ including under `--force`.
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table/build reducer/engine plus pure repository harvest and dispatcher-settings reducers; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `production.ts` (shared shipped registrations), `one-shot.ts` (optional non-phase completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
 | `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
-| `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
+| `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config rendering, while `upgrade.ts` owns merge validation/writes and `upgrade-agent.ts` owns the optional one-shot proposal | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame — pure reducer projection/rendering, discriminated global/harvest/build row selection, contextual controls, status overlay pixels, alternate-screen replacement, and deterministic ANSI-to-PNG/text evidence helpers | §7.5, §14, §15.5 |
 | `src/integration/dashboard-capture.ts` | Local scripted dispatch scenario used by `verify:dashboard`; captures fixed-clock wide/narrow paints and deposits exact frame pairs/manifests | §5, §7.5, §8.2 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |

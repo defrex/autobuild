@@ -23,8 +23,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   abInit,
+  defaultDistRoot,
   installedSkillPath,
   pristineSkillPath,
+  readDistSkills,
   rewriteSkillSource,
 } from './init'
 import { runCli } from './main'
@@ -98,6 +100,46 @@ function installedForm(name: string, body: string): string {
 
 async function install(): Promise<void> {
   await abInit({ targetRepo: target, distRoot: distV1 })
+}
+
+function replaceRequired(text: string, from: string, to: string): string {
+  expect(text).toContain(from)
+  return text.replace(from, to)
+}
+
+/** Seed one conflict against the real distribution for runCli-level tests. */
+async function seedRealPlanConflict(repo: string): Promise<{
+  base: string
+  local: string
+  incoming: string
+  resolved: string
+}> {
+  await mkdir(repo, { recursive: true })
+  const plan = (await readDistSkills(defaultDistRoot())).find(
+    (skill) => skill.installName === 'ab-plan',
+  )
+  if (plan === undefined) throw new Error('real distribution has no ab-plan fixture')
+  const incoming = plan.content
+  const heading = '# /ab-plan <build>'
+  const conflict = '- **Approach** — the shape of the change and why this shape, in a few'
+  const incomingOnly = 'Park the build for a human:'
+  const baseConflict = '- **Approach** — the old default wording for this section'
+  const localConflict = '- **Approach** — keep this repository-specific planning standard'
+
+  let base = replaceRequired(incoming, conflict, baseConflict)
+  base = replaceRequired(base, incomingOnly, 'Ask a human to repair the ticket:')
+  let local = replaceRequired(base, baseConflict, localConflict)
+  local = replaceRequired(local, heading, '# /ab-plan <build> — local house style')
+  let resolved = replaceRequired(incoming, conflict, localConflict)
+  resolved = replaceRequired(resolved, heading, '# /ab-plan <build> — local house style')
+
+  const livePath = installedSkillPath(repo, 'ab-plan')
+  const pristinePath = pristineSkillPath(repo, 'ab-plan')
+  await mkdir(dirname(livePath), { recursive: true })
+  await mkdir(dirname(pristinePath), { recursive: true })
+  await writeFile(livePath, local)
+  await writeFile(pristinePath, base)
+  return { base, local, incoming, resolved }
 }
 
 describe('abUpgrade — legacy project path migration', () => {
@@ -200,14 +242,27 @@ describe('abUpgrade — the four pristine-based cases', () => {
     )
   })
 
-  test('both changed the same region → resolver gets exact base/local/incoming; its output is written', async () => {
+  test('a validated local-biased resolution keeps clean edits from both sides and advances pristine', async () => {
     await install()
     const live = installedSkillPath(target, 'ab-alpha')
-    const localText = installedForm('alpha', BODY.replace('middle line two', 'middle line two (local)'))
+    const localBody = BODY
+      .replace('intro line one', 'intro line one (unrelated local)')
+      .replace('middle line two', 'middle line two (local conflict)')
+    const localText = installedForm('alpha', localBody)
     await writeFile(live, localText)
-    const upstreamBody = BODY.replace('middle line two', 'middle line two (upstream)')
+    const upstreamBody = BODY
+      .replace('middle line two', 'middle line two (upstream conflict)')
+      .replace('closing line three', 'closing line three (incoming clean edit)')
+    const incomingText = installedForm('alpha', upstreamBody)
     await writeDist(distV2, { alpha: upstreamBody })
     const pristineBefore = await readFile(pristineSkillPath(target, 'ab-alpha'), 'utf8')
+    const resolvedText = installedForm(
+      'alpha',
+      BODY
+        .replace('intro line one', 'intro line one (unrelated local)')
+        .replace('middle line two', 'middle line two (local conflict)')
+        .replace('closing line three', 'closing line three (incoming clean edit)'),
+    )
 
     const calls: Array<{ skill: string; base: string; local: string; incoming: string }> = []
     const report = await abUpgrade({
@@ -215,7 +270,7 @@ describe('abUpgrade — the four pristine-based cases', () => {
       distRoot: distV2,
       resolveConflict: async (input) => {
         calls.push(input)
-        return 'resolved by the agent\n'
+        return resolvedText
       },
     })
 
@@ -225,13 +280,82 @@ describe('abUpgrade — the four pristine-based cases', () => {
         skill: 'ab-alpha',
         base: pristineBefore,
         local: localText,
-        incoming: installedForm('alpha', upstreamBody),
+        incoming: incomingText,
       },
     ])
-    expect(await readFile(live, 'utf8')).toBe('resolved by the agent\n')
+    expect(await readFile(live, 'utf8')).toBe(resolvedText)
+    expect(resolvedText).toContain('middle line two (local conflict)')
+    expect(resolvedText).toContain('intro line one (unrelated local)')
+    expect(resolvedText).toContain('closing line three (incoming clean edit)')
+    expect(resolvedText).not.toContain('<<<<<<<')
     expect(await readFile(pristineSkillPath(target, 'ab-alpha'), 'utf8')).toBe(
-      installedForm('alpha', upstreamBody),
+      incomingText,
     )
+  })
+
+  test('marker-documentation lines are protected content, not merge structure', async () => {
+    const markerBody = [
+      '# alpha',
+      '',
+      'This skill documents a literal Git opener:',
+      '<<<<<<< local',
+      'protected marker documentation',
+      'ordinary content after the marker-looking line',
+      '',
+      ...Array.from({ length: 12 }, (_value, index) => `stable context ${index + 1}`),
+      'conflict target',
+      'tail remains clean',
+      '',
+    ].join('\n')
+    await writeDist(distV1, { alpha: markerBody })
+    await install()
+    const live = installedSkillPath(target, 'ab-alpha')
+    const pristinePath = pristineSkillPath(target, 'ab-alpha')
+    const local = installedForm(
+      'alpha',
+      markerBody.replace('conflict target', 'conflict target (local)'),
+    )
+    const incomingBody = markerBody.replace(
+      'conflict target',
+      'conflict target (incoming)',
+    )
+    const incoming = installedForm('alpha', incomingBody)
+    const resolved = installedForm(
+      'alpha',
+      markerBody.replace('conflict target', 'conflict target (local)'),
+    )
+    await writeFile(live, local)
+    await writeDist(distV2, { alpha: incomingBody })
+    const pristine = await readFile(pristinePath, 'utf8')
+
+    const rejected = await abUpgrade({
+      targetRepo: target,
+      distRoot: distV2,
+      resolveConflict: async () =>
+        resolved.replace(
+          '<<<<<<< local\nprotected marker documentation\nordinary content after the marker-looking line',
+          'agent deleted the marker-looking clean region',
+        ),
+    })
+
+    expect(rejected.skills[0]?.action).toBe('conflicted')
+    expect(rejected.skills[0]?.detail).toContain('already-clean merge region')
+    expect(await readFile(live, 'utf8')).toBe(local)
+    expect(await readFile(pristinePath, 'utf8')).toBe(pristine)
+
+    const accepted = await abUpgrade({
+      targetRepo: target,
+      distRoot: distV2,
+      resolveConflict: async () => resolved,
+    })
+
+    expect(accepted.skills).toEqual([{ skill: 'ab-alpha', action: 'resolved' }])
+    expect(await readFile(live, 'utf8')).toBe(resolved)
+    expect(resolved).toContain(
+      '<<<<<<< local\nprotected marker documentation\nordinary content after the marker-looking line',
+    )
+    expect(resolved).not.toContain('ab-upgrade-local-')
+    expect(await readFile(pristinePath, 'utf8')).toBe(incoming)
   })
 
   test('resolver null → local file byte-untouched, conflicted report carries the markers', async () => {
@@ -253,10 +377,10 @@ describe('abUpgrade — the four pristine-based cases', () => {
     expect(entry.skill).toBe('ab-alpha')
     expect(entry.action).toBe('conflicted')
     // The merge-markered text travels in the report — never the live file.
-    expect(entry.detail).toContain('<<<<<<< local')
+    expect(entry.detail).toMatch(/<<<<<<< ab-upgrade-local-[0-9a-f-]+/)
     expect(entry.detail).toContain('middle line two (local)')
     expect(entry.detail).toContain('middle line two (upstream)')
-    expect(entry.detail).toContain('>>>>>>> upstream')
+    expect(entry.detail).toMatch(/>>>>>>> ab-upgrade-incoming-[0-9a-f-]+/)
     expect(await readFile(live, 'utf8')).toBe(localText)
     expect(await readFile(pristineSkillPath(target, 'ab-alpha'), 'utf8')).toBe(pristineBefore)
   })
@@ -271,7 +395,95 @@ describe('abUpgrade — the four pristine-based cases', () => {
     const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
 
     expect(report.skills[0]!.action).toBe('conflicted')
+    expect(report.skills[0]!.detail).toContain('agent resolution unavailable')
     expect(await readFile(live, 'utf8')).toBe(localText)
+  })
+
+  test('declined, failed, wrapped, marked, and incomplete proposals all fail safe', async () => {
+    const cases: Array<{
+      name: string
+      resolve: (local: string) => Promise<string | null>
+      reason: string
+    }> = [
+      {
+        name: 'declined',
+        resolve: async () => null,
+        reason: 'agent declined',
+      },
+      {
+        name: 'failed',
+        resolve: async () => {
+          throw new Error('provider unavailable')
+        },
+        reason: 'agent resolution failed: provider unavailable',
+      },
+      {
+        name: 'wrapped',
+        resolve: async (local) => `Here is the result:\n${local}`,
+        reason: 'must begin at byte 0',
+      },
+      {
+        name: 'marked',
+        resolve: async (local) =>
+          local
+            .replace(
+              'middle line two (local conflict)',
+              '<<<<<<< local\nmiddle line two (local conflict)\n=======\nmiddle line two (upstream conflict)\n>>>>>>> upstream',
+            )
+            .replace(
+              'closing line three',
+              'closing line three (incoming clean edit)',
+            ),
+        reason: 'contains a Git conflict-marker line',
+      },
+      {
+        name: 'incomplete',
+        resolve: async (local) => local,
+        reason: 'already-clean merge region',
+      },
+    ]
+
+    for (const entry of cases) {
+      const repo = join(root, `repo-${entry.name}`)
+      const oldDist = join(root, `old-${entry.name}`)
+      const nextDist = join(root, `next-${entry.name}`)
+      await mkdir(repo, { recursive: true })
+      await writeDist(oldDist, { alpha: BODY })
+      await abInit({ targetRepo: repo, distRoot: oldDist })
+      const live = installedSkillPath(repo, 'ab-alpha')
+      const pristinePath = pristineSkillPath(repo, 'ab-alpha')
+      const local = installedForm(
+        'alpha',
+        BODY
+          .replace('intro line one', 'intro line one (unrelated local)')
+          .replace('middle line two', 'middle line two (local conflict)'),
+      )
+      await writeFile(live, local)
+      await writeDist(nextDist, {
+        alpha: BODY
+          .replace('middle line two', 'middle line two (upstream conflict)')
+          .replace('closing line three', 'closing line three (incoming clean edit)'),
+      })
+      const pristine = await readFile(pristinePath, 'utf8')
+      const out: string[] = []
+
+      const report = await abUpgrade({
+        targetRepo: repo,
+        distRoot: nextDist,
+        resolveConflict: () => entry.resolve(local),
+        stdout: (line) => out.push(line),
+      })
+
+      expect(report.skills[0]?.action).toBe('conflicted')
+      expect(report.skills[0]?.detail).toContain(entry.reason)
+      expect(report.skills[0]?.detail).toContain('<<<<<<< ab-upgrade-local-')
+      expect(out.join('\n')).toContain(
+        `merge by hand against .agents/skills/.ab-pristine/ab-alpha/SKILL.md`,
+      )
+      expect(await readFile(live, 'utf8')).toBe(local)
+      expect(await readFile(pristinePath, 'utf8')).toBe(pristine)
+      expect(local).not.toContain('<<<<<<<')
+    }
   })
 })
 
@@ -356,6 +568,127 @@ describe('abUpgrade — distribution vs local skill sets', () => {
 })
 
 describe('runCli routing — ab upgrade outside a session', () => {
+  test('the real CLI seam reports resolved and preserves the documented local bias', async () => {
+    const repo = join(root, 'cli-resolved')
+    const fixture = await seedRealPlanConflict(repo)
+    const out: string[] = []
+    const err: string[] = []
+    let factoryCalls = 0
+
+    const code = await runCli(['upgrade', repo], {
+      workspacePath: target,
+      processEnv: { UPGRADE_TOKEN: 'secret' },
+      upgradeResolverFactory: (opts) => {
+        factoryCalls += 1
+        expect(opts.targetRepo).toBe(repo)
+        expect(opts.env['UPGRADE_TOKEN']).toBe('secret')
+        return async (input) => {
+          expect(input).toEqual({
+            skill: 'ab-plan',
+            base: fixture.base,
+            local: fixture.local,
+            incoming: fixture.incoming,
+          })
+          return fixture.resolved
+        }
+      },
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    })
+
+    expect(code).toBe(0)
+    expect(err).toEqual([])
+    expect(factoryCalls).toBe(1)
+    expect(out).toContain('ab-plan: resolved')
+    expect(await readFile(installedSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+      fixture.resolved,
+    )
+    expect(await readFile(pristineSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+      fixture.incoming,
+    )
+    expect(fixture.resolved).toContain('keep this repository-specific planning standard')
+    expect(fixture.resolved).toContain('local house style')
+    expect(fixture.resolved).toContain('Park the build for a human:')
+    expect(fixture.resolved).not.toContain('<<<<<<<')
+  })
+
+  test('resolver absence reaches the actionable byte-preserving conflicted outcome', async () => {
+    const repo = join(root, 'cli-unavailable')
+    const fixture = await seedRealPlanConflict(repo)
+    const out: string[] = []
+
+    const code = await runCli(['upgrade', repo], {
+      workspacePath: target,
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+
+    expect(code).toBe(0)
+    expect(out.join('\n')).toContain('ab-plan: conflicted — agent resolution unavailable')
+    expect(out.join('\n')).toContain(
+      'merge by hand against .agents/skills/.ab-pristine/ab-plan/SKILL.md',
+    )
+    expect(await readFile(installedSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+      fixture.local,
+    )
+    expect(await readFile(pristineSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+      fixture.base,
+    )
+  })
+
+  test('declined, thrown, prose-wrapped, and marked CLI proposals all stay fail-safe', async () => {
+    const cases: Array<{
+      name: string
+      resolve: (resolved: string) => Promise<string | null>
+      reason: string
+    }> = [
+      { name: 'decline', resolve: async () => null, reason: 'agent declined' },
+      {
+        name: 'throw',
+        resolve: async () => {
+          throw new Error('completion failed')
+        },
+        reason: 'agent resolution failed: completion failed',
+      },
+      {
+        name: 'prose',
+        resolve: async (resolved) => `Resolved file follows:\n${resolved}`,
+        reason: 'must begin at byte 0',
+      },
+      {
+        name: 'markers',
+        resolve: async (resolved) =>
+          resolved.replace(
+            '- **Approach** — keep this repository-specific planning standard',
+            '<<<<<<< local\nlocal\n=======\nincoming\n>>>>>>> upstream',
+          ),
+        reason: 'contains a Git conflict-marker line',
+      },
+    ]
+
+    for (const entry of cases) {
+      const repo = join(root, `cli-${entry.name}`)
+      const fixture = await seedRealPlanConflict(repo)
+      const out: string[] = []
+      const code = await runCli(['upgrade', repo], {
+        workspacePath: target,
+        upgradeResolverFactory: () => () => entry.resolve(fixture.resolved),
+        stdout: (line) => out.push(line),
+        stderr: () => {},
+      })
+
+      expect(code).toBe(0)
+      expect(out.join('\n')).toContain('ab-plan: conflicted —')
+      expect(out.join('\n')).toContain(entry.reason)
+      expect(await readFile(installedSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+        fixture.local,
+      )
+      expect(await readFile(pristineSkillPath(repo, 'ab-plan'), 'utf8')).toBe(
+        fixture.base,
+      )
+    }
+  })
+
   test('ab upgrade <target> works with no store/env deps and prints per-skill lines', async () => {
     await install()
     // The CLI cannot inject a fixture distRoot, so this runs against the

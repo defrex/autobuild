@@ -624,11 +624,13 @@ reopen that same run twice; this does not reset or alter the within-step attempt
 policy represented by `harvest.failed.attempt`. Failure-tolerant finalize
 post-steps record `ok: false` and their normal follow-up observation.
 
-Pre-build naming does not widen this session/skill contract. A runtime may
-separately register an optional one-shot completion capability
-(`{prompt, cwd, env, model?, signal?} → {text}`), used without tools and without
-entering the resumable session map. A runtime without it is valid and causes the
-deterministic naming fallback (§6.3).
+Narrow non-phase judgments do not widen this session/skill contract. A runtime
+may separately register an optional one-shot completion capability
+(`{prompt, cwd, env, model?, signal?} → {text}`), used without tools or
+extensions and without entering the resumable session map. A runtime without it
+is valid. Each deterministic caller owns its fail-safe: slug naming takes the
+title fallback (§6.3), while a vendored-skill conflict remains byte-untouched
+for manual resolution (§16.3).
 
 - **Adapters:** Claude Agent SDK (subscription billing) for Claude models;
   **pi in SDK mode** for all other models (Kimi/Moonshot, GPT/OpenAI). Both
@@ -638,7 +640,7 @@ deterministic naming fallback (§6.3).
 - **Routing — explicit role inheritance (§16.1):** the *runtime* that executes
   a session and the *model* it runs on live in one open `[roles]` map, alongside
   the independent `extensions` allowlist axis. Its reserved optional `default`
-  entry is the raw repo-wide base and is never itself dispatched. Every phase
+  entry is the raw repo-wide base and is never itself dispatched. Every concrete
   role merges over it independently per field; a set extensions list replaces
   rather than unions. With no default runtime, wiring supplies the fallback.
   With no model on either the phase role or `default`, the merged runtime uses
@@ -1693,12 +1695,22 @@ a repo:
 
 **Upgrades** are the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; `ab upgrade` three-way merges
-(pristine base × local edits × new default). Merge conflicts go to an
-**agent**, with a standing bias: **prefer the local customization** —
-upstream changes are adopted where they don't collide with what the repo
-deliberately changed. Only when the correct resolution is genuinely
-ambiguous does the agent escalate to a human. Local customization survives
-upgrades; divergence is visible instead of silent.
+(pristine base × local edits × new default). A merge conflict routes the
+non-phase, tool-free `upgrade` one-shot role through the normal runtime/model
+resolver under a fixed caller-owned deadline, with a standing bias: **prefer
+the local customization** — upstream changes are adopted where they don't
+collide with what the repo deliberately changed. The agent output is only an
+untrusted full-file proposal. Each merge uses unguessable labels so literal
+marker-looking skill content cannot be parsed as structure. Deterministic code
+validates the same installed-skill identity, exact preservation/order of every
+already-clean merge region, and absence of standard marker lines in the
+agent-authored conflict-hunk gaps before either live or pristine is written. A
+validated proposal produces `resolved`
+and advances pristine to incoming. Unavailable or failed judgment, explicit
+ambiguity/decline, or invalid output produces `conflicted`: live and pristine
+remain byte-untouched, the marked merge remains report-only, and the CLI names
+the manual merge path. Local customization survives upgrades; divergence is
+visible instead of silent.
 
 ## 17. Out of scope for v2.0 (explicitly)
 
