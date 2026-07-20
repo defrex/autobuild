@@ -263,6 +263,26 @@ stalled provider cannot hold the command forever. It returns either full-file
 text or one explicit decline token. It owns no files; `src/cli/upgrade.ts`
 treats that output only as an untrusted proposal.
 
+## CLI BuildStore opening
+
+`src/cli/repo-state.ts` owns Git-topology repository identity and the shared
+sessionless precedence rule (`--store` over nonblank `AB_STORE` over the main
+checkout's `.autobuild/`). It normalizes local overrides against that checkout
+while preserving HTTP(S) references. `src/cli/store-ref.ts` is the lower-level,
+adapter-free local-versus-remote parser: callers inject its remote factory, so
+its tests never need to construct the production HTTP adapter.
+
+`src/cli/store-opening.ts` is the production composition boundary. It joins a
+resolved repository state to `RemoteBuildStore`, forwards a nonempty `AB_TOKEN`
+as an opaque value, and returns the canonical paths, selected reference,
+credential, and handle as one context. Finite sessionless commands run inside
+its scoped callback and close exactly the handle they opened on success or
+failure. Dispatch instead opens from the already-resolved `RepoStatePaths` and
+owns that handle for its loop and in-process runners. Strict build/harvest phase
+tuples remain `binary.ts`'s responsibility; after tuple validation, the binary
+uses the same production reference opener and retains its existing outer
+`try/finally` ownership.
+
 ## Agent session command environment
 
 `src/ports/runner/session-env.ts` is the shared per-turn environment boundary.

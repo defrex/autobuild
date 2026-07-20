@@ -15,6 +15,7 @@ import {
   submitHarvestProposals,
   submitHarvestVerdict,
 } from './harvest'
+import { describeStoreOpeningContract } from './store-opening.contract'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -536,6 +537,18 @@ describe('harvest status', () => {
       '/main/repo',
     ])
   })
+})
+
+describeStoreOpeningContract('ab harvest status', {
+  run: ({ targetRepo, ...opts }) =>
+    abHarvestStatus({
+      ...opts,
+      repo: targetRepo,
+      json: true,
+    }),
+  canonicalMarker: (stdout) =>
+    (JSON.parse(stdout.join('\n')) as { repo: string }).repo,
+  expectedCanonicalMarker: '/main/repo',
 })
 
 describe('harvest CLI', () => {

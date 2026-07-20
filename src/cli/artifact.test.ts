@@ -124,7 +124,11 @@ describe('artifact put/get', () => {
 })
 
 describe('artifact download', () => {
-  test('selects the explicit store, forwards the token, pins revisions, and writes exact bytes', async () => {
+  test('selects the explicit store, forwards the opaque token, pins revisions, closes, and writes exact bytes', async () => {
+    let closeCount = 0
+    store.close = async () => {
+      closeCount += 1
+    }
     const build = 'finished-build'
     await store.createBuild({ slug: build, repo: resolve(tmp) })
     const first = new Uint8Array([137, 80, 78, 71, 0, 255])
@@ -144,7 +148,7 @@ describe('artifact download', () => {
       targetRepo: tmp,
       env: {
         AB_STORE: 'https://ignored.invalid',
-        AB_TOKEN: 'scoped-token',
+        AB_TOKEN: ' scoped-token ',
       },
       exec: spawnExec,
       build,
@@ -158,7 +162,7 @@ describe('artifact download', () => {
     })
 
     expect(opens).toEqual([
-      { ref: resolve(tmp, 'explicit-store'), token: 'scoped-token' },
+      { ref: resolve(tmp, 'explicit-store'), token: ' scoped-token ' },
     ])
     expect(result.artifact.meta.revision).toBe(0)
     expect(result.outputPath).toBe(output)
@@ -185,9 +189,14 @@ describe('artifact download', () => {
       token: 'remote-token',
     })
     expect(new Uint8Array(await readFile(remoteOutput))).toEqual(second)
+    expect(closeCount).toBe(2)
   })
 
   test('rejects unknown builds, wrong-repository builds, and absent refs without creating output', async () => {
+    let closeCount = 0
+    store.close = async () => {
+      closeCount += 1
+    }
     const output = join(tmp, 'should-not-exist.bin')
     const common = {
       targetRepo: tmp,
@@ -223,5 +232,27 @@ describe('artifact download', () => {
       }),
     ).rejects.toThrow(/no "frame" artifact at rev 7.*available refs: text@0/s)
     expect(await Bun.file(output).exists()).toBe(false)
+    expect(closeCount).toBe(3)
+  })
+
+  test('validates build and artifact arguments before opening a store', async () => {
+    let opens = 0
+    const common = {
+      targetRepo: tmp,
+      env: {},
+      exec: spawnExec,
+      outputPath: join(tmp, 'unused'),
+      openStore: () => {
+        opens += 1
+        return store
+      },
+    }
+    await expect(
+      artifactDownload({ ...common, build: '  ', spec: 'frame' }),
+    ).rejects.toThrow(/non-empty <build>/)
+    await expect(
+      artifactDownload({ ...common, build: 'build', spec: '  ' }),
+    ).rejects.toThrow(/non-empty <kind>/)
+    expect(opens).toBe(0)
   })
 })

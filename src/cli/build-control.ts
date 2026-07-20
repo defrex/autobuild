@@ -11,10 +11,11 @@ import { humanActor } from '../events/envelope'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { BuildStatus } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { RemoteBuildStore } from '../store/remote/client'
 import type { BuildStore } from '../store/types'
-import { resolveRepoState } from './repo-state'
-import { resolveStore } from './store-ref'
+import {
+  withSessionlessStore,
+  type StoreOpener,
+} from './store-opening'
 
 const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'paused', 'blocked']
 
@@ -320,7 +321,7 @@ export interface AbBuildControlOpts {
   /** Explicit `--store`; selection remains --store > AB_STORE > repo-local. */
   storeRef?: string
   /** Injectable adapter seam for unit tests. */
-  openStore?: (ref: string, token?: string) => BuildStore
+  openStore?: StoreOpener
 }
 
 /** Sessionless command shell: resolve repository/store, control, always close. */
@@ -331,38 +332,13 @@ export async function abBuildControl(
   // needed to know that an own-phase control attempt is forbidden.
   refuseOwnSessionControl(opts.slug, opts.action, opts.env)
 
-  const state = await resolveRepoState({
-    targetRepo: opts.targetRepo,
-    exec: opts.exec,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined
-      ? { envStore: opts.env['AB_STORE'] }
-      : {}),
-  })
-  const token = opts.env['AB_TOKEN']?.trim()
-  const open =
-    opts.openStore ??
-    ((ref: string, scopedToken?: string) =>
-      resolveStore(ref, {
-        remoteFactory: (url, remoteToken) =>
-          new RemoteBuildStore({ url, token: remoteToken }),
-        ...(scopedToken !== undefined && scopedToken !== ''
-          ? { token: scopedToken }
-          : {}),
-      }))
-  const store = open(
-    state.storeRef,
-    token !== undefined && token !== '' ? token : undefined,
-  )
-  try {
-    return await controlBuild({
+  return withSessionlessStore(opts, ({ store, repo }) =>
+    controlBuild({
       store,
-      repo: state.repo,
+      repo,
       slug: opts.slug,
       env: opts.env,
       action: opts.action,
-    })
-  } finally {
-    await store.close()
-  }
+    }),
+  )
 }

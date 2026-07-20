@@ -74,15 +74,14 @@ import {
   type LaunchRunnerResult,
   type TickReport,
 } from '../processes/dispatcher'
-import { RemoteBuildStore } from '../store/remote/client'
 import {
   BuildControlError,
   buildControlUser,
   controlBuild,
   type BuildControlResult,
 } from './build-control'
-import { resolveRepoState, resolveRepoStatePaths } from './repo-state'
-import { resolveStore } from './store-ref'
+import { resolveRepoState, type RepoStatePaths } from './repo-state'
+import { openStoreForRepoState } from './store-opening'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
@@ -189,7 +188,11 @@ export interface DispatchOpts {
    * interrupted runner's lease expires and a future dispatch re-attaches). */
   signal?: AbortSignal
   /** Injectable for tests — defaults to the production adapters. */
-  wire?: (config: Config, opts: DispatchOpts) => Promise<DispatchWiring> | DispatchWiring
+  wire?: (
+    config: Config,
+    opts: DispatchOpts,
+    state: RepoStatePaths,
+  ) => Promise<DispatchWiring> | DispatchWiring
   /** Injectable sleep (watch loop); default a real timer. Tests use `once`. */
   sleep?: (ms: number) => Promise<void>
   /** Force line-oriented output with no terminal control sequences (`--plain`),
@@ -244,40 +247,34 @@ function openWorkspaceRef(events: AbEvent[]): string | null {
 
 /** Production wiring: the local (or remote) store, the configured
  * TicketSource, the GitHub forge, git worktrees, and shipped runtimes. */
-async function defaultWire(config: Config, opts: DispatchOpts): Promise<DispatchWiring> {
-  const state = resolveRepoStatePaths({
-    repo: opts.targetRepo,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
-  })
-  const storeRef = state.storeRef
-  const token = opts.env['AB_TOKEN']
-  const store = resolveStore(storeRef, {
-    remoteFactory: (url, tok) => new RemoteBuildStore({ url, token: tok }),
-    ...(token !== undefined && token !== '' ? { token } : {}),
-  })
+async function defaultWire(
+  config: Config,
+  opts: DispatchOpts,
+  state: RepoStatePaths,
+): Promise<DispatchWiring> {
+  const opened = openStoreForRepoState(state, { env: opts.env })
 
   const tickets = createTicketSource(
     config.tickets,
     opts.env,
-    opts.targetRepo,
-    state.localStateRoot,
+    opened.repo,
+    opened.localStateRoot,
   )
   const { runtimes, defaultRuntime } = createProductionRuntimes()
 
   return {
-    store,
+    store: opened.store,
     tickets,
     forge: new GitHubForge(),
     // A local override relocates the whole tree. Remote stores still need
     // local Git scratch, which stays beneath the repository's default root.
-    workspaces: new GitWorktreeProvider({ root: state.worktreeRoot }),
+    workspaces: new GitWorktreeProvider({ root: opened.worktreeRoot }),
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
     runtimes,
     defaultRuntime,
-    storeRef,
-    ...(token !== undefined && token !== '' ? { token } : {}),
+    storeRef: opened.storeRef,
+    ...(opened.token !== undefined ? { token: opened.token } : {}),
     ids: randomIds(),
     uuids: randomUuids(),
     clock: systemClock,
@@ -1409,7 +1406,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     throw error
   }
   const wire = resolvedOpts.wire ?? defaultWire
-  const wiring = await wire(config, resolvedOpts)
+  const wiring = await wire(config, resolvedOpts, state)
   // §9: resolve the whole config against the registry ONCE, at startup — a
   // config naming an unregistered runtime or an incompatible merged
   // runtime/model pair fails `ab dispatch` loudly here, before any build

@@ -28,6 +28,7 @@ import {
   statusFilter,
   summarize,
 } from './status'
+import { describeStoreOpeningContract } from './store-opening.contract'
 
 const NOW = new Date('2026-07-15T12:00:00.000Z')
 const REPO = '/Users/dev/code/acme-app'
@@ -799,6 +800,24 @@ describe('abBuildStatus', () => {
     await expect(promise).rejects.toThrow(/ab builds --all/)
   })
 
+  test('rejects a slug owned by another canonical repository', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'theirs', repo: OTHER_REPO })
+    await expect(
+      abBuildStatus({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'theirs',
+      }),
+    ).rejects.toThrow(
+      `build "theirs" belongs to repository "${OTHER_REPO}", not "${REPO}"`,
+    )
+  })
+
   test('--json parses and matches the projection', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -918,6 +937,22 @@ describe('read-only guarantee', () => {
     const after = await store.getBuild('b1')
     expect(after?.lease).toBeUndefined()
   })
+})
+
+describeStoreOpeningContract('ab builds', {
+  run: (opts) =>
+    abBuilds({
+      ...opts,
+      all: true,
+      json: true,
+      now: () => NOW,
+    }),
+  canonicalMarker: (stdout) =>
+    (JSON.parse(stdout.join('\n')) as Array<{ slug: string }>)
+      .map((summary) => summary.slug)
+      .sort()
+      .join(','),
+  expectedCanonicalMarker: 'main-build',
 })
 
 describe('store lifecycle', () => {

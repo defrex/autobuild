@@ -359,7 +359,7 @@ describe('abBuildControl — sessionless repository/store shell', () => {
     exitCode: 128,
   })
 
-  test('uses explicit store precedence, forwards remote token, and closes on success', async () => {
+  test('uses explicit store precedence, forwards the opaque remote token, and closes on success', async () => {
     const store = await makeStore()
     let closeCount = 0
     store.close = async () => {
@@ -385,7 +385,7 @@ describe('abBuildControl — sessionless repository/store shell', () => {
     })
 
     expect(opened).toEqual([
-      { ref: 'https://store.example/control', token: 'remote-token' },
+      { ref: 'https://store.example/control', token: ' remote-token ' },
     ])
     expect(closeCount).toBe(1)
     expect((await store.getEvents(SLUG)).at(-1)?.actor).toEqual({

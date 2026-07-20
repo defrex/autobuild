@@ -13,10 +13,9 @@ import {
   resolveCliEnv,
   resolveHarvestCliEnv,
 } from './env'
-import { resolveStore } from './store-ref'
+import { openProductionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
 import type { DashboardRendererResolver } from './dashboard/render'
-import { RemoteBuildStore } from '../store/remote/client'
 import { GitHubForge } from '../ports/forge/github'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { randomIds } from '../ids'
@@ -79,10 +78,7 @@ export async function runBinary(
       console.error(error instanceof Error ? error.message : String(error))
       return 1
     }
-    const store = resolveStore(harvestEnv.store, {
-      token: harvestEnv.token,
-      remoteFactory: (url, token) => new RemoteBuildStore({ url, token }),
-    })
+    const store = openProductionStore(harvestEnv.store, harvestEnv.token)
     try {
       return await runCli(argv, {
         ...unscopedDeps,
@@ -107,10 +103,7 @@ export async function runBinary(
     return 1
   }
 
-  const store = resolveStore(cliEnv.store, {
-    token: cliEnv.token,
-    remoteFactory: (url, token) => new RemoteBuildStore({ url, token }),
-  })
+  const store = openProductionStore(cliEnv.store, cliEnv.token)
 
   try {
     return await runCli(argv, {
