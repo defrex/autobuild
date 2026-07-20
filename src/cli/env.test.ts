@@ -4,7 +4,12 @@
  * and the expected format (D6: errors are agent feedback).
  */
 import { describe, expect, test } from 'bun:test'
-import { parseAbPhase, resolveCliEnv } from './env'
+import {
+  MissingAmbientContextError,
+  parseAbPhase,
+  resolveCliEnv,
+  resolveHarvestCliEnv,
+} from './env'
 
 const FULL_ENV = {
   AB_STORE: '/home/user/.autobuild',
@@ -12,6 +17,24 @@ const FULL_ENV = {
   AB_PHASE: 'implement@2',
   AB_SESSION: 's_9f2',
   AB_TOKEN: 'tok_abc',
+}
+
+const FULL_HARVEST_ENV = {
+  AB_STORE: '/home/user/.autobuild',
+  AB_REPO: '/home/user/app',
+  AB_HARVEST: 'h_123',
+  AB_PHASE: 'review@3',
+  AB_SESSION: 'hs_9f2',
+  AB_TOKEN: 'tok_harvest',
+}
+
+function thrownBy(action: () => unknown): unknown {
+  try {
+    action()
+  } catch (error) {
+    return error
+  }
+  throw new Error('expected action to throw')
 }
 
 describe('resolveCliEnv', () => {
@@ -46,24 +69,97 @@ describe('resolveCliEnv', () => {
   })
 
   test.each(['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION'] as const)(
-    'missing %s errors naming the variable',
+    'missing %s raises typed context feedback naming the variable',
     (name) => {
       const env: Record<string, string | undefined> = { ...FULL_ENV }
       delete env[name]
-      expect(() => resolveCliEnv(env)).toThrow(new RegExp(`${name} is not set`))
+      const error = thrownBy(() => resolveCliEnv(env))
+      expect(error).toBeInstanceOf(MissingAmbientContextError)
+      expect(error).toMatchObject({ variable: name })
+      expect((error as Error).message).toMatch(new RegExp(`${name} is not set`))
     },
   )
 
-  test('an empty-string variable counts as missing', () => {
-    expect(() => resolveCliEnv({ ...FULL_ENV, AB_SESSION: '' })).toThrow(
-      /AB_SESSION is not set/,
-    )
-  })
+  test.each(['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION'] as const)(
+    'empty %s raises the same typed missing-context error',
+    (name) => {
+      const error = thrownBy(() =>
+        resolveCliEnv({ ...FULL_ENV, [name]: '' }),
+      )
+      expect(error).toBeInstanceOf(MissingAmbientContextError)
+      expect(error).toMatchObject({ variable: name })
+    },
+  )
 
   test('missing AB_PHASE names the expected format', () => {
     const env: Record<string, string | undefined> = { ...FULL_ENV }
     delete env['AB_PHASE']
     expect(() => resolveCliEnv(env)).toThrow(/'<phase>\[@<round>\]'/)
+  })
+
+  test('a fully populated malformed AB_PHASE remains an ordinary parse error', () => {
+    const error = thrownBy(() =>
+      resolveCliEnv({ ...FULL_ENV, AB_PHASE: 'implement@nope' }),
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(MissingAmbientContextError)
+    expect((error as Error).message).toMatch(
+      /AB_PHASE "implement@nope" has a malformed round "nope"/,
+    )
+  })
+})
+
+describe('resolveHarvestCliEnv', () => {
+  test('resolves the complete harvest session environment', () => {
+    expect(resolveHarvestCliEnv(FULL_HARVEST_ENV)).toEqual({
+      store: '/home/user/.autobuild',
+      repo: '/home/user/app',
+      run: 'h_123',
+      phase: 'review',
+      round: 3,
+      session: 'hs_9f2',
+      token: 'tok_harvest',
+    })
+  })
+
+  test.each([
+    'AB_STORE',
+    'AB_REPO',
+    'AB_HARVEST',
+    'AB_PHASE',
+    'AB_SESSION',
+  ] as const)('missing %s raises typed harvest-context feedback', (name) => {
+    const env: Record<string, string | undefined> = { ...FULL_HARVEST_ENV }
+    delete env[name]
+    const error = thrownBy(() => resolveHarvestCliEnv(env))
+    expect(error).toBeInstanceOf(MissingAmbientContextError)
+    expect(error).toMatchObject({ variable: name })
+    expect((error as Error).message).toMatch(new RegExp(`${name} is not set`))
+  })
+
+  test.each([
+    'AB_STORE',
+    'AB_REPO',
+    'AB_HARVEST',
+    'AB_PHASE',
+    'AB_SESSION',
+  ] as const)('empty %s raises the same typed missing-context error', (name) => {
+    const error = thrownBy(() =>
+      resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, [name]: '' }),
+    )
+    expect(error).toBeInstanceOf(MissingAmbientContextError)
+    expect(error).toMatchObject({ variable: name })
+  })
+
+  test('a complete malformed harvest phase is not missing context', () => {
+    const error = thrownBy(() =>
+      resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, AB_PHASE: 'review' }),
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(MissingAmbientContextError)
+    expect((error as Error).message).toMatch(
+      /AB_PHASE "review" is not a harvest session phase/,
+    )
   })
 })
 

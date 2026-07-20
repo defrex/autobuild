@@ -822,12 +822,21 @@ Documented for transparency — **you do not run these by hand.** The build runn
 launches each agent session with `AB_STORE`, `AB_BUILD`, `AB_PHASE`, and
 `AB_SESSION` set, and these commands resolve everything from that environment.
 Every phase ends with exactly one terminal command (`done`, `verdict`, or
-`escalate`). Run one outside a session and it fails on the first missing
-variable:
+`escalate`). Outside a session, a phase-only command reports the complete
+runner context it requires instead of presenting one missing variable as the
+whole problem:
 
 ```text
-AB_STORE is not set — expected the store URL or local path. The runner sets
-ambient auth for every session (D8, SPEC §8.1).
+'ab context' runs inside a build session — the runner sets AB_STORE, AB_BUILD,
+AB_PHASE, AB_SESSION for every session (SPEC §8.1, D8). Use `ab help` for
+commands that run sessionless.
+```
+
+Harvest-agent-only forms receive the corresponding namespace-aware guidance:
+
+```text
+'ab harvest context' runs inside a harvest agent session — the runner sets
+AB_STORE, AB_REPO, AB_HARVEST, AB_PHASE, and AB_SESSION.
 ```
 
 | Command | What it does |
@@ -954,8 +963,10 @@ existing rules.
 | `AB_TOKEN` | Only when the selected store is remote |
 
 **The runner sets these** inside build sessions: `AB_STORE`, `AB_BUILD`,
-`AB_PHASE` (`<phase>[@<round>]`; round defaults to 1), and `AB_SESSION`. The
-session's `AB_STORE` is the dispatcher's already-normalized selection.
+`AB_PHASE` (`<phase>[@<round>]`; round defaults to 1), and `AB_SESSION`. Harvest
+agent sessions instead receive `AB_STORE`, `AB_REPO`, `AB_HARVEST`, `AB_PHASE`
+(`synthesize@<round>` or `review@<round>`), and `AB_SESSION`. The session's
+`AB_STORE` is the dispatcher's already-normalized selection.
 
 **`.env`:** the `ab` binary loads `<cwd>/.env` if it exists. `KEY=VALUE` lines,
 `#` comments, an optional `export ` prefix, and one layer of matching quotes
@@ -1056,18 +1067,24 @@ local differs from the new default`, the skill predates the pristine record —
 merge by hand, or run `ab init --force` to take the default and discard your
 edits.
 
-### `AB_STORE is not set`
+### `runs inside a build session` / `runs inside a harvest agent session`
 
 ```text
-AB_STORE is not set — expected the store URL or local path. The runner sets
-ambient auth for every session (D8, SPEC §8.1).
+'ab context' runs inside a build session — the runner sets AB_STORE, AB_BUILD,
+AB_PHASE, AB_SESSION for every session (SPEC §8.1, D8). Use `ab help` for
+commands that run sessionless.
 ```
 
-You ran an agent build-session command by hand. `ab init`, `ab upgrade`,
-`ab ticket`, `ab dispatch`, `ab builds`, `ab build status`, `ab harvest status`,
-and `ab help` work outside a build or harvest session; the rest
-resolve their identity from the `AB_*` variables the runner sets. Don't set them
-yourself — there is nothing an operator needs from those commands.
+```text
+'ab harvest context' runs inside a harvest agent session — the runner sets
+AB_STORE, AB_REPO, AB_HARVEST, AB_PHASE, and AB_SESSION.
+```
+
+You ran an agent-only command by hand. The operator commands in the command
+reference, including `ab artifact download` and `ab harvest status`, work
+without a phase identity. Build and harvest agent commands resolve their scoped
+identity from the complete `AB_*` tuple the runner supplies. Do not synthesize
+that tuple yourself; there is nothing an operator needs from those commands.
 
 ---
 

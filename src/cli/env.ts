@@ -37,6 +37,24 @@ export interface CliEnv {
 
 const PHASE_FORMAT = "'<phase>[@<round>]' (e.g. 'implement@2', 'verify:e2e@1')"
 
+/** A required runner-provided session value is absent or empty. Callers that
+ * resolve ambient auth directly still receive the variable-specific message;
+ * the process wiring uses the type to defer missing-session feedback to the
+ * command-aware router guard. */
+export class MissingAmbientContextError extends Error {
+  override readonly name = 'MissingAmbientContextError'
+
+  constructor(
+    readonly variable: string,
+    expected: string,
+  ) {
+    super(
+      `${variable} is not set — expected ${expected}. ` +
+        'The runner sets ambient auth for every session (D8, SPEC §8.1).',
+    )
+  }
+}
+
 function requireVar(
   env: Record<string, string | undefined>,
   name: string,
@@ -44,10 +62,7 @@ function requireVar(
 ): string {
   const value = env[name]
   if (value === undefined || value === '') {
-    throw new Error(
-      `${name} is not set — expected ${expected}. ` +
-        'The runner sets ambient auth for every session (D8, SPEC §8.1).',
-    )
+    throw new MissingAmbientContextError(name, expected)
   }
   return value
 }

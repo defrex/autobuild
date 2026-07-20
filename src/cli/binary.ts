@@ -7,7 +7,11 @@
 import { join } from 'node:path'
 import { isSessionlessInvocation, runCli } from './main'
 import { loadDotEnv } from './dotenv'
-import { resolveCliEnv, resolveHarvestCliEnv } from './env'
+import {
+  MissingAmbientContextError,
+  resolveCliEnv,
+  resolveHarvestCliEnv,
+} from './env'
 import { resolveStore } from './store-ref'
 import { processTerminal, processTerminalInput } from './terminal'
 import type { DashboardRendererResolver } from './dashboard/render'
@@ -26,6 +30,13 @@ export async function runBinary(
   loadDotEnv(join(process.cwd(), '.env'), process.env)
 
   const command = argv[0]
+  const unscopedDeps = {
+    workspacePath: process.cwd(),
+    processEnv: process.env,
+    exec: spawnExec,
+    stdout: (line: string) => console.log(line),
+    stderr: (line: string) => console.error(line),
+  }
 
   // Sessionless commands resolve their own repository/store and do not require
   // a phase tuple; durable controls also take a target slug and inspect raw
@@ -40,9 +51,7 @@ export async function runBinary(
     process.once('SIGINT', onSigint)
     try {
       return await runCli(argv, {
-        workspacePath: process.cwd(),
-        exec: spawnExec,
-        processEnv: process.env,
+        ...unscopedDeps,
         signal: controller.signal,
         // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
         // TTY, so a pipe or redirect silently gets plain output.
@@ -51,8 +60,6 @@ export async function runBinary(
         ...(resolveDashboardRenderer !== undefined
           ? { resolveDashboardRenderer }
           : {}),
-        stdout: (line) => console.log(line),
-        stderr: (line) => console.error(line),
       })
     } finally {
       process.removeListener('SIGINT', onSigint)
@@ -64,6 +71,9 @@ export async function runBinary(
     try {
       harvestEnv = resolveHarvestCliEnv(process.env)
     } catch (error) {
+      if (error instanceof MissingAmbientContextError) {
+        return runCli(argv, unscopedDeps)
+      }
       console.error(error instanceof Error ? error.message : String(error))
       return 1
     }
@@ -73,14 +83,11 @@ export async function runBinary(
     })
     try {
       return await runCli(argv, {
+        ...unscopedDeps,
         store,
         harvestEnv,
-        workspacePath: process.cwd(),
-        exec: spawnExec,
         ids: randomIds(),
         clock: systemClock,
-        stdout: (line) => console.log(line),
-        stderr: (line) => console.error(line),
       })
     } finally {
       await store.close()
@@ -91,6 +98,9 @@ export async function runBinary(
   try {
     cliEnv = resolveCliEnv(process.env)
   } catch (error) {
+    if (error instanceof MissingAmbientContextError) {
+      return runCli(argv, unscopedDeps)
+    }
     console.error(error instanceof Error ? error.message : String(error))
     return 1
   }
@@ -102,15 +112,12 @@ export async function runBinary(
 
   try {
     return await runCli(argv, {
+      ...unscopedDeps,
       store,
       env: cliEnv,
-      workspacePath: process.cwd(),
       forge: new GitHubForge(),
-      exec: spawnExec,
       ids: randomIds(),
       clock: systemClock,
-      stdout: (line) => console.log(line),
-      stderr: (line) => console.error(line),
     })
   } finally {
     await store.close()

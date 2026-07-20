@@ -124,6 +124,46 @@ describe('runCli — routing and exit codes', () => {
     expect(await runCli(['verdict'], d)).toBe(1)
     expect(d.err.join('\n')).toContain('usage: ab verdict <approve|revise|escalate|pass|fail|skip>')
   })
+
+  test('dependency-light routing gives build commands the complete session guard', async () => {
+    const err: string[] = []
+    expect(
+      await runCli(['context'], {
+        workspacePath: tmp,
+        stdout: () => {},
+        stderr: (line) => err.push(line),
+      }),
+    ).toBe(1)
+    const feedback = err.join('\n')
+    expect(feedback).toContain("'ab context' runs inside a build session")
+    for (const name of ['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION']) {
+      expect(feedback).toContain(name)
+    }
+  })
+
+  test('dependency-light routing gives harvest commands their own session guard', async () => {
+    const err: string[] = []
+    expect(
+      await runCli(['harvest', 'context'], {
+        workspacePath: tmp,
+        stdout: () => {},
+        stderr: (line) => err.push(line),
+      }),
+    ).toBe(1)
+    const feedback = err.join('\n')
+    expect(feedback).toContain(
+      "'ab harvest context' runs inside a harvest agent session",
+    )
+    for (const name of [
+      'AB_STORE',
+      'AB_REPO',
+      'AB_HARVEST',
+      'AB_PHASE',
+      'AB_SESSION',
+    ]) {
+      expect(feedback).toContain(name)
+    }
+  })
 })
 
 describe('SESSIONLESS_COMMANDS', () => {
@@ -161,6 +201,14 @@ describe('SESSIONLESS_COMMANDS', () => {
     expect(isSessionlessInvocation(['artifact', 'put'])).toBe(false)
     expect(isSessionlessInvocation(['artifact', 'get'])).toBe(false)
     expect(isSessionlessInvocation(['artifact'])).toBe(false)
+  })
+
+  test('only harvest status is sessionless inside the mixed harvest namespace', () => {
+    expect(isSessionlessInvocation(['harvest', 'status'])).toBe(true)
+    expect(isSessionlessInvocation(['harvest', 'context'])).toBe(false)
+    expect(isSessionlessInvocation(['harvest', 'submit'])).toBe(false)
+    expect(isSessionlessInvocation(['harvest', 'verdict'])).toBe(false)
+    expect(isSessionlessInvocation(['harvest'])).toBe(false)
   })
 })
 

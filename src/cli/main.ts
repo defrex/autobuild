@@ -49,9 +49,11 @@ import {
  *
  * `src/cli/binary.ts` routes through `isSessionlessInvocation` below. This set
  * owns flat command names; that helper additionally owns the few mixed nested
- * namespaces (`artifact download`, `harvest status`). Everything else goes
- * through `resolveCliEnv`, which requires the ambient phase tuple. Keeping the
- * classification here beside the switch makes it unit-testable.
+ * namespaces (`artifact download`, `harvest status`). Everything else first
+ * attempts strict ambient resolution in `binary.ts`. A complete tuple gets a
+ * scoped store; an absent value routes here with unscoped dependencies so the
+ * command-specific guard below can name the full build or harvest context.
+ * Keeping the classification here beside the switch makes it unit-testable.
  */
 export const SESSIONLESS_COMMANDS = new Set([
   'init',
@@ -99,9 +101,11 @@ export interface CliDeps {
 /**
  * What `runCli` minimally needs. `ab init` and `ab upgrade` run OUTSIDE
  * build sessions (§16.3) — they take a repo path, not a build, and must
- * work with no AB_* environment — so the session surface is optional here;
- * session commands demand it via requireSession. Full CliDeps satisfies
- * this structurally, so wired-up callers are unchanged.
+ * work with no AB_* environment — so the session surface is optional here.
+ * The binary also uses this narrow shape when ambient phase context is absent,
+ * allowing requireSession/requireHarvestSession to return namespace-aware
+ * guidance without constructing a store. Full CliDeps satisfies this
+ * structurally, so wired-up callers are unchanged.
  */
 export interface SessionlessCliDeps {
   /** For init/upgrade this is just the cwd — the default target repo. */

@@ -241,6 +241,17 @@ to the front of `PATH`. `bin/agent/ab` is a private executable launcher that
 imports the canonical `bin/ab.ts`, so agent tools use the same CLI wiring as the
 operator binary even when the inherited host path contains another `ab`.
 
+`src/cli/binary.ts` classifies sessionless invocations before phase wiring. For
+a phase-only invocation, a complete build or harvest tuple is parsed strictly
+and its scoped store is resolved as before. An absent or empty required value
+raises a typed missing-context error; the binary then routes the original argv
+through `runCli` with only unscoped process dependencies, before any store is
+constructed. `requireSession` or `requireHarvestSession` consequently emits the
+command- and namespace-aware runner-context guidance. This fallback does not
+accept a partial identity: malformed fully supplied phases and other resolver
+failures retain their precise diagnostics, and only a complete tuple receives
+store or session dependencies.
+
 The adapters propagate that fresh map through their runtime-specific seams.
 `claude.ts` supplies it as SDK `options.env`, which is the complete spawned
 process environment; `pi.ts` supplies it to each prompt and its custom bash

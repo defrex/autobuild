@@ -3,23 +3,22 @@
  *
  * These exist because every other CLI test calls `runCli` directly and so
  * never traverses the real process entries and shared `src/cli/binary.ts`
- * wiring. That wiring routes sessionless commands on SESSIONLESS_COMMANDS and
- * sends everything else through `resolveCliEnv`,
- * which REQUIRES AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION and returns 1 before
- * `runCli` routes anything. A command missing from the set therefore ships
- * broken while the entire unit suite stays green — a green `bun test` is not
- * evidence here, so the binary itself is executed.
+ * wiring. That wiring classifies sessionless commands before ambient auth,
+ * strictly resolves complete build/harvest tuples, and sends a typed missing
+ * tuple back through `runCli` for command-aware guidance. A regression at any
+ * of those boundaries can ship while dependency-injected router tests stay
+ * green, so the binary itself is executed.
  *
- * Most smoke cases point AB_STORE at a temporary override, and the session
- * keys stay unset — exactly the condition that would trip resolveCliEnv if
- * routing regressed. A separate real-Git case exercises the implicit
- * repository-local root with no override.
+ * Most sessionless smoke cases point AB_STORE at a temporary override. Missing
+ * session tests remove every AB_* value, while complete-session cases seed the
+ * local store and prove strict production resolution still executes. A
+ * separate real-Git case exercises the implicit repository-local root.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KERNEL } from '../events/envelope'
+import { DISPATCHER, KERNEL } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 
@@ -47,12 +46,18 @@ async function collect(
   return { stdout, stderr, code }
 }
 
-function testEnv(): Record<string, string> {
+function bareEnv(): Record<string, string> {
   return {
     PATH: process.env['PATH'] ?? '',
     HOME: process.env['HOME'] ?? '',
+  }
+}
+
+function testEnv(): Record<string, string> {
+  return {
+    ...bareEnv(),
     // The store is a temp dir; AB_BUILD/AB_PHASE/AB_SESSION are deliberately
-    // absent — resolveCliEnv would reject on them if routing regressed.
+    // absent for sessionless smoke cases.
     AB_STORE: join(tmp, 'store'),
   }
 }
@@ -64,6 +69,18 @@ async function runBin(
   return collect(Bun.spawn(['bun', BIN, ...args], {
     cwd: tmp,
     env: { ...testEnv(), ...env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  }))
+}
+
+async function runBinWithoutAb(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return collect(Bun.spawn(['bun', BIN, ...args], {
+    cwd: tmp,
+    env: { ...bareEnv(), ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   }))
@@ -96,6 +113,64 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
   const result = await spawnExec(['git', ...args], { cwd })
   if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout)
 }
+
+const BUILD_SESSION_COMMANDS = [
+  ['context', ['context']],
+  ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],
+  ['artifact get', ['artifact', 'get', 'notes']],
+  ['observe', ['observe', '--kind', 'followup', 'record this']],
+  ['server', ['server', 'status']],
+  ['done', ['done']],
+  ['verdict', ['verdict', 'approve']],
+  ['escalate', ['escalate', 'Which behavior is intended?']],
+] as const
+
+test.each(BUILD_SESSION_COMMANDS)(
+  'bare ab %s reports complete build-session guidance',
+  async (_label, argv) => {
+    const result = await runBinWithoutAb([...argv])
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain(
+      `'ab ${argv[0]}' runs inside a build session`,
+    )
+    for (const name of ['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION']) {
+      expect(result.stderr).toContain(name)
+      expect(result.stderr).not.toContain(`${name} is not set`)
+    }
+  },
+)
+
+const HARVEST_SESSION_COMMANDS = [
+  ['context', ['harvest', 'context']],
+  ['submit', ['harvest', 'submit', 'proposals.json']],
+  [
+    'verdict',
+    ['harvest', 'verdict', 'approve', '--notes', 'review.md'],
+  ],
+] as const
+
+test.each(HARVEST_SESSION_COMMANDS)(
+  'bare ab harvest %s reports complete harvest-session guidance',
+  async (subcommand, argv) => {
+    const result = await runBinWithoutAb([...argv])
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain(
+      `'ab harvest ${subcommand}' runs inside a harvest agent session`,
+    )
+    for (const name of [
+      'AB_STORE',
+      'AB_REPO',
+      'AB_HARVEST',
+      'AB_PHASE',
+      'AB_SESSION',
+    ]) {
+      expect(result.stderr).toContain(name)
+      expect(result.stderr).not.toContain(`${name} is not set`)
+    }
+  },
+)
 
 test('ab builds runs with no session environment set', async () => {
   const result = await runBin(['builds'])
@@ -158,13 +233,15 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   })
   await local.close()
 
-  const result = await runBin([
+  const result = await runBinWithoutAb([
     'artifact',
     'download',
     'finished',
     'dashboard-frame:mixed-wide:png@0',
     '--output',
     'downloads/frame.png',
+    '--store',
+    join(tmp, 'store'),
   ])
   expect(result.code).toBe(0)
   expect(result.stderr).toBe('')
@@ -174,15 +251,144 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   )
 })
 
-test('artifact put/get still route through ambient phase auth', async () => {
-  for (const argv of [
-    ['artifact', 'put', 'kind', 'file'],
-    ['artifact', 'get', 'kind'],
-  ]) {
-    const result = await runBin(argv)
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain('AB_BUILD')
+test('harvest status remains sessionless with no ambient AB_* values', async () => {
+  const result = await runBinWithoutAb([
+    'harvest',
+    'status',
+    '--json',
+    '--store',
+    join(tmp, 'status-store'),
+  ])
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    status: 'idle',
+    paused: false,
+    runs: [],
+  })
+})
+
+test('a complete build tuple resolves its store and runs context', async () => {
+  const slug = 'phase-context'
+  const repo = await realpath(tmp)
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.createBuild({ slug, repo, branch: `ab/${slug}` })
+  await local.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: {
+        source: 'linear',
+        id: 'AUT-101',
+        title: 'Phase context fixture',
+      },
+      repo,
+      baseBranch: 'main',
+    },
+  })
+  const spec = await local.putArtifact(slug, {
+    kind: 'spec',
+    content: '# Phase context fixture\n',
+  })
+  await local.append(slug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: {
+      artifact: { kind: spec.kind, rev: spec.revision },
+      ticket: { source: 'linear', id: 'AUT-101' },
+    },
+  })
+  await local.close()
+
+  const result = await runBin(['context', '--json'], {
+    AB_BUILD: slug,
+    AB_PHASE: 'plan@1',
+    AB_SESSION: 's_context',
+  })
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    build: slug,
+    phase: 'plan',
+    round: 1,
+    materialized: { 'spec.md': { kind: 'spec', rev: 0 } },
+  })
+})
+
+test('a complete harvest tuple resolves its store and runs context', async () => {
+  const repo = await realpath(tmp)
+  const run = 'h_context'
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.ensureRepo(repo)
+  const packet = {
+    repo,
+    run,
+    observations: [
+      {
+        occurrence: { build: 'source-build', seq: 7 },
+        id: 'obs-context',
+        kind: 'followup' as const,
+        summary: 'Follow-up fixture',
+        ts: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    ledger: [],
   }
+  await local.appendRepoWithArtifacts(
+    repo,
+    [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+    (deposited) => ({
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run,
+        observations: [{ build: 'source-build', seq: 7 }],
+        scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+      },
+    }),
+  )
+  await local.close()
+
+  const result = await runBin(['harvest', 'context', '--json'], {
+    AB_REPO: repo,
+    AB_HARVEST: run,
+    AB_PHASE: 'synthesize@1',
+    AB_SESSION: 'hs_context',
+  })
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    repo,
+    run,
+    phase: 'synthesize',
+    round: 1,
+    allowedTerminal: 'submit',
+  })
+})
+
+test('complete but malformed build and harvest phases keep precise resolver errors', async () => {
+  const build = await runBin(['context'], {
+    AB_BUILD: 'phase-context',
+    AB_PHASE: 'implement@nope',
+    AB_SESSION: 's_bad_phase',
+  })
+  expect(build.code).toBe(1)
+  expect(build.stderr).toContain(
+    'AB_PHASE "implement@nope" has a malformed round "nope"',
+  )
+  expect(build.stderr).not.toContain('runs inside a build session')
+
+  const harvest = await runBin(['harvest', 'context'], {
+    AB_REPO: await realpath(tmp),
+    AB_HARVEST: 'h_bad_phase',
+    AB_PHASE: 'review',
+    AB_SESSION: 'hs_bad_phase',
+  })
+  expect(harvest.code).toBe(1)
+  expect(harvest.stderr).toContain(
+    'AB_PHASE "review" is not a harvest session phase',
+  )
+  expect(harvest.stderr).not.toContain('runs inside a harvest agent session')
 })
 
 test('the real binary rejects an own-phase control without changing the log', async () => {
@@ -249,9 +455,11 @@ test('implicit state is shared by a main checkout and its linked worktree and ig
   expect(JSON.parse(fromLinked.stdout)).toEqual(JSON.parse(fromMain.stdout))
 })
 
-test('a session command still demands its environment', async () => {
-  // The complement: routing did not accidentally make everything sessionless.
+test('a partial build tuple is rejected by the command guard', async () => {
+  // AB_STORE alone must not become an accepted partial identity.
   const result = await runBin(['context'])
   expect(result.code).toBe(1)
+  expect(result.stderr).toContain("'ab context' runs inside a build session")
   expect(result.stderr).toContain('AB_BUILD')
+  expect(result.stderr).not.toContain('AB_BUILD is not set')
 })
