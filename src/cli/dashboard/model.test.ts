@@ -407,14 +407,31 @@ describe('projectBuild: the active-build filter', () => {
       harvestPaused: false,
       statusLine: '',
     })
-    expect(
-      buildDashboard([], CONFIG, {
-        repo: '/repos/app',
-        mode: 'watch',
-        capacity: 2,
-        defaultAutoMerge: true,
-      }).defaultAutoMerge,
-    ).toBe(true)
+    const settings = buildDashboard(
+      [],
+      CONFIG,
+      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      [
+        {
+          repo: '/repos/app',
+          seq: 1,
+          ts: '2026-07-20T00:00:00.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: false },
+        },
+        {
+          repo: '/repos/app',
+          seq: 2,
+          ts: '2026-07-20T00:00:01.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.auto-merge-default-set',
+          payload: { enabled: true },
+        },
+      ],
+    )
+    expect(settings.drained).toBe(true)
+    expect(settings.defaultAutoMerge).toBe(true)
   })
 
   test('the header gate follows acknowledgements, not pending commands or a synthetic row', async () => {

@@ -115,6 +115,31 @@ describe('harvest status', () => {
     })
   })
 
+  test('event history remains harvest-focused in a mixed repository journal', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+    await deps.store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled: true },
+    })
+
+    const view = projectHarvestStatus(
+      '/repo',
+      await deps.store.getRepoEvents('/repo'),
+      2,
+    )
+    expect(view.status).toBe('running')
+    expect(view.events?.map((event) => event.type)).toEqual([
+      'harvest.started',
+    ])
+    expect(renderHarvestStatus(view).join('\n')).not.toContain('dispatcher.')
+  })
+
   test('projects an infrastructure stop before resume and the same running run after acknowledgement', async () => {
     const deps = await fixture()
     await deps.store.appendRepo('/repo', {

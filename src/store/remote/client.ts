@@ -21,11 +21,11 @@ import {
 } from '../../events/catalog'
 import type { EventType } from '../../events/payloads'
 import type {
-  HarvestEvent,
-  HarvestEventEnvelope,
-  HarvestEventType,
-  HarvestEventWrite,
-} from '../../events/harvest'
+  RepositoryEvent,
+  RepositoryEventEnvelope,
+  RepositoryEventType,
+  RepositoryEventWrite,
+} from '../../events/repository'
 import { pollingSubscribe } from '../subscribe'
 import {
   toBytes,
@@ -53,8 +53,8 @@ import {
   errorBodySchema,
   eventEnvelopeWireSchema,
   eventListSchema,
-  harvestEventEnvelopeWireSchema,
-  harvestEventListSchema,
+  repositoryEventEnvelopeWireSchema,
+  repositoryEventListSchema,
   okResponseSchema,
   placeholderRev,
   repoDepositsResponseSchema,
@@ -311,27 +311,27 @@ export class RemoteBuildStore implements BuildStore {
     return repositoryRecordWireSchema.parse(await response.json())
   }
 
-  async appendRepo<T extends HarvestEventType>(
+  async appendRepo<T extends RepositoryEventType>(
     repo: string,
-    event: HarvestEventWrite<T>,
-  ): Promise<HarvestEventEnvelope<T>> {
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T>> {
     const envelope = await this.requestJson(
       'POST',
       `${this.repoPath(repo)}/events`,
-      harvestEventEnvelopeWireSchema,
+      repositoryEventEnvelopeWireSchema,
       { actor: event.actor, type: event.type, payload: event.payload },
     )
-    return envelope as unknown as HarvestEventEnvelope<T>
+    return envelope as unknown as RepositoryEventEnvelope<T>
   }
 
-  async appendRepoWithArtifacts<T extends HarvestEventType>(
+  async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
     makeEvent: (
       deposited: RepositoryArtifactMeta[],
-    ) => HarvestEventWrite<T>,
+    ) => RepositoryEventWrite<T>,
   ): Promise<{
-    event: HarvestEventEnvelope<T>
+    event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }> {
     const sentinels: RepositoryArtifactMeta[] = artifacts.map(
@@ -361,18 +361,18 @@ export class RemoteBuildStore implements BuildStore {
       },
     )
     return {
-      event: result.event as unknown as HarvestEventEnvelope<T>,
+      event: result.event as unknown as RepositoryEventEnvelope<T>,
       artifacts: result.artifacts,
     }
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<HarvestEvent[]> {
+  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
     const events = await this.requestJson(
       'GET',
       `${this.repoPath(repo)}/events?since=${sinceSeq}`,
-      harvestEventListSchema,
+      repositoryEventListSchema,
     )
-    return events as unknown as HarvestEvent[]
+    return events as unknown as RepositoryEvent[]
   }
 
   async putRepoArtifact(

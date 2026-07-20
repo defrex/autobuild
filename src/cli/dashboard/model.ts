@@ -36,11 +36,12 @@
  * engine is touched.
  */
 import type { AbEvent } from '../../events/catalog'
-import type { HarvestEvent } from '../../events/harvest'
+import type { RepositoryEvent } from '../../events/repository'
 import type { Config } from '../../config/schema'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import { verifyPhase } from '../../ontology'
 import type { BuildRecord } from '../../store/types'
+import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   reduceHarvest,
@@ -136,9 +137,9 @@ export interface DashboardModel {
   repo: string
   mode: 'watch' | 'once'
   capacity: number
-  /** Ephemeral state owned by this `ab dispatch` process only. */
+  /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
-  /** Claim-time default for new builds, owned by this process only. */
+  /** Durable repository claim-time default for newly claimed builds. */
   defaultAutoMerge: boolean
   /** Durable repository gate reduced from acknowledged journal facts. Pending
    * commands deliberately do not change this field optimistically. */
@@ -664,7 +665,7 @@ function harvestStepTiming(
  * that consumed it. A countermanding pause invalidates the pending request,
  * matching the repository reducer's command semantics. */
 function escalationAttentionDismissed(
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
   terminalSeq: number,
 ): boolean {
   let pendingHumanResume = false
@@ -689,7 +690,7 @@ function escalationAttentionDismissed(
 /** Project only a concrete run that is open or still needs human attention.
  * The repository gate is projected separately into the header. */
 function projectHarvestRun(
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
   state: HarvestState,
 ): DashboardHarvest | undefined {
   const run = state.latest
@@ -849,7 +850,7 @@ interface RepositoryHarvestProjection {
 }
 
 function projectRepositoryHarvest(
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
 ): RepositoryHarvestProjection {
   const state = reduceHarvest(events)
   const harvest = projectHarvestRun(events, state)
@@ -860,7 +861,7 @@ function projectRepositoryHarvest(
 }
 
 export function projectHarvest(
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
 ): DashboardHarvest | undefined {
   return projectRepositoryHarvest(events).harvest
 }
@@ -874,25 +875,24 @@ export function buildDashboard(
     repo: string
     mode: 'watch' | 'once'
     capacity: number
-    drained?: boolean
-    defaultAutoMerge?: boolean
     selection?: DashboardSelection
     statusLine?: string
     resumeInput?: ResumeInputView
   },
-  harvestEvents: HarvestEvent[] = [],
+  repositoryEvents: RepositoryEvent[] = [],
 ): DashboardModel {
   const builds = entries
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug))
-  const harvestProjection = projectRepositoryHarvest(harvestEvents)
+  const harvestProjection = projectRepositoryHarvest(repositoryEvents)
+  const settings = reduceDispatchSettings(repositoryEvents)
   return {
     repo: header.repo,
     mode: header.mode,
     capacity: header.capacity,
-    drained: header.drained ?? false,
-    defaultAutoMerge: header.defaultAutoMerge ?? false,
+    drained: !settings.intake,
+    defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     statusLine: header.statusLine ?? '',
     ...(header.selection !== undefined ? { selection: header.selection } : {}),

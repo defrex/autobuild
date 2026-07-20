@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { humanActor } from '../../events/envelope'
 import { manualClock } from '../../testing/fixed'
 import {
   buildCreatedWrite,
@@ -51,6 +52,17 @@ describe('SqliteBuildStore durability', () => {
       expect(await first.claimLease('persist', 'runner-a', 60_000)).toBe(true)
       clock.advance(1000)
       expect(await first.heartbeat('persist', 'runner-a')).toBe(true)
+      await first.ensureRepo('acme/rate-limiter')
+      await first.appendRepo('acme/rate-limiter', {
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+      await first.appendRepo('acme/rate-limiter', {
+        actor: humanActor('operator'),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      })
       await first.close()
 
       const second = openLocalStore(root, { clock })
@@ -74,6 +86,25 @@ describe('SqliteBuildStore durability', () => {
         const spec = await second.getArtifact('persist', 'spec')
         expect(textContent(spec!)).toBe('the spec body')
         expect(spec?.meta.metadata).toEqual({ phase: 'spec' })
+
+        expect(
+          (await second.getRepoEvents('acme/rate-limiter')).map((event) => ({
+            seq: event.seq,
+            type: event.type,
+            payload: event.payload,
+          })),
+        ).toEqual([
+          {
+            seq: 1,
+            type: 'dispatcher.intake-set',
+            payload: { enabled: false },
+          },
+          {
+            seq: 2,
+            type: 'dispatcher.auto-merge-default-set',
+            payload: { enabled: true },
+          },
+        ])
 
         // The reopened store keeps assigning seq where the log left off.
         const next = await second.append('persist', sampleEventWrite('after reopen'))

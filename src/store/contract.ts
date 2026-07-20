@@ -18,7 +18,7 @@ import {
   humanActor,
   KERNEL,
 } from '../events/envelope'
-import type { HarvestEventWrite } from '../events/harvest'
+import type { RepositoryEventWrite } from '../events/repository'
 import { manualClock } from '../testing/fixed'
 import {
   contentHash,
@@ -88,7 +88,7 @@ export function sampleEventWrite(
 export function harvestStartedWrite(
   run = 'h_1',
   rev = 0,
-): HarvestEventWrite<'harvest.started'> {
+): RepositoryEventWrite<'harvest.started'> {
   return {
     actor: KERNEL,
     type: 'harvest.started',
@@ -196,7 +196,7 @@ export function describeBuildStoreContract(
       })
     })
 
-    describe('repository journal (harvest paper trail)', () => {
+    describe('repository journal (workflow and control paper trail)', () => {
       test('ensureRepo is idempotent and repo event seq is independent', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {
@@ -215,7 +215,7 @@ export function describeBuildStoreContract(
         })
       })
 
-      test('harvest event validation is strict and actor-aware', async () => {
+      test('repository event validation is strict and actor-aware', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.ensureRepo('acme/a')
           const err = await store
@@ -227,6 +227,55 @@ export function describeBuildStoreContract(
             .catch((error: unknown) => error)
           expect(err).toBeInstanceOf(EventValidationError)
           expect(await store.getRepoEvents('acme/a')).toEqual([])
+        })
+      })
+
+      test('dispatcher settings round-trip with strict payload and actor validation', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/settings')
+          await store.appendRepo('acme/settings', {
+            actor: humanActor('operator'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: false },
+          })
+          await store.appendRepo('acme/settings', {
+            actor: humanActor('operator'),
+            type: 'dispatcher.auto-merge-default-set',
+            payload: { enabled: true },
+          })
+
+          for (const invalid of [
+            {
+              actor: KERNEL,
+              type: 'dispatcher.intake-set',
+              payload: { enabled: true },
+            },
+            {
+              actor: humanActor('operator'),
+              type: 'dispatcher.auto-merge-default-set',
+              payload: { enabled: 'yes' },
+            },
+          ] as const) {
+            const error = await store
+              .appendRepo('acme/settings', invalid as RepositoryEventWrite)
+              .catch((caught: unknown) => caught)
+            expect(error).toBeInstanceOf(EventValidationError)
+          }
+
+          expect(await store.getRepoEvents('acme/settings')).toMatchObject([
+            {
+              seq: 1,
+              actor: humanActor('operator'),
+              type: 'dispatcher.intake-set',
+              payload: { enabled: false },
+            },
+            {
+              seq: 2,
+              actor: humanActor('operator'),
+              type: 'dispatcher.auto-merge-default-set',
+              payload: { enabled: true },
+            },
+          ])
         })
       })
 

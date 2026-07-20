@@ -3,7 +3,7 @@
  * snapshots are never authoritative: dashboard state, resumption boundaries,
  * claims, and the dedup ledger are all re-derived from append-only facts.
  */
-import type { HarvestEvent } from '../events/harvest'
+import type { RepositoryEvent } from '../events/repository'
 import type { Actor } from '../events/envelope'
 import type { ArtifactRef, Finding, TicketRef } from '../ontology'
 import {
@@ -149,7 +149,7 @@ function cloneRef(ref: ArtifactRef): ArtifactRef {
 function requireRun(
   runs: Map<string, HarvestRunState>,
   run: string,
-  event: HarvestEvent,
+  event: RepositoryEvent,
 ): HarvestRunState {
   const state = runs.get(run)
   if (!state) {
@@ -162,7 +162,7 @@ function requireRun(
 
 /** Total for valid journals; malformed cross-event references throw loudly so
  * storage corruption cannot masquerade as an idle harvester. */
-export function reduceHarvest(events: HarvestEvent[]): HarvestState {
+export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
   const runs = new Map<string, HarvestRunState>()
   const order: HarvestRunState[] = []
   const claimed = new Map<
@@ -647,6 +647,11 @@ export function reduceHarvest(events: HarvestEvent[]): HarvestState {
       case 'harvest.session.started':
       case 'harvest.session.ended':
         // Session facts remain individually queryable but add no transition.
+        break
+      case 'dispatcher.intake-set':
+      case 'dispatcher.auto-merge-default-set':
+        // Dispatcher controls share the repository journal but are projected
+        // independently; they never alter harvest workflow state.
         break
     }
   }

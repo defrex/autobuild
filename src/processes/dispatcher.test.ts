@@ -1336,7 +1336,7 @@ describe('Dispatcher harvest coordination', () => {
 
 // ── Janitor (§15.7, D1) ──────────────────────────────────────────────────────
 
-describe('Dispatcher in-memory drain gate', () => {
+describe('Dispatcher tick-time intake gate', () => {
   test('drained skips even listing/claiming ready tickets; a later normal tick dispatches', async () => {
     const h = harness({ tickets: [readyTicket('T-drain')] })
     const listReady = h.tickets.listReady.bind(h.tickets)

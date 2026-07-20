@@ -30,6 +30,7 @@ import type {
 import type { Config } from '../config/schema'
 import { KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
 import type { OneShotCompletionInput } from '../ports/runner/one-shot'
@@ -376,7 +377,7 @@ describe('abDispatch --once', () => {
     }
   }, 30_000)
 
-  test('claim-time auto-merge is visible on the first build frame and survives a default-off restart', async () => {
+  test('claim-time auto-merge is visible immediately, survives a no-flag restart, and explicit off persists', async () => {
     const fx = await makeFixture(
       readyTicket('T-auto-default', { title: 'Automatic landing' }),
       happyHandlers(),
@@ -434,19 +435,46 @@ describe('abDispatch --once', () => {
 
       expect(await fx.store.getEvents(record!.slug)).toEqual(beforeRestart)
       const restarted = stripAnsi(restartTerminal.all())
-      expect(restarted).toContain('auto merge default OFF')
+      expect(restarted).toContain('auto merge default ON')
       expect(restarted).toContain('auto merge')
       expect(
         (await fx.store.getEvents(record!.slug)).filter(
           (event) => event.type === 'build.auto-merge-requested',
         ),
       ).toHaveLength(1)
+
+      const overrideTerminal = fakeTerminal(true, { columns: 180 })
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'override-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        defaultAutoMerge: false,
+        wire: fx.wire,
+        terminal: overrideTerminal,
+      })
+      expect(stripAnsi(overrideTerminal.all())).toContain(
+        'auto merge default OFF',
+      )
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .filter(
+            (event) =>
+              event.type === 'dispatcher.auto-merge-default-set',
+          )
+          .map((event) => ({ actor: event.actor, enabled: event.payload.enabled })),
+      ).toEqual([
+        { actor: { kind: 'human', user: 'dispatch-op' }, enabled: true },
+        { actor: { kind: 'human', user: 'override-op' }, enabled: false },
+      ])
     } finally {
       await fx.cleanup()
     }
   }, 30_000)
 
-  test('initial intake off skips new claims while janitor still advances existing builds', async () => {
+  test('explicit intake off persists across restart while janitor continues, and explicit on replaces it', async () => {
     const fx = await makeFixture(
       readyTicket('T-existing', { title: 'Existing work' }),
       happyHandlers(),
@@ -470,7 +498,7 @@ describe('abDispatch --once', () => {
       fx.tickets.add(readyTicket('T-new', { title: 'New work' }))
       await abDispatch({
         targetRepo: fx.origin,
-        env: {},
+        env: { USER: 'drain-op' },
         exec: spawnExec,
         stdout: () => {},
         stderr: (line) => fx.err.push(line),
@@ -489,6 +517,41 @@ describe('abDispatch --once', () => {
             event.type === 'build.completed' && event.payload.outcome === 'merged',
         ),
       ).toBe(true)
+
+      // Omission reuses the durable OFF setting; the waiting ticket remains
+      // unclaimed after a dispatcher restart.
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'restart-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      expect(fx.tickets.claims).toEqual(['T-existing'])
+
+      // An explicit opposite flag appends the new repository value and the
+      // same tick immediately samples it.
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'resume-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        intake: true,
+        wire: fx.wire,
+      })
+      expect(fx.tickets.claims).toEqual(['T-existing', 'T-new'])
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .filter((event) => event.type === 'dispatcher.intake-set')
+          .map((event) => ({ actor: event.actor, enabled: event.payload.enabled })),
+      ).toEqual([
+        { actor: { kind: 'human', user: 'drain-op' }, enabled: false },
+        { actor: { kind: 'human', user: 'resume-op' }, enabled: true },
+      ])
     } finally {
       await fx.cleanup()
     }
@@ -1927,6 +1990,126 @@ describe('abDispatch --once with an interactive terminal', () => {
 })
 
 describe('abDispatch interactive keyboard controls', () => {
+  test('two dispatchers poll the same durable settings, toggle current state, and gate every tick', async () => {
+    const fx = await makeFixture([], {})
+    const termA = fakeTerminal()
+    const termB = fakeTerminal()
+    const inputA = fakeInput()
+    const inputB = fakeInput()
+    let runA: Promise<void> | undefined
+    let runB: Promise<void> | undefined
+    try {
+      runA = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'operator-a' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 20,
+        wire: fx.wire,
+        terminal: termA,
+        input: inputA,
+      })
+      runB = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'operator-b' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 20,
+        wire: fx.wire,
+        terminal: termB,
+        input: inputB,
+      })
+      await waitFor(
+        () =>
+          latestDashboardFrame(termA).includes('intake ON') &&
+          latestDashboardFrame(termB).includes('auto merge default OFF'),
+      )
+
+      inputA.press('pause')
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) =>
+            event.type === 'dispatcher.intake-set' &&
+            event.payload.enabled === false,
+        ),
+      )
+      await waitFor(() => latestDashboardFrame(termB).includes('intake OFF'))
+
+      inputA.press('auto-merge')
+      await waitFor(async () =>
+        reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
+          .defaultAutoMerge,
+      )
+      await waitFor(() =>
+        latestDashboardFrame(termB).includes('auto merge default ON'),
+      )
+
+      // B started from intake ON / auto-merge OFF. It must invert A's newer
+      // values, not those stale startup views.
+      inputB.press('pause')
+      await waitFor(async () =>
+        reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
+      )
+      await waitFor(() => latestDashboardFrame(termA).includes('intake ON'))
+      inputB.press('auto-merge')
+      await waitFor(async () =>
+        !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
+          .defaultAutoMerge,
+      )
+      await waitFor(() =>
+        latestDashboardFrame(termA).includes('auto merge default OFF'),
+      )
+
+      // Turn intake off once more, add work only after both processes have
+      // observed it, and allow several ticks in each process. Neither may
+      // claim from a value cached at startup or from its prior tick.
+      inputA.press('pause')
+      await waitFor(async () =>
+        !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
+      )
+      await waitFor(
+        () =>
+          latestDashboardFrame(termA).includes('intake OFF') &&
+          latestDashboardFrame(termB).includes('intake OFF'),
+      )
+      fx.tickets.add(
+        readyTicket('T-cross-process', { body: 'not a conforming spec' }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      expect(fx.tickets.claims).toEqual([])
+
+      const settings = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type.startsWith('dispatcher.'),
+      )
+      expect(
+        settings.map((event) => [
+          event.actor.kind === 'human' ? event.actor.user : event.actor.kind,
+          event.type,
+          event.payload,
+        ]),
+      ).toEqual([
+        ['operator-a', 'dispatcher.intake-set', { enabled: false }],
+        ['operator-a', 'dispatcher.auto-merge-default-set', { enabled: true }],
+        ['operator-b', 'dispatcher.intake-set', { enabled: true }],
+        ['operator-b', 'dispatcher.auto-merge-default-set', { enabled: false }],
+        ['operator-a', 'dispatcher.intake-set', { enabled: false }],
+      ])
+
+      inputA.press('interrupt')
+      inputB.press('interrupt')
+      await Promise.all([runA, runB])
+      runA = undefined
+      runB = undefined
+    } finally {
+      inputA.press('interrupt')
+      inputB.press('interrupt')
+      await Promise.all([runA?.catch(() => {}), runB?.catch(() => {})])
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('global controls stay scoped, rapid h toggles pending gate intent, and a running Harvest row has no p action', async () => {
     const fx = await makeFixture(
       [
@@ -1999,7 +2182,26 @@ describe('abDispatch interactive keyboard controls', () => {
         stripAnsi(term.all()).includes('dispatcher auto-merge default OFF'),
       )
       expect(stripAnsi(term.all())).toContain('auto merge default OFF')
-      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(beforeRepo)
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(beforeRepo.length)
+          .map((event) => ({
+            actor: event.actor,
+            type: event.type,
+            payload: event.payload,
+          })),
+      ).toEqual([
+        {
+          actor: { kind: 'human', user: 'harvest-op' },
+          type: 'dispatcher.auto-merge-default-set',
+          payload: { enabled: true },
+        },
+        {
+          actor: { kind: 'human', user: 'harvest-op' },
+          type: 'dispatcher.auto-merge-default-set',
+          payload: { enabled: false },
+        },
+      ])
       for (const slug of ['alpha-work', 'beta-work']) {
         expect(await fx.store.getEvents(slug)).toEqual(beforeBuilds.get(slug)!)
       }
@@ -2049,18 +2251,18 @@ describe('abDispatch interactive keyboard controls', () => {
         beforeRepo.length,
       )
       expect(repoAdded.map((event) => event.type)).toEqual([
+        'dispatcher.auto-merge-default-set',
+        'dispatcher.auto-merge-default-set',
         'harvest.pause-requested',
         'harvest.resume-requested',
         'harvest.resumed',
       ])
-      expect(repoAdded[0]?.actor).toEqual({
-        kind: 'human',
-        user: 'harvest-op',
-      })
-      expect(repoAdded[1]?.actor).toEqual({
-        kind: 'human',
-        user: 'harvest-op',
-      })
+      for (const event of repoAdded.slice(0, 4)) {
+        expect(event.actor).toEqual({
+          kind: 'human',
+          user: 'harvest-op',
+        })
+      }
       for (const slug of ['alpha-work', 'beta-work']) {
         const added = (await fx.store.getEvents(slug)).slice(beforeBuilds.get(slug)!.length)
         expect(added.some((event) => event.actor.kind === 'human')).toBe(false)
@@ -3318,7 +3520,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('launch intake is process-local, global p toggles it, and the removed d key is inert', async () => {
+  test('explicit intake and global p persist, a no-flag restart reuses them, and removed d stays inert', async () => {
     const fx = await makeFixture(
       readyTicket('T-intake-off', { body: 'not a conforming spec' }),
       {},
@@ -3329,7 +3531,7 @@ describe('abDispatch interactive keyboard controls', () => {
       let sleeps = 0
       await abDispatch({
         targetRepo: fx.origin,
-        env: {},
+        env: { USER: 'intake-op' },
         exec: spawnExec,
         stdout: () => {},
         stderr: (line) => fx.err.push(line),
@@ -3356,9 +3558,17 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       expect(fx.tickets.claims).toEqual(['T-intake-off'])
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .filter((event) => event.type === 'dispatcher.intake-set')
+          .map((event) => ({ actor: event.actor, enabled: event.payload.enabled })),
+      ).toEqual([
+        { actor: { kind: 'human', user: 'intake-op' }, enabled: false },
+        { actor: { kind: 'human', user: 'intake-op' }, enabled: true },
+      ])
 
-      // A new DispatchLoop defaults intake back on. A newly ready ticket is
-      // claimed on its first tick without another operator toggle.
+      // A new DispatchLoop samples the toggled ON value. A newly ready ticket
+      // is claimed on its first tick without another operator toggle.
       fx.tickets.add(readyTicket('T-fresh', { body: 'still nonconforming' }))
       const freshInput = fakeInput()
       await abDispatch({

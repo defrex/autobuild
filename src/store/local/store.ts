@@ -23,12 +23,12 @@ import {
 } from '../../events/catalog'
 import type { EventType } from '../../events/payloads'
 import {
-  validateHarvestEventWrite,
-  type HarvestEvent,
-  type HarvestEventEnvelope,
-  type HarvestEventType,
-  type HarvestEventWrite,
-} from '../../events/harvest'
+  validateRepositoryEventWrite,
+  type RepositoryEvent,
+  type RepositoryEventEnvelope,
+  type RepositoryEventType,
+  type RepositoryEventWrite,
+} from '../../events/repository'
 import { pollingSubscribe } from '../subscribe'
 import {
   contentHash,
@@ -533,8 +533,8 @@ export class SqliteBuildStore implements BuildStore {
 
   private appendRepoInTx(
     repo: string,
-    validated: HarvestEventWrite,
-  ): HarvestEventEnvelope {
+    validated: RepositoryEventWrite,
+  ): RepositoryEventEnvelope {
     this.requireRepo(repo)
     const ts = this.now()
     const row = this.db
@@ -569,14 +569,14 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  async appendRepo<T extends HarvestEventType>(
+  async appendRepo<T extends RepositoryEventType>(
     repo: string,
-    event: HarvestEventWrite<T>,
-  ): Promise<HarvestEventEnvelope<T>> {
-    const validated = validateHarvestEventWrite(event)
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T>> {
+    const validated = validateRepositoryEventWrite(event)
     return this.writeTx(
       () => this.appendRepoInTx(repo, validated),
-    ) as HarvestEventEnvelope<T>
+    ) as RepositoryEventEnvelope<T>
   }
 
   private depositRepoInTx(
@@ -622,14 +622,14 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  async appendRepoWithArtifacts<T extends HarvestEventType>(
+  async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifactInputs: ArtifactInput[],
     makeEvent: (
       deposited: RepositoryArtifactMeta[],
-    ) => HarvestEventWrite<T>,
+    ) => RepositoryEventWrite<T>,
   ): Promise<{
-    event: HarvestEventEnvelope<T>
+    event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }> {
     const prepared: PreparedArtifact[] = []
@@ -640,16 +640,16 @@ export class SqliteBuildStore implements BuildStore {
       const deposited = prepared.map((item) =>
         this.depositRepoInTx(repo, item),
       )
-      const validated = validateHarvestEventWrite(makeEvent(deposited))
+      const validated = validateRepositoryEventWrite(makeEvent(deposited))
       const event = this.appendRepoInTx(
         repo,
         validated,
-      ) as HarvestEventEnvelope<T>
+      ) as RepositoryEventEnvelope<T>
       return { event, artifacts: deposited }
     })
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<HarvestEvent[]> {
+  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
     this.requireRepo(repo)
     const rows = this.db
       .select()
@@ -666,7 +666,7 @@ export class SqliteBuildStore implements BuildStore {
           actor: row.actor,
           type: row.type,
           payload: row.payload,
-        }) as HarvestEvent,
+        }) as RepositoryEvent,
     )
   }
 

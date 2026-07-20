@@ -108,6 +108,39 @@ describe('reduceHarvest', () => {
     expect(openHarvestRun(state)).toBeUndefined()
   })
 
+  test('ignores interleaved dispatcher settings without changing harvest decisions', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_mixed',
+        observations: [{ build: 'a', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    const before = reduceHarvest(await store.getRepoEvents('/repo'))
+    const beforeDecision = decideHarvestControl(before)
+
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+    await store.appendRepo('/repo', {
+      actor: humanActor('operator'),
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled: true },
+    })
+    const after = reduceHarvest(await store.getRepoEvents('/repo'))
+    const { lastSeq: _beforeSeq, ...beforeWorkflow } = before
+    const { lastSeq: _afterSeq, ...afterWorkflow } = after
+    expect(afterWorkflow).toEqual(beforeWorkflow)
+    expect(after.lastSeq).toBe(3)
+    expect(decideHarvestControl(after)).toEqual(beforeDecision)
+  })
+
   test('reduces durable pause commands without terminalizing or replacing the open run', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await store.ensureRepo('/repo')

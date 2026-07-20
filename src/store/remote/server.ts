@@ -22,7 +22,7 @@
  */
 import type { ZodType } from 'zod'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
-import type { HarvestEventWrite } from '../../events/harvest'
+import type { RepositoryEventWrite } from '../../events/repository'
 import { systemClock, type BuildStore, type Clock } from '../types'
 import {
   decodeBase64,
@@ -214,7 +214,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         authorizeSession(scope, body.actor)
         return json(
           201,
-          await store.appendRepo(repo, body as HarvestEventWrite),
+          await store.appendRepo(repo, body as RepositoryEventWrite),
         )
       }
       case 'GET events':
@@ -243,7 +243,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
                 body.event.payload,
                 deposited,
               ),
-            }) as HarvestEventWrite,
+            }) as RepositoryEventWrite,
         )
         return json(201, result)
       }

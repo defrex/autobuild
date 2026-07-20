@@ -6,7 +6,7 @@
  * starting a duplicate run.
  */
 import type { Config } from '../config/schema'
-import type { HarvestEvent } from '../events/harvest'
+import type { RepositoryEvent } from '../events/repository'
 import { KERNEL } from '../events/envelope'
 import type { IdSource, UuidSource } from '../ids'
 import {
@@ -123,7 +123,7 @@ function errorMessage(error: unknown): string {
 }
 
 function verdictFromEvent(
-  event: Extract<HarvestEvent, { type: 'harvest.review.verdict' }>,
+  event: Extract<RepositoryEvent, { type: 'harvest.review.verdict' }>,
 ): Verdict {
   if (event.payload.verdict === 'approve') return { verdict: 'approve' }
   if (event.payload.verdict === 'revise') {
@@ -407,7 +407,7 @@ export class HarvestRunner {
           )
           const event = (await this.deps.store.getRepoEvents(this.deps.repo)).find(
             (candidate): candidate is Extract<
-              HarvestEvent,
+              RepositoryEvent,
               { type: 'harvest.review.verdict' }
             > =>
               candidate.type === 'harvest.review.verdict' &&
@@ -487,7 +487,7 @@ export class HarvestRunner {
       .reverse()
       .find(
         (event): event is Extract<
-          HarvestEvent,
+          RepositoryEvent,
           { type: 'harvest.review.verdict' }
         > =>
           event.type === 'harvest.review.verdict' &&
@@ -513,13 +513,13 @@ export class HarvestRunner {
     step: 'synthesize' | 'review'
     round: number
     producer: boolean
-    terminal: (event: HarvestEvent, session: string) => boolean
+    terminal: (event: RepositoryEvent, session: string) => boolean
   }): Promise<void> {
     const { store, repo, ids, workspacePath } = this.deps
     await this.ensureLease()
     const events = await store.getRepoEvents(repo)
     const matchingFailures = events.filter(
-      (event): event is Extract<HarvestEvent, { type: 'harvest.failed' }> =>
+      (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
         event.type === 'harvest.failed' &&
         event.payload.run === spec.run &&
         event.payload.step === spec.step &&

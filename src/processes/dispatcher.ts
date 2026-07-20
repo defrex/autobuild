@@ -334,15 +334,15 @@ export interface TickOpts {
    */
   resumeCurrent?: boolean
   /**
-   * In-memory drain gate for one dispatcher process. False skips only the
-   * ready-ticket list/claim/dispatch stage; janitor, startup resume, lease
-   * sweep, and in-flight runners continue. Absent defaults to true.
+   * Repository-derived intake gate supplied by the CLI for this tick. False
+   * skips only the ready-ticket list/claim/dispatch stage; janitor, startup
+   * resume, lease sweep, and in-flight runners continue. Absent defaults true.
    */
   acceptNewWork?: boolean
   /**
-   * Process-local claim-time default. True records the existing durable
-   * auto-merge request only on builds created by this tick's ticket claims.
-   * Absent/false preserves the existing event sequence.
+   * Repository-derived claim-time default supplied by the CLI for this tick.
+   * True records the existing durable auto-merge request only on builds
+   * created by this tick's ticket claims. Absent/false preserves the sequence.
    */
   defaultAutoMerge?: boolean
   /** Human attribution for a claim-time auto-merge request. Required when

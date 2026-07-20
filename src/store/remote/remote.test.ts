@@ -8,7 +8,12 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
-import { agentActor, DISPATCHER, KERNEL } from '../../events/envelope'
+import {
+  agentActor,
+  DISPATCHER,
+  KERNEL,
+  humanActor,
+} from '../../events/envelope'
 import { manualClock } from '../../testing/fixed'
 import {
   buildCreatedWrite,
@@ -273,6 +278,17 @@ describe('D8 scope enforcement over the wire', () => {
         })
         .catch((error: unknown) => error)
       expect(wrongSession).toBeInstanceOf(AuthError)
+      const spoofedHumanSetting = await client
+        .appendRepo('acme/repo', {
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: false },
+        })
+        .catch((error: unknown) => error)
+      expect(spoofedHumanSetting).toBeInstanceOf(AuthError)
+      expect((spoofedHumanSetting as Error).message).toContain(
+        'may not write events attributed to a non-agent actor',
+      )
       expect(await backing.getRepoEvents('acme/repo')).toHaveLength(2)
       expect(await client.getEvents('build-a').catch((error: unknown) => error)).toBeInstanceOf(
         AuthError,

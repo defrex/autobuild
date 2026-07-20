@@ -111,12 +111,18 @@ raw build envelopes by canonical `{build, seq}` occurrence; `harvest-runner.ts`
 executes the staged workflow under a heartbeated repository lease. The dispatch
 loop starts it fire-and-forget, keeps one process-local in-flight handle, and
 drains that handle only for `--once`, so watch ticks and SIGINT remain
-responsive. `src/events/harvest.ts` and `src/kernel/harvest.ts` define and reduce
-a separate repository journal, including human pause/resume requests, kernel
-boundary acknowledgements, automatic recovery request/ack history, claims,
+responsive. `src/events/repository.ts` defines the mixed repository catalog;
+`src/kernel/harvest.ts` reduces only its harvest subset, including human
+pause/resume requests, kernel boundary acknowledgements, automatic recovery
+request/ack history, claims,
 UUID-v4 reservation facts written before external creates, per-proposal filing
 facts, recovery exhaustion/attention, and the committed dedup ledger. Build
-reducers therefore never interpret a non-build workflow.
+reducers therefore never interpret repository state. The BuildStore repository
+methods, memory/SQLite adapters, and remote protocol use generic
+`RepositoryEvent*` types and validate every write through that catalog. Existing
+`repo_events` rows already store generic type/payload JSON, so adding the strict
+human-only `dispatcher.*-set` facts requires no DDL migration. Harvest reducers
+and `ab harvest status --events` ignore/filter those setting facts explicitly.
 
 The dispatcher asks the shared pure control decision what is due before any new
 scan. An ordinary failed run selects a kernel-only monotonic automatic request;
@@ -241,10 +247,10 @@ including under `--force`.
 | Path | Contents | SPEC |
 |---|---|---|
 | `src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs | §4 |
-| `src/events/` | Build and repository-harvest envelopes, frozen payload schemas, actor validation | §15 |
+| `src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
-| `src/kernel/` | Phase table/build reducer/engine plus the separate pure harvest reducer; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
+| `src/kernel/` | Phase table/build reducer/engine plus pure repository harvest and dispatcher-settings reducers; converge, stall detection, server lifecycle | §5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, fakes. Runtime/model/extension routing lives in `ports/runner/`: `runtime.ts` (the capability-carrying registry), `routing.ts` (the eager resolver), `one-shot.ts` (optional pre-build completion), `provider-error.ts` (shared permanent-failure classifier), `session-env.ts` (per-turn ambient/scoped merge plus managed CLI PATH), and the `claude.ts` / `pi.ts` SDK error extractors/adapters | §3.2, §6.3, §8.1, §9, §13 |
 | `bin/agent/ab` | Private executable launcher placed first on agent-session PATH; delegates to canonical `bin/ab.ts` | §8.1 |
 | `src/cli/` | The `ab` CLI — the only agent↔store channel; `init.ts` owns first-config package-script detection and rendering | §8, §16.3 |
@@ -261,9 +267,9 @@ status row, a blank separator before the harvest/build body, and another before
 the contextual legend/modal controls. It shares the selection marker and
 right-pinned status column across harvest and build rows; `Harvest` is
 operator-facing identity, while its run id stays in the journal. The header
-projects process-local intake and auto-merge-default plus the repository
-reducer's acknowledged durable harvest gate as explicit ON/OFF tokens. Pending
-harvest commands do not optimistically change that token. Per-build auto-merge
+projects durable intake and auto-merge-default from `reduceDispatchSettings`
+plus the harvest reducer's acknowledged durable gate as explicit ON/OFF tokens.
+Pending harvest commands do not optimistically change that token. Per-build auto-merge
 reduction retains four states, but rendering collapses the three active states to `auto merge` with cyan/green/yellow
 emphasis and omits the token for `off`.
 
@@ -274,10 +280,11 @@ always-present global identity and structural reconciliation prevent repaint,
 insertion, or removal from retargeting by row index. When a completed or
 acknowledged harvest row disappears, its old index chooses the valid successor
 or final predecessor. The legend derives from identity plus the run's currently
-safe action. `m` branches by identity: global toggles the process-local
-claim-time auto-merge default, builds append their normal durable control event,
-and harvest remains explanatory. `p` branches by identity: global toggles
-process-local intake, builds append human events to their stream, and a harvest
+safe action. `m` branches by identity: global re-reads the repository journal
+and appends the opposite `dispatcher.auto-merge-default-set` value, builds append
+their normal durable control event, and harvest remains explanatory. `p` branches
+by identity: global similarly appends `dispatcher.intake-set`, builds append
+human events to their stream, and a harvest
 row only writes `harvest.resume-requested` for an ordinary failed run or
 unresolved exhaustion/escalation. Running and pending-acknowledgement rows write
 nothing; a paused gate directs the operator to the header rather than emitting a
@@ -314,17 +321,21 @@ requires positive mergeability, unchanged latest intent, and
 `decideNext(...)=awaiting-pr`; the normal non-admin merge is head-SHA guarded
 and completion remains an observed `pr.merged` fact on the next poll. The
 automatic startup path in `src/processes/dispatcher.ts` is unchanged and
-retries only an all-policy escalation set without input. Intake is process-local
-state that gates only the current dispatcher's ticket-claim stage. CLI
-`--intake`/`--no-intake` seed it (default on), and global-row `p` toggles it
-after launch; it is never persisted. The sibling auto-merge default is likewise
-process-local: `--auto-merge`/`--no-auto-merge` seed it (default off), and
-global-row `m` toggles it. Each serialized tick samples it only inside the fresh
-ticket-claim path. When on, `Dispatcher` appends the existing human-authored
+retries only an all-policy escalation set without input. Intake and the
+claim-time auto-merge default are independent repository facts reduced by
+`src/kernel/dispatch-settings.ts` (fresh defaults ON and OFF respectively).
+Explicit launch flags append human-authored setting facts after wiring/runtime
+validation; omitted flags append nothing. Global `p`/`m` each re-read immediately
+before appending the opposite current value. Every serialized tick re-reads the
+journal before supplying `acceptNewWork` and `defaultAutoMerge`, while every
+dashboard projection derives the same values from its poll. Multiple dispatchers
+therefore converge without a process-owned cache, and sequence order gives each
+setting last-write-wins behavior. The values remain outside `autobuild.toml`.
+When auto-merge default is on, `Dispatcher` appends the existing human-authored
 `build.auto-merge-requested` immediately after `build.created` and before
-provision/runner launch. Resume, adoption, janitor, lease sweep, and direct
-creation never consult it, while the ordinary reducer and build-row
-cancellation path own all behavior after that seed. Dispatcher notices are a
+provision/runner launch. Resume, adoption, janitor, lease sweep, direct creation,
+and existing builds never consult that claim-time seed; the ordinary reducer
+and build-row cancellation path own all behavior afterward. Dispatcher notices are a
 process-local latest-status overlay reapplied after every asynchronous
 projection; dashboard
 mode never routes them to line sinks or scrollback, while plain mode keeps those
@@ -408,6 +419,6 @@ merges into the default branch. Use a dedicated scratch repository only.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit. Every event write still passes
-`validateEventWrite` or `validateHarvestEventWrite`, and phase behavior derives
+`validateEventWrite` or `validateRepositoryEventWrite`, and phase behavior derives
 from `src/kernel/phases.ts`. When adding an adapter, start from its contract
 suite, not only the interface.

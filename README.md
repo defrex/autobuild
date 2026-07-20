@@ -485,10 +485,10 @@ render the post-transition ticket, including a canonicalized file state such as
 ab dispatch --once       # one pass, drain in-flight runners, exit
 ab dispatch              # watch; default interval 10s, Ctrl-C to stop
 ab dispatch --interval 30
-ab dispatch --no-intake    # start without claiming new tickets
-ab dispatch --intake       # explicitly start with intake on (the default)
-ab dispatch --auto-merge   # request auto-merge on each newly claimed build
-ab dispatch --no-auto-merge # explicitly keep that claim-time default off
+ab dispatch --no-intake    # persist intake off, then run
+ab dispatch --intake       # persist intake on, then run
+ab dispatch --auto-merge   # persist auto-merge-on for newly claimed builds
+ab dispatch --no-auto-merge # persist that claim-time default off
 ab dispatch --plain        # force line-oriented output, even on a TTY
 ```
 
@@ -496,10 +496,11 @@ On a TTY the interactive dashboard is one fixed frame. Its first two lines are
 an always-present, selectable global section: `Auto Build` plus the repository
 basename, mode, capacity, active-build count, `intake ON`/`intake OFF`,
 `auto merge default ON`/`auto merge default OFF`, and `harvest ON`/`harvest
-OFF`, then one status slot. The harvest token is the acknowledged durable gate
-from the repository event log; unlike the other two controls, it survives
-process restarts and changes made by another actor. Each tick count, dependency
-diagnostic, parked-build notice, harvest outcome, action confirmation, or
+OFF`, then one status slot. All three controls are reduced from the repository
+event log, survive process restarts, and reflect changes made by another
+dispatcher on the existing dashboard poll. The harvest token specifically is
+its acknowledged durable gate rather than pending intent. Each tick count,
+dependency diagnostic, parked-build notice, harvest outcome, action confirmation, or
 warning replaces that slot instead of
 scrolling above the frame. A blank line separates this section from `Harvest`
 or the first build, matching the blank lines between body rows and before the
@@ -513,7 +514,7 @@ The legend changes with the selected row and lists only meaningful actions:
 | Selection | Keys |
 |---|---|
 | Any selection | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
-| Global top section | `p` toggles this process's intake on/off. `m` toggles its claim-time auto-merge default on/off. `h` toggles the durable repository harvest gate. |
+| Global top section | `p` durably toggles repository intake on/off. `m` durably toggles the repository claim-time auto-merge default. `h` toggles the durable repository harvest gate. |
 | `Harvest` | The row exists only for an open run or unresolved failed/escalated attention. Its legend offers `p resume` for an ordinary failure or `p acknowledge` for exhaustion/escalation; running and acknowledgement-pending rows have no `p` action. `p` never pauses the gate. If harvest is off, select Global and press `h`. |
 | Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. An in-flight agent step finishes before pause takes effect. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
 | Blocked feedback field | Enter submits and Escape cancels. Backspace edits; all printable keys are text rather than dashboard actions. |
@@ -524,21 +525,28 @@ opposing requests even before acknowledgement. The header remains on the last
 acknowledged state until the kernel writes `harvest.paused` or
 `harvest.resumed`.
 
-`--intake` and `--no-intake` choose only the launch value and cannot be combined;
-omitting both starts on. Global `p` can still toggle either way. Intake off skips
-new ticket claims while janitor, stale-runner, harvest, and in-flight work
-continue, and a fresh invocation defaults on again.
+`--intake` and `--no-intake` cannot be combined. Either explicit flag writes the
+repository setting before dispatch starts; omitting both reuses its stored value,
+falling back to ON only when the repository has never stored one. Global `p`
+re-reads current state and appends the opposite value. Intake off skips new
+ticket claims while janitor, stale-runner, harvest, and in-flight work continue.
+Every dispatcher re-reads the repository setting for each tick, so turning it
+off in one process gates claims in all processes for that repository.
 
-`--auto-merge` and `--no-auto-merge` similarly choose only a process-local
-launch value, cannot be combined, and default off when omitted. Global `m`
-toggles it freely and reports the new state. When on, a ticket claim that
-creates a new build immediately records the same human-authored
-`build.auto-merge-requested` fact as build-row `m`, before runner launch. Its
-row therefore shows `auto merge` on its first visible frame and the request
-survives dispatcher restart. The setting is only sampled on fresh dispatcher
-claims: changing it never affects an existing build, a resumed/adopted event
-log, or a build created through another path. Build-row `m` remains independent,
-so a seeded build can be cancelled while the global default remains on.
+`--auto-merge` and `--no-auto-merge` are the same kind of durable setter and
+cannot be combined. Omission reuses stored state, falling back to OFF only on a
+fresh repository. Global `m` re-reads current state, appends the opposite value,
+and reports it. When on, a ticket claim that creates a new build immediately
+records the same human-authored `build.auto-merge-requested` fact as build-row
+`m`, before runner launch. Its row therefore shows `auto merge` on its first
+visible frame. The default is sampled only on fresh dispatcher claims: changing
+it never affects an existing build, a resumed/adopted event log, or a build
+created through another path. Build-row `m` remains independent, so a seeded
+build can be cancelled while the global default remains on.
+
+Both setting events are repository-scoped and independently last-write-wins by
+repository sequence. They are operator runtime state in the BuildStore, not
+`autobuild.toml`; propagation uses the existing poll rather than a push channel.
 
 A blocked row keeps every red `!` blocker visible while its field is open.
 Submitting an empty or whitespace-only field answers every blocker captured
@@ -702,7 +710,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab ticket list [--state <state>] [--labels a,b] [--json]` | List tickets; no filters uses dispatch's ready criteria. Explicit labels all must match. |
 | `ab ticket show <id> [--json]` | Show one ticket, including its complete body/spec. |
 | `ab ticket move <id> <state> [--json]` | Move a ticket to a source-local state; invalid states list the source's known states. |
-| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake] [--auto-merge \| --no-auto-merge]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on; the claim-time auto-merge default starts off. |
+| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake] [--auto-merge \| --no-auto-merge]` | Run the outer loop; a TTY gets the interactive dashboard. Explicit control flags persist repository values; omission reuses stored state (fresh repository: intake on, auto-merge default off). |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
 | `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository gate and latest harvest run, including recovery attempts/limit, stopped boundary, attention state, exact pending work, steps, filing, and failures. Read-only. |

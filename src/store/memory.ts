@@ -11,12 +11,12 @@ import {
 } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import {
-  validateHarvestEventWrite,
-  type HarvestEvent,
-  type HarvestEventEnvelope,
-  type HarvestEventType,
-  type HarvestEventWrite,
-} from '../events/harvest'
+  validateRepositoryEventWrite,
+  type RepositoryEvent,
+  type RepositoryEventEnvelope,
+  type RepositoryEventType,
+  type RepositoryEventWrite,
+} from '../events/repository'
 import { pollingSubscribe } from './subscribe'
 import {
   contentHash,
@@ -64,7 +64,7 @@ interface RepoState {
     heartbeatAt?: string
   }
   lease?: Lease
-  events: HarvestEvent[]
+  events: RepositoryEvent[]
   artifacts: Map<string, RepositoryArtifactMeta[]>
 }
 
@@ -373,12 +373,12 @@ export class MemoryBuildStore implements BuildStore {
     return state ? this.repoSnapshot(state) : null
   }
 
-  async appendRepo<T extends HarvestEventType>(
+  async appendRepo<T extends RepositoryEventType>(
     repo: string,
-    event: HarvestEventWrite<T>,
-  ): Promise<HarvestEventEnvelope<T>> {
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T>> {
     const state = this.repoState(repo)
-    const validated = validateHarvestEventWrite(event)
+    const validated = validateRepositoryEventWrite(event)
     const envelope = {
       repo,
       seq: state.events.length + 1,
@@ -386,20 +386,20 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
-    } as HarvestEventEnvelope<T>
-    state.events.push(structuredClone(envelope) as HarvestEvent)
+    } as RepositoryEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as RepositoryEvent)
     state.record.updatedAt = envelope.ts
     return envelope
   }
 
-  async appendRepoWithArtifacts<T extends HarvestEventType>(
+  async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
     makeEvent: (
       deposited: RepositoryArtifactMeta[],
-    ) => HarvestEventWrite<T>,
+    ) => RepositoryEventWrite<T>,
   ): Promise<{
-    event: HarvestEventEnvelope<T>
+    event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }> {
     const state = this.repoState(repo)
@@ -434,7 +434,7 @@ export class MemoryBuildStore implements BuildStore {
         createdAt: ts,
       }
     })
-    const validated = validateHarvestEventWrite(
+    const validated = validateRepositoryEventWrite(
       makeEvent(structuredClone(deposited)),
     )
     for (const meta of deposited) {
@@ -449,13 +449,13 @@ export class MemoryBuildStore implements BuildStore {
       actor: validated.actor,
       type: validated.type,
       payload: validated.payload,
-    } as HarvestEventEnvelope<T>
-    state.events.push(structuredClone(envelope) as HarvestEvent)
+    } as RepositoryEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as RepositoryEvent)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<HarvestEvent[]> {
+  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
     return structuredClone(
       this.repoState(repo).events.filter((event) => event.seq > sinceSeq),
     )

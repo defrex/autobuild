@@ -1,10 +1,15 @@
 /**
- * Repository-scoped harvest event catalog. These events deliberately do not
- * enter the build event union: a harvest run is an outer-loop workflow, not a
- * synthetic build or a new phase in the fixed build grammar.
+ * Repository-scoped event catalog. These events deliberately do not enter the
+ * build event union: repository controls and harvest runs are not synthetic
+ * builds or new phases in the fixed build grammar.
  */
 import { z } from 'zod'
-import { artifactRefSchema, findingSchema, reviewVerdictKindSchema, ticketRefSchema } from '../ontology'
+import {
+  artifactRefSchema,
+  findingSchema,
+  reviewVerdictKindSchema,
+  ticketRefSchema,
+} from '../ontology'
 import {
   harvestDispositionSchema,
   harvestPendingProposalSchema,
@@ -17,6 +22,7 @@ import { EventValidationError } from './catalog'
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const empty = z.strictObject({})
+const setting = z.strictObject({ enabled: z.boolean() })
 
 export const harvestEventPayloadSchemas = {
   // Repository-wide operator control. Requests are human commands; paused /
@@ -132,34 +138,66 @@ export const harvestEventPayloadSchemas = {
   }),
 } as const
 
-export type HarvestEventType = keyof typeof harvestEventPayloadSchemas
-export const HARVEST_EVENT_TYPES = Object.keys(
-  harvestEventPayloadSchemas,
-) as HarvestEventType[]
-export type HarvestEventPayload<T extends HarvestEventType> = z.infer<
-  (typeof harvestEventPayloadSchemas)[T]
+export const dispatcherSettingEventPayloadSchemas = {
+  /** Current repository-wide intake gate sampled by every dispatcher tick. */
+  'dispatcher.intake-set': setting,
+  /** Claim-time auto-merge default sampled by every dispatcher tick. */
+  'dispatcher.auto-merge-default-set': setting,
+} as const
+
+export const repositoryEventPayloadSchemas = {
+  ...harvestEventPayloadSchemas,
+  ...dispatcherSettingEventPayloadSchemas,
+} as const
+
+export type RepositoryEventType = keyof typeof repositoryEventPayloadSchemas
+export const REPOSITORY_EVENT_TYPES = Object.keys(
+  repositoryEventPayloadSchemas,
+) as RepositoryEventType[]
+export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
+  (typeof repositoryEventPayloadSchemas)[T]
 >
 
-export interface HarvestEventEnvelope<T extends HarvestEventType = HarvestEventType> {
+export interface RepositoryEventEnvelope<
+  T extends RepositoryEventType = RepositoryEventType,
+> {
   repo: string
   seq: number
   ts: string
   actor: Actor
   type: T
-  payload: HarvestEventPayload<T>
+  payload: RepositoryEventPayload<T>
 }
 
-export type HarvestEvent = {
-  [T in HarvestEventType]: HarvestEventEnvelope<T>
-}[HarvestEventType]
+export type RepositoryEvent = {
+  [T in RepositoryEventType]: RepositoryEventEnvelope<T>
+}[RepositoryEventType]
 
-export interface HarvestEventWrite<T extends HarvestEventType = HarvestEventType> {
+export interface RepositoryEventWrite<
+  T extends RepositoryEventType = RepositoryEventType,
+> {
   actor: Actor
   type: T
-  payload: HarvestEventPayload<T>
+  payload: RepositoryEventPayload<T>
 }
 
-const allowedActorKinds: Record<HarvestEventType, readonly ActorKind[]> = {
+export type HarvestEventType = keyof typeof harvestEventPayloadSchemas
+export type HarvestEventPayload<T extends HarvestEventType> =
+  RepositoryEventPayload<T>
+export type HarvestEventEnvelope<
+  T extends HarvestEventType = HarvestEventType,
+> = RepositoryEventEnvelope<T>
+export type HarvestEvent = {
+  [T in HarvestEventType]: RepositoryEventEnvelope<T>
+}[HarvestEventType]
+export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
+  RepositoryEventWrite<T>
+
+export const HARVEST_EVENT_TYPES = Object.keys(
+  harvestEventPayloadSchemas,
+) as HarvestEventType[]
+
+const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.pause-requested': ['human'],
   'harvest.resume-requested': ['human'],
   'harvest.paused': ['kernel'],
@@ -178,20 +216,32 @@ const allowedActorKinds: Record<HarvestEventType, readonly ActorKind[]> = {
   'harvest.completed': ['kernel'],
   'harvest.escalated': ['kernel', 'agent'],
   'harvest.failed': ['kernel'],
+  'dispatcher.intake-set': ['human'],
+  'dispatcher.auto-merge-default-set': ['human'],
 }
 
 export function isHarvestEventType(value: string): value is HarvestEventType {
   return Object.hasOwn(harvestEventPayloadSchemas, value)
 }
 
-export function validateHarvestEventWrite(input: {
+export function isHarvestEvent(event: RepositoryEvent): event is HarvestEvent {
+  return isHarvestEventType(event.type)
+}
+
+export function isRepositoryEventType(
+  value: string,
+): value is RepositoryEventType {
+  return Object.hasOwn(repositoryEventPayloadSchemas, value)
+}
+
+export function validateRepositoryEventWrite(input: {
   actor: unknown
   type: string
   payload: unknown
-}): HarvestEventWrite {
-  if (!isHarvestEventType(input.type)) {
+}): RepositoryEventWrite {
+  if (!isRepositoryEventType(input.type)) {
     throw new EventValidationError(
-      `unknown harvest event type "${input.type}" — known types: ${HARVEST_EVENT_TYPES.join(', ')}`,
+      `unknown repository event type "${input.type}" — known types: ${REPOSITORY_EVENT_TYPES.join(', ')}`,
     )
   }
   const actorResult = actorSchema.safeParse(input.actor)
@@ -208,12 +258,18 @@ export function validateHarvestEventWrite(input: {
       `actor kind "${actor.kind}" may not emit "${input.type}" (allowed: ${allowed.join(', ')})`,
     )
   }
-  const result = harvestEventPayloadSchemas[input.type].safeParse(input.payload)
+  const result = repositoryEventPayloadSchemas[input.type].safeParse(
+    input.payload,
+  )
   if (!result.success) {
     throw new EventValidationError(
       `invalid payload for "${input.type}": ${result.error.message}`,
       result.error.issues,
     )
   }
-  return { actor, type: input.type, payload: result.data } as HarvestEventWrite
+  return {
+    actor,
+    type: input.type,
+    payload: result.data,
+  } as RepositoryEventWrite
 }

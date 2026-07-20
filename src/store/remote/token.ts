@@ -28,7 +28,7 @@ export interface ResourceTokenScope {
   exp: number
 }
 
-/** Legacy build scopes remain valid; repository harvest sessions use the
+/** Legacy build scopes remain valid; repository-scoped agent sessions use the
  * explicit resource form so a repo token cannot read any build stream. */
 export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope
 

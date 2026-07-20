@@ -93,7 +93,7 @@ export const eventEnvelopeWireSchema = z.object({
 })
 export const eventListSchema = z.array(eventEnvelopeWireSchema)
 
-// ── Repository journals / harvest ───────────────────────────────────────────
+// ── Repository journals ─────────────────────────────────────────────────────
 
 export const ensureRepoBodySchema = z.object({ repo: z.string().min(1) })
 export const repositoryRecordWireSchema = z.object({
@@ -104,7 +104,7 @@ export const repositoryRecordWireSchema = z.object({
   heartbeatAt: z.string().optional(),
 })
 
-export const harvestEventEnvelopeWireSchema = z.object({
+export const repositoryEventEnvelopeWireSchema = z.object({
   repo: z.string(),
   seq: z.number().int().positive(),
   ts: z.string(),
@@ -112,7 +112,9 @@ export const harvestEventEnvelopeWireSchema = z.object({
   type: z.string(),
   payload: z.unknown(),
 })
-export const harvestEventListSchema = z.array(harvestEventEnvelopeWireSchema)
+export const repositoryEventListSchema = z.array(
+  repositoryEventEnvelopeWireSchema,
+)
 
 export const repositoryArtifactMetaWireSchema = z.object({
   repo: z.string(),
@@ -133,7 +135,7 @@ export const repositoryArtifactGetResponseSchema = z.union([
   }),
 ])
 export const repoDepositsResponseSchema = z.object({
-  event: harvestEventEnvelopeWireSchema,
+  event: repositoryEventEnvelopeWireSchema,
   artifacts: repositoryArtifactMetaListSchema,
 })
 

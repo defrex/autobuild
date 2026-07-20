@@ -116,9 +116,10 @@ The distinctions that change an administrator's answer:
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
 - **The BuildStore is append-only event logs.** Build status is reduced from
-  each build stream (`src/kernel/reducer.ts`); harvest state and its dedup ledger
-  are reduced from the repository journal (`src/kernel/harvest.ts`). Snapshots
-  are never authoritative. Events record facts, never derived state.
+  each build stream (`src/kernel/reducer.ts`); dispatcher settings and harvest
+  state are independently reduced from the repository journal
+  (`src/kernel/dispatch-settings.ts`, `src/kernel/harvest.ts`). Snapshots are
+  never authoritative. Events record facts, never derived state.
 - **Workspaces** are provisioned per build. Config is read from **the build's
   branch** at provision — so a config change flows through the pipeline like
   any other change, and every phase of one build sees one consistent config.
@@ -355,7 +356,7 @@ variable (a local `.env` works). If a user asks you to put an API key in
 
 Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
 wall clock. The table is prefaulted, so omitting it enables the sensible
-default. Harvest remains independent of build capacity and of process-local
+default. Harvest remains independent of build capacity and of repository
 intake. Dispatch tracks the workflow in-flight without awaiting it on
 watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
 it before exit. The repository lease remains the cross-process single-flight
@@ -485,8 +486,10 @@ On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
 lines are the always-present process-global section: a selectable `Auto Build`
 title with the repository basename, mode, capacity, active-build count,
 `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`, and
-`harvest ON`/`harvest OFF`, then one status slot. Harvest reflects the
-acknowledged durable repository gate, not a process-local or pending value. Tick counts, dependency diagnostics, parked-build notices,
+`harvest ON`/`harvest OFF`, then one status slot. All three controls are durable
+repository projections and converge across dispatchers on the existing poll;
+harvest specifically reflects its acknowledged gate, not pending intent. Tick
+counts, dependency diagnostics, parked-build notices,
 harvest outcomes, action confirmations, and warnings replace that slot instead
 of scrolling above the frame. A blank line separates the global section from
 the first body row, and another separates the body from the legend or feedback
@@ -503,24 +506,26 @@ on/off`, `m auto-merge default`, and `p intake on/off`; `Harvest` offers
 only when that action is available; builds offer `m auto-merge` and `p
 pause/resume`. `m` on `Harvest` is an explanatory build-only no-op.
 
-`--intake` starts process-local intake on, `--no-intake` starts it off, and
-omitting both defaults on; combining them is an argument error. Global-row `p`
-can toggle either way afterward. Intake off skips only new ticket claims while
-janitor, stale-runner, harvest, and in-flight work continue, and a fresh run
-defaults on again.
+`--intake` and `--no-intake` are mutually exclusive durable repository setters.
+Omitting both reuses stored state, falling back to ON only when no intake fact
+exists. Global-row `p` re-reads current state and appends the opposite value.
+Intake off skips only new ticket claims while janitor, stale-runner, harvest,
+and in-flight work continue. Every dispatcher samples the current value on each
+tick, so a change in one process gates all dispatchers for that repository.
 
-`--auto-merge` starts the process-local claim default on,
-`--no-auto-merge` starts it off, and omission defaults off; combining the two
-forms is an argument error independent of the intake pair. Global-row `m`
-toggles it in either direction and posts the new state as a dispatcher notice.
-When on, each fresh dispatcher claim records the existing human-authored
-`build.auto-merge-requested` fact immediately after `build.created` and before
-runner launch. The first visible build frame therefore carries `auto merge`,
-and the intent survives restart through the ordinary reducer/native/cancel
-machinery. This is a creation-time seed, not policy: toggles never touch
-existing builds, resumed/adopted logs or other creation paths never sample it,
-and build-row `m` remains independent (a seeded build can be cancelled while
-the global default stays on). It is not stored in `autobuild.toml` or any store.
+`--auto-merge` and `--no-auto-merge` similarly set the durable repository
+claim-time default; omission reuses stored state, falling back to OFF only when
+no fact exists. The forms are mutually exclusive independently of the intake
+pair. Global-row `m` re-reads current state, appends the opposite value, and
+posts a dispatcher notice. When on, each fresh dispatcher claim records the
+existing human-authored `build.auto-merge-requested` fact immediately after
+`build.created` and before runner launch. The first visible build frame therefore
+carries `auto merge`. This is a creation-time seed, not policy: changes never
+touch existing builds, resumed/adopted logs or other creation paths never sample
+it, and build-row `m` remains independent (a seeded build can be cancelled while
+the global default stays on). Both repository settings are independently
+last-write-wins by event sequence. They are stored in the BuildStore, not in
+`autobuild.toml`; propagation uses polling, not a push channel.
 
 Header `h` re-reads the repository journal and appends the existing human
 pause/resume request. The newest pending command determines the next target, so
@@ -594,11 +599,10 @@ guarantee: if the condition still fails, a phase may raise a new escalation and
 block again. A fresh `ab dispatch` still auto-retries only an all-policy
 escalation set and never invents guidance.
 
-Two asymmetries are intentional and explicit. Dashboard intake and the
-claim-time auto-merge default remain process-local state inside that running
-`ab dispatch`, so their launch flags and global-row toggles have no durable CLI
-commands of their own. Conversely, abort has a CLI command
-but gains no TUI key in this release. Global-row `h` owns the durable harvest
+Two asymmetries are intentional and explicit. Durable repository intake and the
+claim-time auto-merge default have launch-flag setters and global-row toggles,
+but no standalone sessionless control commands. Conversely, abort has a CLI
+command but gains no TUI key in this release. Global-row `h` owns the durable harvest
 gate. On the optional repository-scoped `Harvest` run row, `p` only resumes or
 acknowledges the represented run; `m` remains an explanatory build-only no-op.
 

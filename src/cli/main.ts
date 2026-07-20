@@ -190,8 +190,9 @@ const HELP = [
   '                                         State names and unknown-id errors come from the configured source.',
   '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
-  '                                         --auto-merge seeds durable intent on newly claimed builds only (default off); opposite flag forms cannot be combined',
-  '                                         an interactive terminal gets a fixed global/harvest/build dashboard; TTY controls: Up/Down select, p toggles intake on the global row',
+  '                                         intake/auto-merge flags durably set repository defaults; omission reuses stored state (fresh repo: intake on, auto-merge off);',
+  '                                         --auto-merge seeds durable intent on newly claimed builds only; opposite flag forms cannot be combined',
+  '                                         an interactive terminal gets a fixed global/harvest/build dashboard; TTY controls: Up/Down select, p durably toggles intake on the global row',
   '                                         or pauses/resumes the selected Harvest/build; m toggles the claim-time default on global or durable intent on a build; Ctrl-C stops;',
   '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list only keys active for the selection; --plain forces line-oriented output',
   '                                         (also automatic when stdout is not a TTY)',
@@ -612,8 +613,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
       let once = false
       let plain = false
-      let intake = true
-      let defaultAutoMerge = false
+      let intake: boolean | undefined
+      let defaultAutoMerge: boolean | undefined
       let sawIntake = false
       let sawNoIntake = false
       let sawAutoMerge = false
@@ -670,8 +671,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stderr,
         once,
         plain,
-        intake,
-        defaultAutoMerge,
+        ...(intake !== undefined ? { intake } : {}),
+        ...(defaultAutoMerge !== undefined ? { defaultAutoMerge } : {}),
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),

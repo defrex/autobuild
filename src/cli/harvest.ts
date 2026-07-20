@@ -4,7 +4,12 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import type { HarvestEvent, HarvestEventEnvelope } from '../events/harvest'
+import {
+  isHarvestEvent,
+  type HarvestEvent,
+  type RepositoryEvent,
+  type RepositoryEventEnvelope,
+} from '../events/repository'
 import { agentActor } from '../events/envelope'
 import {
   harvestProposalSetSchema,
@@ -64,7 +69,10 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-function runForEnv(events: HarvestEvent[], env: HarvestCliEnv): HarvestRunState {
+function runForEnv(
+  events: RepositoryEvent[],
+  env: HarvestCliEnv,
+): HarvestRunState {
   const run = reduceHarvest(events).runs.find((candidate) => candidate.run === env.run)
   if (!run) throw new Error(`unknown harvest run "${env.run}" in repo "${env.repo}"`)
   if (run.status !== 'running') {
@@ -76,7 +84,7 @@ function runForEnv(events: HarvestEvent[], env: HarvestCliEnv): HarvestRunState 
 }
 
 function assertNoSessionTerminal(
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
   env: HarvestCliEnv,
 ): void {
   for (const event of events) {
@@ -233,7 +241,7 @@ function validateJoinTargets(
 export async function submitHarvestProposals(
   deps: HarvestCliDeps,
   file: string,
-): Promise<HarvestEventEnvelope<'harvest.proposals.submitted'>> {
+): Promise<RepositoryEventEnvelope<'harvest.proposals.submitted'>> {
   const { store, env } = deps
   if (env.phase !== 'synthesize') {
     throw new Error(
@@ -322,7 +330,7 @@ export interface HarvestVerdictOpts {
 export async function submitHarvestVerdict(
   deps: HarvestCliDeps,
   opts: HarvestVerdictOpts,
-): Promise<HarvestEventEnvelope<'harvest.review.verdict'>> {
+): Promise<RepositoryEventEnvelope<'harvest.review.verdict'>> {
   const { store, env } = deps
   if (env.phase !== 'review') {
     throw new Error(
@@ -493,10 +501,14 @@ function projectRecovery(
 
 export function projectHarvestStatus(
   repo: string,
-  events: HarvestEvent[],
+  events: RepositoryEvent[],
   newestEvents?: number,
 ): HarvestStatusView {
   const state = reduceHarvest(events)
+  const history =
+    newestEvents === undefined
+      ? undefined
+      : events.filter(isHarvestEvent).slice(-newestEvents)
   const latest = state.latest
   if (!latest) {
     return {
@@ -511,9 +523,7 @@ export function projectHarvestStatus(
       rounds: 0,
       filed: [],
       recovery: projectRecovery(undefined),
-      ...(newestEvents !== undefined
-        ? { events: events.slice(-newestEvents) }
-        : {}),
+      ...(history !== undefined ? { events: history } : {}),
     }
   }
   return {
@@ -537,9 +547,7 @@ export function projectHarvestStatus(
       : {}),
     ...(latest.failure !== undefined ? { failure: latest.failure } : {}),
     recovery: projectRecovery(latest),
-    ...(newestEvents !== undefined
-      ? { events: events.slice(-newestEvents) }
-      : {}),
+    ...(history !== undefined ? { events: history } : {}),
   }
 }
 

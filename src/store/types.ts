@@ -17,11 +17,11 @@ import type {
 } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type {
-  HarvestEvent,
-  HarvestEventEnvelope,
-  HarvestEventType,
-  HarvestEventWrite,
-} from '../events/harvest'
+  RepositoryEvent,
+  RepositoryEventEnvelope,
+  RepositoryEventType,
+  RepositoryEventWrite,
+} from '../events/repository'
 import type { TicketRef } from '../ontology'
 
 /** Injectable time source — adapters take one so tests are deterministic. */
@@ -170,25 +170,25 @@ export interface BuildStore {
     onEvent: (event: AbEvent) => void,
   ): Unsubscribe
 
-  // ── Repository journal (outer-loop workflows) ────────────────────────────
-  // Kept alongside, not inside, build streams: a harvest run is not a build.
+  // ── Repository journal (outer-loop workflows and controls) ───────────────
+  // Kept alongside, not inside, build streams: repository state is not a build.
   ensureRepo(repo: string): Promise<RepositoryRecord>
   getRepo(repo: string): Promise<RepositoryRecord | null>
-  appendRepo<T extends HarvestEventType>(
+  appendRepo<T extends RepositoryEventType>(
     repo: string,
-    event: HarvestEventWrite<T>,
-  ): Promise<HarvestEventEnvelope<T>>
-  appendRepoWithArtifacts<T extends HarvestEventType>(
+    event: RepositoryEventWrite<T>,
+  ): Promise<RepositoryEventEnvelope<T>>
+  appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
     makeEvent: (
       deposited: RepositoryArtifactMeta[],
-    ) => HarvestEventWrite<T>,
+    ) => RepositoryEventWrite<T>,
   ): Promise<{
-    event: HarvestEventEnvelope<T>
+    event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }>
-  getRepoEvents(repo: string, sinceSeq?: number): Promise<HarvestEvent[]>
+  getRepoEvents(repo: string, sinceSeq?: number): Promise<RepositoryEvent[]>
   putRepoArtifact(
     repo: string,
     artifact: ArtifactInput,

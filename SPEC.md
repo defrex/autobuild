@@ -94,7 +94,8 @@ Small, independently runnable, crash-safe:
 ### 3.4 The event log spine
 
 Build processes append typed events to per-build logs; repository-scoped outer
-workflows append to a separate repository journal in the same BuildStore.
+workflows and operator settings append to a separate repository journal in the
+same BuildStore.
 Consequences, by design:
 
 - **State is a reduction of events.** Any state snapshot is a cache, never
@@ -689,9 +690,10 @@ observations arriving later wait for the next threshold.
 
 Occurrence identity is `{build slug, event seq}` — never payload id or a scalar
 high-water mark, because event sequences are per build. The repository journal
-is separate from build streams and reduces to run/step state, claims, review
-history, external-create ID reservations, filing facts, and the authoritative
-committed disposition ledger.
+is separate from build streams. Its harvest reducer derives run/step state,
+claims, review history, external-create ID reservations, filing facts, and the
+authoritative committed disposition ledger; its dispatcher-settings reducer
+independently derives intake and the claim-time auto-merge default.
 Dispatch starts harvest fire-and-forget and tracks it as in-flight: watch ticks
 remain responsive for janitor, lease sweep, ticket dispatch, dashboard input,
 and SIGINT, while `--once` drains the visible workflow before exit. A
@@ -829,6 +831,7 @@ events, render, send commands** — commands being events in the applicable buil
 or repository log (§15.2.7): `escalation.answered`,
 `build.pause-requested`, `build.resume-requested`, `build.abort-requested`,
 `build.auto-merge-requested`, `build.auto-merge-cancelled`,
+`dispatcher.intake-set`, `dispatcher.auto-merge-default-set`,
 `harvest.pause-requested`, and `harvest.resume-requested`. The event vocabulary
 *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 
@@ -837,9 +840,10 @@ or repository log (§15.2.7): `escalation.answered`,
   an always-present process-global top section: one selectable `Auto Build`
   title row with the repository basename, mode, capacity, active-build count,
   `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`,
-  and durable `harvest ON`/`harvest OFF`, followed by one process-local status
-  slot. The harvest token reflects only the repository reducer's acknowledged
-  gate state, never an optimistic pending command. Tick
+  and `harvest ON`/`harvest OFF`, followed by one process-local status slot.
+  All three control values come from the repository journal and survive process
+  restarts and other dispatchers' writes. The harvest token reflects only its
+  reducer's acknowledged gate state, never an optimistic pending command. Tick
   counts, dependency diagnostics, parked-build notices, harvest outcomes,
   action confirmations, and warnings replace that slot instead of entering
   scrollback. A blank row separates the top section from the first body row,
@@ -864,24 +868,29 @@ or repository log (§15.2.7): `escalation.answered`,
   Enter submits, and Escape cancels; navigation and actions are suppressed.
   The field stays bound to its captured build and escalation ids, polling
   remains live, and that build's blocker rows remain visible.
-- Intake belongs only to one running dispatcher. `--intake` starts it on,
-  `--no-intake` starts it off, and omission defaults it on; the two forms are
-  mutually exclusive. `p` on global toggles it freely afterward. When off, new
-  ticket claims are skipped while janitor, stale-runner, harvest, and in-flight
-  work continue. The setting is not persisted and a fresh invocation defaults
-  it on again.
-- The auto-merge default also belongs only to one running dispatcher and is not
-  configuration or store state. `--auto-merge` starts it on,
-  `--no-auto-merge` starts it off, and omission defaults it off; the two forms
-  are mutually exclusive. `m` on global toggles it freely afterward and emits a
-  notice naming the new state. When on, each ticket claim that creates a fresh
-  build appends the existing human-authored `build.auto-merge-requested` fact
-  immediately after `build.created` and before runner launch, so the build's
-  first visible frame already shows `auto merge` and normal durable
-  cancellation/native-application behavior applies. The value is sampled only
-  at creation: toggling never writes to existing builds, resumed/adopted logs
-  are unaffected, direct creation paths are unaffected, and build-row `m`
-  remains independent (including cancellation while the default stays on).
+- Intake is durable repository state. `--intake` and `--no-intake` are mutually
+  exclusive explicit setters; omission reuses the latest stored value, with ON
+  as the fallback only when no intake fact exists. `p` on global re-reads the
+  journal and appends the opposite current value. Every serialized dispatch
+  tick re-reads the setting before its claim stage, and the dashboard's existing
+  poll reflects changes from any dispatcher. When off, new ticket claims are
+  skipped in every dispatcher for that repository while janitor, stale-runner,
+  harvest, and in-flight work continue.
+- The claim-time auto-merge default is independent durable repository state,
+  not `autobuild.toml` configuration. `--auto-merge` and `--no-auto-merge` are
+  mutually exclusive explicit setters; omission reuses the latest stored value,
+  with OFF as the fallback only when no fact exists. Global `m` re-reads and
+  appends the opposite current value. Each tick samples the current repository
+  value. When on, each ticket claim that creates a fresh build appends the
+  existing human-authored `build.auto-merge-requested` fact immediately after
+  `build.created` and before runner launch, so the build's first visible frame
+  already shows `auto merge` and normal durable cancellation/native-application
+  behavior applies. The default is sampled only at creation: changing it never
+  writes to existing builds, resumed/adopted logs are unaffected, direct
+  creation paths are unaffected, and build-row `m` remains independent
+  (including cancellation while the default stays on). Repository sequence
+  order gives each setting independent last-write-wins semantics; polling, not
+  a push channel, propagates changes between dispatchers.
 - Repository harvest is projected with the same `PipelineStep` representation
   and row grammar as builds, but the gate and run are separate display facts.
   The header's green/yellow `harvest ON`/`harvest OFF` token is always present
@@ -962,8 +971,9 @@ Every event shares:
 `role` and `session`; humans carry `user`. The store assigns `seq` and `ts`
 so producers can't fake ordering. Repository-journal events use the same shape
 with `repo` in place of `build`, and their own per-repository sequence. They are
-validated by a separate harvest catalog so build reducers cannot accidentally
-interpret outer-loop state.
+validated by the separate repository catalog in `src/events/repository.ts` so
+build reducers cannot accidentally interpret repository workflow or control
+state.
 
 ### 15.2 Conventions
 
@@ -981,10 +991,12 @@ interpret outer-loop state.
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
 7. **[D2] Operator commands are events in the same log.** Humans append
-   `*-requested`/`*-cancelled` events and `escalation.answered`; kernel or
-   dispatcher plumbing acknowledges their effects with fact events. Build
-   commands use the build stream and harvest commands use the repository
-   journal. The store is the *only* coordination surface — no side channel —
+   `*-requested`/`*-cancelled` events, `escalation.answered`, and strict
+   dispatcher setting facts; kernel or dispatcher plumbing acknowledges effects
+   that require a boundary. Build
+   commands use the build stream; harvest commands and dispatcher settings use
+   the repository journal. The store is the *only* coordination surface — no
+   side channel —
    and polling covers commands exactly the way it covers `subscribe`. A runner
    that is dead still receives pause/resume/abort commands and escalation
    answers on resume. Auto-merge commands carry desired state until PR plumbing
@@ -1089,7 +1101,18 @@ the matching started fact, never the older conflict snapshot.
 | `escalation.answered` | human; dispatcher only for all-policy startup retry | `{id, answer, resolution: guidance \| dismiss-finding \| revise-spec \| abort \| retry}` |
 | `phase.failed` | kernel | `{phase, round?, attempt, error, willRetry}` (infra failure — distinct from verdicts) |
 
-**Repository observation harvest** (separate journal)
+**Repository dispatcher controls** (separate journal)
+
+| Type | Actor | Payload |
+|---|---|---|
+| `dispatcher.intake-set` | human | `{enabled: boolean}` — repository-wide ticket-claim gate |
+| `dispatcher.auto-merge-default-set` | human | `{enabled: boolean}` — repository-wide claim-time default |
+
+Both are strict setting facts, not request/acknowledgement pairs. Each setting
+reduces independently by greatest repository sequence. A missing fact yields
+the historical fresh-repository default: intake ON and auto-merge default OFF.
+
+**Repository observation harvest** (same separate journal)
 
 | Type | Actor | Payload |
 |---|---|---|
@@ -1144,8 +1167,12 @@ fields match, so a stale acknowledgement cannot erase newer intent. The
 operator UI's build list is exactly this reduction over every build in the
 store.
 
-The separate repository harvest reducer derives `paused`, its acknowledgement
-sequence/time, pending pause/resume commands, runs, claims, automatic recovery
+The separate dispatcher-settings reducer derives intake and the claim-time
+auto-merge default from their latest independent setting facts; it ignores
+harvest facts. Every dispatcher tick and dashboard projection uses that current
+reduction. The separate repository harvest reducer ignores dispatcher settings
+and derives `paused`, its acknowledgement sequence/time, pending pause/resume
+commands, runs, claims, automatic recovery
 request/ack history, exhaustion/attention state, and the disposition ledger from
 repository events. `harvest.pause-requested` alone does not close or change a
 run; only `harvest.paused` closes the gate. While paused, `openHarvestRun` still
@@ -1525,8 +1552,9 @@ upgrades; divergence is visible instead of silent.
 ## 18. Open threads
 
 1. **Event payload schemas (decided)** — build payloads are frozen in
-   `src/events/payloads.ts`; repository harvest payloads are frozen separately
-   in `src/events/harvest.ts`. Every adapter validates before append.
+   `src/events/payloads.ts`; repository workflow and control payloads are frozen
+   separately in `src/events/repository.ts`. Every adapter validates before
+   append.
 2. **[OPEN] Other-ingester detail** — observation harvest and its typed CLI,
    repository journal, ledger, trigger, and review loop are decided in §8.8 and
    §12. Per-source filter design for scheduled `ingest:*` sources remains open.

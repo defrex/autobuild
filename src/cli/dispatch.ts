@@ -33,6 +33,7 @@ import {
   type IdSource,
   type UuidSource,
 } from '../ids'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   reduceHarvest,
@@ -177,10 +178,11 @@ export interface DispatchOpts {
   once?: boolean
   /** Watch-loop cadence in ms (§3.3); default DEFAULT_INTERVAL_MS. */
   intervalMs?: number
-  /** Whether the process starts by accepting new tickets; default true. */
+  /** Explicit durable repository intake override. Omission reuses stored state,
+   * falling back to true only when the repository has no setting fact. */
   intake?: boolean
-  /** Whether freshly claimed builds start with durable auto-merge intent;
-   * process-local and false by default. */
+  /** Explicit durable repository claim-time auto-merge override. Omission
+   * reuses stored state, falling back to false on a fresh repository. */
   defaultAutoMerge?: boolean
   /** Explicit `--store` override; otherwise AB_STORE, then repo-local state. */
   storeRef?: string
@@ -351,11 +353,10 @@ class DispatchLoop {
    * Read from the store by `renderOnce`; timing is now-independent so the same
    * model ticks without a re-read. */
   private model: DashboardModel | undefined
-  /** Ephemeral per-process controls — deliberately absent from durable state. */
+  /** Ephemeral per-process presentation controls. Dispatcher settings are
+   * projected from the repository journal and never cached here. */
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private statusLine = ''
-  private drained: boolean
-  private defaultAutoMerge: boolean
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -376,8 +377,6 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.region =
       this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
-    this.drained = opts.intake === false
-    this.defaultAutoMerge = opts.defaultAutoMerge === true
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -427,18 +426,30 @@ class DispatchLoop {
     return result
   }
 
-  private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
-    return this.serialize(() =>
-      this.dispatcher.tick({
-        resumeCurrent,
-        acceptNewWork: !this.drained,
-        defaultAutoMerge: this.defaultAutoMerge,
-        autoMergeUser: buildControlUser(this.opts.env),
-      }),
-    )
+  private async readDispatchSettings(): Promise<
+    ReturnType<typeof reduceDispatchSettings>
+  > {
+    const events = await this.wiring.store.getRepoEvents(this.opts.targetRepo)
+    return reduceDispatchSettings(events)
   }
 
-  /** Overlay process-local controls onto the latest store projection. */
+  private dispatcherTick(
+    resumeCurrent: boolean,
+  ): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
+    return this.serialize(async () => {
+      // Sample inside the serialized tick, not at process startup. Every
+      // dispatcher therefore gates claims from the latest repository facts.
+      const settings = await this.readDispatchSettings()
+      return this.dispatcher.tick({
+        resumeCurrent,
+        acceptNewWork: settings.intake,
+        defaultAutoMerge: settings.defaultAutoMerge,
+        autoMergeUser: buildControlUser(this.opts.env),
+      })
+    })
+  }
+
+  /** Overlay only process-local presentation controls onto the projection. */
   private syncModelControls(): void {
     if (this.model === undefined) return
     const {
@@ -449,8 +460,6 @@ class DispatchLoop {
     } = this.model
     this.model = {
       ...base,
-      drained: this.drained,
-      defaultAutoMerge: this.defaultAutoMerge,
       statusLine: this.statusLine,
       ...(this.selection !== undefined
         ? { selection: this.selection }
@@ -510,8 +519,17 @@ class DispatchLoop {
 
   private async togglePause(): Promise<void> {
     if (this.selection?.kind === 'global') {
-      this.drained = !this.drained
-      this.say(`dispatcher intake ${this.drained ? 'OFF' : 'ON'}`)
+      const { store } = this.wiring
+      const repo = this.opts.targetRepo
+      const current = await this.readDispatchSettings()
+      const enabled = !current.intake
+      await store.appendRepo(repo, {
+        actor: humanActor(buildControlUser(this.opts.env)),
+        type: 'dispatcher.intake-set',
+        payload: { enabled },
+      })
+      this.say(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
+      await this.renderOnce()
       return
     }
     if (this.selection?.kind === 'harvest') {
@@ -687,10 +705,19 @@ class DispatchLoop {
 
   private async toggleAutoMerge(): Promise<void> {
     if (this.selection?.kind === 'global') {
-      this.defaultAutoMerge = !this.defaultAutoMerge
+      const { store } = this.wiring
+      const repo = this.opts.targetRepo
+      const current = await this.readDispatchSettings()
+      const enabled = !current.defaultAutoMerge
+      await store.appendRepo(repo, {
+        actor: humanActor(buildControlUser(this.opts.env)),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled },
+      })
       this.say(
-        `dispatcher auto-merge default ${this.defaultAutoMerge ? 'ON' : 'OFF'}`,
+        `dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`,
       )
+      await this.renderOnce()
       return
     }
     const slug = this.selectedBuildSlug('auto-merge')
@@ -1145,7 +1172,7 @@ class DispatchLoop {
       ? []
       : dashboardSelections(this.model)
     const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
-    const harvestEvents =
+    const repositoryEvents =
       repoRecord === null
         ? []
         : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
@@ -1156,10 +1183,8 @@ class DispatchLoop {
         repo: this.opts.targetRepo,
         mode: this.opts.once === true ? 'once' : 'watch',
         capacity: this.config.dispatcher.capacity,
-        drained: this.drained,
-        defaultAutoMerge: this.defaultAutoMerge,
       },
-      harvestEvents,
+      repositoryEvents,
     )
     const nextRows = dashboardSelections(projected)
     this.selection = reconcileSelection(
@@ -1380,6 +1405,27 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     config.roles,
     wiring.defaultRuntime,
   )
+
+  // Launch flags are durable repository setters. Omission writes nothing, so
+  // another dispatcher cannot clobber the latest operator choice with a value
+  // it inferred at startup. Fresh-repository fallbacks live in the reducer.
+  await wiring.store.ensureRepo(resolvedOpts.targetRepo)
+  const actor = humanActor(buildControlUser(resolvedOpts.env))
+  if (resolvedOpts.intake !== undefined) {
+    await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+      actor,
+      type: 'dispatcher.intake-set',
+      payload: { enabled: resolvedOpts.intake },
+    })
+  }
+  if (resolvedOpts.defaultAutoMerge !== undefined) {
+    await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+      actor,
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled: resolvedOpts.defaultAutoMerge },
+    })
+  }
+
   const loop = new DispatchLoop(config, wiring, resolvedOpts, resolver)
   await loop.run()
 }
