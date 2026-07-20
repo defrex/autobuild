@@ -440,7 +440,7 @@ every agent session as `AB_STORE`.
 
 On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
 lines are the always-present process-global section: a selectable `Auto Build`
-title with the repository basename, mode, capacity, active-build count,
+title with the repository basename, capacity, active-build count,
 `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`, and
 `harvest ON`/`harvest OFF`, then one status slot. Harvest reflects the
 acknowledged durable repository gate, not a process-local or pending value. Tick counts, dependency diagnostics, parked-build notices,

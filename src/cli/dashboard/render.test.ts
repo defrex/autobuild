@@ -77,7 +77,6 @@ function unclosedLinks(line: string): number {
 function model(builds: DashboardBuild[]): DashboardModel {
   return {
     repo: '/repos/app',
-    mode: 'watch',
     capacity: 2,
     drained: false,
     defaultAutoMerge: false,
@@ -96,9 +95,8 @@ describe('renderDashboard: the title and status rows', () => {
     expect(header).toContain('Auto Build')
     expect(header).toContain('app') // the repo basename
     expect(header).not.toContain('/repos/app')
-    expect(header).toContain('watch')
-    expect(header).toContain('capacity 2')
-    expect(header).toContain('1 active')
+    expect(header).toContain('capacity 2 | 1 active')
+    expect(header).not.toMatch(/\b(?:watch|once)\b/)
     expect(header).toContain('intake ON')
     expect(header).toContain('auto merge default OFF')
     expect(header).toContain('harvest ON')
@@ -135,9 +133,10 @@ describe('renderDashboard: the title and status rows', () => {
     expect(lines.join('\n')).toContain('no active builds')
   })
 
-  test('mode reads `once` for a single pass', () => {
-    const [header] = rd({ ...model([]), mode: 'once' }, WIDE)
-    expect(header).toContain('once')
+  test('the summary contains no loop-mode word', () => {
+    const [header] = rd(model([]), WIDE)
+    expect(header).toContain('capacity 2 | 0 active')
+    expect(header).not.toMatch(/\b(?:watch|once)\b/)
   })
 
   test('process defaults and the acknowledged durable gate render explicit ON/OFF state', () => {
@@ -151,15 +150,23 @@ describe('renderDashboard: the title and status rows', () => {
     expect(rd({ ...model([]), harvestPaused: true }, WIDE)[0]).toContain(
       'harvest OFF',
     )
-    expect(
-      rd(model([]), { color: true, width: 200 })[0],
-    ).toContain('\x1b[32mharvest ON\x1b[0m')
-    expect(
-      rd(
-        { ...model([]), harvestPaused: true },
-        { color: true, width: 200 },
-      )[0],
-    ).toContain('\x1b[33mharvest OFF\x1b[0m')
+    const defaults = rd(model([]), { color: true, width: 200 })[0]!
+    expect(defaults).toContain('\x1b[32mintake ON\x1b[0m')
+    expect(defaults).toContain('\x1b[33mauto merge default OFF\x1b[0m')
+    expect(defaults).toContain('\x1b[32mharvest ON\x1b[0m')
+
+    const toggled = rd(
+      {
+        ...model([]),
+        drained: true,
+        defaultAutoMerge: true,
+        harvestPaused: true,
+      },
+      { color: true, width: 200 },
+    )[0]!
+    expect(toggled).toContain('\x1b[33mintake OFF\x1b[0m')
+    expect(toggled).toContain('\x1b[32mauto merge default ON\x1b[0m')
+    expect(toggled).toContain('\x1b[33mharvest OFF\x1b[0m')
   })
 
   test('the header is the selected global row even with no harvest or builds', () => {

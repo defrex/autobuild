@@ -81,7 +81,6 @@ describe('dashboard harvest row', () => {
       renderDashboard(
         {
           repo: '/repo',
-          mode: 'watch',
           capacity: 1,
           drained: false,
           defaultAutoMerge: false,
@@ -194,7 +193,6 @@ describe('dashboard harvest row', () => {
       renderDashboard(
         {
           repo: '/repo',
-          mode: 'watch',
           capacity: 1,
           drained: false,
           defaultAutoMerge: false,
@@ -268,7 +266,6 @@ describe('dashboard harvest row', () => {
       renderDashboard(
         {
           repo: '/repo',
-          mode: 'watch',
           capacity: 1,
           drained: false,
           defaultAutoMerge: false,
@@ -343,7 +340,6 @@ describe('dashboard harvest row', () => {
     const lines = renderDashboard(
       {
         repo: '/repo',
-        mode: 'watch',
         capacity: 2,
         drained: false,
         defaultAutoMerge: false,

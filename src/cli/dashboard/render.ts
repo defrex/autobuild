@@ -511,7 +511,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       paint('Auto Build', 'bold', color),
       displayText(basename(model.repo)),
       paint(
-        `${model.mode} | capacity ${model.capacity} | ${model.builds.length} active`,
+        `capacity ${model.capacity} | ${model.builds.length} active`,
         'dim',
         color,
       ),

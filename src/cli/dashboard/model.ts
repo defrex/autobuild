@@ -134,7 +134,6 @@ export interface ResumeInputView {
 
 export interface DashboardModel {
   repo: string
-  mode: 'watch' | 'once'
   capacity: number
   /** Ephemeral state owned by this `ab dispatch` process only. */
   drained: boolean
@@ -872,7 +871,6 @@ export function buildDashboard(
   config: Config,
   header: {
     repo: string
-    mode: 'watch' | 'once'
     capacity: number
     drained?: boolean
     defaultAutoMerge?: boolean
@@ -889,7 +887,6 @@ export function buildDashboard(
   const harvestProjection = projectRepositoryHarvest(harvestEvents)
   return {
     repo: header.repo,
-    mode: header.mode,
     capacity: header.capacity,
     drained: header.drained ?? false,
     defaultAutoMerge: header.defaultAutoMerge ?? false,

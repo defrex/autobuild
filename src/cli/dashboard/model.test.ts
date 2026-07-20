@@ -395,22 +395,21 @@ describe('projectBuild: the active-build filter', () => {
         { record: { ...RECORD, slug: 'alpha' }, state: active, events: activeLog },
       ],
       CONFIG,
-      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      { repo: '/repos/app', capacity: 2 },
     )
     expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'zebra'])
     expect(model).toMatchObject({
       repo: '/repos/app',
-      mode: 'watch',
       capacity: 2,
       drained: false,
       defaultAutoMerge: false,
       harvestPaused: false,
       statusLine: '',
     })
+    expect('mode' in model).toBe(false)
     expect(
       buildDashboard([], CONFIG, {
         repo: '/repos/app',
-        mode: 'watch',
         capacity: 2,
         defaultAutoMerge: true,
       }).defaultAutoMerge,
@@ -428,7 +427,7 @@ describe('projectBuild: the active-build filter', () => {
     let model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      { repo: '/repos/app', capacity: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)
@@ -442,7 +441,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      { repo: '/repos/app', capacity: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -456,7 +455,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      { repo: '/repos/app', capacity: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -469,7 +468,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', mode: 'watch', capacity: 2 },
+      { repo: '/repos/app', capacity: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)

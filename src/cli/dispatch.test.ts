@@ -1434,6 +1434,9 @@ describe('abDispatch --once with an interactive terminal', () => {
       const builds = await fx.store.listBuilds()
       const slug = builds[0]!.slug
       const painted = term.all()
+      const header = latestDashboardFrame(term).split('\n')[0]!
+      expect(header).toContain('capacity 1 | 1 active')
+      expect(header).not.toMatch(/\bonce\b/)
       expect(painted).toContain(slug)
       // A progress row, with the pipeline in it.
       expect(painted).toContain('plan')
@@ -1663,6 +1666,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       const diagnosticLines = stripAnsi(diagnosticFrame!).split('\n').slice(0, -1)
       const countLines = stripAnsi(countFrame!).split('\n').slice(0, -1)
       expect(diagnosticLines[0]).toContain('Auto Build')
+      expect(diagnosticLines[0]).toContain('capacity 1 | 0 active')
+      expect(diagnosticLines[0]).not.toMatch(/\bwatch\b/)
       expect(diagnosticLines[1]).toBe(diagnostic)
       expect(countLines[1]).toBe('tick: dependencyBlocked=1')
       expect(countLines).toHaveLength(diagnosticLines.length)
