@@ -10,7 +10,7 @@
  * a re-run, not a special path — constitution #2), and release of an
  * unknown or already-released workspace is a no-op, never an error.
  */
-import { cp, mkdir, rm } from 'node:fs/promises'
+import { cp, mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import type {
@@ -26,6 +26,16 @@ export interface ProvisionRecord {
 }
 
 export type FakeWorkspaceMode = 'filesystem' | 'logical'
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
 
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly name = 'fake'
@@ -86,14 +96,20 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     const ref = resolve(join(this.root, opts.branch))
     const existing = this.active.get(ref)
     if (existing) {
-      this.provisions.push({ ...opts })
-      return {
-        ...existing,
-        base: {
-          source: 'existing',
-          sha: this.branchHeads.get(opts.branch) ?? this.initialBase.sha,
-        },
+      if (this.mode === 'logical' || (await pathExists(existing.path))) {
+        this.provisions.push({ ...opts })
+        return {
+          ...existing,
+          base: {
+            source: 'existing',
+            sha: this.branchHeads.get(opts.branch) ?? this.initialBase.sha,
+          },
+        }
       }
+      // The active map is only process-local bookkeeping. If its filesystem
+      // working copy disappeared out of band, forget that stale registration
+      // and rematerialize below without changing the durable fake branch head.
+      this.active.delete(ref)
     }
 
     if (this.mode === 'filesystem') {

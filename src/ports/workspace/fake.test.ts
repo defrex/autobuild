@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describeWorkspaceProviderContract } from './contract'
@@ -41,15 +42,29 @@ describe('FakeWorkspaceProvider', () => {
     expect(provider.isActive(handle.ref)).toBe(true)
   })
 
-  test('provision distinguishes first creation from idempotent reuse', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
-    const first = await provider.provision(OPTS)
-    const second = await provider.provision(OPTS)
-    expect(second).toEqual({
-      ...first,
-      base: { source: 'existing', sha: 'fake-base-sha' },
-    })
-    expect(provider.provisions).toHaveLength(2)
+  test('logical provision stays idempotent without touching the filesystem', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-fake-workspace-logical-'))
+    const root = join(tmp, 'workspaces')
+    const provider = new FakeWorkspaceProvider({ root, mode: 'logical' })
+    try {
+      const first = await provider.provision({
+        ...OPTS,
+        repo: join(tmp, 'nonexistent-source'),
+      })
+      const second = await provider.provision({
+        ...OPTS,
+        repo: join(tmp, 'nonexistent-source'),
+      })
+      expect(second).toEqual({
+        ...first,
+        base: { source: 'existing', sha: 'fake-base-sha' },
+      })
+      expect(provider.provisions).toHaveLength(2)
+      expect(existsSync(root)).toBe(false)
+      expect(existsSync(first.path)).toBe(false)
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
   })
 
   test('configured fallback evidence is returned and the branch head survives release', async () => {
@@ -76,6 +91,52 @@ describe('FakeWorkspaceProvider', () => {
       source: 'existing',
       sha: 'implemented-sha',
     })
+  })
+
+  test('filesystem reprovision repairs stale active bookkeeping without releasing the branch', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-fake-workspace-recovery-'))
+    const repo = join(tmp, 'source')
+    const root = join(tmp, 'workspaces')
+    const fixture = join(repo, 'source-fixture.txt')
+    await mkdir(repo, { recursive: true })
+    await writeFile(fixture, 'source tree\n')
+    const provider = new FakeWorkspaceProvider({ root })
+    const opts = { ...OPTS, repo }
+
+    try {
+      const first = await provider.provision(opts)
+      const inProgress = join(first.path, 'in-progress.txt')
+      await writeFile(inProgress, 'keep while intact\n')
+      provider.setBranchHead(opts.branch, 'implemented-sha')
+
+      const intact = await provider.provision(opts)
+      expect(intact.base).toEqual({
+        source: 'existing',
+        sha: 'implemented-sha',
+      })
+      expect(await readFile(inProgress, 'utf8')).toBe('keep while intact\n')
+
+      const provisionsBeforeRecovery = provider.provisions.length
+      await rm(first.path, { recursive: true, force: true })
+      const recovered = await provider.provision(opts)
+
+      expect(recovered.path).toBe(first.path)
+      expect((await stat(recovered.path)).isDirectory()).toBe(true)
+      expect(await readFile(join(recovered.path, 'source-fixture.txt'), 'utf8')).toBe(
+        'source tree\n',
+      )
+      await writeFile(join(recovered.path, 'write-probe.txt'), 'writable\n')
+      expect(recovered.base).toEqual({
+        source: 'existing',
+        sha: 'implemented-sha',
+      })
+      expect(provider.isActive(recovered.ref)).toBe(true)
+      expect(provider.provisions).toHaveLength(provisionsBeforeRecovery + 1)
+      expect(provider.provisions.at(-1)).toEqual(opts)
+      expect(provider.releases).toEqual([])
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
   })
 
   test('release journals and is idempotent', async () => {
