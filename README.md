@@ -44,24 +44,6 @@ queryable paper trail.
 
 ## How a build flows
 
-```mermaid
-flowchart LR
-    SPEC[spec] --> PLAN[plan]
-    PLAN --> PLANREV{plan-review}
-    PLANREV -->|revise| PLAN
-    PLANREV -->|approve| IMPL[implement]
-    IMPL --> CODEREV{code-review}
-    CODEREV -->|revise| IMPL
-    CODEREV -->|approve| VERIFY{"verify:*"}
-    VERIFY -->|fail| IMPL
-    VERIFY -->|pass| PR[finalize<br/>PR opens]
-    PR --> RECON{conflicted?}
-    RECON -->|yes| FIX[reconcile] --> RECON
-    RECON -->|no| MERGED([merged])
-```
-
-In text, the same thing:
-
 ```text
 spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize
       epilogue: (pr.conflicted → reconcile → verify:*)* → merged or closed
