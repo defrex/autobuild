@@ -126,12 +126,31 @@ inspection, self-skip, historical snapshot comparison, or golden-frame gate.
 On pass, its report atomically carries the manifest in
 `verify-report:dashboard`. Finalize reads only a successful dashboard report
 after `reduceBuild(events).verify.cycleSince`, resolves every exact text/PNG
-ref, and adds escaped monospace text plus shell-safe download commands to the
-best-effort PR summary. Any skip, stale cycle, malformed report, or missing
-artifact omits the whole optional section. Images are never uploaded or hosted.
-`src/cli/artifact.ts` keeps deposits binary-safe and provides the read-only
-sessionless `artifact download` shell with ordinary repository/store/token
-resolution, allowing exact PNG retrieval after terminal builds.
+ref, and always retains escaped monospace text plus shell-safe download commands
+in the best-effort PR summary. Any skip, stale cycle, malformed report, or
+missing artifact omits the whole optional section.
+
+When the optional target frozen in `build.created.dashboardFrames` exists,
+`src/cli/terminals.ts` opens/adopts the PR first and sends those same PNG bytes
+through the Forge's narrow dashboard-frame capability. The GitHub implementation
+in `src/ports/forge/github-dashboard-frames.ts` validates a pre-existing public,
+published, mutable release, pages assets for deterministic-name adoption, uses
+a removable OS temp file for binary `gh api` upload, and returns the public URL
+plus deletion handle. No path under a workspace is created. Every successful
+external call is followed by `dashboard-frame.hosted`; a store-write failure
+therefore retries/adopts before finalize, while provider errors become follow-up
+observations and preserve an all-text comment. Images render only for a complete
+manifest, never a partial set. A missing Forge capability is a silent supported
+text-only path.
+
+After any `build.completed`, dispatcher janitor work derives unreclaimed hosted
+event sequences and deletes them from the main-repository cwd. It records
+`dashboard-frame.reclaimed` after success (including provider 404) or
+`dashboard-frame.reclaim-failed` after a bounded command/API failure; already
+terminal builds are revisited until cleanup lands. The URL lifetime is therefore
+the active review window. `src/cli/artifact.ts` keeps the BuildStore originals
+binary-safe and provides the read-only sessionless `artifact download` shell;
+those authoritative artifacts remain under separate store retention.
 
 The reconcile boundary intentionally has two durable snapshots.
 `pr.conflicted.baseSha` is what the janitor observed at conflict detection;

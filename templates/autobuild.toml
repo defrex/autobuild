@@ -7,6 +7,16 @@
 [project]
 baseBranch = "main"
 
+# Optional review-window hosting for existing verify:dashboard PNG artifacts.
+# Off by default. The release must already exist, be published and mutable, and
+# live in a public repository; private source repos may name a separate public
+# asset repo. The gh identity needs Contents write permission there. Hosted
+# copies are deleted automatically after build completion.
+#[dashboardFrames]
+#provider = "github-release"
+#repository = "owner/public-review-assets"
+#releaseId = 123456
+
 # Deterministic verbs the kernel may run. `setup` runs after provision and
 # after a sandbox rehydrate (§15.6-C). On first init, exact `lint`,
 # `type-check`, and `test` scripts from the root package.json add truthful

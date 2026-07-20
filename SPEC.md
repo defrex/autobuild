@@ -356,12 +356,26 @@ store. The full audit trail is queryable, not committed to the branch.
 
 A successful current-cycle `verify:dashboard` report may embed the versioned
 manifest of its exact text/PNG frame artifact refs. Finalize resolves only that
-cycle's successful report, validates every referenced artifact, and adds the
-ANSI-stripped frames as escaped monospace text plus exact
+cycle's successful report, validates every referenced artifact, and always
+retains ANSI-stripped frames as escaped monospace text plus exact
 `ab artifact download` commands. Missing, malformed, skipped, or stale-cycle
-capture evidence omits this optional section and cannot reverse the already
-recorded finalize terminal. PNG bytes are not uploaded or linked: no public
-repository, hosted asset URL, or forge upload capability is required.
+capture evidence omits this optional section.
+
+Dashboard image hosting is optional and off by default. When a build's frozen
+`dashboardFrames` target names an existing published, mutable release in a
+public GitHub repository, finalize opens/adopts the PR first, copies those exact
+BuildStore PNG bytes to release assets, records each external handle as
+`dashboard-frame.hosted`, and embeds images only when the complete manifest was
+hosted. A private source repository may target a separate public asset
+repository; that temporary public disclosure is explicit configuration. No
+frame is written beneath a Git workspace or enters any branch/tree. Unsupported
+forges and upload/validation/timeout failures keep the complete text projection;
+a configured upload failure records a follow-up observation but never changes a
+verify result or blocks finalize. After `build.completed`, dispatcher janitor
+work deletes each hosted copy and durably records reclamation, retrying failures
+on later ticks. Inline URLs therefore intentionally expire after the review
+window, while authoritative BuildStore artifacts remain under the store's
+separate retention policy.
 
 ## 8. The `ab` CLI
 
@@ -1050,7 +1064,7 @@ state.
 
 | Type | Actor | Payload |
 |---|---|---|
-| `build.created` | dispatcher, human | `{ticket: {source, id, url, title}, repo, baseBranch}` |
+| `build.created` | dispatcher, human | `{ticket: {source, id, url, title}, repo, baseBranch, dashboardFrames?: {provider: "github-release", repository, releaseId}}` (optional target frozen at claim time) |
 | `build.completed` | dispatcher | `{outcome: merged \| closed-unmerged \| abandoned}` |
 | `runner.attached` | kernel | `{instance, host, resumedFromSeq?}` |
 | `workspace.provisioned` | dispatcher, kernel | `{provider, ref, branch, base: {source: remote, sha} \| {source: local, sha, remoteError} \| {source: existing, sha}}` |
@@ -1109,6 +1123,14 @@ what guarantees the analysis corpus)
 | `finalize.started` | kernel | `{}` |
 | `finalize.completed` | kernel | `{pr: {number, url, headSha}}` (kernel opens the PR after the agent's `ab done` — [D7], §8.6) |
 | `finalize.step-completed` | agent | `{step, ok, note?}` |
+| `dashboard-frame.hosted` | kernel | `{frameId, artifact: {kind, rev}, asset: {provider: "github-release", repository, releaseId, assetId, url}}` |
+| `dashboard-frame.reclaimed` | dispatcher | `{hostedSeq}` |
+| `dashboard-frame.reclaim-failed` | dispatcher | `{hostedSeq, attempt, error}` |
+
+The dashboard-frame facts are audit/cleanup plumbing only and never change
+phase, status, or verification routing. `hostedSeq` correlates cleanup with the
+exact successful upload fact, so deletion survives config changes and workspace
+removal.
 
 The skipped reason is trimmed and must remain non-empty. For stored-log
 compatibility, readers also accept the historical strict payload
@@ -1370,6 +1392,16 @@ emits `pr.merged`, then workspace release and `build.completed`. The expected
 head SHA rejects a changed-head race, and a normal (non-admin) merge remains
 subject to protection added after the probe.
 
+`build.completed` is also the reclamation boundary for hosted dashboard copies.
+After completing merged, closed-unmerged, or abandoned work, the janitor deletes
+every `dashboard-frame.hosted` handle not correlated by a later
+`dashboard-frame.reclaimed`. It revisits already-done builds to close the
+completion/delete crash window. A timeout, API error, or unavailable capability
+appends `dashboard-frame.reclaim-failed` and leaves the handle pending; a later
+tick retries, and provider 404 means success. Cleanup runs from the main
+repository after workspace removal and can neither delay nor undo build
+completion, ticket transition, or capacity release.
+
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted {baseSha}` and re-attaches
 a build-runner (the dispatcher itself never runs agents). That SHA is durable
@@ -1419,6 +1451,12 @@ itself: the system can retune its own configuration via a ticket and a PR.
 ```toml
 [project]
 baseBranch = "main"
+
+# Optional; omission is the default text-only behavior.
+[dashboardFrames]
+provider = "github-release"
+repository = "owner/public-review-assets"
+releaseId = 123456
 
 [commands]                      # deterministic verbs the kernel may run
 setup = "bun install"           # after provision / sandbox rehydrate (§15.6-C)
@@ -1501,6 +1539,15 @@ any future tooling parse it without evaluating anything; commands are plain
 shell strings. The removed legacy `[agent]` table is rejected with an error
 that directs its fields to `[roles.default]`; it is not a parsing alias or an
 automatic migration.
+
+`[dashboardFrames]` is optional and has no enabled default. Its provider is the
+literal `github-release`; `repository` is one nonblank `owner/repo` pair and
+`releaseId` is positive. The release must pre-exist, be published and mutable,
+and its repository must be public because GitHub's image proxy cannot fetch
+authenticated release assets. Autobuild creates no release or tag. The `gh`
+identity needs Contents write permission on the host repository. The dispatcher
+copies this target into `build.created`, so an in-flight build never changes
+destination when branch config changes or a dispatcher restarts.
 
 A plan may begin with the narrow TOML front-matter contract below; no other
 plan metadata is interpreted:
