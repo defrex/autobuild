@@ -80,6 +80,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     mode: 'watch',
     capacity: 2,
     drained: false,
+    defaultAutoMerge: false,
     statusLine: '',
     builds,
   }
@@ -88,7 +89,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
 const WIDE = { color: false, width: 200 }
 
 describe('renderDashboard: the title and status rows', () => {
-  test('one title names the product, repo basename, mode, capacity, count, and intake', () => {
+  test('one title names the product, repo basename, mode, capacity, count, intake, and auto-merge default', () => {
     const lines = rd(model([build()]), WIDE)
     const header = lines[0]!
     expect(header).toContain('Auto Build')
@@ -98,6 +99,7 @@ describe('renderDashboard: the title and status rows', () => {
     expect(header).toContain('capacity 2')
     expect(header).toContain('1 active')
     expect(header).toContain('intake ON')
+    expect(header).toContain('auto merge default OFF')
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
 
@@ -136,9 +138,13 @@ describe('renderDashboard: the title and status rows', () => {
     expect(header).toContain('once')
   })
 
-  test('intake state is explicit as ON/OFF and defaults to ON in a fresh model', () => {
+  test('process defaults render explicit ON/OFF state', () => {
     expect(rd({ ...model([]), drained: true }, WIDE)[0]).toContain('intake OFF')
     expect(rd(model([]), WIDE)[0]).toContain('intake ON')
+    expect(rd(model([]), WIDE)[0]).toContain('auto merge default OFF')
+    expect(
+      rd({ ...model([]), defaultAutoMerge: true }, WIDE)[0],
+    ).toContain('auto merge default ON')
   })
 
   test('the header is the selected global row even with no harvest or builds', () => {
@@ -157,9 +163,9 @@ describe('renderDashboard: the title and status rows', () => {
       WIDE,
     )
     expect(globalLines.at(-1)).toBe(
-      'Keys: Up/Down select  p intake on/off  Ctrl-C quit',
+      'Keys: Up/Down select  m auto-merge default  p intake on/off  Ctrl-C quit',
     )
-    expect(globalLines.at(-1)).not.toContain('m auto-merge')
+    expect(globalLines.at(-1)).toContain('m auto-merge default')
 
     const harvestLines = rd(
       {
@@ -360,7 +366,10 @@ describe('renderDashboard: emphasis', () => {
     expect(colored(build({ autoMerge: 'cancelling' }))).toContain(
       '\x1b[33mauto merge\x1b[0m',
     )
-    expect(colored(build({ autoMerge: 'off' }))).not.toContain('auto merge')
+    const offRow = colored(build({ autoMerge: 'off' }))
+      .split('\n')
+      .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
+    expect(stripAnsi(offRow)).not.toContain('auto merge')
   })
 })
 

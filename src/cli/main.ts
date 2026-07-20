@@ -177,10 +177,11 @@ const HELP = [
   '                                         file a ticket to the configured [tickets] source (§8.8; runs outside sessions).',
   '                                         --blocked-by takes comma-separated ticket ids from that same source',
   '                                         (e.g. AUT-8 for linear, file-1 for file); dispatch waits for all of them.',
-  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake]',
+  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
   '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
+  '                                         --auto-merge seeds durable intent on newly claimed builds only (default off); opposite flag forms cannot be combined',
   '                                         an interactive terminal gets a fixed global/harvest/build dashboard; TTY controls: Up/Down select, p toggles intake on the global row',
-  '                                         or pauses/resumes the selected Harvest/build, m toggles native squash auto-merge on builds only, Ctrl-C stops;',
+  '                                         or pauses/resumes the selected Harvest/build; m toggles the claim-time default on global or durable intent on a build; Ctrl-C stops;',
   '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list only keys active for the selection; --plain forces line-oriented output',
   '                                         (also automatic when stdout is not a TTY)',
   '  ab models [query] [--available]        list Pi\'s model catalog (filtered by query) to find a provider-qualified id for autobuild.toml (§9; runs outside sessions)',
@@ -487,12 +488,15 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
       const usage =
-        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] [--intake | --no-intake] (§3.3)'
+        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
       let once = false
       let plain = false
       let intake = true
+      let defaultAutoMerge = false
       let sawIntake = false
       let sawNoIntake = false
+      let sawAutoMerge = false
+      let sawNoAutoMerge = false
       let intervalMs: number | undefined
       let storeRef: string | undefined
       for (let i = 0; i < rest.length; i += 1) {
@@ -507,6 +511,12 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         } else if (arg === '--no-intake') {
           sawNoIntake = true
           intake = false
+        } else if (arg === '--auto-merge') {
+          sawAutoMerge = true
+          defaultAutoMerge = true
+        } else if (arg === '--no-auto-merge') {
+          sawNoAutoMerge = true
+          defaultAutoMerge = false
         } else if (arg === '--interval') {
           const value = rest[(i += 1)]
           const seconds = value === undefined ? NaN : Number(value)
@@ -523,6 +533,11 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (sawIntake && sawNoIntake) {
         throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
       }
+      if (sawAutoMerge && sawNoAutoMerge) {
+        throw new Error(
+          `--auto-merge and --no-auto-merge cannot be combined — ${usage}`,
+        )
+      }
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
       }
@@ -535,6 +550,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         once,
         plain,
         intake,
+        defaultAutoMerge,
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),

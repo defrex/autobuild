@@ -722,8 +722,13 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     }
   })
 
-  test('--intake and --no-intake each parse', async () => {
-    for (const flag of ['--intake', '--no-intake']) {
+  test('both forms of each process-local launch setting parse', async () => {
+    for (const flag of [
+      '--intake',
+      '--no-intake',
+      '--auto-merge',
+      '--no-auto-merge',
+    ]) {
       const d = deps()
       expect(
         await runCli(['dispatch', '--once', flag], { ...d, workspacePath: tmp }),
@@ -748,6 +753,35 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     }
   })
 
+  test('--auto-merge and --no-auto-merge together are a usage error in either order', async () => {
+    for (const flags of [
+      ['--auto-merge', '--no-auto-merge'],
+      ['--no-auto-merge', '--auto-merge'],
+    ]) {
+      const d = deps()
+      expect(
+        await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp }),
+      ).toBe(1)
+      const err = d.err.join('\n')
+      expect(err).toContain(
+        '--auto-merge and --no-auto-merge cannot be combined',
+      )
+      expect(err).toContain('usage: ab dispatch')
+    }
+  })
+
+  test('the intake and auto-merge flag pairs are independent', async () => {
+    const d = deps()
+    expect(
+      await runCli(
+        ['dispatch', '--once', '--no-intake', '--auto-merge'],
+        { ...d, workspacePath: tmp },
+      ),
+    ).toBe(1)
+    expect(d.err.join('\n')).toContain('autobuild.toml: not found')
+    expect(d.err.join('\n')).not.toContain('cannot be combined')
+  })
+
   test('an unknown dispatch flag still errors with the usage string', async () => {
     const d = deps()
     expect(await runCli(['dispatch', '--dashboard'], { ...d, workspacePath: tmp })).toBe(1)
@@ -755,13 +789,16 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     expect(err).toContain('unknown argument "--dashboard"')
     expect(err).toContain('[--plain]')
     expect(err).toContain('[--intake | --no-intake]')
+    expect(err).toContain('[--auto-merge | --no-auto-merge]')
   })
 
-  test('the help advertises plain output and both launch-intake forms', async () => {
+  test('the help advertises both process-local launch settings', async () => {
     const d = deps()
     await runCli(['help'], d)
-    expect(d.out.join('\n')).toContain(
-      'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake]',
+    const help = d.out.join('\n')
+    expect(help).toContain(
+      'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
     )
+    expect(help).toContain('newly claimed builds only (default off)')
   })
 })

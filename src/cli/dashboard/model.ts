@@ -129,6 +129,8 @@ export interface DashboardModel {
   capacity: number
   /** Ephemeral state owned by this `ab dispatch` process only. */
   drained: boolean
+  /** Claim-time default for new builds, owned by this process only. */
+  defaultAutoMerge: boolean
   /** Stable row identity, never a row index. */
   selection?: DashboardSelection
   /** Latest process-local dispatcher notice. Always rendered on one reserved
@@ -779,6 +781,7 @@ export function buildDashboard(
     mode: 'watch' | 'once'
     capacity: number
     drained?: boolean
+    defaultAutoMerge?: boolean
     selection?: DashboardSelection
     statusLine?: string
     resumeInput?: ResumeInputView
@@ -795,6 +798,7 @@ export function buildDashboard(
     mode: header.mode,
     capacity: header.capacity,
     drained: header.drained ?? false,
+    defaultAutoMerge: header.defaultAutoMerge ?? false,
     statusLine: header.statusLine ?? '',
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),

@@ -416,26 +416,41 @@ every agent session as `AB_STORE`.
 
 On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
 lines are the always-present process-global section: a selectable `Auto Build`
-title with the repository basename, mode, capacity, active-build count, and
-`intake ON`/`intake OFF`, then one status slot. Tick counts, dependency
-diagnostics, parked-build notices, harvest outcomes, action confirmations, and
-warnings replace that slot instead of scrolling above the frame. A blank line
-separates the global section from the first body row, and another separates the
-body from the legend or feedback controls. The duplicate startup banner is
-suppressed; `--plain` and non-TTY output remain line-oriented and unchanged.
+title with the repository basename, mode, capacity, active-build count,
+`intake ON`/`intake OFF`, and `auto merge default ON`/`auto merge default OFF`,
+then one status slot. Tick counts, dependency diagnostics, parked-build notices,
+harvest outcomes, action confirmations, and warnings replace that slot instead
+of scrolling above the frame. A blank line separates the global section from
+the first body row, and another separates the body from the legend or feedback
+controls. The duplicate startup banner is suppressed; `--plain` and non-TTY
+output remain line-oriented and unchanged.
 
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
-contextual: every row offers navigation and quit; global offers `p intake
-on/off`; `Harvest` offers `p pause/resume`; builds offer `m auto-merge` and `p
-pause/resume`. `m` on global or `Harvest` is an explanatory build-only no-op.
+contextual: every row offers navigation and quit; global offers `m auto-merge
+default` and `p intake on/off`; `Harvest` offers `p pause/resume`; builds offer
+`m auto-merge` and `p pause/resume`. `m` on `Harvest` is an explanatory
+build-only no-op.
 
 `--intake` starts process-local intake on, `--no-intake` starts it off, and
 omitting both defaults on; combining them is an argument error. Global-row `p`
 can toggle either way afterward. Intake off skips only new ticket claims while
 janitor, stale-runner, harvest, and in-flight work continue, and a fresh run
 defaults on again.
+
+`--auto-merge` starts the process-local claim default on,
+`--no-auto-merge` starts it off, and omission defaults off; combining the two
+forms is an argument error independent of the intake pair. Global-row `m`
+toggles it in either direction and posts the new state as a dispatcher notice.
+When on, each fresh dispatcher claim records the existing human-authored
+`build.auto-merge-requested` fact immediately after `build.created` and before
+runner launch. The first visible build frame therefore carries `auto merge`,
+and the intent survives restart through the ordinary reducer/native/cancel
+machinery. This is a creation-time seed, not policy: toggles never touch
+existing builds, resumed/adopted logs or other creation paths never sample it,
+and build-row `m` remains independent (a seeded build can be cancelled while
+the global default stays on). It is not stored in `autobuild.toml` or any store.
 
 `Harvest` uses the same marker, right-aligned status column, and status colors
 as builds; its internal run id is not shown. Pause renders yellow `PAUSED`. A
@@ -500,9 +515,10 @@ guarantee: if the condition still fails, a phase may raise a new escalation and
 block again. A fresh `ab dispatch` still auto-retries only an all-policy
 escalation set and never invents guidance.
 
-Two asymmetries are intentional and explicit. Dashboard intake remains
-process-local state inside that running `ab dispatch`, so its launch flags and
-global-row `p` have no durable CLI command. Conversely, abort has a CLI command
+Two asymmetries are intentional and explicit. Dashboard intake and the
+claim-time auto-merge default remain process-local state inside that running
+`ab dispatch`, so their launch flags and global-row toggles have no durable CLI
+commands of their own. Conversely, abort has a CLI command
 but gains no TUI key in this release. On the repository-scoped `Harvest` row,
 `p` requests durable harvest pause/resume or acknowledges exhausted recovery
 attention, while `m` remains an explanatory build-only no-op.

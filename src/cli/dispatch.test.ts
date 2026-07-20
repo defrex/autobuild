@@ -376,6 +376,76 @@ describe('abDispatch --once', () => {
     }
   }, 30_000)
 
+  test('claim-time auto-merge is visible on the first build frame and survives a default-off restart', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-auto-default', { title: 'Automatic landing' }),
+      happyHandlers(),
+    )
+    const firstTerminal = fakeTerminal(true, { columns: 180 })
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'dispatch-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        defaultAutoMerge: true,
+        wire: fx.wire,
+        terminal: firstTerminal,
+      })
+
+      const [record] = await fx.store.listBuilds()
+      expect(record).toBeDefined()
+      const events = await fx.store.getEvents(record!.slug)
+      const types = events.map((event) => event.type)
+      expect(types.indexOf('build.auto-merge-requested')).toBeGreaterThan(
+        types.indexOf('build.created'),
+      )
+      expect(types.indexOf('build.auto-merge-requested')).toBeLessThan(
+        types.indexOf('workspace.provisioned'),
+      )
+      const request = events.find(
+        (event) => event.type === 'build.auto-merge-requested',
+      )
+      expect(request?.actor).toEqual({ kind: 'human', user: 'dispatch-op' })
+
+      const firstBuildFrame = firstTerminal.frames.find((frame) =>
+        stripAnsi(frame).includes(record!.slug),
+      )
+      expect(firstBuildFrame).toBeDefined()
+      expect(stripAnsi(firstBuildFrame!)).toContain('auto merge')
+      expect(stripAnsi(firstTerminal.all())).toContain(
+        'auto merge default ON',
+      )
+
+      const beforeRestart = await fx.store.getEvents(record!.slug)
+      const restartTerminal = fakeTerminal(true, { columns: 180 })
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'another-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: restartTerminal,
+      })
+
+      expect(await fx.store.getEvents(record!.slug)).toEqual(beforeRestart)
+      const restarted = stripAnsi(restartTerminal.all())
+      expect(restarted).toContain('auto merge default OFF')
+      expect(restarted).toContain('auto merge')
+      expect(
+        (await fx.store.getEvents(record!.slug)).filter(
+          (event) => event.type === 'build.auto-merge-requested',
+        ),
+      ).toHaveLength(1)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('initial intake off skips new claims while janitor still advances existing builds', async () => {
     const fx = await makeFixture(
       readyTicket('T-existing', { title: 'Existing work' }),
@@ -1846,7 +1916,7 @@ describe('abDispatch --once with an interactive terminal', () => {
 })
 
 describe('abDispatch interactive keyboard controls', () => {
-  test('global is selected first; harvest/build p route by row while m remains build-only', async () => {
+  test('global m toggles the process default; harvest/build controls remain scoped by row', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-alpha-harvest', { title: 'Alpha work' }),
@@ -1910,8 +1980,14 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('auto-merge')
       await waitFor(() =>
-        stripAnsi(term.all()).includes('Dispatcher auto-merge unavailable: select a build'),
+        stripAnsi(term.all()).includes('dispatcher auto-merge default ON'),
       )
+      expect(stripAnsi(term.all())).toContain('auto merge default ON')
+      input.press('auto-merge')
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('dispatcher auto-merge default OFF'),
+      )
+      expect(stripAnsi(term.all())).toContain('auto merge default OFF')
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(beforeRepo)
       for (const slug of ['alpha-work', 'beta-work']) {
         expect(await fx.store.getEvents(slug)).toEqual(beforeBuilds.get(slug)!)
@@ -1990,6 +2066,150 @@ describe('abDispatch interactive keyboard controls', () => {
         (event) => event.actor.kind === 'human' && event.actor.user === 'harvest-op',
       )).toBe(true)
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('global default seeds only later claims and never overrides per-build cancellation', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-existing-default', { title: 'Existing work' }),
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 3'),
+    )
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    const term = fakeTerminal(true, { columns: 180 })
+    try {
+      // Establish an in-flight build before this dispatch process chooses its
+      // default. It must remain untouched when global m turns the default on.
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const existingBefore = await fx.store.getEvents('existing-work')
+
+      let sleeps = 0
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'default-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            input.press('auto-merge')
+            await waitFor(() =>
+              stripAnsi(term.all()).includes(
+                'dispatcher auto-merge default ON',
+              ),
+            )
+            fx.tickets.add(
+              readyTicket('T-seeded-default', { title: 'Seeded work' }),
+            )
+            return
+          }
+          if (sleeps === 2) {
+            await waitFor(async () =>
+              (await fx.store.getEvents('seeded-work')).some(
+                (event) => event.type === 'build.auto-merge-requested',
+              ),
+            )
+            await waitFor(() =>
+              /^  .*seeded-work.*RUNNING/m.test(stripAnsi(term.all())),
+            )
+
+            // Global → existing-work → seeded-work. Cancelling this seeded
+            // build is authoritative even while the global default stays on.
+            input.press('down')
+            await waitFor(() =>
+              /^> .*existing-work/m.test(stripAnsi(term.all())),
+            )
+            input.press('down')
+            await waitFor(() =>
+              /^> .*seeded-work/m.test(stripAnsi(term.all())),
+            )
+            input.press('auto-merge')
+            await waitFor(async () =>
+              (await fx.store.getEvents('seeded-work')).some(
+                (event) => event.type === 'build.auto-merge-cancelled',
+              ),
+            )
+
+            // Return to global and turn the claim-time default off. This must
+            // not emit another build cancellation.
+            input.press('up')
+            input.press('up')
+            input.press('auto-merge')
+            await waitFor(() =>
+              stripAnsi(term.all()).includes(
+                'dispatcher auto-merge default OFF',
+              ),
+            )
+            fx.tickets.add(
+              readyTicket('T-unseeded-default', { title: 'Unseeded work' }),
+            )
+            return
+          }
+          if (sleeps === 3) {
+            await waitFor(async () =>
+              (await fx.store.getEvents('unseeded-work')).some(
+                (event) => event.type === 'spec.imported',
+              ),
+            )
+            await waitFor(async () =>
+              (await fx.store.getEvents('seeded-work')).some(
+                (event) => event.type === 'finalize.completed',
+              ) &&
+              (await fx.store.getEvents('unseeded-work')).some(
+                (event) => event.type === 'finalize.completed',
+              ),
+              10_000,
+            )
+            return
+          }
+          input.press('interrupt')
+        },
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await run
+      run = undefined
+
+      expect(await fx.store.getEvents('existing-work')).toEqual(existingBefore)
+      const seeded = await fx.store.getEvents('seeded-work')
+      expect(
+        seeded.filter(
+          (event) => event.type === 'build.auto-merge-requested',
+        ),
+      ).toHaveLength(1)
+      expect(
+        seeded.filter(
+          (event) => event.type === 'build.auto-merge-cancelled',
+        ),
+      ).toHaveLength(1)
+      expect(
+        seeded.find(
+          (event) => event.type === 'build.auto-merge-requested',
+        )?.actor,
+      ).toEqual({ kind: 'human', user: 'default-op' })
+      expect(
+        (await fx.store.getEvents('unseeded-work')).some(
+          (event) => event.type === 'build.auto-merge-requested',
+        ),
+      ).toBe(false)
+      expect(fx.cliErrors).toEqual([])
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)

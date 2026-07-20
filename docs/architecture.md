@@ -212,17 +212,21 @@ The renderer reserves one selectable `Auto Build` title row, one always-present
 status row, a blank separator before the harvest/build body, and another before
 the contextual legend/modal controls. It shares the selection marker and
 right-pinned status column across harvest and build rows; `Harvest` is
-operator-facing identity, while its run id stays in the journal. Auto-merge
-reduction retains four states, but rendering collapses the three active states
-to `auto merge` with cyan/green/yellow emphasis and omits the token for `off`.
+operator-facing identity, while its run id stays in the journal. The header
+projects both process-local controls as explicit intake and auto-merge-default
+ON/OFF tokens. Per-build auto-merge reduction retains four states, but rendering
+collapses the three active states to `auto merge` with cyan/green/yellow
+emphasis and omits the token for `off`.
 
 The dashboard is an operator command producer, not forge plumbing. Its model
 tracks selection as `{kind: 'global'} | {kind: 'harvest'} | {kind: 'build',
 slug}` over global first, optional harvest second, and slug-sorted builds. The
 always-present global identity and structural reconciliation prevent repaint,
 insertion, or removal from retargeting by row index. The legend derives from
-that identity. `m` narrows it to a build and remains explanatory on global and
-harvest. `p` branches by identity: global toggles process-local intake, builds
+that identity. `m` branches by identity: global toggles the process-local
+claim-time auto-merge default, builds append their normal durable control event,
+and harvest remains explanatory. `p` branches by identity: global toggles
+process-local intake, builds
 append human events to their stream, while harvest appends
 `harvest.resume-requested` when the reduced gate is paused, an ordinary failed
 run is manually resumed, or exhausted attention needs acknowledgement;
@@ -252,8 +256,16 @@ automatic startup path in `src/processes/dispatcher.ts` is unchanged and
 retries only an all-policy escalation set without input. Intake is process-local
 state that gates only the current dispatcher's ticket-claim stage. CLI
 `--intake`/`--no-intake` seed it (default on), and global-row `p` toggles it
-after launch; it is never persisted. Dispatcher notices are a process-local
-latest-status overlay reapplied after every asynchronous projection; dashboard
+after launch; it is never persisted. The sibling auto-merge default is likewise
+process-local: `--auto-merge`/`--no-auto-merge` seed it (default off), and
+global-row `m` toggles it. Each serialized tick samples it only inside the fresh
+ticket-claim path. When on, `Dispatcher` appends the existing human-authored
+`build.auto-merge-requested` immediately after `build.created` and before
+provision/runner launch. Resume, adoption, janitor, lease sweep, and direct
+creation never consult it, while the ordinary reducer and build-row
+cancellation path own all behavior after that seed. Dispatcher notices are a
+process-local latest-status overlay reapplied after every asynchronous
+projection; dashboard
 mode never routes them to line sinks or scrollback, while plain mode keeps those
 sinks.
 The live region therefore owns only in-place frame replacement and cursor

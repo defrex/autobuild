@@ -421,15 +421,17 @@ when the source provides one.
 ab dispatch --once       # one pass, drain in-flight runners, exit
 ab dispatch              # watch; default interval 10s, Ctrl-C to stop
 ab dispatch --interval 30
-ab dispatch --no-intake  # start without claiming new tickets
-ab dispatch --intake     # explicitly start with intake on (the default)
-ab dispatch --plain      # force line-oriented output, even on a TTY
+ab dispatch --no-intake    # start without claiming new tickets
+ab dispatch --intake       # explicitly start with intake on (the default)
+ab dispatch --auto-merge   # request auto-merge on each newly claimed build
+ab dispatch --no-auto-merge # explicitly keep that claim-time default off
+ab dispatch --plain        # force line-oriented output, even on a TTY
 ```
 
 On a TTY the interactive dashboard is one fixed frame. Its first two lines are
 an always-present, selectable global section: `Auto Build` plus the repository
-basename, mode, capacity, active-build count, and `intake ON`/`intake OFF`, then
-one status slot. Each tick count, dependency diagnostic, parked-build notice,
+basename, mode, capacity, active-build count, `intake ON`/`intake OFF`, and
+`auto merge default ON`/`auto merge default OFF`, then one status slot. Each tick count, dependency diagnostic, parked-build notice,
 harvest outcome, action confirmation, or warning replaces that slot instead of
 scrolling above the frame. A blank line separates this section from `Harvest`
 or the first build, matching the blank lines between body rows and before the
@@ -441,7 +443,7 @@ The legend changes with the selected row and lists only meaningful actions:
 | Selection | Keys |
 |---|---|
 | Any selection | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
-| Global top section | `p` toggles this process's intake on/off. `m` is an explanatory “select a build” no-op. |
+| Global top section | `p` toggles this process's intake on/off. `m` toggles its claim-time auto-merge default on/off. |
 | `Harvest` | `p` requests repository-wide pause, resumes a paused or ordinarily failed run, or acknowledges a recovery-exhausted attention stop. That acknowledgement releases the barrier; it does not reopen the exhausted run. `m` is the same build-only no-op. |
 | Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. An in-flight agent step finishes before pause takes effect. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
 | Blocked feedback field | Enter submits and Escape cancels. Backspace edits; all printable keys are text rather than dashboard actions. |
@@ -450,6 +452,17 @@ The legend changes with the selected row and lists only meaningful actions:
 omitting both starts on. Global `p` can still toggle either way. Intake off skips
 new ticket claims while janitor, stale-runner, harvest, and in-flight work
 continue, and a fresh invocation defaults on again.
+
+`--auto-merge` and `--no-auto-merge` similarly choose only a process-local
+launch value, cannot be combined, and default off when omitted. Global `m`
+toggles it freely and reports the new state. When on, a ticket claim that
+creates a new build immediately records the same human-authored
+`build.auto-merge-requested` fact as build-row `m`, before runner launch. Its
+row therefore shows `auto merge` on its first visible frame and the request
+survives dispatcher restart. The setting is only sampled on fresh dispatcher
+claims: changing it never affects an existing build, a resumed/adopted event
+log, or a build created through another path. Build-row `m` remains independent,
+so a seeded build can be cancelled while the global default remains on.
 
 A blocked row keeps every red `!` blocker visible while its field is open.
 Submitting an empty or whitespace-only field answers every blocker captured
@@ -606,7 +619,7 @@ Run these yourself, from the repo root. They need no `AB_*` environment.
 | `ab init [target] [--force]` | Vendor the default `ab-*` skills and write `autobuild.toml`. `--force` overwrites edited skills only. |
 | `ab upgrade [target]` | Three-way merge the vendored skills with the new defaults. See below. |
 | `ab ticket create <title> --body <file> [--labels a,b]` | File a ticket to the configured `[tickets]` source. |
-| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on. |
+| `ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake \| --no-intake] [--auto-merge \| --no-auto-merge]` | Run the outer loop; a TTY gets the interactive selection/action dashboard. Intake defaults on; the claim-time auto-merge default starts off. |
 | `ab builds [--queued] [--all] [--json] [--store <ref>]` | List builds for this repository. Read-only. |
 | `ab build status <slug> [--events <n>] [--json] [--store <ref>]` | Project one build's durable state. Read-only. |
 | `ab harvest status [--events <n>] [--json] [--store <ref>]` | Project the durable repository gate and latest harvest run, including recovery attempts/limit, stopped boundary, attention state, exact pending work, steps, filing, and failures. Read-only. |

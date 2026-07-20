@@ -828,7 +828,8 @@ or repository log (§15.2.7): `escalation.answered`,
 - `ab dispatch` on a TTY is an interactive fixed frame. Its first two rows form
   an always-present process-global top section: one selectable `Auto Build`
   title row with the repository basename, mode, capacity, active-build count,
-  and `intake ON`/`intake OFF`, followed by one process-local status slot. Tick
+  `intake ON`/`intake OFF`, and `auto merge default ON`/`auto merge default
+  OFF`, followed by one process-local status slot. Tick
   counts, dependency diagnostics, parked-build notices, harvest outcomes,
   action confirmations, and warnings replace that slot instead of entering
   scrollback. A blank row separates the top section from the first body row,
@@ -842,10 +843,11 @@ or repository log (§15.2.7): `escalation.answered`,
   selection marker appears at the start of the title when global is selected;
   Up there is a no-op.
 - The bottom legend is the authoritative, contextual key map. Navigation and
-  Ctrl-C appear for every selection. On global it offers only `p` for intake;
-  on `Harvest` it offers only `p` for pause/resume; on a build it offers `p`
-  for pause/resume (or blocked feedback) and `m` for durable auto-merge intent.
-  `m` on global or `Harvest` is an explanatory build-only no-op. While the
+  Ctrl-C appear for every selection. On global it offers `p` for intake and `m`
+  for the claim-time auto-merge default; on `Harvest` it offers only `p` for
+  pause/resume; on a build it offers `p` for pause/resume (or blocked feedback)
+  and `m` for durable auto-merge intent. `m` on `Harvest` is an explanatory
+  build-only no-op. While the
   blocked-resume field is active, printable keys edit it, Backspace edits,
   Enter submits, and Escape cancels; navigation and actions are suppressed.
   The field stays bound to its captured build and escalation ids, polling
@@ -856,6 +858,18 @@ or repository log (§15.2.7): `escalation.answered`,
   ticket claims are skipped while janitor, stale-runner, harvest, and in-flight
   work continue. The setting is not persisted and a fresh invocation defaults
   it on again.
+- The auto-merge default also belongs only to one running dispatcher and is not
+  configuration or store state. `--auto-merge` starts it on,
+  `--no-auto-merge` starts it off, and omission defaults it off; the two forms
+  are mutually exclusive. `m` on global toggles it freely afterward and emits a
+  notice naming the new state. When on, each ticket claim that creates a fresh
+  build appends the existing human-authored `build.auto-merge-requested` fact
+  immediately after `build.created` and before runner launch, so the build's
+  first visible frame already shows `auto merge` and normal durable
+  cancellation/native-application behavior applies. The value is sampled only
+  at creation: toggling never writes to existing builds, resumed/adopted logs
+  are unaffected, direct creation paths are unaffected, and build-row `m`
+  remains independent (including cancellation while the default stays on).
 - Repository harvest is projected with the same `PipelineStep` representation
   and row grammar as builds. Its identity is `Harvest` (never its internal run
   id); its status is right-aligned and uses the shared status colors. An

@@ -419,7 +419,7 @@ function frameWidths(
 // ── The frame ────────────────────────────────────────────────────────────────
 
 export const DASHBOARD_GLOBAL_LEGEND =
-  'Keys: Up/Down select  p intake on/off  Ctrl-C quit'
+  'Keys: Up/Down select  m auto-merge default  p intake on/off  Ctrl-C quit'
 export const DASHBOARD_HARVEST_LEGEND =
   'Keys: Up/Down select  p pause/resume  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND =
@@ -494,6 +494,9 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   const intake = model.drained
     ? paint('intake OFF', 'yellow', color)
     : paint('intake ON', 'green', color)
+  const autoMergeDefault = model.defaultAutoMerge
+    ? paint('auto merge default ON', 'green', color)
+    : paint('auto merge default OFF', 'yellow', color)
   const header = truncate(
     `${marker}${[
       paint('Auto Build', 'bold', color),
@@ -504,6 +507,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
         color,
       ),
       intake,
+      autoMergeDefault,
     ].join('  ')}`,
     width,
   )

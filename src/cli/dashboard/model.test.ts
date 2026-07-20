@@ -391,8 +391,18 @@ describe('projectBuild: the active-build filter', () => {
       repo: '/repos/app',
       mode: 'watch',
       capacity: 2,
+      drained: false,
+      defaultAutoMerge: false,
       statusLine: '',
     })
+    expect(
+      buildDashboard([], CONFIG, {
+        repo: '/repos/app',
+        mode: 'watch',
+        capacity: 2,
+        defaultAutoMerge: true,
+      }).defaultAutoMerge,
+    ).toBe(true)
   })
 })
 

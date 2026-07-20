@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
+import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -84,6 +85,10 @@ function harness(
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
     launchResult?: LaunchRunnerResult
+    onLaunch?: (
+      slug: string,
+      store: MemoryBuildStore,
+    ) => Promise<void> | void
     workspaceBase?: WorkspaceBase
   } = {},
 ) {
@@ -111,6 +116,7 @@ function harness(
     repo: REPO,
     exec,
     launchRunner: async (slug) => {
+      await opts.onLaunch?.(slug, store)
       launches.push(slug)
       return opts.launchResult ?? 'scheduled'
     },
@@ -566,6 +572,90 @@ describe('Dispatcher dispatch', () => {
       { id: 'T-1', body: 'build add-rate-limiting dispatched' },
     ])
     expect(h.launches).toEqual(['add-rate-limiting'])
+  })
+
+  test('claim-time auto-merge records the existing human fact before runner launch', async () => {
+    let launchSnapshot: string[] = []
+    const h = harness({
+      tickets: [readyTicket('T-auto')],
+      onLaunch: async (slug, store) => {
+        launchSnapshot = (await store.getEvents(slug)).map(
+          (event) => event.type,
+        )
+      },
+    })
+
+    const report = await h.dispatcher.tick({
+      defaultAutoMerge: true,
+      autoMergeUser: '  dispatch-op  ',
+    })
+    expect(report).toEqual({ ...emptyTickReport(), dispatched: 1 })
+
+    const events = await h.store.getEvents('add-rate-limiting')
+    expect(events.map((event) => event.type)).toEqual([
+      'build.created',
+      'build.auto-merge-requested',
+      'workspace.provisioned',
+      'spec.imported',
+    ])
+    expect(launchSnapshot).toEqual(events.map((event) => event.type))
+    expect(events[1]?.actor).toEqual({ kind: 'human', user: 'dispatch-op' })
+    expect(events[1]?.payload).toEqual({})
+    expect(reduceBuild(events).autoMerge.requested).toBe(true)
+  })
+
+  test('an explicit off default preserves the original event sequence', async () => {
+    const h = harness({ tickets: [readyTicket('T-off')] })
+
+    await h.dispatcher.tick({
+      defaultAutoMerge: false,
+      autoMergeUser: 'unused-operator',
+    })
+
+    expect(
+      (await h.store.getEvents('add-rate-limiting')).map(
+        (event) => event.type,
+      ),
+    ).toEqual([
+      'build.created',
+      'workspace.provisioned',
+      'spec.imported',
+    ])
+  })
+
+  test('the default never touches resumed or directly created builds', async () => {
+    const h = harness()
+    const resumed = await seedBuild(h, { slug: 'resumed-build' })
+    await h.store.createBuild({
+      slug: 'direct-build',
+      repo: REPO,
+      branch: 'ab/direct-build',
+    })
+    const beforeResumed = await h.store.getEvents(resumed)
+    const beforeDirect = await h.store.getEvents('direct-build')
+
+    expect(
+      await h.dispatcher.tick({
+        resumeCurrent: true,
+        acceptNewWork: false,
+        defaultAutoMerge: true,
+        autoMergeUser: 'dispatch-op',
+      }),
+    ).toEqual({ ...emptyTickReport(), resumed: 1 })
+
+    expect(await h.store.getEvents(resumed)).toEqual(beforeResumed)
+    expect(await h.store.getEvents('direct-build')).toEqual(beforeDirect)
+    expect(h.launches).toEqual([resumed])
+  })
+
+  test('an on default requires valid human attribution before claiming', async () => {
+    const h = harness({ tickets: [readyTicket('T-no-user')] })
+
+    await expect(
+      h.dispatcher.tick({ defaultAutoMerge: true, autoMergeUser: '   ' }),
+    ).rejects.toThrow('requires nonempty human attribution')
+    expect(h.tickets.claims).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
   })
 
   test('copies local fallback evidence from the workspace result into the event', async () => {
