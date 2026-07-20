@@ -93,9 +93,10 @@ acknowledgement clears that barrier;
 the acknowledgement does not reopen the exhausted run. Completed and deliberate
 escalated runs remain terminal, with escalation snapshots still claimed. Typed
 session deposits live under `ab harvest context|submit|verdict`; `ab harvest
-status` and the selectable `Harvest` dashboard row project recovery progress,
-stopped boundary, exhaustion, and pending work from the same journal. The row
-omits the internal run id; status retains it.
+status` projects full history, while the dashboard separates the durable gate
+into its always-present header token and projects a selectable `Harvest` row
+only for an open run or unresolved failure/escalation attention. The row omits
+the internal run id; status retains it.
 
 ## Pre-build identity
 
@@ -213,30 +214,43 @@ status row, a blank separator before the harvest/build body, and another before
 the contextual legend/modal controls. It shares the selection marker and
 right-pinned status column across harvest and build rows; `Harvest` is
 operator-facing identity, while its run id stays in the journal. The header
-projects both process-local controls as explicit intake and auto-merge-default
-ON/OFF tokens. Per-build auto-merge reduction retains four states, but rendering
-collapses the three active states to `auto merge` with cyan/green/yellow
+projects process-local intake and auto-merge-default plus the repository
+reducer's acknowledged durable harvest gate as explicit ON/OFF tokens. Pending
+harvest commands do not optimistically change that token. Per-build auto-merge
+reduction retains four states, but rendering collapses the three active states to `auto merge` with cyan/green/yellow
 emphasis and omits the token for `off`.
 
 The dashboard is an operator command producer, not forge plumbing. Its model
 tracks selection as `{kind: 'global'} | {kind: 'harvest'} | {kind: 'build',
 slug}` over global first, optional harvest second, and slug-sorted builds. The
 always-present global identity and structural reconciliation prevent repaint,
-insertion, or removal from retargeting by row index. The legend derives from
-that identity. `m` branches by identity: global toggles the process-local
+insertion, or removal from retargeting by row index. When a completed or
+acknowledged harvest row disappears, its old index chooses the valid successor
+or final predecessor. The legend derives from identity plus the run's currently
+safe action. `m` branches by identity: global toggles the process-local
 claim-time auto-merge default, builds append their normal durable control event,
 and harvest remains explanatory. `p` branches by identity: global toggles
-process-local intake, builds
-append human events to their stream, while harvest appends
-`harvest.resume-requested` when the reduced gate is paused, an ordinary failed
-run is manually resumed, or exhausted attention needs acknowledgement;
-otherwise it appends `harvest.pause-requested`. `FAILED` stays distinct from
-`RUNNING`: an ordinary stop names its step and automatic progress, while
-exhaustion clearly names the attention barrier and pending count. The
-exhaustion acknowledgement does not reopen the old run. Error recovery uses a
-distinct status message, and an escalated run is never treated as recoverable
-infrastructure state. Build-runner and harvest-runner acknowledge pause/resume
-at their respective safe boundaries;
+process-local intake, builds append human events to their stream, and a harvest
+row only writes `harvest.resume-requested` for an ordinary failed run or
+unresolved exhaustion/escalation. Running and pending-acknowledgement rows write
+nothing; a paused gate directs the operator to the header rather than emitting a
+run action. `h` is global-only: it re-reduces the repository journal, treats the
+newest pending command as requested state so rapid presses oppose, and appends
+the corresponding pause/resume request. The header remains acknowledged-only.
+
+The harvest projection independently filters the latest run. Running stays
+visible (with timing frozen when the gate is paused), completed is absent,
+ordinary failure is visible until reopened, and exhausted failure is absent
+after `attentionAcknowledgedSeq`. Escalation is absent only after a display-only
+pair: a human resume request with seq after `terminalSeq`, followed by the kernel
+resume that acknowledges it. The request alone remains visible and no reducer
+lifecycle changes. This intentionally means a header resume can both open a
+paused gate and settle visible run attention through the shared event
+vocabulary. `FAILED` stays distinct from `RUNNING`: an ordinary stop names its step and
+automatic progress, while exhaustion clearly names the attention barrier and
+pending count. Exhaustion acknowledgement does not reopen the old run, and
+escalation remains terminal. Build-runner and harvest-runner acknowledge
+pause/resume at their respective safe boundaries;
 dispatcher code reconciles auto-merge via the `Forge` port. On a blocked build,
 `p` instead opens slug/escalation-bound process state: Enter
 appends one human `escalation.answered` per captured id (`retry` for blank

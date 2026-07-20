@@ -430,9 +430,13 @@ ab dispatch --plain        # force line-oriented output, even on a TTY
 
 On a TTY the interactive dashboard is one fixed frame. Its first two lines are
 an always-present, selectable global section: `Auto Build` plus the repository
-basename, mode, capacity, active-build count, `intake ON`/`intake OFF`, and
-`auto merge default ON`/`auto merge default OFF`, then one status slot. Each tick count, dependency diagnostic, parked-build notice,
-harvest outcome, action confirmation, or warning replaces that slot instead of
+basename, mode, capacity, active-build count, `intake ON`/`intake OFF`,
+`auto merge default ON`/`auto merge default OFF`, and `harvest ON`/`harvest
+OFF`, then one status slot. The harvest token is the acknowledged durable gate
+from the repository event log; unlike the other two controls, it survives
+process restarts and changes made by another actor. Each tick count, dependency
+diagnostic, parked-build notice, harvest outcome, action confirmation, or
+warning replaces that slot instead of
 scrolling above the frame. A blank line separates this section from `Harvest`
 or the first build, matching the blank lines between body rows and before the
 bottom legend (or active feedback field). `--plain` and non-TTY output remain
@@ -443,10 +447,16 @@ The legend changes with the selected row and lists only meaningful actions:
 | Selection | Keys |
 |---|---|
 | Any selection | Up / Down moves without wrapping; Ctrl-C stops and restores terminal input/cursor state. Global is first, then optional `Harvest`, then slug-sorted builds. Stable identity preserves selection across repaint, re-sort, and row appearance/disappearance. |
-| Global top section | `p` toggles this process's intake on/off. `m` toggles its claim-time auto-merge default on/off. |
-| `Harvest` | `p` requests repository-wide pause, resumes a paused or ordinarily failed run, or acknowledges a recovery-exhausted attention stop. That acknowledgement releases the barrier; it does not reopen the exhausted run. `m` is the same build-only no-op. |
+| Global top section | `p` toggles this process's intake on/off. `m` toggles its claim-time auto-merge default on/off. `h` toggles the durable repository harvest gate. |
+| `Harvest` | The row exists only for an open run or unresolved failed/escalated attention. Its legend offers `p resume` for an ordinary failure or `p acknowledge` for exhaustion/escalation; running and acknowledgement-pending rows have no `p` action. `p` never pauses the gate. If harvest is off, select Global and press `h`. |
 | Build | `p` requests pause, resumes an authoritatively paused unblocked build, or opens optional feedback for a blocked build. An in-flight agent step finishes before pause takes effect. `m` toggles durable auto-merge intent; gated branches use GitHub-native auto-merge, while proved-ungated branches may use the guarded non-admin squash fallback. |
 | Blocked feedback field | Enter submits and Escape cancels. Backspace edits; all printable keys are text rather than dashboard actions. |
+
+Header `h` re-reads the repository journal before every write. It appends
+`harvest.pause-requested` or `harvest.resume-requested`; two rapid presses issue
+opposing requests even before acknowledgement. The header remains on the last
+acknowledged state until the kernel writes `harvest.paused` or
+`harvest.resumed`.
 
 `--intake` and `--no-intake` choose only the launch value and cannot be combined;
 omitting both starts on. Global `p` can still toggle either way. Intake off skips
@@ -516,10 +526,12 @@ while missing creates, tombstone/unknown joins, and otherwise unclassifiable
 members are released. Successfully read malformed/missing content fails safe to
 release; a rejected artifact read remains retryable infrastructure. A durable
 human-attention barrier prevents those released observations from being
-reclaimed immediately into another hot loop.
-Press `p` to acknowledge the barrier; the old run stays finished, and a future
-scan may claim the released work. Deliberate agent/stall/policy escalations
-still consume their snapshots and are never automatically recovered.
+reclaimed immediately into another hot loop. Select its `Harvest` row and press
+`p` to acknowledge it while the gate is on; if the gate is off, select Global
+and press `h`. The shared resume acknowledgement opens the gate and clears the
+barrier, but the old exhausted run stays finished and only a future scan may
+claim released work. Deliberate agent/stall/policy escalations still consume
+their snapshots and are never automatically recovered.
 
 Within one dispatcher process, build-runner launches are single-flighted by
 slug. Repeated polling or a transiently stale lease cannot open another agent
@@ -531,16 +543,18 @@ cross-process stale-runner recovery gate. Accordingly, `resumed` and `swept`
 count runners actually scheduled, not launch requests suppressed as already
 active.
 
-The dashboard renders repository harvest as the selectable `Harvest` row with
-elapsed times, observation count, and the same marker, right-aligned status
-column, and status colors as build rows. The internal run id is not displayed.
-`RUNNING` is green, acknowledged pause is literal yellow `PAUSED`, and an
-infrastructure stop is literal red `FAILED`. A recoverable stop shows its exact
-step/error and automatic attempt progress. An exhausted stop remains red for
-compatibility but says `recovery exhausted — human attention required`, names
-the stopped step, and shows the pending count. Pressing `p` there appends the
-human acknowledgement request; pressing it on an escalation does not reopen
-that run. `m` remains a build-only no-op.
+The selectable `Harvest` row is a run, not the repository setting. It appears
+for an open run (including one frozen by the off gate) or unresolved failed or
+escalated attention, with elapsed times, observation count, the shared marker,
+right-aligned status, and existing detail lines. The internal run id is not
+displayed. A completed run removes the row immediately, an idle paused
+repository has no row, and selection moves safely when a row disappears.
+Ordinary failure remains red `FAILED` until resumed; exhausted failure and
+escalation remain visible until acknowledged. Exhaustion disappears after its
+existing attention acknowledgement. Escalation has no dedicated acknowledgement
+event, so its row stays through the human request and disappears only after the
+later kernel `harvest.resumed`; the run itself remains terminal. A header resume
+while the gate is off intentionally supplies the same shared request/ack pair.
 
 Use `ab harvest status --events 20` for the durable gate, run id, recoverable
 versus terminal state, automatic attempts/limit, stopped boundary, exact pending

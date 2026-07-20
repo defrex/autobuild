@@ -772,11 +772,12 @@ The harvester only proposes: it never claims, readies, grooms, or dispatches a
 proposal. A terminal escalation consumes its claimed snapshot so watch ticks do
 not hot-loop, and harvest resume never reopens that deliberate human-in-the-loop
 outcome. Completed/cancelled/missing proposal refs remain dedup tombstones.
-Every step brackets start/result events and agent sessions/transcripts, and
-repository harvest appears as the selectable `Harvest` row in the dispatch
-dashboard whenever a latest run or acknowledged pause exists. Its internal run
-id remains in the repository journal, not in the row. Humans still own Triage
-→ Ready.
+Every step brackets start/result events and agent sessions/transcripts. The
+dispatch header always projects the acknowledged repository gate as `harvest
+ON`/`harvest OFF`; the selectable `Harvest` row exists only for an open run or
+unresolved failed/escalated attention. Completed runs, idle paused repositories,
+and acknowledged terminal attention have no row. The internal run id remains in
+the repository journal, not in the row. Humans still own Triage → Ready.
 
 ## 13. Ticket source policy
 
@@ -828,8 +829,10 @@ or repository log (§15.2.7): `escalation.answered`,
 - `ab dispatch` on a TTY is an interactive fixed frame. Its first two rows form
   an always-present process-global top section: one selectable `Auto Build`
   title row with the repository basename, mode, capacity, active-build count,
-  `intake ON`/`intake OFF`, and `auto merge default ON`/`auto merge default
-  OFF`, followed by one process-local status slot. Tick
+  `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`,
+  and durable `harvest ON`/`harvest OFF`, followed by one process-local status
+  slot. The harvest token reflects only the repository reducer's acknowledged
+  gate state, never an optimistic pending command. Tick
   counts, dependency diagnostics, parked-build notices, harvest outcomes,
   action confirmations, and warnings replace that slot instead of entering
   scrollback. A blank row separates the top section from the first body row,
@@ -843,12 +846,14 @@ or repository log (§15.2.7): `escalation.answered`,
   selection marker appears at the start of the title when global is selected;
   Up there is a no-op.
 - The bottom legend is the authoritative, contextual key map. Navigation and
-  Ctrl-C appear for every selection. On global it offers `p` for intake and `m`
-  for the claim-time auto-merge default; on `Harvest` it offers only `p` for
-  pause/resume; on a build it offers `p` for pause/resume (or blocked feedback)
-  and `m` for durable auto-merge intent. `m` on `Harvest` is an explanatory
-  build-only no-op. While the
-  blocked-resume field is active, printable keys edit it, Backspace edits,
+  Ctrl-C appear for every selection. On global it offers `p` for intake, `m`
+  for the claim-time auto-merge default, and `h` for the durable harvest gate.
+  On `Harvest`, it offers `p resume` for an ordinary failure or `p acknowledge`
+  for unresolved exhaustion/escalation, and no run action while running or
+  awaiting acknowledgement. On a build it offers `p` for pause/resume (or
+  blocked feedback) and `m` for durable auto-merge intent. `m` on `Harvest` is
+  an explanatory build-only no-op. While the blocked-resume field is active,
+  printable keys edit it, Backspace edits,
   Enter submits, and Escape cancels; navigation and actions are suppressed.
   The field stays bound to its captured build and escalation ids, polling
   remains live, and that build's blocker rows remain visible.
@@ -871,23 +876,39 @@ or repository log (§15.2.7): `escalation.answered`,
   are unaffected, direct creation paths are unaffected, and build-row `m`
   remains independent (including cancellation while the default stays on).
 - Repository harvest is projected with the same `PipelineStep` representation
-  and row grammar as builds. Its identity is `Harvest` (never its internal run
-  id); its status is right-aligned and uses the shared status colors. An
-  acknowledged repository gate renders literal yellow `PAUSED`; an
-  infrastructure stop renders literal red `FAILED`, preserves completed steps,
-  and marks the exact failed step. Both suppress an old open occurrence from
-  appearing current and freeze its timer. The latest run's claim count and
-  recovery progress or stopped-boundary detail remains visible; a pause before
-  the first run still has a row. A recoverable stop shows automatic attempt
-  progress. Exhaustion keeps the red `FAILED` compatibility status but clearly
-  says `recovery exhausted — human attention required`, names the stopped step,
-  and reports the pending count. `p` appends a resume request when the gate is
-  paused, for a still-recoverable manual reopen, or to acknowledge an exhausted
-  attention barrier; that last acknowledgement does not reopen the old run.
-  Error recovery reports `harvest: error resume requested`, distinct from
-  ordinary `harvest: resume requested`. Escalated runs are not error-resumable,
-  and an already-acknowledged exhausted run retains ordinary repository-gate
-  pause semantics. `m` remains the build-only explanatory no-op.
+  and row grammar as builds, but the gate and run are separate display facts.
+  The header's green/yellow `harvest ON`/`harvest OFF` token is always present
+  and comes from acknowledged `paused` state in the repository event log, so it
+  survives processes and reflects other actors. Header `h` re-reads that log
+  and appends `harvest.pause-requested` or `harvest.resume-requested`; the newest
+  pending command is the requested target, so rapid presses countermand each
+  other, while the token itself changes only on `harvest.paused` or
+  `harvest.resumed`.
+- The optional run row's identity is `Harvest` (never its internal run id). It
+  exists for a running/open run, including one frozen by a paused gate, and for
+  unresolved `FAILED` or `ESCALATED` attention. `completed` removes it
+  immediately. An idle paused repository has no row. Recovery-exhausted failure
+  disappears after its attention acknowledgement. Because escalation has no
+  dedicated acknowledgement payload, its row disappears only when the raw
+  journal contains a human `harvest.resume-requested` after that run's terminal
+  seq and a later kernel `harvest.resumed` that consumes the request; the request
+  alone is not enough. Row removal structurally reconciles selection to the
+  successor at that index or the final predecessor (the global row when no body
+  row remains).
+- A visible row keeps the existing right-aligned status colors, completed-step
+  projection, frozen timing, claim count, and stopped-boundary detail. A paused
+  open run reads yellow `PAUSED`; ordinary infrastructure failure reads red
+  `FAILED` with automatic progress and offers `p resume`. Exhaustion remains
+  red and says `recovery exhausted — human attention required`, names the stop,
+  reports pending count, and offers `p acknowledge`; escalation also offers
+  `p acknowledge`. A pending resume advertises no duplicate action. Row `p`
+  never emits a pause. If the gate is off it writes nothing and directs the
+  operator to select the header and press `h`; that header resume deliberately
+  serves both as gate intent and, after kernel acknowledgement, run resume or
+  attention acknowledgement under the shared event vocabulary. The exhausted
+  run remains terminal, an ordinary failure reopens, and an escalation remains
+  terminal but its display attention is dismissed. `m` remains the build-only
+  explanatory no-op.
 - A build with auto-merge intent off has no auto-merge token. Requested,
   natively enabled, and cancelling intent all render the literal `auto merge`;
   teal/cyan means requested locally but not yet applied, green means native
@@ -1117,9 +1138,11 @@ run identically for a human or automatic request, preserving every workflow
 collection and historical attempt. `harvest.recovery-exhausted` verifies that
 committed dispositions plus released keys partition the immutable snapshot,
 adds the committed subset to the ledger, removes only released keys from the
-claim set, and raises attention atomically. A later human `harvest.resumed`
-acknowledges that barrier without reopening the exhausted run. Completed and
-escalated outcomes are irrevocable.
+claim set, and raises attention atomically. A later human-requested `harvest.resumed` acknowledges that barrier without
+reopening the exhausted run. Completed and escalated outcomes are irrevocable.
+The dashboard additionally treats a post-terminal human resume request plus its
+later kernel resume acknowledgement as display-only resolution of escalated
+attention; neither event changes that run's terminal reducer state.
 
 ### 15.6 Walkthroughs
 

@@ -432,8 +432,9 @@ every agent session as `AB_STORE`.
 On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
 lines are the always-present process-global section: a selectable `Auto Build`
 title with the repository basename, mode, capacity, active-build count,
-`intake ON`/`intake OFF`, and `auto merge default ON`/`auto merge default OFF`,
-then one status slot. Tick counts, dependency diagnostics, parked-build notices,
+`intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`, and
+`harvest ON`/`harvest OFF`, then one status slot. Harvest reflects the
+acknowledged durable repository gate, not a process-local or pending value. Tick counts, dependency diagnostics, parked-build notices,
 harvest outcomes, action confirmations, and warnings replace that slot instead
 of scrolling above the frame. A blank line separates the global section from
 the first body row, and another separates the body from the legend or feedback
@@ -443,10 +444,11 @@ output remain line-oriented and unchanged.
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
-contextual: every row offers navigation and quit; global offers `m auto-merge
-default` and `p intake on/off`; `Harvest` offers `p pause/resume`; builds offer
-`m auto-merge` and `p pause/resume`. `m` on `Harvest` is an explanatory
-build-only no-op.
+contextual: every row offers navigation and quit; global offers `h harvest
+on/off`, `m auto-merge default`, and `p intake on/off`; `Harvest` offers
+`p resume` for ordinary failure or `p acknowledge` for exhaustion/escalation
+only when that action is available; builds offer `m auto-merge` and `p
+pause/resume`. `m` on `Harvest` is an explanatory build-only no-op.
 
 `--intake` starts process-local intake on, `--no-intake` starts it off, and
 omitting both defaults on; combining them is an argument error. Global-row `p`
@@ -467,17 +469,26 @@ existing builds, resumed/adopted logs or other creation paths never sample it,
 and build-row `m` remains independent (a seeded build can be cancelled while
 the global default stays on). It is not stored in `autobuild.toml` or any store.
 
+Header `h` re-reads the repository journal and appends the existing human
+pause/resume request. The newest pending command determines the next target, so
+rapid presses issue opposing requests; the token changes only after the kernel's
+`harvest.paused`/`harvest.resumed` acknowledgement.
+
 `Harvest` uses the same marker, right-aligned status column, and status colors
-as builds; its internal run id is not shown. Pause renders yellow `PAUSED`. A
-recoverable infrastructure stop renders red `FAILED`, marks the stopped step,
-and shows automatic attempt progress. Exhaustion remains red for compatibility
-but says `recovery exhausted — human attention required` and shows the stopped
-step and pending count. On `Harvest`, `p` requests resume when the gate is
-paused, an ordinary failed run needs a manual reopen, or exhausted attention
-needs acknowledgement; otherwise it requests pause. Error recovery has the
-distinct status message `harvest: error resume requested`. The exhausted
-acknowledgement removes only the barrier and does not reopen the old run.
-Completed and escalated runs are not reopened.
+as builds; its internal run id is not shown. It appears only for an open run or
+unresolved failed/escalated attention. Completed runs, an idle paused
+repository, acknowledged recovery exhaustion, and dismissed escalation have no
+row. A paused open run freezes and reads `PAUSED`. Ordinary failure reads red
+`FAILED`, marks the stopped step, shows automatic progress, and offers `p
+resume`. Exhaustion remains red, says `recovery exhausted — human attention
+required`, shows stopped step/pending count, and offers `p acknowledge`;
+escalation also offers `p acknowledge`. A request awaiting acknowledgement has
+no duplicate action. Row `p` never pauses the gate. When the gate is off it
+writes nothing and directs the operator to global `h`; the eventual shared
+resume acknowledgement intentionally also reopens ordinary failure or settles
+attention. Exhaustion and escalation remain terminal. Escalation's row is
+dismissed only by a post-terminal human resume request followed by its later
+kernel acknowledgement, never by the request alone.
 
 A build with auto-merge off has no auto-merge token. Requested, enabled, and
 cancelling states all read `auto merge`: cyan means requested locally but not
@@ -534,9 +545,9 @@ Two asymmetries are intentional and explicit. Dashboard intake and the
 claim-time auto-merge default remain process-local state inside that running
 `ab dispatch`, so their launch flags and global-row toggles have no durable CLI
 commands of their own. Conversely, abort has a CLI command
-but gains no TUI key in this release. On the repository-scoped `Harvest` row,
-`p` requests durable harvest pause/resume while `m` remains an explanatory
-build-only no-op.
+but gains no TUI key in this release. Global-row `h` owns the durable harvest
+gate. On the optional repository-scoped `Harvest` run row, `p` only resumes or
+acknowledges the represented run; `m` remains an explanatory build-only no-op.
 
 ## Checking build status
 
@@ -580,10 +591,11 @@ resumes. It distinguishes recoverable from terminal, shows automatic
 attempts/limit, stopped step/round, attention state, exact pending observation
 and proposal keys, each workflow occurrence, review rounds, filed ticket refs,
 and any escalation or infrastructure failure. It is read-only and also reports
-an idle or paused repository with no run. The dispatch dashboard shows
-repository harvest as the selectable, non-color-only `Harvest` step row without
-its internal run id; `p` requests pause/resume or acknowledges exhausted
-attention there, and `m` remains the build-only no-op.
+an idle or paused repository with no run. The dispatch header always shows its
+acknowledged `harvest ON/OFF` gate and global `h` controls it. The optional,
+non-color-only `Harvest` row omits the internal run id and represents only an
+open run or unresolved attention; its contextual `p` resumes or acknowledges
+that run, and `m` remains the build-only no-op.
 
 ### Lease health is not build status
 
