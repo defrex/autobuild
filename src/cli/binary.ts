@@ -5,7 +5,7 @@
  * identical between the two entries.
  */
 import { join } from 'node:path'
-import { runCli, SESSIONLESS_COMMANDS } from './main'
+import { isSessionlessInvocation, runCli } from './main'
 import { loadDotEnv } from './dotenv'
 import { resolveCliEnv, resolveHarvestCliEnv } from './env'
 import { resolveStore } from './store-ref'
@@ -29,13 +29,9 @@ export async function runBinary(
 
   // Sessionless commands resolve their own repository/store and do not require
   // a phase tuple; durable controls also take a target slug and inspect raw
-  // AB_SESSION/AB_BUILD only to reject self-control. The list lives in main.ts
-  // beside the switch that implements them; this wiring only routes on it.
-  if (
-    command === undefined ||
-    SESSIONLESS_COMMANDS.has(command) ||
-    (command === 'harvest' && argv[1] === 'status')
-  ) {
+  // AB_SESSION/AB_BUILD only to reject self-control. The flat-name set and
+  // mixed nested-command classifier live beside the switch in main.ts.
+  if (isSessionlessInvocation(argv)) {
     // The dispatch watch loop runs until SIGINT; abort the signal so it exits
     // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
     // a future dispatch re-attaches).

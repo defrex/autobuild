@@ -11,7 +11,11 @@ import { join } from 'node:path'
 import { KERNEL, agentActor } from '../events/envelope'
 import { openLocalStore } from '../store/local/store'
 import type { MemoryBuildStore } from '../store/memory'
-import { runCli, SESSIONLESS_COMMANDS } from './main'
+import {
+  isSessionlessInvocation,
+  runCli,
+  SESSIONLESS_COMMANDS,
+} from './main'
 import {
   BRANCH,
   BUILD,
@@ -53,7 +57,7 @@ describe('runCli — routing and exit codes', () => {
     const d = deps()
     expect(await runCli(['help'], d)).toBe(0)
     const help = d.out.join('\n')
-    for (const command of ['ab context', 'ab artifact put', 'ab observe', 'ab server', 'ab done', 'ab verdict', 'ab escalate']) {
+    for (const command of ['ab context', 'ab artifact put', 'ab artifact download', 'ab observe', 'ab server', 'ab done', 'ab verdict', 'ab escalate']) {
       expect(help).toContain(command)
     }
   })
@@ -123,10 +127,9 @@ describe('runCli — routing and exit codes', () => {
 })
 
 describe('SESSIONLESS_COMMANDS', () => {
-  // bin/ab.ts routes on this set; a command missing from it goes through
-  // resolveCliEnv and exits 1 on absent AB_* before routing. runCli tests
-  // cannot see that failure — they never traverse the binary — so the set
-  // itself is asserted here, and the binary is smoke-tested in bin-ab.test.ts.
+  // Flat names route on this set; mixed namespaces route through
+  // isSessionlessInvocation. runCli tests cannot see the pre-routing ambient
+  // auth failure, so both classifiers and the real binary are exercised.
   test('contains the status and build-control commands', () => {
     for (const command of [
       'builds',
@@ -151,6 +154,13 @@ describe('SESSIONLESS_COMMANDS', () => {
     for (const command of ['context', 'done', 'verdict', 'escalate', 'observe', 'artifact', 'server']) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(false)
     }
+  })
+
+  test('only artifact download is sessionless inside the mixed artifact namespace', () => {
+    expect(isSessionlessInvocation(['artifact', 'download'])).toBe(true)
+    expect(isSessionlessInvocation(['artifact', 'put'])).toBe(false)
+    expect(isSessionlessInvocation(['artifact', 'get'])).toBe(false)
+    expect(isSessionlessInvocation(['artifact'])).toBe(false)
   })
 })
 
@@ -546,10 +556,64 @@ describe('runCli — artifact and observe', () => {
     expect(getter.out).toEqual(['# The plan\n'])
   })
 
+  test('artifact download runs without a phase tuple and writes exact binary bytes', async () => {
+    const storeRef = join(tmp, 'artifact-download-store')
+    const local = openLocalStore(storeRef)
+    await local.createBuild({ slug: 'finished', repo: tmp })
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 1])
+    await local.putArtifact('finished', {
+      kind: 'dashboard-frame:wide:png',
+      content: bytes,
+    })
+    await local.close()
+    const out: string[] = []
+    const err: string[] = []
+    const output = join(tmp, 'frames', 'wide.png')
+    const code = await runCli(
+      [
+        'artifact',
+        'download',
+        'finished',
+        'dashboard-frame:wide:png@0',
+        '--output',
+        output,
+      ],
+      {
+        workspacePath: tmp,
+        processEnv: { AB_STORE: storeRef },
+        exec: async () => ({
+          stdout: '',
+          stderr: 'not a git repository',
+          exitCode: 128,
+        }),
+        stdout: (line) => out.push(line),
+        stderr: (line) => err.push(line),
+      },
+    )
+    expect(code).toBe(0)
+    expect(err).toEqual([])
+    expect(out.join('\n')).toContain('dashboard-frame:wide:png@0')
+    expect(new Uint8Array(await Bun.file(output).bytes())).toEqual(bytes)
+  })
+
+  test('artifact download validates its nested grammar', async () => {
+    for (const argv of [
+      ['artifact', 'download'],
+      ['artifact', 'download', 'build', 'kind'],
+      ['artifact', 'download', 'build', 'kind', '--output'],
+      ['artifact', 'download', 'build', 'kind', '--output', '--store'],
+      ['artifact', 'download', 'build', 'kind', '--unknown', 'x'],
+    ]) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain('usage: ab artifact download')
+    }
+  })
+
   test('artifact with a bad subcommand prints usage and exits 1', async () => {
     const d = deps()
     expect(await runCli(['artifact', 'list'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('usage: ab artifact <put|get>')
+    expect(d.err.join('\n')).toContain('usage: ab artifact <put|get|download>')
   })
 
   test('observe requires --kind', async () => {
