@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Ticket } from '../types'
+import { describeTicketSourceContract } from './contract'
 import { FakeTicketSource } from './fake'
 
 function ticket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
@@ -12,6 +13,14 @@ function ticket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
 }
+
+describeTicketSourceContract('FakeTicketSource', async () => ({
+  source: new FakeTicketSource([], {
+    createState: 'Triage',
+    doneState: 'Done',
+  }),
+  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+}))
 
 describe('FakeTicketSource', () => {
   test('claim returns true exactly once per ticket (§12 claim-before-launch)', async () => {

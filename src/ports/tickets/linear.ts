@@ -228,11 +228,20 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async get(id: string): Promise<Ticket | null> {
-    const data = await this.gql<{ issue: GqlIssue | null }>(
-      'get',
-      GET_ISSUE_QUERY,
-      { id },
-    )
+    let data: { issue: GqlIssue | null }
+    try {
+      data = await this.gql<{ issue: GqlIssue | null }>(
+        'get',
+        GET_ISSUE_QUERY,
+        { id },
+      )
+    } catch (error) {
+      // Linear's `issue(id:)` field is non-null in the live schema: an unknown
+      // identifier arrives as INPUT_ERROR / Entity not found rather than the
+      // nullable-looking canned `{ issue: null }` shape.
+      if (isEntityNotFound(error)) return null
+      throw error
+    }
     return data.issue ? this.toTicket(data.issue) : null
   }
 

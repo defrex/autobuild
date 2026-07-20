@@ -1,15 +1,17 @@
 /**
- * FakeWorkspaceProvider (SPEC §3.2): in-memory WorkspaceProvider for seam
- * tests — the dispatcher's provision/release plumbing (§3.3, §15.7) and the
- * build-runner's rehydrate path (§15.6-C) run against it without touching
- * git. Every call is journaled so tests assert exactly what was provisioned
- * and released, mirroring the other fakes (FakeForge, FakeTicketSource).
+ * FakeWorkspaceProvider (SPEC §3.2): WorkspaceProvider for seam tests. Its
+ * default filesystem mode copies a source working tree so the returned path
+ * has the same usable-path semantics as GitWorktreeProvider. High-volume
+ * process-decision tests may explicitly select `logical` mode when their
+ * synthetic repo/path values are intentionally not filesystem fixtures.
  *
  * Shape parity with GitWorktreeProvider: `ref` and `path` are the same
  * string (`<root>/<branch>`), provision is idempotent per branch (resume is
  * a re-run, not a special path — constitution #2), and release of an
  * unknown or already-released workspace is a no-op, never an error.
  */
+import { cp, mkdir, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
 import type {
   WorkspaceHandle,
@@ -23,6 +25,8 @@ export interface ProvisionRecord {
   branch: string
 }
 
+export type FakeWorkspaceMode = 'filesystem' | 'logical'
+
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly name = 'fake'
 
@@ -32,15 +36,24 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
 
   private readonly root: string
   private readonly initialBase: WorkspaceBase
+  private readonly mode: FakeWorkspaceMode
   /** ref → handle for workspaces provisioned and not yet released. */
   private readonly active = new Map<string, WorkspaceHandle>()
   /** Durable fake branch heads survive release, like real Git branches. */
   private readonly branchHeads = new Map<string, string>()
   private readonly failures = new Map<'provision' | 'release', Error>()
 
-  constructor(opts: { root?: string; base?: WorkspaceBase } = {}) {
-    this.root = opts.root ?? '/fake/workspaces'
+  constructor(
+    opts: {
+      root?: string
+      base?: WorkspaceBase
+      /** Default `filesystem` enforces a real usable working-copy path. */
+      mode?: FakeWorkspaceMode
+    } = {},
+  ) {
+    this.root = resolve(opts.root ?? '/fake/workspaces')
     this.initialBase = opts.base ?? { source: 'remote', sha: 'fake-base-sha' }
+    this.mode = opts.mode ?? 'filesystem'
   }
 
   /**
@@ -70,10 +83,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   }): Promise<WorkspaceProvisionResult> {
     const failure = this.failures.get('provision')
     if (failure) throw failure
-    this.provisions.push({ ...opts })
-    const ref = `${this.root}/${opts.branch}`
+    const ref = resolve(join(this.root, opts.branch))
     const existing = this.active.get(ref)
     if (existing) {
+      this.provisions.push({ ...opts })
       return {
         ...existing,
         base: {
@@ -83,6 +96,14 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       }
     }
 
+    if (this.mode === 'filesystem') {
+      await mkdir(dirname(ref), { recursive: true })
+      // The fake owns its root. Remove an out-of-band leftover before making
+      // the new active working copy, just as worktree prune permits recovery.
+      await rm(ref, { recursive: true, force: true })
+      await cp(opts.repo, ref, { recursive: true })
+    }
+
     const handle: WorkspaceHandle = {
       provider: this.name,
       ref,
@@ -90,6 +111,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       branch: opts.branch,
     }
     this.active.set(ref, handle)
+    this.provisions.push({ ...opts })
 
     const existingSha = this.branchHeads.get(opts.branch)
     if (existingSha !== undefined) {
@@ -110,6 +132,11 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       path: handle.path,
       branch: handle.branch,
     })
+    const active = this.active.get(handle.ref)
+    if (!active) return
+    if (this.mode === 'filesystem') {
+      await rm(active.path, { recursive: true, force: true })
+    }
     this.active.delete(handle.ref)
   }
 }

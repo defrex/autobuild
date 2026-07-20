@@ -279,7 +279,7 @@ interface Harness {
 async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const clock = options.clock ?? steppingClock()
   const store = new MemoryBuildStore({ clock })
-  const workspaces = new FakeWorkspaceProvider()
+  const workspaces = new FakeWorkspaceProvider({ mode: 'logical' })
   const handle = await workspaces.provision({
     repo: 'acme/app',
     baseBranch: 'main',

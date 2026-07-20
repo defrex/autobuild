@@ -796,6 +796,30 @@ describe('LinearTicketSource', () => {
     },
   }
 
+  test('get maps the live "Entity not found" response to null', async () => {
+    const { fetchFn } = fakeLinear([ENTITY_NOT_FOUND])
+
+    expect(await makeSource(fetchFn).get('AUT-99999')).toBeNull()
+  })
+
+  test('get does not hide a mixed not-found and provider failure', async () => {
+    const { fetchFn } = fakeLinear([
+      {
+        body: {
+          data: null,
+          errors: [
+            ...ENTITY_NOT_FOUND.body.errors,
+            { message: 'rate limited', extensions: { code: 'RATELIMITED' } },
+          ],
+        },
+      },
+    ])
+
+    await expect(makeSource(fetchFn).get('AUT-99999')).rejects.toThrow(
+      'rate limited',
+    )
+  })
+
   test('dependencyStates maps a live "Entity not found" error to exists: false', async () => {
     const { fetchFn } = fakeLinear([ENTITY_NOT_FOUND])
 

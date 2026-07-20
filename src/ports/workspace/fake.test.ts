@@ -1,11 +1,34 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describeWorkspaceProviderContract } from './contract'
 import { FakeWorkspaceProvider } from './fake'
 
 const OPTS = { repo: '/repos/origin', baseBranch: 'main', branch: 'ab/fix-login' }
 
+describeWorkspaceProviderContract('FakeWorkspaceProvider', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'ab-fake-workspace-contract-'))
+  const repo = join(tmp, 'source')
+  const root = join(tmp, 'workspaces')
+  const fixture = { relativePath: 'source-fixture.txt', content: 'selected source tree\n' }
+  await mkdir(repo, { recursive: true })
+  await writeFile(join(repo, fixture.relativePath), fixture.content)
+  return {
+    provider: new FakeWorkspaceProvider({
+      root,
+      base: { source: 'remote', sha: 'contract-base-sha' },
+    }),
+    provision: { repo, baseBranch: 'main', branch: 'ab/contract-workspace' },
+    expectedBase: { source: 'remote', sha: 'contract-base-sha' },
+    fixture,
+    cleanup: () => rm(tmp, { recursive: true, force: true }),
+  }
+})
+
 describe('FakeWorkspaceProvider', () => {
   test('provision returns <root>/<branch> with ref === path and journals', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws' })
+    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const handle = await provider.provision(OPTS)
     expect(handle).toEqual({
       provider: 'fake',
@@ -19,7 +42,7 @@ describe('FakeWorkspaceProvider', () => {
   })
 
   test('provision distinguishes first creation from idempotent reuse', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws' })
+    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const first = await provider.provision(OPTS)
     const second = await provider.provision(OPTS)
     expect(second).toEqual({
@@ -32,6 +55,7 @@ describe('FakeWorkspaceProvider', () => {
   test('configured fallback evidence is returned and the branch head survives release', async () => {
     const provider = new FakeWorkspaceProvider({
       root: '/ws',
+      mode: 'logical',
       base: {
         source: 'local',
         sha: 'local-sha',
@@ -55,7 +79,7 @@ describe('FakeWorkspaceProvider', () => {
   })
 
   test('release journals and is idempotent', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws' })
+    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const handle = await provider.provision(OPTS)
     await provider.release(handle)
     expect(provider.isActive(handle.ref)).toBe(false)
@@ -65,7 +89,7 @@ describe('FakeWorkspaceProvider', () => {
   })
 
   test('setFailure makes the named operation throw until cleared', async () => {
-    const provider = new FakeWorkspaceProvider({ root: '/ws' })
+    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     provider.setFailure('provision', new Error('disk full'))
     await expect(provider.provision(OPTS)).rejects.toThrow('disk full')
     expect(provider.provisions).toEqual([]) // failed calls are not journaled

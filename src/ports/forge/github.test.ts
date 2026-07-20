@@ -352,6 +352,11 @@ describe('GitHubForge.setAutoMerge', () => {
     ...over,
   })
   const noGate = [repo, classic(), { stdout: '[]' }]
+  const nativeState = (enabled: boolean) => ({
+    stdout: JSON.stringify({
+      autoMergeRequest: enabled ? { mergeMethod: 'SQUASH' } : null,
+    }),
+  })
 
   test('CLEAN plus a real gate uses native squash auto-merge even though requirements are satisfied', async () => {
     const { forge, calls } = makeForge([
@@ -360,6 +365,7 @@ describe('GitHubForge.setAutoMerge', () => {
       classic(classicRule({ requiresStatusChecks: true })),
       { stdout: '[]' },
       {},
+      nativeState(true),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
@@ -385,8 +391,12 @@ describe('GitHubForge.setAutoMerge', () => {
       cmd: ['gh', 'api', 'repos/acme/app/rules/branches/main'],
       cwd: '/ws/build-1',
     })
-    expect(calls.at(-1)).toEqual({
+    expect(calls.at(-2)).toEqual({
       cmd: ['gh', 'pr', 'merge', '42', '--auto', '--squash'],
+      cwd: '/ws/build-1',
+    })
+    expect(calls.at(-1)).toEqual({
+      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
       cwd: '/ws/build-1',
     })
     expect(calls.flatMap((call) => call.cmd)).not.toContain('--admin')
@@ -406,17 +416,26 @@ describe('GitHubForge.setAutoMerge', () => {
       classic(),
       { stdout: JSON.stringify(rules) },
       {},
+      nativeState(true),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
     })
-    expect(calls.at(-1)!.cmd).toEqual([
+    expect(calls.at(-2)!.cmd).toEqual([
       'gh',
       'pr',
       'merge',
       '42',
       '--auto',
       '--squash',
+    ])
+    expect(calls.at(-1)!.cmd).toEqual([
+      'gh',
+      'pr',
+      'view',
+      '42',
+      '--json',
+      'autoMergeRequest',
     ])
   })
 
@@ -445,17 +464,30 @@ describe('GitHubForge.setAutoMerge', () => {
   })
 
   test('HAS_HOOKS is never treated as ungated and delegates to native auto-merge', async () => {
-    const { forge, calls } = makeForge([view('HAS_HOOKS'), ...noGate, {}])
+    const { forge, calls } = makeForge([
+      view('HAS_HOOKS'),
+      ...noGate,
+      {},
+      nativeState(true),
+    ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
     })
-    expect(calls.at(-1)!.cmd).toEqual([
+    expect(calls.at(-2)!.cmd).toEqual([
       'gh',
       'pr',
       'merge',
       '42',
       '--auto',
       '--squash',
+    ])
+    expect(calls.at(-1)!.cmd).toEqual([
+      'gh',
+      'pr',
+      'view',
+      '42',
+      '--json',
+      'autoMergeRequest',
     ])
   })
 
@@ -467,6 +499,7 @@ describe('GitHubForge.setAutoMerge', () => {
         }),
       },
       {},
+      nativeState(false),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({
       kind: 'applied',
@@ -475,17 +508,40 @@ describe('GitHubForge.setAutoMerge', () => {
       cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
       cwd: '/ws/build-1',
     })
-    expect(calls.at(-1)).toEqual({
+    expect(calls.at(-2)).toEqual({
       cmd: ['gh', 'pr', 'merge', '42', '--disable-auto'],
       cwd: '/ws/build-1',
     })
-    expect(calls).toHaveLength(2)
+    expect(calls.at(-1)).toEqual({
+      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
+      cwd: '/ws/build-1',
+    })
+    expect(calls).toHaveLength(3)
+  })
+
+  test('a successful command without matching native projection stays deferred', async () => {
+    const enable = makeForge([
+      view(),
+      repo,
+      classic(classicRule({ requiresStatusChecks: true })),
+      { stdout: '[]' },
+      {},
+      nativeState(false),
+    ])
+    expect(
+      await enable.forge.setAutoMerge('/ws/build-1', 42, true),
+    ).toEqual({ kind: 'deferred' })
+
+    const disable = makeForge([nativeState(true), {}, nativeState(true)])
+    expect(
+      await disable.forge.setAutoMerge('/ws/build-1', 42, false),
+    ).toEqual({ kind: 'deferred' })
   })
 
   test('idempotent desired state only inspects the PR', async () => {
     for (const [enabled, response] of [
       [true, view('UNKNOWN', { mergeMethod: 'SQUASH' })],
-      [false, { stdout: JSON.stringify({ autoMergeRequest: null }) }],
+      [false, nativeState(false)],
     ] as const) {
       const { forge, calls } = makeForge([response])
       expect(await forge.setAutoMerge('/ws/build-1', 42, enabled)).toEqual({
@@ -493,6 +549,31 @@ describe('GitHubForge.setAutoMerge', () => {
       })
       expect(calls).toHaveLength(1)
     }
+  })
+
+  test('a repeated enable is acknowledged without repeating the mutation', async () => {
+    const { forge, calls } = makeForge([
+      view(),
+      repo,
+      classic(classicRule({ requiresStatusChecks: true })),
+      { stdout: '[]' },
+      {},
+      nativeState(true),
+      view('UNKNOWN', { mergeMethod: 'SQUASH' }),
+    ])
+
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'applied',
+    })
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'applied',
+    })
+    expect(
+      calls.filter(
+        (call) =>
+          call.cmd.join(' ') === 'gh pr merge 42 --auto --squash',
+      ),
+    ).toHaveLength(1)
   })
 
   test('probe, inspection, and native mutation failures propagate and never return direct eligibility', async () => {

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { manualClock } from '../../testing/fixed'
+import { describeTicketSourceContract } from './contract'
 import { FileTicketSource } from './file'
 
 let dir: string
@@ -22,6 +23,15 @@ function source(opts: Partial<ConstructorParameters<typeof FileTicketSource>[0]>
     ...opts,
   })
 }
+
+describeTicketSourceContract('FileTicketSource', async () => {
+  const contractDir = await mkdtemp(join(tmpdir(), 'ab-file-ticket-contract-'))
+  return {
+    source: new FileTicketSource({ dir: contractDir }),
+    states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+    cleanup: () => rm(contractDir, { recursive: true, force: true }),
+  }
+})
 
 const SPEC_BODY = [
   '# Rate-limit auth endpoints',

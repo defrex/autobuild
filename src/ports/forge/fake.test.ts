@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { Forge, PrState } from '../types'
+import {
+  describeForgeContract,
+  type ForgeContractFactory,
+} from './contract'
 import { FakeForge } from './fake'
 
 const prOpts = (over: Partial<Parameters<Forge['openPr']>[0]> = {}) => ({
@@ -10,6 +14,57 @@ const prOpts = (over: Partial<Parameters<Forge['openPr']>[0]> = {}) => ({
   body: 'Body text',
   ...over,
 })
+
+const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
+  const headSha = `head-${crypto.randomUUID()}`
+  const landingSha = `squash-${crypto.randomUUID()}`
+  const forge = new FakeForge({
+    headSha,
+    mergeSha: landingSha,
+    gatePresence: opts.gated ? 'present' : 'absent',
+  })
+  return {
+    forge,
+    workspacePath: `/fake/forge-contract/${crypto.randomUUID()}`,
+    head: `ab/contract-head-${crypto.randomUUID()}`,
+    base: `contract-base-${crypto.randomUUID()}`,
+    title: `Forge contract ${crypto.randomUUID()}`,
+    body: 'Autobuild Forge contract fixture',
+    controls: {
+      remoteHead: async (branch) => {
+        if (!forge.pushes.some((push) => push.branch === branch)) {
+          throw new Error(`fake contract probe: branch ${branch} was not pushed`)
+        }
+        return headSha
+      },
+      prepareMergeable: async (number) => {
+        forge.setPrState(number, { state: 'open', mergeable: true })
+      },
+      closePr: async (number) => {
+        forge.setPrState(number, { state: 'closed' })
+      },
+      makeConflict: async (number) => {
+        forge.setPrState(number, { state: 'open', mergeable: false })
+      },
+      advanceHead: async (number) => {
+        const sha = `advanced-${crypto.randomUUID()}`
+        forge.setPrHeadSha(number, sha)
+        forge.setPrState(number, { state: 'open', mergeable: true })
+        return sha
+      },
+      nativeAutoMergeEnabled: async (number) =>
+        forge.isAutoMergeEnabled(number),
+      commentExists: async (number, body) =>
+        forge.comments.some(
+          (comment) => comment.number === number && comment.body === body,
+        ),
+      mergeSha: async () => landingSha,
+      trackPr: () => {},
+    },
+  }
+}
+
+describeForgeContract('FakeForge', fakeForgeContractFactory)
 
 describe('FakeForge', () => {
   test('pushBranch journals workspacePath and branch in call order', async () => {

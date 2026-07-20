@@ -98,6 +98,7 @@ function harness(
   const tickets = opts.wrapTickets ? opts.wrapTickets(fakeTickets) : fakeTickets
   const workspaces = new FakeWorkspaceProvider({
     root: '/ws',
+    mode: 'logical',
     ...(opts.workspaceBase ? { base: opts.workspaceBase } : {}),
   })
   const forge = new FakeForge()

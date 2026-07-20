@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WorkspaceHandle } from '../types'
+import { describeWorkspaceProviderContract } from './contract'
 import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
 
 /** Identity/signing pinned per-invocation so tests ignore user git config. */
@@ -48,6 +49,32 @@ async function commitFile(
   await run(['git', ...GIT_ID, 'commit', '-q', '-m', message], worktree)
   return run(['git', 'rev-parse', 'HEAD'], worktree)
 }
+
+describeWorkspaceProviderContract('GitWorktreeProvider', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'ab-git-worktree-contract-'))
+  const remote = join(tmp, 'remote.git')
+  const upstream = join(tmp, 'upstream')
+  const repo = join(tmp, 'repo')
+  const root = join(tmp, 'worktrees')
+  await mkdir(remote, { recursive: true })
+  await run(['git', 'init', '--bare', '-q', '-b', 'main'], remote)
+  await initRepo(upstream)
+  await run(['git', 'remote', 'add', 'origin', remote], upstream)
+  await run(['git', 'push', '-q', '-u', 'origin', 'main'], upstream)
+  await run(['git', 'clone', '-q', remote, repo], tmp)
+  const selectedSha = await run(['git', 'rev-parse', 'refs/heads/main'], remote)
+  return {
+    provider: new GitWorktreeProvider({ root }),
+    provision: {
+      repo,
+      baseBranch: 'main',
+      branch: `ab/contract-${crypto.randomUUID()}`,
+    },
+    expectedBase: { source: 'remote', sha: selectedSha },
+    fixture: { relativePath: 'README.md', content: 'origin\n' },
+    cleanup: () => rm(tmp, { recursive: true, force: true }),
+  }
+})
 
 describe('GitWorktreeProvider', () => {
   let tmp: string

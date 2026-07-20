@@ -89,7 +89,7 @@ function harness(toml = '') {
   const dispatcher = new Dispatcher({
     store,
     tickets,
-    workspaces: new FakeWorkspaceProvider({ root: '/ws' }),
+    workspaces: new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' }),
     forge: new FakeForge(),
     config,
     repo: REPO,
