@@ -153,7 +153,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     startedEvent: 'verify.started',
     terminal: 'verdict',
     terminalEvent: 'verify.completed',
-    verdictVocabulary: ['pass', 'fail'],
+    verdictVocabulary: ['pass', 'fail', 'skip'],
     serverAccess: true,
     inputs: { spec: true, stepConfig: true, commitRange: true },
   },

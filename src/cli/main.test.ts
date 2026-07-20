@@ -98,7 +98,7 @@ describe('runCli — routing and exit codes', () => {
   test('verdict without a kind prints usage and exits 1', async () => {
     const d = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
     expect(await runCli(['verdict'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('usage: ab verdict <approve|revise|escalate|pass|fail>')
+    expect(d.err.join('\n')).toContain('usage: ab verdict <approve|revise|escalate|pass|fail|skip>')
   })
 })
 

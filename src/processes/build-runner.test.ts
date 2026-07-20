@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
-import type { EventType } from '../events/payloads'
+import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import type { Decision } from '../kernel/engine'
 import type { Finding } from '../ontology'
@@ -192,7 +192,7 @@ function happyHandlers(store: BuildStore): Record<string, SkillHandler> {
       await store.append(SLUG, {
         actor: agentActor('verify-e2e', sessionOf(ctx)),
         type: 'verify.completed',
-        payload: { step: 'e2e', attempt: roundOf(ctx), pass: true },
+        payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
       })
       return defaultTurnResult('e2e green')
     },
@@ -976,11 +976,52 @@ describe('happy path (§15.6)', () => {
     expect(h.execCalls.every((c) => c.cwd === h.workspacePath)).toBe(true)
     const events = await h.store.getEvents(SLUG)
     const completed = ofType(events, 'verify.completed')
-    expect(completed.map((e) => [e.payload.step, e.payload.pass, e.actor.kind])).toEqual([
-      ['types', true, 'kernel'],
-      ['unit', true, 'kernel'],
-      ['e2e', true, 'agent'],
+    expect(
+      completed.map((e) => [
+        e.payload.step,
+        normalizeVerifyCompletion(e.payload).outcome,
+        e.actor.kind,
+      ]),
+    ).toEqual([
+      ['types', 'pass', 'kernel'],
+      ['unit', 'pass', 'kernel'],
+      ['e2e', 'pass', 'agent'],
     ])
+  })
+
+  test('an agent verify skip is terminal and the runner continues to finalize', async () => {
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'verify-e2e': async (ctx) => {
+          await store.append(SLUG, {
+            actor: agentActor('verify-e2e', sessionOf(ctx)),
+            type: 'verify.completed',
+            payload: {
+              step: 'e2e',
+              attempt: roundOf(ctx),
+              outcome: 'skipped',
+              reason: 'No browser-facing behavior changed',
+            },
+          })
+          return defaultTurnResult('e2e not applicable')
+        },
+      }),
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const skipped = ofType(events, 'verify.completed').find(
+      (event) => normalizeVerifyCompletion(event.payload).outcome === 'skipped',
+    )
+    expect(skipped).toBeDefined()
+    expect(normalizeVerifyCompletion(skipped!.payload)).toEqual({
+      step: 'e2e',
+      attempt: 1,
+      outcome: 'skipped',
+      reason: 'No browser-facing behavior changed',
+    })
+    expect(ofType(events, 'finalize.completed')).toHaveLength(1)
   })
 
   test('finalize.step-completed is recorded with the session agent actor', async () => {
@@ -1589,7 +1630,7 @@ describe('crash-gap repair', () => {
 // ── Deterministic checks (§8.2) ──────────────────────────────────────────────
 
 describe('checks', () => {
-  test('a failing check deposits the exec output as the verify report (D6) and completes pass:false', async () => {
+  test('a failing check deposits the exec output as the verify report (D6) and completes outcome:fail', async () => {
     const h = await makeHarness({ failCommands: ['bun tsc --noEmit'] })
     await seedPlanApproved(h.store)
     await seedCodeApproved(h.store)
@@ -1609,7 +1650,7 @@ describe('checks', () => {
     expect(completed.payload).toEqual({
       step: 'types',
       attempt: 1,
-      pass: false,
+      outcome: 'fail',
       report: { kind: 'verify-report:types', rev: 0 },
     })
 

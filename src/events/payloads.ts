@@ -24,12 +24,50 @@ import {
   reviewVerdictKindSchema,
   ticketRefSchema,
   workspaceBaseSchema,
+  type ArtifactRef,
+  type VerifyOutcome,
 } from '../ontology'
 
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
+
+const verifyCompletionBase = {
+  step: z.string().min(1),
+  attempt,
+}
+
+/**
+ * `verify.completed` is a durable protocol. The boolean branch remains
+ * readable for historical logs; every current writer uses the canonical,
+ * three-outcome branch. Keeping the branches strict prevents a producer from
+ * smuggling a skip through `pass: true` or recording contradictory facts.
+ */
+const verifyCompletedPayloadSchema = z.union([
+  z.strictObject({
+    ...verifyCompletionBase,
+    pass: z.boolean(),
+    report: artifactRefSchema.optional(),
+  }),
+  z.discriminatedUnion('outcome', [
+    z.strictObject({
+      ...verifyCompletionBase,
+      outcome: z.literal('pass'),
+      report: artifactRefSchema.optional(),
+    }),
+    z.strictObject({
+      ...verifyCompletionBase,
+      outcome: z.literal('fail'),
+      report: artifactRefSchema.optional(),
+    }),
+    z.strictObject({
+      ...verifyCompletionBase,
+      outcome: z.literal('skipped'),
+      reason: z.string().trim().min(1, 'a skipped verification requires a non-blank reason'),
+    }),
+  ]),
+])
 
 /** Shared by `plan-review.verdict` and `code-review.verdict` (symmetric by design). */
 const reviewVerdictPayload = z.strictObject({
@@ -132,12 +170,7 @@ export const eventPayloadSchemas = {
 
   // ── Verify / finalize ──────────────────────────────────────────────────────
   'verify.started': z.strictObject({ step: z.string().min(1), attempt }),
-  'verify.completed': z.strictObject({
-    step: z.string().min(1),
-    attempt,
-    pass: z.boolean(),
-    report: artifactRefSchema.optional(),
-  }),
+  'verify.completed': verifyCompletedPayloadSchema,
   'finalize.started': empty,
   'finalize.completed': z.strictObject({
     pr: z.strictObject({
@@ -208,6 +241,46 @@ export const EVENT_TYPES = Object.keys(eventPayloadSchemas) as EventType[]
 export type EventPayload<T extends EventType> = z.infer<
   (typeof eventPayloadSchemas)[T]
 >
+
+/** Canonical read shape shared by the reducer, engine, and query surfaces. */
+export interface NormalizedVerifyCompletion {
+  step: string
+  attempt: number
+  outcome: VerifyOutcome
+  report?: ArtifactRef
+  reason?: string
+}
+
+/**
+ * Normalize exactly once at each event-consumer boundary. Legacy booleans keep
+ * their historical meaning; `skipped` is never represented as either boolean.
+ */
+export function normalizeVerifyCompletion(
+  payload: EventPayload<'verify.completed'>,
+): NormalizedVerifyCompletion {
+  if ('pass' in payload) {
+    return {
+      step: payload.step,
+      attempt: payload.attempt,
+      outcome: payload.pass ? 'pass' : 'fail',
+      ...(payload.report !== undefined ? { report: payload.report } : {}),
+    }
+  }
+  if (payload.outcome === 'skipped') {
+    return {
+      step: payload.step,
+      attempt: payload.attempt,
+      outcome: 'skipped',
+      reason: payload.reason,
+    }
+  }
+  return {
+    step: payload.step,
+    attempt: payload.attempt,
+    outcome: payload.outcome,
+    ...(payload.report !== undefined ? { report: payload.report } : {}),
+  }
+}
 
 export function isEventType(value: string): value is EventType {
   return Object.hasOwn(eventPayloadSchemas, value)

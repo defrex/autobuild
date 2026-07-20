@@ -339,7 +339,7 @@ describe('detail', () => {
       payload: { step: 'unit', attempt: 2, pass: true },
     })
     const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
-    expect(d.verify.steps).toEqual([{ step: 'unit', pass: true }])
+    expect(d.verify.steps).toEqual([{ step: 'unit', outcome: 'pass' }])
     expect(d.verify.currentStep).toBeUndefined()
   })
 
@@ -377,6 +377,33 @@ describe('detail', () => {
     expect(d.verify.steps).toEqual([])
   })
 
+  test('a skipped step surfaces distinctly with its reason in data and text', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: {
+        step: 'e2e',
+        attempt: 1,
+        outcome: 'skipped',
+        reason: 'No browser-facing behavior changed',
+      },
+    })
+
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.verify.steps).toEqual([
+      {
+        step: 'e2e',
+        outcome: 'skipped',
+        reason: 'No browser-facing behavior changed',
+      },
+    ])
+    expect(renderDetail(d, NOW).join('\n')).toContain(
+      'SKIP  e2e — No browser-facing behavior changed',
+    )
+  })
+
   test('a failed step in the current attempt surfaces as a failure', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -386,7 +413,7 @@ describe('detail', () => {
       payload: { step: 'e2e', attempt: 1, pass: false },
     })
     const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
-    expect(d.verify.steps).toEqual([{ step: 'e2e', pass: false }])
+    expect(d.verify.steps).toEqual([{ step: 'e2e', outcome: 'fail' }])
     // Rendered in words, since color is not available to lean on.
     expect(renderDetail(d, NOW).join('\n')).toContain('FAIL  e2e')
   })

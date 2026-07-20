@@ -545,7 +545,7 @@ export class BuildRunner {
       await store.append(slug, {
         actor: KERNEL,
         type: 'verify.completed',
-        payload: { step, attempt, pass: true },
+        payload: { step, attempt, outcome: 'pass' },
       } satisfies EventWrite<'verify.completed'>)
       return
     }
@@ -573,7 +573,7 @@ export class BuildRunner {
           payload: {
             step,
             attempt,
-            pass: false,
+            outcome: 'fail',
             report: { kind: meta.kind, rev: meta.revision },
           },
         } satisfies EventWrite<'verify.completed'>
@@ -581,7 +581,7 @@ export class BuildRunner {
     )
   }
 
-  /** Agent-verify step (§5): a session with a pass/fail verdict; the kernel
+  /** Agent-verify step (§5): a session with a pass/fail/skip verdict; the kernel
    * owns the dev server around it (D10). */
   private async runAgentVerify(
     decision: RunAgentVerifyDecision,

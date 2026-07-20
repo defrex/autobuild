@@ -167,7 +167,7 @@ const HELP = [
   '  ab server <start|stop|restart|status|logs> [n]',
   '                                         dev-server lifecycle, config-driven (§16.2); implement/verify only',
   '  ab done [--notes <file>]               complete a producer phase (TERMINAL: validates, then runs plumbing)',
-  '  ab verdict <approve|revise|escalate|pass|fail> [--findings <json>] [--notes <file>] [--reason <text>] [--report <file>]',
+  '  ab verdict <approve|revise|escalate|pass|fail|skip> [--findings <json>] [--notes <file>] [--reason <text>] [--report <file>]',
   '                                         complete a review/verify phase (TERMINAL; vocabulary is phase-dependent)',
   '  ab escalate <question> [--refs a,b]    park the build for human input (TERMINAL)',
   '',
@@ -956,7 +956,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const [kind] = parsed.positionals
       if (kind === undefined) {
         throw new Error(
-          'usage: ab verdict <approve|revise|escalate|pass|fail> ' +
+          'usage: ab verdict <approve|revise|escalate|pass|fail|skip> ' +
             '[--findings <json>] [--notes <file>] [--reason <text>] [--report <file>] (§8.2)',
         )
       }

@@ -166,7 +166,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(ofType(events, 'verify.started')[0]!.payload).toEqual({ step: 'unit', attempt: 1 })
   const verified = ofType(events, 'verify.completed')[0]!
   expect(verified.actor).toEqual({ kind: 'kernel' }) // deterministic check, no session (§8.2)
-  expect(verified.payload).toEqual({ step: 'unit', attempt: 1, pass: true })
+  expect(verified.payload).toEqual({ step: 'unit', attempt: 1, outcome: 'pass' })
   expect(ofType(events, 'finalize.completed')[0]!.actor).toEqual({ kind: 'kernel' }) // D7
 
   // FakeForge journal: the push (real branch) and the PR (title = the
@@ -522,8 +522,8 @@ test('a2. reconcile merges the current base when main advances after conflict de
   })
   expect(ofType(events, 'escalation.raised')).toEqual([])
   expect(ofType(events, 'verify.completed').map((event) => event.payload)).toEqual([
-    { step: 'unit', attempt: 1, pass: true },
-    { step: 'unit', attempt: 2, pass: true },
+    { step: 'unit', attempt: 1, outcome: 'pass' },
+    { step: 'unit', attempt: 2, outcome: 'pass' },
   ])
 
   if (mergeCommit === undefined) {
@@ -617,12 +617,12 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'session.ended',
   ])
 
-  // The failed check: verify.completed{pass:false} with the report artifact.
+  // The failed check: verify.completed{outcome:fail} with the report artifact.
   const [fail, pass] = ofType(events, 'verify.completed')
   expect(fail!.payload).toEqual({
     step: 'unit',
     attempt: 1,
-    pass: false,
+    outcome: 'fail',
     report: { kind: 'verify-report:unit', rev: 0 },
   })
   expect(fail!.actor).toEqual({ kind: 'kernel' })
@@ -650,7 +650,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     { step: 'unit', attempt: 1 },
     { step: 'unit', attempt: 2 },
   ])
-  expect(pass!.payload).toEqual({ step: 'unit', attempt: 2, pass: true })
+  expect(pass!.payload).toEqual({ step: 'unit', attempt: 2, outcome: 'pass' })
 
   // One more code-review round; the reviewer is a FRESH session each round.
   const verdicts = ofType(events, 'code-review.verdict')
@@ -869,7 +869,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   expect(ofType(events, 'verify.completed')[0]!.payload).toEqual({
     step: 'unit',
     attempt: 1,
-    pass: true,
+    outcome: 'pass',
   })
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 }, 30_000)

@@ -303,6 +303,16 @@ describe('ab done — finalize', () => {
       type: 'verify.completed',
       payload: { step: 'types', attempt: 1, pass: true },
     })
+    await store.append(BUILD, {
+      actor: agent('verify:e2e'),
+      type: 'verify.completed',
+      payload: {
+        step: 'e2e',
+        attempt: 1,
+        outcome: 'skipped',
+        reason: 'No browser-facing behavior changed',
+      },
+    })
   })
 
   test('rejected without a pr-description artifact', async () => {
@@ -346,6 +356,9 @@ describe('ab done — finalize', () => {
     expect(comment.body).toContain('code-review r1: revise (2 findings)')
     expect(comment.body).toContain('code-review r2: approve')
     expect(comment.body).toContain('types (attempt 1): pass')
+    expect(comment.body).toContain(
+      'e2e (attempt 1): skipped — No browser-facing behavior changed',
+    )
     expect(comment.body).toContain(`build: ${BUILD}`)
   })
 
@@ -674,14 +687,14 @@ describe('ab verdict — vocabulary enforcement (§8.2)', () => {
   test('a review phase rejects pass, citing the exact rule and its own vocabulary', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
     await expect(verdict(deps, { verdict: 'pass' })).rejects.toThrow(
-      /review phases accept approve\|revise\|escalate; agent-verify steps accept pass\|fail\. code-review accepts: approve\|revise\|escalate/,
+      /review phases accept approve\|revise\|escalate; agent-verify steps accept pass\|fail\|skip\. code-review accepts: approve\|revise\|escalate/,
     )
   })
 
-  test('an agent-verify phase rejects approve, citing pass|fail', async () => {
+  test('an agent-verify phase rejects approve, citing pass|fail|skip', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e' }) })
     await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(
-      /verify:e2e accepts: pass\|fail/,
+      /verify:e2e accepts: pass\|fail\|skip/,
     )
   })
 
@@ -886,7 +899,7 @@ describe('ab verdict — agent-verify', () => {
     const events = await verdict(deps, { verdict: 'pass' })
     expect(events).toHaveLength(1)
     expect(events[0]!.type).toBe('verify.completed')
-    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, pass: true })
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, outcome: 'pass' })
     expect(events[0]!.actor).toEqual({
       kind: 'agent',
       role: 'verify:e2e',
@@ -901,7 +914,7 @@ describe('ab verdict — agent-verify', () => {
     expect(events[0]!.payload).toEqual({
       step: 'e2e',
       attempt: 1,
-      pass: true,
+      outcome: 'pass',
       report: { kind: 'verify-report:e2e', rev: 0 },
     })
     const artifact = await store.getArtifact(BUILD, 'verify-report:e2e')
@@ -915,14 +928,14 @@ describe('ab verdict — agent-verify', () => {
     )
   })
 
-  test('fail deposits the report and emits pass:false with attempt = round', async () => {
+  test('fail deposits the report and emits outcome:fail with attempt = round', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 3 }) })
     const report = await stash('report.md', 'login flow 500s\n')
     const events = await verdict(deps, { verdict: 'fail', report })
     expect(events[0]!.payload).toEqual({
       step: 'e2e',
       attempt: 3,
-      pass: false,
+      outcome: 'fail',
       report: { kind: 'verify-report:e2e', rev: 0 },
     })
     const artifact = await store.getArtifact(BUILD, 'verify-report:e2e')
@@ -942,7 +955,35 @@ describe('ab verdict — agent-verify', () => {
     // A later attempt of the same step is a fresh terminal.
     const nextAttempt = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 2 }) })
     const events = await verdict(nextAttempt, { verdict: 'pass' })
-    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, pass: true })
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 2, outcome: 'pass' })
+  })
+
+  test('skip requires a non-blank reason before recording anything', async () => {
+    for (const reason of [undefined, '', '   ']) {
+      const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
+      await expect(
+        verdict(deps, { verdict: 'skip', ...(reason !== undefined ? { reason } : {}) }),
+      ).rejects.toThrow(/'ab verdict skip' requires --reason <text>/)
+    }
+    expect(await eventTypes()).not.toContain('verify.completed')
+    expect(await store.getArtifact(BUILD, 'verify-report:e2e')).toBeNull()
+  })
+
+  test('skip records its trimmed reason without requiring a report artifact', async () => {
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 4 }) })
+    const events = await verdict(deps, {
+      verdict: 'skip',
+      reason: '  No browser-facing behavior changed  ',
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]!.payload).toEqual({
+      step: 'e2e',
+      attempt: 4,
+      outcome: 'skipped',
+      reason: 'No browser-facing behavior changed',
+    })
+    expect(await store.getArtifact(BUILD, 'verify-report:e2e')).toBeNull()
   })
 
   test('a pre-restart verify.completed does not shadow the rebuilt pipeline’s attempt (§6.3)', async () => {
@@ -965,7 +1006,7 @@ describe('ab verdict — agent-verify', () => {
 
     const deps = makeDeps({ store, env: makeEnv({ phase: 'verify:e2e', round: 1 }) })
     const events = await verdict(deps, { verdict: 'pass' })
-    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 1, pass: true })
+    expect(events[0]!.payload).toEqual({ step: 'e2e', attempt: 1, outcome: 'pass' })
 
     // Within the SAME post-restart cycle, the duplicate is still rejected.
     const dup = makeDeps({
