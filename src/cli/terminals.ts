@@ -187,6 +187,33 @@ async function git(deps: TerminalDeps, args: string[]): Promise<string> {
   return result.stdout
 }
 
+/** Git object ids are 40 hex characters for SHA-1 repositories and 64 for
+ * SHA-256 repositories. The corresponding rev-parse calls also prove type. */
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+
+function gitObjectIds(output: string, command: string): string[] {
+  const body = output.endsWith('\n') ? output.slice(0, -1) : output
+  if (body === '') return []
+  const ids = body.split('\n')
+  const malformed = ids.find((id) => !GIT_OBJECT_ID.test(id))
+  if (malformed !== undefined) {
+    throw new Error(
+      `${command} returned malformed commit output: ${JSON.stringify(output)}`,
+    )
+  }
+  return ids
+}
+
+function singleGitObjectId(output: string, command: string): string {
+  const ids = gitObjectIds(output, command)
+  if (ids.length !== 1) {
+    throw new Error(
+      `${command} expected exactly one commit SHA, found ${ids.length}`,
+    )
+  }
+  return ids[0]!
+}
+
 /** No `done` on a dirty worktree (D5) — the error lists the offending files. */
 async function assertCleanWorktree(deps: TerminalDeps): Promise<void> {
   const status = (await git(deps, ['status', '--porcelain'])).trimEnd()
@@ -207,14 +234,10 @@ function baseBranchOf(events: AbEvent[]): string {
   )
 }
 
-/** The first provisioning fact is the immutable branch-cut provenance. Later
- * `existing` facts record resume tips and must never narrow code review. */
-function implementationBaseOf(events: AbEvent[]): string {
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') return event.payload.base.sha
-  }
+function requireImplementationProvisioning(events: AbEvent[]): void {
+  if (events.some((event) => event.type === 'workspace.provisioned')) return
   throw new Error(
-    "implement's 'ab done' requires a workspace.provisioned base SHA — " +
+    "implement's 'ab done' requires workspace.provisioned provenance — " +
       'this build has no workspace.provisioned event (§7.4, §15.3)',
   )
 }
@@ -227,6 +250,69 @@ async function buildBranch(deps: TerminalDeps): Promise<string> {
     )
   }
   return build.branch ?? `ab/${build.slug}`
+}
+
+/**
+ * Establish the focused range that this implementation completion makes
+ * durable. The target snapshot lives only in a build-scoped internal ref:
+ * neither FETCH_HEAD nor operator/remote-tracking refs are review inputs.
+ */
+async function implementationReviewBoundary(
+  deps: TerminalDeps,
+  events: AbEvent[],
+): Promise<{ branch: string; base: string; head: string }> {
+  const diagnostic = 'cannot establish implementation review boundary'
+  try {
+    requireImplementationProvisioning(events)
+    const baseBranch = baseBranchOf(events)
+    const branch = await buildBranch(deps)
+    const headCommand = 'git rev-parse --verify HEAD^{commit}'
+    const head = singleGitObjectId(
+      await git(deps, ['rev-parse', '--verify', 'HEAD^{commit}']),
+      headCommand,
+    )
+
+    const targetRef = `refs/autobuild/review/${branch}/base`
+    await git(deps, [
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      '--refmap=',
+      'origin',
+      `+refs/heads/${baseBranch}:${targetRef}`,
+    ])
+    const targetCommand = `git rev-parse --verify ${targetRef}^{commit}`
+    const target = singleGitObjectId(
+      await git(deps, ['rev-parse', '--verify', `${targetRef}^{commit}`]),
+      targetCommand,
+    )
+
+    const mergeBaseArgs = ['merge-base', '--all', target, head]
+    const mergeBaseCommand = `git ${mergeBaseArgs.join(' ')}`
+    const merged = await deps.exec(['git', ...mergeBaseArgs], {
+      cwd: deps.workspacePath,
+    })
+    if (merged.exitCode === 1) {
+      throw new Error(`${mergeBaseCommand} found no common ancestor`)
+    }
+    if (merged.exitCode !== 0) {
+      throw new Error(
+        `${mergeBaseCommand} exited ${merged.exitCode}: ` +
+          `${merged.stderr.trim() || merged.stdout.trim() || '(no output)'}`,
+      )
+    }
+    const mergeBases = gitObjectIds(merged.stdout, mergeBaseCommand)
+    if (mergeBases.length !== 1) {
+      throw new Error(
+        `${mergeBaseCommand} expected exactly one merge-base, found ` +
+          `${mergeBases.length}${mergeBases.length > 0 ? `: ${mergeBases.join(', ')}` : ''}`,
+      )
+    }
+    return { branch, base: mergeBases[0]!, head }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`${diagnostic}: ${detail}`)
+  }
 }
 
 function refOf(meta: ArtifactMeta | undefined): ArtifactRef {
@@ -318,9 +404,9 @@ export async function done(
       const notesPath = requireNotes(opts.notes, "implement's 'ab done' deposits implement-notes")
       const notes = await readTextFile(notesPath, '--notes')
       await assertCleanWorktree(deps)
-      const base = implementationBaseOf(events)
-      const branch = await buildBranch(deps)
-      const head = (await git(deps, ['rev-parse', 'HEAD'])).trim()
+      // Resolve the current target and focused divergence BEFORE publication
+      // or deposit. A misleading range is worse than rejecting this terminal.
+      const { branch, base, head } = await implementationReviewBoundary(deps, events)
       // Push BEFORE the event (walkthrough §8.7 order): a push without an
       // event is a harmless retry — the re-run pushes the same branch again —
       // but an event without a push breaks cross-sandbox resume, which

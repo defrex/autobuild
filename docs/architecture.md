@@ -91,9 +91,12 @@ evidence). Two kernel-authored skip sources narrow the configured universe:
 selection (applied at the planner's `ab done` in `src/cli/terminals.ts`,
 snapshotted by the engine at approval), and
 `src/kernel/verify-applicability.ts` matches changed paths against a step's
-selectors, resolved by the build runner via `git diff` against the build's
-durable base. Both produce the ordinary queryable skipped outcome; Git
-failure is infrastructure and fails closed, never a synthetic skip.
+selectors, resolved by the build runner via `git diff` against the initial
+branch-cut base (or the refreshed base promoted by a completed reconcile).
+This verify-only base is deliberately independent from implementation's
+focused review range. Both narrowing mechanisms produce the ordinary
+queryable skipped outcome; Git failure is infrastructure and fails closed,
+never a synthetic skip.
 
 **Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
 launches per slug within one process; the BuildStore lease remains the
@@ -116,13 +119,17 @@ stderr) while tracker-wide invariant violations stay fatal — one broken
 ticket never blocks unrelated dispatch, but nothing that could permit double
 dispatch is tolerated.
 
-**Workspace base selection.** `src/ports/workspace/git-worktree.ts` selects
-the base once at first branch creation, fetching into a build-scoped private
-ref; re-provisioning resumes at the branch tip and never re-cuts. The
-recorded first base SHA is the immutable review anchor every
-`implement.completed` range uses (`src/cli/terminals.ts`). Reconcile's
-execution-time base refresh in `src/processes/build-runner.ts` is deliberately
-separate and fails closed.
+**Workspace and review base selection.**
+`src/ports/workspace/git-worktree.ts` selects the branch-cut base once at first
+creation, fetching into a build-scoped private ref; re-provisioning resumes at
+the branch tip and never re-cuts, so the first provisioning fact remains
+immutable provenance. Separately, each successful implementation terminal in
+`src/cli/terminals.ts` privately refreshes the frozen target branch and records
+the unique merge-base of that snapshot and `HEAD` in `implement.completed`.
+It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
+errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
+execution-time target refresh in `src/processes/build-runner.ts` remains a
+third, deliberately separate boundary and also fails closed.
 
 **Agent runtimes.** `src/ports/runner/`: `runtime.ts` (capability-carrying
 registry), `routing.ts` (eager role resolver), `production.ts` (shipped

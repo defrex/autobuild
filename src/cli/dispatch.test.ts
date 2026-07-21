@@ -92,6 +92,10 @@ async function initOrigin(dir: string, toml = DISPATCH_CONFIG_TOML): Promise<voi
   await writeFile(join(dir, 'README.md'), 'dispatch e2e origin\n')
   await git(['add', '-A'], dir)
   await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir)
+  const remote = join(dir, '..', 'origin.git')
+  await git(['init', '-q', '--bare', remote], dir)
+  await git(['remote', 'add', 'origin', remote], dir)
+  await git(['push', '-q', '--set-upstream', 'origin', 'main'], dir)
 }
 
 interface Fixture {

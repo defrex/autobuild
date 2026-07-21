@@ -135,12 +135,19 @@ export async function initWorkspaceRepo(dir: string, branch = BRANCH): Promise<v
   await runGit(['checkout', '-q', '-b', branch], dir)
 }
 
-/** Attach a throwaway bare origin and seed its build branch at the local tip. */
+/**
+ * Attach a throwaway bare origin, seed its build ref at the local branch tip,
+ * and seed `main` at an independently selected target commit. Directly moving
+ * the bare target ref deliberately leaves operator-owned local/tracking refs
+ * untouched, matching the real workspace boundary tests.
+ */
 export async function initBareOrigin(
   workspace: string,
   remote: string,
   branch = BRANCH,
+  target = 'HEAD',
 ): Promise<void> {
+  const targetSha = await runGit(['rev-parse', '--verify', `${target}^{commit}`], workspace)
   await mkdir(remote, { recursive: true })
   await runGit(['init', '-q', '--bare'], remote)
   await runGit(['remote', 'add', 'origin', remote], workspace)
@@ -148,6 +155,8 @@ export async function initBareOrigin(
     ['push', '-q', 'origin', `${branch}:refs/heads/${branch}`],
     workspace,
   )
+  await runGit(['update-ref', 'refs/heads/main', targetSha], remote)
+  await runGit(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote)
 }
 
 export function remoteBranchHead(

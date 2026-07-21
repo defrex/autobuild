@@ -331,7 +331,7 @@ sandbox can resume a build a dead sandbox started: pull events, rehydrate
 scratch from latest artifact revisions, continue. v1 structurally could not
 do this.
 
-Three base-selection invariants make this safe with Git:
+Four base-selection invariants make this safe with Git:
 
 - **The base is chosen once, at first branch creation**, from the freshly
   fetched origin tip of the configured base branch (fetched into a
@@ -340,9 +340,22 @@ Three base-selection invariants make this safe with Git:
   back to the local base and records the diagnostic.
 - **Re-provisioning never re-cuts.** An existing build branch is resumed at
   its current tip — never rewound, rebased, or re-created from a newer base.
-- **The first branch-cut SHA is the immutable review anchor.** Every
-  `implement.completed` commit range uses it as `base`, across review rounds
-  and sandbox resumption.
+  The first `workspace.provisioned` base remains immutable branch-cut
+  provenance; later `existing` facts are resume evidence, not new cuts.
+- **Each implementation completion records the branch's effective target
+  divergence.** `ab done` fetches the frozen target branch's current remote
+  tip into a build-scoped private ref and requires exactly one merge-base with
+  the implementation `HEAD`. That merge-base and head become the durable
+  `implement.completed {commits}` range, so target history already absorbed by
+  the build is excluded while every branch-unique commit remains reviewable.
+  Resolution is refreshed across review rounds and sandbox resumption. Fetch,
+  ref, missing-ancestor, malformed-output, or ambiguous-base failure rejects
+  the terminal before push, artifact deposit, or completion event; there is no
+  stale fallback. This interrogation never moves the build branch, rewrites
+  history, writes `FETCH_HEAD`, or updates operator/remote-tracking refs.
+- **Conditional verify keeps its own durable diff base.** Path applicability
+  still uses the initial branch-cut SHA until a completed reconcile promotes
+  that attempt's refreshed target. It does not consume the focused review base.
 
 ### 7.5 What the PR gets
 
@@ -504,9 +517,10 @@ not build failures.
 ### 8.6 Agents never touch the remote [D7]
 
 All `git push`, PR creation, and forge API calls happen kernel-side. `ab done`
-in `implement` pushes the branch and records `{base, head}`; `ab done` in
-`finalize` has the kernel open the PR using the deposited `pr-description`
-artifact. After a successful content-producing `finalize:*` step, the runner
+in `implement` first establishes the focused target merge-base, then pushes
+and records `{base, head}`; `ab done` in `finalize` has the kernel open the PR
+using the deposited `pr-description` artifact. After a successful
+content-producing `finalize:*` step, the runner
 requires a clean worktree and a descendant local `HEAD`, then regular-pushes
 the configured build branch and records that head before completing the step.
 A no-op step has no push. Agents only ever commit locally. Consequences: forge
@@ -522,8 +536,8 @@ convention.
 ```
 implementer:  ab context → (work, commit) → ab observe --kind refactor "…"
               → ab done --notes .ab/implement-notes.md
-                  ⇒ validates clean worktree, pushes branch,
-                    emits implement.completed {commits, artifact}
+                  ⇒ validates clean worktree and focused review boundary,
+                    pushes branch, emits implement.completed {commits, artifact}
 reviewer:     ab context   (gets spec, plan, {base,head}, prior findings)
               → ab verdict revise --findings f.json --notes review.md
                   ⇒ stamps finding ids, stores artifact,

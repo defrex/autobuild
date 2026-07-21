@@ -448,8 +448,30 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   expect(reduceBuild(events).prState).toBe('open')
 }, 30_000)
 
-test('a1. code review starts at the remote branch-cut SHA while local main is stale', async () => {
+test('a1. code review excludes multiple target commits absorbed after branch cut', async () => {
   const handlers = happyHandlers()
+  const happyImplement = handlers.implement
+  if (happyImplement === undefined) throw new Error('happy implement handler missing')
+  handlers.implement = async (cli) => {
+    // Model a long-running branch absorbing the target after dispatch without
+    // touching operator refs: fast-forward from the branch cut through the
+    // two newly landed target commits, then let the normal handler add work.
+    const incorporatedRef = 'refs/autobuild/test/e2e-incorporated-target'
+    await git(
+      [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        '--refmap=',
+        'origin',
+        `+refs/heads/main:${incorporatedRef}`,
+      ],
+      cli.ws,
+    )
+    await git(['merge', '--ff-only', incorporatedRef], cli.ws)
+    return happyImplement(cli)
+  }
+
   let codeReviewContext: string | undefined
   handlers['code-review'] = async (cli) => {
     await cli.run(['context'])
@@ -470,11 +492,11 @@ test('a1. code review starts at the remote branch-cut SHA while local main is st
     makeHarness({ handlers, tickets: [readyTicket('T-1')] }),
   )
   const staleLocalSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
-  const remoteSha = await h.advanceRemote(
+  const branchCut = await h.advanceRemote(
     { 'remote-only.txt': 'landed before dispatch\n' },
     'base: remote-only change',
   )
-  expect(remoteSha).not.toBe(staleLocalSha)
+  expect(branchCut).not.toBe(staleLocalSha)
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
 
   expect(await h.dispatcher.tick()).toEqual({
@@ -488,11 +510,23 @@ test('a1. code review starts at the remote branch-cut SHA while local main is st
     'spec.imported',
   ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
-  expect(provisioned.payload.base).toEqual({ source: 'remote', sha: remoteSha })
-  expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(remoteSha)
+  expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
+  expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(branchCut)
   expect(existsSync(join(provisioned.payload.ref, 'remote-only.txt'))).toBe(true)
-  // Provisioning uses a private destination ref; operator-owned local refs
-  // remain exactly as stale as they were before dispatch.
+
+  const firstTarget = await h.advanceRemote(
+    { 'target-one.txt': 'first target commit after branch cut\n' },
+    'target: first post-cut change',
+  )
+  const newestTarget = await h.advanceRemote(
+    { 'target-two.txt': 'second target commit after branch cut\n' },
+    'target: second post-cut change',
+  )
+  expect(firstTarget).not.toBe(branchCut)
+  expect(newestTarget).not.toBe(firstTarget)
+
+  // Provisioning and implementation fetch only private destinations;
+  // operator-owned local refs remain exactly as stale as before dispatch.
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
   expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(
     staleLocalSha,
@@ -507,29 +541,28 @@ test('a1. code review starts at the remote branch-cut SHA while local main is st
     commitRange?: { base: string; head: string }
   }
   const completed = ofType(await h.events(SLUG), 'implement.completed')[0]!
-  expect(completed.payload.commits.base).toBe(remoteSha)
+  expect(completed.payload.commits.base).toBe(newestTarget)
   expect(context.commitRange).toEqual(completed.payload.commits)
+  const focusedLog = await git(
+    [
+      'log',
+      '--reverse',
+      '--format=%s',
+      `${completed.payload.commits.base}..${completed.payload.commits.head}`,
+    ],
+    provisioned.payload.ref,
+  )
+  expect(focusedLog).toBe('implement: rate limiting r1')
+  expect(focusedLog).not.toContain('target: first post-cut change')
+  expect(focusedLog).not.toContain('target: second post-cut change')
   expect(
     await git(
-      [
-        'log',
-        '--reverse',
-        '--format=%s',
-        `${completed.payload.commits.base}..${completed.payload.commits.head}`,
-      ],
+      ['log', '--reverse', '--format=%s', `${branchCut}..${completed.payload.commits.head}`],
       provisioned.payload.ref,
     ),
-  ).toBe('implement: rate limiting r1')
-  expect(
-    await git(
-      [
-        'log',
-        '--format=%s',
-        `${completed.payload.commits.base}..${completed.payload.commits.head}`,
-      ],
-      provisioned.payload.ref,
-    ),
-  ).not.toContain('base: remote-only change')
+  ).toBe(
+    'target: first post-cut change\ntarget: second post-cut change\nimplement: rate limiting r1',
+  )
   // Running implementation/review must not mutate the operator-owned refs.
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
   expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(

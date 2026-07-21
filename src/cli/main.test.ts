@@ -21,6 +21,7 @@ import {
   BRANCH,
   BUILD,
   commitFile,
+  initBareOrigin,
   initWorkspaceRepo,
   makeDeps,
   makeEnv,
@@ -1102,6 +1103,7 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
     const workspace = join(tmp, 'ws-walk')
     await initWorkspaceRepo(workspace)
     const base = await runGit(['rev-parse', 'main'], workspace)
+    await initBareOrigin(workspace, join(tmp, 'walkthrough-origin.git'), BRANCH, base)
     await store.append(BUILD, {
       actor: KERNEL,
       type: 'workspace.provisioned',
@@ -1109,11 +1111,7 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
         provider: 'git-worktree',
         ref: workspace,
         branch: BRANCH,
-        base: {
-          source: 'local',
-          sha: base,
-          remoteError: 'walkthrough fixture has no remote',
-        },
+        base: { source: 'remote', sha: base },
       },
     })
     await store.append(BUILD, {
