@@ -6,10 +6,9 @@
 
 </div>
 
-Every build runs headless — planning, implementation, code review,
-verification — so ten tickets in flight cost the same attention as one. You
-groom tickets in; you review pull requests out. Agents do the work,
-deterministic code keeps them honest.
+Every build runs headless, so ten tickets in flight cost the same 
+attention as one. You groom tickets in, you review pull requests out. 
+Agents do the work, and deterministic code keeps them honest.
 
 ![The autobuild dispatch dashboard with four builds in flight and an
 observation harvest running](docs/assets/headline-wide.png)
