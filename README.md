@@ -57,7 +57,8 @@ ab init
 
 This writes `autobuild.toml` — with verify steps pre-filled from your
 `package.json` scripts — and vendors the `ab-*` agent skills. The default
-ticket source is a local file tracker in `.autobuild/tickets/`.
+ticket source is a local file tracker in `.autobuild/tickets/`. See the
+[configuration reference](docs/configuration.md) for the complete surface.
 
 Write a ticket that says what and why, with acceptance criteria and an
 out-of-scope list (the `/ab-spec` skill will interview you into one), then
@@ -165,6 +166,8 @@ pipe or a script sees exactly what you do.
 
 - [`docs/spec-standard.md`](docs/spec-standard.md) — what makes a ticket
   buildable: the standard every dispatched spec must meet.
+- [`docs/configuration.md`](docs/configuration.md) — the complete strict
+  `autobuild.toml` schema and examples.
 - [`autobuild.toml`](autobuild.toml) — this repository's own pipeline
   configuration, as a worked example of the config surface.
 - [`docs/architecture.md`](docs/architecture.md) — how the design maps to the
