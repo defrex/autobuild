@@ -1,6 +1,6 @@
 <div align="center">
 
-### Autobuild
+# Autobuild
 
 **Tickets in, PRs out. No babysitting required.**
 
@@ -14,7 +14,7 @@ deterministic code keeps them honest.
 ![The autobuild dispatch dashboard with four builds in flight and an
 observation harvest running](docs/assets/headline-wide.png)
 
-#### Groomed ticket in, reviewed PR out
+## Groomed ticket in, reviewed PR out
 
 Running several coding agents by hand doesn't scale well. Every session wants
 prompts, permissions, and attention, and your focus becomes the ceiling.
@@ -37,7 +37,7 @@ Every seam is an adapter: ticket sources (Linear or local files), agent
 runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
 build store all sit behind narrow interfaces you can swap or extend.
 
-#### Quickstart
+## Quickstart
 
 You need [Bun](https://bun.sh), `git`, and the
 [`gh` CLI](https://cli.github.com) authenticated (`gh auth login`). Agent
@@ -79,7 +79,7 @@ On a TTY you get the dashboard above. The build plans, implements, reviews
 its own code, verifies, and opens a PR. Review and merge it yourself — or
 press `m` on the build row and let it land when your checks pass.
 
-#### How it works
+## How it works
 
 Every build moves through the same fixed pipeline:
 
@@ -117,7 +117,7 @@ extension points, declared per-repo in `autobuild.toml`. For the seams and
 the reasoning behind them, see [`docs/architecture.md`](docs/architecture.md)
 and [`SPEC.md`](SPEC.md).
 
-##### Observation harvesting
+### Observation harvesting
 
 Builds notice things they shouldn't fix. An implementer that spots a latent
 bug, a worthwhile refactor, or a missing follow-up outside its spec records a
@@ -131,7 +131,7 @@ already filed. Proposals land in triage and never dispatch themselves: you
 groom and ready them like any ticket you wrote yourself. Agents propose;
 humans dispatch.
 
-#### Operating it
+## Operating it
 
 `ab dispatch` on a TTY is the whole cockpit. Every build in flight is a row —
 pipeline position, elapsed time, PR state — and a handful of keys cover the
@@ -156,7 +156,7 @@ dashboard is load-bearing — `ab builds`, `ab build status <slug>`, and
 `ab harvest status` project the same durable state as text or `--json`, so a
 pipe or a script sees exactly what you do.
 
-#### Learn more
+## Learn more
 
 - [`docs/spec-standard.md`](docs/spec-standard.md) — what makes a ticket
   buildable: the standard every dispatched spec must meet.
