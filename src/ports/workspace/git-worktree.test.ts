@@ -5,7 +5,14 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WorkspaceHandle } from '../types'
@@ -48,6 +55,36 @@ async function commitFile(
   await run(['git', 'add', file], worktree)
   await run(['git', ...GIT_ID, 'commit', '-q', '-m', message], worktree)
   return run(['git', 'rev-parse', 'HEAD'], worktree)
+}
+
+async function publishDetachedCommit(
+  repo: string,
+  worktree: string,
+  branch: string,
+): Promise<{ localSha: string; publishedSha: string }> {
+  const localSha = await run(
+    ['git', 'rev-parse', `refs/heads/${branch}`],
+    repo,
+  )
+  await run(['git', 'checkout', '-q', '--detach', 'HEAD'], worktree)
+  const publishedSha = await commitFile(
+    worktree,
+    'detached.ts',
+    'export const detached = true\n',
+    'detached completion',
+  )
+  await run(
+    ['git', 'push', '-q', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+    worktree,
+  )
+  return { localSha, publishedSha }
+}
+
+async function registrationCount(repo: string, path: string): Promise<number> {
+  const list = await run(['git', 'worktree', 'list', '--porcelain'], repo)
+  return list
+    .split('\n\n')
+    .filter((block) => block.split('\n').includes(`worktree ${path}`)).length
 }
 
 describeWorkspaceProviderContract('GitWorktreeProvider', async () => {
@@ -213,6 +250,263 @@ describe('GitWorktreeProvider', () => {
       source: 'existing',
       sha: first.base.sha,
     })
+  })
+
+  test('reprovision reattaches a registered detached worktree at its published head', async () => {
+    const branch = 'ab/detached-registered'
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { localSha, publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+    await writeFile(join(handle.path, 'recovery-wip.txt'), 'preserve me\n')
+
+    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(
+      localSha,
+    )
+    expect(
+      await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo),
+    ).toBe(publishedSha)
+    expect(await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], handle.path)).toBe(
+      'HEAD',
+    )
+
+    const calls: string[][] = []
+    const restarted = new GitWorktreeProvider({
+      root,
+      exec: async (cmd, opts) => {
+        calls.push([...cmd])
+        return spawnExec(cmd, opts)
+      },
+    })
+    const recovered = await restarted.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+    })
+
+    expect(recovered.path).toBe(handle.path)
+    expect(recovered.base).toEqual({ source: 'existing', sha: publishedSha })
+    expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], recovered.path)).toBe(
+      branch,
+    )
+    expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(
+      publishedSha,
+    )
+    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(
+      publishedSha,
+    )
+    expect(await readFile(join(recovered.path, 'recovery-wip.txt'), 'utf8')).toBe(
+      'preserve me\n',
+    )
+    expect(await registrationCount(repo, handle.path)).toBe(1)
+    expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
+    expect(calls.some((cmd) => cmd.includes('push'))).toBe(false)
+  })
+
+  test('reprovision rematerializes a removed detached workspace at its published head', async () => {
+    const branch = 'ab/detached-removed'
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { localSha, publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+    await rm(handle.path, { recursive: true, force: true })
+
+    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(
+      localSha,
+    )
+
+    const calls: string[][] = []
+    const restarted = new GitWorktreeProvider({
+      root,
+      exec: async (cmd, opts) => {
+        calls.push([...cmd])
+        return spawnExec(cmd, opts)
+      },
+    })
+    const recovered = await restarted.provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+    })
+
+    expect(recovered.path).toBe(handle.path)
+    expect(recovered.base).toEqual({ source: 'existing', sha: publishedSha })
+    expect(await run(['git', 'symbolic-ref', '--short', 'HEAD'], recovered.path)).toBe(
+      branch,
+    )
+    expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(
+      publishedSha,
+    )
+    expect(await run(['git', 'rev-parse', `refs/heads/${branch}`], repo)).toBe(
+      publishedSha,
+    )
+    expect(await registrationCount(repo, handle.path)).toBe(1)
+    expect(calls.some((cmd) => cmd.includes('fetch'))).toBe(false)
+    expect(calls.some((cmd) => cmd.includes('push'))).toBe(false)
+  })
+
+  test('published recovery never rolls back a newer local build branch', async () => {
+    const branch = 'ab/local-ahead'
+    const branchRef = `refs/heads/${branch}`
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { localSha, publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+    const newerSha = await commitFile(
+      handle.path,
+      'newer.ts',
+      'export const newer = true\n',
+      'newer local completion',
+    )
+    await run(['git', 'update-ref', branchRef, newerSha, localSha], repo)
+    await rm(handle.path, { recursive: true, force: true })
+
+    const recovered = await new GitWorktreeProvider({ root }).provision({
+      repo,
+      baseBranch: 'main',
+      branch,
+    })
+
+    expect(publishedSha).not.toBe(newerSha)
+    expect(
+      await run(['git', 'merge-base', '--is-ancestor', publishedSha, newerSha], repo),
+    ).toBe('')
+    expect(recovered.base).toEqual({ source: 'existing', sha: newerSha })
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(newerSha)
+    expect(await run(['git', 'rev-parse', 'HEAD'], recovered.path)).toBe(newerSha)
+    expect(
+      await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo),
+    ).toBe(publishedSha)
+  })
+
+  test('published recovery rejects divergent local and remote-tracking tips without rewriting either', async () => {
+    const branch = 'ab/divergent-recovery'
+    const branchRef = `refs/heads/${branch}`
+    const publishedRef = `refs/remotes/origin/${branch}`
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+
+    await run(['git', 'checkout', '-q', branch], handle.path)
+    const divergentSha = await commitFile(
+      handle.path,
+      'divergent.ts',
+      'export const divergent = true\n',
+      'divergent local work',
+    )
+    await provider.release(handle)
+
+    const error = await new GitWorktreeProvider({ root })
+      .provision({ repo, baseBranch: 'main', branch })
+      .then(() => null)
+      .catch((failure: unknown) => failure as Error)
+
+    expect(error?.message).toContain('have diverged')
+    expect(error?.message).toContain(branchRef)
+    expect(error?.message).toContain(publishedRef)
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(divergentSha)
+    expect(await run(['git', 'rev-parse', publishedRef], repo)).toBe(publishedSha)
+    expect(existsSync(handle.path)).toBe(false)
+  })
+
+  test('registered detached recovery refuses an unpublished detached commit', async () => {
+    const branch = 'ab/unpublished-detached'
+    const branchRef = `refs/heads/${branch}`
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+    const unpublishedSha = await commitFile(
+      handle.path,
+      'unpublished.ts',
+      'export const unpublished = true\n',
+      'unpublished detached work',
+    )
+
+    const error = await new GitWorktreeProvider({ root })
+      .provision({ repo, baseBranch: 'main', branch })
+      .then(() => null)
+      .catch((failure: unknown) => failure as Error)
+
+    expect(error?.message).toContain('does not match durable')
+    expect(error?.message).toContain('refusing to discard either commit')
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(publishedSha)
+    expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(
+      unpublishedSha,
+    )
+    expect(await run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], handle.path)).toBe(
+      'HEAD',
+    )
+  })
+
+  test('published recovery uses an expected old ref and preserves a concurrent advance', async () => {
+    const branch = 'ab/concurrent-recovery'
+    const branchRef = `refs/heads/${branch}`
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    const { localSha, publishedSha } = await publishDetachedCommit(
+      repo,
+      handle.path,
+      branch,
+    )
+    const concurrentSha = await commitFile(
+      handle.path,
+      'concurrent.ts',
+      'export const concurrent = true\n',
+      'concurrent local advance',
+    )
+    await run(
+      ['git', 'update-ref', 'refs/autobuild/tests/concurrent', concurrentSha],
+      repo,
+    )
+    await run(['git', 'checkout', '-q', '--detach', publishedSha], handle.path)
+    await provider.release(handle)
+
+    let raced = false
+    let attemptedUpdate: string[] | undefined
+    const raceExec: Exec = async (cmd, opts) => {
+      const updateRef = cmd.indexOf('update-ref')
+      if (!raced && updateRef >= 0 && cmd[updateRef + 1] === branchRef) {
+        raced = true
+        attemptedUpdate = [...cmd]
+        const movement = await spawnExec(
+          ['git', '-C', repo, 'update-ref', branchRef, concurrentSha, localSha],
+          {},
+        )
+        if (movement.exitCode !== 0) {
+          throw new Error(`failed to stage ref race: ${movement.stderr}`)
+        }
+      }
+      return spawnExec(cmd, opts)
+    }
+
+    const error = await new GitWorktreeProvider({ root, exec: raceExec })
+      .provision({ repo, baseBranch: 'main', branch })
+      .then(() => null)
+      .catch((failure: unknown) => failure as Error)
+
+    expect(raced).toBe(true)
+    expect(attemptedUpdate?.slice(-3)).toEqual([
+      branchRef,
+      publishedSha,
+      localSha,
+    ])
+    expect(error?.message).toMatch(/cannot lock ref|expected/i)
+    expect(await run(['git', 'rev-parse', branchRef], repo)).toBe(concurrentSha)
+    expect(
+      await run(['git', 'rev-parse', `refs/remotes/origin/${branch}`], repo),
+    ).toBe(publishedSha)
+    expect(existsSync(handle.path)).toBe(false)
   })
 
   test('release/re-provision reuses the branch tip without fetching a moved origin (§15.6-C)', async () => {
