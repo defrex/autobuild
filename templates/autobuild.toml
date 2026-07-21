@@ -57,7 +57,9 @@ steps = [
 #always = true
 
 # Optional post-steps; failure-tolerant — a failed step files an observation,
-# it never kills a green build (§5).
+# it never kills a green build (§5). Content-producing steps select and commit
+# files locally, finish with a clean worktree, and let the runner regular-push
+# the descendant HEAD. A no-op creates and pushes no commit; agents never push.
 [finalize]
 steps = []
 

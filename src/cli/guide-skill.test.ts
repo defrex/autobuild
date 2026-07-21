@@ -116,6 +116,22 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
   })
 })
 
+describe('ab-guide — finalize publication boundary', () => {
+  test('keeps local commits, clean-worktree validation, and regular push kernel-owned', () => {
+    const finalize = sectionFor('finalize')
+    expect(finalize).toBeDefined()
+    for (const contract of [
+      'select and commit its files\nlocally and leave a clean worktree',
+      'regular, non-force push through the Forge port',
+      'the agent never pushes',
+      'An unchanged `HEAD` creates and pushes no commit',
+      'file an observation while the green build continues',
+    ]) {
+      expect(finalize).toContain(contract)
+    }
+  })
+})
+
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
   test('every skill in the distribution has a row in the skills rundown', async () => {
     const skills = await readDistSkills(DIST_ROOT)
