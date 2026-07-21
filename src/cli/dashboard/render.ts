@@ -335,10 +335,15 @@ function renderBuild(
   lines.push(...packLines(build.steps.map((s) => renderStep(s, color, now)), width, '  '))
   // Blockers wrap too — "every unresolved blocker message is displayed" is not
   // satisfied by its first 80 characters, and a policy escalation's question
-  // is routinely longer than that. Wrap the words, then paint each line, so no
-  // escape is ever split across a wrap.
+  // is routinely longer than that. Escape external text before tokenization so
+  // the visible code-point escapes participate in width accounting, then paint
+  // each line so no ANSI escape is ever split across a wrap.
   for (const blocker of build.blockers) {
-    const [first, ...rest] = packLines(blocker.split(/\s+/), width - 4, '')
+    const [first, ...rest] = packLines(
+      displayText(blocker).split(/\s+/),
+      width - 4,
+      '',
+    )
     if (first === undefined) continue
     lines.push(truncate(paint(`  ! ${first}`, 'red', color), width))
     for (const line of rest) lines.push(truncate(paint(`    ${line}`, 'red', color), width))
@@ -378,7 +383,11 @@ function renderHarvest(
     ),
   )
   if (harvest.detail !== undefined) {
-    const wrapped = packLines(harvest.detail.split(/\s+/), width - 4, '')
+    const wrapped = packLines(
+      displayText(harvest.detail).split(/\s+/),
+      width - 4,
+      '',
+    )
     for (const [index, line] of wrapped.entries()) {
       lines.push(
         truncate(

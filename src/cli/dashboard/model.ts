@@ -820,11 +820,11 @@ function projectHarvestRun(
     run.escalation !== undefined
       ? run.escalation.reason
       : exhaustion !== undefined
-        ? `recovery exhausted — human attention required; stopped at ${exhaustion.step}${
+        ? `recovery exhausted - human attention required; stopped at ${exhaustion.step}${
             exhaustion.round !== undefined ? ` r${exhaustion.round}` : ''
           }; pending ${exhaustion.releasedObservations.length}`
         : run.failure !== undefined
-          ? `stopped at ${stoppedAt} — automatic recovery ${recoveryAttempts}/${recoveryLimit}; ${run.failure.error}`
+          ? `stopped at ${stoppedAt} - automatic recovery ${recoveryAttempts}/${recoveryLimit}; ${run.failure.error}`
           : recoveryAttempts > 0
             ? `automatic recovery ${recoveryAttempts}/${recoveryLimit} resumed`
             : undefined

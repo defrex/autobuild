@@ -3,6 +3,7 @@
  * the operator can SEE is assertable here without a terminal.
  */
 import { describe, expect, test } from 'bun:test'
+import { renderDashboardFrameImage } from './frame-image'
 import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
 import type {
   DashboardBuild,
@@ -571,6 +572,40 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     const statusLines = lines.filter((line) => stripAnsi(line).endsWith('PAUSED'))
     expect(statusLines).toHaveLength(2)
     expect(statusLines.every((line) => line.includes('\x1b[33mPAUSED\x1b[0m'))).toBe(true)
+  })
+
+  test('agent-authored blocker and harvest failure text stays visible in an ASCII PNG frame', () => {
+    const blockerQuestion = 'Should the “café” policy remain enabled?'
+    const failureError = 'agent failed in naïve 💥 mode'
+    const failureDetail =
+      `stopped at synthesize r1 - automatic recovery 0/2; ${failureError}`
+    const dashboard = {
+      ...model([
+        build({
+          status: 'blocked',
+          blockers: [blockerQuestion],
+        }),
+      ]),
+      harvest: harvest({ status: 'failed', detail: failureDetail }),
+    }
+
+    const lines = rd(dashboard, { color: true, width: 120 })
+    const plain = lines.map(stripAnsi)
+
+    expect(dashboard.builds[0]!.blockers[0]).toBe(blockerQuestion)
+    expect(dashboard.harvest?.detail).toBe(failureDetail)
+    expect(plain.join('\n')).toContain(
+      'Should the \\u{201c}caf\\u{e9}\\u{201d} policy remain enabled?',
+    )
+    expect(plain.join('\n')).toContain(
+      'agent failed in na\\u{ef}ve \\u{1f4a5} mode',
+    )
+    expect(plain.every((line) => /^[\x20-\x7e]*$/.test(line))).toBe(true)
+
+    const image = renderDashboardFrameImage(lines, { columns: 120 })
+    expect([...image.png.slice(0, 8)]).toEqual([
+      137, 80, 78, 71, 13, 10, 26, 10,
+    ])
   })
 })
 

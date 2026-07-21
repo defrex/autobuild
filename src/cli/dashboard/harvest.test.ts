@@ -65,7 +65,7 @@ describe('dashboard harvest row', () => {
       status: 'failed',
       action: 'resume',
       detail:
-        'stopped at synthesize r1 — automatic recovery 0/2; no-terminal',
+        'stopped at synthesize r1 - automatic recovery 0/2; no-terminal',
     })
     expect(byLabel.get('scan')?.state).toBe('done')
     expect(byLabel.get('synthesize')).toMatchObject({
@@ -212,7 +212,7 @@ describe('dashboard harvest row', () => {
       status: 'failed',
       action: 'acknowledge',
       detail:
-        'recovery exhausted — human attention required; stopped at file; pending 1',
+        'recovery exhausted - human attention required; stopped at file; pending 1',
     })
     const rendered = stripAnsi(
       renderDashboard(
@@ -230,7 +230,7 @@ describe('dashboard harvest row', () => {
       ).join('\n'),
     )
     expect(rendered).toContain('FAILED')
-    expect(rendered).toContain('recovery exhausted — human attention required')
+    expect(rendered).toContain('recovery exhausted - human attention required')
 
     await store.appendRepo('/repo', {
       actor: humanActor('operator'),
