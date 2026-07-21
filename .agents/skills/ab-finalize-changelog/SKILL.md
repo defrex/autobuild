@@ -53,15 +53,18 @@ Before editing tracked files:
 - With zero markers, require all PR/title inputs above. Normalize the title to
   one line, construct exactly the format shown, and insert it as the first
   nonblank content beneath `## Unreleased`, before every existing entry. Keep
-  the heading's blank separator and do not reorder or rewrite existing lines.
+  one blank separator below the heading (introduce it when the empty scaffold
+  has none), and do not reorder or rewrite existing lines.
 
 After insertion, prove before committing that:
 
 - this PR marker occurs exactly once;
 - the new entry is the first nonblank content in the Unreleased section;
 - `git diff --check -- CHANGELOG.md` passes; and
-- the unstaged diff has exactly one added line, the new entry, with no removed
-  or modified lines and no changed path besides `CHANGELOG.md`.
+- the unstaged diff has exactly one added entry line, with no removed or
+  modified existing lines and no changed path besides `CHANGELOG.md`. The only
+  other permitted addition is the heading's blank separator when the section
+  was the empty scaffold.
 
 If any proof fails, restore only the uncommitted `CHANGELOG.md` change and use
 the semantic-failure path below. Otherwise stage only that file, inspect the
