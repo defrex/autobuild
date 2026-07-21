@@ -62,6 +62,7 @@ import type {
   AgentRunner,
   AgentSessionHandle,
   AgentTurnResult,
+  Forge,
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore, Clock } from '../store/types'
@@ -116,8 +117,10 @@ export interface BuildRunnerDeps {
   workspacePath: string
   branch: string
   slug: string
-  /** Shell seam for deterministic checks (§8.2). */
+  /** Shell seam for deterministic checks and finalize Git guards (§8.2, D7). */
   exec: Exec
+  /** Remote publication stays behind the kernel-owned Forge port (D7). */
+  forge: Forge
   server?: ServerLifecycle
   ids: IdSource
   clock: Clock
@@ -177,6 +180,31 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Latest event-checkpointed branch head that kernel plumbing published. */
+export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
+  let head: string | undefined
+  for (const event of events) {
+    if (event.type === 'implement.completed') {
+      head = event.payload.commits.head
+    } else if (event.type === 'reconcile.completed') {
+      head = event.payload.mergeCommit
+    } else if (
+      event.type === 'finalize.step-completed' &&
+      event.payload.ok &&
+      event.payload.headSha !== undefined
+    ) {
+      head = event.payload.headSha
+    }
+  }
+  if (head === undefined) {
+    throw new Error(
+      'finalize publication requires a prior implement.completed, reconcile.completed, ' +
+        'or successful finalize publication head, but this build has none',
+    )
+  }
+  return head
 }
 
 /**
@@ -395,7 +423,7 @@ export class BuildRunner {
         await this.skipVerify(decision)
         return decision
       case 'run-finalize-step':
-        await this.runFinalizeStep(decision)
+        await this.runFinalizeStep(decision, events)
         return decision
     }
   }
@@ -782,15 +810,17 @@ export class BuildRunner {
   }
 
   /**
-   * Failure-tolerant post-step (§5): the outcome is "did the turn complete
-   * without throwing or reporting a structured failure". The runner records
-   * `finalize.step-completed`
-   * (and, on failure, the follow-up observation) on the session's behalf
-   * with the session's agent actor — those event types only admit agents
-   * (§15.3); pragmatism, documented. Never fails the build.
+   * Failure-tolerant post-step (§5). Agents may select and commit repository
+   * content locally, but only this kernel boundary may publish it (D7). A
+   * clean descendant HEAD is regular-pushed and checkpointed before the step
+   * completion fact; Git/Forge failures become the ordinary failed outcome
+   * plus an observation and never route a green build backward.
    */
-  private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
-    const { store, slug, ids, workspacePath } = this.deps
+  private async runFinalizeStep(
+    decision: RunFinalizeStepDecision,
+    events: AbEvent[],
+  ): Promise<void> {
+    const { store, slug, ids, workspacePath, forge } = this.deps
     const { step } = decision
     const session = ids('s')
     const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
@@ -808,22 +838,34 @@ export class BuildRunner {
       },
     } satisfies EventWrite<'session.started'>)
 
-    let handle: AgentSessionHandle | undefined
-    let ok = true
+    let durableHead: string | undefined
+    let failureNote: string | undefined
     try {
-      const turn = await runner.start({
-        skill: installedSkillName(step), // installed names carry `ab-` (§4)
-        invocation: slug,
-        buildSlug: slug,
-        workspacePath,
-        ...(model !== undefined ? { model } : {}),
-        ...(extensions !== undefined ? { extensions } : {}),
-        env: this.sessionEnvFor('finalize@1', session),
-      })
-      handle = turn.session
-      if (turn.result.kind === 'failed') ok = false
-    } catch {
-      ok = false
+      await this.requireFinalizeWorktreeClean('before the post-step starts')
+      durableHead = selectPublishedBranchHead(events)
+    } catch (error) {
+      failureNote = `finalize publication preflight failed: ${errorMessage(error)}`
+    }
+
+    let handle: AgentSessionHandle | undefined
+    if (failureNote === undefined) {
+      try {
+        const turn = await runner.start({
+          skill: installedSkillName(step), // installed names carry `ab-` (§4)
+          invocation: slug,
+          buildSlug: slug,
+          workspacePath,
+          ...(model !== undefined ? { model } : {}),
+          ...(extensions !== undefined ? { extensions } : {}),
+          env: this.sessionEnvFor('finalize@1', session),
+        })
+        handle = turn.session
+        if (turn.result.kind === 'failed') {
+          failureNote = `agent turn failed: ${turn.result.failure.message}`
+        }
+      } catch (error) {
+        failureNote = `agent session failed: ${errorMessage(error)}`
+      }
     }
 
     if (handle !== undefined) {
@@ -841,25 +883,108 @@ export class BuildRunner {
       }
     }
 
+    let pushedHead: string | undefined
+    if (failureNote === undefined && durableHead !== undefined) {
+      try {
+        await this.requireFinalizeWorktreeClean('after the post-step finishes')
+        const head = await this.resolveFinalizeHead()
+        if (head !== durableHead) {
+          await this.requirePublishedHeadAncestor(durableHead, head)
+          await forge.pushBranch(workspacePath, this.deps.branch)
+          pushedHead = head
+        }
+      } catch (error) {
+        failureNote = `finalize publication failed: ${errorMessage(error)}`
+      }
+    }
+
     const actor = agentActor(step, session)
+    if (failureNote === undefined) {
+      await store.append(slug, {
+        actor,
+        type: 'finalize.step-completed',
+        payload: {
+          step,
+          ok: true,
+          ...(pushedHead !== undefined ? { headSha: pushedHead } : {}),
+        },
+      } satisfies EventWrite<'finalize.step-completed'>)
+      return
+    }
+
     await store.append(slug, {
       actor,
       type: 'finalize.step-completed',
-      payload: { step, ok },
+      payload: { step, ok: false, note: failureNote },
     } satisfies EventWrite<'finalize.step-completed'>)
-    if (!ok) {
-      // §5: a failed post-step files an observation; it never kills a green
-      // build.
-      await store.append(slug, {
-        actor,
-        type: 'observation.recorded',
-        payload: {
-          id: ids('o'),
-          kind: 'followup',
-          summary: `finalize step "${step}" failed — needs manual follow-up`,
-        },
-      } satisfies EventWrite<'observation.recorded'>)
+    // §5: a failed post-step files an observation; it never kills a green
+    // build. Store-write failures intentionally propagate: no durable fact is
+    // claimed when its append did not land.
+    await store.append(slug, {
+      actor,
+      type: 'observation.recorded',
+      payload: {
+        id: ids('o'),
+        kind: 'followup',
+        summary:
+          `finalize step "${step}" failed — needs manual follow-up: ` + failureNote,
+      },
+    } satisfies EventWrite<'observation.recorded'>)
+  }
+
+  private async requireFinalizeWorktreeClean(when: string): Promise<void> {
+    const args = ['git', 'status', '--porcelain']
+    const result = await this.deps.exec(args, { cwd: this.deps.workspacePath })
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `${args.join(' ')} exited ${result.exitCode}: ` +
+          `${result.stderr.trim() || result.stdout.trim() || '(no output)'}`,
+      )
     }
+    if (result.stdout.length > 0) {
+      throw new Error(
+        `workspace must be clean ${when}; commit intended files and remove ` +
+          `temporary files before finishing:\n${result.stdout.trimEnd()}`,
+      )
+    }
+  }
+
+  private async resolveFinalizeHead(): Promise<string> {
+    const args = ['git', 'rev-parse', 'HEAD']
+    const result = await this.deps.exec(args, { cwd: this.deps.workspacePath })
+    const head = result.stdout.trim()
+    if (result.exitCode !== 0 || head.length === 0 || /\s/.test(head)) {
+      throw new Error(
+        `${args.join(' ')} did not resolve one commit: ` +
+          `${result.stderr.trim() || head || '(no output)'}`,
+      )
+    }
+    return head
+  }
+
+  private async requirePublishedHeadAncestor(
+    publishedHead: string,
+    currentHead: string,
+  ): Promise<void> {
+    const args = [
+      'git',
+      'merge-base',
+      '--is-ancestor',
+      publishedHead,
+      currentHead,
+    ]
+    const result = await this.deps.exec(args, { cwd: this.deps.workspacePath })
+    if (result.exitCode === 0) return
+    if (result.exitCode === 1) {
+      throw new Error(
+        `finalize step rewrote branch history: published head ${publishedHead} ` +
+          `is not an ancestor of current HEAD ${currentHead}`,
+      )
+    }
+    throw new Error(
+      `${args.join(' ')} exited ${result.exitCode}: ` +
+        `${result.stderr.trim() || result.stdout.trim() || '(no output)'}`,
+    )
   }
 
   // ── The session bracket (§15.3) ────────────────────────────────────────────

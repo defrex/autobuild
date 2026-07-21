@@ -262,6 +262,76 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(reduced.outcome).toBe('merged')
 }, 30_000)
 
+const FINALIZE_CONTENT_TOML = `${CONFIG_TOML}
+
+[finalize]
+steps = ["repository-content", "no-op"]
+`
+
+test('content-producing finalize post-steps extend the open PR branch through kernel plumbing', async () => {
+  const h = await track(
+    makeHarness({
+      configToml: FINALIZE_CONTENT_TOML,
+      tickets: [readyTicket('T-1')],
+      handlers: {
+        ...happyHandlers(),
+        'repository-content': async (cli) => {
+          await cli.run(['context'])
+          await writeFileIn(cli.ws, 'post-step.txt', 'generic finalize content\n')
+          await commitAll(cli.ws, 'finalize: add repository content')
+        },
+        'no-op': async (cli) => {
+          await cli.run(['context'])
+        },
+      },
+    }),
+  )
+
+  await h.dispatcher.tick()
+  await h.runLatest()
+
+  const events = await h.events(SLUG)
+  const workspace = ofType(events, 'workspace.provisioned')[0]!.payload.ref
+  const implementHead = ofType(events, 'implement.completed')[0]!.payload.commits.head
+  const steps = ofType(events, 'finalize.step-completed')
+  expect(steps.map((event) => event.payload)).toEqual([
+    {
+      step: 'repository-content',
+      ok: true,
+      headSha: expect.any(String),
+    },
+    { step: 'no-op', ok: true },
+  ])
+  const publication = steps[0]!
+  if (!publication.payload.ok || publication.payload.headSha === undefined) {
+    throw new Error('repository-content did not publish a finalize head')
+  }
+  const finalizeHead = publication.payload.headSha
+
+  // Exactly one post-step commit extends (never rewrites) the implementation.
+  await git(['merge-base', '--is-ancestor', implementHead, finalizeHead], workspace)
+  expect(await git(['rev-list', '--count', `${implementHead}..${finalizeHead}`], workspace)).toBe('1')
+  expect(await git(['log', '--format=%s'], workspace)).toBe(
+    'finalize: add repository content\nimplement: rate limiting r1\ninitial',
+  )
+  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(finalizeHead)
+
+  // Implement and finalize publication are both kernel-owned regular pushes;
+  // the no-op adds neither a commit nor a third push. The existing PR stays open.
+  expect(h.forge.pushes).toEqual([
+    { workspacePath: workspace, branch: BRANCH },
+    { workspacePath: workspace, branch: BRANCH },
+  ])
+  expect(h.forge.opened).toHaveLength(1)
+  expect(reduceBuild(events).pr).toEqual({
+    number: 1,
+    url: 'https://fake.forge/pr/1',
+    headSha: 'sha-1',
+  })
+  expect(ofType(events, 'finalize.completed')[0]!.seq).toBeLessThan(steps[0]!.seq)
+  expect(h.cliErrors).toEqual([])
+}, 30_000)
+
 const PLAN_SELECTION_TOML = `
 [project]
 baseBranch = "main"

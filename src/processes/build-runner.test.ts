@@ -16,6 +16,7 @@ import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import type { Decision } from '../kernel/engine'
 import type { Finding } from '../ontology'
+import { FakeForge } from '../ports/forge/fake'
 import {
   ScriptedAgentRunner,
   defaultTurnResult,
@@ -33,6 +34,7 @@ import {
   BuildRunner,
   LeaseHeldError,
   parseNulChangedPaths,
+  selectPublishedBranchHead,
   selectVerifyDiffBase,
   type ServerLifecycle,
 } from './build-runner'
@@ -259,6 +261,8 @@ type VerifyDiffResult =
   | { stdout: string }
   | { error: string }
 
+type FinalizeGitResult<T> = T | { error: string }
+
 interface HarnessOptions {
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   noServer?: boolean
@@ -270,6 +274,13 @@ interface HarnessOptions {
   /** Results for successive conditional-verify Git diffs. The final entry
    * repeats; omitted defaults to an empty changed-path set. */
   verifyDiffs?: VerifyDiffResult[]
+  /** Porcelain output before/after finalize turns; empty means clean. */
+  finalizeStatuses?: Array<FinalizeGitResult<string>>
+  /** `git rev-parse HEAD` results after successful finalize turns. */
+  finalizeHeads?: Array<FinalizeGitResult<string>>
+  /** Successive ancestry checks for changed finalize heads. */
+  finalizeAncestors?: Array<FinalizeGitResult<boolean>>
+  forge?: FakeForge
   sessionEnv?: Record<string, string>
   runnerOpts?: { maxPhaseAttempts?: number; heartbeatMs?: number; leaseTtlMs?: number }
   clock?: Clock
@@ -285,6 +296,7 @@ interface Harness {
   store: MemoryBuildStore
   runner: ScriptedAgentRunner
   br: BuildRunner
+  forge: FakeForge
   ops: string[]
   execCalls: Array<{ cmd: string[]; cwd: string | undefined }>
   workspacePath: string
@@ -346,6 +358,12 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     }
   const verifyDiffs = options.verifyDiffs ?? [{ paths: [] }]
   let verifyDiffIndex = 0
+  const finalizeStatuses = options.finalizeStatuses ?? ['']
+  const finalizeHeads = options.finalizeHeads ?? ['sha-head-1']
+  const finalizeAncestors = options.finalizeAncestors ?? [true]
+  let finalizeStatusIndex = 0
+  let finalizeHeadIndex = 0
+  let finalizeAncestorIndex = 0
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
@@ -367,6 +385,37 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
         stderr: '',
         exitCode: 0,
       }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'status') {
+      const status =
+        finalizeStatuses[Math.min(finalizeStatusIndex, finalizeStatuses.length - 1)] ?? {
+          error: 'no finalize status result configured',
+        }
+      finalizeStatusIndex += 1
+      return typeof status === 'string'
+        ? { stdout: status, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: status.error, exitCode: 128 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'rev-parse' && cmd[2] === 'HEAD') {
+      const head =
+        finalizeHeads[Math.min(finalizeHeadIndex, finalizeHeads.length - 1)] ?? {
+          error: 'no finalize head result configured',
+        }
+      finalizeHeadIndex += 1
+      return typeof head === 'string'
+        ? { stdout: `${head}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: head.error, exitCode: 128 }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'merge-base') {
+      const ancestor =
+        finalizeAncestors[
+          Math.min(finalizeAncestorIndex, finalizeAncestors.length - 1)
+        ] ?? { error: 'no finalize ancestry result configured' }
+      finalizeAncestorIndex += 1
+      if (typeof ancestor === 'boolean') {
+        return { stdout: '', stderr: '', exitCode: ancestor ? 0 : 1 }
+      }
+      return { stdout: '', stderr: ancestor.error, exitCode: 128 }
     }
     if (cmd[0] === 'git' && cmd[1] === 'fetch') {
       refreshIndex += 1
@@ -396,6 +445,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   }
 
   const server = options.noServer === true ? undefined : new FakeServer(ops)
+  const forge = options.forge ?? new FakeForge()
   const br = new BuildRunner({
     store,
     config: options.configToml !== undefined ? parseConfig(options.configToml) : config,
@@ -412,6 +462,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     branch: BRANCH,
     slug: SLUG,
     exec,
+    forge,
     ...(server !== undefined ? { server } : {}),
     ids: sequentialIds(),
     clock,
@@ -420,7 +471,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     ...(options.sessionEnv !== undefined ? { sessionEnv: options.sessionEnv } : {}),
     ...(options.runnerOpts !== undefined ? { opts: options.runnerOpts } : {}),
   })
-  return { store, runner, br, ops, execCalls, workspacePath: handle.path }
+  return { store, runner, br, forge, ops, execCalls, workspacePath: handle.path }
 }
 
 // ── Seed helpers (dead-sandbox logs, engine-state shortcuts) ─────────────────
@@ -466,7 +517,7 @@ async function seedCodeApproved(store: BuildStore): Promise<void> {
   })
 }
 
-async function seedFinalized(store: BuildStore): Promise<void> {
+async function seedReadyForFinalizeStep(store: BuildStore): Promise<void> {
   await seedPlanApproved(store)
   await seedCodeApproved(store)
   for (const step of ['types', 'unit', 'e2e']) {
@@ -483,6 +534,10 @@ async function seedFinalized(store: BuildStore): Promise<void> {
       pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
     },
   })
+}
+
+async function seedFinalized(store: BuildStore): Promise<void> {
+  await seedReadyForFinalizeStep(store)
   await store.append(SLUG, {
     actor: agentActor('release-notes', 's_seed'),
     type: 'finalize.step-completed',
@@ -649,11 +704,9 @@ describe('setup command (§16.1)', () => {
       cwd: h.workspacePath,
     })
     // Checks still ran, after setup.
-    expect(h.execCalls.map((c) => c.cmd[2])).toEqual([
-      'bun install',
-      'bun tsc --noEmit',
-      'bun test',
-    ])
+    expect(
+      h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd[2]),
+    ).toEqual(['bun install', 'bun tsc --noEmit', 'bun test'])
   })
 
   test('a re-attach re-runs setup (§15.6-C: the sandbox-rehydrate step)', async () => {
@@ -1011,7 +1064,9 @@ describe('happy path (§15.6)', () => {
   test('deterministic checks run through exec sh -c in the workspace (§8.2), commands resolved from [commands]', async () => {
     const h = await makeHarness()
     await h.br.run()
-    expect(h.execCalls.map((c) => c.cmd)).toEqual([
+    expect(
+      h.execCalls.filter((c) => c.cmd[0] === 'sh').map((c) => c.cmd),
+    ).toEqual([
       ['sh', '-c', 'bun tsc --noEmit'],
       ['sh', '-c', 'bun test'],
     ])
@@ -1111,11 +1166,143 @@ describe('happy path (§15.6)', () => {
     expect(ofType(events, 'finalize.step-completed').at(-1)?.payload).toEqual({
       step: 'release-notes',
       ok: false,
+      note: 'agent turn failed: 403 billing disabled',
     })
     expect(ofType(events, 'session.ended')).toHaveLength(1)
     expect(ofType(events, 'observation.recorded').at(-1)?.payload.summary).toContain(
       'release-notes',
     )
+  })
+})
+
+// ── Finalize post-step publication (§5, D7) ──────────────────────────────────
+
+describe('finalize post-step publication', () => {
+  const FINALIZE_HEAD = 'f'.repeat(40)
+
+  async function readyHarness(options: HarnessOptions = {}): Promise<Harness> {
+    const h = await makeHarness(options)
+    await seedReadyForFinalizeStep(h.store)
+    return h
+  }
+
+  async function expectFailureTolerance(
+    h: Harness,
+    note: string,
+  ): Promise<void> {
+    const events = await h.store.getEvents(SLUG)
+    const completed = ofType(events, 'finalize.step-completed').at(-1)
+    expect(completed?.payload).toMatchObject({
+      step: 'release-notes',
+      ok: false,
+      note: expect.stringContaining(note),
+    })
+    expect(ofType(events, 'observation.recorded').at(-1)?.payload.summary).toContain(
+      note,
+    )
+    expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+  }
+
+  test('regular-pushes a clean descendant to the immutable branch and checkpoints it', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ''],
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+    })
+
+    expect((await h.br.step()).kind).toBe('run-finalize-step')
+    expect(h.forge.pushes).toEqual([
+      { workspacePath: h.workspacePath, branch: BRANCH },
+    ])
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'finalize.step-completed').at(-1)?.payload).toEqual({
+      step: 'release-notes',
+      ok: true,
+      headSha: FINALIZE_HEAD,
+    })
+    expect(selectPublishedBranchHead(events)).toBe(FINALIZE_HEAD)
+    expect(h.execCalls.slice(-4).map((call) => call.cmd)).toEqual([
+      ['git', 'status', '--porcelain'],
+      ['git', 'status', '--porcelain'],
+      ['git', 'rev-parse', 'HEAD'],
+      ['git', 'merge-base', '--is-ancestor', 'sha-head-1', FINALIZE_HEAD],
+    ])
+  })
+
+  test('an unchanged HEAD creates and pushes nothing', async () => {
+    const h = await readyHarness({ finalizeHeads: ['sha-head-1'] })
+
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([])
+    expect(
+      h.execCalls.some((call) => call.cmd[0] === 'git' && call.cmd[1] === 'commit'),
+    ).toBe(false)
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload,
+    ).toEqual({ step: 'release-notes', ok: true })
+  })
+
+  test('dirty post-step output is observed and still advances to the open PR wait', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ' M release-notes.md\n'],
+    })
+
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([])
+    await expectFailureTolerance(h, 'workspace must be clean after the post-step finishes')
+  })
+
+  test('a non-descendant HEAD is rejected without pushing or failing the green build', async () => {
+    const h = await readyHarness({
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [false],
+    })
+
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([])
+    await expectFailureTolerance(h, 'rewrote branch history')
+  })
+
+  test('a thrown Forge push is observed and still advances to the open PR wait', async () => {
+    class ThrowingPushForge extends FakeForge {
+      readonly attempts: Array<{ workspacePath: string; branch: string }> = []
+
+      override async pushBranch(workspacePath: string, branch: string): Promise<void> {
+        this.attempts.push({ workspacePath, branch })
+        throw new Error('remote rejected finalize push')
+      }
+    }
+    const forge = new ThrowingPushForge()
+    const h = await readyHarness({
+      forge,
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+    })
+
+    await h.br.step()
+    expect(forge.attempts).toEqual([
+      { workspacePath: h.workspacePath, branch: BRANCH },
+    ])
+    await expectFailureTolerance(h, 'remote rejected finalize push')
+  })
+
+  test('retries an already-pushed local descendant when the completion checkpoint was lost', async () => {
+    const h = await readyHarness({
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+    })
+    // Models a crash after Forge.pushBranch and before finalize.step-completed.
+    await h.forge.pushBranch(h.workspacePath, BRANCH)
+
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([
+      { workspacePath: h.workspacePath, branch: BRANCH },
+      { workspacePath: h.workspacePath, branch: BRANCH },
+    ])
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload,
+    ).toMatchObject({ ok: true, headSha: FINALIZE_HEAD })
   })
 })
 
