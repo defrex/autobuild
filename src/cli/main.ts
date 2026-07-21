@@ -829,19 +829,29 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
             const events = await session.store.getEvents(session.env.build)
             const pr = reduceBuild(events).pr
             if (pr !== undefined) {
-              await preparePrAttachments(session, events, pr.url)
-              await session.forge.commentOnPr(
-                session.workspacePath,
-                pr.number,
-                renderPrSummary(
-                  session.env,
-                  await session.store.getEvents(session.env.build),
-                ),
-              )
+              try {
+                await preparePrAttachments(session, events, pr.url)
+              } catch {
+                // A post-upload hosted-fact failure records the exact public
+                // asset identity before throwing. Keep going so its hosting
+                // failure cannot suppress the complete text projection.
+              }
+              try {
+                await session.forge.commentOnPr(
+                  session.workspacePath,
+                  pr.number,
+                  renderPrSummary(
+                    session.env,
+                    await session.store.getEvents(session.env.build),
+                  ),
+                )
+              } catch {
+                // The exact artifact and designation are already durable. A
+                // comment refresh cannot turn the agent's deposit into failure.
+              }
             }
           } catch {
-            // The exact artifact and designation are already durable. Hosting
-            // or comment refresh cannot turn the agent's deposit into failure.
+            // Reading the optional PR projection is best-effort too.
           }
         }
 

@@ -875,6 +875,85 @@ describe('runCli — artifact and observe', () => {
     ).toContain('pr-attachment.designated')
   })
 
+  test('a late hosted-fact write failure leaves a durable public-asset cleanup pointer', async () => {
+    await store.close()
+    store = await seedStore({
+      imageHost: {
+        provider: 'github-release',
+        repository: 'acme/review-assets',
+        releaseId: 42,
+      },
+    })
+    const forge = new FakeForge({ prAttachments: true })
+    const pr = await forge.openPr({
+      workspacePath: tmp,
+      head: BRANCH,
+      base: 'main',
+      title: 'Existing PR',
+      body: 'Body',
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr },
+    })
+    const append = store.append.bind(store)
+    let failHostedFactOnce = true
+    store.append = (async (slug, event) => {
+      if (event.type === 'pr-attachment.hosted' && failHostedFactOnce) {
+        failHostedFactOnce = false
+        throw new Error('hosted fact store unavailable')
+      }
+      return append(slug, event)
+    }) as typeof store.append
+
+    const file = join(tmp, 'late-failure.png')
+    await writeFile(file, new Uint8Array([137, 80, 78, 71, 10]))
+    const d = makeDeps({
+      store,
+      env: makeEnv({
+        phase: 'verify:visual-check',
+        round: 2,
+        session: 's_late_failure',
+      }),
+      workspacePath: tmp,
+      forge,
+    })
+
+    expect(
+      await runCli(
+        ['artifact', 'put', 'visual:late-failure', file, '--attach'],
+        d,
+      ),
+    ).toBe(0)
+    expect(d.out).toEqual(['0'])
+    expect(forge.prAttachmentUploads).toHaveLength(1)
+    expect(forge.comments).toHaveLength(1)
+    expect(forge.comments[0]!.body).toContain(
+      '<code>visual:late-failure@0</code>',
+    )
+    expect(forge.comments[0]!.body).not.toContain('<img ')
+
+    const events = await store.getEvents(BUILD)
+    expect(events.some((event) => event.type === 'pr-attachment.hosted')).toBe(
+      false,
+    )
+    const observation = events.findLast(
+      (event) => event.type === 'observation.recorded',
+    )
+    const assetRef = 'github-release:acme/review-assets:release/42:asset/1'
+    expect(observation?.payload.summary).toContain(
+      `public copy ${assetRef} was uploaded`,
+    )
+    expect(observation?.payload.summary).toContain(
+      'hosted fact store unavailable',
+    )
+    expect(observation?.payload.refs).toEqual([
+      'visual:late-failure@0',
+      assetRef,
+    ])
+  })
+
   test('artifact download runs without a phase tuple and writes exact binary bytes', async () => {
     const storeRef = join(tmp, 'artifact-download-store')
     const local = openLocalStore(storeRef)

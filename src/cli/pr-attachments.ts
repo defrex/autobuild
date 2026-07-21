@@ -1,4 +1,4 @@
-import type { AbEvent } from '../events/catalog'
+import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
 import {
@@ -31,6 +31,7 @@ async function recordHostingFailure(
   events: AbEvent[],
   designation: ReturnType<typeof currentPrAttachments>[number],
   error: unknown,
+  extraRefs: string[] = [],
 ): Promise<void> {
   const { artifact } = designation.payload
   try {
@@ -43,7 +44,7 @@ async function recordHostingFailure(
         summary:
           `PR attachment hosting failed for ${designation.payload.filename} ` +
           `(${artifact.kind}@${artifact.rev}): ${errorMessage(error)}`,
-        refs: [`${artifact.kind}@${artifact.rev}`],
+        refs: [`${artifact.kind}@${artifact.rev}`, ...extraRefs],
       },
     })
     events.push(observed)
@@ -117,11 +118,32 @@ export async function preparePrAttachments(
       continue
     }
 
-    const event = await deps.store.append(deps.env.build, {
-      actor: KERNEL,
-      type: 'pr-attachment.hosted',
-      payload: { designationSeq: designation.seq, asset },
-    })
+    const assetRef =
+      `${asset.provider}:${asset.repository}:release/${asset.releaseId}:` +
+      `asset/${asset.assetId}`
+    let event: EventEnvelope<'pr-attachment.hosted'>
+    try {
+      event = await deps.store.append(deps.env.build, {
+        actor: KERNEL,
+        type: 'pr-attachment.hosted',
+        payload: { designationSeq: designation.seq, asset },
+      })
+    } catch (error) {
+      // A late attachment has no phase retry after its external upload. Leave
+      // an exact cleanup pointer before preserving finalize's throw-and-adopt
+      // behavior for this upload/write crash window.
+      await recordHostingFailure(
+        deps,
+        events,
+        designation,
+        new Error(
+          `public copy ${assetRef} was uploaded, but its durable hosted fact ` +
+            `could not be recorded: ${errorMessage(error)}`,
+        ),
+        [assetRef],
+      )
+      throw error
+    }
     events.push(event)
     hosted.set(designation.seq, event)
   }
