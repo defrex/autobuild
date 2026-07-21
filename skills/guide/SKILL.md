@@ -431,7 +431,7 @@ not configurable and is separate from retry policy inside one harvest step.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `threshold` | `10` | positive integer | Number of newly unclaimed `observation.recorded` occurrences required to start one harvest run. The run claims the whole current accumulation. |
+| `threshold` | `5` | positive integer | Number of newly unclaimed `observation.recorded` occurrences required to start one harvest run. The run claims the whole current accumulation. |
 
 ### `[outer]`
 

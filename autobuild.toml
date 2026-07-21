@@ -128,7 +128,7 @@ triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets 
 # optional runtime/model overrides are `[roles.harvest]` and
 # `[roles.harvest-review]`.
 [harvest]
-threshold = 10
+threshold = 5
 
 # Cron schedules for other outer-loop ingesters (§12). `harvest` is no longer a
 # legal cron key; ingest:sentry and other scheduled sources are unchanged.

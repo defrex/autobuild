@@ -303,7 +303,7 @@ export type TicketsConfig = z.infer<typeof ticketsSchema>
 
 export const harvestSchema = z.strictObject({
   /** Unclaimed observation occurrences required to start one harvest run. */
-  threshold: z.number().int().positive().default(10),
+  threshold: z.number().int().positive().default(5),
 })
 export type HarvestConfig = z.infer<typeof harvestSchema>
 

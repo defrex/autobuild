@@ -134,12 +134,15 @@ describe('abInit — fresh install', () => {
     const baseline = parseConfig(template)
     expect(baseline.commands).toEqual({ setup: 'bun install' })
     expect(baseline.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(baseline.harvest.threshold).toBe(5)
 
     await abInit({ targetRepo: target })
     const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
+    const generatedConfig = parseConfig(generated)
     expect(generated).not.toContain('@ab-init/')
-    expect(parseConfig(generated).commands).toEqual({ setup: 'bun install' })
-    expect(parseConfig(generated).verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(generatedConfig.commands).toEqual({ setup: 'bun install' })
+    expect(generatedConfig.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(generatedConfig.harvest.threshold).toBe(5)
   })
 
   test('generated ticket guidance documents the conjunctive readyLabels gate without enabling it', async () => {
