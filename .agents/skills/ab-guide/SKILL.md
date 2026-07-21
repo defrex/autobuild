@@ -832,6 +832,7 @@ default, when you need to know what this repo's version says).
 | `ab-verify-e2e` | a `verify:<step>` phase | **Sample** agent-verify skill: drive the running app and check acceptance criteria. Runs only if a `[verify.<step>]` table names it. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
+| `ab-finalize-changelog` | repository `finalize:changelog` post-step | Add the opened PR's linked summary to `CHANGELOG.md` as a local commit; the kernel publishes it. Runner-only; carries `disable-model-invocation: true`. |
 
 Everything except `ab-spec`, `ab-tickets`, and `ab-guide` is **runner-invoked**
 by the kernel and carries `disable-model-invocation: true` — do not invoke a
