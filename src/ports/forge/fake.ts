@@ -10,14 +10,14 @@ import {
 } from '../../kernel/auto-merge'
 import type {
   AutoMergeResult,
-  DashboardFrameHosting,
-  DashboardFrameReclaimRequest,
-  DashboardFrameUploadRequest,
+  PrAttachmentHosting,
+  PrAttachmentReclaimRequest,
+  PrAttachmentUploadRequest,
   Forge,
   PrRef,
   PrState,
 } from '../types'
-import type { HostedDashboardFrameAsset } from '../../ontology'
+import type { HostedPrAttachmentAsset } from '../../ontology'
 
 export interface PushRecord {
   workspacePath: string
@@ -52,8 +52,8 @@ export interface SquashMergeRecord {
   expectedHeadSha: string
 }
 
-export type DashboardFrameUploadRecord = DashboardFrameUploadRequest
-export type DashboardFrameReclaimRecord = DashboardFrameReclaimRequest
+export type PrAttachmentUploadRecord = PrAttachmentUploadRequest
+export type PrAttachmentReclaimRecord = PrAttachmentReclaimRequest
 
 /** Constant sha, or derived from the assigned PR number. */
 export type HeadSha = string | ((number: number) => string)
@@ -63,7 +63,7 @@ type FakeGateState = MergeGatePresence | { error: string }
 
 export class FakeForge implements Forge {
   readonly name = 'fake'
-  readonly dashboardFrames?: DashboardFrameHosting
+  readonly prAttachments?: PrAttachmentHosting
 
   /** Journals — public so tests assert directly on call order and args. */
   readonly pushes: PushRecord[] = []
@@ -71,11 +71,11 @@ export class FakeForge implements Forge {
   readonly comments: CommentRecord[] = []
   readonly autoMergeCalls: AutoMergeRecord[] = []
   readonly squashMergeCalls: SquashMergeRecord[] = []
-  readonly dashboardFrameUploads: DashboardFrameUploadRecord[] = []
-  readonly dashboardFrameReclaims: DashboardFrameReclaimRecord[] = []
+  readonly prAttachmentUploads: PrAttachmentUploadRecord[] = []
+  readonly prAttachmentReclaims: PrAttachmentReclaimRecord[] = []
 
   private nextNumber = 1
-  private nextDashboardAssetId = 1
+  private nextAttachmentAssetId = 1
   private headSha: HeadSha
   private mergeSha: MergeSha
   private readonly defaultGatePresence: MergeGatePresence
@@ -86,9 +86,9 @@ export class FakeForge implements Forge {
   private readonly autoMerge = new Map<number, boolean>()
   private readonly nativeErrors = new Map<number, string>()
   private readonly squashErrors = new Map<number, string>()
-  private readonly dashboardAssets = new Map<string, HostedDashboardFrameAsset>()
-  private readonly dashboardUploadErrors: string[] = []
-  private readonly dashboardReclaimErrors: string[] = []
+  private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
+  private readonly attachmentUploadErrors: string[] = []
+  private readonly attachmentReclaimErrors: string[] = []
 
   constructor(
     opts: {
@@ -97,7 +97,7 @@ export class FakeForge implements Forge {
       gatePresence?: MergeGatePresence
       /** Hosting is unsupported by default, matching a forge without this
        * optional capability. Tests opt in explicitly. */
-      dashboardFrames?: boolean
+      prAttachments?: boolean
     } = {},
   ) {
     this.headSha = opts.headSha ?? ((n) => `sha-${n}`)
@@ -105,10 +105,10 @@ export class FakeForge implements Forge {
     // Existing tests model the historical, gated native path unless they opt
     // into the ungated repository scenario explicitly.
     this.defaultGatePresence = opts.gatePresence ?? 'present'
-    if (opts.dashboardFrames === true) {
-      this.dashboardFrames = {
-        upload: (request) => this.uploadDashboardFrame(request),
-        reclaim: (request) => this.reclaimDashboardFrame(request),
+    if (opts.prAttachments === true) {
+      this.prAttachments = {
+        upload: (request) => this.uploadPrAttachment(request),
+        reclaim: (request) => this.reclaimPrAttachment(request),
       }
     }
   }
@@ -195,59 +195,62 @@ export class FakeForge implements Forge {
   }
 
   /** Fail the next opt-in hosting call; queues permit deterministic mid-set failures. */
-  failNextDashboardFrameUpload(message: string): void {
-    this.dashboardUploadErrors.push(message)
+  failNextPrAttachmentUpload(message: string): void {
+    this.attachmentUploadErrors.push(message)
   }
 
   /** Fail the next cleanup call; the following retry resumes normal behavior. */
-  failNextDashboardFrameReclaim(message: string): void {
-    this.dashboardReclaimErrors.push(message)
+  failNextPrAttachmentReclaim(message: string): void {
+    this.attachmentReclaimErrors.push(message)
   }
 
-  private dashboardAssetKey(request: DashboardFrameUploadRequest): string {
+  private attachmentAssetKey(request: PrAttachmentUploadRequest): string {
     return [
       request.target.repository,
       request.target.releaseId,
       request.prUrl,
-      request.name,
+      request.attachment.artifact.kind,
+      request.attachment.artifact.rev,
+      request.attachment.filename,
+      request.attachment.mediaType,
       request.sha256,
     ].join('\0')
   }
 
-  private async uploadDashboardFrame(
-    request: DashboardFrameUploadRequest,
-  ): Promise<HostedDashboardFrameAsset> {
-    this.dashboardFrameUploads.push({
+  private async uploadPrAttachment(
+    request: PrAttachmentUploadRequest,
+  ): Promise<HostedPrAttachmentAsset> {
+    this.prAttachmentUploads.push({
       ...request,
       content: request.content.slice(),
     })
-    const error = this.dashboardUploadErrors.shift()
+    const error = this.attachmentUploadErrors.shift()
     if (error !== undefined) throw new Error(error)
-    const key = this.dashboardAssetKey(request)
-    const existing = this.dashboardAssets.get(key)
+    const key = this.attachmentAssetKey(request)
+    const existing = this.attachmentAssets.get(key)
     if (existing !== undefined) return existing
-    const assetId = this.nextDashboardAssetId++
-    const asset: HostedDashboardFrameAsset = {
+    const assetId = this.nextAttachmentAssetId++
+    const asset: HostedPrAttachmentAsset = {
       provider: 'github-release',
       repository: request.target.repository,
       releaseId: request.target.releaseId,
       assetId,
       url:
-        `https://fake.forge/dashboard-frames/${assetId}/` +
-        `${encodeURIComponent(request.name)}.png`,
+        `https://fake.forge/pr-attachments/${assetId}/` +
+        encodeURIComponent(request.attachment.filename),
     }
-    this.dashboardAssets.set(key, asset)
+    this.attachmentAssets.set(key, asset)
     return asset
   }
 
-  private async reclaimDashboardFrame(
-    request: DashboardFrameReclaimRequest,
+  private async reclaimPrAttachment(
+    request: PrAttachmentReclaimRequest,
   ): Promise<void> {
-    this.dashboardFrameReclaims.push({ ...request, asset: { ...request.asset } })
-    const error = this.dashboardReclaimErrors.shift()
+    this.prAttachmentReclaims.push({ ...request, asset: { ...request.asset } })
+    const error = this.attachmentReclaimErrors.shift()
     if (error !== undefined) throw new Error(error)
-    for (const [key, asset] of this.dashboardAssets) {
-      if (asset.assetId === request.asset.assetId) this.dashboardAssets.delete(key)
+    for (const [key, asset] of this.attachmentAssets) {
+      if (asset.assetId === request.asset.assetId) this.attachmentAssets.delete(key)
     }
     // Missing means it was already deleted: cleanup is idempotent.
   }

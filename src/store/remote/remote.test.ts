@@ -438,6 +438,40 @@ describe('atomic deposits over the wire (D6)', () => {
     })
   })
 
+  test('nested attachment refs replace the wire placeholder with the server-assigned revision', async () => {
+    await withOpenStore(async ({ store, backing }) => {
+      await store.createBuild(sampleBuildInput('attachment-ok'))
+      await store.putArtifact('attachment-ok', {
+        kind: 'visual:home',
+        content: 'older',
+      })
+      const { event, artifacts } = await store.appendWithArtifacts(
+        'attachment-ok',
+        [{ kind: 'visual:home', content: new Uint8Array([1, 2, 3]) }],
+        (deposited) => ({
+          actor: agentActor('verify:visual', 's_visual'),
+          type: 'pr-attachment.designated',
+          payload: {
+            artifact: {
+              kind: deposited[0]!.kind,
+              rev: deposited[0]!.revision,
+            },
+            filename: 'home.png',
+            mediaType: 'image/png',
+          },
+        }),
+      )
+
+      expect(artifacts[0]?.revision).toBe(1)
+      expect(event.type).toBe('pr-attachment.designated')
+      expect(event.payload.artifact).toEqual({ kind: 'visual:home', rev: 1 })
+      const stored = (await backing.getEvents('attachment-ok')).at(-1)
+      expect(stored?.type).toBe('pr-attachment.designated')
+      if (stored?.type !== 'pr-attachment.designated') throw new Error('unreachable')
+      expect(stored.payload.artifact).toEqual({ kind: 'visual:home', rev: 1 })
+    })
+  })
+
   test('a payload failing event validation persists nothing server-side', async () => {
     await withOpenStore(async ({ store, backing }) => {
       await store.createBuild(sampleBuildInput('deposit-bad'))

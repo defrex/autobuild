@@ -9,13 +9,18 @@ test('repository installs the path-scoped dashboard image verifier after determi
   expect(config.baseBranch).toBe('main')
   expect(config.capacity).toBe(3)
   expect(config.policy.harvestThreshold).toBe(5)
-  expect(config.dashboardFrames).toBeUndefined()
+  expect(config.pr).toBeUndefined()
   expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
   expect(config.verify.steps).toEqual(['types', 'unit', 'dashboard'])
   expect(config.verify.stepConfigs['dashboard']).toEqual({
     kind: 'agent',
     skill: 'ab-verify-dashboard',
     needsServer: false,
-    paths: ['src/cli/dashboard/**', 'src/cli/dispatch.ts'],
+    paths: [
+      'src/cli/dashboard/**',
+      'src/cli/dispatch.ts',
+      'tools/dashboard-capture.ts',
+      '.agents/skills/ab-verify-dashboard/SKILL.md',
+    ],
   })
 })

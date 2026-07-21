@@ -90,7 +90,7 @@ function harness(
       store: MemoryBuildStore,
     ) => Promise<void> | void
     workspaceBase?: WorkspaceBase
-    dashboardFrames?: boolean
+    prAttachments?: boolean
   } = {},
 ) {
   const clock = manualClock()
@@ -103,7 +103,7 @@ function harness(
     ...(opts.workspaceBase ? { base: opts.workspaceBase } : {}),
   })
   const forge = new FakeForge({
-    ...(opts.dashboardFrames === true ? { dashboardFrames: true } : {}),
+    ...(opts.prAttachments === true ? { prAttachments: true } : {}),
   })
   const launches: string[] = []
   const execCalls: string[][] = []
@@ -199,24 +199,32 @@ async function seedBuild(
   return slug
 }
 
-async function seedHostedDashboardFrame(
+async function seedHostedPrAttachment(
   h: Harness,
   slug: string,
-  frameId = 'mixed-wide',
+  name = 'screenshot',
   assetId = 7,
 ) {
+  const designated = await h.store.append(slug, {
+    actor: agentActor('verify:visual', 's_visual'),
+    type: 'pr-attachment.designated',
+    payload: {
+      artifact: { kind: `visual:${name}`, rev: 0 },
+      filename: `${name}.png`,
+      mediaType: 'image/png',
+    },
+  })
   return h.store.append(slug, {
     actor: KERNEL,
-    type: 'dashboard-frame.hosted',
+    type: 'pr-attachment.hosted',
     payload: {
-      frameId,
-      artifact: { kind: `dashboard-frame:${frameId}:png`, rev: 0 },
+      designationSeq: designated.seq,
       asset: {
         provider: 'github-release',
         repository: 'acme/review-assets',
         releaseId: 42,
         assetId,
-        url: `https://github.com/acme/review-assets/releases/download/review/${frameId}.png`,
+        url: `https://github.com/acme/review-assets/releases/download/review/${name}.png`,
       },
     },
   })
@@ -618,11 +626,11 @@ describe('Dispatcher dispatch', () => {
     ])
   })
 
-  test('freezes an enabled dashboard frame destination into build.created', async () => {
+  test('freezes an enabled PR image host into build.created', async () => {
     const h = harness({
       tickets: [readyTicket('T-host')],
       toml: `
-[dashboardFrames]
+[pr.imageHost]
 provider = "github-release"
 repository = "acme/review-assets"
 releaseId = 42
@@ -635,10 +643,12 @@ releaseId = 42
       (event) => event.type === 'build.created',
     )
     expect(created?.payload).toMatchObject({
-      dashboardFrames: {
-        provider: 'github-release',
-        repository: 'acme/review-assets',
-        releaseId: 42,
+      pr: {
+        imageHost: {
+          provider: 'github-release',
+          repository: 'acme/review-assets',
+          releaseId: 42,
+        },
       },
     })
   })
@@ -2486,14 +2496,14 @@ describe('Dispatcher janitor', () => {
     expect(h.workspaces.releases).toHaveLength(1) // released once, tick 1
   })
 
-  test('hosted dashboard copies are reclaimed after merged, closed, and abandoned completion facts', async () => {
+  test('hosted PR attachment copies are reclaimed after merged, closed, and abandoned completion facts', async () => {
     for (const scenario of ['merged', 'closed', 'abandoned'] as const) {
-      const h = harness({ dashboardFrames: true })
+      const h = harness({ prAttachments: true })
       const slug = await seedBuild(h, {
         slug: `cleanup-${scenario}`,
         ...(scenario !== 'abandoned' ? { pr: PR } : {}),
       })
-      const hosted = await seedHostedDashboardFrame(h, slug)
+      const hosted = await seedHostedPrAttachment(h, slug)
       if (scenario === 'merged') {
         h.forge.setPrState(1, { state: 'merged', sha: 'squash-cleanup' })
       } else if (scenario === 'closed') {
@@ -2518,11 +2528,11 @@ describe('Dispatcher janitor', () => {
       const events = await h.store.getEvents(slug)
       const completed = events.find((event) => event.type === 'build.completed')!
       const reclaimed = events.find(
-        (event) => event.type === 'dashboard-frame.reclaimed',
+        (event) => event.type === 'pr-attachment.reclaimed',
       )!
       expect(reclaimed.seq).toBeGreaterThan(completed.seq)
       expect(reclaimed.payload).toEqual({ hostedSeq: hosted.seq })
-      expect(h.forge.dashboardFrameReclaims).toEqual([
+      expect(h.forge.prAttachmentReclaims).toEqual([
         {
           workspacePath: REPO,
           asset: hosted.payload.asset,
@@ -2533,23 +2543,23 @@ describe('Dispatcher janitor', () => {
   })
 
   test('a done build retries transient reclamation, records attempts, and becomes idempotent', async () => {
-    const h = harness({ dashboardFrames: true })
+    const h = harness({ prAttachments: true })
     const slug = await seedBuild(h, {
       slug: 'cleanup-retry',
       workspace: false,
     })
-    const hosted = await seedHostedDashboardFrame(h, slug)
+    const hosted = await seedHostedPrAttachment(h, slug)
     await h.store.append(slug, {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'abandoned' },
     })
-    h.forge.failNextDashboardFrameReclaim('temporary delete outage')
+    h.forge.failNextPrAttachmentReclaim('temporary delete outage')
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     let events = await h.store.getEvents(slug)
     const failed = events.find(
-      (event) => event.type === 'dashboard-frame.reclaim-failed',
+      (event) => event.type === 'pr-attachment.reclaim-failed',
     )
     expect(failed?.payload).toEqual({
       hostedSeq: hosted.seq,
@@ -2561,12 +2571,12 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     events = await h.store.getEvents(slug)
     expect(
-      events.filter((event) => event.type === 'dashboard-frame.reclaimed'),
+      events.filter((event) => event.type === 'pr-attachment.reclaimed'),
     ).toHaveLength(1)
-    expect(h.forge.dashboardFrameReclaims).toHaveLength(2)
+    expect(h.forge.prAttachmentReclaims).toHaveLength(2)
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.forge.dashboardFrameReclaims).toHaveLength(2)
+    expect(h.forge.prAttachmentReclaims).toHaveLength(2)
   })
 })
 

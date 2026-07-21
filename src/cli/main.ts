@@ -15,6 +15,7 @@ import { textContent } from '../store/types'
 import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
+import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactGet, artifactPut } from './artifact'
 import { parseArgs, stringFlag, type ParsedArgs } from './args'
 import {
@@ -30,6 +31,8 @@ import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import { abModels } from './models'
 import { observe } from './observe'
+import { preparePrAttachments } from './pr-attachments'
+import { renderPrSummary } from './pr-summary'
 import { ServerControl } from './server-control'
 import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
@@ -182,7 +185,7 @@ const HELP = [
   'ab — the agent↔store channel (SPEC §8.2)',
   '',
   '  ab context [--json]                    hydrate .ab/ with the phase\'s inputs; print the manifest',
-  '  ab artifact put <kind> <file>          deposit a versioned artifact → prints the assigned rev',
+  '  ab artifact put <kind> <file> [--attach] deposit a versioned artifact → prints the assigned rev; optionally designate it for the PR',
   '  ab artifact get <kind>[@rev]           fetch an artifact within own build (latest when @rev omitted)',
   '  ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]',
   '                                         retrieve exact artifact bytes after a build (read-only, sessionless)',
@@ -805,8 +808,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
       const session = requireSession(command, deps)
       if (sub === 'put') {
-        const usage = 'usage: ab artifact put <kind> <file> (§8.2)'
-        const parsed = parseArgs(more, {}, usage)
+        const usage = 'usage: ab artifact put <kind> <file> [--attach] (§8.2)'
+        const parsed = parseArgs(more, { attach: 'boolean' }, usage)
         const [kind, file] = parsed.positionals
         if (
           kind === undefined ||
@@ -815,7 +818,33 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ) {
           throw new Error(usage)
         }
-        const meta = await artifactPut(session, kind, file)
+        const attach = parsed.flags.has('attach')
+        const meta = await artifactPut(session, kind, file, { attach })
+
+        // A designation made after the PR exists (verify after reconcile or a
+        // finalize post-step) republishes the same complete projection. Every
+        // external side effect is best-effort after the atomic designation.
+        if (attach) {
+          try {
+            const events = await session.store.getEvents(session.env.build)
+            const pr = reduceBuild(events).pr
+            if (pr !== undefined) {
+              await preparePrAttachments(session, events, pr.url)
+              await session.forge.commentOnPr(
+                session.workspacePath,
+                pr.number,
+                renderPrSummary(
+                  session.env,
+                  await session.store.getEvents(session.env.build),
+                ),
+              )
+            }
+          } catch {
+            // The exact artifact and designation are already durable. Hosting
+            // or comment refresh cannot turn the agent's deposit into failure.
+          }
+        }
+
         // The assigned rev is the command's one output (§8.2).
         stdout(String(meta.revision))
         return 0

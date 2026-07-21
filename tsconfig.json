@@ -15,5 +15,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "bin", "drizzle.config.ts"]
+  "include": ["src", "bin", "tools", "drizzle.config.ts"]
 }

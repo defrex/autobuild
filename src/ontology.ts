@@ -154,7 +154,7 @@ export function verifyReportKind(step: string): string {
   return `verify-report:${step}`
 }
 
-// ── Dashboard frame hosting ──────────────────────────────────────────────────
+// ── Pull-request attachments ─────────────────────────────────────────────────
 
 /** Deliberately narrower than GitHub's full repository-name policy: one
  * non-blank, whitespace-free `owner/repo` pair is enough for deterministic
@@ -167,16 +167,44 @@ export const githubRepositorySchema = z
   )
 export type GitHubRepository = z.infer<typeof githubRepositorySchema>
 
-/** Optional, frozen destination for review-window dashboard PNG copies. */
-export const dashboardFrameHostSchema = z.strictObject({
+/** Optional, frozen destination for review-window image copies. */
+export const prImageHostSchema = z.strictObject({
   provider: z.literal('github-release'),
   repository: githubRepositorySchema,
   releaseId: z.number().int().positive(),
 })
-export type DashboardFrameHostTarget = z.infer<typeof dashboardFrameHostSchema>
+export type PrImageHostTarget = z.infer<typeof prImageHostSchema>
 
-/** Durable deletion handle returned by GitHub after one frame is hosted. */
-export const hostedDashboardFrameAssetSchema = z.strictObject({
+/** A basename safe to render and pass back to `ab artifact download`. */
+export const prAttachmentFilenameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((value) => value.trim().length > 0, 'attachment filename must be non-blank')
+  .refine((value) => value !== '.' && value !== '..', 'attachment filename must name a file')
+  .refine(
+    (value) => !/[\\/\u0000-\u001f\u007f]/.test(value),
+    'attachment filename must be a basename without path separators or control characters',
+  )
+
+/** Normalized MIME media type: lowercase type/subtype with no parameters. */
+export const mediaTypeSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/,
+    'expected a normalized lowercase media type without parameters',
+  )
+
+/** One exact BuildStore artifact explicitly designated for PR projection. */
+export const prAttachmentSchema = z.strictObject({
+  artifact: artifactRefSchema,
+  filename: prAttachmentFilenameSchema,
+  mediaType: mediaTypeSchema,
+})
+export type PrAttachment = z.infer<typeof prAttachmentSchema>
+
+/** Durable deletion handle returned after one image attachment is hosted. */
+export const hostedPrAttachmentAssetSchema = z.strictObject({
   provider: z.literal('github-release'),
   repository: githubRepositorySchema,
   releaseId: z.number().int().positive(),
@@ -184,10 +212,10 @@ export const hostedDashboardFrameAssetSchema = z.strictObject({
   url: z
     .string()
     .url()
-    .refine((url) => url.startsWith('https://'), 'hosted dashboard frame URL must use HTTPS'),
+    .refine((url) => url.startsWith('https://'), 'hosted PR attachment URL must use HTTPS'),
 })
-export type HostedDashboardFrameAsset = z.infer<
-  typeof hostedDashboardFrameAssetSchema
+export type HostedPrAttachmentAsset = z.infer<
+  typeof hostedPrAttachmentAssetSchema
 >
 
 // ── Builds ───────────────────────────────────────────────────────────────────

@@ -228,7 +228,7 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   await local.createBuild({ slug: 'finished', repo: await realpath(tmp) })
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255])
   await local.putArtifact('finished', {
-    kind: 'dashboard-frame:mixed-wide:png',
+    kind: 'visual:mixed-wide',
     content: bytes,
   })
   await local.close()
@@ -237,7 +237,7 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
     'artifact',
     'download',
     'finished',
-    'dashboard-frame:mixed-wide:png@0',
+    'visual:mixed-wide@0',
     '--output',
     'downloads/frame.png',
     '--store',
@@ -245,10 +245,43 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   ])
   expect(result.code).toBe(0)
   expect(result.stderr).toBe('')
-  expect(result.stdout).toContain('dashboard-frame:mixed-wide:png@0')
+  expect(result.stdout).toContain('visual:mixed-wide@0')
   expect(await Bun.file(join(tmp, 'downloads', 'frame.png')).bytes()).toEqual(
     bytes,
   )
+})
+
+test('artifact put --attach uses the real binary grammar and records the assigned revision', async () => {
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.createBuild({ slug: 'attached', repo: await realpath(tmp) })
+  await local.close()
+  const file = join(tmp, 'evidence.png')
+  const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
+  await writeFile(file, bytes)
+
+  const result = await runBin(
+    ['artifact', 'put', 'visual:evidence', file, '--attach'],
+    {
+      AB_BUILD: 'attached',
+      AB_PHASE: 'verify:visual@1',
+      AB_SESSION: 's_visual',
+    },
+  )
+  expect(result).toEqual({ code: 0, stderr: '', stdout: '0\n' })
+
+  const reopened = openLocalStore(join(tmp, 'store'))
+  const event = (await reopened.getEvents('attached')).at(-1)
+  expect(event).toMatchObject({
+    actor: { kind: 'agent', role: 'verify:visual', session: 's_visual' },
+    type: 'pr-attachment.designated',
+    payload: {
+      artifact: { kind: 'visual:evidence', rev: 0 },
+      filename: 'evidence.png',
+      mediaType: 'image/png',
+    },
+  })
+  expect((await reopened.getArtifact('attached', 'visual:evidence', 0))?.content).toEqual(bytes)
+  await reopened.close()
 })
 
 test('harvest status remains sessionless with no ambient AB_* values', async () => {

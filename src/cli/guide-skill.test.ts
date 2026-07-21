@@ -23,7 +23,8 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
-  dashboardFramesSchema,
+  imageHostSchema,
+  prSchema,
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
   policySchema,
@@ -58,7 +59,7 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
-  dashboardFrames: Object.keys(dashboardFramesSchema.shape),
+  pr: Object.keys(prSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
   server: Object.keys(serverSchema.shape),
@@ -127,6 +128,16 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
       }
     }
     expect(missing, `skills/guide/SKILL.md:\n${missing.join('\n')}`).toEqual([])
+  })
+
+  test('documents every nested [pr.imageHost] field', () => {
+    const section = headingSection('### `[pr.imageHost]`')
+    expect(section).toBeDefined()
+    for (const field of Object.keys(imageHostSchema.shape)) {
+      expect(section).toMatch(
+        new RegExp('^\\| `' + escapeRegex(field) + '` \\|', 'm'),
+      )
+    }
   })
 })
 

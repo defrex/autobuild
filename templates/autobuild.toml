@@ -8,12 +8,12 @@
 baseBranch = "main"
 capacity = 1             # concurrent builds for this repo
 
-# Optional review-window hosting for existing verify:dashboard PNG artifacts.
-# Off by default. The release must already exist, be published and mutable, and
-# live in a public repository; private source repos may name a separate public
-# asset repo. The gh identity needs Contents write permission there. Hosted
-# copies are deleted automatically after build completion.
-#[dashboardFrames]
+# Optional review-window hosting for explicitly attached images. Exact text
+# download commands work without it. The release must already exist, be
+# published and mutable, and live in a public repository; private source repos
+# may name a separate public asset repo. The gh identity needs Contents write
+# permission there. Hosted copies are deleted after build completion.
+#[pr.imageHost]
 #provider = "github-release"
 #repository = "owner/public-review-assets"
 #releaseId = 123456

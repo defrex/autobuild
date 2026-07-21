@@ -8,12 +8,12 @@
 baseBranch = "main"
 capacity = 3             # concurrent builds for this repo
 
-# Optional review-window hosting for existing verify:dashboard PNG artifacts.
-# Off by default. The release must already exist, be published and mutable, and
-# live in a public repository; private source repos may name a separate public
-# asset repo. The gh identity needs Contents write permission there. Hosted
-# copies are deleted automatically after build completion.
-#[dashboardFrames]
+# Optional review-window hosting for explicitly attached images. Text download
+# commands work without it. The release must already exist, be published and
+# mutable, and live in a public repository; private source repos may name a
+# separate public asset repo. The gh identity needs Contents write permission.
+# Hosted copies are deleted automatically after build completion.
+#[pr.imageHost]
 #provider = "github-release"
 #repository = "owner/public-review-assets"
 #releaseId = 123456
@@ -53,7 +53,7 @@ command = "test"
 [verify.dashboard]
 kind = "agent"
 skill = "ab-verify-dashboard"
-paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts"]
+paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts", "tools/dashboard-capture.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
 
 # Agent-verify example — a skill run with a pass|fail|skip verdict (§5):
 #[verify.e2e]

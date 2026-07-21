@@ -75,13 +75,70 @@ describe('artifact put/get', () => {
     const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 254, 1])
     await writeFile(path, bytes)
 
-    const meta = await artifactPut(deps(), 'dashboard-frame:test:png', path)
+    const meta = await artifactPut(deps(), 'visual:screenshot', path)
     const artifact = await store.getArtifact(
       'auth-rate-limit',
-      'dashboard-frame:test:png',
+      'visual:screenshot',
       meta.revision,
     )
     expect(artifact?.content).toEqual(bytes)
+  })
+
+  test('put --attach atomically records exact refs, actor, filename, media type, and bytes', async () => {
+    const path = join(tmp, 'home.png')
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255])
+    await writeFile(path, bytes)
+    const attachedDeps = {
+      store,
+      env: makeEnv({
+        phase: 'verify:visual-check',
+        round: 1,
+        session: 's_visual',
+      }),
+    }
+
+    const meta = await artifactPut(attachedDeps, 'visual:home', path, {
+      attach: true,
+    })
+
+    expect(meta.revision).toBe(0)
+    expect(
+      (await store.getArtifact('auth-rate-limit', 'visual:home', 0))?.content,
+    ).toEqual(bytes)
+    const event = (await store.getEvents('auth-rate-limit')).at(-1)
+    expect(event).toMatchObject({
+      actor: {
+        kind: 'agent',
+        role: 'verify:visual-check',
+        session: 's_visual',
+      },
+      type: 'pr-attachment.designated',
+      payload: {
+        artifact: { kind: 'visual:home', rev: 0 },
+        filename: 'home.png',
+        mediaType: 'image/png',
+      },
+    })
+  })
+
+  test('put --attach normalizes text media parameters and rejects unsafe filenames before writing', async () => {
+    const textPath = join(tmp, 'trace.txt')
+    await writeFile(textPath, 'trace\n')
+    await artifactPut(deps(), 'visual:trace', textPath, { attach: true })
+    expect(
+      (await store.getEvents('auth-rate-limit')).at(-1)?.payload,
+    ).toMatchObject({
+      filename: 'trace.txt',
+      mediaType: 'text/plain',
+    })
+
+    const unsafe = join(tmp, 'bad\nname.png')
+    await writeFile(unsafe, new Uint8Array([1]))
+    const before = await store.listArtifacts('auth-rate-limit')
+    await expect(
+      artifactPut(deps(), 'visual:unsafe', unsafe, { attach: true }),
+    ).rejects.toThrow(/attachment filename/)
+    expect(await store.listArtifacts('auth-rate-limit')).toEqual(before)
   })
 
   test('put with a missing file names the path', async () => {
@@ -134,11 +191,11 @@ describe('artifact download', () => {
     const first = new Uint8Array([137, 80, 78, 71, 0, 255])
     const second = new Uint8Array([1, 2, 3])
     await store.putArtifact(build, {
-      kind: 'dashboard-frame:wide:png',
+      kind: 'visual:wide',
       content: first,
     })
     await store.putArtifact(build, {
-      kind: 'dashboard-frame:wide:png',
+      kind: 'visual:wide',
       content: second,
     })
     const opens: Array<{ ref: string; token?: string }> = []
@@ -152,7 +209,7 @@ describe('artifact download', () => {
       },
       exec: spawnExec,
       build,
-      spec: 'dashboard-frame:wide:png@0',
+      spec: 'visual:wide@0',
       outputPath: output,
       storeRef: 'explicit-store',
       openStore: (ref, token) => {
@@ -177,7 +234,7 @@ describe('artifact download', () => {
       },
       exec: spawnExec,
       build,
-      spec: 'dashboard-frame:wide:png',
+      spec: 'visual:wide',
       outputPath: remoteOutput,
       openStore: (ref, token) => {
         opens.push({ ref, ...(token !== undefined ? { token } : {}) })

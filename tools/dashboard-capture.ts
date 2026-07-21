@@ -1,18 +1,11 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { abDispatch } from '../cli/dispatch'
-import {
-  dashboardFrameArtifactKind,
-  dashboardFrameManifestSchema,
-  dashboardVerifyReport,
-  type DashboardFrameManifest,
-} from '../cli/dashboard/frame-artifacts'
-import { renderDashboardFrameImage } from '../cli/dashboard/frame-image'
-import { renderDashboard, stripAnsi } from '../cli/dashboard/render'
-import type { TerminalInput, TerminalOut } from '../cli/terminal'
-import { humanActor, KERNEL } from '../events/envelope'
-import type { ArtifactMeta } from '../store/types'
-import { spawnExec } from '../ports/workspace/git-worktree'
+import { abDispatch } from '../src/cli/dispatch'
+import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
+import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
+import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
+import { humanActor, KERNEL } from '../src/events/envelope'
+import { spawnExec } from '../src/ports/workspace/git-worktree'
 import {
   CONFIG_TOML,
   happyHandlers,
@@ -20,7 +13,7 @@ import {
   readyTicket,
   type E2eHarness,
   type SkillHandlers,
-} from './harness'
+} from '../src/integration/harness'
 
 const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 const FRAME_SPECS = [
@@ -32,10 +25,6 @@ const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace(
   'capacity = 2',
   'capacity = 3',
 )
-
-export interface DashboardArtifactDeposit {
-  (kind: string, filePath: string): Promise<number>
-}
 
 export interface CapturedDashboardFrame {
   id: string
@@ -50,7 +39,6 @@ export interface CapturedDashboardFrame {
 export interface DashboardCaptureResult {
   outputDir: string
   reportPath: string
-  manifest: DashboardFrameManifest
   frames: CapturedDashboardFrame[]
   diagnostics: {
     buildSlugs: string[]
@@ -64,8 +52,6 @@ export interface DashboardCaptureResult {
 export interface DashboardCaptureOptions {
   /** Product workspace. Generated evidence is always confined to its .ab/. */
   workspacePath?: string
-  /** Tests inject a memory deposit; production invokes managed `ab artifact`. */
-  deposit?: DashboardArtifactDeposit
 }
 
 function captureHandlers(): SkillHandlers {
@@ -299,35 +285,6 @@ async function capturePaint(
   return validateCapturedFrame(spec.id, captured, spec.columns)
 }
 
-async function managedArtifactDeposit(
-  kind: string,
-  filePath: string,
-): Promise<number> {
-  const child = Bun.spawn(['ab', 'artifact', 'put', kind, filePath], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  if (code !== 0) {
-    throw new Error(
-      `ab artifact put ${kind} failed (${code}): ${stderr.trim() || '(no stderr)'}`,
-    )
-  }
-  const printed = stdout.trim()
-  if (!/^\d+$/.test(printed)) {
-    throw new Error(
-      `ab artifact put ${kind} returned invalid revision ${JSON.stringify(printed)}`,
-    )
-  }
-  return Number(printed)
-}
-
 function assertOutputUnderScratch(workspacePath: string, outputDir: string): void {
   const scratch = resolve(workspacePath, '.ab')
   const output = resolve(outputDir)
@@ -339,16 +296,9 @@ function assertOutputUnderScratch(workspacePath: string, outputDir: string): voi
   }
 }
 
-function ref(meta: ArtifactMeta | { kind: string; revision: number }): {
-  kind: string
-  rev: number
-} {
-  return { kind: meta.kind, rev: meta.revision }
-}
-
-/** Drive the real scripted pipeline and dispatch composition, then deposit the
- * two evidence forms. Applicability is intentionally absent: the kernel has
- * already decided to launch this command. */
+/** Drive the real scripted pipeline and dispatch composition, then write the
+ * two evidence forms to scratch. Applicability and later PR designation are
+ * intentionally absent: the kernel and repo-local verifier own those choices. */
 export async function captureDashboardFrames(
   options: DashboardCaptureOptions = {},
 ): Promise<DashboardCaptureResult> {
@@ -357,12 +307,10 @@ export async function captureDashboardFrames(
   assertOutputUnderScratch(workspacePath, outputDir)
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
-  const deposit = options.deposit ?? managedArtifactDeposit
   const harness = await prepareScenario()
 
   try {
     const frames: CapturedDashboardFrame[] = []
-    const entries: DashboardFrameManifest['frames'] = []
     for (const spec of FRAME_SPECS) {
       const lines = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
@@ -373,27 +321,6 @@ export async function captureDashboardFrames(
       await writeFile(textPath, rendered.text)
       await writeFile(pngPath, rendered.png)
 
-      const textKind = dashboardFrameArtifactKind(spec.id, 'text')
-      const pngKind = dashboardFrameArtifactKind(spec.id, 'png')
-      const textRevision = await deposit(textKind, textPath)
-      const pngRevision = await deposit(pngKind, pngPath)
-      for (const [kind, revision] of [
-        [textKind, textRevision],
-        [pngKind, pngRevision],
-      ] as const) {
-        if (!Number.isInteger(revision) || revision < 0) {
-          throw new Error(
-            `dashboard artifact ${kind} returned invalid revision ${revision}`,
-          )
-        }
-      }
-
-      entries.push({
-        id: spec.id,
-        terminal: { columns: spec.columns, rows: spec.rows },
-        text: ref({ kind: textKind, revision: textRevision }),
-        png: ref({ kind: pngKind, revision: pngRevision }),
-      })
       frames.push({
         id: spec.id,
         terminal: { columns: spec.columns, rows: spec.rows },
@@ -405,18 +332,32 @@ export async function captureDashboardFrames(
       })
     }
 
-    const manifest = dashboardFrameManifestSchema.parse({
-      version: 1,
-      renderer: 'dashboard-ansi-png-v1',
-      frames: entries,
-    })
     const reportPath = join(outputDir, 'verify-report.md')
-    await writeFile(reportPath, dashboardVerifyReport(manifest))
+    await writeFile(
+      reportPath,
+      [
+        '# Dashboard visual verification',
+        '',
+        '## Generated evidence',
+        ...frames.flatMap((frame) => [
+          `- ${frame.id} (${frame.terminal.columns}x${frame.terminal.rows})`,
+          `  - text: ${frame.id}.txt`,
+          `  - image: ${frame.id}.png`,
+        ]),
+        '',
+        '## Visual checklist',
+        '- [ ] Every PNG opens and is non-empty.',
+        '- [ ] Rows, statuses, progress, and separators do not overlap.',
+        '- [ ] The Harvest row remains legible.',
+        '- [ ] The narrow frame truncates deliberately without clipping.',
+        '- [ ] Colour emphasis is present and literal statuses remain readable.',
+        '',
+      ].join('\n'),
+    )
 
     return {
       outputDir,
       reportPath,
-      manifest,
       frames,
       diagnostics: {
         buildSlugs: harness.launched.map((entry) => entry.slug),

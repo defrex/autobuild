@@ -5,7 +5,9 @@
  * verifies the repository/build explicitly and writes exact bytes to a file.
  */
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
+import { agentActor } from '../events/envelope'
+import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import type { CliEnv } from './env'
@@ -34,11 +36,22 @@ export function parseArtifactSpec(spec: string): { kind: string; rev?: number } 
   return { kind, rev: Number(revPart) }
 }
 
+export interface ArtifactPutOpts {
+  /** Atomically designate this exact deposited revision for PR projection. */
+  attach?: boolean
+}
+
+function normalizedMediaType(file: ReturnType<typeof Bun.file>): string {
+  const type = file.type.split(';', 1)[0]?.trim().toLowerCase()
+  return type === undefined || type === '' ? 'application/octet-stream' : type
+}
+
 /** Deposit a revision of `kind` from `filePath`; the caller prints the rev. */
 export async function artifactPut(
   deps: ArtifactDeps,
   kind: string,
   filePath: string,
+  opts: ArtifactPutOpts = {},
 ): Promise<ArtifactMeta> {
   if (kind.trim() === '') {
     throw new Error("'ab artifact put' requires a non-empty <kind> (§8.2)")
@@ -62,7 +75,37 @@ export async function artifactPut(
   // Artifacts are byte streams. Text deposits remain byte-for-byte compatible,
   // while PNG and other binary evidence must never pass through UTF-8 decode.
   const content = await file.bytes()
-  return deps.store.putArtifact(deps.env.build, { kind, content })
+  if (opts.attach !== true) {
+    return deps.store.putArtifact(deps.env.build, { kind, content })
+  }
+
+  // Validate every display/provider field before entering the atomic store
+  // operation. `basename` ensures callers cannot publish an output path.
+  const attachment = prAttachmentSchema.parse({
+    artifact: { kind, rev: 0 }, // replaced with the store-assigned rev below
+    filename: basename(filePath),
+    mediaType: normalizedMediaType(file),
+  })
+  const { artifacts } = await deps.store.appendWithArtifacts(
+    deps.env.build,
+    [{ kind, content }],
+    (deposited) => ({
+      actor: agentActor(deps.env.phase, deps.env.session),
+      type: 'pr-attachment.designated',
+      payload: {
+        ...attachment,
+        artifact: {
+          kind: deposited[0]!.kind,
+          rev: deposited[0]!.revision,
+        },
+      },
+    }),
+  )
+  const meta = artifacts[0]
+  if (meta === undefined) {
+    throw new Error('attachment deposit produced no artifact meta — this is a store bug')
+  }
+  return meta
 }
 
 /** Fetch `<kind>[@rev]` within the own build; latest when rev is omitted. */

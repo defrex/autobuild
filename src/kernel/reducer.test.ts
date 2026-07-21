@@ -346,34 +346,38 @@ describe('reduceBuild: §15.6 happy path', () => {
     expect(final.pendingCommands).toEqual([])
   })
 
-  test('post-completion dashboard cleanup facts are audit-only and leave the build done', () => {
+  test('post-completion attachment cleanup facts are audit-only and leave the build done', () => {
     const cleanupLog = toLog([
       ...prelude(),
-      ev('dashboard-frame.hosted', {
-        frameId: 'mixed-wide',
-        artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
+      ev('pr-attachment.designated', {
+        artifact: { kind: 'visual:screenshot', rev: 0 },
+        filename: 'screenshot.png',
+        mediaType: 'image/png',
+      }),
+      ev('pr-attachment.hosted', {
+        designationSeq: 5,
         asset: {
           provider: 'github-release',
           repository: 'acme/review-assets',
           releaseId: 42,
           assetId: 7,
-          url: 'https://github.com/acme/review-assets/releases/download/review/frame.png',
+          url: 'https://github.com/acme/review-assets/releases/download/review/screenshot.png',
         },
       }),
       ev('build.completed', { outcome: 'merged' }),
-      ev('dashboard-frame.reclaim-failed', {
-        hostedSeq: 5,
+      ev('pr-attachment.reclaim-failed', {
+        hostedSeq: 6,
         attempt: 1,
         error: 'temporary timeout',
       }),
-      ev('dashboard-frame.reclaimed', { hostedSeq: 5 }),
+      ev('pr-attachment.reclaimed', { hostedSeq: 6 }),
     ])
     const state = reduceBuild(cleanupLog)
     expect(state.status).toBe('done')
     expect(state.outcome).toBe('merged')
     expect(state.phase).toBeUndefined()
     expect(state.failures).toEqual({})
-    expect(state.lastEvent?.type).toBe('dashboard-frame.reclaimed')
+    expect(state.lastEvent?.type).toBe('pr-attachment.reclaimed')
   })
 })
 

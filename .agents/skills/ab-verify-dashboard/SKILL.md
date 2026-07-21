@@ -13,9 +13,10 @@ the diff and not to decide applicability again.
 ## Session shape
 
 1. Run `ab context`.
-2. Run `bun run capture:dashboard`. This drives the local scripted dispatch
-   harness and writes `.ab/dashboard-frames/verify-report.md` plus PNG/text
-   scratch files. It requires no server, network, forge, or live agent runner.
+2. Run `bun run capture:dashboard`. This drives the repo-local scripted
+   dispatch harness and writes `.ab/dashboard-frames/verify-report.md` plus
+   PNG/text scratch files. It requires no server, network, forge, or live agent
+   runner and does not deposit artifacts itself.
 3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool.
    Judge the images themselves. The `.txt` files are human evidence and may
    help identify a frame, but they are not a basis for your verdict.
@@ -24,10 +25,20 @@ the diff and not to decide applicability again.
    overlap; the Harvest row is legible; the narrow frame truncates/wraps
    deliberately without clipping; colour emphasis is present while literal
    status remains readable.
-5. End exactly once:
+5. If and only if every visual criterion passes, designate the reviewed files
+   as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:mixed-wide:text .ab/dashboard-frames/mixed-wide.txt --attach
+   ab artifact put dashboard-frame:mixed-wide:png .ab/dashboard-frames/mixed-wide.png --attach
+   ab artifact put dashboard-frame:mixed-narrow:text .ab/dashboard-frames/mixed-narrow.txt --attach
+   ab artifact put dashboard-frame:mixed-narrow:png .ab/dashboard-frames/mixed-narrow.png --attach
    ab verdict pass --notes .ab/dashboard-frames/verify-report.md
+   ```
+
+   On any failure, designate nothing and end exactly once with:
+
+   ```
    ab verdict fail --report .ab/dashboard-frames/verify-report.md
    ```
 
@@ -44,5 +55,7 @@ the diff and not to decide applicability again.
 - If capture fails before creating the report, create the report only under
   `.ab/dashboard-frames/`, record the command/error and the missing evidence,
   then use the failing terminal above.
+- Never designate evidence from a failed visual run. Attachments are the
+  passing review record, not a capture dump.
 - Do not edit product code or fix what you find. Report it to the implementer
   through the failing verdict.

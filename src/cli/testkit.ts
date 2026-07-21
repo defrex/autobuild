@@ -9,7 +9,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DISPATCHER } from '../events/envelope'
-import type { DashboardFrameHostTarget } from '../ontology'
+import type { PrImageHostTarget } from '../ontology'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
@@ -34,7 +34,7 @@ export function makeEnv(overrides: Partial<CliEnv> = {}): CliEnv {
 
 /** Build + `build.created` + spec@0 (`spec.imported`) — every phase's floor. */
 export async function seedStore(opts: {
-  dashboardFrames?: DashboardFrameHostTarget
+  imageHost?: PrImageHostTarget
 } = {}): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore({ clock: steppingClock() })
   await store.createBuild({ slug: BUILD, repo: 'acme/app', branch: BRANCH })
@@ -50,8 +50,8 @@ export async function seedStore(opts: {
       },
       repo: 'acme/app',
       baseBranch: 'main',
-      ...(opts.dashboardFrames !== undefined
-        ? { dashboardFrames: opts.dashboardFrames }
+      ...(opts.imageHost !== undefined
+        ? { pr: { imageHost: opts.imageHost } }
         : {}),
     },
   })

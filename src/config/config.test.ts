@@ -9,7 +9,7 @@ const READY = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 const COMPLETE_EXAMPLE = `baseBranch = "main"
 capacity = 3
 
-[dashboardFrames]
+[pr.imageHost]
 provider = "github-release"
 repository = "owner/public-review-assets"
 releaseId = 123456
@@ -89,10 +89,12 @@ describe('parseConfig — complete flattened surface', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       baseBranch: 'main',
       capacity: 3,
-      dashboardFrames: {
-        provider: 'github-release',
-        repository: 'owner/public-review-assets',
-        releaseId: 123456,
+      pr: {
+        imageHost: {
+          provider: 'github-release',
+          repository: 'owner/public-review-assets',
+          releaseId: 123456,
+        },
       },
       commands: {
         setup: 'bun install',
@@ -225,22 +227,27 @@ skill = "ab-verify-e2e"
   })
 })
 
-describe('parseConfig — optional dashboard frame hosting', () => {
+describe('parseConfig — optional PR image hosting', () => {
   test('accepts one explicit target and otherwise stays off', () => {
     const enabled = parseConfig(`${READY}
-[dashboardFrames]
+[pr.imageHost]
 provider = "github-release"
 repository = "acme/review-assets"
 releaseId = 123456
 `)
-    expect(enabled.dashboardFrames?.repository).toBe('acme/review-assets')
-    expect(parseConfig(READY).dashboardFrames).toBeUndefined()
+    expect(enabled.pr?.imageHost?.repository).toBe('acme/review-assets')
+    expect(parseConfig(READY).pr).toBeUndefined()
   })
 
   test('is strict and validates provider, repository, and release id', () => {
-    expect(() => parseConfig(`${READY}[dashboardFrames]\nprovider = "s3"\nrepository = "a/b"\nreleaseId = 1\n`)).toThrow(/dashboardFrames/)
-    expect(() => parseConfig(`${READY}[dashboardFrames]\nprovider = "github-release"\nrepository = "bad"\nreleaseId = 1\n`)).toThrow(/dashboardFrames\.repository/)
-    expect(() => parseConfig(`${READY}[dashboardFrames]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 0\n`)).toThrow(/dashboardFrames\.releaseId/)
+    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "s3"\nrepository = "a/b"\nreleaseId = 1\n`)).toThrow(/pr\.imageHost/)
+    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "bad"\nreleaseId = 1\n`)).toThrow(/pr\.imageHost\.repository/)
+    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 0\n`)).toThrow(/pr\.imageHost\.releaseId/)
+    expect(() => parseConfig(`${READY}[pr]\nunknown = true\n`)).toThrow(/pr/)
+  })
+
+  test('rejects the removed dashboardFrames table', () => {
+    expect(() => parseConfig(`${READY}[dashboardFrames]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 1\n`)).toThrow(/dashboardFrames/)
   })
 })
 
@@ -445,7 +452,7 @@ extensions = []
     const root = parseError(`${READY}[polcy]\nstallRounds = 3\n`)
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
-    expect(root.message).toContain('known tables: dashboardFrames, commands')
+    expect(root.message).toContain('known tables: pr, commands')
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')
     expect(parseError(`${READY}[roles.default]\nmdel = "x"\n`).message).toContain('"mdel"')

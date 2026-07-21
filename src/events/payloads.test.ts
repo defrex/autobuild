@@ -19,7 +19,7 @@ function verify(payload: unknown): EventWrite<'verify.completed'> {
   }) as EventWrite<'verify.completed'>
 }
 
-describe('dashboard frame hosting event protocol', () => {
+describe('PR attachment event protocol', () => {
   const target = {
     provider: 'github-release' as const,
     repository: 'acme/review-assets',
@@ -28,7 +28,7 @@ describe('dashboard frame hosting event protocol', () => {
   const asset = {
     ...target,
     assetId: 7,
-    url: 'https://github.com/acme/review-assets/releases/download/review/frame.png',
+    url: 'https://github.com/acme/review-assets/releases/download/review/screenshot.png',
   }
 
   test('build.created remains backwards-readable and may freeze a strict target', () => {
@@ -45,62 +45,78 @@ describe('dashboard frame hosting event protocol', () => {
       validateEventWrite({
         actor: DISPATCHER,
         type: 'build.created',
-        payload: { ...base, dashboardFrames: target },
+        payload: { ...base, pr: { imageHost: target } },
       }).payload,
-    ).toEqual({ ...base, dashboardFrames: target })
+    ).toEqual({ ...base, pr: { imageHost: target } })
     expect(() =>
       validateEventWrite({
         actor: DISPATCHER,
         type: 'build.created',
-        payload: { ...base, dashboardFrames: { ...target, releaseId: 0 } },
+        payload: { ...base, pr: { imageHost: { ...target, releaseId: 0 } } },
+      }),
+    ).toThrow(/invalid payload for "build\.created"/)
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, dashboardFrames: target },
       }),
     ).toThrow(/invalid payload for "build\.created"/)
   })
 
-  test('upload and cleanup facts are strict and actor-owned', () => {
-    const hosted = validateEventWrite({
-      actor: KERNEL,
-      type: 'dashboard-frame.hosted',
+  test('designation, upload, and cleanup facts are strict and actor-owned', () => {
+    const designated = validateEventWrite({
+      actor: agentActor('verify:visual', 's_visual'),
+      type: 'pr-attachment.designated',
       payload: {
-        frameId: 'mixed-wide',
-        artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
-        asset,
+        artifact: { kind: 'visual:screenshot', rev: 2 },
+        filename: 'screenshot.png',
+        mediaType: 'image/png',
       },
-    })
-    expect(hosted.payload).toEqual({
-      frameId: 'mixed-wide',
-      artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
-      asset,
     })
     expect(() =>
       validateEventWrite({
+        actor: KERNEL,
+        type: 'pr-attachment.designated',
+        payload: designated.payload,
+      }),
+    ).toThrow(/may not emit "pr-attachment\.designated"/)
+
+    const hosted = validateEventWrite({
+      actor: KERNEL,
+      type: 'pr-attachment.hosted',
+      payload: { designationSeq: 8, asset },
+    })
+    expect(hosted.payload).toEqual({ designationSeq: 8, asset })
+    expect(() =>
+      validateEventWrite({
         actor: agentActor('finalize', 's_bad'),
-        type: 'dashboard-frame.hosted',
+        type: 'pr-attachment.hosted',
         payload: hosted.payload,
       }),
-    ).toThrow(/may not emit "dashboard-frame\.hosted"/)
+    ).toThrow(/may not emit "pr-attachment\.hosted"/)
 
     expect(
       validateEventWrite({
         actor: DISPATCHER,
-        type: 'dashboard-frame.reclaimed',
+        type: 'pr-attachment.reclaimed',
         payload: { hostedSeq: 9 },
       }).payload,
     ).toEqual({ hostedSeq: 9 })
     expect(
       validateEventWrite({
         actor: DISPATCHER,
-        type: 'dashboard-frame.reclaim-failed',
+        type: 'pr-attachment.reclaim-failed',
         payload: { hostedSeq: 9, attempt: 2, error: 'timeout' },
       }).payload,
     ).toEqual({ hostedSeq: 9, attempt: 2, error: 'timeout' })
     expect(() =>
       validateEventWrite({
         actor: DISPATCHER,
-        type: 'dashboard-frame.reclaimed',
+        type: 'pr-attachment.reclaimed',
         payload: { hostedSeq: 9, extra: true },
       }),
-    ).toThrow(/invalid payload for "dashboard-frame\.reclaimed"/)
+    ).toThrow(/invalid payload for "pr-attachment\.reclaimed"/)
   })
 })
 

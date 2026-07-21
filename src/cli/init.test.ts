@@ -51,7 +51,6 @@ const SKILL_NAMES = [
   'reconcile',
   'spec',
   'tickets',
-  'verify-dashboard',
   'verify-e2e',
 ]
 

@@ -2,8 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { extractDashboardFrameManifest } from '../cli/dashboard/frame-artifacts'
-import { spawnExec } from '../ports/workspace/git-worktree'
+import { spawnExec } from '../src/ports/workspace/git-worktree'
 import {
   captureDashboardFrames,
   type DashboardCaptureResult,
@@ -27,7 +26,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 
 interface Run {
   result: DashboardCaptureResult
-  deposits: Map<string, Uint8Array>
   status: string
 }
 
@@ -52,16 +50,8 @@ async function runCapture(name: string): Promise<Run> {
     'fixture',
   )
 
-  const deposits = new Map<string, Uint8Array>()
-  const result = await captureDashboardFrames({
-    workspacePath: workspace,
-    deposit: async (kind, filePath) => {
-      if (deposits.has(kind)) throw new Error(`duplicate deposit ${kind}`)
-      deposits.set(kind, new Uint8Array(await readFile(filePath)))
-      return 0
-    },
-  })
-  return { result, deposits, status: await git(workspace, 'status', '--porcelain') }
+  const result = await captureDashboardFrames({ workspacePath: workspace })
+  return { result, status: await git(workspace, 'status', '--porcelain') }
 }
 
 test('scripted dispatch capture is deterministic, mixed-state, paired, and source-clean', async () => {
@@ -75,12 +65,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'mixed-wide',
     'mixed-narrow',
   ])
-  expect(first.result.manifest).toEqual(second.result.manifest)
-  expect(
-    extractDashboardFrameManifest(
-      await readFile(first.result.reportPath, 'utf8'),
-    ),
-  ).toEqual(first.result.manifest)
+  const report = await readFile(first.result.reportPath, 'utf8')
+  expect(report).toContain('# Dashboard visual verification')
+  expect(report).toContain('mixed-wide.png')
+  expect(report).toContain('mixed-narrow.txt')
+  expect(report).toContain('- [ ] Every PNG opens and is non-empty.')
 
   for (const frame of first.result.frames) {
     const again = second.result.frames.find((item) => item.id === frame.id)!
@@ -102,21 +91,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text,
   ).toContain('~')
 
-  const expectedKinds = first.result.manifest.frames.flatMap((frame) => [
-    frame.text.kind,
-    frame.png.kind,
-  ])
-  expect([...first.deposits.keys()]).toEqual(expectedKinds)
-  expect([...second.deposits.keys()]).toEqual(expectedKinds)
-  for (const entry of first.result.manifest.frames) {
-    expect(entry.text.rev).toBe(0)
-    expect(entry.png.rev).toBe(0)
-    expect(new TextDecoder().decode(first.deposits.get(entry.text.kind)!)).toBe(
-      first.result.frames.find((frame) => frame.id === entry.id)!.text,
-    )
-    expect(first.deposits.get(entry.png.kind)).toEqual(
-      first.result.frames.find((frame) => frame.id === entry.id)!.png,
-    )
+  for (const frame of first.result.frames) {
+    expect(await readFile(frame.textPath, 'utf8')).toBe(frame.text)
+    expect([...(await readFile(frame.pngPath))]).toEqual([...frame.png])
   }
 
   // One scripted FakeForge PR proves finalize composition ran; every agent

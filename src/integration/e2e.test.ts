@@ -192,7 +192,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(summary.body).toContain(`## Autobuild: ${SLUG}`)
   expect(summary.body).toContain('- plan-review r1: approve')
   expect(summary.body).toContain('- code-review r1: approve')
-  expect(summary.body).toContain('- unit (attempt 1): pass')
+  expect(summary.body).toContain('- <code>unit</code> (attempt 1): pass')
 
   // Artifacts: every deposit, transcripts with §7.1 metadata.
   const artifacts = await h.store.listArtifacts(SLUG)
@@ -722,11 +722,11 @@ baseBranch = "main"
 [commands]
 conditional = "true"
 [verify]
-steps = ["dashboard", "base-only"]
-[verify.dashboard]
+steps = ["visual", "base-only"]
+[verify.visual]
 kind = "agent"
-skill = "ab-verify-dashboard"
-paths = ["src/cli/dashboard/**"]
+skill = "ab-verify-visual"
+paths = ["src/ui/**"]
 [verify.base-only]
 kind = "check"
 command = "conditional"
@@ -738,10 +738,22 @@ readyState = "Ready"
 `
 
   const handlers = happyHandlers()
-  let dashboardSessions = 0
-  handlers['ab-verify-dashboard'] = async (cli) => {
-    dashboardSessions += 1
+  let visualSessions = 0
+  handlers['ab-verify-visual'] = async (cli) => {
+    visualSessions += 1
     await cli.run(['context'])
+    const screenshot = await writeFileIn(
+      cli.ws,
+      '.ab/evidence/reconciled-ui.png',
+      'simulated image evidence\n',
+    )
+    await cli.run([
+      'artifact',
+      'put',
+      'visual:reconciled-ui',
+      screenshot,
+      '--attach',
+    ])
     await cli.run(['verdict', 'pass'])
   }
   handlers['reconcile'] = async (cli) => {
@@ -757,18 +769,18 @@ readyState = "Ready"
       { cwd: cli.ws },
     )
     expect(merge.exitCode).toBe(0)
-    // This build-owned reconciliation change brings dashboard verification
+    // This build-owned reconciliation change brings visual verification
     // into scope. The upstream-only base-only/ file must remain excluded.
     await writeFileIn(
       cli.ws,
-      'src/cli/dashboard/reconciled.ts',
+      'src/ui/reconciled.ts',
       'export const reconciled = true\n',
     )
-    await commitAll(cli.ws, 'reconcile: add dashboard resolution')
+    await commitAll(cli.ws, 'reconcile: add visual resolution')
     const notes = await writeFileIn(
       cli.ws,
       '.ab/reconcile-notes.md',
-      'Merged the refreshed base and added the dashboard-side resolution.\n',
+      'Merged the refreshed base and added the visual resolution.\n',
     )
     await cli.run(['done', '--notes', notes])
   }
@@ -787,15 +799,15 @@ readyState = "Ready"
     normalizeVerifyCompletion(event.payload),
   )
   expect(results.map(({ step, attempt, outcome }) => ({ step, attempt, outcome }))).toEqual([
-    { step: 'dashboard', attempt: 1, outcome: 'skipped' },
+    { step: 'visual', attempt: 1, outcome: 'skipped' },
     { step: 'base-only', attempt: 1, outcome: 'skipped' },
   ])
-  // The kernel-authored skip starts no dashboard agent and consumes no
+  // The kernel-authored skip starts no visual agent and consumes no
   // failure attempt; the first actual session appears only after a path match.
-  expect(dashboardSessions).toBe(0)
+  expect(visualSessions).toBe(0)
   expect(
     [...h.agents.sessions.values()].some(
-      (session) => session.opts.skill === 'ab-verify-dashboard',
+      (session) => session.opts.skill === 'ab-verify-visual',
     ),
   ).toBe(false)
 
@@ -816,16 +828,16 @@ readyState = "Ready"
     normalizeVerifyCompletion(event.payload),
   )
   expect(results.map(({ step, attempt, outcome }) => ({ step, attempt, outcome }))).toEqual([
-    { step: 'dashboard', attempt: 1, outcome: 'skipped' },
+    { step: 'visual', attempt: 1, outcome: 'skipped' },
     { step: 'base-only', attempt: 1, outcome: 'skipped' },
-    { step: 'dashboard', attempt: 2, outcome: 'pass' },
+    { step: 'visual', attempt: 2, outcome: 'pass' },
     { step: 'base-only', attempt: 2, outcome: 'skipped' },
   ])
   expect(results[2]?.outcome).toBe('pass')
-  expect(dashboardSessions).toBe(1)
+  expect(visualSessions).toBe(1)
   expect(
     [...h.agents.sessions.values()].filter(
-      (session) => session.opts.skill === 'ab-verify-dashboard',
+      (session) => session.opts.skill === 'ab-verify-visual',
     ),
   ).toHaveLength(1)
   expect(results[3]).toMatchObject({
@@ -834,6 +846,16 @@ readyState = "Ready"
   })
   expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
   expect(ofType(events, 'finalize.completed')).toHaveLength(1)
+  const [designation] = ofType(events, 'pr-attachment.designated')
+  expect(designation?.payload).toEqual({
+    artifact: { kind: 'visual:reconciled-ui', rev: 0 },
+    filename: 'reconciled-ui.png',
+    mediaType: 'image/png',
+  })
+  expect(h.forge.comments.at(-1)?.body).toContain(
+    '<code>visual:reconciled-ui@0</code>',
+  )
+  expect(h.forge.comments.at(-1)?.body).toContain('ab artifact download')
   expect(h.cliErrors).toEqual([])
 }, 30_000)
 

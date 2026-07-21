@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { KERNEL, agentActor } from '../events/envelope'
+import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
 import type { MemoryBuildStore } from '../store/memory'
 import {
@@ -822,13 +823,65 @@ describe('runCli — artifact and observe', () => {
     expect(getter.out).toEqual(['# The plan\n'])
   })
 
+  test('artifact put --attach prints only the rev and refreshes a complete existing PR summary', async () => {
+    await store.close()
+    store = await seedStore({
+      imageHost: {
+        provider: 'github-release',
+        repository: 'acme/review-assets',
+        releaseId: 42,
+      },
+    })
+    const forge = new FakeForge({ prAttachments: true })
+    const pr = await forge.openPr({
+      workspacePath: tmp,
+      head: BRANCH,
+      base: 'main',
+      title: 'Existing PR',
+      body: 'Body',
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr },
+    })
+    const file = join(tmp, 'late.png')
+    const bytes = new Uint8Array([137, 80, 78, 71, 9])
+    await writeFile(file, bytes)
+    const d = makeDeps({
+      store,
+      env: makeEnv({
+        phase: 'verify:visual-check',
+        round: 2,
+        session: 's_late',
+      }),
+      workspacePath: tmp,
+      forge,
+    })
+
+    expect(
+      await runCli(
+        ['artifact', 'put', 'visual:late', file, '--attach'],
+        d,
+      ),
+    ).toBe(0)
+    expect(d.out).toEqual(['0'])
+    expect(forge.prAttachmentUploads).toHaveLength(1)
+    expect(forge.comments).toHaveLength(1)
+    expect(forge.comments[0]!.body).toContain('<code>visual:late@0</code>')
+    expect(forge.comments[0]!.body).toContain('<img ')
+    expect(
+      (await store.getEvents(BUILD)).map((event) => event.type),
+    ).toContain('pr-attachment.designated')
+  })
+
   test('artifact download runs without a phase tuple and writes exact binary bytes', async () => {
     const storeRef = join(tmp, 'artifact-download-store')
     const local = openLocalStore(storeRef)
     await local.createBuild({ slug: 'finished', repo: tmp })
     const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 1])
     await local.putArtifact('finished', {
-      kind: 'dashboard-frame:wide:png',
+      kind: 'visual:wide',
       content: bytes,
     })
     await local.close()
@@ -840,7 +893,7 @@ describe('runCli — artifact and observe', () => {
         'artifact',
         'download',
         'finished',
-        'dashboard-frame:wide:png@0',
+        'visual:wide@0',
         '--output',
         output,
       ],
@@ -858,7 +911,7 @@ describe('runCli — artifact and observe', () => {
     )
     expect(code).toBe(0)
     expect(err).toEqual([])
-    expect(out.join('\n')).toContain('dashboard-frame:wide:png@0')
+    expect(out.join('\n')).toContain('visual:wide@0')
     expect(new Uint8Array(await Bun.file(output).bytes())).toEqual(bytes)
   })
 
@@ -869,11 +922,18 @@ describe('runCli — artifact and observe', () => {
       ['artifact', 'download', 'build', 'kind', '--output'],
       ['artifact', 'download', 'build', 'kind', '--output', '--store'],
       ['artifact', 'download', 'build', 'kind', '--unknown', 'x'],
+      ['artifact', 'download', 'build', 'kind', '--output', 'x', '--attach'],
     ]) {
       const d = deps()
       expect(await runCli(argv, d)).toBe(1)
       expect(d.err.join('\n')).toContain('usage: ab artifact download')
     }
+  })
+
+  test('--attach is scoped to artifact put', async () => {
+    const d = deps()
+    expect(await runCli(['artifact', 'get', 'spec', '--attach'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('usage: ab artifact get')
   })
 
   test('artifact with a bad subcommand prints usage and exits 1', async () => {

@@ -75,9 +75,10 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'finalize.started': ['kernel'],
   'finalize.completed': ['kernel'],
   'finalize.step-completed': ['kernel', 'agent'],
-  'dashboard-frame.hosted': ['kernel'],
-  'dashboard-frame.reclaimed': ['dispatcher'],
-  'dashboard-frame.reclaim-failed': ['dispatcher'],
+  'pr-attachment.designated': ['agent'],
+  'pr-attachment.hosted': ['kernel'],
+  'pr-attachment.reclaimed': ['dispatcher'],
+  'pr-attachment.reclaim-failed': ['dispatcher'],
 
   'pr.auto-merge-enabled': ['kernel', 'dispatcher'],
   'pr.auto-merge-disabled': ['kernel', 'dispatcher'],

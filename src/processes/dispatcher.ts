@@ -40,6 +40,7 @@ import {
   decideHarvestControl,
   reduceHarvest,
 } from '../kernel/harvest'
+import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
 import type {
@@ -433,20 +434,6 @@ function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
   return { kind: meta.kind, rev: meta.revision }
 }
 
-function pendingDashboardFrameHosts(
-  events: AbEvent[],
-): Extract<AbEvent, { type: 'dashboard-frame.hosted' }>[] {
-  const reclaimed = new Set(
-    events
-      .filter((event) => event.type === 'dashboard-frame.reclaimed')
-      .map((event) => event.payload.hostedSeq),
-  )
-  return events.filter(
-    (event): event is Extract<AbEvent, { type: 'dashboard-frame.hosted' }> =>
-      event.type === 'dashboard-frame.hosted' && !reclaimed.has(event.seq),
-  )
-}
-
 export class Dispatcher {
   private readonly leaseTtlMs: number
   private readonly triageState: string
@@ -541,7 +528,7 @@ export class Dispatcher {
       // has its own crash window after build.completed. Revisit only pending
       // hosted handles; this never relaunches a runner or consumes capacity.
       if (state.status === 'done') {
-        await this.reclaimDashboardFrames(record.slug, events)
+        await this.reclaimPrAttachments(record.slug, events)
         continue
       }
       if (state.status === 'aborted') {
@@ -578,7 +565,7 @@ export class Dispatcher {
       type: 'build.completed',
       payload: { outcome: 'abandoned' },
     } satisfies EventWrite<'build.completed'>)
-    await this.reclaimDashboardFrames(record.slug, events)
+    await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
   }
 
@@ -694,7 +681,7 @@ export class Dispatcher {
           type: 'build.completed',
           payload: { outcome: 'merged' },
         } satisfies EventWrite<'build.completed'>)
-        await this.reclaimDashboardFrames(record.slug, events)
+        await this.reclaimPrAttachments(record.slug, events)
         report.merged += 1
         return
       }
@@ -720,7 +707,7 @@ export class Dispatcher {
           type: 'build.completed',
           payload: { outcome: 'closed-unmerged' },
         } satisfies EventWrite<'build.completed'>)
-        await this.reclaimDashboardFrames(record.slug, events)
+        await this.reclaimPrAttachments(record.slug, events)
         report.closed += 1
         return
       }
@@ -735,21 +722,21 @@ export class Dispatcher {
    * is deliberately post-terminal and best-effort: a provider, timeout, or
    * store failure cannot roll back build.completed/ticket/workspace work.
    * Pending handles remain derivable and are retried on every later tick. */
-  private async reclaimDashboardFrames(
+  private async reclaimPrAttachments(
     slug: string,
     events: AbEvent[],
   ): Promise<void> {
-    for (const hosted of pendingDashboardFrameHosts(events)) {
+    for (const hosted of pendingPrAttachmentReclaims(events)) {
       const priorAttempts = events.filter(
         (event) =>
-          event.type === 'dashboard-frame.reclaim-failed' &&
+          event.type === 'pr-attachment.reclaim-failed' &&
           event.payload.hostedSeq === hosted.seq,
       ).length
       try {
-        const capability = this.deps.forge.dashboardFrames
+        const capability = this.deps.forge.prAttachments
         if (capability === undefined) {
           throw new Error(
-            `forge ${this.deps.forge.name} does not support dashboard frame reclamation`,
+            `forge ${this.deps.forge.name} does not support PR attachment reclamation`,
           )
         }
         await capability.reclaim({
@@ -758,20 +745,20 @@ export class Dispatcher {
         })
         await this.deps.store.append(slug, {
           actor: DISPATCHER,
-          type: 'dashboard-frame.reclaimed',
+          type: 'pr-attachment.reclaimed',
           payload: { hostedSeq: hosted.seq },
         })
       } catch (error) {
         try {
           await this.deps.store.append(slug, {
             actor: DISPATCHER,
-            type: 'dashboard-frame.reclaim-failed',
+            type: 'pr-attachment.reclaim-failed',
             payload: {
               hostedSeq: hosted.seq,
               attempt: priorAttempts + 1,
               error:
                 (error instanceof Error ? error.message : String(error)).trim() ||
-                'dashboard frame reclamation failed without an error message',
+                'PR attachment reclamation failed without an error message',
             },
           })
         } catch {
@@ -1041,9 +1028,7 @@ export class Dispatcher {
           ticket: ticket.ref,
           repo: this.deps.repo,
           baseBranch,
-          ...(config.dashboardFrames !== undefined
-            ? { dashboardFrames: config.dashboardFrames }
-            : {}),
+          ...(config.pr !== undefined ? { pr: config.pr } : {}),
         },
       } satisfies EventWrite<'build.created'>)
       if (autoMergeUser !== undefined) {

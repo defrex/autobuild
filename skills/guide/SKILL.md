@@ -146,8 +146,9 @@ evaluated as config logic.
 tables are **errors**, not warnings — a typo must not silently disable a
 verifier. The open maps (`[commands]`, `[roles]`, and the named
 `[verify.<step>]` / `[finalize.<step>]` table sets) admit user-chosen names,
-but every value in them remains strictly validated. The removed `[project]`,
-`[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
+but every value in them remains strictly validated. The removed
+`[dashboardFrames]`, `[project]`, `[dispatcher]`, `[harvest]`, and `[outer]`
+tables have no aliases or migration
 shims; they fail as ordinary unknown top-level keys.
 
 ### Root scalars
@@ -160,31 +161,43 @@ under the preceding table.
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
 
-### `[dashboardFrames]`
+### `[pr]`
 
-Optional and **off by default**. When configured, finalize copies the exact PNGs
-from a successful current-cycle `verify:dashboard` report to an existing public
-GitHub release and embeds their `browser_download_url` values in the PR summary.
-The release must already be published and mutable; Autobuild creates no release
-or tag. A private source repository must name a separate public asset repository
-because GitHub's image proxy cannot fetch authenticated release assets. This is
-an explicit temporary-public-disclosure opt-in.
+Optional PR-projection settings. Omission leaves artifact attachments text-only.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `provider` | — | required literal `"github-release"` | Selects the only dashboard-frame host implemented in this release. |
+| `imageHost` | — | optional `[pr.imageHost]` table | Opts attached images into temporary public hosting and inline PR rendering. |
+
+### `[pr.imageHost]`
+
+Optional and **off by default**. Any agent session may explicitly designate an
+exact deposited artifact with `ab artifact put <kind> <file> --attach`. Every
+attachment receives a pinned BuildStore download command in the PR summary.
+When this table is configured, only attachments whose normalized media type is
+`image/*` are copied to an existing public GitHub release and rendered inline;
+non-images remain text-download-only. The release must already be published and
+mutable; Autobuild creates no release or tag. A private source repository must
+name a separate public asset repository because GitHub's image proxy cannot
+fetch authenticated assets. This is an explicit temporary-public-disclosure
+opt-in.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `provider` | — | required literal `"github-release"` | Selects the only image host implemented in this release. |
 | `repository` | — | required nonblank `"owner/repo"` pair | Public repository that owns the pre-existing release. |
 | `releaseId` | — | required positive integer | Numeric GitHub release id used for upload and deletion. |
 
 The `gh` identity running Autobuild needs Contents write permission on the host
 repository. Obtain an existing release's numeric id with, for example,
-`gh api repos/owner/repo/releases/tags/<tag> --jq .id`. Upload/validation/timeout
-failure records a follow-up observation
-and preserves the complete text-frame comment; it never changes verification.
-Hosted copies are deleted automatically after `build.completed` (404 is already
-clean), so their inline URLs intentionally stop working after the review window.
-The authoritative BuildStore frame artifacts remain queryable under the store's
-separate retention policy.
+`gh api repos/owner/repo/releases/tags/<tag> --jq .id`. Upload, validation, or
+timeout failure records a follow-up observation and preserves every exact text
+retrieval command; it never changes verification or blocks finalize. Hosted
+copies are deleted after `build.completed` (404 is already clean), and failed
+deletions remain durable and retry on later dispatcher ticks. Their inline URLs
+therefore intentionally stop working after the review window. The authoritative
+BuildStore artifacts remain queryable under the store's separate retention
+policy.
 
 ### `[commands]`
 
@@ -590,10 +603,14 @@ prose: a `Ticket[]` for `list`, and the complete `Ticket` for `show` or `move`.
 is the read-only, sessionless binary retrieval form. It works after a build is
 terminal, writes exact bytes (creating parent directories), verifies that the
 build belongs to this repository, and uses the standard explicit `--store` >
-nonblank `AB_STORE` > repository-local selection. Use an exact `@rev` from a
-verify report or PR comment when retrieving dashboard PNG evidence. In-session
-`ab artifact put|get` remain own-build commands and still require ambient phase
-auth.
+nonblank `AB_STORE` > repository-local selection. Use the exact pinned `@rev`
+from a PR attachment command.
+
+In a build session, `ab artifact put <kind> <file> --attach` atomically deposits
+the exact bytes and designates that revision for the PR. A later designation of
+the same kind replaces it; distinct kinds remain distinct attachments. The
+ordinary form without `--attach` remains a private BuildStore deposit, and
+in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
@@ -814,7 +831,6 @@ default, when you need to know what this repo's version says).
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
-| `ab-verify-dashboard` | repository `verify:dashboard` phase | Drive the deterministic local dispatch simulation and inspect every colour PNG frame; path applicability is kernel-owned and the skill never self-skips. |
 | `ab-verify-e2e` | a `verify:<step>` phase | **Sample** agent-verify skill: drive the running app and check acceptance criteria. Runs only if a `[verify.<step>]` table names it. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |

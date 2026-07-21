@@ -4,17 +4,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
-  dashboardFrameHostSchema,
-  hostedDashboardFrameAssetSchema,
-  type HostedDashboardFrameAsset,
+  hostedPrAttachmentAssetSchema,
+  prAttachmentSchema,
+  prImageHostSchema,
+  type HostedPrAttachmentAsset,
 } from '../../ontology'
 import type {
-  DashboardFrameHosting,
-  DashboardFrameReclaimRequest,
-  DashboardFrameUploadRequest,
+  PrAttachmentHosting,
+  PrAttachmentReclaimRequest,
+  PrAttachmentUploadRequest,
 } from '../types'
 
-export interface DashboardFrameExecResult {
+export interface PrAttachmentExecResult {
   stdout: string
   stderr: string
   exitCode: number
@@ -22,24 +23,24 @@ export interface DashboardFrameExecResult {
 
 /** The production GitHub exec seam accepts cancellation; existing test seams
  * may ignore the optional signal without changing their shape. */
-export type DashboardFrameExec = (
+export type PrAttachmentExec = (
   cmd: string[],
   opts: { cwd: string; signal?: AbortSignal },
-) => Promise<DashboardFrameExecResult>
+) => Promise<PrAttachmentExecResult>
 
-export interface DashboardFrameTempFile {
+export interface PrAttachmentTempFile {
   path: string
   cleanup(): Promise<void>
 }
 
-export type DashboardFrameTempFileWriter = (
+export type PrAttachmentTempFileWriter = (
   content: Uint8Array,
-) => Promise<DashboardFrameTempFile>
+) => Promise<PrAttachmentTempFile>
 
-export const defaultDashboardFrameTempFileWriter: DashboardFrameTempFileWriter =
+export const defaultPrAttachmentTempFileWriter: PrAttachmentTempFileWriter =
   async (content) => {
-    const dir = await mkdtemp(join(tmpdir(), 'ab-dashboard-frame-'))
-    const path = join(dir, 'frame.png')
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pr-attachment-'))
+    const path = join(dir, 'attachment.bin')
     try {
       await writeFile(path, content)
     } catch (error) {
@@ -95,7 +96,7 @@ function errorMessage(error: unknown): string {
 }
 
 function repositoryParts(repository: string): [string, string] {
-  dashboardFrameHostSchema.shape.repository.parse(repository)
+  prImageHostSchema.shape.repository.parse(repository)
   return repository.split('/') as [string, string]
 }
 
@@ -104,19 +105,27 @@ function repositoryEndpoint(repository: string): string {
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 }
 
-/** Hash all identity inputs with explicit separators; no user-controlled text
- * enters the GitHub filename. */
-export function githubDashboardFrameAssetName(
-  request: Pick<DashboardFrameUploadRequest, 'prUrl' | 'name' | 'sha256'>,
+/** Hash all identity inputs with explicit separators. Only a short,
+ * validated extension survives from the user-controlled filename. */
+export function githubPrAttachmentAssetName(
+  request: Pick<PrAttachmentUploadRequest, 'prUrl' | 'attachment' | 'sha256'>,
 ): string {
+  const { artifact, filename, mediaType } = request.attachment
+  const extension = filename.match(/\.([A-Za-z0-9]{1,10})$/)?.[1]?.toLowerCase()
   const digest = createHash('sha256')
     .update(request.prUrl)
     .update('\0')
-    .update(request.name)
+    .update(artifact.kind)
+    .update('\0')
+    .update(String(artifact.rev))
+    .update('\0')
+    .update(filename)
+    .update('\0')
+    .update(mediaType)
     .update('\0')
     .update(request.sha256)
     .digest('hex')
-  return `autobuild-dashboard-${digest}.png`
+  return `autobuild-attachment-${digest}${extension === undefined ? '' : `.${extension}`}`
 }
 
 function uploadEndpoint(uploadUrl: string, name: string): string {
@@ -131,7 +140,7 @@ function flattenAssets(value: z.infer<typeof pagedAssetsJson>): ReleaseAsset[] {
     : (value as ReleaseAsset[])
 }
 
-function isNotFound(result: DashboardFrameExecResult): boolean {
+function isNotFound(result: PrAttachmentExecResult): boolean {
   return (
     result.exitCode !== 0 &&
     /(?:HTTP\s*404|status(?: code)?\s*[:=]?\s*404|\b404\s+Not Found\b|Not Found\s*\(HTTP 404\))/i.test(
@@ -140,25 +149,25 @@ function isNotFound(result: DashboardFrameExecResult): boolean {
   )
 }
 
-export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
-  private readonly exec: DashboardFrameExec
-  private readonly writeTempFile: DashboardFrameTempFileWriter
+export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
+  private readonly exec: PrAttachmentExec
+  private readonly writeTempFile: PrAttachmentTempFileWriter
   private readonly commandTimeoutMs: number
   /** One GitHubForge instance serves one plumbing operation in production;
-   * share the target probe across that operation's frame uploads. */
+   * share the target probe across that operation's attachment uploads. */
   private readonly targetValidations = new Map<
     string,
     Promise<z.infer<typeof releaseJson>>
   >()
 
   constructor(opts: {
-    exec: DashboardFrameExec
-    writeTempFile?: DashboardFrameTempFileWriter
+    exec: PrAttachmentExec
+    writeTempFile?: PrAttachmentTempFileWriter
     commandTimeoutMs?: number
   }) {
     this.exec = opts.exec
     this.writeTempFile =
-      opts.writeTempFile ?? defaultDashboardFrameTempFileWriter
+      opts.writeTempFile ?? defaultPrAttachmentTempFileWriter
     this.commandTimeoutMs =
       opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   }
@@ -166,7 +175,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
   private async execute(
     cmd: string[],
     cwd: string,
-  ): Promise<DashboardFrameExecResult> {
+  ): Promise<PrAttachmentExecResult> {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -174,7 +183,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
         controller.abort()
         reject(
           new Error(
-            `dashboard frame GitHub command timed out after ${this.commandTimeoutMs}ms: ${cmd.join(' ')}`,
+            `PR attachment GitHub command timed out after ${this.commandTimeoutMs}ms: ${cmd.join(' ')}`,
           ),
         )
       }, Math.max(0, this.commandTimeoutMs))
@@ -193,7 +202,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
     const result = await this.execute(cmd, cwd)
     if (result.exitCode !== 0) {
       throw new Error(
-        `dashboard frame forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
+        `PR attachment forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
           (result.stderr.trim() || result.stdout.trim()),
       )
     }
@@ -215,9 +224,9 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
   }
 
   private async validateTarget(
-    request: DashboardFrameUploadRequest,
+    request: PrAttachmentUploadRequest,
   ): Promise<z.infer<typeof releaseJson>> {
-    const target = dashboardFrameHostSchema.parse(request.target)
+    const target = prImageHostSchema.parse(request.target)
     const root = repositoryEndpoint(target.repository)
     const repoCmd = ['gh', 'api', root]
     const repository = this.parseJson(
@@ -230,7 +239,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
       (repository.visibility !== undefined && repository.visibility !== 'public')
     ) {
       throw new Error(
-        `dashboard frame host ${target.repository} is private; GitHub cannot render authenticated release assets inline`,
+        `PR attachment host ${target.repository} is private; GitHub cannot render authenticated release assets inline`,
       )
     }
 
@@ -246,24 +255,24 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
     )
     if (release.id !== target.releaseId) {
       throw new Error(
-        `dashboard frame host returned release ${release.id}, expected ${target.releaseId}`,
+        `PR attachment host returned release ${release.id}, expected ${target.releaseId}`,
       )
     }
     if (release.draft || release.published_at === null) {
       throw new Error(
-        `dashboard frame host release ${target.repository}#${target.releaseId} is not published`,
+        `PR attachment host release ${target.repository}#${target.releaseId} is not published`,
       )
     }
     if (release.immutable === true) {
       throw new Error(
-        `dashboard frame host release ${target.repository}#${target.releaseId} is immutable`,
+        `PR attachment host release ${target.repository}#${target.releaseId} is immutable`,
       )
     }
     return release
   }
 
   private validatedTarget(
-    request: DashboardFrameUploadRequest,
+    request: PrAttachmentUploadRequest,
   ): Promise<z.infer<typeof releaseJson>> {
     const key = `${request.target.repository}\0${request.target.releaseId}`
     const existing = this.targetValidations.get(key)
@@ -277,7 +286,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
   }
 
   private async listAssets(
-    request: DashboardFrameUploadRequest,
+    request: PrAttachmentUploadRequest,
   ): Promise<ReleaseAsset[]> {
     const root = repositoryEndpoint(request.target.repository)
     const cmd = [
@@ -297,35 +306,35 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
 
   private assertCompatibleAsset(
     asset: ReleaseAsset,
-    expected: { name: string; size: number; digest: string },
-    target: DashboardFrameUploadRequest['target'],
-  ): HostedDashboardFrameAsset {
+    expected: { name: string; mediaType: string; size: number; digest: string },
+    target: PrAttachmentUploadRequest['target'],
+  ): HostedPrAttachmentAsset {
     if (asset.name !== expected.name) {
       throw new Error(
-        `dashboard frame asset has name ${JSON.stringify(asset.name)}, expected ${JSON.stringify(expected.name)}`,
+        `PR attachment asset has name ${JSON.stringify(asset.name)}, expected ${JSON.stringify(expected.name)}`,
       )
     }
     if (asset.state !== 'uploaded') {
       throw new Error(
-        `dashboard frame asset ${asset.name} has state ${JSON.stringify(asset.state)}, expected "uploaded"`,
+        `PR attachment asset ${asset.name} has state ${JSON.stringify(asset.state)}, expected "uploaded"`,
       )
     }
-    if (asset.content_type !== 'image/png') {
+    if (asset.content_type !== expected.mediaType) {
       throw new Error(
-        `dashboard frame asset ${asset.name} has content type ${JSON.stringify(asset.content_type)}, expected "image/png"`,
+        `PR attachment asset ${asset.name} has content type ${JSON.stringify(asset.content_type)}, expected ${JSON.stringify(expected.mediaType)}`,
       )
     }
     if (asset.size !== expected.size) {
       throw new Error(
-        `dashboard frame asset ${asset.name} has size ${asset.size}, expected ${expected.size}`,
+        `PR attachment asset ${asset.name} has size ${asset.size}, expected ${expected.size}`,
       )
     }
     if (asset.digest != null && asset.digest !== expected.digest) {
       throw new Error(
-        `dashboard frame asset ${asset.name} has digest ${JSON.stringify(asset.digest)}, expected ${JSON.stringify(expected.digest)}`,
+        `PR attachment asset ${asset.name} has digest ${JSON.stringify(asset.digest)}, expected ${JSON.stringify(expected.digest)}`,
       )
     }
-    return hostedDashboardFrameAssetSchema.parse({
+    return hostedPrAttachmentAssetSchema.parse({
       provider: 'github-release',
       repository: target.repository,
       releaseId: target.releaseId,
@@ -335,30 +344,34 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
   }
 
   async upload(
-    request: DashboardFrameUploadRequest,
-  ): Promise<HostedDashboardFrameAsset> {
-    const target = dashboardFrameHostSchema.parse(request.target)
+    request: PrAttachmentUploadRequest,
+  ): Promise<HostedPrAttachmentAsset> {
+    const target = prImageHostSchema.parse(request.target)
     if (!SHA256.test(request.sha256)) {
-      throw new Error('dashboard frame upload requires a full lowercase SHA-256 blob ref')
+      throw new Error('PR attachment upload requires a full lowercase SHA-256 blob ref')
     }
     const actual = createHash('sha256').update(request.content).digest('hex')
     if (actual !== request.sha256) {
       throw new Error(
-        `dashboard frame bytes hash to ${actual}, not expected blob ${request.sha256}`,
+        `PR attachment bytes hash to ${actual}, not expected blob ${request.sha256}`,
       )
     }
-    if (request.name.trim() === '') {
-      throw new Error('dashboard frame upload name must be non-blank')
+    const attachment = prAttachmentSchema.parse(request.attachment)
+    if (!attachment.mediaType.startsWith('image/')) {
+      throw new Error(
+        `PR attachment image host accepts only image/* media, got ${JSON.stringify(attachment.mediaType)}`,
+      )
     }
     if (request.prUrl.trim() === '') {
-      throw new Error('dashboard frame upload PR URL must be non-blank')
+      throw new Error('PR attachment upload PR URL must be non-blank')
     }
 
-    const normalized = { ...request, target }
+    const normalized = { ...request, target, attachment }
     const release = await this.validatedTarget(normalized)
-    const filename = githubDashboardFrameAssetName(normalized)
+    const filename = githubPrAttachmentAssetName(normalized)
     const expected = {
       name: filename,
+      mediaType: normalized.attachment.mediaType,
       size: normalized.content.byteLength,
       digest: `sha256:${normalized.sha256}`,
     }
@@ -369,7 +382,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
     if (existing !== undefined) {
       // GitHub may leave an incomplete starter/open row when an upload dies.
       // It is safe to remove because its deterministic name belongs to this
-      // exact PR/frame/blob identity; an uploaded mismatch is never clobbered.
+      // exact PR/attachment/blob identity; an uploaded mismatch is never clobbered.
       if (existing.state === 'starter' || existing.state === 'open') {
         await this.deleteAsset(
           normalized.workspacePath,
@@ -390,7 +403,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
         'POST',
         uploadEndpoint(release.upload_url, filename),
         '--header',
-        'Content-Type: image/png',
+        `Content-Type: ${normalized.attachment.mediaType}`,
         '--input',
         temp.path,
       ]
@@ -402,7 +415,7 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
         )
         if (uploaded.name !== filename) {
           throw new Error(
-            `dashboard frame upload returned name ${JSON.stringify(uploaded.name)}, expected ${JSON.stringify(filename)}`,
+            `PR attachment upload returned name ${JSON.stringify(uploaded.name)}, expected ${JSON.stringify(filename)}`,
           )
         }
         return this.assertCompatibleAsset(uploaded, expected, target)
@@ -460,13 +473,13 @@ export class GitHubDashboardFrameHosting implements DashboardFrameHosting {
     const result = await this.execute(cmd, workspacePath)
     if (result.exitCode === 0 || isNotFound(result)) return
     throw new Error(
-      `dashboard frame forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
+      `PR attachment forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
         (result.stderr.trim() || result.stdout.trim()),
     )
   }
 
-  async reclaim(request: DashboardFrameReclaimRequest): Promise<void> {
-    const asset = hostedDashboardFrameAssetSchema.parse(request.asset)
+  async reclaim(request: PrAttachmentReclaimRequest): Promise<void> {
+    const asset = hostedPrAttachmentAssetSchema.parse(request.asset)
     await this.deleteAsset(request.workspacePath, asset.repository, asset.assetId)
   }
 }

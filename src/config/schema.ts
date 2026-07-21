@@ -11,14 +11,19 @@
  * user-chosen names, while every value remains strictly validated.
  */
 import { z } from 'zod'
-import { dashboardFrameHostSchema } from '../ontology'
+import { prImageHostSchema } from '../ontology'
 
-// ── [dashboardFrames] ────────────────────────────────────────────────────────
+// ── [pr] / [pr.imageHost] ────────────────────────────────────────────────────
 
-/** Optional public GitHub release used only for review-window dashboard PNG
- * copies. Omission is intentionally `undefined`: hosting is off by default. */
-export const dashboardFramesSchema = dashboardFrameHostSchema
-export type DashboardFramesConfig = z.infer<typeof dashboardFramesSchema>
+/** Optional public GitHub release used for review-window image copies.
+ * Omission is intentionally `undefined`: hosting is off by default. */
+export const imageHostSchema = prImageHostSchema
+export type ImageHostConfig = z.infer<typeof imageHostSchema>
+
+export const prSchema = z.strictObject({
+  imageHost: imageHostSchema.optional(),
+})
+export type PrConfig = z.infer<typeof prSchema>
 
 // ── [commands] ───────────────────────────────────────────────────────────────
 //
@@ -304,7 +309,7 @@ const configRootSchema = z.strictObject({
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */
   capacity: z.number().int().positive().default(1),
-  dashboardFrames: dashboardFramesSchema.optional(),
+  pr: prSchema.optional(),
   commands: commandsSchema.prefault({}),
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),

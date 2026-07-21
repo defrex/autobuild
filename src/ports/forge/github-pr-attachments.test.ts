@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, test } from 'bun:test'
-import type { DashboardFrameUploadRequest } from '../types'
+import type { PrAttachmentUploadRequest } from '../types'
 import {
-  GitHubDashboardFrameHosting,
-  githubDashboardFrameAssetName,
-  type DashboardFrameExec,
-  type DashboardFrameExecResult,
-  type DashboardFrameTempFileWriter,
-} from './github-dashboard-frames'
+  GitHubPrAttachmentHosting,
+  githubPrAttachmentAssetName,
+  type PrAttachmentExec,
+  type PrAttachmentExecResult,
+  type PrAttachmentTempFileWriter,
+} from './github-pr-attachments'
 
 interface Call {
   cmd: string[]
@@ -15,10 +15,10 @@ interface Call {
   signal?: AbortSignal
 }
 
-function scripted(responses: Partial<DashboardFrameExecResult>[]) {
+function scripted(responses: Partial<PrAttachmentExecResult>[]) {
   const calls: Call[] = []
   const queue = [...responses]
-  const exec: DashboardFrameExec = async (cmd, opts) => {
+  const exec: PrAttachmentExec = async (cmd, opts) => {
     calls.push({ cmd, cwd: opts.cwd, signal: opts.signal })
     const next = queue.shift() ?? {}
     return { stdout: '', stderr: '', exitCode: 0, ...next }
@@ -28,7 +28,7 @@ function scripted(responses: Partial<DashboardFrameExecResult>[]) {
 
 const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
 const sha256 = createHash('sha256').update(bytes).digest('hex')
-const request: DashboardFrameUploadRequest = {
+const request: PrAttachmentUploadRequest = {
   workspacePath: '/ws/build',
   target: {
     provider: 'github-release',
@@ -36,11 +36,15 @@ const request: DashboardFrameUploadRequest = {
     releaseId: 42,
   },
   prUrl: 'https://github.com/acme/app/pull/9',
-  name: 'mixed-wide',
+  attachment: {
+    artifact: { kind: 'visual:screenshot', rev: 2 },
+    filename: 'screenshot.png',
+    mediaType: 'image/png',
+  },
   content: bytes,
   sha256,
 }
-const filename = githubDashboardFrameAssetName(request)
+const filename = githubPrAttachmentAssetName(request)
 const downloadUrl =
   `https://github.com/acme/review-assets/releases/download/review/${filename}`
 
@@ -72,7 +76,7 @@ function asset(overrides: Record<string, unknown> = {}): string {
 function tempWriter() {
   const writes: Uint8Array[] = []
   let cleanups = 0
-  const writer: DashboardFrameTempFileWriter = async (content) => {
+  const writer: PrAttachmentTempFileWriter = async (content) => {
     writes.push(content.slice())
     return {
       path: '/tmp/frame.png',
@@ -84,7 +88,7 @@ function tempWriter() {
   return { writer, writes, cleanups: () => cleanups }
 }
 
-describe('GitHubDashboardFrameHosting.upload', () => {
+describe('GitHubPrAttachmentHosting.upload', () => {
   test('validates the public release, pages assets, uploads exact PNG bytes, and returns a durable handle', async () => {
     const { exec, calls } = scripted([
       PUBLIC,
@@ -93,7 +97,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
       { stdout: asset() },
     ])
     const temp = tempWriter()
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       writeTempFile: temp.writer,
     })
@@ -144,7 +148,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
       },
     ])
     const temp = tempWriter()
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       writeTempFile: temp.writer,
     })
@@ -155,7 +159,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
   })
 
   test('rejects private, unpublished, and immutable targets before upload', async () => {
-    const cases: Partial<DashboardFrameExecResult>[][] = [
+    const cases: Partial<PrAttachmentExecResult>[][] = [
       [{ stdout: JSON.stringify({ private: true }) }],
       [
         PUBLIC,
@@ -184,7 +188,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
     ]
     for (const responses of cases) {
       const { exec } = scripted(responses)
-      const hosting = new GitHubDashboardFrameHosting({ exec })
+      const hosting = new GitHubPrAttachmentHosting({ exec })
       await expect(hosting.upload(request)).rejects.toThrow(
         /private|not published|immutable/,
       )
@@ -203,7 +207,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
         RELEASE,
         { stdout: JSON.stringify([[JSON.parse(asset(mismatch))]]) },
       ])
-      const hosting = new GitHubDashboardFrameHosting({ exec })
+      const hosting = new GitHubPrAttachmentHosting({ exec })
       await expect(hosting.upload(request)).rejects.toThrow(
         /content type|size|digest|state/,
       )
@@ -220,7 +224,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
       { stdout: asset({ id: 88 }) },
     ])
     const temp = tempWriter()
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       writeTempFile: temp.writer,
     })
@@ -244,7 +248,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
       { stdout: JSON.stringify([[JSON.parse(asset())]]) },
     ])
     const temp = tempWriter()
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       writeTempFile: temp.writer,
     })
@@ -264,7 +268,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
       {},
     ])
     const temp = tempWriter()
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       writeTempFile: temp.writer,
     })
@@ -282,7 +286,7 @@ describe('GitHubDashboardFrameHosting.upload', () => {
 
   test('checks the supplied blob hash before any GitHub call', async () => {
     const { exec, calls } = scripted([])
-    const hosting = new GitHubDashboardFrameHosting({ exec })
+    const hosting = new GitHubPrAttachmentHosting({ exec })
     await expect(
       hosting.upload({ ...request, sha256: '0'.repeat(64) }),
     ).rejects.toThrow(/bytes hash to/)
@@ -291,22 +295,82 @@ describe('GitHubDashboardFrameHosting.upload', () => {
 
   test('an internal deadline aborts a hung gh child', async () => {
     let aborted = false
-    const exec: DashboardFrameExec = (_cmd, opts) =>
+    const exec: PrAttachmentExec = (_cmd, opts) =>
       new Promise((_resolve) => {
         opts.signal?.addEventListener('abort', () => {
           aborted = true
         })
       })
-    const hosting = new GitHubDashboardFrameHosting({
+    const hosting = new GitHubPrAttachmentHosting({
       exec,
       commandTimeoutMs: 1,
     })
     await expect(hosting.upload(request)).rejects.toThrow(/timed out/)
     expect(aborted).toBe(true)
   })
+
+  test('uses the attachment media type and full identity while retaining only a safe extension', async () => {
+    const webpRequest: PrAttachmentUploadRequest = {
+      ...request,
+      attachment: {
+        artifact: { kind: 'visual:card', rev: 4 },
+        filename: 'customer card.WEBP',
+        mediaType: 'image/webp',
+      },
+    }
+    const webpName = githubPrAttachmentAssetName(webpRequest)
+    const webpUrl = `https://example.invalid/${webpName}`
+    const { exec, calls } = scripted([
+      PUBLIC,
+      RELEASE,
+      { stdout: '[[]]' },
+      {
+        stdout: JSON.stringify({
+          id: 88,
+          name: webpName,
+          state: 'uploaded',
+          content_type: 'image/webp',
+          size: bytes.byteLength,
+          digest: `sha256:${sha256}`,
+          browser_download_url: webpUrl,
+        }),
+      },
+    ])
+
+    expect(await new GitHubPrAttachmentHosting({ exec }).upload(webpRequest)).toMatchObject({
+      assetId: 88,
+      url: webpUrl,
+    })
+    expect(webpName).toMatch(/^autobuild-attachment-[0-9a-f]{64}\.webp$/)
+    expect(calls.at(-1)?.cmd).toContain('Content-Type: image/webp')
+    expect(
+      githubPrAttachmentAssetName({
+        ...webpRequest,
+        attachment: {
+          ...webpRequest.attachment,
+          artifact: { kind: 'visual:card', rev: 5 },
+        },
+      }),
+    ).not.toBe(webpName)
+  })
+
+  test('rejects non-image requests at the host boundary before any GitHub call', async () => {
+    const { exec, calls } = scripted([])
+    await expect(
+      new GitHubPrAttachmentHosting({ exec }).upload({
+        ...request,
+        attachment: {
+          artifact: { kind: 'trace', rev: 0 },
+          filename: 'trace.txt',
+          mediaType: 'text/plain',
+        },
+      }),
+    ).rejects.toThrow(/only image\/\*/)
+    expect(calls).toEqual([])
+  })
 })
 
-describe('GitHubDashboardFrameHosting.reclaim', () => {
+describe('GitHubPrAttachmentHosting.reclaim', () => {
   const reclaim = {
     workspacePath: '/repos/main',
     asset: {
@@ -320,7 +384,7 @@ describe('GitHubDashboardFrameHosting.reclaim', () => {
 
   test('deletes by durable repository/asset id from the supplied cwd', async () => {
     const { exec, calls } = scripted([{}])
-    const hosting = new GitHubDashboardFrameHosting({ exec })
+    const hosting = new GitHubPrAttachmentHosting({ exec })
     await hosting.reclaim(reclaim)
     expect(calls).toEqual([
       {
@@ -341,7 +405,7 @@ describe('GitHubDashboardFrameHosting.reclaim', () => {
     const { exec } = scripted([
       { exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' },
     ])
-    const hosting = new GitHubDashboardFrameHosting({ exec })
+    const hosting = new GitHubPrAttachmentHosting({ exec })
     await expect(hosting.reclaim(reclaim)).resolves.toBeUndefined()
   })
 })

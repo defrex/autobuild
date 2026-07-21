@@ -15,12 +15,14 @@ import {
   artifactRefSchema,
   buildOutcomeSchema,
   commitRangeSchema,
-  dashboardFrameHostSchema,
+  prAttachmentFilenameSchema,
+  prImageHostSchema,
   escalationResolutionSchema,
   escalationSourceSchema,
   feedbackSchema,
   findingSchema,
-  hostedDashboardFrameAssetSchema,
+  hostedPrAttachmentAssetSchema,
+  mediaTypeSchema,
   observationKindSchema,
   phaseSchema,
   reviewVerdictKindSchema,
@@ -109,7 +111,11 @@ export const eventPayloadSchemas = {
     repo: z.string().min(1),
     baseBranch: z.string().min(1),
     /** Frozen at claim time. Historical logs and disabled installs omit it. */
-    dashboardFrames: dashboardFrameHostSchema.optional(),
+    pr: z
+      .strictObject({
+        imageHost: prImageHostSchema.optional(),
+      })
+      .optional(),
   }),
   'build.completed': z.strictObject({ outcome: buildOutcomeSchema }),
   'runner.attached': z.strictObject({
@@ -216,19 +222,24 @@ export const eventPayloadSchemas = {
     note: z.string().optional(),
   }),
 
-  // Successful external uploads are recorded immediately so retries can
-  // adopt them and terminal-build cleanup never depends on a workspace or the
-  // repository's current config.
-  'dashboard-frame.hosted': z.strictObject({
-    frameId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  // Any agent session may explicitly designate an exact deposited revision.
+  // Successful external uploads are recorded immediately so retries can adopt
+  // them and terminal cleanup never depends on a workspace or current config.
+  'pr-attachment.designated': z.strictObject({
     artifact: artifactRefSchema,
-    asset: hostedDashboardFrameAssetSchema,
+    filename: prAttachmentFilenameSchema,
+    mediaType: mediaTypeSchema,
   }),
-  'dashboard-frame.reclaimed': z.strictObject({
-    /** seq of the correlated dashboard-frame.hosted fact. */
+  'pr-attachment.hosted': z.strictObject({
+    /** seq of the correlated pr-attachment.designated fact. */
+    designationSeq: z.number().int().positive(),
+    asset: hostedPrAttachmentAssetSchema,
+  }),
+  'pr-attachment.reclaimed': z.strictObject({
+    /** seq of the correlated pr-attachment.hosted fact. */
     hostedSeq: z.number().int().positive(),
   }),
-  'dashboard-frame.reclaim-failed': z.strictObject({
+  'pr-attachment.reclaim-failed': z.strictObject({
     hostedSeq: z.number().int().positive(),
     attempt,
     error: z.string().min(1),

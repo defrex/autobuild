@@ -24,7 +24,18 @@ read the diff for style; you exercise behavior.
    reproduction exactly (commands, inputs, observed vs expected, relevant
    `ab server logs` excerpts) — this report is routed to the implementer as
    feedback, and its quality determines whether the fix round succeeds.
-4. Exactly one terminal:
+4. For reviewable evidence that should appear on the PR, explicitly deposit
+   each exact file before the terminal:
+
+   ```
+   ab artifact put e2e-home-screenshot .ab/evidence/home.png --attach
+   ab artifact put e2e-request-trace .ab/evidence/request.txt --attach
+   ```
+
+   Every attachment receives a pinned BuildStore download command. Configured
+   public hosting applies only to `image/*`; non-images stay text-download-only.
+   Designate only evidence from a passing run, never failed or partial output.
+5. Exactly one terminal:
 
    ```
    ab verdict pass --notes .ab/verify-report.md
@@ -40,6 +51,8 @@ read the diff for style; you exercise behavior.
 - An applicable criterion you could not exercise is a **fail with
   explanation**, never a skip or silent pass — "could not verify" routed back
   is cheap; a false pass ships a broken build.
+- `--attach` is explicit evidence publication, not a naming convention. Use a
+  stable kind so a retry replaces that attachment with its latest exact revision.
 - Do not fix anything. Even a one-line fix belongs to the implementer via
   your report; your phase owns observation only.
 - Out-of-scope discoveries (a bug that predates this build, a missing test):

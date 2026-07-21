@@ -21,15 +21,15 @@ import {
 } from '../../kernel/auto-merge'
 import type {
   AutoMergeResult,
-  DashboardFrameHosting,
+  PrAttachmentHosting,
   Forge,
   PrRef,
   PrState,
 } from '../types'
 import {
-  GitHubDashboardFrameHosting,
-  type DashboardFrameTempFileWriter,
-} from './github-dashboard-frames'
+  GitHubPrAttachmentHosting,
+  type PrAttachmentTempFileWriter,
+} from './github-pr-attachments'
 
 export interface ExecResult {
   stdout: string
@@ -323,7 +323,7 @@ const MERGEABLE_MAP = {
 
 export class GitHubForge implements Forge {
   readonly name = 'github'
-  readonly dashboardFrames: DashboardFrameHosting
+  readonly prAttachments: PrAttachmentHosting
 
   private readonly exec: Exec
   private readonly writeTempFile: TempFileWriter
@@ -332,19 +332,19 @@ export class GitHubForge implements Forge {
     opts: {
       exec?: Exec
       writeTempFile?: TempFileWriter
-      writeDashboardFrameTempFile?: DashboardFrameTempFileWriter
-      dashboardFrameTimeoutMs?: number
+      writePrAttachmentTempFile?: PrAttachmentTempFileWriter
+      prAttachmentTimeoutMs?: number
     } = {},
   ) {
     this.exec = opts.exec ?? bunExec
     this.writeTempFile = opts.writeTempFile ?? defaultTempFileWriter
-    this.dashboardFrames = new GitHubDashboardFrameHosting({
+    this.prAttachments = new GitHubPrAttachmentHosting({
       exec: this.exec,
-      ...(opts.writeDashboardFrameTempFile !== undefined
-        ? { writeTempFile: opts.writeDashboardFrameTempFile }
+      ...(opts.writePrAttachmentTempFile !== undefined
+        ? { writeTempFile: opts.writePrAttachmentTempFile }
         : {}),
-      ...(opts.dashboardFrameTimeoutMs !== undefined
-        ? { commandTimeoutMs: opts.dashboardFrameTimeoutMs }
+      ...(opts.prAttachmentTimeoutMs !== undefined
+        ? { commandTimeoutMs: opts.prAttachmentTimeoutMs }
         : {}),
     })
   }

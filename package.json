@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
-    "capture:dashboard": "bun src/integration/dashboard-capture.ts",
+    "capture:dashboard": "bun tools/dashboard-capture.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

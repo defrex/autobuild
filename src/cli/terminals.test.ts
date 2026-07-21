@@ -14,11 +14,6 @@ import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
-import {
-  dashboardFrameArtifactKind,
-  dashboardVerifyReport,
-  type DashboardFrameManifest,
-} from './dashboard/frame-artifacts'
 import { buildContext } from './context'
 import { done, escalate, verdict } from './terminals'
 import {
@@ -572,15 +567,15 @@ describe('ab done — implement', () => {
 
 describe('ab done — finalize', () => {
   let workspace: string
-  const DASHBOARD_HOST = {
+  const IMAGE_HOST = {
     provider: 'github-release' as const,
     repository: 'acme/review-assets',
     releaseId: 42,
   }
 
-  async function resetStoreWithDashboardHost(): Promise<void> {
+  async function resetStoreWithImageHost(): Promise<void> {
     await store.close()
-    store = await seedStore({ dashboardFrames: DASHBOARD_HOST })
+    store = await seedStore({ imageHost: IMAGE_HOST })
   }
 
   beforeEach(async () => {
@@ -619,57 +614,25 @@ describe('ab done — finalize', () => {
     })
   })
 
-  async function seedDashboardCaptureFrames(
-    inputs: { id: string; text: string; columns?: number; rows?: number }[],
-  ): Promise<void> {
-    const frames: DashboardFrameManifest['frames'] = []
-    for (const input of inputs) {
-      const textKind = dashboardFrameArtifactKind(input.id, 'text')
-      const pngKind = dashboardFrameArtifactKind(input.id, 'png')
-      const textMeta = await store.putArtifact(BUILD, {
-        kind: textKind,
-        content: input.text,
-      })
-      const pngMeta = await store.putArtifact(BUILD, {
-        kind: pngKind,
-        content: new Uint8Array([137, 80, 78, 71, textMeta.revision]),
-      })
-      frames.push({
-        id: input.id,
-        terminal: {
-          columns: input.columns ?? 140,
-          rows: input.rows ?? 40,
-        },
-        text: { kind: textKind, rev: textMeta.revision },
-        png: { kind: pngKind, rev: pngMeta.revision },
-      })
-    }
-    const manifest: DashboardFrameManifest = {
-      version: 1,
-      renderer: 'dashboard-ansi-png-v1',
-      frames,
-    }
-    const report = await store.putArtifact(BUILD, {
-      kind: 'verify-report:dashboard',
-      content: dashboardVerifyReport(manifest),
+  async function designateAttachment(input: {
+    kind: string
+    filename: string
+    mediaType: string
+    content: string | Uint8Array
+  }) {
+    const meta = await store.putArtifact(BUILD, {
+      kind: input.kind,
+      content: input.content,
     })
-    await store.append(BUILD, {
-      actor: agent('verify:dashboard'),
-      type: 'verify.completed',
+    return store.append(BUILD, {
+      actor: agent('verify:visual-check'),
+      type: 'pr-attachment.designated',
       payload: {
-        step: 'dashboard',
-        attempt: 1,
-        outcome: 'pass',
-        report: { kind: report.kind, rev: report.revision },
+        artifact: { kind: meta.kind, rev: meta.revision },
+        filename: input.filename,
+        mediaType: input.mediaType,
       },
     })
-  }
-
-  async function seedDashboardCapture(
-    label: string,
-    text = `Auto Build ${label}\nHarvest PAUSED\n`,
-  ): Promise<void> {
-    await seedDashboardCaptureFrames([{ id: 'mixed-wide', text }])
   }
 
   test('rejected without a pr-description artifact', async () => {
@@ -712,11 +675,11 @@ describe('ab done — finalize', () => {
     expect(comment.number).toBe(1)
     expect(comment.body).toContain('code-review r1: revise (2 findings)')
     expect(comment.body).toContain('code-review r2: approve')
-    expect(comment.body).toContain('types (attempt 1): pass')
+    expect(comment.body).toContain('<code>types</code> (attempt 1): pass')
     expect(comment.body).toContain(
-      'e2e (attempt 1): skipped — No browser-facing behavior changed',
+      '<code>e2e</code> (attempt 1): skipped — No browser-facing behavior changed',
     )
-    expect(comment.body).toContain(`build: ${BUILD}`)
+    expect(comment.body).toContain(`build: <code>${BUILD}</code>`)
   })
 
   test('detached HEAD still opens the PR from the durable build branch', async () => {
@@ -741,14 +704,22 @@ describe('ab done — finalize', () => {
     expect(deps.forge.opened[0]!.head).toBe(BRANCH)
   })
 
-  test('projects exact current dashboard frame refs and escaped monospace text into the PR comment', async () => {
-    await seedDashboardCapture(
-      'SAFE',
-      '\x1b[31m<dashboard & row>\x1b[0m\ncontrol:\u0001 and ``` markdown\n',
-    )
+  test('lists image and non-image designations from an arbitrary verifier without a host', async () => {
+    await designateAttachment({
+      kind: 'visual:home',
+      filename: 'home.png',
+      mediaType: 'image/png',
+      content: new Uint8Array([137, 80, 78, 71]),
+    })
+    await designateAttachment({
+      kind: 'visual:trace',
+      filename: 'trace.txt',
+      mediaType: 'text/plain',
+      content: 'trace evidence\n',
+    })
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
-      content: '# Dashboard evidence\n\nBody.\n',
+      content: '# Attached evidence\n\nBody.\n',
     })
     const deps = makeDeps({
       store,
@@ -759,38 +730,41 @@ describe('ab done — finalize', () => {
     await done(deps)
 
     const comment = deps.forge.comments[0]!.body
-    expect(comment).toContain('### Dashboard frames')
-    expect(comment).toContain('#### mixed-wide (140x40)')
+    expect(comment).toContain('### PR attachments')
+    expect(comment).toContain('<code>visual:home@0</code>')
+    expect(comment).toContain('<code>visual:trace@0</code>')
     expect(comment).toContain(
-      '<code>dashboard-frame:mixed-wide:text@0</code>',
+      "ab artifact download &#39;auth-rate-limit&#39; &#39;visual:home@0&#39; --output &#39;home.png&#39; --store &#39;/tmp/ab-store&#39;",
     )
     expect(comment).toContain(
-      '<code>dashboard-frame:mixed-wide:png@0</code>',
+      "ab artifact download &#39;auth-rate-limit&#39; &#39;visual:trace@0&#39; --output &#39;trace.txt&#39; --store &#39;/tmp/ab-store&#39;",
     )
-    expect(comment).toContain(
-      "ab artifact download &#39;auth-rate-limit&#39; &#39;dashboard-frame:mixed-wide:png@0&#39; --output &#39;mixed-wide.png&#39; --store &#39;/tmp/ab-store&#39;",
-    )
-    expect(comment).toContain('&lt;dashboard &amp; row&gt;')
-    expect(comment).toContain('control:\\u{1} and ``` markdown')
-    expect(comment).not.toContain('\x1b')
-    expect(comment).not.toContain('<dashboard & row>')
+    expect(comment).not.toContain('<img ')
   })
 
-  test('configured hosting embeds the exact colour image while retaining text and writes nothing to Git', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCapture(
-      'HOSTED',
-      '\x1b[32mHosted dashboard colour fallback\x1b[0m\n',
-    )
+  test('configured hosting uploads images only, renders them inline, and writes nothing to Git', async () => {
+    await resetStoreWithImageHost()
+    const imageDesignation = await designateAttachment({
+      kind: 'visual:home',
+      filename: 'home.png',
+      mediaType: 'image/png',
+      content: new Uint8Array([137, 80, 78, 71, 1]),
+    })
+    await designateAttachment({
+      kind: 'visual:trace',
+      filename: 'trace.json',
+      mediaType: 'application/json',
+      content: '{}\n',
+    })
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
-      content: '# Hosted dashboard evidence\n\nBody.\n',
+      content: '# Hosted evidence\n\nBody.\n',
     })
-    const forge = new FakeForge({ dashboardFrames: true })
-    const fakeUpload = forge.dashboardFrames!.upload.bind(forge.dashboardFrames)
-    forge.dashboardFrames!.upload = async (request) => ({
-      ...(await fakeUpload(request)),
-      url: 'https://fake.forge/dashboard-frames/1/mixed-wide.png?a=1&b=2',
+    const forge = new FakeForge({ prAttachments: true })
+    const upload = forge.prAttachments!.upload.bind(forge.prAttachments)
+    forge.prAttachments!.upload = async (request) => ({
+      ...(await upload(request)),
+      url: 'https://fake.forge/pr-attachments/1/home.png?a=1&b=2',
     })
     const deps = makeDeps({
       store,
@@ -802,40 +776,46 @@ describe('ab done — finalize', () => {
     const event = await done(deps)
 
     expect(event.type).toBe('finalize.completed')
-    expect(forge.dashboardFrameUploads).toHaveLength(1)
-    expect([...forge.dashboardFrameUploads[0]!.content]).toEqual([
-      137, 80, 78, 71, 0,
+    expect(forge.prAttachmentUploads).toHaveLength(1)
+    expect(forge.prAttachmentUploads[0]!.attachment).toEqual(
+      imageDesignation.payload,
+    )
+    expect([...forge.prAttachmentUploads[0]!.content]).toEqual([
+      137, 80, 78, 71, 1,
     ])
     const events = await store.getEvents(BUILD)
-    const hosted = events.find((item) => item.type === 'dashboard-frame.hosted')
+    const hosted = events.find((item) => item.type === 'pr-attachment.hosted')
     expect(hosted?.actor).toEqual(KERNEL)
     expect(hosted?.payload).toMatchObject({
-      frameId: 'mixed-wide',
-      artifact: { kind: 'dashboard-frame:mixed-wide:png', rev: 0 },
-      asset: DASHBOARD_HOST,
+      designationSeq: imageDesignation.seq,
+      asset: IMAGE_HOST,
     })
-    expect(events.map((item) => item.type).indexOf('dashboard-frame.hosted')).toBeLessThan(
+    expect(events.map((item) => item.type).indexOf('pr-attachment.hosted')).toBeLessThan(
       events.map((item) => item.type).indexOf('finalize.completed'),
     )
 
     const comment = forge.comments[0]!.body
     expect(comment).toContain(
-      '<img src="https://fake.forge/dashboard-frames/1/mixed-wide.png?a=1&amp;b=2" alt="Dashboard frame mixed-wide in colour">',
+      '<img src="https://fake.forge/pr-attachments/1/home.png?a=1&amp;b=2" alt="PR attachment home.png">',
     )
-    expect(comment).toContain('Hosted dashboard colour fallback')
-    expect(comment).toContain('<code>dashboard-frame:mixed-wide:png@0</code>')
+    expect(comment).toContain('<code>visual:trace@0</code>')
     expect(await runGit(['status', '--porcelain'], workspace)).toBe('')
     expect(await runGit(['ls-files', '*.png'], workspace)).toBe('')
   })
 
-  test('a finalize store failure retries by reusing the prior hosted fact instead of uploading again', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCapture('RETRY-HOSTED')
+  test('a finalize store failure reuses the prior hosted fact instead of uploading again', async () => {
+    await resetStoreWithImageHost()
+    await designateAttachment({
+      kind: 'visual:retry',
+      filename: 'retry.png',
+      mediaType: 'image/png',
+      content: new Uint8Array([1, 2, 3]),
+    })
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
-      content: '# Retry hosted dashboard evidence\n\nBody.\n',
+      content: '# Retry hosted evidence\n\nBody.\n',
     })
-    const forge = new FakeForge({ dashboardFrames: true })
+    const forge = new FakeForge({ prAttachments: true })
     const deps = makeDeps({
       store,
       env: makeEnv({ phase: 'finalize' }),
@@ -853,52 +833,34 @@ describe('ab done — finalize', () => {
     }) as typeof store.append
 
     await expect(done(deps)).rejects.toThrow('store unavailable at finalize commit')
-    expect(forge.dashboardFrameUploads).toHaveLength(1)
+    expect(forge.prAttachmentUploads).toHaveLength(1)
     expect(
       (await store.getEvents(BUILD)).filter(
-        (event) => event.type === 'dashboard-frame.hosted',
+        (event) => event.type === 'pr-attachment.hosted',
       ),
     ).toHaveLength(1)
 
     const event = await done(deps)
     expect(event.type).toBe('finalize.completed')
     expect(forge.opened).toHaveLength(1)
-    expect(forge.dashboardFrameUploads).toHaveLength(1)
+    expect(forge.prAttachmentUploads).toHaveLength(1)
     expect(forge.comments[0]!.body).toContain('<img ')
   })
 
-  test('a configured forge without hosting support silently keeps the complete text fallback', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCapture('UNSUPPORTED')
+  test('hosting failures record kernel follow-ups and retain complete text projection', async () => {
+    await resetStoreWithImageHost()
+    await designateAttachment({
+      kind: 'visual:failed',
+      filename: 'failed.png',
+      mediaType: 'image/png',
+      content: new Uint8Array([4, 5, 6]),
+    })
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
-      content: '# Text-only dashboard evidence\n\nBody.\n',
+      content: '# Degraded evidence\n\nBody.\n',
     })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'finalize' }),
-      workspacePath: workspace,
-      forge: new FakeForge(),
-    })
-
-    await done(deps)
-
-    const events = await store.getEvents(BUILD)
-    expect(events.some((item) => item.type === 'dashboard-frame.hosted')).toBe(false)
-    expect(events.some((item) => item.type === 'observation.recorded')).toBe(false)
-    expect(deps.forge.comments[0]!.body).toContain('UNSUPPORTED')
-    expect(deps.forge.comments[0]!.body).not.toContain('<img ')
-  })
-
-  test('an upload failure records a follow-up but finalizes with all-text evidence and no verify failure', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCapture('UPLOAD-FAILED')
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Degraded dashboard evidence\n\nBody.\n',
-    })
-    const forge = new FakeForge({ dashboardFrames: true })
-    forge.failNextDashboardFrameUpload('release upload unavailable')
+    const forge = new FakeForge({ prAttachments: true })
+    forge.failNextPrAttachmentUpload('release upload unavailable')
     const deps = makeDeps({
       store,
       env: makeEnv({ phase: 'finalize' }),
@@ -913,42 +875,37 @@ describe('ab done — finalize', () => {
     const observation = events.findLast(
       (item) => item.type === 'observation.recorded',
     )
-    expect(observation?.actor).toEqual({
-      kind: 'agent',
-      role: 'finalize',
-      session: 's_test',
-    })
+    expect(observation?.actor).toEqual(KERNEL)
     expect(observation?.payload.summary).toContain('release upload unavailable')
-    expect(events.some((item) => item.type === 'dashboard-frame.hosted')).toBe(false)
-    expect(
-      events.some(
-        (item) =>
-          item.type === 'verify.completed' &&
-          item.payload.step === 'dashboard' &&
-          'outcome' in item.payload &&
-          item.payload.outcome === 'fail',
-      ),
-    ).toBe(false)
-    expect(forge.comments[0]!.body).toContain('UPLOAD-FAILED')
+    expect(events.some((item) => item.type === 'pr-attachment.hosted')).toBe(false)
+    expect(forge.comments[0]!.body).toContain('<code>visual:failed@0</code>')
     expect(forge.comments[0]!.body).not.toContain('<img ')
   })
 
-  test('a mid-set upload failure retains cleanup handles but renders no partial image set', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCaptureFrames([
-      { id: 'mixed-wide', text: 'FIRST FRAME TEXT\n' },
-      { id: 'mixed-narrow', text: 'SECOND FRAME TEXT\n', columns: 72 },
-    ])
+  test('mixed upload success is projected independently and every text command remains', async () => {
+    await resetStoreWithImageHost()
+    await designateAttachment({
+      kind: 'visual:first',
+      filename: 'first.png',
+      mediaType: 'image/png',
+      content: new Uint8Array([1]),
+    })
+    await designateAttachment({
+      kind: 'visual:second',
+      filename: 'second.webp',
+      mediaType: 'image/webp',
+      content: new Uint8Array([2]),
+    })
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
-      content: '# Partial hosted dashboard evidence\n\nBody.\n',
+      content: '# Partial hosted evidence\n\nBody.\n',
     })
-    const forge = new FakeForge({ dashboardFrames: true })
-    const upload = forge.dashboardFrames!.upload.bind(forge.dashboardFrames)
+    const forge = new FakeForge({ prAttachments: true })
+    const upload = forge.prAttachments!.upload.bind(forge.prAttachments)
     let calls = 0
-    forge.dashboardFrames!.upload = async (request) => {
+    forge.prAttachments!.upload = async (request) => {
       calls += 1
-      if (calls === 2) throw new Error('second frame upload failed')
+      if (calls === 2) throw new Error('second image upload failed')
       return upload(request)
     }
     const deps = makeDeps({
@@ -962,129 +919,12 @@ describe('ab done — finalize', () => {
 
     const events = await store.getEvents(BUILD)
     expect(
-      events.filter((event) => event.type === 'dashboard-frame.hosted'),
+      events.filter((event) => event.type === 'pr-attachment.hosted'),
     ).toHaveLength(1)
-    expect(
-      events.findLast((event) => event.type === 'observation.recorded')?.payload,
-    ).toMatchObject({
-      kind: 'followup',
-      summary: expect.stringContaining('second frame upload failed'),
-    })
     const comment = forge.comments[0]!.body
-    expect(comment).toContain('FIRST FRAME TEXT')
-    expect(comment).toContain('SECOND FRAME TEXT')
-    expect(comment).not.toContain('<img ')
-  })
-
-  test('uses only a successful dashboard report after the latest reconcile cycle boundary', async () => {
-    await seedDashboardCapture('STALE-CAPTURE')
-    await store.append(BUILD, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'base-new' },
-    })
-    await store.append(BUILD, {
-      actor: agent('reconcile'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-new',
-        artifact: { kind: 'reconcile-notes', rev: 0 },
-      },
-    })
-    await seedDashboardCapture('CURRENT-CAPTURE')
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Current dashboard evidence\n\nBody.\n',
-    })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'finalize' }),
-      workspacePath: workspace,
-    })
-
-    await done(deps)
-
-    const comment = deps.forge.comments[0]!.body
-    expect(comment).toContain('CURRENT-CAPTURE')
-    expect(comment).not.toContain('STALE-CAPTURE')
-    expect(comment).toContain('dashboard-frame:mixed-wide:png@1')
-  })
-
-  test('a current-cycle dashboard skip suppresses stale captures', async () => {
-    await resetStoreWithDashboardHost()
-    await seedDashboardCapture('STALE-CAPTURE')
-    await store.append(BUILD, {
-      actor: KERNEL,
-      type: 'reconcile.started',
-      payload: { attempt: 1, baseSha: 'base-new' },
-    })
-    await store.append(BUILD, {
-      actor: agent('reconcile'),
-      type: 'reconcile.completed',
-      payload: {
-        mergeCommit: 'merge-new',
-        artifact: { kind: 'reconcile-notes', rev: 0 },
-      },
-    })
-    await store.append(BUILD, {
-      actor: KERNEL,
-      type: 'verify.completed',
-      payload: {
-        step: 'dashboard',
-        attempt: 2,
-        outcome: 'skipped',
-        reason: 'excluded by [verify.dashboard].paths',
-      },
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Skipped dashboard evidence\n\nBody.\n',
-    })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'finalize' }),
-      workspacePath: workspace,
-      forge: new FakeForge({ dashboardFrames: true }),
-    })
-
-    const event = await done(deps)
-
-    expect(event.type).toBe('finalize.completed')
-    expect(deps.forge.dashboardFrameUploads).toEqual([])
-    expect(deps.forge.comments[0]!.body).not.toContain('### Dashboard frames')
-    expect(deps.forge.comments[0]!.body).not.toContain('STALE-CAPTURE')
-  })
-
-  test('malformed current-cycle dashboard evidence is omitted without reversing finalize', async () => {
-    const report = await store.putArtifact(BUILD, {
-      kind: 'verify-report:dashboard',
-      content: '# malformed report with no manifest\n',
-    })
-    await store.append(BUILD, {
-      actor: agent('verify:dashboard'),
-      type: 'verify.completed',
-      payload: {
-        step: 'dashboard',
-        attempt: 1,
-        outcome: 'pass',
-        report: { kind: report.kind, rev: report.revision },
-      },
-    })
-    await store.putArtifact(BUILD, {
-      kind: 'pr-description',
-      content: '# Malformed dashboard evidence\n\nBody.\n',
-    })
-    const deps = makeDeps({
-      store,
-      env: makeEnv({ phase: 'finalize' }),
-      workspacePath: workspace,
-    })
-
-    const event = await done(deps)
-
-    expect(event.type).toBe('finalize.completed')
-    expect(deps.forge.comments).toHaveLength(1)
-    expect(deps.forge.comments[0]!.body).not.toContain('### Dashboard frames')
+    expect(comment).toContain('<img ')
+    expect(comment).toContain('<code>visual:first@0</code>')
+    expect(comment).toContain('<code>visual:second@0</code>')
   })
 
   test('a pre-PR auto-merge request on gated CLEAN is applied natively and acknowledged', async () => {
