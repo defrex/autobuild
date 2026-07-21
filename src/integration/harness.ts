@@ -58,8 +58,8 @@ import { steppingClock } from '../testing/fixed'
 // ok.marker` fails until an implement round commits the marker file.
 
 export const CONFIG_TOML = `
-[project]
 baseBranch = "main"
+capacity = 2
 
 [commands]
 test = "test -f ok.marker"
@@ -73,9 +73,6 @@ command = "test"
 
 [policy]
 stallRounds = 3
-
-[dispatcher]
-capacity = 2
 
 [tickets]
 source = "file"

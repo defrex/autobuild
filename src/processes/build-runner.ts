@@ -29,9 +29,9 @@
  *   fails (a rambling session is never continued — fresh start next attempt,
  *   D5) or when `run` exits; the cumulative turn log is discarded then,
  *   because every round already deposited its own transcript.
- * - `finalize.step-completed` and `observation.recorded` admit only agent
- *   actors (§15.3), so the runner records a post-step's outcome on the
- *   session's behalf using the session's own agent actor.
+ * - Finalize checks are deterministic kernel work with no synthetic session;
+ *   finalize agents retain their session actor. Both paths are deliberately
+ *   failure-tolerant and drain through the same completion/observation writer.
  * - The D5 retry guard also covers agent-verify steps (keyed `verify:<step>`,
  *   round = attempt): a no-terminal or provider-failed verify session would
  *   otherwise re-run forever, since its `verify.completed` never lands.
@@ -42,7 +42,7 @@
  */
 import type { Config } from '../config/schema'
 import type { AbEvent, EventWrite } from '../events/catalog'
-import { KERNEL, agentActor } from '../events/envelope'
+import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import type { IdSource } from '../ids'
 import { decideNext, type Decision } from '../kernel/engine'
 import { PHASE_SPECS } from '../kernel/phases'
@@ -57,7 +57,6 @@ import {
 } from '../ontology'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import { installedSkillName } from '../skills'
 import type {
   AgentRunner,
   AgentSessionHandle,
@@ -781,17 +780,38 @@ export class BuildRunner {
     }
   }
 
-  /**
-   * Failure-tolerant post-step (§5): the outcome is "did the turn complete
-   * without throwing or reporting a structured failure". The runner records
-   * `finalize.step-completed`
-   * (and, on failure, the follow-up observation) on the session's behalf
-   * with the session's agent actor — those event types only admit agents
-   * (§15.3); pragmatism, documented. Never fails the build.
-   */
+  /** Failure-tolerant post-step dispatcher (§5). */
   private async runFinalizeStep(decision: RunFinalizeStepDecision): Promise<void> {
+    if (decision.action.kind === 'check') {
+      await this.runFinalizeCheck(decision.step, decision.action.command)
+    } else {
+      await this.runFinalizeAgent(decision.step, decision.action.skill)
+    }
+  }
+
+  /** A finalize check is direct kernel plumbing: no agent session is created. */
+  private async runFinalizeCheck(step: string, command: string): Promise<void> {
+    const { exec, workspacePath } = this.deps
+    let ok = true
+    let note: string | undefined
+    try {
+      const result = await exec(['sh', '-c', command], { cwd: workspacePath })
+      if (result.exitCode !== 0) {
+        ok = false
+        note = `command exited ${result.exitCode}`
+      }
+    } catch (error) {
+      ok = false
+      note = `command execution failed: ${errorMessage(error)}`
+    }
+    await this.recordFinalizeOutcome(step, ok, KERNEL, note)
+  }
+
+  /** A finalize agent uses the configured skill verbatim and the logical step
+   * name for role routing. Provider/launch failures remain post-step failures,
+   * not build failures. */
+  private async runFinalizeAgent(step: string, skill: string): Promise<void> {
     const { store, slug, ids, workspacePath } = this.deps
-    const { step } = decision
     const session = ids('s')
     const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
 
@@ -810,9 +830,10 @@ export class BuildRunner {
 
     let handle: AgentSessionHandle | undefined
     let ok = true
+    let note: string | undefined
     try {
       const turn = await runner.start({
-        skill: installedSkillName(step), // installed names carry `ab-` (§4)
+        skill,
         invocation: slug,
         buildSlug: slug,
         workspacePath,
@@ -821,9 +842,13 @@ export class BuildRunner {
         env: this.sessionEnvFor('finalize@1', session),
       })
       handle = turn.session
-      if (turn.result.kind === 'failed') ok = false
-    } catch {
+      if (turn.result.kind === 'failed') {
+        ok = false
+        note = turn.result.failure.message
+      }
+    } catch (error) {
       ok = false
+      note = `agent launch failed: ${errorMessage(error)}`
     }
 
     if (handle !== undefined) {
@@ -841,15 +866,25 @@ export class BuildRunner {
       }
     }
 
-    const actor = agentActor(step, session)
+    await this.recordFinalizeOutcome(step, ok, agentActor(step, session), note)
+  }
+
+  /** Both finalize kinds append the existing facts and always let the engine
+   * advance. Durable-write failures still propagate; only step work is
+   * failure-tolerant. */
+  private async recordFinalizeOutcome(
+    step: string,
+    ok: boolean,
+    actor: Actor,
+    note?: string,
+  ): Promise<void> {
+    const { store, slug, ids } = this.deps
     await store.append(slug, {
       actor,
       type: 'finalize.step-completed',
-      payload: { step, ok },
+      payload: { step, ok, ...(note !== undefined ? { note } : {}) },
     } satisfies EventWrite<'finalize.step-completed'>)
     if (!ok) {
-      // §5: a failed post-step files an observation; it never kills a green
-      // build.
       await store.append(slug, {
         actor,
         type: 'observation.recorded',

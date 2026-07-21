@@ -104,6 +104,40 @@ describe('dashboard frame hosting event protocol', () => {
   })
 })
 
+describe('finalize outcome attribution', () => {
+  test('deterministic checks and agent steps may emit the existing completion and observation facts', () => {
+    for (const actor of [KERNEL, agentActor('release-notes', 's_notes')]) {
+      expect(
+        validateEventWrite({
+          actor,
+          type: 'finalize.step-completed',
+          payload: { step: 'publish', ok: false, note: 'exited 1' },
+        }).actor,
+      ).toEqual(actor)
+      expect(
+        validateEventWrite({
+          actor,
+          type: 'observation.recorded',
+          payload: { id: 'o_1', kind: 'followup', summary: 'publish failed' },
+        }).actor,
+      ).toEqual(actor)
+    }
+
+    for (const type of ['finalize.step-completed', 'observation.recorded'] as const) {
+      expect(() =>
+        validateEventWrite({
+          actor: DISPATCHER,
+          type,
+          payload:
+            type === 'finalize.step-completed'
+              ? { step: 'publish', ok: true }
+              : { id: 'o_1', kind: 'followup', summary: 'publish failed' },
+        }),
+      ).toThrow(new RegExp(`may not emit "${type.replace('.', '\\.')}`))
+    }
+  })
+})
+
 describe('plan.completed verify selection compatibility', () => {
   const base = { round: 1, artifact: { kind: 'plan', rev: 0 } }
 

@@ -60,6 +60,10 @@ needsServer = true
 
 [finalize]
 steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
 `
 
 const config = parseConfig(CONFIG_TOML)
@@ -373,7 +377,11 @@ describe('decideNext: §15.6 happy path — prefix walk', () => {
     agentE2e, // 20 verify.started e2e
     runPhase('finalize', 1), // 21 all steps passed
     runPhase('finalize', 1), // 22 finalize.started
-    { kind: 'run-finalize-step', step: 'release-notes' }, // 23 finalize.completed
+    {
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'ab-release-notes' },
+    }, // 23 finalize.completed
     wait('awaiting-pr'), // 24 post-step done → PR is the janitor's (§15.7)
     wait('awaiting-pr'), // 25 pr.merged — the janitor completes the build
     wait('awaiting-pr'), // 26 workspace.released
@@ -1659,9 +1667,25 @@ describe('decideNext: rule 8 — finalize', () => {
   })
 
   test('post-steps run in config order after finalize.completed', () => {
-    const twoSteps = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n[finalize]\nsteps = ["release-notes", "screenshots"]\n',
-    )
+    const twoSteps = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+notes = "bun run release-notes"
+
+[finalize]
+steps = ["release-notes", "screenshots"]
+
+[finalize.release-notes]
+kind = "check"
+command = "notes"
+
+[finalize.screenshots]
+kind = "agent"
+skill = "custom-screenshot-skill"
+`)
     const done = [
       ...prelude(),
       ...planApproved(),
@@ -1673,6 +1697,7 @@ describe('decideNext: rule 8 — finalize', () => {
     expect(decideNext(toLog(done), twoSteps)).toEqual({
       kind: 'run-finalize-step',
       step: 'release-notes',
+      action: { kind: 'check', command: 'bun run release-notes' },
     })
     // ok:false still counts — post-steps are failure-tolerant (§5): a failed
     // step files an observation, never re-runs, never kills a green build.
@@ -1680,6 +1705,7 @@ describe('decideNext: rule 8 — finalize', () => {
     expect(decideNext(toLog(firstFailed), twoSteps)).toEqual({
       kind: 'run-finalize-step',
       step: 'screenshots',
+      action: { kind: 'agent', skill: 'custom-screenshot-skill' },
     })
     expect(
       decideNext(toLog([...firstFailed, ev('finalize.step-completed', { step: 'screenshots', ok: true })]), twoSteps),

@@ -77,6 +77,10 @@ needsServer = true
 [finalize]
 steps = ["release-notes"]
 
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
 [roles]
 plan = { runtime = "scripted", model = "m-plan" }
 `
@@ -264,6 +268,8 @@ interface HarnessOptions {
   noServer?: boolean
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
   failCommands?: string[]
+  /** Shell commands whose Exec call throws before returning a result. */
+  throwCommands?: string[]
   /** Results for successive reconcile-time remote-base refreshes. The final
    * entry repeats when more refreshes occur. */
   reconcileRefreshes?: ReconcileRefresh[]
@@ -338,6 +344,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const runner = new ScriptedAgentRunner({ script })
 
   const failing = new Set(options.failCommands ?? [])
+  const throwing = new Set(options.throwCommands ?? [])
   const refreshes = options.reconcileRefreshes ?? [{ sha: 'a'.repeat(40) }]
   let refreshIndex = -1
   const currentRefresh = (): ReconcileRefresh =>
@@ -386,6 +393,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       return { stdout: `${refresh.sha}\n`, stderr: '', exitCode: 0 }
     }
     const shell = cmd[2] ?? ''
+    if (throwing.has(shell)) throw new Error(`exec unavailable for ${shell}`)
     return failing.has(shell)
       ? {
           stdout: 'src/auth.ts(3,7): error TS2304: Cannot find name',
@@ -1111,11 +1119,117 @@ describe('happy path (§15.6)', () => {
     expect(ofType(events, 'finalize.step-completed').at(-1)?.payload).toEqual({
       step: 'release-notes',
       ok: false,
+      note: '403 billing disabled',
     })
     expect(ofType(events, 'session.ended')).toHaveLength(1)
     expect(ofType(events, 'observation.recorded').at(-1)?.payload.summary).toContain(
       'release-notes',
     )
+  })
+})
+
+// ── First-class finalize actions (§5, §16.1) ─────────────────────────────────
+
+describe('first-class finalize checks and agents', () => {
+  const finalizeConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+publish = "bun run publish"
+
+[finalize]
+steps = ["publish", "release-notes"]
+
+[finalize.publish]
+kind = "check"
+command = "publish"
+
+[finalize.release-notes]
+kind = "agent"
+skill = "custom-notes-skill"
+`
+
+  async function seedReady(store: BuildStore): Promise<void> {
+    await seedPlanApproved(store)
+    await seedCodeApproved(store)
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 7, url: 'https://forge.test/pr/7', headSha: 'sha-head-1' },
+      },
+    })
+  }
+
+  test('runs a check in the workspace with no session, then invokes the configured agent skill verbatim', async () => {
+    const h = await makeHarness({
+      configToml: finalizeConfig,
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'custom-notes-skill': () => defaultTurnResult('notes posted'),
+      }),
+    })
+    await seedReady(h.store)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'publish',
+      action: { kind: 'check', command: 'bun run publish' },
+    })
+    expect(h.execCalls).toEqual([
+      { cmd: ['sh', '-c', 'bun run publish'], cwd: h.workspacePath },
+    ])
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.started')).toHaveLength(0)
+    expect(ofType(events, 'finalize.step-completed').at(-1)).toMatchObject({
+      actor: { kind: 'kernel' },
+      payload: { step: 'publish', ok: true },
+    })
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-finalize-step',
+      step: 'release-notes',
+      action: { kind: 'agent', skill: 'custom-notes-skill' },
+    })
+    const journal = [...h.runner.sessions.values()][0]!
+    expect(journal.opts.skill).toBe('custom-notes-skill')
+    expect(journal.opts.workspacePath).toBe(h.workspacePath)
+    events = await h.store.getEvents(SLUG)
+    const agentDone = ofType(events, 'finalize.step-completed').at(-1)!
+    expect(agentDone.actor.kind).toBe('agent')
+    expect(ofType(events, 'session.ended')).toHaveLength(1)
+  })
+
+  test('nonzero and thrown checks record kernel follow-ups and still advance', async () => {
+    for (const mode of ['nonzero', 'throw'] as const) {
+      const h = await makeHarness({
+        configToml: finalizeConfig,
+        ...(mode === 'nonzero'
+          ? { failCommands: ['bun run publish'] }
+          : { throwCommands: ['bun run publish'] }),
+      })
+      await seedReady(h.store)
+      await h.br.step()
+
+      const events = await h.store.getEvents(SLUG)
+      const completed = ofType(events, 'finalize.step-completed').at(-1)!
+      expect(completed.actor).toEqual(KERNEL)
+      expect(completed.payload).toMatchObject({ step: 'publish', ok: false })
+      expect(completed.payload.note).toContain(
+        mode === 'nonzero' ? 'exited 1' : 'exec unavailable',
+      )
+      const observation = ofType(events, 'observation.recorded').at(-1)!
+      expect(observation.actor).toEqual(KERNEL)
+      expect(observation.payload.summary).toContain('publish')
+      expect(ofType(events, 'session.started')).toHaveLength(0)
+
+      expect(await h.br.step()).toMatchObject({
+        kind: 'run-finalize-step',
+        step: 'release-notes',
+      })
+    }
   })
 })
 

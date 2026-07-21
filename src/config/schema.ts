@@ -4,20 +4,14 @@
  * future tooling parse it without evaluating anything; commands are plain
  * shell strings.
  *
- * Strictness policy (§16.1): unknown top-level tables and unknown keys inside
- * known tables are ERRORS — a typo must not silently disable a verifier. Open
- * maps ([commands], [roles], [outer], and the [verify.<step>] table set) are
- * exempt by construction: their keys are user-chosen names.
+ * Strictness policy (§16.1): unknown top-level keys/tables and unknown keys
+ * inside known tables are ERRORS — a typo must not silently disable a
+ * verifier. Open maps ([commands], [roles], and the named [verify.<step>] and
+ * [finalize.<step>] table sets) are exempt by construction: their keys are
+ * user-chosen names, while every value remains strictly validated.
  */
 import { z } from 'zod'
 import { dashboardFrameHostSchema } from '../ontology'
-
-// ── [project] ────────────────────────────────────────────────────────────────
-
-export const projectSchema = z.strictObject({
-  baseBranch: z.string().min(1).default('main'),
-})
-export type ProjectConfig = z.infer<typeof projectSchema>
 
 // ── [dashboardFrames] ────────────────────────────────────────────────────────
 
@@ -161,15 +155,59 @@ export const verifySectionSchema = z
     return { steps, stepConfigs }
   })
 
-// ── [finalize] ───────────────────────────────────────────────────────────────
+// ── [finalize.<step>] ────────────────────────────────────────────────────────
 
-export const finalizeSchema = z.strictObject({
-  /** Optional post-steps, failure-tolerant (§5). */
-  steps: z
-    .array(z.string().min(1, 'finalize.steps entries must be nonempty step names'))
-    .default([]),
+/** Finalize steps deliberately omit verify-only applicability/server fields. */
+export const finalizeCheckStepSchema = z.strictObject({
+  kind: z.literal('check'),
+  /** Ref into [commands] — cross-validated below. */
+  command: z.string().min(1),
 })
-export type FinalizeConfig = z.infer<typeof finalizeSchema>
+
+export const finalizeAgentStepSchema = z.strictObject({
+  kind: z.literal('agent'),
+  /** Exact installed skill name passed to the configured runtime. */
+  skill: z.string().min(1),
+})
+
+export const finalizeStepConfigSchema = z.discriminatedUnion('kind', [
+  finalizeCheckStepSchema,
+  finalizeAgentStepSchema,
+])
+export type FinalizeStepConfig = z.infer<typeof finalizeStepConfigSchema>
+
+export interface FinalizeConfig {
+  /** Ordered, failure-tolerant post-steps (§5). */
+  steps: string[]
+  /** The [finalize.<step>] tables, keyed by logical step name. */
+  stepConfigs: Record<string, FinalizeStepConfig>
+}
+
+/** Like [verify], [finalize] mixes `steps` with a strict named table set. */
+export const finalizeSectionSchema = z
+  .looseObject({
+    steps: z
+      .array(z.string().min(1, 'finalize.steps entries must be nonempty step names'))
+      .default([]),
+  })
+  .transform(({ steps, ...stepTables }, ctx): FinalizeConfig => {
+    const stepConfigs: Record<string, FinalizeStepConfig> = {}
+    for (const [step, table] of Object.entries(stepTables)) {
+      const parsed = finalizeStepConfigSchema.safeParse(table)
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [step, ...issue.path],
+            message: issue.message,
+          })
+        }
+        continue
+      }
+      stepConfigs[step] = parsed.data
+    }
+    return { steps, stepConfigs }
+  })
 
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
@@ -196,48 +234,12 @@ export const policySchema = z.strictObject({
   stallRounds: z.number().int().positive().default(3),
   maxVerifyAttempts: z.number().int().positive().default(3),
   maxReconcileAttempts: z.number().int().positive().default(3),
-  /**
-   * converge's `maxRounds` for the review loops (SPEC §10). §16.1's example
-   * leaves this knob implicit — §10 names it in the converge policy, so it
-   * lives here; default 4.
-   */
+  /** converge's `maxRounds` for the review loops (SPEC §10). */
   maxReviewRounds: z.number().int().positive().default(4),
+  /** Unclaimed observation occurrences required to start one harvest run. */
+  harvestThreshold: z.number().int().positive().default(10),
 })
 export type PolicyConfig = z.infer<typeof policySchema>
-
-// ── [dispatcher] ─────────────────────────────────────────────────────────────
-
-export const dispatcherSchema = z.strictObject(
-  {
-    /** Concurrent builds for this repo (§16.1; global cap is OPEN — §18.4). */
-    capacity: z.number().int().positive().default(1),
-  },
-  {
-    // This is a clean config move, not a compatibility shim: the old values
-    // remain unknown and are never consumed. Give the two known old keys a
-    // purpose-built remedy while preserving strict errors for every other typo.
-    error: (issue) => {
-      if (issue.code !== 'unrecognized_keys') return undefined
-      const moved = issue.keys.filter(
-        (key) => key === 'readyState' || key === 'readyLabels',
-      )
-      if (moved.length === 0) return undefined
-      const unknown = issue.keys.filter(
-        (key) => key !== 'readyState' && key !== 'readyLabels',
-      )
-      return [
-        ...moved.map(
-          (key) =>
-            `[dispatcher].${key} has moved to [tickets].${key} — move the field to its new table`,
-        ),
-        ...(unknown.length > 0
-          ? [`Unrecognized key${unknown.length === 1 ? '' : 's'}: ${unknown.map((key) => `"${key}"`).join(', ')}`]
-          : []),
-      ].join('; ')
-    },
-  },
-)
-export type DispatcherConfig = z.infer<typeof dispatcherSchema>
 
 // ── [tickets] ────────────────────────────────────────────────────────────────
 //
@@ -295,43 +297,23 @@ export const ticketsSchema = z.strictObject({
 })
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
-// ── [harvest] ────────────────────────────────────────────────────────────────
-//
-// Observation harvest is back-pressure driven by dispatch. It is deliberately
-// not an [outer] cron entry: idle repositories do no work and bursts are
-// handled on the next dispatch tick.
-
-export const harvestSchema = z.strictObject({
-  /** Unclaimed observation occurrences required to start one harvest run. */
-  threshold: z.number().int().positive().default(10),
-})
-export type HarvestConfig = z.infer<typeof harvestSchema>
-
-// ── [outer] ──────────────────────────────────────────────────────────────────
-//
-// Open map: scheduled outer-loop ingesters. Harvest is rejected below because
-// it moved to [harvest].threshold; other names remain open and cron-driven.
-
-export const outerScheduleSchema = z.strictObject({
-  cron: z.string().min(1),
-})
-export type OuterScheduleConfig = z.infer<typeof outerScheduleSchema>
-
 // ── Whole file ───────────────────────────────────────────────────────────────
 
-const configTableSchema = z.strictObject({
-  project: projectSchema.prefault({}),
+const configRootSchema = z.strictObject({
+  /** Base branch builds cut from and target (§16.1). */
+  baseBranch: z.string().min(1).default('main'),
+  /** Concurrent builds for this repository (§16.1). */
+  capacity: z.number().int().positive().default(1),
   dashboardFrames: dashboardFramesSchema.optional(),
   commands: commandsSchema.prefault({}),
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
-  finalize: finalizeSchema.prefault({}),
+  finalize: finalizeSectionSchema.prefault({}),
   // `default` is a reserved optional entry inside this open map (§9). An
   // absent [roles.default] is an empty base; the resolver then uses its wiring
   // fallback runtime and that runtime's own default model.
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
-  dispatcher: dispatcherSchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
   // ready gate. Prefault feeds the file-source identity through ticketsSchema,
   // which deliberately fails on missing `readyState` at `tickets.readyState`.
@@ -340,73 +322,106 @@ const configTableSchema = z.strictObject({
   tickets: ticketsSchema.prefault({
     source: 'file',
   } as z.input<typeof ticketsSchema>),
-  harvest: harvestSchema.prefault({}),
-  outer: z.record(z.string().min(1), outerScheduleSchema).prefault({}),
 })
 
-/** The known top-level tables — used to make unknown-table errors actionable. */
-export const TOP_LEVEL_TABLES = Object.keys(configTableSchema.shape)
+/** Root metadata keeps strict error prose and documentation coverage honest. */
+export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity'] as const
+export const TOP_LEVEL_TABLES = Object.keys(configRootSchema.shape).filter(
+  (key) => !(TOP_LEVEL_SCALARS as readonly string[]).includes(key),
+)
+export const TOP_LEVEL_KEYS = Object.keys(configRootSchema.shape)
 
 /**
  * Cross-validation (§16.1): errors carry the path and what would be accepted,
  * because validation failures are feedback to whoever edits the file (D6
  * discipline applied to config).
  */
-export const configSchema = configTableSchema.superRefine((config, ctx) => {
-  if (Object.hasOwn(config.outer, 'harvest')) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['outer', 'harvest'],
-      message:
-        '[outer].harvest is no longer scheduled by cron — remove it and configure observation back-pressure with [harvest].threshold',
-    })
-  }
-
+export const configSchema = configRootSchema.superRefine((config, ctx) => {
   const commandNames = Object.keys(config.commands)
   const knownCommands =
     commandNames.length > 0
       ? `known commands: ${commandNames.join(', ')}`
       : '[commands] has no entries'
 
-  config.verify.steps.forEach((step, index) => {
-    if (!Object.hasOwn(config.verify.stepConfigs, step)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['verify', 'steps', index],
-        message:
-          `verify step "${step}" is listed in verify.steps but has no [verify.${step}] table — ` +
-          `add one with kind = "check" (command = <name in [commands]>) or kind = "agent" (skill = <skill name>)`,
-      })
-    }
-  })
+  // A failed transformed subsection can be absent from Zod's partial object
+  // while sibling issues are collected. Guard the cross-check so malformed
+  // tables report validation feedback instead of throwing inside validation.
+  if (config.verify?.stepConfigs !== undefined) {
+    config.verify.steps.forEach((step, index) => {
+      if (!Object.hasOwn(config.verify.stepConfigs, step)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['verify', 'steps', index],
+          message:
+            `verify step "${step}" is listed in verify.steps but has no [verify.${step}] table — ` +
+            `add one with kind = "check" (command = <name in [commands]>) or kind = "agent" (skill = <skill name>)`,
+        })
+      }
+    })
 
-  const listed = new Set(config.verify.steps)
-  for (const [step, stepConfig] of Object.entries(config.verify.stepConfigs)) {
-    if (!listed.has(step)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['verify', step],
-        message:
-          `[verify.${step}] is defined but "${step}" is not listed in verify.steps — ` +
-          `add "${step}" to verify.steps or remove the table`,
-      })
+    const listed = new Set(config.verify.steps)
+    for (const [step, stepConfig] of Object.entries(config.verify.stepConfigs)) {
+      if (!listed.has(step)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['verify', step],
+          message:
+            `[verify.${step}] is defined but "${step}" is not listed in verify.steps — ` +
+            `add "${step}" to verify.steps or remove the table`,
+        })
+      }
+      if (stepConfig.kind === 'check' && !Object.hasOwn(config.commands, stepConfig.command)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['verify', step, 'command'],
+          message:
+            `[verify.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
+        })
+      }
+      if (stepConfig.kind === 'agent' && stepConfig.needsServer && config.server === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['verify', step, 'needsServer'],
+          message:
+            `[verify.${step}].needsServer = true requires a [server] table (start, url) — ` +
+            `add [server] or set needsServer = false`,
+        })
+      }
     }
-    if (stepConfig.kind === 'check' && !Object.hasOwn(config.commands, stepConfig.command)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['verify', step, 'command'],
-        message:
-          `[verify.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
-      })
-    }
-    if (stepConfig.kind === 'agent' && stepConfig.needsServer && config.server === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['verify', step, 'needsServer'],
-        message:
-          `[verify.${step}].needsServer = true requires a [server] table (start, url) — ` +
-          `add [server] or set needsServer = false`,
-      })
+  }
+
+  if (config.finalize?.stepConfigs !== undefined) {
+    config.finalize.steps.forEach((step, index) => {
+      if (!Object.hasOwn(config.finalize.stepConfigs, step)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['finalize', 'steps', index],
+          message:
+            `finalize step "${step}" is listed in finalize.steps but has no [finalize.${step}] table — ` +
+            `add one with kind = "check" (command = <name in [commands]>) or kind = "agent" (skill = <skill name>)`,
+        })
+      }
+    })
+
+    const listedFinalize = new Set(config.finalize.steps)
+    for (const [step, stepConfig] of Object.entries(config.finalize.stepConfigs)) {
+      if (!listedFinalize.has(step)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['finalize', step],
+          message:
+            `[finalize.${step}] is defined but "${step}" is not listed in finalize.steps — ` +
+            `add "${step}" to finalize.steps or remove the table`,
+        })
+      }
+      if (stepConfig.kind === 'check' && !Object.hasOwn(config.commands, stepConfig.command)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['finalize', step, 'command'],
+          message:
+            `[finalize.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
+        })
+      }
     }
   }
 

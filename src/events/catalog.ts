@@ -74,7 +74,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'verify.completed': ['kernel', 'agent'],
   'finalize.started': ['kernel'],
   'finalize.completed': ['kernel'],
-  'finalize.step-completed': ['agent'],
+  'finalize.step-completed': ['kernel', 'agent'],
   'dashboard-frame.hosted': ['kernel'],
   'dashboard-frame.reclaimed': ['dispatcher'],
   'dashboard-frame.reclaim-failed': ['dispatcher'],
@@ -87,7 +87,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.started': ['kernel'],
   'reconcile.completed': ['agent'],
 
-  'observation.recorded': ['agent'],
+  'observation.recorded': ['kernel', 'agent'],
   'escalation.raised': ['agent', 'kernel'],
   // Humans may use every resolution, including a bare `retry`. Dispatcher-
   // authored answers are restricted to `retry` below; matching those to an

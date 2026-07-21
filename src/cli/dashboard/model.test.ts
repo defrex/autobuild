@@ -89,6 +89,10 @@ command = "test"
 
 [finalize]
 steps = ["changelog"]
+
+[finalize.changelog]
+kind = "agent"
+skill = "ab-changelog"
 `)
 
 // ── Fixture plumbing (reducer-test style: seq by index, every write validated)
@@ -1234,6 +1238,7 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(decideNext(log, CONFIG_POST_STEPS)).toEqual({
       kind: 'run-finalize-step',
       step: 'changelog',
+      action: { kind: 'agent', skill: 'ab-changelog' },
     })
   })
 

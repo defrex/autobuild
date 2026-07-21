@@ -53,6 +53,10 @@ export type VerifyAction =
       attempt: number
     }
 
+export type FinalizeAction =
+  | { kind: 'check'; command: string }
+  | { kind: 'agent'; skill: string }
+
 export type Decision =
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
@@ -80,7 +84,7 @@ export type Decision =
       attempt: number
       reason: string
     }
-  | { kind: 'run-finalize-step'; step: string }
+  | { kind: 'run-finalize-step'; step: string; action: FinalizeAction }
   | {
       kind: 'raise-escalation'
       source: 'agent' | 'stall' | 'policy'
@@ -478,7 +482,19 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   for (const step of config.finalize.steps) {
     // Post-steps are independent and failure-tolerant (§5): a completion with
     // ok false still counts — it filed its observation and never re-runs.
-    if (!log.finalizeStepsDone.has(step)) return { kind: 'run-finalize-step', step }
+    if (log.finalizeStepsDone.has(step)) continue
+    const stepConfig = config.finalize.stepConfigs[step]
+    if (stepConfig === undefined) continue // unreachable: configSchema cross-validates
+    const action: FinalizeAction =
+      stepConfig.kind === 'check'
+        ? {
+            kind: 'check',
+            // Resolve the [commands] ref; fallback keeps decideNext total for
+            // directly-constructed Config values that bypass validation.
+            command: config.commands[stepConfig.command] ?? stepConfig.command,
+          }
+        : { kind: 'agent', skill: stepConfig.skill }
+    return { kind: 'run-finalize-step', step, action }
   }
 
   // ── 9. Post-PR epilogue (§15.7): finalize → (conflicted → reconcile →

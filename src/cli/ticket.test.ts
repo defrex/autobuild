@@ -209,7 +209,7 @@ describe('abTicketCreate', () => {
   test('a config without [tickets] fails at the mandatory ready-state path', async () => {
     await writeFile(
       join(tmp, 'autobuild.toml'),
-      '[project]\nbaseBranch = "main"\n',
+      'baseBranch = "main"\n',
     )
     const bodyFile = join(tmp, 'spec.md')
     await writeFile(bodyFile, '## What and why\n\nBecause.\n')

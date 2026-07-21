@@ -132,14 +132,22 @@ describe('abInit — fresh install', () => {
   test('the template and a no-package render are setup-only, zero-verify configs', async () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     const baseline = parseConfig(template)
+    expect(baseline.baseBranch).toBe('main')
+    expect(baseline.capacity).toBe(1)
+    expect(baseline.policy.harvestThreshold).toBe(10)
     expect(baseline.commands).toEqual({ setup: 'bun install' })
     expect(baseline.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(baseline.finalize).toEqual({ steps: [], stepConfigs: {} })
 
     await abInit({ targetRepo: target })
     const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
     expect(generated).not.toContain('@ab-init/')
-    expect(parseConfig(generated).commands).toEqual({ setup: 'bun install' })
-    expect(parseConfig(generated).verify).toEqual({ steps: [], stepConfigs: {} })
+    const generatedConfig = parseConfig(generated)
+    expect(generatedConfig.baseBranch).toBe('main')
+    expect(generatedConfig.capacity).toBe(1)
+    expect(generatedConfig.commands).toEqual({ setup: 'bun install' })
+    expect(generatedConfig.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(generatedConfig.finalize).toEqual({ steps: [], stepConfigs: {} })
   })
 
   test('generated ticket guidance documents the conjunctive readyLabels gate without enabling it', async () => {
@@ -171,9 +179,13 @@ describe('abInit — fresh install', () => {
     // top-level config concept.
     await abInit({ targetRepo: target })
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.baseBranch).toBe('main')
+    expect(config.capacity).toBe(1)
+    expect(config.policy.harvestThreshold).toBe(10)
     expect(config.tickets.readyState).toBe('ready')
     expect(config.roles.default).toEqual({ runtime: 'claude' })
     expect(config.commands).toEqual({ setup: 'bun install' })
+    expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
     expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
   })
 
@@ -410,11 +422,11 @@ describe('abInit — idempotence and safety', () => {
 
   test('an existing autobuild.toml is never clobbered', async () => {
     await abInit({ targetRepo: target })
-    await writeFile(join(target, 'autobuild.toml'), '[project]\nbaseBranch = "trunk"\n')
+    await writeFile(join(target, 'autobuild.toml'), 'baseBranch = "trunk"\n')
     const report = await abInit({ targetRepo: target })
     expect(report.config).toBe('skipped')
     expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(
-      '[project]\nbaseBranch = "trunk"\n',
+      'baseBranch = "trunk"\n',
     )
   })
 
@@ -528,7 +540,7 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
       const skillPath = installedSkillPath(explicit, 'ab-plan')
       const defaultSkill = await readFile(skillPath, 'utf8')
       const configPath = join(explicit, 'autobuild.toml')
-      const existingConfig = '[project]\nbaseBranch = "trunk"\n'
+      const existingConfig = 'baseBranch = "trunk"\n'
       await writeFile(skillPath, 'edited\n')
       await writeFile(configPath, existingConfig)
       d.out.length = 0

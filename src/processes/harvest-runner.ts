@@ -198,7 +198,7 @@ export class HarvestRunner {
         // boundary even when the threshold is not met, so a request arriving
         // during the read is acknowledged before this runner returns idle.
         await this.controlBoundary()
-        if (scan.observations.length < this.deps.config.harvest.threshold) {
+        if (scan.observations.length < this.deps.config.policy.harvestThreshold) {
           return { outcome: 'idle' }
         }
         const runId = this.deps.ids('harvest')

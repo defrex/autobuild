@@ -424,7 +424,7 @@ function baseBranchOf(events: AbEvent[], config: Config): string {
   for (const event of events) {
     if (event.type === 'build.created') return event.payload.baseBranch
   }
-  return config.project.baseBranch
+  return config.baseBranch
 }
 
 function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
@@ -937,7 +937,7 @@ export class Dispatcher {
         if (record.ticket) activeTicketIds.add(record.ticket.id)
       }
     }
-    let capacity = config.dispatcher.capacity - active
+    let capacity = config.capacity - active
 
     // The ready scan runs even at full capacity: `queued` is the operator's
     // standing queue-depth report and must stay honest exactly when the
@@ -1027,7 +1027,7 @@ export class Dispatcher {
       const baseSlug = await this.chooseSlugBase(ticket.title, body)
       const slug = await this.uniqueSlug(baseSlug)
       const branch = `ab/${slug}`
-      const baseBranch = config.project.baseBranch
+      const baseBranch = config.baseBranch
       await store.createBuild({
         slug,
         repo: this.deps.repo,

@@ -4,8 +4,9 @@
 # itself. Declarative only — commands are plain shell strings, nothing here
 # is evaluated.
 
-[project]
+# Root scalars must appear before the first TOML table.
 baseBranch = "main"
+capacity = 1             # concurrent builds for this repo
 
 # Optional review-window hosting for existing verify:dashboard PNG artifacts.
 # Off by default. The release must already exist, be published and mutable, and
@@ -56,10 +57,22 @@ steps = [
 #paths = ["web/**", "src/routes/**"]
 #always = true
 
-# Optional post-steps; failure-tolerant — a failed step files an observation,
-# it never kills a green build (§5).
+# Optional ordered post-steps. Checks run deterministic command refs without
+# an agent session; agents run the exact configured skill. Either kind is
+# failure-tolerant: a failure files an observation and never kills a green
+# build (§5).
 [finalize]
 steps = []
+
+# Check post-step example:
+#[finalize.publish]
+#kind = "check"
+#command = "publish"             # ref into [commands]
+
+# Agent post-step example:
+#[finalize.release-notes]
+#kind = "agent"
+#skill = "ab-release-notes"      # exact installed skill name
 
 # Runtime/model/extensions configuration (§9) is one open map of roles. The
 # reserved optional `default` role is the raw inheritance base for every other
@@ -90,9 +103,12 @@ stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
-
-[dispatcher]
-capacity = 1             # concurrent builds for this repo
+# Observation harvest is back-pressure driven by `ab dispatch`: no agent runs
+# while fewer than this many new structured observations are waiting. Once the
+# threshold is reached, scan -> synthesize <-> review -> file is journaled and
+# approved proposals are created in Triage only. Optional role overrides are
+# `[roles.harvest]` and `[roles.harvest-review]`.
+harvestThreshold = 10
 
 # Ticket source, ready gate, and lifecycle states (§3.2, §3.3, §13).
 # This default is the local file tracker at `.autobuild/tickets/`: four state
@@ -119,16 +135,3 @@ readyState = "ready"
 # secret: set LINEAR_API_KEY in the environment (a local .env works), never here.
 #teamKey = "ENG"                 # Linear team key (required)
 #claimedState = "In Progress"    # Linear workflow state claim() moves into
-
-# Observation harvest is back-pressure driven by `ab dispatch`: no agent runs
-# while fewer than this many new structured observations are waiting. Once the
-# threshold is reached, scan -> synthesize <-> review -> file is journaled and
-# approved proposals are created in Triage only. Optional role overrides are
-# `[roles.harvest]` and `[roles.harvest-review]`.
-[harvest]
-threshold = 10
-
-# Cron schedules for OTHER outer-loop ingesters (§12). The exact key `harvest`
-# is rejected; configure it above instead.
-#[outer]
-#"ingest:sentry" = { cron = "0 */4 * * *" }

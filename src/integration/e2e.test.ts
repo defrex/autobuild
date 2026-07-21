@@ -263,8 +263,8 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
 }, 30_000)
 
 const PLAN_SELECTION_TOML = `
-[project]
 baseBranch = "main"
+capacity = 1
 [commands]
 mandatory = "echo mandatory >> verify-order.log"
 omitted = "echo OMITTED >> verify-order.log"
@@ -284,8 +284,6 @@ skill = "ab-verify-never"
 [verify.selected]
 kind = "check"
 command = "selected"
-[dispatcher]
-capacity = 1
 [tickets]
 source = "file"
 readyLabels = ["autobuild"]
@@ -720,7 +718,6 @@ test('a2. reconcile merges the current base when main advances after conflict de
 
 test('a3. conditional verify skips initially, then re-evaluates after reconcile against the refreshed base', async () => {
   const conditionalConfig = `
-[project]
 baseBranch = "main"
 [commands]
 conditional = "true"
@@ -1544,7 +1541,10 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
     makeHarness({
       handlers: {},
       tickets: [],
-      configToml: `${CONFIG_TOML}\n[harvest]\nthreshold = 2\n`,
+      configToml: CONFIG_TOML.replace(
+        'stallRounds = 3',
+        'stallRounds = 3\nharvestThreshold = 2',
+      ),
     }),
   )
   const cliErrors: string[] = []

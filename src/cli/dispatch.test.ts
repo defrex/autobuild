@@ -59,8 +59,8 @@ import {
 // but `[tickets]` is still required to name the mandatory ready state. This
 // fixture pins that the complete table parses and flows through.
 const DISPATCH_CONFIG_TOML = `
-[project]
 baseBranch = "main"
+capacity = 1
 
 [commands]
 test = "test -f ok.marker"
@@ -74,9 +74,6 @@ command = "test"
 
 [policy]
 stallRounds = 3
-
-[dispatcher]
-capacity = 1
 
 [tickets]
 source = "file"
@@ -236,7 +233,7 @@ describe('abDispatch guards', () => {
     try {
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        '[project]\nbaseBranch = "main"\n[dispatcher]\ncapacity = 1\n',
+        'baseBranch = "main"\ncapacity = 1\n',
       )
       let wired = false
 
@@ -769,7 +766,10 @@ model = "gpt-slug-name"
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      `${DISPATCH_CONFIG_TOML}\n[harvest]\nthreshold = 1\n`,
+      DISPATCH_CONFIG_TOML.replace(
+        'stallRounds = 3',
+        'stallRounds = 3\nharvestThreshold = 1',
+      ),
     )
     const run = 'h_dispatch_resume'
     const out: string[] = []
@@ -917,7 +917,10 @@ model = "gpt-slug-name"
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      `${DISPATCH_CONFIG_TOML}\n[harvest]\nthreshold = 1\n`,
+      DISPATCH_CONFIG_TOML.replace(
+        'stallRounds = 3',
+        'stallRounds = 3\nharvestThreshold = 1',
+      ),
     )
     const run = 'h_failed_dispatch'
     const out: string[] = []
@@ -1284,7 +1287,10 @@ describe('abDispatch watch harvest coordination', () => {
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      `${DISPATCH_CONFIG_TOML}\n[harvest]\nthreshold = 1\n`,
+      DISPATCH_CONFIG_TOML.replace(
+        'stallRounds = 3',
+        'stallRounds = 3\nharvestThreshold = 1',
+      ),
     )
     let releaseTurn!: () => void
     const turnGate = new Promise<void>((resolve) => {

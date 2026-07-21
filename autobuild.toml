@@ -4,8 +4,9 @@
 # itself. Declarative only — commands are plain shell strings, nothing here
 # is evaluated.
 
-[project]
+# Root scalars must appear before the first TOML table.
 baseBranch = "main"
+capacity = 3             # concurrent builds for this repo
 
 # Optional review-window hosting for existing verify:dashboard PNG artifacts.
 # Off by default. The release must already exist, be published and mutable, and
@@ -19,7 +20,7 @@ baseBranch = "main"
 
 # Deterministic verbs the kernel may run. `setup` runs after provision and
 # after a sandbox rehydrate (§15.6-C); the rest are referenced by name from
-# [verify.*] check steps.
+# [verify.*] or [finalize.*] check steps.
 [commands]
 setup = "bun install"
 typecheck = "bun tsc --noEmit"
@@ -60,10 +61,22 @@ paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts"]
 #skill = "ab-verify-e2e"
 #needsServer = true
 
-# Optional post-steps; failure-tolerant — a failed step files an observation,
-# it never kills a green build (§5).
+# Optional ordered post-steps. Checks run deterministic command refs without
+# an agent session; agents run the exact configured skill. Either kind is
+# failure-tolerant: a failure files an observation and never kills a green
+# build (§5).
 [finalize]
 steps = []
+
+# Check post-step example:
+#[finalize.publish]
+#kind = "check"
+#command = "publish"             # ref into [commands]
+
+# Agent post-step example:
+#[finalize.release-notes]
+#kind = "agent"
+#skill = "ab-release-notes"      # exact installed skill name
 
 # Runtime/model/extensions configuration (§9) is one open map of roles. The
 # reserved `default` entry is the repo-wide inheritance base and is never
@@ -103,9 +116,11 @@ stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
-
-[dispatcher]
-capacity = 3             # concurrent builds for this repo
+# Structured observations are harvested on back-pressure by `ab dispatch`.
+# The workflow is repository-scoped and independent of build capacity; its two
+# optional runtime/model overrides are `[roles.harvest]` and
+# `[roles.harvest-review]`.
+harvestThreshold = 10
 
 # Ticket source and lifecycle states (§3.2, §3.3, §13). The Linear API key is a
 # secret — set the LINEAR_API_KEY environment variable (a local .env works),
@@ -122,15 +137,3 @@ claimedState = "In Progress"    # workflow state claim() moves an issue to
 createState = "Todo"         # state new tickets are filed into (absent = provider default)
 triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with readyState = "ready" and optional dir = "tickets"
-
-# Structured observations are harvested on back-pressure by `ab dispatch`.
-# The workflow is repository-scoped and independent of build capacity; its two
-# optional runtime/model overrides are `[roles.harvest]` and
-# `[roles.harvest-review]`.
-[harvest]
-threshold = 10
-
-# Cron schedules for other outer-loop ingesters (§12). `harvest` is no longer a
-# legal cron key; ingest:sentry and other scheduled sources are unchanged.
-#[outer]
-#"ingest:sentry" = { cron = "0 */4 * * *" }

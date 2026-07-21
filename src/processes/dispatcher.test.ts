@@ -71,7 +71,7 @@ function withReadyState(toml: string): string {
   if (/(^|\n)\[tickets\]/.test(toml)) {
     return toml.replace(/(^|\n)(\[tickets\][^\n]*\n)/, `$1$2readyState = "Ready"\n`)
   }
-  return `[tickets]\nsource = "file"\nreadyState = "Ready"\n${toml}`
+  return `${toml}${toml.endsWith('\n') || toml.length === 0 ? '' : '\n'}[tickets]\nsource = "file"\nreadyState = "Ready"\n`
 }
 
 function harness(
@@ -601,6 +601,23 @@ describe('Dispatcher dispatch', () => {
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
+  test('uses the top-level baseBranch for the durable fact and workspace', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-trunk')],
+      toml: 'baseBranch = "trunk"\n',
+    })
+
+    await h.dispatcher.tick()
+
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created?.payload.baseBranch).toBe('trunk')
+    expect(h.workspaces.provisions).toEqual([
+      { repo: REPO, baseBranch: 'trunk', branch: 'ab/add-rate-limiting' },
+    ])
+  })
+
   test('freezes an enabled dashboard frame destination into build.created', async () => {
     const h = harness({
       tickets: [readyTicket('T-host')],
@@ -835,11 +852,10 @@ releaseId = 42
     const h = harness({
       tickets: [ready, backlog],
       toml: [
+        'capacity = 2',
         '[tickets]',
         'source = "file"',
         'readyState = "Ready"',
-        '[dispatcher]',
-        'capacity = 2',
       ].join('\n'),
     })
 
@@ -868,12 +884,11 @@ releaseId = 42
     const h = harness({
       tickets: [done, fresh],
       toml: [
+        'capacity = 2', // room for BOTH — so a skip is a real gate, not a cap
         '[tickets]',
         'source = "file"',
         'readyLabels = ["autobuild"]',
         'readyState = "Ready"',
-        '[dispatcher]',
-        'capacity = 2', // room for BOTH — so a skip is a real gate, not a cap
       ].join('\n'),
     })
 
@@ -1094,7 +1109,7 @@ releaseId = 42
   test('equal meaningful candidates dedupe with a suffix outside the word budget', async () => {
     const h = harness({
       tickets: [readyTicket('T-1'), readyTicket('T-2')],
-      toml: '[dispatcher]\ncapacity = 2\n',
+      toml: 'capacity = 2\n',
       nameSlug: async () => 'login-rate-limit',
     })
 
@@ -1116,7 +1131,7 @@ releaseId = 42
     const oldSlug = 'existing-build-with-a-long-historical-slug'
     const h = harness({
       tickets: [readyTicket('T-new')],
-      toml: '[dispatcher]\ncapacity = 4\n',
+      toml: 'capacity = 4\n',
       nameSlug: async () => 'login-rate-limit',
     })
     await h.store.createBuild({
@@ -1496,11 +1511,10 @@ describe('Dispatcher dependency gate', () => {
    * in another state is a dependency and not itself dispatchable work — the
    * arrangement these tests are actually about. */
   const CAPACITY_2 = [
+    'capacity = 2',
     '[tickets]',
     'source = "file"',
     'readyState = "Ready"',
-    '[dispatcher]',
-    'capacity = 2',
   ].join('\n')
 
   test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
@@ -1542,11 +1556,10 @@ describe('Dispatcher dependency gate', () => {
         readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
       ],
       toml: [
+        'capacity = 1',
         '[tickets]',
         'source = "file"',
         'readyState = "Ready"',
-        '[dispatcher]',
-        'capacity = 1',
       ].join('\n'),
     })
 
@@ -1766,11 +1779,10 @@ describe('Dispatcher dependency gate', () => {
         readyTicket('T-3', { title: 'Third', state: 'Done', blockedBy: ['T-2'] }),
       ],
       toml: [
+        'capacity = 5',
         '[tickets]',
         'source = "file"',
         'readyState = "Done"',
-        '[dispatcher]',
-        'capacity = 5',
       ].join('\n'),
     })
 
@@ -2165,7 +2177,11 @@ describe('Dispatcher janitor', () => {
   })
 
   test('fallback waits for finalize post-steps before landing', async () => {
-    const h = harness({ toml: '[finalize]\nsteps = ["release-notes"]\n' })
+    const h = harness({
+      toml:
+        '[finalize]\nsteps = ["release-notes"]\n' +
+        '[finalize.release-notes]\nkind = "agent"\nskill = "ab-release-notes"\n',
+    })
     const slug = await seedAwaitingPr(h)
     await h.store.append(slug, {
       actor: humanActor('operator'),
@@ -2753,7 +2769,11 @@ describe('Dispatcher lease sweep', () => {
     // Regression: the sweep skipped every build with a non-conflicted PR, so
     // a runner dying after finalize.completed silently dropped configured
     // finalize:* steps — never executed, no observation filed.
-    const h = harness({ toml: '[finalize]\nsteps = ["release-notes"]\n' })
+    const h = harness({
+      toml:
+        '[finalize]\nsteps = ["release-notes"]\n' +
+        '[finalize.release-notes]\nkind = "agent"\nskill = "ab-release-notes"\n',
+    })
     const slug = await seedBuild(h)
     await seedLoopsApproved(h, slug)
     await h.store.append(slug, {

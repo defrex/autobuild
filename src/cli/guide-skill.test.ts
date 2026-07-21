@@ -24,15 +24,14 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
   dashboardFramesSchema,
-  dispatcherSchema,
-  finalizeSchema,
-  harvestSchema,
-  outerScheduleSchema,
+  finalizeAgentStepSchema,
+  finalizeCheckStepSchema,
   policySchema,
-  projectSchema,
   roleSchema,
   serverSchema,
   ticketsSchema,
+  TOP_LEVEL_KEYS,
+  TOP_LEVEL_SCALARS,
   TOP_LEVEL_TABLES,
   verifyAgentStepSchema,
   verifyCheckStepSchema,
@@ -59,7 +58,6 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
-  project: Object.keys(projectSchema.shape),
   dashboardFrames: Object.keys(dashboardFramesSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
@@ -69,18 +67,18 @@ const TABLE_FIELDS: Record<string, string[]> = {
     ...Object.keys(verifyCheckStepSchema.shape),
     ...Object.keys(verifyAgentStepSchema.shape),
   ],
-  finalize: Object.keys(finalizeSchema.shape),
+  finalize: [
+    'steps',
+    ...Object.keys(finalizeCheckStepSchema.shape),
+    ...Object.keys(finalizeAgentStepSchema.shape),
+  ],
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
-  dispatcher: Object.keys(dispatcherSchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
-  harvest: Object.keys(harvestSchema.shape),
-  outer: Object.keys(outerScheduleSchema.shape),
 }
 
-/** The guide text under `### \`[table]\``, up to the next `###` heading. */
-function sectionFor(table: string): string | undefined {
-  const heading = `### \`[${table}]\``
+/** The guide text under a level-three heading, up to the next one. */
+function headingSection(heading: string): string | undefined {
   const start = guide.indexOf(heading)
   if (start === -1) return undefined
   const after = start + heading.length
@@ -88,8 +86,24 @@ function sectionFor(table: string): string | undefined {
   return next === -1 ? guide.slice(after) : guide.slice(after, next)
 }
 
+function sectionFor(table: string): string | undefined {
+  return headingSection(`### \`[${table}]\``)
+}
+
 describe('ab-guide — autobuild.toml coverage (AC6)', () => {
-  test('the heading map covers exactly the schema\'s top-level tables', () => {
+  test('documents every root scalar as a structural row', () => {
+    const section = headingSection('### Root scalars')
+    expect(section).toBeDefined()
+    const missing = TOP_LEVEL_SCALARS.filter(
+      (field) => !new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm').test(section ?? ''),
+    )
+    expect(missing, `skills/guide/SKILL.md is missing root scalar rows for: ${missing.join(', ')}`).toEqual([])
+  })
+
+  test('the scalar/table maps cover exactly the live root surface', () => {
+    expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual(
+      [...TOP_LEVEL_KEYS].sort(),
+    )
     // Adding a table to the schema without mapping it here would otherwise
     // skip it entirely — the guard must fail, not shrug.
     expect(Object.keys(TABLE_FIELDS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
@@ -117,6 +131,29 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
 })
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
+  test('canonical, installed, and pristine guide copies stay synchronized', async () => {
+    const canonical = (await readDistSkills(DIST_ROOT)).find(
+      (skill) => skill.name === 'guide',
+    )
+    expect(canonical).toBeDefined()
+    const [installed, pristine] = await Promise.all([
+      readFile(join(DIST_ROOT, '.agents', 'skills', 'ab-guide', 'SKILL.md'), 'utf8'),
+      readFile(
+        join(
+          DIST_ROOT,
+          '.agents',
+          'skills',
+          '.ab-pristine',
+          'ab-guide',
+          'SKILL.md',
+        ),
+        'utf8',
+      ),
+    ])
+    expect(installed).toBe(canonical!.content)
+    expect(pristine).toBe(canonical!.content)
+  })
+
   test('every skill in the distribution has a row in the skills rundown', async () => {
     const skills = await readDistSkills(DIST_ROOT)
     expect(skills.length).toBeGreaterThan(1)

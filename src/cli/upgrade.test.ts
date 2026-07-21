@@ -75,8 +75,8 @@ async function writeDist(dist: string, skills: Record<string, string>): Promise<
   await writeFile(
     join(dist, 'templates', 'autobuild.toml'),
     [
-      '[project]',
       'baseBranch = "main"',
+      'capacity = 1',
       '[commands]',
       '# @ab-init/package-script-commands',
       '[verify]',

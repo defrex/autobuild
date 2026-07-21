@@ -13,7 +13,7 @@
  * `ab ticket create` constructs its TicketSource via a factory, so the whole
  * loop is testable over fakes.
  *
- * Concurrency is config, not code (§16.1): `[dispatcher].capacity` caps the
+ * Concurrency is config, not code (§16.1): top-level `capacity` caps the
  * concurrent builds for this repo. `launchRunner` starts each build-runner
  * IN-PROCESS but does not block the dispatcher on it (fire-and-forget,
  * tracked) — so with capacity N up to N builds run at once, while the
@@ -1315,7 +1315,7 @@ class DispatchLoop {
   }
 
   async run(): Promise<void> {
-    const capacity = this.config.dispatcher.capacity
+    const capacity = this.config.capacity
     if (this.opts.once) {
       if (!this.dashboard) {
         this.say(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)

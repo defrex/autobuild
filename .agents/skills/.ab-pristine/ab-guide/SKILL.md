@@ -50,7 +50,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   out-of-scope, evidence) and dispatches. Generated work cannot leave Triage
   un-groomed. The dispatcher claims tickets that pass the `[tickets]` ready
   gate, chooses a short immutable slug from the final conforming spec, and
-  starts builds up to `[dispatcher].capacity`.
+  starts builds up to the top-level `capacity` bound.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
@@ -78,7 +78,8 @@ autobuild by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
 **Observation harvest is not a build phase.** On each dispatch tick, once
-`[harvest].threshold` new structured observations have accumulated, dispatch
+`[policy].harvestThreshold` new structured observations have accumulated,
+dispatch
 runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created directly in Triage. A repository journal,
@@ -141,16 +142,23 @@ One declarative file at the repo root. **Declarative, not executable** —
 commands are plain shell strings that the kernel runs; nothing in this file is
 evaluated as config logic.
 
-**Strictness:** unknown top-level tables and unknown keys inside known tables
-are **errors**, not warnings — a typo must not silently disable a verifier. The
-open maps (`[commands]`, `[roles]`, `[outer]`, and the `[verify.<step>]` table
-set) are exempt by construction, because their keys are user-chosen names.
+**Strictness:** unknown top-level keys/tables and unknown keys inside known
+tables are **errors**, not warnings — a typo must not silently disable a
+verifier. The open maps (`[commands]`, `[roles]`, and the named
+`[verify.<step>]` / `[finalize.<step>]` table sets) admit user-chosen names,
+but every value in them remains strictly validated. The removed `[project]`,
+`[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
+shims; they fail as ordinary unknown top-level keys.
 
-### `[project]`
+### Root scalars
+
+Root scalars must appear before the first TOML table; TOML otherwise nests them
+under the preceding table.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
+| `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
 
 ### `[dashboardFrames]`
 
@@ -187,7 +195,7 @@ likes.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from `[verify.<step>].command`. |
+| `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from check steps in `[verify.<step>]` or `[finalize.<step>]`. |
 
 `setup` is special by convention: it runs after workspace provision and after a
 sandbox rehydrate. Values are never evaluated as config — they are handed to a
@@ -293,9 +301,40 @@ without consuming that budget.
 
 ### `[finalize]`
 
+`steps` orders the post-PR actions; every name requires a matching
+`[finalize.<step>]` table. Finalize has its own narrow union: verify-only
+`paths`, `always`, and `needsServer` fields are errors.
+
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `steps` | `[]` | array of nonempty step names | Post-steps that run after the PR is opened. **Failure-tolerant**: a failed step files an observation and never fails a green build. |
+| `steps` | `[]` | array of nonempty step names | Ordered post-steps that run after the PR is opened. Each name must have a matching table. |
+| `kind` | — | **required**, `"check"` \| `"agent"` | Selects deterministic command execution or an agent skill. |
+| `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]`. The kernel runs the resolved shell command in the workspace with no agent session. |
+| `skill` | — | **required when `kind = "agent"`**, nonempty string | Exact installed skill name passed to the runtime; no implicit `ab-` prefix is added. |
+
+```toml
+[finalize]
+steps = ["publish", "release-notes"]
+
+[finalize.publish]
+kind = "check"
+command = "publish"
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+```
+
+The logical step name still selects `[roles.<step>]` for agent routing. Checks
+write their completion and any follow-up with kernel attribution; agents retain
+their session actor and transcript. Nonzero command exits, execution/launch
+exceptions, and structured agent failures all produce `ok = false` plus a
+follow-up observation. Either `ok = true` or `ok = false` drains the step, so
+neither kind can turn an otherwise green build red.
+
+Validation rejects a listed name with no table, a table whose name is not in
+`steps`, a check command absent from `[commands]`, an unknown kind, or any
+field outside the selected strict variant. Diagnostics name the logical step.
 
 ### `[roles]`
 
@@ -351,15 +390,14 @@ Every field is a **positive integer**.
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
 | `maxReviewRounds` | `4` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
+| `harvestThreshold` | `10` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 
-### `[dispatcher]`
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `capacity` | `1` | positive integer | Concurrent builds for this repo. |
-
-Readiness is expressed in the ticket source's vocabulary, so its fields live
-under `[tickets]`, not `[dispatcher]`.
+Harvest is driven by back-pressure inside `ab dispatch`, not by a wall clock,
+and remains independent of build `capacity` and repository intake. Once the
+threshold is reached, the run claims the whole current accumulation. Dispatch
+tracks it without blocking watch ticks; a repository lease provides
+cross-process single-flight. Recovery has its fixed per-run two-attempt budget,
+separate from the configurable policy fields above.
 
 ### `[tickets]`
 
@@ -416,32 +454,6 @@ hand.
 **Secrets never live in this file.** `LINEAR_API_KEY` is an environment
 variable (a local `.env` works). If a user asks you to put an API key in
 `autobuild.toml`, use the environment variable instead and say why.
-
-### `[harvest]`
-
-Observation harvest is driven by back-pressure inside `ab dispatch`, not by a
-wall clock. The table is prefaulted, so omitting it enables the sensible
-default. Harvest remains independent of build capacity and of repository
-intake. Dispatch tracks the workflow in-flight without awaiting it on
-watch ticks, so janitor/dispatch/input/SIGINT stay responsive; `--once` drains
-it before exit. The repository lease remains the cross-process single-flight
-gate. Every parked failure is settled before any new scan; the oldest receives
-a fixed two-attempt automatic recovery budget applied per run. It is deliberately
-not configurable and is separate from retry policy inside one harvest step.
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `threshold` | `10` | positive integer | Number of newly unclaimed `observation.recorded` occurrences required to start one harvest run. The run claims the whole current accumulation. |
-
-### `[outer]`
-
-An **open map** of scheduled outer-loop ingester name → schedule (for example
-`"ingest:sentry"`). The exact key `harvest` is rejected with an error directing
-the user to `[harvest].threshold`; other scheduled ingesters are unaffected.
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `cron` | — | **required**, nonempty string | Cron schedule for that non-harvest outer-loop process. |
 
 ## Setup and upgrades
 

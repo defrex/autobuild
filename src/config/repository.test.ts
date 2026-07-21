@@ -6,7 +6,11 @@ test('repository installs the path-scoped dashboard image verifier after determi
   const config = await loadConfig(
     join(import.meta.dir, '..', '..', 'autobuild.toml'),
   )
+  expect(config.baseBranch).toBe('main')
+  expect(config.capacity).toBe(3)
+  expect(config.policy.harvestThreshold).toBe(10)
   expect(config.dashboardFrames).toBeUndefined()
+  expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
   expect(config.verify.steps).toEqual(['types', 'unit', 'dashboard'])
   expect(config.verify.stepConfigs['dashboard']).toEqual({
     kind: 'agent',
