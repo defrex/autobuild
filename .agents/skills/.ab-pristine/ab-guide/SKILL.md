@@ -588,20 +588,24 @@ auth.
 On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
 terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied
-to the normal screen and remains in scrollback. Its first two lines are the
-always-present process-global section: a selectable `Auto Build`
-title with the repository basename, capacity, active-build count,
-`intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`, and
-`harvest ON`/`harvest OFF`, then one status slot. All three controls are durable
-repository projections and converge across dispatchers on the existing poll;
-harvest specifically reflects its acknowledged gate, not pending intent. Tick
-counts, dependency diagnostics, parked-build notices,
-harvest outcomes, action confirmations, and warnings replace that slot instead
-of scrolling above the frame. A blank line separates the global section from
-the first body row, and another separates the body from the legend or feedback
-controls. The duplicate startup banner is suppressed; `--plain` and non-TTY
-output remain line-oriented and unchanged. A satisfied verify skip carries the
-literal `skipped` qualifier, so it remains distinct from a pass without color.
+to the normal screen and remains in scrollback. Its always-present two-line
+process-global header has a selectable `Auto Build` summary with the repository
+basename, queue depth, and active-build count, followed by an indented controls
+line for `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and
+`harvest ON`/`harvest OFF`. The controls start in the title column. From the top
+of the frame through the body, the two-column marker lane stays empty except for
+the selected row's `> ` marker. All three controls are durable repository
+projections and converge across dispatchers on the existing poll; harvest
+specifically reflects its acknowledged gate, not pending intent. Routine tick
+counts, dependency diagnostics, parked-build notices, harvest outcomes, and
+action confirmations are suppressed in the interactive frame. The latest true
+warning or error instead appears on a conditional row below the header, aligned
+to the title; when none exists, that row consumes no space. A blank line
+separates the global section from the first body row, and another separates the
+body from the legend or feedback controls. The duplicate startup banner is
+suppressed; `--plain` and non-TTY output remain line-oriented and unchanged. A
+satisfied verify skip carries the literal `skipped` qualifier, so it remains
+distinct from a pass without color.
 
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
