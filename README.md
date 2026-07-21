@@ -132,7 +132,14 @@ humans dispatch.
 
 ## Operating it
 
-`ab dispatch` on a TTY is the whole cockpit. Every build in flight is a row —
+The loop starts before the dispatcher: every build is only as good as its
+ticket. The vendored `/ab-spec` skill is the grooming surface — it interviews
+you from an idea to a conforming spec, or takes a ticket someone else filed
+and tightens it until it meets
+[the standard](docs/spec-standard.md) the build process expects. Groom the
+ticket, mark it ready, and it's dispatchable.
+
+From there, `ab dispatch` on a TTY is the whole cockpit. Every build in flight is a row —
 pipeline position, elapsed time, PR state — and a handful of keys cover the
 day-to-day:
 
@@ -149,9 +156,8 @@ day-to-day:
 ![Answering a blocked build's escalation from the
 dashboard](docs/assets/headline-interactive.png)
 
-Grooming stays conversational: the vendored `/ab-spec` skill interviews you
-from an idea to a conforming spec and files the ticket. And nothing about the
-dashboard is load-bearing — `ab builds`, `ab build status <slug>`, and
+Nothing about the dashboard is load-bearing — `ab builds`,
+`ab build status <slug>`, and
 `ab harvest status` project the same durable state as text or `--json`, so a
 pipe or a script sees exactly what you do.
 
