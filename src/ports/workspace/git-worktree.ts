@@ -66,20 +66,35 @@ function sanitizeBranch(branch: string): string {
 
 interface WorktreeEntry {
   path: string
+  head?: string
   branch?: string
+  detached: boolean
+}
+
+interface WorktreeSelection {
+  /** Requested branch attached inside this provider's root. */
+  attached?: WorktreeEntry
+  /** Detached registration at the requested branch's deterministic path. */
+  detached?: WorktreeEntry
+  /** The requested branch is attached anywhere, including outside our root. */
+  branchAttached: boolean
 }
 
 function parseWorktreeList(porcelain: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = []
   for (const block of porcelain.split('\n\n')) {
     let path: string | undefined
+    let head: string | undefined
     let branch: string | undefined
+    let detached = false
     for (const line of block.split('\n')) {
       if (line.startsWith('worktree ')) path = line.slice('worktree '.length)
+      else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length)
       else if (line.startsWith('branch refs/heads/'))
         branch = line.slice('branch refs/heads/'.length)
+      else if (line === 'detached') detached = true
     }
-    if (path) entries.push({ path, branch })
+    if (path) entries.push({ path, head, branch, detached })
   }
   return entries
 }
@@ -145,6 +160,111 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return this.shaFrom(repo, args, await this.git(repo, args))
   }
 
+  private async resolveOptionalCommit(
+    repo: string,
+    ref: string,
+  ): Promise<string | null> {
+    const args = ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]
+    const result = await this.git(repo, args)
+    if (result.exitCode === 0) return this.shaFrom(repo, args, result)
+    if (result.exitCode === 1) return null
+    throw new GitError(['-C', repo, ...args], result)
+  }
+
+  private async isAncestor(
+    repo: string,
+    ancestor: string,
+    descendant: string,
+  ): Promise<boolean> {
+    const args = ['merge-base', '--is-ancestor', ancestor, descendant]
+    const result = await this.git(repo, args)
+    if (result.exitCode === 0) return true
+    if (result.exitCode === 1) return false
+    throw new GitError(['-C', repo, ...args], result)
+  }
+
+  /** Reconcile a stale local build ref from the ref updated by a successful
+   * Forge push. Both ancestry checks and the expected-old update make this a
+   * normal fast-forward that cannot overwrite divergent or concurrent work. */
+  private async recoverPublishedBranch(
+    repo: string,
+    branch: string,
+    localSha: string,
+  ): Promise<string> {
+    const branchRef = `refs/heads/${branch}`
+    const publishedRef = `refs/remotes/origin/${branch}`
+    const publishedSha = await this.resolveOptionalCommit(repo, publishedRef)
+    if (!publishedSha || publishedSha === localSha) return localSha
+
+    if (await this.isAncestor(repo, localSha, publishedSha)) {
+      await this.gitOrThrow(repo, [
+        'update-ref',
+        branchRef,
+        publishedSha,
+        localSha,
+      ])
+      return publishedSha
+    }
+
+    if (await this.isAncestor(repo, publishedSha, localSha)) return localSha
+
+    throw new Error(
+      `cannot recover ${branchRef}: local tip ${localSha} and published ` +
+        `${publishedRef} tip ${publishedSha} have diverged; refusing to rewrite either ref`,
+    )
+  }
+
+  /** Attach the one detached registration this provider owns. The published
+   * ref must first have made its HEAD exactly the durable branch tip; an
+   * arbitrary detached commit is never adopted or discarded. */
+  private async reattachDetachedWorktree(
+    repo: string,
+    entry: WorktreeEntry,
+    branch: string,
+    expectedSha: string,
+  ): Promise<string> {
+    if (!entry.head) {
+      throw new Error(
+        `cannot recover detached worktree ${entry.path}: its registered HEAD is missing`,
+      )
+    }
+
+    const liveHead = await this.resolveCommit(entry.path, 'HEAD')
+    const branchRef = `refs/heads/${branch}`
+    const branchSha = await this.resolveCommit(repo, branchRef)
+    if (entry.head !== liveHead || branchSha !== expectedSha) {
+      throw new Error(
+        `cannot recover detached worktree ${entry.path}: its registration or ` +
+          `${branchRef} changed during provisioning; refusing to move it`,
+      )
+    }
+    if (liveHead !== branchSha) {
+      throw new Error(
+        `cannot recover detached worktree ${entry.path}: detached HEAD ${liveHead} ` +
+          `does not match durable ${branchRef} tip ${branchSha}; refusing to discard either commit`,
+      )
+    }
+
+    await this.gitOrThrow(entry.path, ['checkout', '--quiet', branch])
+
+    const symbolicArgs = ['symbolic-ref', '--quiet', '--short', 'HEAD']
+    const symbolic = await this.git(entry.path, symbolicArgs)
+    const actualHead = await this.resolveCommit(entry.path, 'HEAD')
+    const actualBranch = await this.resolveCommit(repo, branchRef)
+    if (
+      symbolic.exitCode !== 0 ||
+      symbolic.stdout.trim() !== branch ||
+      actualHead !== expectedSha ||
+      actualBranch !== expectedSha
+    ) {
+      throw new Error(
+        `detached worktree recovery at ${entry.path} did not produce ${branch} ` +
+          `at expected commit ${expectedSha}`,
+      )
+    }
+    return actualHead
+  }
+
   /** Select a new branch's base without mutating any operator or shared
    * remote-tracking ref. A remote failure is evidence, not a dispatch gate. */
   private async selectNewBranchBase(
@@ -195,29 +315,63 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     await this.gitOrThrow(repo, ['worktree', 'prune'])
 
     const rootDir = await this.realRoot()
-    const existing = await this.findWorktree(repo, branch, rootDir)
-    if (existing) {
+    const worktreePath = join(rootDir, sanitizeBranch(branch))
+    const worktrees = await this.findWorktrees(
+      repo,
+      branch,
+      rootDir,
+      worktreePath,
+    )
+    if (worktrees.attached) {
       // Idempotent provision (constitution #2): the registered worktree — at
       // the branch's current tip — is the resume point, not a fresh checkout.
       const sha = await this.resolveCommit(repo, `refs/heads/${branch}`)
-      this.repos.set(existing, repo)
+      this.repos.set(worktrees.attached.path, repo)
       return {
         provider: this.name,
-        ref: existing,
-        path: existing,
+        ref: worktrees.attached.path,
+        path: worktrees.attached.path,
         branch,
         base: { source: 'existing', sha },
       }
     }
 
-    const worktreePath = join(rootDir, sanitizeBranch(branch))
     const branchRef = `refs/heads/${branch}`
-    const branchArgs = ['rev-parse', '--verify', '--quiet', `${branchRef}^{commit}`]
-    const branchTip = await this.git(repo, branchArgs)
-    if (branchTip.exitCode === 0) {
-      // Resume (§15.6-C): the worktree starts at the branch's current tip and
-      // remote access never occurs for an already-created build branch.
-      const sha = this.shaFrom(repo, branchArgs, branchTip)
+    const localSha = await this.resolveOptionalCommit(repo, branchRef)
+    if (localSha) {
+      // A branch attached outside this provider's root is not ours to repair
+      // or reuse. The ordinary worktree-add/checkout error below remains the
+      // non-destructive diagnostic for that unsupported registration.
+      const sha = worktrees.branchAttached
+        ? localSha
+        : await this.recoverPublishedBranch(repo, branch, localSha)
+
+      if (worktrees.detached) {
+        if (worktrees.branchAttached) {
+          throw new Error(
+            `cannot recover detached worktree ${worktrees.detached.path}: ` +
+              `${branchRef} is already attached to another worktree`,
+          )
+        }
+        const recoveredSha = await this.reattachDetachedWorktree(
+          repo,
+          worktrees.detached,
+          branch,
+          sha,
+        )
+        this.repos.set(worktrees.detached.path, repo)
+        return {
+          provider: this.name,
+          ref: worktrees.detached.path,
+          path: worktrees.detached.path,
+          branch,
+          base: { source: 'existing', sha: recoveredSha },
+        }
+      }
+
+      // Resume (§15.6-C): rematerialize only after the local branch has been
+      // monotonically reconciled with any push-updated publication evidence.
+      // This path performs no fetch and no remote write.
       await this.gitOrThrow(repo, ['worktree', 'add', worktreePath, branch])
       this.repos.set(worktreePath, repo)
       return {
@@ -227,6 +381,13 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         branch,
         base: { source: 'existing', sha },
       }
+    }
+
+    if (worktrees.detached) {
+      throw new Error(
+        `cannot recover detached worktree ${worktrees.detached.path}: ` +
+          `${branchRef} does not exist; refusing to adopt an arbitrary detached commit`,
+      )
     }
 
     const base = await this.selectNewBranchBase(repo, baseBranch, branch)
@@ -284,25 +445,35 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     this.repos.delete(path)
   }
 
-  /** Registered worktree for `branch` under this provider's root, if any.
-   * The root-prefix filter also excludes the main working tree, so
-   * provisioning never aliases the origin's own checkout. */
-  private async findWorktree(
+  /** Discover only registrations relevant to the requested branch. Attached
+   * reuse stays root-scoped (and therefore excludes the main checkout); a
+   * detached registration is recoverable only at this branch's exact,
+   * deterministic provider-owned path. */
+  private async findWorktrees(
     repo: string,
     branch: string,
     rootDir: string,
-  ): Promise<string | null> {
+    worktreePath: string,
+  ): Promise<WorktreeSelection> {
     const list = await this.gitOrThrow(repo, [
       'worktree',
       'list',
       '--porcelain',
     ])
-    for (const entry of parseWorktreeList(list.stdout)) {
-      const path = resolve(entry.path)
-      const underRoot = path.startsWith(rootDir + sep)
-      if (entry.branch === branch && underRoot) return path
+    const entries = parseWorktreeList(list.stdout).map((entry) => ({
+      ...entry,
+      path: resolve(entry.path),
+    }))
+    return {
+      attached: entries.find(
+        (entry) =>
+          entry.branch === branch && entry.path.startsWith(rootDir + sep),
+      ),
+      detached: entries.find(
+        (entry) => entry.detached && entry.path === worktreePath,
+      ),
+      branchAttached: entries.some((entry) => entry.branch === branch),
     }
-    return null
   }
 
   /** Main-repo directory owning the worktree at `path`, or null if the path
