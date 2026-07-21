@@ -46,10 +46,10 @@ export interface RenderOpts {
   /**
    * Hard cap on the NUMBER of lines — the screen's paintable rows.
    *
-   * The live region clears its alternate display and re-anchors this frame
-   * from the terminal's current bottom on every effective paint. The cap still
-   * matters: every rendered line has a trailing newline, so a frame as tall as
-   * the screen scrolls its own top away even on a freshly cleared display.
+   * The live region clears its alternate display and anchors this frame at
+   * terminal row 1 on every effective paint. The cap still matters: every
+   * rendered line has a trailing newline, so a frame as tall as the screen
+   * scrolls its own top away even on a freshly cleared display.
    *
    * This is a cap on LINES, and it is NOT the screen's row count: the region
    * needs a row for the cursor to rest on, so a caller painting a terminal

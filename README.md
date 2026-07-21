@@ -624,9 +624,12 @@ ab dispatch --no-auto-merge # persist that claim-time default off
 ab dispatch --plain        # force line-oriented output, even on a TTY
 ```
 
-On a TTY the interactive dashboard is one fixed frame. Its first two lines are
-an always-present, selectable global section: `Auto Build` plus the repository
-basename, capacity, active-build count, `intake ON`/`intake OFF`,
+On a TTY the interactive dashboard is one fixed frame painted from the
+terminal's first row. The header remains on that top row as the frame grows or
+shrinks and after a resize; unused blank rows remain below it. On exit, the
+final frame is copied to the normal screen and remains in scrollback. Its first
+two lines are an always-present, selectable global section: `Auto Build` plus the
+repository basename, capacity, active-build count, `intake ON`/`intake OFF`,
 `auto merge default ON`/`auto merge default OFF`, and `harvest ON`/`harvest
 OFF`, then one status slot. All three controls are reduced from the repository
 event log, survive process restarts, and reflect changes made by another

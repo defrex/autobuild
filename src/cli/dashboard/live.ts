@@ -2,11 +2,11 @@
  * The live region: the one impure piece of the dashboard, and the only thing
  * here that touches the writer.
  *
- * The job is narrow — keep a block of lines repainted in place at the bottom
+ * The job is narrow — keep a block of lines repainted in place from the top
  * of the screen, and never let it accumulate. Everything interesting about it
  * is a consequence of one invariant:
  *
- *   >>> The region is always the LAST thing on screen. <<<
+ *   >>> The region's first line is always terminal row 1. <<<
  *
  * Dispatcher messages are part of the frame's reserved status row, so this
  * seam owns only in-place replacement and cursor restoration. Nothing may
@@ -49,7 +49,7 @@ export class LiveRegion {
   /** The frame currently painted — `[]` when the region is empty. Also the
    * identical-frame check's comparand. */
   private painted: string[] = []
-  /** Terminal height used to anchor `painted`; a resize invalidates equality. */
+  /** Terminal height at the last paint; a resize invalidates equality. */
   private paintedRows: number | undefined
   private alternate = false
   private hidden = false
@@ -61,9 +61,9 @@ export class LiveRegion {
    * Repaint the region in place.
    *
    * Each effective paint replaces the whole alternate display and anchors the
-   * frame from the terminal's current bottom, so it never depends on how many
-   * rows survived a resize. Equal lines at equal height cost zero writes and
-   * zero flicker; equal lines after a resize must be re-anchored.
+   * frame at row 1, so its header stays fixed as the frame grows, shrinks, or
+   * crosses a resize. Equal lines at equal height cost zero writes and zero
+   * flicker; a resize invalidates the paint even when the lines are unchanged.
    */
   update(lines: string[]): void {
     if (this.finished) return
@@ -81,8 +81,7 @@ export class LiveRegion {
       this.hidden = true
     }
 
-    const top = Math.max(1, rows - lines.length)
-    this.term.write(CLEAR_DISPLAY + CURSOR_POSITION(top))
+    this.term.write(CLEAR_DISPLAY + CURSOR_POSITION(1))
     const frame = lines.map((line) => `${line}\n`).join('')
     if (frame.length > 0) this.term.write(frame)
     this.painted = [...lines]

@@ -546,11 +546,15 @@ projection; dashboard
 mode never routes them to line sinks or scrollback, while plain mode keeps those
 sinks.
 The live region therefore owns alternate-screen frame replacement. Every
-effective paint clears that display and anchors the frame from the terminal's
-current height, so a resize never depends on rows from the prior frame. During
-teardown it restores the normal display, copies the final snapshot there, and
-restores the cursor. Raw input and live output remain separate adapters so
-keypresses cannot write into or tear a rendered frame.
+effective paint clears that display and anchors the frame at terminal row 1, so
+the header stays fixed while frame height changes and unused rows remain below.
+Terminal height remains part of paint identity, so even unchanged lines are
+cleared and repainted after a resize. The trailing-newline protocol limits the
+frame to `rows - 1`; the spare row prevents a maximum-height paint from
+scrolling its header away. During teardown the region restores the normal
+display, copies the final snapshot there for scrollback, and restores the
+cursor. Raw input and live output remain separate adapters so keypresses cannot
+write into or tear a rendered frame.
 
 ## Development
 

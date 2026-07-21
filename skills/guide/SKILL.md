@@ -585,8 +585,11 @@ auth.
 
 ## Dispatch dashboard
 
-On a TTY, `ab dispatch` renders one fixed interactive frame. Its first two
-lines are the always-present process-global section: a selectable `Auto Build`
+On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
+terminal's first row. Its header remains on that top row as frame height changes
+and after a resize; unused rows remain below. On exit, the final frame is copied
+to the normal screen and remains in scrollback. Its first two lines are the
+always-present process-global section: a selectable `Auto Build`
 title with the repository basename, capacity, active-build count,
 `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`, and
 `harvest ON`/`harvest OFF`, then one status slot. All three controls are durable

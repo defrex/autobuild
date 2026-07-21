@@ -1548,6 +1548,13 @@ describe('abDispatch --once with an interactive terminal', () => {
       const slug = builds[0]!.slug
       const painted = term.all()
       const header = latestDashboardFrame(term).split('\n')[0]!
+      const firstPaintOrigin = term.frames.findIndex(
+        (chunk) => chunk === '\x1b[2J\x1b[1;1H',
+      )
+      expect(firstPaintOrigin).toBeGreaterThanOrEqual(0)
+      expect(
+        stripAnsi(term.frames[firstPaintOrigin + 1] ?? '').split('\n')[0],
+      ).toContain('Auto Build')
       expect(header).toContain('queue 0 | active 1')
       expect(header).not.toMatch(/\bonce\b/)
       expect(painted).toContain(slug)

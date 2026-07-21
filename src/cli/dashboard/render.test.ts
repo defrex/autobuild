@@ -611,8 +611,8 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
 
 describe('renderDashboard: truncation (one rendered line = one physical row)', () => {
   // If a line exceeds the width, terminal wrapping consumes unbudgeted rows and
-  // can scroll the bottom-anchored frame's header away despite its logical
-  // line count fitting the screen.
+  // can scroll the top-anchored frame's header away despite its logical line
+  // count fitting the screen.
 
   test('no line exceeds the width, in plain or color', () => {
     const long = build({
@@ -684,9 +684,9 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
 
 describe('renderDashboard: `height` caps the LINE count', () => {
   // f_d2e4b3ee — the width invariant's twin, on the other axis. The live region
-  // clears its alternate display and anchors from the current bottom, but a
-  // frame taller than the paintable rows still scrolls its own top away. The
-  // header — the line AC 19 names — is the first thing lost.
+  // clears its alternate display and anchors at row 1, but a frame taller than
+  // the paintable rows still scrolls its own top away. The header — the line AC
+  // 19 names — is the first thing lost.
   //
   // What this file can and cannot prove (f_c9449563): `height` here is a cap
   // on LINES, and these tests only pin `lines.length <= height`. They say

@@ -933,9 +933,11 @@ or repository log (§15.2.7): `escalation.answered`,
 *is* the UI API; forge mutation remains kernel/dispatcher plumbing.
 
 - v2.0 front end: terminal, with herdr as the multiplexer.
-- `ab dispatch` on a TTY is an interactive fixed frame. Its first two rows form
-  an always-present process-global top section: one selectable `Auto Build`
-  title row with the repository basename, capacity, active-build count,
+- `ab dispatch` on a TTY is an interactive fixed frame anchored at the
+  terminal's first row. Its header remains on that top row through frame-height
+  changes and terminal resizes; unused rows remain below the frame. Its first
+  two rows form an always-present process-global top section: one selectable
+  `Auto Build` title row with the repository basename, capacity, active-build count,
   `intake ON`/`intake OFF`, `auto merge default ON`/`auto merge default OFF`,
   and `harvest ON`/`harvest OFF`, followed by one process-local status slot.
   All three control values come from the repository journal and survive process
@@ -945,8 +947,10 @@ or repository log (§15.2.7): `escalation.answered`,
   action confirmations, and warnings replace that slot instead of entering
   scrollback. A blank row separates the top section from the first body row,
   and another separates the body from the legend or modal controls. The
-  redundant startup banner is omitted. `--plain` (and non-TTY output) remains
-  line-oriented, prints every line as before, and reads no keyboard input.
+  redundant startup banner is omitted. On teardown, the final frame is copied
+  to the normal screen and remains in scrollback. `--plain` (and non-TTY
+  output) remains line-oriented, prints every line as before, and reads no
+  keyboard input.
 - Build-row polling uses a process-local, display-only cache. Every normal
   refresh still calls `listBuilds()` for discovery and fully hydrates each
   first-seen stream from its append-only event log. Later refreshes call

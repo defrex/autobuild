@@ -64,17 +64,36 @@ describe('paintableRows: the frame needs one row fewer than the screen', () => {
     new LiveRegion(term).update(['a', 'b', 'c'])
     expect(term.writes.at(-1)).toBe('a\nb\nc\n')
   })
+
+  test('a maximum-paintable frame starts at row 1 and keeps the spare row below it', () => {
+    const rows = 5
+    const term = fakeTerm(rows)
+    const lines = Array.from(
+      { length: paintableRows(rows) },
+      (_, i) => `line-${i}`,
+    )
+
+    new LiveRegion(term).update(lines)
+
+    expect(lines).toHaveLength(rows - 1)
+    expect(term.writes).toEqual([
+      ENTER_ALTERNATE_SCREEN,
+      HIDE_CURSOR,
+      CLEAR_DISPLAY + CURSOR_POSITION(1),
+      frame(lines),
+    ])
+  })
 })
 
 describe('LiveRegion: alternate-screen replacement', () => {
-  test('the first frame enters before clearing and anchors from the bottom', () => {
+  test('the first frame enters before clearing and anchors at the top', () => {
     const term = fakeTerm(24)
     new LiveRegion(term).update(['one', 'two'])
 
     expect(term.writes).toEqual([
       ENTER_ALTERNATE_SCREEN,
       HIDE_CURSOR,
-      CLEAR_DISPLAY + CURSOR_POSITION(22),
+      CLEAR_DISPLAY + CURSOR_POSITION(1),
       'one\ntwo\n',
     ])
   })
@@ -88,7 +107,7 @@ describe('LiveRegion: alternate-screen replacement', () => {
     region.update(['x'])
 
     expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(23),
+      CLEAR_DISPLAY + CURSOR_POSITION(1),
       'x\n',
     ])
   })
@@ -104,7 +123,7 @@ describe('LiveRegion: alternate-screen replacement', () => {
 })
 
 describe('LiveRegion: terminal resize', () => {
-  test('shrink and grow both clear and re-anchor using the current rows', () => {
+  test('shrink and grow both clear and repaint at row 1', () => {
     const term = fakeTerm(8)
     const region = new LiveRegion(term)
     const tall = ['header', 'status', '', 'row', '', 'controls']
@@ -127,7 +146,7 @@ describe('LiveRegion: terminal resize', () => {
     before = term.writes.length
     region.update(changed)
     expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(2),
+      CLEAR_DISPLAY + CURSOR_POSITION(1),
       frame(changed),
     ])
 
@@ -139,12 +158,12 @@ describe('LiveRegion: terminal resize', () => {
     expect(term.writes.length).toBe(before)
 
     // Height is part of paint identity: the same frame after a grow is cleared
-    // and moved to its new bottom anchor on the very next update.
+    // and repainted at its stable row-1 origin on the very next update.
     term.rows = 9
     before = term.writes.length
     region.update(changed)
     expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(7),
+      CLEAR_DISPLAY + CURSOR_POSITION(1),
       frame(changed),
     ])
 

@@ -35,9 +35,9 @@ export interface TerminalOut {
   /** Terminal width in columns; a sane fallback when unknown. */
   columns: number
   /** Terminal height in rows; a sane fallback when unknown. The live region
-   * snapshots this on every update so its alternate-screen repaint can clear
-   * and re-anchor from the current bottom after a resize. The frame still has
-   * to leave one spare row for its trailing newline. */
+   * snapshots this on every update so a resize invalidates its top-anchored
+   * alternate-screen paint. The frame still has to leave one spare row for its
+   * trailing newline. */
   rows: number
   /** True only for a real TTY — false for pipes and redirects. */
   interactive: boolean
