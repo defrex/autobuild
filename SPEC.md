@@ -1034,7 +1034,7 @@ source = "file"
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
 [harvest]                       # observation-count back-pressure in dispatch
-threshold = 10
+threshold = 5
 
 [outer]                         # cron schedules for OTHER ingesters
 "ingest:sentry" = { cron = "0 */4 * * *" }

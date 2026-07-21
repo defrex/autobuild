@@ -64,7 +64,7 @@ readyLabels = ["autobuild"]
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 
 [harvest]                       # observation back-pressure, owned by dispatch
-threshold = 10
+threshold = 5
 
 [outer]                         # cron schedules for other outer-loop processes
 "ingest:sentry" = { cron = "0 */4 * * *" }
@@ -145,7 +145,7 @@ describe('parseConfig — SPEC §16.1 example', () => {
         readyLabels: ['autobuild'],
         readyState: 'ready',
       },
-      harvest: { threshold: 10 },
+      harvest: { threshold: 5 },
       outer: {
         'ingest:sentry': { cron: '0 */4 * * *' },
       },
@@ -181,7 +181,7 @@ describe('parseConfig — defaults', () => {
       },
       dispatcher: { capacity: 1 },
       tickets: { source: 'file', readyState: 'ready' },
-      harvest: { threshold: 10 },
+      harvest: { threshold: 5 },
       outer: {},
     })
   })
@@ -414,8 +414,9 @@ path = ["src/**"]
 })
 
 describe('parseConfig — harvest back-pressure', () => {
-  test('threshold defaults to 10 and accepts a positive override', () => {
-    expect(parseConfig(READY).harvest.threshold).toBe(10)
+  test('threshold defaults to 5 for an omitted table or key and accepts a positive override', () => {
+    expect(parseConfig(READY).harvest.threshold).toBe(5)
+    expect(parseConfig(`${READY}[harvest]\n`).harvest.threshold).toBe(5)
     expect(
       parseConfig(`${READY}[harvest]\nthreshold = 3\n`).harvest.threshold,
     ).toBe(3)

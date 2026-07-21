@@ -126,7 +126,7 @@ readyState = "ready"
 # approved proposals are created in Triage only. Optional role overrides are
 # `[roles.harvest]` and `[roles.harvest-review]`.
 [harvest]
-threshold = 10
+threshold = 5
 
 # Cron schedules for OTHER outer-loop ingesters (§12). The exact key `harvest`
 # is rejected; configure it above instead.
