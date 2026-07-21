@@ -92,6 +92,21 @@ const verifyCompletedPayloadSchema = z.union([
   ]),
 ])
 
+/** A pushed head is a success checkpoint, never a claim attached to failure. */
+const finalizeStepCompletedPayloadSchema = z.discriminatedUnion('ok', [
+  z.strictObject({
+    step: z.string().min(1),
+    ok: z.literal(true),
+    note: z.string().optional(),
+    headSha: z.string().trim().min(1, 'a finalize publication head must be non-blank').optional(),
+  }),
+  z.strictObject({
+    step: z.string().min(1),
+    ok: z.literal(false),
+    note: z.string().optional(),
+  }),
+])
+
 /** Shared by `plan-review.verdict` and `code-review.verdict` (symmetric by design). */
 const reviewVerdictPayload = z.strictObject({
   round,
@@ -210,11 +225,7 @@ export const eventPayloadSchemas = {
       headSha: z.string().min(1),
     }),
   }),
-  'finalize.step-completed': z.strictObject({
-    step: z.string().min(1),
-    ok: z.boolean(),
-    note: z.string().optional(),
-  }),
+  'finalize.step-completed': finalizeStepCompletedPayloadSchema,
 
   // Successful external uploads are recorded immediately so retries can
   // adopt them and terminal-build cleanup never depends on a workspace or the

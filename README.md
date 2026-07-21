@@ -99,8 +99,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
    shell commands judged by exit code, or agent verifiers that return a
    verdict.
 5. **finalize** — the PR opens with an agent-written description, then any
-   post-PR steps you've configured (changelogs, release notes) run
-   failure-tolerant.
+   post-PR steps you've configured run failure-tolerant. A content-producing
+   step commits selected files locally and finishes clean; the runner extends
+   the open PR branch with a regular push. A no-op adds no commit, and a
+   publication failure becomes a follow-up observation rather than failing
+   the green build.
 6. **epilogue** — the dispatcher watches the open PR. Conflicts route back
    through reconcile and re-verify; the build ends `merged` or `closed`.
 
@@ -113,9 +116,10 @@ durable state, and every decision along the way stays queryable after the
 fact.
 
 The pipeline grammar is fixed on purpose; `verify:*` and `finalize:*` are the
-extension points, declared per-repo in `autobuild.toml`. For the seams and
-the reasoning behind them, see [`docs/architecture.md`](docs/architecture.md)
-and [`SPEC.md`](SPEC.md).
+extension points, declared per-repo in `autobuild.toml`. Post-step agents may
+commit locally but never push or call the forge; publication stays
+kernel-owned. For the seams and the reasoning behind them, see
+[`docs/architecture.md`](docs/architecture.md) and [`SPEC.md`](SPEC.md).
 
 ### Observation harvesting
 

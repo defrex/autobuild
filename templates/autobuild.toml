@@ -60,7 +60,9 @@ steps = [
 # Optional ordered post-steps. Checks run deterministic command refs without
 # an agent session; agents run the exact configured skill. Either kind is
 # failure-tolerant: a failure files an observation and never kills a green
-# build (§5).
+# build (§5). Content-producing steps select and commit files locally, finish
+# with a clean worktree, and let the runner regular-push the descendant HEAD.
+# A no-op creates and pushes no commit; agents never push.
 [finalize]
 steps = []
 

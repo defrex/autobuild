@@ -66,7 +66,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   order. A failing step sends the build back to `implement` with the report;
   an explicit skip records why the step did not apply and advances.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
-  PR. `[finalize].steps` run afterward and are failure-tolerant.
+  PR. `[finalize].steps` run afterward and are failure-tolerant. A
+  content-producing step commits selected files locally and finishes clean;
+  the runner regular-pushes a descendant head to extend the open PR branch.
 - **Epilogue.** If main moves and the PR conflicts, `pr.conflicted` sends the
   build to `reconcile` (merge base *into* the branch — never a rebase), then
   back through `verify:*`. This can repeat. The build terminates **merged** or
@@ -133,8 +135,9 @@ The distinctions that change an administrator's answer:
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
-  locally and never push, never touch the remote, never open the PR. The push
-  happens at the phase boundary when the agent's terminal command succeeds.
+  locally and never push, never touch the remote, never open the PR. A push
+  happens at the implement terminal boundary or after the runner validates a
+  successful content-producing finalize post-step; neither path force-pushes.
 
 ## `autobuild.toml` reference
 
@@ -335,6 +338,13 @@ neither kind can turn an otherwise green build red.
 Validation rejects a listed name with no table, a table whose name is not in
 `steps`, a check command absent from `[commands]`, an unknown kind, or any
 field outside the selected strict variant. Diagnostics name the logical step.
+
+A post-step that produces repository content must select and commit its files
+locally and leave a clean worktree. The runner proves the last published head
+is an ancestor and performs the regular, non-force push through the Forge port;
+the agent never pushes. An unchanged `HEAD` creates and pushes no commit. Dirty
+output, rewritten history, Git errors, and publication failures record the
+step as failed and file an observation while the green build continues.
 
 ### `[roles]`
 

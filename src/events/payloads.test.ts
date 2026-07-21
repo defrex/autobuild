@@ -19,6 +19,14 @@ function verify(payload: unknown): EventWrite<'verify.completed'> {
   }) as EventWrite<'verify.completed'>
 }
 
+function finalizeStep(payload: unknown): EventWrite<'finalize.step-completed'> {
+  return validateEventWrite({
+    actor: agentActor('release-notes', 's_finalize'),
+    type: 'finalize.step-completed',
+    payload,
+  }) as EventWrite<'finalize.step-completed'>
+}
+
 describe('dashboard frame hosting event protocol', () => {
   const target = {
     provider: 'github-release' as const,
@@ -160,6 +168,34 @@ describe('plan.completed verify selection compatibility', () => {
     for (const verifySteps of ['types', [1], [''], ['   '], ['types', 'types']]) {
       expect(() => plan({ ...base, verifySteps })).toThrow(
         /invalid payload for "plan\.completed"/,
+      )
+    }
+  })
+})
+
+describe('finalize.step-completed publication checkpoint', () => {
+  test('keeps historical/no-op and failed payloads valid', () => {
+    expect(finalizeStep({ step: 'release-notes', ok: true }).payload).toEqual({
+      step: 'release-notes',
+      ok: true,
+    })
+    expect(
+      finalizeStep({ step: 'release-notes', ok: false, note: 'push failed' }).payload,
+    ).toEqual({ step: 'release-notes', ok: false, note: 'push failed' })
+  })
+
+  test('accepts a non-blank pushed head only on success', () => {
+    expect(
+      finalizeStep({ step: 'release-notes', ok: true, headSha: '  abc123  ' }).payload,
+    ).toEqual({ step: 'release-notes', ok: true, headSha: 'abc123' })
+
+    for (const payload of [
+      { step: 'release-notes', ok: true, headSha: '' },
+      { step: 'release-notes', ok: true, headSha: '   ' },
+      { step: 'release-notes', ok: false, headSha: 'abc123' },
+    ]) {
+      expect(() => finalizeStep(payload)).toThrow(
+        /invalid payload for "finalize\.step-completed"/,
       )
     }
   })

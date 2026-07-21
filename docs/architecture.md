@@ -75,6 +75,13 @@ consults a snapshot in place of the append-only log.
 only through `src/cli/` terminals, which convert artifact deposits into
 event facts atomically — the engine never reads blobs.
 
+**Finalize publication.** Content-producing `finalize:*` checks or agents
+select and commit files locally and leave a clean worktree. `build-runner.ts`
+derives the last published head from event facts, rejects a non-descendant
+`HEAD`, and uses the `Forge.pushBranch` port for a regular kernel-side push
+before checkpointing the new head on `finalize.step-completed`. An unchanged
+head is a no-op; Git/Forge failures stay failure-tolerant observations.
+
 **Verify gating.** `src/ontology.ts` owns the canonical
 `pass | fail | skipped` outcome (only `fail` routes back to implement or
 consumes attempts; a skip satisfies one step without being passing

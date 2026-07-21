@@ -391,6 +391,7 @@ export async function makeHarness(opts: {
         branch: record.branch ?? `ab/${slug}`,
         slug,
         exec: spawnExec,
+        forge,
         ids,
         clock,
         instance: `runner-${instances}`,

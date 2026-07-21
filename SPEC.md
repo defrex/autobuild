@@ -188,7 +188,13 @@ engine. Exactly two extension points:
   publishing, ticket linking). Each configured step is either a deterministic
   command check with no agent session or an agent running an exact skill.
   Independent and failure-tolerant: a failed post-step files an observation;
-  it never kills a green build.
+  it never kills a green build. A step that produces repository content
+  selects and commits its files locally and must finish with a clean worktree.
+  The runner verifies that the last durably published head remains an ancestor,
+  then regular-pushes the new head and checkpoints it on
+  `finalize.step-completed`. An unchanged head creates and pushes no commit;
+  Git or publication failure is the ordinary failed-step observation, never a
+  reason to rewrite history or fail the green build.
 
 Everything else — phase order, the two review loops, escalation semantics —
 is kernel-hard-coded. That is what keeps the system inspectable.
@@ -486,13 +492,17 @@ not build failures.
 
 ### 8.6 Agents never touch the remote [D7]
 
-All `git push`, PR creation, and forge API calls happen kernel-side, as
-plumbing triggered by terminal commands: `ab done` in `implement` pushes the
-branch and records `{base, head}`; `ab done` in `finalize` has the kernel
-open the PR using the deposited `pr-description` artifact. Agents only ever
-commit locally. Consequences: forge credentials **never enter the sandbox**
-(load-bearing once builds run on remote sandboxes), and the push-at-boundary
-rule from [D3] is enforced by construction rather than convention.
+All `git push`, PR creation, and forge API calls happen kernel-side. `ab done`
+in `implement` pushes the branch and records `{base, head}`; `ab done` in
+`finalize` has the kernel open the PR using the deposited `pr-description`
+artifact. After a successful content-producing `finalize:*` step, the runner
+requires a clean worktree and a descendant local `HEAD`, then regular-pushes
+the configured build branch and records that head before completing the step.
+A no-op step has no push. Agents only ever commit locally. Consequences: forge
+credentials **never enter the sandbox** (load-bearing once builds run on
+remote sandboxes), history is extended rather than force-pushed, and the
+push-at-boundary rule from [D3] is enforced by construction rather than
+convention.
 
 ### 8.7 Walkthroughs
 
@@ -823,7 +833,7 @@ The families, with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started`, `verify.completed {step, outcome}`, `finalize.completed {pr}` |
+| Verify/finalize | `verify.started`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; the `harvest.*` workflow, recovery, and ledger facts |

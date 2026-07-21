@@ -147,6 +147,13 @@ failures record `ok = false` and a follow-up observation, then advance. They do
 not fail an otherwise green build. Missing tables, orphan tables, and missing
 command refs are config errors naming the step.
 
+A step that produces repository content selects and commits its files locally
+and must finish with a clean worktree. The runner verifies that the last
+published head is an ancestor, then extends the open PR branch with a regular,
+non-force push through the Forge port. Agents never push. An unchanged `HEAD`
+adds no commit or push; dirty output, rewritten history, Git errors, and push
+failures become the step's failure-tolerant follow-up observation.
+
 ## `[roles]`
 
 An open map from role name to independent runtime configuration axes. The

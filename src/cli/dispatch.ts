@@ -1008,6 +1008,7 @@ class DispatchLoop {
         branch: record.branch ?? `ab/${slug}`,
         slug,
         exec: this.opts.exec,
+        forge: this.wiring.forge,
         ids,
         clock,
         instance: `${this.host}-${slug}-${ids('inst')}`,
