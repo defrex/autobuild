@@ -246,10 +246,10 @@ it to exist. An unknown build returns `404 not-found`.
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`; list order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
-| `getEvents` | `GET /builds/{slug}/events?since={n}` | `since` is an optional integer, default `0` | `200` + envelopes whose `seq` is strictly greater than `since`, in increasing sequence order |
+| `getEvents` | `GET /builds/{slug}/events?since={n}` | optional `since` query value, parsed below; absence defaults to `0` | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
-| `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; `rev` is an optional integer | `200` + artifact read; omitting `rev` selects the latest revision; a missing kind/revision is `200 null` |
+| `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; optional `rev` is parsed below | `200` + artifact read; an absent `rev` parameter selects the latest revision; a missing kind/revision is `200 null` |
 | `listArtifacts` | `GET /builds/{slug}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `claimLease` | `POST /builds/{slug}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeat` | `POST /builds/{slug}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
@@ -260,12 +260,18 @@ independently, starting at 1, and assigns the envelope timestamp. Successful
 appends preserve append order. Event and artifact writes update the record's
 server-owned timestamps according to the backing `BuildStore` contract.
 
-The `since` and `rev` query parser accepts integers only. A missing `since` is
-0. Sequence filtering is always strict `>`, so a client can pass the last
-sequence it has processed without receiving it again. Artifact revisions are
-nonnegative; a requested revision that does not exist, including a negative
-one, produces `null`. A missing or empty `kind` on the artifact-read route is
-`400 validation`.
+For a present `since` or `rev`, the shipped server applies JavaScript
+`Number(rawValue)` and accepts the result only when `Number.isInteger` is true.
+Consequently hexadecimal and exponent forms such as `0x10` and `1e1`,
+whitespace-padded values, and empty or whitespace-only values are accepted;
+empty and whitespace-only values convert to `0`. Values converting to `NaN`, infinity, or a
+non-integral number produce `400 validation`. An absent `since` defaults to
+`0`. An absent `rev` selects the latest artifact, but a present empty `rev=`
+selects revision `0`. Sequence filtering is always strict `>`, so a client can
+pass the last sequence it has processed without receiving it again. Artifact
+revisions are nonnegative; a requested revision that does not exist, including
+a negative one, produces `null`. A missing or empty `kind` on the artifact-read
+route is `400 validation`.
 
 The artifact-list `kind` is optional and is normally a nonempty stored kind.
 No pagination, deletion, retention, range request, or streaming endpoint is
@@ -283,10 +289,10 @@ repository to exist. An unknown repository returns `404 not-found`.
 | `ensureRepo` | `POST /repos` | `{"repo": string}` with a nonempty id | `200` + `RepositoryRecord`; idempotently returns the existing record |
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
-| `getRepoEvents` | `GET /repos/{repo}/events?since={n}` | optional integer `since`, default `0` | `200` + envelopes with `seq > since`, in increasing sequence order |
+| `getRepoEvents` | `GET /repos/{repo}/events?since={n}` | optional `since` query value, parsed as in section 3; absence defaults to `0` | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `appendRepoWithArtifacts` | `POST /repos/{repo}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using repository shapes |
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
-| `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional integer `rev` | `200` + artifact read; latest when `rev` is absent; missing kind/revision is `200 null` |
+| `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
 | `listRepoArtifacts` | `GET /repos/{repo}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
@@ -441,7 +447,7 @@ The shipped server maps failures as follows:
 
 | Status | `kind` | Meaning |
 |---:|---|---|
-| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, or a non-integer `since`/`rev` query value |
+| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, or a `since`/`rev` value whose JavaScript `Number` conversion is not an integer |
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
 | `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, or unknown repository |
