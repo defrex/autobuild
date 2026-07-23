@@ -48,7 +48,8 @@ any table header.
 |---|---:|---|---|
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup. |
+| `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup and in scoped phase CLI processes. |
 
 ### Plugin modules
 
@@ -65,8 +66,9 @@ must default-export a strict manifest with a plugin name, a semver range in
 `workspaceProviders`, and `forges` factory maps. One manifest may contribute
 to several ports.
 
-Plugin modules execute in-process during `ab dispatch` and have the same trust
-as repository-supplied commands; there is no sandbox. A missing module, module
+Plugin modules execute in-process during `ab dispatch` and configured scoped
+phase CLI composition and have the same trust as repository-supplied commands;
+there is no sandbox. A missing module, module
 that throws, malformed manifest, incompatible API range, or adapter-name
 collision fails startup before a ticket claim. Builtin names and names from
 earlier configured plugins are reserved, and declaration order never permits
@@ -76,10 +78,64 @@ Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
-TicketSource, WorkspaceProvider, Forge, BuildStore, and BlobStore contract
-suites. Workspace selection is open to registered plugin factories; ticket
-source, agent runtime, and forge selectors remain restricted to shipped
-builtins until their own selector releases.
+TicketSource, AgentRunner, WorkspaceProvider, Forge, BuildStore, and BlobStore
+contract suites. Adapter values may use the backward-compatible bare factory or
+carry a contract fixture descriptor:
+
+```ts
+import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
+
+export default {
+  name: 'acme-integrations',
+  apiVersion: '^1.1.0',
+  ticketSources: {
+    jira: {
+      factory: ({ config, env, repoRoot }) => createJira(config, env, repoRoot),
+      contract: {
+        // Return the TicketSourceContractFactory consumed by the shared suite.
+        factory: ({ env }) => makeJiraContractFactory(env),
+        live: true,
+      },
+    },
+  },
+} satisfies AutobuildPluginManifest
+```
+
+Use the sessionless author/operator loop from the repository checkout:
+
+```sh
+ab plugin list
+ab plugin doctor
+ab plugin test ticket-source jira
+AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test ticket-source jira
+```
+
+The four test port tokens are `ticket-source`, `agent-runtime`,
+`workspace-provider`, and `forge`. `list` includes builtins and successful
+plugin registrations with module, resolved path/kind, owner, API status, and
+contract availability. `doctor` attempts every configured module in declaration
+order, reports each resolution/evaluation/manifest/registration result, and
+exits nonzero if any fail. Dispatch intentionally differs: it stops on the
+first plugin failure before opening stores or claiming work. `test` invokes one
+unchanged shared suite under `bun test`; Bun's per-test output and exit status
+are authoritative. A missing `contract.factory` is an actionable error. A
+`live = true` descriptor cannot launch or create its harness unless
+`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
+
+Forge and workspace selection are open. Set the root `forge` scalar or
+`[workspace].provider` to a registered name; omission selects `github` and
+`git-worktree`, respectively. Ticket-source and agent-runtime selectors remain
+restricted to shipped builtins in this release. A selected plugin forge factory
+receives an empty adapter-specific `config` object, while a workspace factory
+receives `[workspace.config]`; both receive the process environment and absolute
+repository root and are invoked lazily after the complete plugin catalog loads.
+Unknown names fail with the available names for that port, and factory failures
+are contextualized with the adapter and plugin names. Scoped build-session CLI
+processes repeat forge config/plugin loading from the build worktree, so phase
+terminal plumbing uses the same configured forge. The returned forge is not
+wrapped: an absent `prAttachments` capability intentionally selects text-only
+attachment summaries, while a present capability serves upload and terminal
+reclamation.
 
 ## `[pr]`
 
@@ -509,6 +565,7 @@ that exist in your repository and providers.
 ```toml
 baseBranch = "main"
 capacity = 2
+forge = "github"
 plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
 [workspace]

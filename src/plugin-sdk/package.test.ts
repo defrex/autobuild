@@ -11,6 +11,7 @@ import {
   MemoryBuildStore,
   PLUGIN_API_VERSION,
   ScriptedAgentRunner,
+  describeAgentRunnerContract,
   describeBlobStoreContract,
   describeBuildStoreContract,
   describeForgeContract,
@@ -35,8 +36,9 @@ describe('autobuild/plugin-sdk package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.0.0')
+    expect(PLUGIN_API_VERSION).toBe('1.1.0')
     for (const symbol of [
+      describeAgentRunnerContract,
       describeTicketSourceContract,
       describeWorkspaceProviderContract,
       describeForgeContract,
@@ -64,8 +66,15 @@ describe('autobuild/plugin-sdk package surface', () => {
         name: 'erased-types',
         apiVersion: '^1.0.0',
         ticketSources: {
-          sample: async ({ config }: PluginFactoryContext<SampleConfig>) => {
-            throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
+          sample: {
+            factory: async ({ config }: PluginFactoryContext<SampleConfig>) => {
+              throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
+            },
+            contract: {
+              factory: (_context: PluginFactoryContext) => async () => {
+                throw new Error('contract fixture is lazy')
+              },
+            },
           },
         },
       } satisfies AutobuildPluginManifest
@@ -157,6 +166,7 @@ describe('autobuild/plugin-sdk package surface', () => {
     for (const path of [
       'package/src/plugin-sdk/index.ts',
       'package/src/ports/tickets/contract.ts',
+      'package/src/ports/runner/contract.ts',
       'package/src/ports/workspace/contract.ts',
       'package/src/ports/forge/contract.ts',
       'package/src/store/contract.ts',

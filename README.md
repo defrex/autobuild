@@ -36,11 +36,29 @@ Every seam is an adapter: ticket sources (Linear or local files), agent
 runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
 build store all sit behind narrow interfaces. Trusted Bun plugins declared in
 `autobuild.toml` can register third-party ticket, runtime, workspace, and forge
-adapters against the versioned `autobuild/plugin-sdk` surface. Workspace
-providers can be selected by name through `[workspace]`; selector support for
-the remaining plugin ports is rolling out separately. The build store keeps
-remote HTTP as its extension
-surface.
+adapters against the versioned `autobuild/plugin-sdk` surface. The root
+`forge` setting and `[workspace].provider` select registered adapters (`github`
+and `git-worktree` by default); selector support for the remaining plugin ports
+is rolling out separately. BuildStore is deliberately excluded from in-process
+plugins: its extension surface is the documented
+[remote HTTP protocol](docs/remote-store-protocol.md), so an independent server
+can use any language or storage.
+
+Inspect and certify configured integrations from the repository root:
+
+```sh
+ab plugin list
+ab plugin doctor
+ab plugin test ticket-source jira
+# Only for a manifest descriptor explicitly marked live:
+AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test forge gitlab
+```
+
+`list` shows builtin and plugin registrations, module resolution, API
+compatibility, and contract availability. `doctor` reports every configured
+module rather than stopping at the first failure. `test` runs the port's shared
+Bun contract suite and returns its exact status; live fixtures never run without
+the explicit environment opt-in.
 
 ## Quickstart
 
@@ -186,5 +204,7 @@ pipe or a script sees exactly what you do.
   configuration, as a worked example of the config surface.
 - [`docs/architecture.md`](docs/architecture.md) — how the design maps to the
   codebase: kernel, ports, processes, and stores.
+- [`docs/remote-store-protocol.md`](docs/remote-store-protocol.md) — the
+  complete HTTP server contract and BuildStore conformance instructions.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and its
   terminology.

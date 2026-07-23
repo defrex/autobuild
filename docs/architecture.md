@@ -151,9 +151,24 @@ deposited, and a turn's typed terminal always beats a late failure signal.
 
 **Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
 configured relative or package module from the consuming repository, validates
-its default manifest/API range, and atomically registers its factories before
-production wiring or the first dispatch tick. Workspace factories are consumed
-by the selector above; the other production selectors remain builtin-owned.
+its default manifest/API range, and atomically registers normalized factories,
+provenance, and optional contract descriptors before production wiring or the
+first dispatch tick. Its structured single-module attempt feeds two policies:
+`loadPlugins` remains fail-fast for dispatch, while `diagnosePlugins` collects
+ordered failures and retains later healthy registrations for `ab plugin doctor`.
+`src/cli/plugin.ts` owns the sessionless list/doctor/test grammar and live gate;
+`src/plugins/contract-entry.ts` reloads one selected registration inside a real
+`bun test` process and registers exactly one unchanged port suite.
+`src/ports/forge/create.ts` resolves the root `forge` selector, constructs
+GitHub or lazily invokes the registered plugin factory, and preserves the
+returned adapter's optional attachment capability. Dispatch constructs one
+selected adapter before opening the store and threads it through runners,
+epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
+load the build worktree's immutable config/plugins and resolve the same name for
+phase terminal plumbing. `src/ports/workspace/create.ts` similarly resolves
+`[workspace].provider`, retaining host-owned git-worktree construction while
+passing plugin config, environment, and repository root to registered factories.
+Ticket-source and agent-runtime selectors remain builtin-only.
 `src/cli/repo-state.ts` owns
 repository identity and store precedence (`--store` > `AB_STORE` >
 `.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;
@@ -213,18 +228,23 @@ installed `ab` binary remains the non-watching production entry.
 
 ### Contract suites
 
-The seams are the contract. Four reusable contract families run the same
+The seams are the contract. Five reusable contract families run the same
 behavioral assertions against every implementation:
 
 - `src/store/contract.ts` — `BuildStore` and `BlobStore`;
 - `src/ports/tickets/contract.ts` — `TicketSource`;
 - `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
-- `src/ports/forge/contract.ts` — `Forge`.
+- `src/ports/forge/contract.ts` — `Forge`;
+- `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
+  transcript metadata and usage, typed failure permanence, per-turn ambient
+  environment refresh, distribution-managed `ab` resolution, and the optional
+  tool-free one-shot capability.
 
 A normal `bun test` runs the memory/fake/local registrations, including the
-real filesystem and real local-git adapters. The Linear and GitHub
+real filesystem and real local-git adapters and the complete injected-SDK
+contracts for Claude and Pi. The Linear, GitHub, and real-runtime AgentRunner
 registrations are present in the same run but reported as skipped: live
-provider mutation requires both credentials and an explicit opt-in. When
+provider access requires credentials/resources and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
 To run the Linear contract manually against a destructive scratch target:
@@ -260,6 +280,27 @@ token with repository admin, contents, pull-request, comment, and branch
 protection permissions. The fixture creates and deletes temporary branches,
 PRs, comments, and a required-check protection rule; it never pushes to or
 merges into the default branch. Use a dedicated scratch repository only.
+
+The deterministic Claude and Pi adapter contracts run offline in every normal
+test run. Their live registrations add real transport/authentication smoke
+coverage for successful start, continue, end, environment refresh, managed CLI
+execution, and one-shot completion:
+
+```sh
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_CLAUDE_CONTRACT_MODEL=claude-sonnet-4-… \
+bun test src/ports/runner/claude.live.test.ts
+
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_PI_CONTRACT_MODEL=openai/gpt-… \
+bun test src/ports/runner/pi.live.test.ts
+```
+
+Claude uses the Agent SDK's configured authentication. Pi uses the credentials
+required by the provider named in `AB_PI_CONTRACT_MODEL`. The live fixtures
+create isolated temporary project skills and probe files and remove them after
+each run; provider failures remain in the deterministic injected-SDK contract
+because they cannot be manufactured safely against a live account.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit.

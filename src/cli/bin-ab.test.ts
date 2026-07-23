@@ -15,7 +15,7 @@
  * separate real-Git case exercises the implicit repository-local root.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DISPATCHER, KERNEL } from '../events/envelope'
@@ -29,6 +29,12 @@ let tmp: string
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), 'ab-bin-'))
+  // Scoped binary composition reads the build worktree's config before
+  // selecting its forge. Sessionless cases ignore this fixture.
+  await writeFile(
+    join(tmp, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
 })
 
 afterEach(async () => {
@@ -194,6 +200,42 @@ test('the repo dev script forwards a complete CLI invocation and exits under --h
   expect(JSON.parse(result.stdout)).toEqual([])
 })
 
+test('plugin diagnostics and a real contract run are sessionless in the binary', async () => {
+  await writeFile(
+    join(tmp, 'autobuild.toml'),
+    'plugins = ["./plugin.ts"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  await writeFile(
+    join(tmp, 'plugin.ts'),
+    `
+import { FakeTicketSource } from ${JSON.stringify(join(ROOT, 'src', 'plugin-sdk', 'index.ts'))}
+const adapter = () => new FakeTicketSource()
+const fixture = () => async () => ({
+  source: new FakeTicketSource([], { createState: 'Triage', doneState: 'Done' }),
+  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+  editableLabel: 'contract',
+})
+export default {
+  name: 'binary-fixture', apiVersion: '^1.1.0',
+  ticketSources: { sample: { factory: adapter, contract: { factory: fixture } } },
+}
+`,
+  )
+
+  const doctor = await runBinWithoutAb(['plugin', 'doctor'])
+  expect(doctor.code).toBe(0)
+  expect(doctor.stdout).toContain('OK ./plugin.ts')
+  expect(doctor.stderr).not.toContain('AB_BUILD')
+
+  const contract = await runBinWithoutAb([
+    'plugin', 'test', 'ticket-source', 'sample',
+  ])
+  expect(contract.code).toBe(0)
+  expect(contract.stdout + contract.stderr).toContain(
+    'create/get round-trips common fields',
+  )
+})
+
 test('ab build status runs sessionless and exits 1 on an unknown slug', async () => {
   const result = await runBin(['build', 'status', 'no-such-build'])
   expect(result.code).toBe(1)
@@ -346,6 +388,99 @@ test('a complete build tuple resolves its store and runs context', async () => {
     round: 1,
     materialized: { 'spec.md': { kind: 'spec', rev: 0 } },
   })
+})
+
+test('a scoped implement terminal routes publication through the configured plugin forge', async () => {
+  const slug = 'plugin-forge-terminal'
+  const marker = join(tmp, 'forge-calls.log')
+  await writeFile(
+    join(tmp, 'autobuild.toml'),
+    'forge = "recording"\nplugins = ["./forge-plugin.ts"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  await writeFile(
+    join(tmp, 'forge-plugin.ts'),
+    `import { appendFileSync } from 'node:fs'\n` +
+      `export default { name: 'recording-forge', apiVersion: '^1.0.0', forges: { recording: ({ env }) => ({\n` +
+      `  name: 'recording',\n` +
+      `  pushBranch: async (_workspace, branch) => { appendFileSync(env['FORGE_MARKER'], 'push:' + branch + '\\n') },\n` +
+      `  openPr: async () => ({ number: 1, url: 'https://example.test/pr/1', headSha: 'head' }),\n` +
+      `  getPrState: async () => ({ state: 'open', mergeable: null }),\n` +
+      `  setAutoMerge: async () => ({ kind: 'applied' }),\n` +
+      `  squashMerge: async () => {}, commentOnPr: async () => {}\n` +
+      `}) } }\n`,
+  )
+  await git(tmp, 'init', '-q', '-b', 'main')
+  await git(tmp, 'config', 'user.email', 'ab-bin@example.invalid')
+  await git(tmp, 'config', 'user.name', 'ab-bin')
+  await git(tmp, 'add', 'autobuild.toml', 'forge-plugin.ts')
+  await git(tmp, 'commit', '-q', '-m', 'initial')
+  await git(tmp, 'init', '--bare', '-q', '-b', 'main', 'remote.git')
+  await git(tmp, 'remote', 'add', 'origin', join(tmp, 'remote.git'))
+  await git(tmp, 'push', '-q', '-u', 'origin', 'main')
+  const baseResult = await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: tmp })
+  expect(baseResult.exitCode).toBe(0)
+  const base = baseResult.stdout.trim()
+  await git(tmp, 'checkout', '-q', '-b', `ab/${slug}`)
+  await writeFile(join(tmp, 'feature.ts'), 'export const feature = true\n')
+  await git(tmp, 'add', 'feature.ts')
+  await git(tmp, 'commit', '-q', '-m', 'implement feature')
+  await mkdir(join(tmp, '.ab'), { recursive: true })
+  await writeFile(
+    join(tmp, '.git', 'info', 'exclude'),
+    '.ab/\nstore/\nremote.git/\nforge-calls.log\n',
+  )
+  await writeFile(join(tmp, '.ab', 'implement-notes.md'), 'implemented through plugin forge\n')
+
+  const repo = await realpath(tmp)
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.createBuild({ slug, repo, branch: `ab/${slug}` })
+  await local.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: { source: 'file', id: 'T-plugin', title: 'Plugin forge terminal' },
+      repo,
+      baseBranch: 'main',
+    },
+  })
+  await local.append(slug, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'git-worktree',
+      ref: repo,
+      branch: `ab/${slug}`,
+      base: { source: 'existing', sha: base },
+    },
+  })
+  await local.append(slug, {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: { round: 1 },
+  })
+  await local.close()
+
+  const result = await runBin(
+    ['done', '--notes', '.ab/implement-notes.md'],
+    {
+      AB_BUILD: slug,
+      AB_PHASE: 'implement@1',
+      AB_SESSION: 's_plugin_forge',
+      FORGE_MARKER: marker,
+    },
+  )
+  expect(result).toEqual({
+    code: 0,
+    stderr: '',
+    stdout: 'implement.completed recorded (seq 4)\n',
+  })
+  expect(await Bun.file(marker).text()).toBe(`push:ab/${slug}\n`)
+
+  const reopened = openLocalStore(join(tmp, 'store'))
+  expect((await reopened.getEvents(slug)).map((event) => event.type)).toContain(
+    'implement.completed',
+  )
+  await reopened.close()
 })
 
 test('a complete harvest tuple resolves its store and runs context', async () => {

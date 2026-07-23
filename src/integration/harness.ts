@@ -34,7 +34,9 @@ import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import { sequentialIds, sequentialUuids, type IdSource } from '../ids'
 import type { BuildState } from '../kernel/reducer'
+import { createForge } from '../ports/forge/create'
 import { FakeForge } from '../ports/forge/fake'
+import { createPluginRegistry, type PluginRegistry } from '../plugins/registry'
 import {
   defaultTurnResult,
   ScriptedAgentRunner,
@@ -44,6 +46,7 @@ import {
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type {
   AgentTurnResult,
+  Forge,
   Ticket,
   TicketSource,
   WorkspaceProvider,
@@ -295,6 +298,10 @@ export async function makeHarness(opts: {
     repoRoot: string
     worktreeRoot: string
   }) => WorkspaceProvider | Promise<WorkspaceProvider>
+  /** Resolve the config's forge name through a plugin registration instead of
+   * injecting FakeForge directly. The selected adapter still shares this one
+   * fake journal across CLI terminals, runner, dispatcher, and janitor. */
+  pluginForge?: { prAttachments?: boolean }
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   const originPath = join(tmp, 'origin')
@@ -310,10 +317,29 @@ export async function makeHarness(opts: {
   const ids = sequentialIds()
   const uuids = sequentialUuids()
   const store = new MemoryBuildStore({ clock })
-  const forge = new FakeForge({ gatePresence: opts.gatePresence ?? 'present' })
+  const config = parseConfig(configToml, 'e2e autobuild.toml')
+  const forge = new FakeForge({
+    gatePresence: opts.gatePresence ?? 'present',
+    ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
+  })
+  let selectedForge: Forge = forge
+  let plugins: PluginRegistry | undefined
+  if (opts.pluginForge !== undefined) {
+    plugins = createPluginRegistry()
+    plugins.register({
+      name: 'e2e-forge-plugin',
+      apiVersion: '^1.0.0',
+      forges: { [config.forge]: async () => forge },
+    })
+    selectedForge = await createForge({
+      name: config.forge,
+      registry: plugins,
+      env: process.env,
+      repoRoot: origin,
+    })
+  }
   const tickets = new FakeTicketSource(opts.tickets ?? [])
   const ticketSource: TicketSource = opts.ticketSource ?? tickets
-  const config = parseConfig(configToml, 'e2e autobuild.toml')
   const worktreeRoot = join(tmp, 'worktrees')
   const workspaces = opts.createWorkspaceProvider === undefined
     ? new GitWorktreeProvider({ root: worktreeRoot })
@@ -352,7 +378,7 @@ export async function makeHarness(opts: {
         store,
         env,
         workspacePath: ws,
-        forge,
+        forge: selectedForge,
         exec: spawnExec,
         ids,
         clock,
@@ -407,7 +433,7 @@ export async function makeHarness(opts: {
         branch: record.branch ?? `ab/${slug}`,
         slug,
         exec: spawnExec,
-        forge,
+        forge: selectedForge,
         ids,
         clock,
         instance: `runner-${instances}`,
@@ -424,7 +450,7 @@ export async function makeHarness(opts: {
     store,
     tickets: ticketSource,
     workspaces,
-    forge,
+    forge: selectedForge,
     config,
     repo: origin,
     exec: spawnExec,
@@ -435,7 +461,7 @@ export async function makeHarness(opts: {
   const wiring: DispatchWiring = {
     store,
     tickets: ticketSource,
-    forge,
+    forge: selectedForge,
     workspaces,
     runtimes,
     defaultRuntime: 'scripted',
@@ -445,6 +471,7 @@ export async function makeHarness(opts: {
     ids,
     uuids,
     clock,
+    ...(plugins !== undefined ? { plugins } : {}),
   }
 
   return {

@@ -163,7 +163,8 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order before dispatch wiring. |
+| `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order before dispatch and scoped phase wiring. |
 
 Relative paths and npm package specifiers resolve from the consuming repository,
 so packages come from its installed dependencies rather than Autobuild's.
@@ -177,9 +178,14 @@ with the same trust as configured commands and is not sandboxed.
 `autobuild/plugin-sdk` is the supported authoring entry point for manifest and
 factory types, frozen port types, contract suites, and fake adapters. Plugins
 may use type-only imports with Autobuild as a dev/peer dependency and need no
-runtime Autobuild dependency. Workspace selection consumes registered plugin
-factories; ticket, runtime, and forge selectors remain builtin-only until their
-follow-up releases.
+runtime Autobuild dependency. Forge selection is open through the root `forge`
+scalar; omission selects `github`. A selected plugin factory receives empty
+adapter config, the process environment, and the absolute repository root.
+Unknown names list all available forges. Dispatch and scoped phase CLI processes
+resolve the same configured name, preserving the adapter's optional
+`prAttachments` capability. Workspace selection consumes registered plugin
+factories through `[workspace]`. Ticket-source and agent-runtime selectors
+remain builtin-only.
 
 ### `[pr]`
 

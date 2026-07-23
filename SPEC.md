@@ -95,8 +95,8 @@ startup registration. Runtime registrations reuse §9's capability-bearing
 `RuntimeRegistration`; the frozen `AgentRunner` interface is not widened.
 
 The host exposes one versioned authoring surface, `autobuild/plugin-sdk`: port
-and manifest types, the reusable TicketSource/WorkspaceProvider/Forge/
-BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
+and manifest types, the reusable TicketSource/AgentRunner/WorkspaceProvider/
+Forge/BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
 production code can use erased type-only imports, with Autobuild present only
 as a development or peer dependency; a consuming repository needs no bridge
 module.
@@ -105,8 +105,10 @@ Plugin specifiers are resolved as though imported from the consuming
 repository root. Thus both repository-relative modules and package export maps
 work, and bare packages come from that repository's installed dependencies,
 not Autobuild's installation. Modules load in declaration order during
-`ab dispatch`, after strict config parsing and before stores, production
-adapters, ticket claims, or build launch. Resolution/evaluation errors,
+`ab dispatch` and scoped build CLI composition. Dispatch does so after strict
+config parsing and before stores, production adapters, ticket claims, or build
+launch; scoped processes load from the build worktree before opening their
+store or executing terminal plumbing. Resolution/evaluation errors,
 malformed or missing default manifests, and plugin-API incompatibility fail
 startup with both the configured module and available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
@@ -115,12 +117,30 @@ name may exist on different ports. `[workspace].provider` selects from the
 workspace catalog; omission selects `git-worktree`. The selected factory is
 invoked lazily with `[workspace.config]`, environment, and repository root.
 
+Each adapter map value may remain a bare factory or may be an object containing
+that factory plus an optional `contract: { factory, live? }` descriptor. The
+contract factory receives the same repository context and returns the fixture
+factory required by that port's unchanged shared suite. `ab plugin list`
+projects builtin and configured registrations with provenance, resolution kind,
+API compatibility, and contract availability. `ab plugin doctor` exhaustively
+attempts every configured module and exits nonzero if any fail; this diagnostic
+collection does not weaken `ab dispatch`, which remains fail-fast. `ab plugin
+test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>` delegates
+one selected suite to Bun's test runner and preserves its per-test output and
+exit status. A descriptor marked `live` is never launched unless
+`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly present.
+
 Plugins execute in-process and are Bun-only. They have the same repository
-trust boundary as declarative shell commands: no sandbox is promised. This
-foundation registers plugin factories while shipped selectors remain closed;
-opening each selector is follow-up work. `TelemetrySource` remains deferred,
-and BuildStore's third-party extension surface remains the remote HTTP protocol
-rather than in-process registration.
+trust boundary as declarative shell commands: no sandbox is promised. Forge
+selection is open through the root `forge` scalar (`github` by default): the
+selected plugin factory receives an empty adapter config, process environment,
+and absolute repository root, and is invoked before store opening. Unknown
+names list the complete available forge catalog. Dispatch and scoped build CLI
+processes resolve the same configured name independently, and all forge
+plumbing receives the selected adapter unchanged. Ticket, runtime, and
+workspace plugin selectors remain closed pending their follow-up work.
+`TelemetrySource` remains deferred, and BuildStore's third-party extension
+surface remains the remote HTTP protocol rather than in-process registration.
 
 ### 3.3 Processes
 
@@ -347,7 +367,11 @@ contract (`src/store/contract.ts` is the shared conformance suite):
    nonempty `AB_STORE` > repository default.
 2. **Remote** — the same store interface behind a small self-hosted HTTP API
    binary, selected by an `http(s)://` reference. What remote sandboxes talk
-   to. Git worktrees and default file tickets necessarily remain local.
+   to. The documented [remote store protocol](docs/remote-store-protocol.md)
+   is the public BuildStore extension surface for independently implemented
+   servers; `src/store/contract.ts`, driven through the shipped remote client,
+   is the conformance bar. Autobuild does not load in-process BuildStore
+   plugins. Git worktrees and default file tickets necessarily remain local.
 
 `subscribe` is specced in the interface; the v2.0 implementation is polling
 `getEvents(since)`. True push comes later.
@@ -410,11 +434,13 @@ retrieval command; distinct kinds remain distinct. The BuildStore copy is
 always authoritative, and non-image artifacts use this same path.
 
 Optionally, `[pr.imageHost]` may name a **public** GitHub release so designated
-`image/*` media render inline during review. Non-images never cross that host
-boundary. Enabling it is an explicit public-disclosure choice made in config,
-and hosted copies are temporary — the dispatcher reclaims them after the build
-reaches a terminal outcome, while store artifacts remain under the store's
-retention policy. Upload/validation/timeout failures record follow-up
+`image/*` media render inline during review. The selected Forge must expose the
+optional `PrAttachmentHosting` capability to serve upload and reclamation;
+without it the supported path remains the complete text-only projection.
+Non-images never cross that host boundary. Enabling it is an explicit
+public-disclosure choice made in config, and hosted copies are temporary — the
+dispatcher reclaims them after the build reaches a terminal outcome, while
+store artifacts remain under the store's retention policy. Upload/validation/timeout failures record follow-up
 observations and preserve the complete text projection; they never fail
 verification or block finalize. Agents receive no forge credentials. A
 designation after the PR exists publishes a new complete summary, so finalize
@@ -1069,6 +1095,7 @@ itself: the system can retune its own configuration via a ticket and a PR.
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
+forge = "github"                # builtin default or a plugin-registered name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 #[workspace]                     # optional; default provider = "git-worktree"
@@ -1134,13 +1161,13 @@ readyState = "ready"            # required: the one state a ticket must sit in t
 ```
 
 The root scalars must appear before the first table header (TOML otherwise
-nests them in that table). `plugins` defaults to `[]`, preserving repositories
-with no plugin configuration. `[workspace]` defaults to `provider =
-"git-worktree"` and empty config; the strict selector envelope permits open
-plugin-owned values only under `[workspace.config]`. Unknown providers fail
-with the complete available-name list. Providers still yield a locally
-reachable working-copy path; remote execution remains a later sandbox project.
-Declarative (TOML), not executable config: the
+nests them in that table). `forge` defaults to `"github"` and `plugins` defaults
+to `[]`, preserving repositories with no plugin configuration. `[workspace]`
+defaults to `provider = "git-worktree"` and empty config; the strict selector
+envelope permits open plugin-owned values only under `[workspace.config]`.
+Unknown providers fail with the complete available-name list. Providers still
+yield a locally reachable working-copy path; remote execution remains a later
+sandbox project. Declarative (TOML), not executable config: the
 kernel, dispatcher, CLI, and any future tooling parse it without evaluating
 anything; commands are plain shell strings. Parsing is strict — an unknown table or key is an error, so a
 typo cannot silently disable a verifier. The full config surface, field
