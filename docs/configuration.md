@@ -49,7 +49,7 @@ any table header.
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
 | `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup and in scoped phase CLI processes. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
 
 ### Plugin modules
 
@@ -66,8 +66,9 @@ must default-export a strict manifest with a plugin name, a semver range in
 `workspaceProviders`, and `forges` factory maps. One manifest may contribute
 to several ports.
 
-Plugin modules execute in-process during `ab dispatch` and configured scoped
-phase CLI composition and have the same trust as repository-supplied commands;
+Plugin modules execute in-process during `ab dispatch`, sessionless `ab ticket`
+commands, and configured scoped phase CLI composition. They have the same trust
+as repository-supplied commands;
 there is no sandbox. A missing module, module
 that throws, malformed manifest, incompatible API range, or adapter-name
 collision fails startup before a ticket claim. Builtin names and names from
@@ -80,7 +81,10 @@ without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
 TicketSource, AgentRunner, WorkspaceProvider, Forge, BuildStore, and BlobStore
 contract suites. Adapter values may use the backward-compatible bare factory or
-carry a contract fixture descriptor:
+carry a contract fixture descriptor. Ticket sources may also declare
+`requiredEnv`; the host checks every declared variable for a nonempty value
+before invoking the adapter factory. Plugins using descriptors introduced in
+API 1.1 should require `^1.1.0`.
 
 ```ts
 import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
@@ -90,6 +94,7 @@ export default {
   apiVersion: '^1.1.0',
   ticketSources: {
     jira: {
+      requiredEnv: ['JIRA_TOKEN'],
       factory: ({ config, env, repoRoot }) => createJira(config, env, repoRoot),
       contract: {
         // Return the TicketSourceContractFactory consumed by the shared suite.
@@ -122,20 +127,20 @@ are authoritative. A missing `contract.factory` is an actionable error. A
 `live = true` descriptor cannot launch or create its harness unless
 `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
 
-Forge and workspace selection are open. Set the root `forge` scalar or
-`[workspace].provider` to a registered name; omission selects `github` and
-`git-worktree`, respectively. Ticket-source and agent-runtime selectors remain
-restricted to shipped builtins in this release. A selected plugin forge factory
-receives an empty adapter-specific `config` object, while a workspace factory
-receives `[workspace.config]`; both receive the process environment and absolute
-repository root and are invoked lazily after the complete plugin catalog loads.
-Unknown names fail with the available names for that port, and factory failures
-are contextualized with the adapter and plugin names. Scoped build-session CLI
-processes repeat forge config/plugin loading from the build worktree, so phase
-terminal plumbing uses the same configured forge. The returned forge is not
-wrapped: an absent `prAttachments` capability intentionally selects text-only
-attachment summaries, while a present capability serves upload and terminal
-reclamation.
+Ticket-source, forge, and workspace selection are open. Set `[tickets].source`,
+the root `forge` scalar, or `[workspace].provider` to a registered name;
+omission selects the builtin defaults where applicable. Only the agent-runtime
+selector remains restricted to shipped builtins. A selected plugin forge
+factory receives an empty adapter-specific `config` object, while a workspace
+factory receives `[workspace.config]`; both receive the process environment
+and absolute repository root and are invoked lazily after the complete plugin
+catalog loads. Unknown names fail with the available names for that port, and
+factory failures are contextualized with the adapter and plugin names. Scoped
+build-session CLI processes repeat forge config/plugin loading from the build
+worktree, so phase terminal plumbing uses the same configured forge. The
+returned forge is not wrapped: an absent `prAttachments` capability
+intentionally selects text-only attachment summaries, while a present
+capability serves upload and terminal reclamation.
 
 ## `[pr]`
 
@@ -508,17 +513,18 @@ state. Within a present table, `source` and `readyState` are required.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
-| `source` | — | required `"file"` or `"linear"` | Select the ticket adapter. |
+| `source` | — | required nonblank builtin or plugin registration name | Select the ticket adapter after configured plugins load. |
 | `readyLabels` | source-aware | optional array of nonempty strings; `[]` allowed | Require every listed label in addition to the state gate. |
 | `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
-| `teamKey` | — | required for Linear; forbidden for file; nonempty string | Linear team key such as `"ENG"`. |
-| `claimedState` | `"In Progress"` for Linear | optional nonempty string; Linear only | Workflow state entered when a Linear issue is claimed. |
+| `teamKey` | — | required for Linear; forbidden for file; optional for plugins | Linear team key such as `"ENG"`, or an existing plugin config field. |
+| `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | State used by newly created tickets. |
-| `triageState` | Linear: `"Backlog"`; file: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
-| `dir` | selected local state root's `tickets/` (normally `.autobuild/tickets`) | optional nonempty path; file only | Root containing the file source's state directories. Relative paths resolve from the repository; absolute paths are used as given. |
+| `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
-When `readyLabels` is absent, Linear uses `["autobuild"]`; the file source uses
-`[]`, meaning no label gate. An explicit value always wins. A nonempty list is
+When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
+sources use `[]`, meaning no host-imposed label gate. An explicit value always
+wins. A nonempty list is
 conjunctive: every configured label must be present. `readyState` remains
 mandatory regardless of labels. Linear compares state and label names exactly
 and case-sensitively. The file source accepts state names case-insensitively and
@@ -528,8 +534,10 @@ Source-specific validation is strict:
 
 - Linear requires `teamKey` and rejects `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
-- `createState` and `triageState` are valid for either source, but the named
+- `createState` and `triageState` are valid for every source, but the named
   state must exist in that provider when used.
+- Plugin sources receive the existing fields in this table unchanged and own
+  any additional semantic validation. No untyped plugin-options table exists.
 
 For Linear, omitting `createState` lets the team's default state apply. For the
 file source it defaults to `Triage`. An omitted Linear `triageState` uses
@@ -554,6 +562,27 @@ triageState = "Backlog"
 
 Linear credentials do not belong in this table. Set `LINEAR_API_KEY` in the
 environment or local `.env` file described below.
+
+A plugin registration is selected the same way. `ab dispatch` and every
+`ab ticket` subcommand load the plugin and route through that source. Within a
+dispatch process, one selected instance serves dependencies, claim/projections,
+harvest filing, and janitor completion. Unknown names fail with the available
+builtin and loaded plugin names. Missing descriptor credentials name both the
+source and each variable.
+
+<!-- config-fragment:plugin-tickets -->
+```toml
+plugins = ["./plugins/company.ts"]
+
+[tickets]
+source = "company"
+readyState = "Ready"
+claimedState = "Doing"
+createState = "Triage"
+triageState = "Triage"
+```
+
+Set `COMPANY_TICKET_TOKEN` in the environment, never in this table.
 
 ## Complete example
 

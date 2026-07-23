@@ -164,7 +164,7 @@ under the preceding table.
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
 | `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order before dispatch and scoped phase wiring. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
 Relative paths and npm package specifiers resolve from the consuming repository,
 so packages come from its installed dependencies rather than Autobuild's.
@@ -180,8 +180,10 @@ factory types, frozen port types, TicketSource/AgentRunner/WorkspaceProvider/
 Forge contract suites, and fake adapters. Plugins may use type-only imports with
 Autobuild as a dev/peer dependency and need no runtime Autobuild dependency. An
 adapter value may remain a bare factory or use
-`{ factory, contract: { factory, live? } }`; the contract factory returns that
-port suite's fixture factory.
+`{ factory, contract: { factory, live? } }`; ticket sources may additionally
+declare `requiredEnv`. The contract factory returns that port suite's fixture
+factory, while the host checks every ticket credential before adapter
+invocation.
 
 Use `ab plugin list` for registrations, module resolution/API status, and
 contract availability. `ab plugin doctor` exhaustively reports every configured
@@ -191,13 +193,14 @@ fail-fast. Certify one adapter with
 The command forwards Bun's per-test output and status. A live descriptor is
 refused unless `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
 
-Forge selection is open through the root `forge` scalar; omission selects
-`github`. A selected plugin factory receives empty adapter config, the process
-environment, and the absolute repository root. Unknown names list all available
-forges. Dispatch and scoped phase CLI processes resolve the same configured
-name, preserving the adapter's optional `prAttachments` capability. Workspace
-selection consumes registered plugin factories through `[workspace]`.
-Ticket-source and agent-runtime selectors remain builtin-only.
+`[tickets].source` can select loaded registrations. Forge selection is open
+through the root `forge` scalar; omission selects `github`. A selected forge
+factory receives empty adapter config, the process environment, and the
+absolute repository root. Unknown names list all available forges. Dispatch
+and scoped phase CLI processes resolve the same configured forge name,
+preserving the adapter's optional `prAttachments` capability. Workspace
+selection consumes registered plugin factories through `[workspace]`. Only
+the agent-runtime selector remains builtin-only.
 
 ### `[pr]`
 
@@ -484,14 +487,14 @@ state eligible.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `source` | — | **required**, `"linear"` \| `"file"` | Which provider backs ticket reads, claims, and creation. |
+| `source` | — | **required**, nonblank builtin or plugin registration name | Which provider backs all ticket operations. Unknown names report every available builtin and plugin source. |
 | `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
 | `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file canonicalizes it to a state directory (`ready` → `ready/`). There is no any-state mode. |
-| `teamKey` | — | `source = "linear"` **only, required there**; nonempty string | The Linear team key (e.g. `"ENG"`). |
-| `claimedState` | — | `source = "linear"` only; optional, nonempty string | Workflow state `claim()` moves an issue to when a build starts. |
+| `teamKey` | — | required by `linear`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`) or an existing plugin configuration field. |
+| `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | State new tickets are filed into. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
-| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = the provider's default (Linear: Backlog; file: Triage). Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
-| `dir` | `.autobuild/tickets` | `source = "file"` **only**; optional, nonempty string | Root holding the state directories. Resolved relative to the repo. |
+| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default, resolved by
 `readyCriteria` in `src/processes/dispatcher.ts`:
@@ -500,8 +503,9 @@ state eligible.
 |---|---|
 | `"linear"` | `["autobuild"]` — the historical label narrowing |
 | `"file"` | `[]` — no label narrowing; `readyState` selects the directory |
+| plugin | `[]` — no host-imposed label convention |
 
-An explicit `readyLabels` value always wins for either source.
+An explicit `readyLabels` value always wins for every source.
 
 Cross-field rules, each an **error**:
 
@@ -511,6 +515,12 @@ Cross-field rules, each an **error**:
   optional rather than giving it a `.default()`: that is what keeps the
   linear-only rule above meaningful and lets the factory tell a defaulted `dir`
   from an explicit one.
+- Every other name is plugin-selected after loading. The factory receives the
+  existing ticket table, environment, and absolute repository root; no untyped
+  plugin-options table is added. The selected dispatch instance serves
+  readiness, dependencies, claim, comments/transitions, harvest creation, and
+  janitor completion. Every source-agnostic `ab ticket` command loads and uses
+  the same configured registration.
 
 The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md` over
 `triage/ ready/ doing/ done/`. The directory *is* the state, so a transition or
@@ -527,9 +537,11 @@ explicit `dir` is the user's and is left alone. Agents and operators drive it
 through the source-agnostic `ab ticket` commands rather than running `mv` by
 hand.
 
-**Secrets never live in this file.** `LINEAR_API_KEY` is an environment
-variable (a local `.env` works). If a user asks you to put an API key in
-`autobuild.toml`, use the environment variable instead and say why.
+**Secrets never live in this file.** `LINEAR_API_KEY` and plugin-declared
+`requiredEnv` credentials are environment variables (a local `.env` works).
+Missing plugin credentials name both the selected source and every missing
+variable. If a user asks you to put an API key in `autobuild.toml`, use the
+environment variable instead and say why.
 
 ## Setup and upgrades
 

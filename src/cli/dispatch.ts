@@ -271,11 +271,12 @@ async function defaultWire(
   })
   const opened = openStoreForRepoState(state, { env: opts.env })
 
-  const tickets = createTicketSource(
+  const tickets = await createTicketSource(
     config.tickets,
     opts.env,
     opened.repo,
     opened.localStateRoot,
+    plugins,
   )
   const { runtimes, defaultRuntime } = createProductionRuntimes()
   // A local override relocates the whole tree. Remote stores still need local

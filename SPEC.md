@@ -89,10 +89,16 @@ A repository may list trusted Bun modules in `autobuild.toml`. Each module
 default-exports a strict manifest with a diagnostic `name`, an `apiVersion`
 semver range, and optional name-to-factory maps for `ticketSources`,
 `agentRuntimes`, `workspaceProviders`, and `forges`. One manifest may register
-adapters for several ports. Factories receive adapter-specific config, the
-process environment, and the absolute repository root, and remain lazy during
-startup registration. Runtime registrations reuse §9's capability-bearing
-`RuntimeRegistration`; the frozen `AgentRunner` interface is not widened.
+adapters for several ports. A ticket-source entry is either its legacy bare
+factory or `{ factory, requiredEnv?, contract? }`; `requiredEnv` lets the host
+reject unset or empty credential variables before construction with a
+diagnostic that names both source and variables. Plugin API 1.1 introduces the
+descriptor metadata while remaining compatible with manifests accepting
+`^1.0.0`. Factories receive
+adapter-specific config, the process environment, and the absolute repository
+root, and remain lazy during startup registration. Runtime registrations reuse
+§9's capability-bearing `RuntimeRegistration`; the frozen `AgentRunner`
+interface is not widened.
 
 The host exposes one versioned authoring surface, `autobuild/plugin-sdk`: port
 and manifest types, the reusable TicketSource/AgentRunner/WorkspaceProvider/
@@ -105,10 +111,11 @@ Plugin specifiers are resolved as though imported from the consuming
 repository root. Thus both repository-relative modules and package export maps
 work, and bare packages come from that repository's installed dependencies,
 not Autobuild's installation. Modules load in declaration order during
-`ab dispatch` and scoped build CLI composition. Dispatch does so after strict
-config parsing and before stores, production adapters, ticket claims, or build
-launch; scoped processes load from the build worktree before opening their
-store or executing terminal plumbing. Resolution/evaluation errors,
+`ab dispatch`, the sessionless `ab ticket` commands, and scoped build CLI
+composition. Dispatch loads them after strict config parsing and before stores,
+production adapters, ticket claims, or build launch; ticket commands load them
+before ticket access; scoped processes load from the build worktree before
+opening their store or executing terminal plumbing. Resolution/evaluation errors,
 malformed or missing default manifests, and plugin-API incompatibility fail
 startup with both the configured module and available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
@@ -118,8 +125,9 @@ workspace catalog; omission selects `git-worktree`. The selected factory is
 invoked lazily with `[workspace.config]`, environment, and repository root.
 
 Each adapter map value may remain a bare factory or may be an object containing
-that factory plus an optional `contract: { factory, live? }` descriptor. The
-contract factory receives the same repository context and returns the fixture
+that factory plus an optional `contract: { factory, live? }` descriptor; ticket
+sources may carry `requiredEnv` in the same object. The contract factory
+receives the same repository context and returns the fixture
 factory required by that port's unchanged shared suite. `ab plugin list`
 projects builtin and configured registrations with provenance, resolution kind,
 API compatibility, and contract availability. `ab plugin doctor` exhaustively
@@ -131,14 +139,23 @@ exit status. A descriptor marked `live` is never launched unless
 `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly present.
 
 Plugins execute in-process and are Bun-only. They have the same repository
-trust boundary as declarative shell commands: no sandbox is promised. Forge
-selection is open through the root `forge` scalar (`github` by default): the
-selected plugin factory receives an empty adapter config, process environment,
-and absolute repository root, and is invoked before store opening. Unknown
-names list the complete available forge catalog. Dispatch and scoped build CLI
-processes resolve the same configured name independently, and all forge
-plumbing receives the selected adapter unchanged. Ticket, runtime, and
-workspace plugin selectors remain closed pending their follow-up work.
+trust boundary as declarative shell commands: no sandbox is promised.
+`[tickets].source` may name a loaded plugin registration; unknown names fail
+with all available builtin and plugin names. Dispatch routes one selected
+instance through readiness, dependencies, claim, projection, harvest creation,
+and janitor completion; the same registration backs every source-agnostic
+`ab ticket` operation. Plugin sources receive the existing `[tickets]`
+lifecycle fields unchanged and own any further validation; credentials remain
+environment-only.
+
+Forge selection is open through the root `forge` scalar (`github` by default):
+the selected plugin factory receives an empty adapter config, process
+environment, and absolute repository root, and is invoked before store opening.
+Unknown names list the complete available forge catalog. Dispatch and scoped
+build CLI processes resolve the same configured name independently, and all
+forge plumbing receives the selected adapter unchanged. Workspace selection is
+open through `[workspace].provider` as described above; only the agent-runtime
+plugin selector remains closed pending its follow-up work.
 `TelemetrySource` remains deferred, and BuildStore's third-party extension
 surface remains the remote HTTP protocol rather than in-process registration.
 
@@ -1174,7 +1191,12 @@ typo cannot silently disable a verifier. The full config surface, field
 semantics, and validation rules live with the config code and
 `docs/configuration.md`. The removed `[dashboardFrames]`, `[project]`,
 `[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
-shims.
+shims. `[tickets].source` is a nonblank builtin or plugin registration name.
+The builtin `linear` and `file` branches retain their exact field restrictions
+and defaults; any other name is resolved after plugin loading, receives the
+existing ticket table as factory config, and fails with the complete available
+name set when unregistered. Plugin-declared `requiredEnv` values are never TOML
+fields: secrets stay in the process environment or local `.env`.
 
 Two configurable narrowing mechanisms govern which verify steps run, both
 resolving to the ordinary `skipped` outcome so exclusions stay queryable:

@@ -126,6 +126,9 @@ maxReviewRounds = 4
 harvestThreshold = 5
 
 # Ticket source, ready gate, and lifecycle states (§3.2, §3.3, §13).
+# `source` may also name a registration from `plugins` above. Plugin
+# credentials belong in environment variables declared by its `requiredEnv`,
+# never in this file; dispatch and every `ab ticket` command load that source.
 # This default is the local file tracker at `.autobuild/tickets/`: four state
 # directories (triage/ ready/ doing/ done/) of markdown tickets. No secret;
 # the default directory gitignores itself, `ls` is the UI, and moving a ticket
@@ -136,7 +139,7 @@ source = "file"
 # The file tracker maps this to a state directory (`ready` → `ready/`); Linear
 # users must name their own ready workflow state exactly (case-sensitive).
 readyState = "ready"
-# Absent readyLabels uses the source's label default: none for file, or
+# Absent readyLabels uses the source's label default: none for file/plugins, or
 # ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
 # readyState: every configured label must be present. With
 # ["autobuild", "ready"], a ticket carrying only one label does not satisfy the

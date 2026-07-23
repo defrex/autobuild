@@ -16,7 +16,9 @@ describe('PluginRegistry', () => {
     const registry = new PluginRegistry()
     registry.register(
       plugin('acme', {
-        ticketSources: { shared: factory },
+        ticketSources: {
+          shared: { factory, requiredEnv: ['SHARED_TOKEN'] },
+        },
         agentRuntimes: { shared: factory },
         workspaceProviders: { container: factory },
         forges: { gitlab: factory },
@@ -27,6 +29,10 @@ describe('PluginRegistry', () => {
       kind: 'plugin',
       name: 'acme',
     })
+    expect(registry.ticketSources.get('shared')?.factory).toBe(factory)
+    expect(registry.ticketSources.get('shared')?.requiredEnv).toEqual([
+      'SHARED_TOKEN',
+    ])
     expect(registry.agentRuntimes.has('shared')).toBe(true)
     expect(registry.workspaceProviders.has('container')).toBe(true)
     expect(registry.forges.has('gitlab')).toBe(true)
@@ -41,6 +47,7 @@ describe('PluginRegistry', () => {
         ticketSources: {
           jira: {
             factory,
+            requiredEnv: ['JIRA_TOKEN'],
             contract: { factory: contractFactory, live: true },
           },
         },
@@ -52,6 +59,9 @@ describe('PluginRegistry', () => {
       },
     )
 
+    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual([
+      'JIRA_TOKEN',
+    ])
     expect(registry.ticketSources.get('jira')?.contract).toEqual({
       factory: contractFactory,
       live: true,

@@ -18,6 +18,7 @@ import {
   describeTicketSourceContract,
   describeWorkspaceProviderContract,
   type AutobuildPluginManifest,
+  type TicketSourcePluginDescriptor,
 } from 'autobuild/plugin-sdk'
 
 const root = resolve(import.meta.dir, '..', '..')
@@ -29,10 +30,14 @@ afterEach(async () => {
 
 describe('autobuild/plugin-sdk package surface', () => {
   test('exports manifest types, contracts, and reference adapters from the public subpath', () => {
+    const ticketSource = {
+      factory: () => new FakeTicketSource(),
+      requiredEnv: ['SAMPLE_TOKEN'],
+    } satisfies TicketSourcePluginDescriptor
     const sample = {
       name: 'sample-package',
-      apiVersion: '^1.0.0',
-      ticketSources: { sample: () => new FakeTicketSource() },
+      apiVersion: '^1.1.0',
+      ticketSources: { sample: ticketSource },
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
@@ -64,9 +69,10 @@ describe('autobuild/plugin-sdk package surface', () => {
       interface SampleConfig { endpoint: string }
       const manifest = {
         name: 'erased-types',
-        apiVersion: '^1.0.0',
+        apiVersion: '^1.1.0',
         ticketSources: {
           sample: {
+            requiredEnv: ['SAMPLE_TOKEN'],
             factory: async ({ config }: PluginFactoryContext<SampleConfig>) => {
               throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
             },

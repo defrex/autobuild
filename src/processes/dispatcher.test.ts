@@ -2963,6 +2963,7 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
 
   const FILE = '[tickets]\nsource = "file"\n'
   const LINEAR = '[tickets]\nsource = "linear"\nteamKey = "ENG"\n'
+  const PLUGIN = '[tickets]\nsource = "jira"\n'
 
   test('file source: the configured state is the gate, no label gate by default', () => {
     // The headline claim: no label — `mv` into the readyState directory dispatches.
@@ -2981,7 +2982,14 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
     })
   })
 
-  test('the state gate is always emitted for both sources', () => {
+  test('plugin sources have no host-imposed label convention', () => {
+    expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
+      labels: [],
+      state: 'Open',
+    })
+  })
+
+  test('the state gate is always emitted for every source', () => {
     expect(criteria(`${LINEAR}readyState = "Todo"\n`)).toEqual({
       labels: ['autobuild'],
       state: 'Todo',
@@ -2990,14 +2998,21 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
       labels: [],
       state: 'Todo',
     })
+    expect(criteria(`${PLUGIN}readyState = "Todo"\n`)).toEqual({
+      labels: [],
+      state: 'Todo',
+    })
   })
 
-  test('an explicit readyLabels wins for either source — config is never ignored', () => {
+  test('an explicit readyLabels wins for every source — config is never ignored', () => {
     expect(
       criteria(`${FILE}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
     ).toEqual({ labels: ['urgent'], state: 'Ready' })
     expect(
       criteria(`${LINEAR}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
+    ).toEqual({ labels: ['urgent'], state: 'Ready' })
+    expect(
+      criteria(`${PLUGIN}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
     ).toEqual({ labels: ['urgent'], state: 'Ready' })
   })
 

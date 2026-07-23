@@ -34,13 +34,16 @@ describe('loadPlugins', () => {
     const repo = await fixture()
     await write(
       join(repo, 'repo-local.ts'),
-      `export default { name: 'local', apiVersion: '^1.0.0', ticketSources: { jira: () => ({}) } }\n`,
+      `export default { name: 'local', apiVersion: '^1.0.0', ticketSources: { jira: { factory: () => ({}), requiredEnv: ['JIRA_TOKEN'] } } }\n`,
     )
     const registry = await loadPlugins(['./repo-local.ts'], repo)
     expect(registry.ticketSources.get('jira')?.owner).toEqual({
       kind: 'plugin',
       name: 'local',
     })
+    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual([
+      'JIRA_TOKEN',
+    ])
   })
 
   test('resolves a package export from the consuming repository, not an outer decoy', async () => {

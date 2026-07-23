@@ -52,6 +52,7 @@ export type {
   PluginContractDescriptor,
   PluginFactory,
   PluginFactoryContext,
+  TicketSourcePluginDescriptor,
   TicketSourcePluginFactory,
   TicketSourcePluginRegistration,
   WorkspaceProviderPluginFactory,

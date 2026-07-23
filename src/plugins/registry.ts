@@ -2,7 +2,6 @@ import type {
   AgentRuntimePluginFactory,
   AutobuildPluginManifest,
   ForgePluginFactory,
-  PluginAdapterRegistration,
   PluginApiCompatibility,
   PluginContractDescriptor,
   TicketSourcePluginFactory,
@@ -52,6 +51,9 @@ export interface AdapterRegistration<Factory, ContractFactory = unknown> {
    * the registry. Plugin registrations always carry a normalized factory for
    * open selectors to consume lazily. */
   factory?: Factory
+  /** Host-enforced ticket-source credential declarations. Undefined for
+   * builtins and every other plugin port. */
+  requiredEnv?: readonly string[]
   contract?: PluginContractDescriptor<ContractFactory>
   source: RegistrationSource
 }
@@ -94,22 +96,39 @@ interface PendingRegistration {
   port: PluginPort
   name: string
   factory: unknown
+  requiredEnv?: readonly string[]
   contract?: PluginContractDescriptor<unknown>
   target: Map<string, AdapterRegistration<unknown, unknown>>
 }
 
+type InternalRegistration<AdapterFactory, ContractFactory> =
+  | AdapterFactory
+  | {
+      factory: AdapterFactory
+      requiredEnv?: readonly string[]
+      contract?: PluginContractDescriptor<ContractFactory>
+    }
+
 function normalize<AdapterFactory, ContractFactory>(
-  registration: PluginAdapterRegistration<AdapterFactory, ContractFactory>,
-): { factory: AdapterFactory; contract?: PluginContractDescriptor<ContractFactory> } {
+  registration: InternalRegistration<AdapterFactory, ContractFactory>,
+): {
+  factory: AdapterFactory
+  requiredEnv?: readonly string[]
+  contract?: PluginContractDescriptor<ContractFactory>
+} {
   if (typeof registration === 'function') {
     return { factory: registration as AdapterFactory }
   }
   const object = registration as {
     factory: AdapterFactory
+    requiredEnv?: readonly string[]
     contract?: PluginContractDescriptor<ContractFactory>
   }
   return {
     factory: object.factory,
+    ...(object.requiredEnv !== undefined
+      ? { requiredEnv: [...object.requiredEnv] }
+      : {}),
     ...(object.contract !== undefined ? { contract: object.contract } : {}),
   }
 }
@@ -148,7 +167,7 @@ export class PluginRegistry {
       port: PluginPort,
       registrations: Record<
         string,
-        PluginAdapterRegistration<AdapterFactory, ContractFactory>
+        InternalRegistration<AdapterFactory, ContractFactory>
       > | undefined,
       target: Map<string, AdapterRegistration<AdapterFactory, ContractFactory>>,
     ): void => {
@@ -165,6 +184,9 @@ export class PluginRegistry {
           port,
           name,
           factory: normalized.factory,
+          ...(normalized.requiredEnv !== undefined
+            ? { requiredEnv: normalized.requiredEnv }
+            : {}),
           ...(normalized.contract !== undefined
             ? { contract: normalized.contract as PluginContractDescriptor<unknown> }
             : {}),
@@ -173,7 +195,14 @@ export class PluginRegistry {
       }
     }
 
-    collect('ticket-source', plugin.ticketSources, this.ticketSources)
+    collect(
+      'ticket-source',
+      plugin.ticketSources as Record<
+        string,
+        InternalRegistration<TicketSourcePluginFactory, TicketSourceContractFactory>
+      > | undefined,
+      this.ticketSources,
+    )
     collect('agent-runtime', plugin.agentRuntimes, this.agentRuntimes)
     collect('workspace-provider', plugin.workspaceProviders, this.workspaceProviders)
     collect('forge', plugin.forges, this.forges)
@@ -194,6 +223,9 @@ export class PluginRegistry {
       registration.target.set(registration.name, {
         owner: { kind: 'plugin', name: plugin.name },
         factory: registration.factory,
+        ...(registration.requiredEnv !== undefined
+          ? { requiredEnv: registration.requiredEnv }
+          : {}),
         ...(registration.contract !== undefined
           ? { contract: registration.contract }
           : {}),

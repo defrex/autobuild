@@ -45,8 +45,8 @@ K unclaimed observation.recorded events
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating, server lifecycle | §5, §7.5, §10, §12, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
-| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, and owner-aware adapter registration | §3.2.1 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin ticket construction; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
+| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, owner-aware adapter registration, and ticket credential metadata | §3.2.1 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
@@ -152,13 +152,15 @@ deposited, and a turn's typed terminal always beats a late failure signal.
 **Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
 configured relative or package module from the consuming repository, validates
 its default manifest/API range, and atomically registers normalized factories,
-provenance, and optional contract descriptors before production wiring or the
-first dispatch tick. Its structured single-module attempt feeds two policies:
-`loadPlugins` remains fail-fast for dispatch, while `diagnosePlugins` collects
-ordered failures and retains later healthy registrations for `ab plugin doctor`.
-`src/cli/plugin.ts` owns the sessionless list/doctor/test grammar and live gate;
-`src/plugins/contract-entry.ts` reloads one selected registration inside a real
-`bun test` process and registers exactly one unchanged port suite.
+provenance, ticket credential metadata, and optional contract descriptors before
+production wiring or the first dispatch tick. Its structured single-module
+attempt feeds two policies: `loadPlugins` remains fail-fast for dispatch, while
+`diagnosePlugins` collects ordered failures and retains later healthy
+registrations for `ab plugin doctor`. `src/cli/plugin.ts` owns the sessionless
+list/doctor/test grammar and live gate; `src/plugins/contract-entry.ts` reloads
+one selected registration inside a real `bun test` process and registers exactly
+one unchanged port suite.
+
 `src/ports/forge/create.ts` resolves the root `forge` selector, constructs
 GitHub or lazily invokes the registered plugin factory, and preserves the
 returned adapter's optional attachment capability. Dispatch constructs one
@@ -167,9 +169,11 @@ epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
 load the build worktree's immutable config/plugins and resolve the same name for
 phase terminal plumbing. `src/ports/workspace/create.ts` similarly resolves
 `[workspace].provider`, retaining host-owned git-worktree construction while
-passing plugin config, environment, and repository root to registered factories.
-Ticket-source and agent-runtime selectors remain builtin-only.
-`src/cli/repo-state.ts` owns
+passing plugin config, environment, and repository root to registered
+factories. Ticket-source selection is registry-backed in
+`src/ports/tickets/create.ts`; dispatch and sessionless `ab ticket` commands
+load plugins before constructing it. Only the agent-runtime selector remains
+builtin-only. `src/cli/repo-state.ts` owns
 repository identity and store precedence (`--store` > `AB_STORE` >
 `.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
@@ -240,11 +244,15 @@ behavioral assertions against every implementation:
   environment refresh, distribution-managed `ab` resolution, and the optional
   tool-free one-shot capability.
 
-A normal `bun test` runs the memory/fake/local registrations, including the
-real filesystem and real local-git adapters and the complete injected-SDK
-contracts for Claude and Pi. The Linear, GitHub, and real-runtime AgentRunner
-registrations are present in the same run but reported as skipped: live
-provider access requires credentials/resources and an explicit opt-in. When
+A normal `bun test` runs the memory/fake/local registrations, including a fake
+selected through the plugin ticket-source registry, the real filesystem and
+local-git adapters, and the complete injected-SDK contracts for Claude and Pi.
+Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
+before selecting their TicketSource; dispatch passes that one adapter instance
+through readiness, dependency, harvest, and completion paths. The Linear,
+GitHub, and real-runtime AgentRunner registrations are present in the same run
+but reported as skipped: live provider access requires credentials/resources
+and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
 To run the Linear contract manually against a destructive scratch target:

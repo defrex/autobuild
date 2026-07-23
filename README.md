@@ -36,11 +36,12 @@ Every seam is an adapter: ticket sources (Linear or local files), agent
 runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
 build store all sit behind narrow interfaces. Trusted Bun plugins declared in
 `autobuild.toml` can register third-party ticket, runtime, workspace, and forge
-adapters against the versioned `autobuild/plugin-sdk` surface. The root
-`forge` setting and `[workspace].provider` select registered adapters (`github`
-and `git-worktree` by default); selector support for the remaining plugin ports
-is rolling out separately. BuildStore is deliberately excluded from in-process
-plugins: its extension surface is the documented
+adapters against the versioned `autobuild/plugin-sdk` surface. Third-party
+ticket sources are selectable for dispatch, harvest, completion, and every
+`ab ticket` operation. The root `forge` setting and `[workspace].provider`
+likewise select registered adapters (`github` and `git-worktree` by default);
+agent-runtime selection will follow. BuildStore is deliberately excluded from
+in-process plugins: its extension surface is the documented
 [remote HTTP protocol](docs/remote-store-protocol.md), so an independent server
 can use any language or storage.
 

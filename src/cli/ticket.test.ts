@@ -132,6 +132,64 @@ function fakeFactory(
   }
 }
 
+describe('plugin-selected ticket commands', () => {
+  test('loads plugins before selection and enforces descriptor credentials', async () => {
+    await writeFile(
+      join(tmp, 'tickets-plugin.ts'),
+      `
+        const ticket = {
+          ref: { source: 'journal', id: 'J-1' },
+          title: 'Plugin ticket',
+          body: 'plugin spec',
+          state: 'Ready',
+          labels: [],
+        }
+        const source = {
+          name: 'journal',
+          listReady: async () => ({ tickets: [ticket], diagnostics: [] }),
+          get: async (id) => id === 'J-1' ? ticket : null,
+          claim: async () => true,
+          comment: async () => {},
+          transition: async () => {},
+          create: async () => ticket,
+          update: async () => {},
+          addBlocker: async () => {},
+          removeBlocker: async () => {},
+          dependencyStates: async (ids) => ids.map((id) => ({ id, exists: false, resolved: false, blockedBy: [] })),
+        }
+        export default {
+          name: 'journal-plugin',
+          apiVersion: '^1.1.0',
+          ticketSources: {
+            journal: { factory: async () => source, requiredEnv: ['JOURNAL_TOKEN'] },
+          },
+        }
+      `,
+    )
+    await writeRepo(
+      'plugins = ["./tickets-plugin.ts"]\n\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
+    )
+
+    const out: string[] = []
+    await abTicketList({
+      targetRepo: tmp,
+      env: { JOURNAL_TOKEN: 'secret' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+    expect(out.join('\n')).toContain('journal:J-1')
+
+    await expect(
+      abTicketList({
+        targetRepo: tmp,
+        env: {},
+        stdout: () => {},
+        stderr: () => {},
+      }),
+    ).rejects.toThrow(/journal.*journal-plugin.*JOURNAL_TOKEN/)
+  })
+})
+
 describe('abTicketCreate', () => {
   test('files the body file through the configured source and prints the ref', async () => {
     await writeRepo(FILE_TICKETS_TOML)

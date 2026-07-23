@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#89](https://github.com/defrex/autobuild/pull/89) — Add workspace provider selection
+- [#88](https://github.com/defrex/autobuild/pull/88) — Enable plugin ticket sources
 - [#87](https://github.com/defrex/autobuild/pull/87) — Add plugin diagnostics and contract certification
 - [#86](https://github.com/defrex/autobuild/pull/86) — Select plugin-registered forge adapters
 - [#85](https://github.com/defrex/autobuild/pull/85) — Add reusable AgentRunner contract suite
