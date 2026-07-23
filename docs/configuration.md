@@ -48,7 +48,8 @@ any table header.
 |---|---:|---|---|
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup. |
+| `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup and in scoped phase CLI processes. |
 
 ### Plugin modules
 
@@ -65,8 +66,9 @@ must default-export a strict manifest with a plugin name, a semver range in
 `workspaceProviders`, and `forges` factory maps. One manifest may contribute
 to several ports.
 
-Plugin modules execute in-process during `ab dispatch` and have the same trust
-as repository-supplied commands; there is no sandbox. A missing module, module
+Plugin modules execute in-process during `ab dispatch` and configured scoped
+phase CLI composition and have the same trust as repository-supplied commands;
+there is no sandbox. A missing module, module
 that throws, malformed manifest, incompatible API range, or adapter-name
 collision fails startup before a ticket claim. Builtin names and names from
 earlier configured plugins are reserved, and declaration order never permits
@@ -77,9 +79,21 @@ with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
 TicketSource, WorkspaceProvider, Forge, BuildStore, and BlobStore contract
-suites. This foundation release registers factories but keeps ticket source,
-agent runtime, workspace, and forge selectors restricted to shipped builtins;
-follow-up releases open those config selectors.
+suites. Forge selection is open: set the root `forge` scalar to a registered
+name. Omission selects `github`. Ticket source, agent runtime, and workspace
+selectors remain restricted to shipped builtins in this release.
+
+A selected plugin forge factory receives an empty adapter-specific `config`
+object, the process environment, and the absolute repository root. It is
+invoked lazily after the complete plugin catalog has loaded and before the
+production store is opened. Unknown names fail with the available forge list;
+factory failures are contextualized with the adapter and plugin names. Scoped
+build-session CLI processes repeat config/plugin loading from the build
+worktree, so implement publication, finalization, reconciliation, late
+attachment summaries, epilogue polling, and janitor operations all use the
+same configured adapter name. The returned adapter is not wrapped: an absent
+`prAttachments` capability intentionally selects text-only attachment summaries,
+while a present capability serves upload and terminal reclamation.
 
 ## `[pr]`
 
@@ -477,6 +491,7 @@ that exist in your repository and providers.
 ```toml
 baseBranch = "main"
 capacity = 2
+forge = "github"
 plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
 [pr.imageHost]

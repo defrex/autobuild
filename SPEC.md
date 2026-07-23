@@ -105,8 +105,10 @@ Plugin specifiers are resolved as though imported from the consuming
 repository root. Thus both repository-relative modules and package export maps
 work, and bare packages come from that repository's installed dependencies,
 not Autobuild's installation. Modules load in declaration order during
-`ab dispatch`, after strict config parsing and before stores, production
-adapters, ticket claims, or build launch. Resolution/evaluation errors,
+`ab dispatch` and scoped build CLI composition. Dispatch does so after strict
+config parsing and before stores, production adapters, ticket claims, or build
+launch; scoped processes load from the build worktree before opening their
+store or executing terminal plumbing. Resolution/evaluation errors,
 malformed or missing default manifests, and plugin-API incompatibility fail
 startup with both the configured module and available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
@@ -114,11 +116,16 @@ reserved per port; collisions fail atomically and nothing is shadowed. The same
 name may exist on different ports.
 
 Plugins execute in-process and are Bun-only. They have the same repository
-trust boundary as declarative shell commands: no sandbox is promised. This
-foundation registers plugin factories while shipped selectors remain closed;
-opening each selector is follow-up work. `TelemetrySource` remains deferred,
-and BuildStore's third-party extension surface remains the remote HTTP protocol
-rather than in-process registration.
+trust boundary as declarative shell commands: no sandbox is promised. Forge
+selection is open through the root `forge` scalar (`github` by default): the
+selected plugin factory receives an empty adapter config, process environment,
+and absolute repository root, and is invoked before store opening. Unknown
+names list the complete available forge catalog. Dispatch and scoped build CLI
+processes resolve the same configured name independently, and all forge
+plumbing receives the selected adapter unchanged. Ticket, runtime, and
+workspace plugin selectors remain closed pending their follow-up work.
+`TelemetrySource` remains deferred, and BuildStore's third-party extension
+surface remains the remote HTTP protocol rather than in-process registration.
 
 ### 3.3 Processes
 
@@ -408,11 +415,13 @@ retrieval command; distinct kinds remain distinct. The BuildStore copy is
 always authoritative, and non-image artifacts use this same path.
 
 Optionally, `[pr.imageHost]` may name a **public** GitHub release so designated
-`image/*` media render inline during review. Non-images never cross that host
-boundary. Enabling it is an explicit public-disclosure choice made in config,
-and hosted copies are temporary — the dispatcher reclaims them after the build
-reaches a terminal outcome, while store artifacts remain under the store's
-retention policy. Upload/validation/timeout failures record follow-up
+`image/*` media render inline during review. The selected Forge must expose the
+optional `PrAttachmentHosting` capability to serve upload and reclamation;
+without it the supported path remains the complete text-only projection.
+Non-images never cross that host boundary. Enabling it is an explicit
+public-disclosure choice made in config, and hosted copies are temporary — the
+dispatcher reclaims them after the build reaches a terminal outcome, while
+store artifacts remain under the store's retention policy. Upload/validation/timeout failures record follow-up
 observations and preserve the complete text projection; they never fail
 verification or block finalize. Agents receive no forge credentials. A
 designation after the PR exists publishes a new complete summary, so finalize
@@ -1067,6 +1076,7 @@ itself: the system can retune its own configuration via a ticket and a PR.
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
+forge = "github"                # builtin default or a plugin-registered name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 #[pr.imageHost]                 # optional public inline rendering for attached images
@@ -1127,8 +1137,9 @@ readyState = "ready"            # required: the one state a ticket must sit in t
 ```
 
 The root scalars must appear before the first table header (TOML otherwise
-nests them in that table). `plugins` defaults to `[]`, preserving repositories
-with no plugin configuration. Declarative (TOML), not executable config: the
+nests them in that table). `forge` defaults to `"github"` and `plugins` defaults
+to `[]`, preserving repositories with no plugin configuration. Declarative
+(TOML), not executable config: the
 kernel, dispatcher, CLI, and any future tooling parse it without evaluating
 anything; commands are plain shell strings. Parsing is strict — an unknown table or key is an error, so a
 typo cannot silently disable a verifier. The full config surface, field

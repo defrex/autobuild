@@ -36,9 +36,10 @@ Every seam is an adapter: ticket sources (Linear or local files), agent
 runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
 build store all sit behind narrow interfaces. Trusted Bun plugins declared in
 `autobuild.toml` can register third-party ticket, runtime, workspace, and forge
-adapters against the versioned `autobuild/plugin-sdk` surface; selector support
-is rolling out per port. The build store keeps remote HTTP as its extension
-surface.
+adapters against the versioned `autobuild/plugin-sdk` surface. The root
+`forge` setting selects a registered forge (`github` by default); selector
+support for the other plugin ports is rolling out separately. The build store
+keeps remote HTTP as its extension surface.
 
 ## Quickstart
 
