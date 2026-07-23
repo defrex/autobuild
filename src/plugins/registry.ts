@@ -18,8 +18,8 @@ export type RegistrationOwner =
 
 export interface AdapterRegistration<Factory> {
   owner: RegistrationOwner
-  /** Builtins are reservations in this foundation release; their existing
-   * composition paths remain authoritative until selector follow-up tickets. */
+  /** Builtins reserve their names; host construction may remain outside the
+   * plugin factory map while selectors consume plugin registrations lazily. */
   factory?: Factory
 }
 

@@ -16,7 +16,9 @@ import {
 import { openProductionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
 import type { DashboardRendererResolver } from './dashboard/render'
-import { GitHubForge } from '../ports/forge/github'
+import { loadConfig } from '../config/load'
+import { loadPlugins } from '../plugins/load'
+import { createForge } from '../ports/forge/create'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { randomIds } from '../ids'
 import { systemClock } from '../store/types'
@@ -103,14 +105,32 @@ export async function runBinary(
     return 1
   }
 
-  const store = openProductionStore(cliEnv.store, cliEnv.token)
+  // A scoped phase process is composed from the build worktree's immutable
+  // configuration just like dispatch. Load and select the forge before opening
+  // the store so plugin failures cannot partially execute terminal plumbing.
+  let forge
+  try {
+    const repoRoot = process.cwd()
+    const config = await loadConfig(join(repoRoot, 'autobuild.toml'))
+    const plugins = await loadPlugins(config.plugins, repoRoot)
+    forge = await createForge({
+      name: config.forge,
+      registry: plugins,
+      env: process.env,
+      repoRoot,
+    })
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    return 1
+  }
 
+  const store = openProductionStore(cliEnv.store, cliEnv.token)
   try {
     return await runCli(argv, {
       ...unscopedDeps,
       store,
       env: cliEnv,
-      forge: new GitHubForge(),
+      forge,
       ids: randomIds(),
       clock: systemClock,
     })
