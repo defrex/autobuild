@@ -43,10 +43,10 @@ describe('autobuild/plugin-sdk package surface', () => {
     expect(sample.name).toBe('sample-package')
     expect(PLUGIN_API_VERSION).toBe('1.1.0')
     for (const symbol of [
+      describeAgentRunnerContract,
       describeTicketSourceContract,
       describeWorkspaceProviderContract,
       describeForgeContract,
-      describeAgentRunnerContract,
       describeBuildStoreContract,
       describeBlobStoreContract,
       FakeTicketSource,
@@ -69,12 +69,17 @@ describe('autobuild/plugin-sdk package surface', () => {
       interface SampleConfig { endpoint: string }
       const manifest = {
         name: 'erased-types',
-        apiVersion: '^1.0.0',
+        apiVersion: '^1.1.0',
         ticketSources: {
           sample: {
             requiredEnv: ['SAMPLE_TOKEN'],
             factory: async ({ config }: PluginFactoryContext<SampleConfig>) => {
               throw new Error(\`fixture factory for \${config.endpoint} is lazy\`)
+            },
+            contract: {
+              factory: (_context: PluginFactoryContext) => async () => {
+                throw new Error('contract fixture is lazy')
+              },
             },
           },
         },
@@ -167,9 +172,9 @@ describe('autobuild/plugin-sdk package surface', () => {
     for (const path of [
       'package/src/plugin-sdk/index.ts',
       'package/src/ports/tickets/contract.ts',
+      'package/src/ports/runner/contract.ts',
       'package/src/ports/workspace/contract.ts',
       'package/src/ports/forge/contract.ts',
-      'package/src/ports/runner/contract.ts',
       'package/src/store/contract.ts',
     ]) {
       expect(listing).toContain(path)

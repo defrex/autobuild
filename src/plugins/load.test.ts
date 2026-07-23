@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadPlugins } from './load'
+import { diagnosePlugins, loadPlugins } from './load'
 
 const roots: string[] = []
 
@@ -69,6 +69,31 @@ describe('loadPlugins', () => {
       name: 'consumer',
     })
     expect(registry.forges.has('decoy')).toBe(false)
+  })
+
+  test('diagnosis reports ordered failures and keeps later successful registrations', async () => {
+    const repo = await fixture()
+    await write(join(repo, 'throws.ts'), `throw new Error('diagnostic boom')\n`)
+    await write(
+      join(repo, 'good.ts'),
+      `export default { name: 'good', apiVersion: '^1.1.0', forges: { gitlab: () => ({}) } }\n`,
+    )
+    const diagnosis = await diagnosePlugins(
+      ['./missing.ts', './throws.ts', './good.ts'],
+      repo,
+    )
+    expect(diagnosis.healthy).toBe(false)
+    expect(diagnosis.reports.map((report) => [report.module, report.stage])).toEqual([
+      ['./missing.ts', 'resolution'],
+      ['./throws.ts', 'evaluation'],
+      ['./good.ts', 'loaded'],
+    ])
+    expect(diagnosis.registry.forges.has('gitlab')).toBe(true)
+    expect(diagnosis.reports[2]).toMatchObject({
+      resolutionKind: 'repo-path',
+      pluginName: 'good',
+      api: { hostVersion: '1.1.0', status: 'compatible' },
+    })
   })
 
   test('names unresolved modules, evaluation failures, invalid defaults, and collisions', async () => {

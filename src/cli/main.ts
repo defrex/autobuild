@@ -31,6 +31,7 @@ import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import { abModels } from './models'
 import { observe } from './observe'
+import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import { ServerControl } from './server-control'
@@ -72,6 +73,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'answer',
   'abort',
   'models',
+  'plugin',
   'help',
   '--help',
   '-h',
@@ -137,6 +139,8 @@ export interface SessionlessCliDeps {
     targetRepo: string
     env: Record<string, string | undefined>
   }) => ResolveConflict
+  /** Injectable child-process seam for plugin contract CLI tests. */
+  pluginSubprocess?: PluginContractSubprocess
   store?: BuildStore
   env?: CliEnv
   harvestEnv?: HarvestCliEnv
@@ -223,6 +227,10 @@ const HELP = [
   '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list only keys active for the selection; --plain forces line-oriented output',
   '                                         (also automatic when stdout is not a TTY)',
   '  ab models [query] [--available]        list Pi\'s model catalog (filtered by query) to find a provider-qualified id for autobuild.toml (§9; runs outside sessions)',
+  '  ab plugin list                         list builtin and configured adapters, resolution, API status, and contract availability (sessionless)',
+  '  ab plugin doctor                       diagnose every configured plugin module; exits nonzero if any fail (sessionless)',
+  '  ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>',
+  '                                         run the adapter\'s shared port contract suite; live fixtures require AB_RUN_LIVE_PORT_CONTRACTS=1',
   '  ab builds [--queued] [--all] [--json] [--store <ref>]',
   '                                         list this repo\'s builds — default: running, paused, blocked; --queued adds queued;',
   '                                         --all every status (§15.5; read-only, runs outside sessions)',
@@ -497,6 +505,22 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           : {}),
       })
       return 0
+    }
+
+    case 'plugin': {
+      if (deps.exec === undefined) {
+        throw new Error("'ab plugin' needs an exec seam — this is a wiring bug in the ab binary")
+      }
+      return await abPlugin(rest, {
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        stderr,
+        ...(deps.pluginSubprocess !== undefined
+          ? { subprocess: deps.pluginSubprocess }
+          : {}),
+      })
     }
 
     // models runs OUTSIDE build sessions (§9): it lists Pi's model catalog so a
