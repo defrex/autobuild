@@ -102,6 +102,16 @@ describe('runCli — routing and exit codes', () => {
     }
   })
 
+  test('help documents the sessionless plugin diagnostics and contract verb', async () => {
+    const d = deps()
+    expect(await runCli(['help'], d)).toBe(0)
+    const help = d.out.join('\n')
+    expect(help).toContain('ab plugin list')
+    expect(help).toContain('ab plugin doctor')
+    expect(help).toContain('ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>')
+    expect(help).toContain('AB_RUN_LIVE_PORT_CONTRACTS=1')
+  })
+
   test('an unknown command prints the help and exits 1', async () => {
     const d = deps()
     expect(await runCli(['frobnicate'], d)).toBe(1)
@@ -397,6 +407,7 @@ describe('SESSIONLESS_COMMANDS', () => {
       'auto-merge',
       'answer',
       'abort',
+      'plugin',
     ]) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(true)
     }

@@ -17,18 +17,37 @@ export type {
 
 export {
   PLUGIN_API_VERSION,
+  PluginApiCompatibilityError,
+  pluginApiCompatibility,
   pluginManifestSchema,
   parsePluginManifest,
 } from '../plugins/manifest'
 export type {
   AgentRuntimePluginFactory,
+  AgentRuntimePluginRegistration,
   AutobuildPluginManifest,
   ForgePluginFactory,
+  ForgePluginRegistration,
+  PluginAdapterRegistration,
+  PluginApiCompatibility,
+  PluginContractDescriptor,
   PluginFactory,
   PluginFactoryContext,
   TicketSourcePluginFactory,
+  TicketSourcePluginRegistration,
   WorkspaceProviderPluginFactory,
+  WorkspaceProviderPluginRegistration,
 } from '../plugins/manifest'
+
+export { describeAgentRunnerContract } from '../ports/runner/contract'
+export type {
+  AgentRunnerContractFactory,
+  AgentRunnerContractHarness,
+  AgentRunnerContractOneShotHarness,
+  AgentRunnerContractOneShotObservation,
+  AgentRunnerContractScenario,
+  AgentRunnerContractTurnObservation,
+} from '../ports/runner/contract'
 
 export {
   describeTicketSourceContract,

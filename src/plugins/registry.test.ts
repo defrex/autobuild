@@ -30,6 +30,48 @@ describe('PluginRegistry', () => {
     expect(registry.agentRuntimes.has('shared')).toBe(true)
     expect(registry.workspaceProviders.has('container')).toBe(true)
     expect(registry.forges.has('gitlab')).toBe(true)
+    expect(registry.ticketSources.get('shared')?.factory).toBe(factory)
+  })
+
+  test('normalizes contract metadata and exposes a stable provenance projection', () => {
+    const registry = new PluginRegistry()
+    const contractFactory = (() => async () => ({})) as never
+    registry.register(
+      plugin('acme', {
+        ticketSources: {
+          jira: {
+            factory,
+            contract: { factory: contractFactory, live: true },
+          },
+        },
+      }),
+      {
+        module: '@acme/plugin',
+        resolved: '/repo/node_modules/@acme/plugin/index.ts',
+        resolutionKind: 'package',
+      },
+    )
+
+    expect(registry.ticketSources.get('jira')?.contract).toEqual({
+      factory: contractFactory,
+      live: true,
+    })
+    expect(registry.adapters('ticket-source')).toEqual([
+      expect.objectContaining({ name: 'file', source: { kind: 'builtin' } }),
+      expect.objectContaining({ name: 'linear', source: { kind: 'builtin' } }),
+      expect.objectContaining({
+        port: 'ticket-source',
+        name: 'jira',
+        hasContract: true,
+        live: true,
+        source: expect.objectContaining({
+          module: '@acme/plugin',
+          resolutionKind: 'package',
+          pluginName: 'acme',
+          api: expect.objectContaining({ status: 'compatible' }),
+        }),
+      }),
+    ])
   })
 
   test('rejects builtin and prior-plugin collisions with ownership diagnostics', () => {
