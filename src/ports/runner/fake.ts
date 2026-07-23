@@ -14,6 +14,7 @@ import {
   type AgentTurnResult,
   type Transcript,
 } from '../types'
+import { sessionEnv } from './session-env'
 
 /** What the script sees on each invocation — one call per turn. */
 export interface ScriptContext {
@@ -105,7 +106,10 @@ export class ScriptedAgentRunner implements AgentRunner {
     this.sessions.set(session.id, journal)
 
     const result = await this.script({
-      opts,
+      // Scripts observe the same effective launch environment as production
+      // adapters; the journal below intentionally retains the caller's raw
+      // start options as the session identity.
+      opts: { ...opts, env: sessionEnv(opts.env) },
       session,
       turn: 1,
       history: [],
@@ -126,10 +130,11 @@ export class ScriptedAgentRunner implements AgentRunner {
     // refreshed ambient env merged over the start env, so the script's fake
     // CLI resolves exactly what a real agent's `ab` would. The journal keeps
     // the START opts — they are the session's identity.
-    const turnOpts =
+    const scoped =
       opts?.env !== undefined
-        ? { ...journal.opts, env: { ...journal.opts.env, ...opts.env } }
-        : journal.opts
+        ? { ...journal.opts.env, ...opts.env }
+        : journal.opts.env
+    const turnOpts = { ...journal.opts, env: sessionEnv(scoped) }
 
     const result = await this.script({
       opts: turnOpts,

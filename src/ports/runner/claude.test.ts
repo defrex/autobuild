@@ -10,6 +10,15 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_FOLLOW_UP,
+  CONTRACT_ONE_SHOT_PROMPT,
+  CONTRACT_ONE_SHOT_TEXT,
+  CONTRACT_PERMANENT_FAILURE,
+  CONTRACT_RETRYABLE_FAILURE,
+  describeAgentRunnerContract,
+  type AgentRunnerContractFactory,
+} from './contract'
+import {
   ClaudeAgentRunner,
   type QueryFn,
   type SdkAssistantMessage,
@@ -98,6 +107,72 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
     ...overrides,
   }
 }
+
+const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
+  const calls: RecordedCall[] = []
+  const queryFn: QueryFn = (opts) => {
+    calls.push(opts)
+    return (async function* (): AsyncIterable<SdkMessage> {
+      if (opts.prompt === CONTRACT_ONE_SHOT_PROMPT) {
+        yield assistant(CONTRACT_ONE_SHOT_TEXT)
+        yield sdkResult('claude-contract-one-shot', 2, 1)
+        return
+      }
+      if (scenario === 'retryable-failure') {
+        yield sdkError('claude-contract-retryable', CONTRACT_RETRYABLE_FAILURE)
+        return
+      }
+      if (scenario === 'permanent-failure') {
+        yield sdkError(
+          'claude-contract-permanent',
+          CONTRACT_PERMANENT_FAILURE,
+          { status: 401 },
+        )
+        return
+      }
+      if (opts.prompt === CONTRACT_FOLLOW_UP) {
+        yield assistant('contract continued')
+      } else {
+        yield assistant('contract started')
+      }
+      yield sdkResult('claude-contract-session', 3, 2)
+    })()
+  }
+  const runner = new ClaudeAgentRunner({ queryFn })
+  return {
+    runner,
+    model: 'claude-contract-model',
+    workspacePath: process.cwd(),
+    turns: () =>
+      calls
+        .filter((call) => call.prompt !== CONTRACT_ONE_SHOT_PROMPT)
+        .map((call) => ({
+          ...(call.prompt === CONTRACT_FOLLOW_UP
+            ? { message: call.prompt }
+            : {}),
+          env: call.options.env,
+        })),
+    oneShot: {
+      completion: runner,
+      observation: () => {
+        const call = calls.find(
+          (candidate) => candidate.prompt === CONTRACT_ONE_SHOT_PROMPT,
+        )
+        if (call === undefined) return undefined
+        return {
+          prompt: call.prompt,
+          cwd: call.options.cwd,
+          env: call.options.env,
+          ...(call.options.model !== undefined
+            ? { model: call.options.model }
+            : {}),
+        }
+      },
+    },
+  }
+}
+
+describeAgentRunnerContract('ClaudeAgentRunner (injected SDK)', claudeContractFactory)
 
 async function writeConflictingAb(dir: string): Promise<void> {
   const path = join(dir, 'ab')

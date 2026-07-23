@@ -11,6 +11,15 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_FOLLOW_UP,
+  CONTRACT_ONE_SHOT_PROMPT,
+  CONTRACT_ONE_SHOT_TEXT,
+  CONTRACT_PERMANENT_FAILURE,
+  CONTRACT_RETRYABLE_FAILURE,
+  describeAgentRunnerContract,
+  type AgentRunnerContractFactory,
+} from './contract'
+import {
   PiAgentRunner,
   PiTurnCapture,
   type PiCreateSessionFn,
@@ -18,6 +27,89 @@ import {
   type PiTurn,
 } from './pi'
 import { AGENT_BIN_DIR } from './session-env'
+
+const piContractFactory: AgentRunnerContractFactory = (scenario) => {
+  const creates: RecordedCreate[] = []
+  const prompts: RecordedPrompt[] = []
+  let nextSession = 0
+  const createSessionFn: PiCreateSessionFn = async (opts) => {
+    creates.push({
+      cwd: opts.cwd,
+      model: opts.model,
+      tools: opts.tools,
+      extensions: opts.extensions,
+    })
+    nextSession += 1
+    return {
+      sessionId: `pi-contract-${nextSession}`,
+      async prompt(text, env, signal): Promise<PiTurn> {
+        prompts.push({ text, env, signal })
+        if (text === CONTRACT_ONE_SHOT_PROMPT) {
+          return {
+            text: CONTRACT_ONE_SHOT_TEXT,
+            usage: { inputTokens: 2, outputTokens: 1 },
+          }
+        }
+        if (scenario !== 'success') {
+          const message =
+            scenario === 'permanent-failure'
+              ? CONTRACT_PERMANENT_FAILURE
+              : CONTRACT_RETRYABLE_FAILURE
+          const capture = new PiTurnCapture()
+          capture.observe({
+            type: 'message_end',
+            message: {
+              role: 'assistant',
+              stopReason: 'error',
+              errorMessage: message,
+            },
+          })
+          return capture.result({ inputTokens: 0, outputTokens: 0 })
+        }
+        return {
+          text: text === CONTRACT_FOLLOW_UP ? 'contract continued' : 'contract started',
+          usage: { inputTokens: 3, outputTokens: 2 },
+        }
+      },
+      dispose() {},
+    }
+  }
+  const runner = new PiAgentRunner({ createSessionFn })
+  return {
+    runner,
+    model: 'openai/contract-model',
+    workspacePath: process.cwd(),
+    turns: () =>
+      prompts
+        .filter((prompt) => prompt.text !== CONTRACT_ONE_SHOT_PROMPT)
+        .map((prompt) => ({
+          ...(prompt.text === CONTRACT_FOLLOW_UP
+            ? { message: prompt.text }
+            : {}),
+          env: prompt.env,
+        })),
+    oneShot: {
+      completion: runner,
+      observation: () => {
+        const prompt = prompts.find(
+          (candidate) => candidate.text === CONTRACT_ONE_SHOT_PROMPT,
+        )
+        const create = creates[0]
+        if (prompt === undefined || create === undefined) return undefined
+        return {
+          prompt: prompt.text,
+          cwd: create.cwd,
+          env: prompt.env,
+          ...(create.model !== undefined
+            ? { model: `${create.model.provider}/${create.model.id}` }
+            : {}),
+        }
+      },
+    },
+  }
+}
+
+describeAgentRunnerContract('PiAgentRunner (injected SDK)', piContractFactory)
 
 const KIMI_QUOTA =
   '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'

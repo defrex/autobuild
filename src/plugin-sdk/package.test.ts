@@ -11,6 +11,7 @@ import {
   MemoryBuildStore,
   PLUGIN_API_VERSION,
   ScriptedAgentRunner,
+  describeAgentRunnerContract,
   describeBlobStoreContract,
   describeBuildStoreContract,
   describeForgeContract,
@@ -40,6 +41,7 @@ describe('autobuild/plugin-sdk package surface', () => {
       describeTicketSourceContract,
       describeWorkspaceProviderContract,
       describeForgeContract,
+      describeAgentRunnerContract,
       describeBuildStoreContract,
       describeBlobStoreContract,
       FakeTicketSource,
@@ -159,6 +161,7 @@ describe('autobuild/plugin-sdk package surface', () => {
       'package/src/ports/tickets/contract.ts',
       'package/src/ports/workspace/contract.ts',
       'package/src/ports/forge/contract.ts',
+      'package/src/ports/runner/contract.ts',
       'package/src/store/contract.ts',
     ]) {
       expect(listing).toContain(path)
