@@ -16,6 +16,25 @@ export type {
 } from '../ports/runner/one-shot'
 
 export {
+  CONTRACT_FOLLOW_UP,
+  CONTRACT_INVOCATION,
+  CONTRACT_ONE_SHOT_PROMPT,
+  CONTRACT_ONE_SHOT_TEXT,
+  CONTRACT_PERMANENT_FAILURE,
+  CONTRACT_RETRYABLE_FAILURE,
+  CONTRACT_SKILL,
+  describeAgentRunnerContract,
+} from '../ports/runner/contract'
+export type {
+  AgentRunnerContractFactory,
+  AgentRunnerContractHarness,
+  AgentRunnerContractOneShotHarness,
+  AgentRunnerContractOneShotObservation,
+  AgentRunnerContractScenario,
+  AgentRunnerContractTurnObservation,
+} from '../ports/runner/contract'
+
+export {
   PLUGIN_API_VERSION,
   PluginApiCompatibilityError,
   pluginApiCompatibility,
@@ -38,16 +57,6 @@ export type {
   WorkspaceProviderPluginFactory,
   WorkspaceProviderPluginRegistration,
 } from '../plugins/manifest'
-
-export { describeAgentRunnerContract } from '../ports/runner/contract'
-export type {
-  AgentRunnerContractFactory,
-  AgentRunnerContractHarness,
-  AgentRunnerContractOneShotHarness,
-  AgentRunnerContractOneShotObservation,
-  AgentRunnerContractScenario,
-  AgentRunnerContractTurnObservation,
-} from '../ports/runner/contract'
 
 export {
   describeTicketSourceContract,

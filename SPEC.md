@@ -358,7 +358,11 @@ contract (`src/store/contract.ts` is the shared conformance suite):
    nonempty `AB_STORE` > repository default.
 2. **Remote** — the same store interface behind a small self-hosted HTTP API
    binary, selected by an `http(s)://` reference. What remote sandboxes talk
-   to. Git worktrees and default file tickets necessarily remain local.
+   to. The documented [remote store protocol](docs/remote-store-protocol.md)
+   is the public BuildStore extension surface for independently implemented
+   servers; `src/store/contract.ts`, driven through the shipped remote client,
+   is the conformance bar. Autobuild does not load in-process BuildStore
+   plugins. Git worktrees and default file tickets necessarily remain local.
 
 `subscribe` is specced in the interface; the v2.0 implementation is polling
 `getEvents(since)`. True push comes later.
