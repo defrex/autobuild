@@ -289,6 +289,68 @@ describe('abDispatch guards', () => {
     }
   })
 
+  test('unknown forge selection fails with available names before injectable wiring', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-forge-'))
+    try {
+      await writeFile(
+        join(tmp, 'autobuild.toml'),
+        'forge = "missing"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      )
+      let wired = false
+      await expect(
+        abDispatch({
+          targetRepo: tmp,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => {
+            wired = true
+            throw new Error('wire must not run for an unknown forge')
+          },
+        }),
+      ).rejects.toThrow(
+        'unknown forge adapter "missing"; available forges: github',
+      )
+      expect(wired).toBe(false)
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('production wiring selects a plugin forge factory before the first tick', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-forge-plugin-'))
+    const marker = join(tmp, 'forge-selected.txt')
+    try {
+      await writeFile(
+        join(tmp, 'forge-plugin.ts'),
+        `import { writeFileSync } from 'node:fs'\n` +
+          `export default { name: 'test-forge', apiVersion: '^1.0.0', forges: {\n` +
+          `  custom: ({ env }) => {\n` +
+          `    writeFileSync(env['FORGE_MARKER'], 'selected')\n` +
+          `    return { name: 'custom', pushBranch: async () => {}, openPr: async () => ({ number: 1, url: 'https://example.test/pr/1', headSha: 'head' }), getPrState: async () => ({ state: 'open', mergeable: null }), setAutoMerge: async () => ({ kind: 'applied' }), squashMerge: async () => {}, commentOnPr: async () => {} }\n` +
+          `  }\n` +
+          `} }\n`,
+      )
+      await writeFile(
+        join(tmp, 'autobuild.toml'),
+        'forge = "custom"\nplugins = ["./forge-plugin.ts"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      )
+      await abDispatch({
+        targetRepo: tmp,
+        env: { FORGE_MARKER: marker },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+      })
+      expect(await Bun.file(marker).text()).toBe('selected')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
   test('uses --store over AB_STORE and normalizes either against the main repo', async () => {
     const fx = await makeFixture([], happyHandlers())
     const seen: string[] = []

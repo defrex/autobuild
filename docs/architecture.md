@@ -146,8 +146,14 @@ deposited, and a turn's typed terminal always beats a late failure signal.
 **Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
 configured relative or package module from the consuming repository, validates
 its default manifest/API range, and atomically registers its factories before
-production wiring or the first dispatch tick. Builtin selectors intentionally
-remain unchanged in this foundation release. `src/cli/repo-state.ts` owns
+production wiring or the first dispatch tick. `src/ports/forge/create.ts`
+resolves the root `forge` selector, constructs GitHub or lazily invokes the
+registered plugin factory, and preserves the returned adapter's optional
+attachment capability. Dispatch constructs one selected adapter before opening
+the store and threads it through runners, epilogue, and janitor work. Scoped
+`src/cli/binary.ts` processes independently load the build worktree's immutable
+config/plugins and resolve the same name for phase terminal plumbing. The other
+plugin selectors remain builtin-only. `src/cli/repo-state.ts` owns
 repository identity and store precedence (`--store` > `AB_STORE` >
 `.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
