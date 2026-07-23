@@ -200,6 +200,42 @@ test('the repo dev script forwards a complete CLI invocation and exits under --h
   expect(JSON.parse(result.stdout)).toEqual([])
 })
 
+test('plugin diagnostics and a real contract run are sessionless in the binary', async () => {
+  await writeFile(
+    join(tmp, 'autobuild.toml'),
+    'plugins = ["./plugin.ts"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  await writeFile(
+    join(tmp, 'plugin.ts'),
+    `
+import { FakeTicketSource } from ${JSON.stringify(join(ROOT, 'src', 'plugin-sdk', 'index.ts'))}
+const adapter = () => new FakeTicketSource()
+const fixture = () => async () => ({
+  source: new FakeTicketSource([], { createState: 'Triage', doneState: 'Done' }),
+  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+  editableLabel: 'contract',
+})
+export default {
+  name: 'binary-fixture', apiVersion: '^1.1.0',
+  ticketSources: { sample: { factory: adapter, contract: { factory: fixture } } },
+}
+`,
+  )
+
+  const doctor = await runBinWithoutAb(['plugin', 'doctor'])
+  expect(doctor.code).toBe(0)
+  expect(doctor.stdout).toContain('OK ./plugin.ts')
+  expect(doctor.stderr).not.toContain('AB_BUILD')
+
+  const contract = await runBinWithoutAb([
+    'plugin', 'test', 'ticket-source', 'sample',
+  ])
+  expect(contract.code).toBe(0)
+  expect(contract.stdout + contract.stderr).toContain(
+    'create/get round-trips common fields',
+  )
+})
+
 test('ab build status runs sessionless and exits 1 on an unknown slug', async () => {
   const result = await runBin(['build', 'status', 'no-such-build'])
   expect(result.code).toBe(1)

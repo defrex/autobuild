@@ -95,8 +95,8 @@ startup registration. Runtime registrations reuse §9's capability-bearing
 `RuntimeRegistration`; the frozen `AgentRunner` interface is not widened.
 
 The host exposes one versioned authoring surface, `autobuild/plugin-sdk`: port
-and manifest types, the reusable TicketSource/WorkspaceProvider/Forge/
-BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
+and manifest types, the reusable TicketSource/AgentRunner/WorkspaceProvider/
+Forge/BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
 production code can use erased type-only imports, with Autobuild present only
 as a development or peer dependency; a consuming repository needs no bridge
 module.
@@ -114,6 +114,19 @@ startup with both the configured module and available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
 reserved per port; collisions fail atomically and nothing is shadowed. The same
 name may exist on different ports.
+
+Each adapter map value may remain a bare factory or may be an object containing
+that factory plus an optional `contract: { factory, live? }` descriptor. The
+contract factory receives the same repository context and returns the fixture
+factory required by that port's unchanged shared suite. `ab plugin list`
+projects builtin and configured registrations with provenance, resolution kind,
+API compatibility, and contract availability. `ab plugin doctor` exhaustively
+attempts every configured module and exits nonzero if any fail; this diagnostic
+collection does not weaken `ab dispatch`, which remains fail-fast. `ab plugin
+test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>` delegates
+one selected suite to Bun's test runner and preserves its per-test output and
+exit status. A descriptor marked `live` is never launched unless
+`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly present.
 
 Plugins execute in-process and are Bun-only. They have the same repository
 trust boundary as declarative shell commands: no sandbox is promised. Forge

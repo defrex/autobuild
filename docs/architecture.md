@@ -145,15 +145,22 @@ deposited, and a turn's typed terminal always beats a late failure signal.
 
 **Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
 configured relative or package module from the consuming repository, validates
-its default manifest/API range, and atomically registers its factories before
-production wiring or the first dispatch tick. `src/ports/forge/create.ts`
-resolves the root `forge` selector, constructs GitHub or lazily invokes the
-registered plugin factory, and preserves the returned adapter's optional
-attachment capability. Dispatch constructs one selected adapter before opening
-the store and threads it through runners, epilogue, and janitor work. Scoped
-`src/cli/binary.ts` processes independently load the build worktree's immutable
-config/plugins and resolve the same name for phase terminal plumbing. The other
-plugin selectors remain builtin-only. `src/cli/repo-state.ts` owns
+its default manifest/API range, and atomically registers normalized factories,
+provenance, and optional contract descriptors before production wiring or the
+first dispatch tick. Its structured single-module attempt feeds two policies:
+`loadPlugins` remains fail-fast for dispatch, while `diagnosePlugins` collects
+ordered failures and retains later healthy registrations for `ab plugin doctor`.
+`src/cli/plugin.ts` owns the sessionless list/doctor/test grammar and live gate;
+`src/plugins/contract-entry.ts` reloads one selected registration inside a real
+`bun test` process and registers exactly one unchanged port suite.
+`src/ports/forge/create.ts` resolves the root `forge` selector, constructs
+GitHub or lazily invokes the registered plugin factory, and preserves the
+returned adapter's optional attachment capability. Dispatch constructs one
+selected adapter before opening the store and threads it through runners,
+epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
+load the build worktree's immutable config/plugins and resolve the same name for
+phase terminal plumbing. The other plugin selectors remain builtin-only.
+`src/cli/repo-state.ts` owns
 repository identity and store precedence (`--store` > `AB_STORE` >
 `.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`

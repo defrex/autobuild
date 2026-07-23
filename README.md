@@ -43,6 +43,22 @@ deliberately excluded from in-process plugins: its extension surface is the
 documented [remote HTTP protocol](docs/remote-store-protocol.md), so an
 independent server can use any language or storage.
 
+Inspect and certify configured integrations from the repository root:
+
+```sh
+ab plugin list
+ab plugin doctor
+ab plugin test ticket-source jira
+# Only for a manifest descriptor explicitly marked live:
+AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test forge gitlab
+```
+
+`list` shows builtin and plugin registrations, module resolution, API
+compatibility, and contract availability. `doctor` reports every configured
+module rather than stopping at the first failure. `test` runs the port's shared
+Bun contract suite and returns its exact status; live fixtures never run without
+the explicit environment opt-in.
+
 ## Quickstart
 
 You need [Bun](https://bun.sh), `git`, and the
