@@ -7,6 +7,9 @@
 # Root scalars must appear before the first TOML table.
 baseBranch = "main"
 capacity = 1             # concurrent builds for this repo
+# Trusted Bun modules loaded from this repository before dispatch starts.
+# Relative paths and installed package specifiers are both supported.
+#plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 # Optional review-window hosting for explicitly attached images. Exact text
 # download commands work without it. The release must already exist, be

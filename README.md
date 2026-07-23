@@ -34,7 +34,11 @@ triage; approve one and it runs the same loop.
 
 Every seam is an adapter: ticket sources (Linear or local files), agent
 runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
-build store all sit behind narrow interfaces you can swap or extend.
+build store all sit behind narrow interfaces. Trusted Bun plugins declared in
+`autobuild.toml` can register third-party ticket, runtime, workspace, and forge
+adapters against the versioned `autobuild/plugin-sdk` surface; selector support
+is rolling out per port. The build store keeps remote HTTP as its extension
+surface.
 
 ## Quickstart
 

@@ -18,13 +18,16 @@ command references are errors. The only open maps are `[commands]`, `[roles]`,
 and the named `[verify.<step>]` and `[finalize.<step>]` tables. Their keys are
 repository-defined, but every value inside them is still validated.
 
-There are two validation layers:
+There are three validation layers:
 
 1. TOML syntax and schema/cross-field validation happen while
    `autobuild.toml` is loaded. Errors start with the file path and either
    `TOML syntax error` or `invalid config`; schema errors then identify paths
    such as `verify.e2e.needsServer` or `tickets.teamKey`.
-2. Runtime/model compatibility is checked eagerly after the configured
+2. Configured plugin modules are resolved from the repository, evaluated,
+   manifest-validated, checked for plugin-API compatibility, and registered
+   before production adapters, stores, claims, or runners are started.
+3. Runtime/model compatibility is checked eagerly after the configured
    adapters are wired. Its separate `invalid runtime/model configuration`
    error reports every incompatible declared role before a build launches.
 
@@ -38,12 +41,45 @@ field in whichever table precedes it.
 
 ## Root scalars
 
-Both root scalars are optional and receive defaults.
+All root scalars are optional and receive defaults. They must appear before
+any table header.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order at dispatcher startup. |
+
+### Plugin modules
+
+<!-- config-fragment:plugins -->
+```toml
+plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
+```
+
+Relative paths and bare npm package specifiers are resolved as though imported
+from the repository root. Package specifiers therefore use that repository's
+installed dependencies, not Autobuild's own installation tree. Each module
+must default-export a strict manifest with a plugin name, a semver range in
+`apiVersion`, and optional `ticketSources`, `agentRuntimes`,
+`workspaceProviders`, and `forges` factory maps. One manifest may contribute
+to several ports.
+
+Plugin modules execute in-process during `ab dispatch` and have the same trust
+as repository-supplied commands; there is no sandbox. A missing module, module
+that throws, malformed manifest, incompatible API range, or adapter-name
+collision fails startup before a ticket claim. Builtin names and names from
+earlier configured plugins are reserved, and declaration order never permits
+shadowing.
+
+Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
+with `import type`, and can develop against Autobuild as a dev/peer dependency
+without adding a runtime Autobuild dependency to the plugin. That entry point
+exports the manifest/factory types, port types, fake adapters, and reusable
+TicketSource, WorkspaceProvider, Forge, BuildStore, and BlobStore contract
+suites. This foundation release registers factories but keeps ticket source,
+agent runtime, workspace, and forge selectors restricted to shipped builtins;
+follow-up releases open those config selectors.
 
 ## `[pr]`
 
@@ -441,6 +477,7 @@ that exist in your repository and providers.
 ```toml
 baseBranch = "main"
 capacity = 2
+plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
 [pr.imageHost]
 provider = "github-release"

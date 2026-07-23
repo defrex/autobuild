@@ -76,12 +76,49 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; later GitHub Issues |
-| `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode) |
-| `Workspace` | provision isolated working copies | git worktree; later remote sandbox |
-| `Forge` | git + PR plumbing | GitHub |
+| `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; third-party in-process registrations; later GitHub Issues |
+| `AgentRunner` | run agent sessions (see §9) | Claude Agent SDK; pi (SDK mode); third-party in-process registrations |
+| `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
+| `Forge` | git + PR plumbing | GitHub; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
+
+#### 3.2.1 In-process adapter plugins
+
+A repository may list trusted Bun modules in `autobuild.toml`. Each module
+default-exports a strict manifest with a diagnostic `name`, an `apiVersion`
+semver range, and optional name-to-factory maps for `ticketSources`,
+`agentRuntimes`, `workspaceProviders`, and `forges`. One manifest may register
+adapters for several ports. Factories receive adapter-specific config, the
+process environment, and the absolute repository root, and remain lazy during
+startup registration. Runtime registrations reuse §9's capability-bearing
+`RuntimeRegistration`; the frozen `AgentRunner` interface is not widened.
+
+The host exposes one versioned authoring surface, `autobuild/plugin-sdk`: port
+and manifest types, the reusable TicketSource/WorkspaceProvider/Forge/
+BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
+production code can use erased type-only imports, with Autobuild present only
+as a development or peer dependency; a consuming repository needs no bridge
+module.
+
+Plugin specifiers are resolved as though imported from the consuming
+repository root. Thus both repository-relative modules and package export maps
+work, and bare packages come from that repository's installed dependencies,
+not Autobuild's installation. Modules load in declaration order during
+`ab dispatch`, after strict config parsing and before stores, production
+adapters, ticket claims, or build launch. Resolution/evaluation errors,
+malformed or missing default manifests, and plugin-API incompatibility fail
+startup with both the configured module and available compatibility details.
+Builtin registration names and names registered by an earlier plugin are
+reserved per port; collisions fail atomically and nothing is shadowed. The same
+name may exist on different ports.
+
+Plugins execute in-process and are Bun-only. They have the same repository
+trust boundary as declarative shell commands: no sandbox is promised. This
+foundation registers plugin factories while shipped selectors remain closed;
+opening each selector is follow-up work. `TelemetrySource` remains deferred,
+and BuildStore's third-party extension surface remains the remote HTTP protocol
+rather than in-process registration.
 
 ### 3.3 Processes
 
@@ -1030,6 +1067,7 @@ itself: the system can retune its own configuration via a ticket and a PR.
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
+plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 #[pr.imageHost]                 # optional public inline rendering for attached images
 #provider = "github-release"
@@ -1088,8 +1126,9 @@ source = "file"
 readyState = "ready"            # required: the one state a ticket must sit in to dispatch
 ```
 
-The two root scalars must appear before the first table header (TOML otherwise
-nests them in that table). Declarative (TOML), not executable config: the
+The root scalars must appear before the first table header (TOML otherwise
+nests them in that table). `plugins` defaults to `[]`, preserving repositories
+with no plugin configuration. Declarative (TOML), not executable config: the
 kernel, dispatcher, CLI, and any future tooling parse it without evaluating
 anything; commands are plain shell strings. Parsing is strict — an unknown table or key is an error, so a
 typo cannot silently disable a verifier. The full config surface, field
