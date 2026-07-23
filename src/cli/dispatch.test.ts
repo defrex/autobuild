@@ -261,6 +261,34 @@ describe('abDispatch guards', () => {
     }
   })
 
+  test('plugin bootstrap failures happen before production wiring or a dispatch tick', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-'))
+    try {
+      await writeFile(
+        join(tmp, 'autobuild.toml'),
+        'plugins = ["missing-dispatch-plugin"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      )
+      let wired = false
+      await expect(
+        abDispatch({
+          targetRepo: tmp,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => {
+            wired = true
+            throw new Error('wire must not run before plugin bootstrap')
+          },
+        }),
+      ).rejects.toThrow(/missing-dispatch-plugin.*could not be resolved/)
+      expect(wired).toBe(false)
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
   test('uses --store over AB_STORE and normalizes either against the main repo', async () => {
     const fx = await makeFixture([], happyHandlers())
     const seen: string[] = []

@@ -25,6 +25,8 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
+import { loadPlugins } from '../plugins/load'
+import type { PluginRegistry } from '../plugins/registry'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
 import {
@@ -164,6 +166,9 @@ export interface DispatchWiring {
   ids: IdSource
   uuids: UuidSource
   clock: Clock
+  /** Validated startup catalog. Existing selectors remain builtin-only in
+   * this foundation release; follow-up tickets consume these factories. */
+  plugins?: PluginRegistry
 }
 
 export interface DispatchOpts {
@@ -194,6 +199,7 @@ export interface DispatchOpts {
     config: Config,
     opts: DispatchOpts,
     state: RepoStatePaths,
+    plugins: PluginRegistry,
   ) => Promise<DispatchWiring> | DispatchWiring
   /** Injectable sleep (watch loop); default a real timer. Tests use `once`. */
   sleep?: (ms: number) => Promise<void>
@@ -253,6 +259,7 @@ async function defaultWire(
   config: Config,
   opts: DispatchOpts,
   state: RepoStatePaths,
+  plugins: PluginRegistry,
 ): Promise<DispatchWiring> {
   const opened = openStoreForRepoState(state, { env: opts.env })
 
@@ -280,6 +287,7 @@ async function defaultWire(
     ids: randomIds(),
     uuids: randomUuids(),
     clock: systemClock,
+    plugins,
   }
 }
 
@@ -1424,8 +1432,16 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     }
     throw error
   }
+  // Configured plugin code is trusted like configured shell commands, but it
+  // must resolve, evaluate, validate, and register before production wiring
+  // opens a store, claims a ticket, or launches a runner.
+  const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo)
   const wire = resolvedOpts.wire ?? defaultWire
-  const wiring = await wire(config, resolvedOpts, state)
+  const wired = await wire(config, resolvedOpts, state, plugins)
+  const wiring: DispatchWiring = {
+    ...wired,
+    plugins: wired.plugins ?? plugins,
+  }
   // §9: resolve the whole config against the registry ONCE, at startup — a
   // config naming an unregistered runtime or an incompatible merged
   // runtime/model pair fails `ab dispatch` loudly here, before any build

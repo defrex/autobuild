@@ -309,6 +309,16 @@ const configRootSchema = z.strictObject({
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */
   capacity: z.number().int().positive().default(1),
+  /** Trusted in-process plugin modules, loaded in declaration order from the
+   * consuming repository before production adapters are constructed. */
+  plugins: z
+    .array(
+      z.string().refine(
+        (value) => value.trim().length > 0,
+        'plugin module specifiers must be nonblank',
+      ),
+    )
+    .default([]),
   pr: prSchema.optional(),
   commands: commandsSchema.prefault({}),
   server: serverSchema.optional(),
@@ -330,7 +340,7 @@ const configRootSchema = z.strictObject({
 })
 
 /** Root metadata keeps strict error prose and documentation coverage honest. */
-export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity'] as const
+export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity', 'plugins'] as const
 export const TOP_LEVEL_TABLES = Object.keys(configRootSchema.shape).filter(
   (key) => !(TOP_LEVEL_SCALARS as readonly string[]).includes(key),
 )

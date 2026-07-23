@@ -46,6 +46,8 @@ K unclaimed observation.recorded events
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating, server lifecycle | §5, §7.5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
+| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, and owner-aware adapter registration | §3.2.1 |
+| `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
@@ -141,9 +143,13 @@ merge that fronts `bin/agent/ab` on `PATH`). Adapters own SDK-native error
 extraction; processes own durable failure policy — the transcript is always
 deposited, and a turn's typed terminal always beats a late failure signal.
 
-**CLI composition.** `src/cli/repo-state.ts` owns repository identity and
-store precedence (`--store` > `AB_STORE` > `.autobuild/`);
-`src/cli/store-opening.ts` is the production composition boundary;
+**Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
+configured relative or package module from the consuming repository, validates
+its default manifest/API range, and atomically registers its factories before
+production wiring or the first dispatch tick. Builtin selectors intentionally
+remain unchanged in this foundation release. `src/cli/repo-state.ts` owns
+repository identity and store precedence (`--store` > `AB_STORE` >
+`.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
 classifies build/harvest session tuples and routes sessionless invocations,
 so phase-only commands report their complete runner context when run by hand.
