@@ -6,7 +6,7 @@
 
 # Root scalars must appear before the first TOML table.
 baseBranch = "main"
-capacity = 3             # concurrent builds for this repo
+capacity = 10             # concurrent builds for this repo
 # Forge adapter: builtin GitHub by default, or a name registered below.
 #forge = "github"
 # Trusted Bun modules loaded from this repository before dispatch starts.
@@ -143,6 +143,6 @@ readyLabels = []                 # labels that additionally narrow readiness ([]
 # in before claim() moves them to "In Progress". Matched case-sensitively.
 readyState = "Todo"
 claimedState = "In Progress"    # workflow state claim() moves an issue to
-createState = "Todo"         # state new tickets are filed into (absent = provider default)
+createState = "Backlog"         # state new tickets are filed into (absent = provider default)
 triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with readyState = "ready" and optional dir = "tickets"
