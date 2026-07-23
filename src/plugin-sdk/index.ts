@@ -26,7 +26,9 @@ export type {
   ForgePluginFactory,
   PluginFactory,
   PluginFactoryContext,
+  TicketSourcePluginDescriptor,
   TicketSourcePluginFactory,
+  TicketSourcePluginRegistration,
   WorkspaceProviderPluginFactory,
 } from '../plugins/manifest'
 

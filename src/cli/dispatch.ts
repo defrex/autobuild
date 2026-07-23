@@ -166,8 +166,8 @@ export interface DispatchWiring {
   ids: IdSource
   uuids: UuidSource
   clock: Clock
-  /** Validated startup catalog. Existing selectors remain builtin-only in
-   * this foundation release; follow-up tickets consume these factories. */
+  /** Validated startup catalog. Ticket-source selection consumes it here;
+   * remaining plugin port selectors are opened by follow-up releases. */
   plugins?: PluginRegistry
 }
 
@@ -263,11 +263,12 @@ async function defaultWire(
 ): Promise<DispatchWiring> {
   const opened = openStoreForRepoState(state, { env: opts.env })
 
-  const tickets = createTicketSource(
+  const tickets = await createTicketSource(
     config.tickets,
     opts.env,
     opened.repo,
     opened.localStateRoot,
+    plugins,
   )
   const { runtimes, defaultRuntime } = createProductionRuntimes()
 

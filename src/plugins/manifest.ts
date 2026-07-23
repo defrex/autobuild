@@ -4,7 +4,7 @@ import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import type { RuntimeRegistration } from '../ports/runner/runtime'
 
 /** Version of the in-process plugin contract exposed by `autobuild/plugin-sdk`. */
-export const PLUGIN_API_VERSION = '1.0.0' as const
+export const PLUGIN_API_VERSION = '1.1.0' as const
 
 /** Context supplied when a registered adapter is selected. Plugin loading is
  * deliberately lazy with respect to factories: this context is not created and
@@ -30,6 +30,19 @@ export type PluginFactory<Adapter, Config = Record<string, unknown>> = {
 
 export type TicketSourcePluginFactory<Config = Record<string, unknown>> =
   PluginFactory<TicketSource, Config>
+
+/** Optional host-enforced metadata for a ticket source. Bare factories remain
+ * valid for plugin API 1.0 compatibility. */
+export interface TicketSourcePluginDescriptor<Config = Record<string, unknown>> {
+  factory: TicketSourcePluginFactory<Config>
+  /** Environment variables that must be nonempty before the factory runs. */
+  requiredEnv?: readonly string[]
+}
+
+export type TicketSourcePluginRegistration<Config = Record<string, unknown>> =
+  | TicketSourcePluginFactory<Config>
+  | TicketSourcePluginDescriptor<Config>
+
 export type AgentRuntimePluginFactory<Config = Record<string, unknown>> =
   PluginFactory<RuntimeRegistration, Config>
 export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> =
@@ -42,7 +55,7 @@ export interface AutobuildPluginManifest {
   name: string
   /** Semver range of plugin API versions accepted by this plugin. */
   apiVersion: string
-  ticketSources?: Record<string, TicketSourcePluginFactory>
+  ticketSources?: Record<string, TicketSourcePluginRegistration>
   agentRuntimes?: Record<string, AgentRuntimePluginFactory>
   workspaceProviders?: Record<string, WorkspaceProviderPluginFactory>
   forges?: Record<string, ForgePluginFactory>
@@ -60,11 +73,37 @@ const factorySchema = z.custom<PluginFactory<unknown>>(
 
 const factoryMapSchema = z.record(nonblank, factorySchema)
 
+const requiredEnvSchema = z
+  .array(nonblank)
+  .superRefine((names, ctx) => {
+    const seen = new Set<string>()
+    names.forEach((name, index) => {
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index],
+          message: `environment variable "${name}" is declared more than once`,
+        })
+      }
+      seen.add(name)
+    })
+  })
+
+const ticketSourceDescriptorSchema = z.strictObject({
+  factory: factorySchema,
+  requiredEnv: requiredEnvSchema.optional(),
+})
+
+const ticketSourceMapSchema = z.record(
+  nonblank,
+  z.union([factorySchema, ticketSourceDescriptorSchema]),
+)
+
 /** Strict runtime contract for a plugin module's default export. */
 export const pluginManifestSchema = z.strictObject({
   name: nonblank,
   apiVersion: nonblank,
-  ticketSources: factoryMapSchema.optional(),
+  ticketSources: ticketSourceMapSchema.optional(),
   agentRuntimes: factoryMapSchema.optional(),
   workspaceProviders: factoryMapSchema.optional(),
   forges: factoryMapSchema.optional(),

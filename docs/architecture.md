@@ -45,8 +45,8 @@ K unclaimed observation.recorded events
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating, server lifecycle | §5, §7.5, §10, §12, §15.4–15.5, §16.2 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
-| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, and owner-aware adapter registration | §3.2.1 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin ticket construction; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
+| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, owner-aware adapter registration, and ticket credential metadata | §3.2.1 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
@@ -214,9 +214,12 @@ behavioral assertions against every implementation:
 - `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
 - `src/ports/forge/contract.ts` — `Forge`.
 
-A normal `bun test` runs the memory/fake/local registrations, including the
-real filesystem and real local-git adapters. The Linear and GitHub
-registrations are present in the same run but reported as skipped: live
+A normal `bun test` runs the memory/fake/local registrations, including a fake
+selected through the plugin ticket-source registry plus the real filesystem and
+real local-git adapters. Both `ab dispatch` and sessionless `ab ticket` load the
+repository's plugins before selecting their TicketSource; dispatch passes that
+one adapter instance through readiness, dependency, harvest, and completion
+paths. The Linear and GitHub registrations are present in the same run but reported as skipped: live
 provider mutation requires both credentials and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 

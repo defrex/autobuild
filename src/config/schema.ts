@@ -254,7 +254,12 @@ export type PolicyConfig = z.infer<typeof policySchema>
 // file.
 
 export const ticketsSchema = z.strictObject({
-  source: z.enum(['linear', 'file']),
+  /** Builtin or plugin-registered TicketSource name. Registry membership is
+   * validated after configured plugins load. */
+  source: z.string().refine(
+    (value) => value.trim().length > 0,
+    '[tickets].source must be a nonblank builtin or plugin ticket source name',
+  ),
   /**
    * Ticket labels that additionally narrow the mandatory readyState gate
    * (§3.3). A nonempty list is conjunctive: every configured label must be
@@ -458,7 +463,7 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
           '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
       })
     }
-  } else {
+  } else if (tickets.source === 'file') {
     // dir is optional for the file source: absent = .autobuild/tickets.
     for (const key of ['teamKey', 'claimedState'] as const) {
       if (tickets[key] !== undefined) {
@@ -470,6 +475,8 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
       }
     }
   }
+  // Plugin sources receive the existing ticket lifecycle/configuration fields
+  // unchanged; adapter-specific validation belongs to their factory.
 })
 
 export type Config = z.infer<typeof configSchema>

@@ -419,7 +419,21 @@ describe('parseConfig — [tickets]', () => {
     })
   })
 
-  test('readyState is mandatory and nonblank', () => {
+  test('plugin source names parse while source and readyState remain nonblank', () => {
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "jira-cloud"\nreadyState = "Open"\nteamKey = "APP"\nclaimedState = "Doing"\ndir = "plugin-option"\n',
+      ).tickets,
+    ).toEqual({
+      source: 'jira-cloud',
+      readyState: 'Open',
+      teamKey: 'APP',
+      claimedState: 'Doing',
+      dir: 'plugin-option',
+    })
+    expect(parseError('[tickets]\nsource = "   "\nreadyState = "Open"\n').message).toContain(
+      'tickets.source',
+    )
     expect(parseError('[tickets]\nsource = "file"\n').message).toContain('tickets.readyState')
     expect(parseError('[tickets]\nsource = "file"\nreadyState = "   "\n').message).toContain('must not be blank')
   })

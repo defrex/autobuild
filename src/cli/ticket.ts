@@ -8,6 +8,8 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { Config, TicketsConfig } from '../config/schema'
+import { loadPlugins } from '../plugins/load'
+import type { PluginRegistry } from '../plugins/registry'
 import { createTicketSource } from '../ports/tickets/create'
 import type {
   Ticket,
@@ -23,8 +25,9 @@ export type TicketSourceFactory = (
   config: TicketsConfig,
   env: Record<string, string | undefined>,
   targetRepo: string,
-  localStateRoot?: string,
-) => TicketSource
+  localStateRoot: string | undefined,
+  plugins: PluginRegistry,
+) => TicketSource | Promise<TicketSource>
 
 interface TicketCommandOpts {
   targetRepo: string
@@ -121,6 +124,9 @@ async function resolveTicketCommand(
     throw error
   }
 
+  // Ticket commands use the same trusted plugin catalog as dispatch. Loading
+  // and registration finish before any adapter is constructed or called.
+  const plugins = await loadPlugins(config.plugins, targetRepo)
   const repoState = resolveRepoStatePaths({
     repo: targetRepo,
     ...(opts.env['AB_STORE'] !== undefined
@@ -130,11 +136,12 @@ async function resolveTicketCommand(
   const factory = opts.sourceFactory ?? createTicketSource
   return {
     config,
-    source: factory(
+    source: await factory(
       config.tickets,
       opts.env,
       targetRepo,
       repoState.localStateRoot,
+      plugins,
     ),
   }
 }

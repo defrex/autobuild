@@ -153,7 +153,7 @@ describe('abInit — fresh install', () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     await abInit({ targetRepo: target })
     const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
-    const guidance = `# Absent readyLabels uses the source's label default: none for file, or
+    const guidance = `# Absent readyLabels uses the source's label default: none for file/plugins, or
 # ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
 # readyState: every configured label must be present. With
 # ["autobuild", "ready"], a ticket carrying only one label does not satisfy the

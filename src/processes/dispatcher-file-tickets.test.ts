@@ -74,12 +74,12 @@ function withReadyState(toml: string): string {
   return `[tickets]\nsource = "file"\nreadyState = "ready"\n${toml}`
 }
 
-function harness(toml = '') {
+async function harness(toml = '') {
   const clock = manualClock()
   const store = new MemoryBuildStore({ clock })
   const config = parseConfig(withReadyState(toml))
   // The real seam: config → factory → adapter, exactly as defaultWire does it.
-  const tickets = createTicketSource(config.tickets, {}, repoDir)
+  const tickets = await createTicketSource(config.tickets, {}, repoDir)
   const launches: string[] = []
   const exec: Exec = async () => ({
     stdout: `${BASE_SHA}\trefs/heads/main\n`,
@@ -108,7 +108,7 @@ const ls = (state: string) => readdir(join(trackerDir(), state))
 
 describe('minimal config dispatch over the real file tracker', () => {
   test('default dir and no labels: mv into ready/ is sufficient to dispatch', async () => {
-    const h = harness()
+    const h = await harness()
 
     // Create files to triage/, then groom it exactly the way a human or the
     // ab-tickets skill would: one mv. No label, no frontmatter edit.
@@ -125,7 +125,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('malformed terminal content is reported while valid ready work dispatches', async () => {
-    const h = harness()
+    const h = await harness()
     const valid = await h.tickets.create({
       title: 'Add rate limiting',
       body: CONFORMING_BODY,
@@ -150,7 +150,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('malformed ready content stays unclaimed while another ready ticket dispatches', async () => {
-    const h = harness()
+    const h = await harness()
     const valid = await h.tickets.create({
       title: 'Add rate limiting',
       body: CONFORMING_BODY,
@@ -177,7 +177,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('a second tick does not dispatch the same ticket a second time', async () => {
-    const h = harness()
+    const h = await harness()
     const created = await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
     await h.tickets.transition(created.ref.id, 'Ready')
 
@@ -195,7 +195,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('a ticket left in triage/ is not dispatched', async () => {
-    const h = harness()
+    const h = await harness()
     await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
 
     await h.dispatcher.tick()
@@ -206,14 +206,14 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('the default tracker gitignores itself — git never sees the local backlog', async () => {
-    const h = harness()
+    const h = await harness()
     await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
 
     expect(await Bun.file(join(trackerDir(), '.gitignore')).text()).toBe('*\n')
   })
 
   test('a non-conforming spec bounces back to triage/, not into doing/', async () => {
-    const h = harness()
+    const h = await harness()
     const created = await h.tickets.create({ title: 'Vague idea', body: 'make auth better' })
     await h.tickets.transition(created.ref.id, 'Ready')
 
@@ -227,7 +227,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('a cp instead of an mv is a loud error, never a double dispatch', async () => {
-    const h = harness()
+    const h = await harness()
     const created = await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
     const file = `${created.ref.id}.md`
     // The mistake the AC names: copy, don't move.
@@ -238,7 +238,7 @@ describe('minimal config dispatch over the real file tracker', () => {
   })
 
   test('explicit [tickets] dir + readyLabels still gate the way they always did', async () => {
-    const h = harness(
+    const h = await harness(
       '[tickets]\nsource = "file"\ndir = "tickets"\nreadyLabels = ["autobuild"]\n',
     )
     const plain = await h.tickets.create({ title: 'Unlabelled', body: CONFORMING_BODY })

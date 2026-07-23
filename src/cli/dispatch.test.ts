@@ -14,9 +14,14 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
-import { abDispatch, type DispatchWiring } from './dispatch'
+import {
+  abDispatch,
+  type DispatchOpts,
+  type DispatchWiring,
+} from './dispatch'
 import {
   renderDashboard,
   stripAnsi,
@@ -39,12 +44,13 @@ import {
   ScriptedAgentRunner,
   type ScriptContext,
 } from '../ports/runner/fake'
+import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
-import { systemClock, type Clock } from '../store/types'
+import { systemClock, textContent, type Clock } from '../store/types'
 import { manualClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
@@ -289,6 +295,52 @@ describe('abDispatch guards', () => {
     }
   })
 
+  test('production wiring selects a plugin-registered ticket source', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-source-'))
+    const origin = join(tmp, 'repo')
+    try {
+      await initOrigin(
+        origin,
+        'plugins = ["./tickets-plugin.ts"]\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
+      )
+      await writeFile(
+        join(origin, 'tickets-plugin.ts'),
+        `
+          const source = {
+            name: 'journal',
+            listReady: async () => ({ tickets: [], diagnostics: ['plugin ticket source selected'] }),
+            get: async () => null,
+            claim: async () => false,
+            comment: async () => {},
+            transition: async () => {},
+            create: async () => { throw new Error('unused') },
+            update: async () => {},
+            addBlocker: async () => {},
+            removeBlocker: async () => {},
+            dependencyStates: async () => [],
+          }
+          export default {
+            name: 'journal-plugin',
+            apiVersion: '^1.1.0',
+            ticketSources: { journal: { factory: async () => source, requiredEnv: ['JOURNAL_TOKEN'] } },
+          }
+        `,
+      )
+      const errors: string[] = []
+      await abDispatch({
+        targetRepo: origin,
+        env: { JOURNAL_TOKEN: 'secret' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => errors.push(line),
+        once: true,
+      })
+      expect(errors).toContain('plugin ticket source selected')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
   test('uses --store over AB_STORE and normalizes either against the main repo', async () => {
     const fx = await makeFixture([], happyHandlers())
     const seen: string[] = []
@@ -401,6 +453,116 @@ describe('abDispatch --once', () => {
 
       // The operator saw the build park.
       expect(out.some((line) => line.includes(`build ${slug} parked`))).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a registry-selected source serves dispatch, dependencies, build projection, and completion', async () => {
+    const config = `
+plugins = ["./journal-plugin.ts"]
+baseBranch = "main"
+capacity = 1
+[commands]
+test = "test -f ok.marker"
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "test"
+[tickets]
+source = "journal"
+readyState = "Ready"
+readyLabels = ["autobuild"]
+claimedState = "Doing"
+createState = "Triage"
+triageState = "Triage"
+`
+    const fx = await makeFixture([], happyHandlers(), config)
+    const fakeModule = pathToFileURL(
+      join(import.meta.dir, '..', 'ports', 'tickets', 'fake.ts'),
+    ).href
+    const pluginPath = join(fx.origin, 'journal-plugin.ts')
+    try {
+      await writeFile(
+        pluginPath,
+        `
+          import { FakeTicketSource } from ${JSON.stringify(fakeModule)}
+          export const source = new FakeTicketSource([
+            ${JSON.stringify(readyTicket('B-1', { title: 'Resolved dependency', state: 'Done', labels: [] }))},
+            ${JSON.stringify(readyTicket('P-1', { title: 'Plugin lifecycle', blockedBy: ['B-1'] }))},
+          ], { doneState: 'Done' })
+          Object.defineProperty(source, 'name', { value: 'journal' })
+          export default {
+            name: 'journal-plugin',
+            apiVersion: '^1.1.0',
+            ticketSources: {
+              journal: { factory: async () => source, requiredEnv: ['JOURNAL_TOKEN'] },
+            },
+          }
+        `,
+      )
+      await git(['add', 'journal-plugin.ts'], fx.origin)
+      await git([...GIT_ID, 'commit', '-q', '-m', 'add ticket plugin'], fx.origin)
+      await git(['push', '-q'], fx.origin)
+
+      const pluginWire: NonNullable<DispatchOpts['wire']> = async (
+        parsed,
+        opts,
+        state,
+        plugins,
+      ): Promise<DispatchWiring> => ({
+        ...fx.wire(),
+        tickets: await createTicketSource(
+          parsed.tickets,
+          opts.env,
+          state.repo,
+          state.localStateRoot,
+          plugins,
+        ),
+      })
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { JOURNAL_TOKEN: 'secret' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: pluginWire,
+      })
+
+      const [build] = await fx.store.listBuilds()
+      expect(build?.ticket?.id).toBe('P-1')
+      expect(textContent((await fx.store.getArtifact(build!.slug, 'spec'))!)).toBe(
+        CONFORMING_BODY,
+      )
+
+      fx.forge.setPrState(1, {
+        state: 'merged',
+        sha: 'plugin-merge-sha',
+      })
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { JOURNAL_TOKEN: 'secret' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: pluginWire,
+      })
+
+      const loaded = (await import(pathToFileURL(pluginPath).href)) as {
+        source: FakeTicketSource
+      }
+      expect(loaded.source.dependencyQueries).toContainEqual(['B-1'])
+      expect(loaded.source.claims).toContain('P-1')
+      expect(loaded.source.comments.some(({ id }) => id === 'P-1')).toBe(true)
+      expect(loaded.source.transitions).toContainEqual({ id: 'P-1', state: 'Done' })
+      expect((await fx.store.getEvents(build!.slug)).map(({ type }) => type)).toContain(
+        'build.completed',
+      )
+      expect(fx.cliErrors).toEqual([])
     } finally {
       await fx.cleanup()
     }

@@ -18,9 +18,10 @@ export type RegistrationOwner =
 
 export interface AdapterRegistration<Factory> {
   owner: RegistrationOwner
-  /** Builtins are reservations in this foundation release; their existing
-   * composition paths remain authoritative until selector follow-up tickets. */
   factory?: Factory
+  /** Host-enforced ticket-source credential declarations. Undefined for
+   * builtins and every other plugin port. */
+  requiredEnv?: readonly string[]
 }
 
 const BUILTIN = { kind: 'builtin', name: 'autobuild' } as const
@@ -39,6 +40,7 @@ interface PendingRegistration {
   port: PluginPort
   name: string
   factory: unknown
+  requiredEnv?: readonly string[]
   target: Map<string, AdapterRegistration<unknown>>
 }
 
@@ -76,7 +78,29 @@ export class PluginRegistry {
       }
     }
 
-    collect('ticket source', plugin.ticketSources, this.ticketSources)
+    for (const [name, value] of Object.entries(plugin.ticketSources ?? {})) {
+      const registration =
+        typeof value === 'function' ? { factory: value } : value
+      const existing = this.ticketSources.get(name)
+      if (existing !== undefined) {
+        throw new Error(
+          `ticket source adapter "${name}" from plugin "${plugin.name}" collides ` +
+            `with ${ownerDescription(existing.owner)}; choose a unique adapter name`,
+        )
+      }
+      pending.push({
+        port: 'ticket source',
+        name,
+        factory: registration.factory,
+        ...(registration.requiredEnv !== undefined
+          ? { requiredEnv: [...registration.requiredEnv] }
+          : {}),
+        target: this.ticketSources as Map<
+          string,
+          AdapterRegistration<unknown>
+        >,
+      })
+    }
     collect('agent runtime', plugin.agentRuntimes, this.agentRuntimes)
     collect(
       'workspace provider',
@@ -103,6 +127,9 @@ export class PluginRegistry {
       registration.target.set(registration.name, {
         owner: { kind: 'plugin', name: plugin.name },
         factory: registration.factory,
+        ...(registration.requiredEnv !== undefined
+          ? { requiredEnv: registration.requiredEnv }
+          : {}),
       })
     }
   }
