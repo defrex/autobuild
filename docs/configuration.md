@@ -76,9 +76,52 @@ Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
-TicketSource, WorkspaceProvider, Forge, BuildStore, and BlobStore contract
-suites. This foundation release registers factories but keeps ticket source,
-agent runtime, workspace, and forge selectors restricted to shipped builtins;
+TicketSource, AgentRunner, WorkspaceProvider, Forge, BuildStore, and BlobStore
+contract suites. Adapter values may use the backward-compatible bare factory or
+carry a contract fixture descriptor:
+
+```ts
+import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
+
+export default {
+  name: 'acme-integrations',
+  apiVersion: '^1.1.0',
+  ticketSources: {
+    jira: {
+      factory: ({ config, env, repoRoot }) => createJira(config, env, repoRoot),
+      contract: {
+        // Return the TicketSourceContractFactory consumed by the shared suite.
+        factory: ({ env }) => makeJiraContractFactory(env),
+        live: true,
+      },
+    },
+  },
+} satisfies AutobuildPluginManifest
+```
+
+Use the sessionless author/operator loop from the repository checkout:
+
+```sh
+ab plugin list
+ab plugin doctor
+ab plugin test ticket-source jira
+AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test ticket-source jira
+```
+
+The four test port tokens are `ticket-source`, `agent-runtime`,
+`workspace-provider`, and `forge`. `list` includes builtins and successful
+plugin registrations with module, resolved path/kind, owner, API status, and
+contract availability. `doctor` attempts every configured module in declaration
+order, reports each resolution/evaluation/manifest/registration result, and
+exits nonzero if any fail. Dispatch intentionally differs: it stops on the
+first plugin failure before opening stores or claiming work. `test` invokes one
+unchanged shared suite under `bun test`; Bun's per-test output and exit status
+are authoritative. A missing `contract.factory` is an actionable error. A
+`live = true` descriptor cannot launch or create its harness unless
+`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
+
+This foundation release registers factories but keeps ticket source, agent
+runtime, workspace, and forge selectors restricted to shipped builtins;
 follow-up releases open those config selectors.
 
 ## `[pr]`
