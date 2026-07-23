@@ -8,6 +8,7 @@ const READY = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
 const COMPLETE_EXAMPLE = `baseBranch = "main"
 capacity = 3
+plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 [pr.imageHost]
 provider = "github-release"
@@ -89,6 +90,7 @@ describe('parseConfig — complete flattened surface', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       baseBranch: 'main',
       capacity: 3,
+      plugins: ['./plugins/local.ts', '@acme/autobuild-plugin'],
       pr: {
         imageHost: {
           provider: 'github-release',
@@ -155,6 +157,7 @@ describe('parseConfig — defaults', () => {
     expect(parseConfig(READY)).toEqual({
       baseBranch: 'main',
       capacity: 1,
+      plugins: [],
       commands: {},
       verify: { steps: [], stepConfigs: {} },
       finalize: { steps: [], stepConfigs: {} },
@@ -168,6 +171,16 @@ describe('parseConfig — defaults', () => {
       },
       tickets: { source: 'file', readyState: 'ready' },
     })
+  })
+
+  test('plugins default empty and accept repository paths and package specifiers', () => {
+    expect(parseConfig(READY).plugins).toEqual([])
+    expect(
+      parseConfig(`plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]\n${READY}`).plugins,
+    ).toEqual(['./plugins/local.ts', '@acme/autobuild-plugin'])
+    for (const value of ['[""]', '["   "]', '[1]']) {
+      expect(() => parseConfig(`plugins = ${value}\n${READY}`)).toThrow(/plugins/)
+    }
   })
 
   test('top-level scalars and positive numeric knobs accept overrides', () => {
