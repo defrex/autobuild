@@ -206,18 +206,23 @@ installed `ab` binary remains the non-watching production entry.
 
 ### Contract suites
 
-The seams are the contract. Four reusable contract families run the same
+The seams are the contract. Five reusable contract families run the same
 behavioral assertions against every implementation:
 
 - `src/store/contract.ts` — `BuildStore` and `BlobStore`;
 - `src/ports/tickets/contract.ts` — `TicketSource`;
 - `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
-- `src/ports/forge/contract.ts` — `Forge`.
+- `src/ports/forge/contract.ts` — `Forge`;
+- `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
+  transcript metadata and usage, typed failure permanence, per-turn ambient
+  environment refresh, distribution-managed `ab` resolution, and the optional
+  tool-free one-shot capability.
 
 A normal `bun test` runs the memory/fake/local registrations, including the
-real filesystem and real local-git adapters. The Linear and GitHub
+real filesystem and real local-git adapters and the complete injected-SDK
+contracts for Claude and Pi. The Linear, GitHub, and real-runtime AgentRunner
 registrations are present in the same run but reported as skipped: live
-provider mutation requires both credentials and an explicit opt-in. When
+provider access requires credentials/resources and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
 To run the Linear contract manually against a destructive scratch target:
@@ -253,6 +258,27 @@ token with repository admin, contents, pull-request, comment, and branch
 protection permissions. The fixture creates and deletes temporary branches,
 PRs, comments, and a required-check protection rule; it never pushes to or
 merges into the default branch. Use a dedicated scratch repository only.
+
+The deterministic Claude and Pi adapter contracts run offline in every normal
+test run. Their live registrations add real transport/authentication smoke
+coverage for successful start, continue, end, environment refresh, managed CLI
+execution, and one-shot completion:
+
+```sh
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_CLAUDE_CONTRACT_MODEL=claude-sonnet-4-… \
+bun test src/ports/runner/claude.live.test.ts
+
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_PI_CONTRACT_MODEL=openai/gpt-… \
+bun test src/ports/runner/pi.live.test.ts
+```
+
+Claude uses the Agent SDK's configured authentication. Pi uses the credentials
+required by the provider named in `AB_PI_CONTRACT_MODEL`. The live fixtures
+create isolated temporary project skills and probe files and remove them after
+each run; provider failures remain in the deterministic injected-SDK contract
+because they cannot be manufactured safely against a live account.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit.
