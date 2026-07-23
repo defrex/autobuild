@@ -128,13 +128,18 @@ describe('FakeForge', () => {
     expect((await forge.openPr(prOpts({ head: 'ab/other' }))).headSha).toBe('custom-2')
   })
 
-  test('a just-opened PR reads back open with mergeable null', async () => {
+  test('getPrState journals workspacePath and number', async () => {
     const forge = new FakeForge()
     const { number } = await forge.openPr(prOpts())
     expect(await forge.getPrState('/ws/a', number)).toEqual({
       state: 'open',
       mergeable: null,
     })
+    await forge.getPrState('/ws/b', number)
+    expect(forge.getPrStateCalls).toEqual([
+      { workspacePath: '/ws/a', number },
+      { workspacePath: '/ws/b', number },
+    ])
   })
 
   test('setPrState drives a janitor scenario: conflicted then merged', async () => {

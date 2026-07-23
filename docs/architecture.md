@@ -122,10 +122,16 @@ ticket never blocks unrelated dispatch, but nothing that could permit double
 dispatch is tolerated.
 
 **Workspace and review base selection.**
-`src/ports/workspace/git-worktree.ts` selects the branch-cut base once at first
-creation, fetching into a build-scoped private ref; re-provisioning resumes at
-the branch tip and never re-cuts, so the first provisioning fact remains
-immutable provenance. Separately, each successful implementation terminal in
+`src/ports/workspace/create.ts` resolves `[workspace].provider` against the
+builtin-plus-plugin registry once during production wiring. The builtin stays
+store-root-aware; selected plugin factories receive their nested config,
+environment, and absolute repository root. `WorkspaceHandle.ref` remains a
+provider identifier while `path` is the locally reachable working copy used by
+runners and forge calls; both are recorded, with `ref` as the historical-event
+fallback. `src/ports/workspace/git-worktree.ts` selects the branch-cut base once
+at first creation, fetching into a build-scoped private ref; re-provisioning
+resumes at the branch tip and never re-cuts, so the first provisioning fact
+remains immutable provenance. Separately, each successful implementation terminal in
 `src/cli/terminals.ts` privately refreshes the frozen target branch and records
 the unique merge-base of that snapshot and `HEAD` in `implement.completed`.
 It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
@@ -159,7 +165,10 @@ returned adapter's optional attachment capability. Dispatch constructs one
 selected adapter before opening the store and threads it through runners,
 epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
 load the build worktree's immutable config/plugins and resolve the same name for
-phase terminal plumbing. The other plugin selectors remain builtin-only.
+phase terminal plumbing. `src/ports/workspace/create.ts` similarly resolves
+`[workspace].provider`, retaining host-owned git-worktree construction while
+passing plugin config, environment, and repository root to registered factories.
+Ticket-source and agent-runtime selectors remain builtin-only.
 `src/cli/repo-state.ts` owns
 repository identity and store precedence (`--store` > `AB_STORE` >
 `.autobuild/`); `src/cli/store-opening.ts` is the production composition boundary;

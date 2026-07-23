@@ -141,6 +141,8 @@ export const eventPayloadSchemas = {
   'workspace.provisioned': z.strictObject({
     provider: z.string().min(1),
     ref: z.string().min(1),
+    /** Locally reachable working copy. Optional for historical event replay. */
+    path: z.string().min(1).optional(),
     branch: z.string().min(1),
     base: workspaceBaseSchema,
   }),

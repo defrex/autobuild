@@ -13,6 +13,14 @@ capacity = 1             # concurrent builds for this repo
 # Relative paths and installed package specifiers are both supported.
 #plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
+# Workspace provider. Omission uses the shipped git-worktree adapter exactly as
+# before. Select a plugin-registered name here; only the nested config table is
+# plugin-owned. Factories receive it with the environment and absolute repo root.
+#[workspace]
+#provider = "company-container"
+#[workspace.config]
+#image = "ghcr.io/acme/build:bun"
+
 # Optional review-window hosting for explicitly attached images. Exact text
 # download commands work without it. The release must already exist, be
 # published and mutable, and live in a public repository; private source repos

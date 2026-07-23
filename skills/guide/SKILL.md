@@ -195,9 +195,9 @@ Forge selection is open through the root `forge` scalar; omission selects
 `github`. A selected plugin factory receives empty adapter config, the process
 environment, and the absolute repository root. Unknown names list all available
 forges. Dispatch and scoped phase CLI processes resolve the same configured
-name, preserving the adapter's optional `prAttachments` capability.
-Ticket/runtime/workspace selectors remain builtin-only until their follow-up
-releases.
+name, preserving the adapter's optional `prAttachments` capability. Workspace
+selection consumes registered plugin factories through `[workspace]`.
+Ticket-source and agent-runtime selectors remain builtin-only.
 
 ### `[pr]`
 
@@ -236,6 +236,24 @@ deletions remain durable and retry on later dispatcher ticks. Their inline URLs
 therefore intentionally stop working after the review window. The authoritative
 BuildStore artifacts remain queryable under the store's separate retention
 policy.
+
+### `[workspace]`
+
+Optional and backward-compatible: omission selects the builtin `git-worktree`
+provider. The selector envelope is strict; only `[workspace.config]` is an open,
+plugin-owned table.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `provider` | `"git-worktree"` | nonblank builtin or plugin-registered name | Selects the one provider used by dispatch, recovery, PR polling, and cleanup. |
+| `config` | `{}` | open nested table; must be empty for `git-worktree` | Passed unchanged to the selected plugin factory. |
+
+A selected plugin factory receives the nested config, process environment, and
+absolute repository root. Unknown names fail before claims and list all
+available providers. Providers retain the existing local-working-copy contract:
+`path` is absolute and locally reachable, while provider-scoped `ref` may differ;
+both are durable evidence and historical logs fall back from missing `path` to
+`ref`. Remote sandbox execution remains a separate project.
 
 ### `[commands]`
 

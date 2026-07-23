@@ -36,6 +36,7 @@ import {
   TOP_LEVEL_TABLES,
   verifyAgentStepSchema,
   verifyCheckStepSchema,
+  workspaceSchema,
 } from '../config/schema'
 import { readDistSkills } from './init'
 
@@ -60,6 +61,7 @@ function escapeRegex(literal: string): string {
  */
 const TABLE_FIELDS: Record<string, string[]> = {
   pr: Object.keys(prSchema.shape),
+  workspace: Object.keys(workspaceSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
   server: Object.keys(serverSchema.shape),

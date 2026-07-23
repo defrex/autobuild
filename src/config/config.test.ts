@@ -11,6 +11,13 @@ capacity = 3
 forge = "gitlab"
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
+[workspace]
+provider = "container"
+
+[workspace.config]
+image = "bun:latest"
+writable = true
+
 [pr.imageHost]
 provider = "github-release"
 repository = "owner/public-review-assets"
@@ -93,6 +100,10 @@ describe('parseConfig — complete flattened surface', () => {
       capacity: 3,
       forge: 'gitlab',
       plugins: ['./plugins/local.ts', '@acme/autobuild-plugin'],
+      workspace: {
+        provider: 'container',
+        config: { image: 'bun:latest', writable: true },
+      },
       pr: {
         imageHost: {
           provider: 'github-release',
@@ -161,6 +172,7 @@ describe('parseConfig — defaults', () => {
       capacity: 1,
       forge: 'github',
       plugins: [],
+      workspace: { provider: 'git-worktree', config: {} },
       commands: {},
       verify: { steps: [], stepConfigs: {} },
       finalize: { steps: [], stepConfigs: {} },
@@ -174,6 +186,31 @@ describe('parseConfig — defaults', () => {
       },
       tickets: { source: 'file', readyState: 'ready' },
     })
+  })
+
+  test('workspace defaults to git-worktree and preserves plugin-owned nested config', () => {
+    expect(parseConfig(READY).workspace).toEqual({
+      provider: 'git-worktree',
+      config: {},
+    })
+    expect(
+      parseConfig(`[workspace]\nprovider = "container"\n[workspace.config]\nimage = "bun:latest"\nlimits = { cpu = 2 }\n${READY}`).workspace,
+    ).toEqual({
+      provider: 'container',
+      config: { image: 'bun:latest', limits: { cpu: 2 } },
+    })
+  })
+
+  test('workspace envelope is strict and the configless builtin rejects adapter config', () => {
+    expect(() =>
+      parseConfig(`[workspace]\nprovider = "   "\n${READY}`),
+    ).toThrow(/workspace\.provider/)
+    expect(() =>
+      parseConfig(`[workspace]\nprovider = "git-worktree"\nextra = true\n${READY}`),
+    ).toThrow(/workspace:.*extra/)
+    expect(() =>
+      parseConfig(`[workspace.config]\nroot = "elsewhere"\n${READY}`),
+    ).toThrow(/workspace\.config/)
   })
 
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
@@ -476,7 +513,7 @@ extensions = []
     const root = parseError(`${READY}[polcy]\nstallRounds = 3\n`)
     expect(root.message).toContain('"polcy"')
     expect(root.message).toContain('known top-level keys: baseBranch, capacity')
-    expect(root.message).toContain('known tables: pr, commands')
+    expect(root.message).toContain('known tables: pr, workspace, commands')
 
     expect(parseError(`${READY}[policy]\nstallRound = 3\n`).message).toContain('"stallRound"')
     expect(parseError(`${READY}[roles.default]\nmdel = "x"\n`).message).toContain('"mdel"')
