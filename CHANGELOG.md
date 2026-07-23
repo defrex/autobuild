@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#90](https://github.com/defrex/autobuild/pull/90) — Open role routing to plugin agent runtimes
 - Open plugin-registered agent runtimes to role and one-shot selection
 - [#85](https://github.com/defrex/autobuild/pull/85) — Add reusable AgentRunner contract suite
 - [#84](https://github.com/defrex/autobuild/pull/84) — Document the remote BuildStore protocol
