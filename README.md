@@ -32,17 +32,20 @@ latent bugs, worthwhile refactors, follow-ups they noticed but rightly left
 alone. A harvester distills them into proposed tickets and files them for
 triage; approve one and it runs the same loop.
 
-Every seam is an adapter: ticket sources (Linear or local files), agent
-runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
-build store all sit behind narrow interfaces. Trusted Bun plugins declared in
-`autobuild.toml` can register third-party ticket, runtime, workspace, and forge
-adapters against the versioned `autobuild/plugin-sdk` surface. Third-party
-ticket sources are selectable for dispatch, harvest, completion, and every
-`ab ticket` operation. The root `forge` setting and `[workspace].provider`
-likewise select registered adapters (`github` and `git-worktree` by default);
-agent-runtime selection will follow. BuildStore is deliberately excluded from
-in-process plugins: its extension surface is the documented
-[remote HTTP protocol](docs/remote-store-protocol.md), so an independent server
+Every seam is an adapter: ticket sources (Linear, local files, or a configured
+plugin), agent runtimes (Claude, Pi, or a configured plugin), the forge (GitHub
+via `gh` or a configured plugin), workspaces, and the build store all sit behind
+narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
+third-party ticket, runtime, workspace, and forge adapters against the versioned
+`autobuild/plugin-sdk` surface. Third-party ticket sources are selectable for
+dispatch, harvest, completion, and every `ab ticket` operation. The root `forge`
+setting and `[workspace].provider` likewise select registered adapters (`github`
+and `git-worktree` by default). Plugin runtime names are selectable in any role
+with the same eager model-family/default validation and session attribution as
+builtins; optional one-shot support also serves slug and upgrade judgments.
+Plugin authors should run the exported contract suite for each adapter.
+BuildStore is deliberately excluded from in-process plugins: its extension
+surface is the documented [remote HTTP protocol](docs/remote-store-protocol.md), so an independent server
 can use any language or storage.
 
 Inspect and certify configured integrations from the repository root:

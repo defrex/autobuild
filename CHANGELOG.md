@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#90](https://github.com/defrex/autobuild/pull/90) — Open role routing to plugin agent runtimes
 - [#89](https://github.com/defrex/autobuild/pull/89) — Add workspace provider selection
 - [#88](https://github.com/defrex/autobuild/pull/88) — Enable plugin ticket sources
 - [#87](https://github.com/defrex/autobuild/pull/87) — Add plugin diagnostics and contract certification

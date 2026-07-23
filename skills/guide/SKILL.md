@@ -193,14 +193,20 @@ fail-fast. Certify one adapter with
 The command forwards Bun's per-test output and status. A live descriptor is
 refused unless `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
 
-`[tickets].source` can select loaded registrations. Forge selection is open
-through the root `forge` scalar; omission selects `github`. A selected forge
-factory receives empty adapter config, the process environment, and the
-absolute repository root. Unknown names list all available forges. Dispatch
-and scoped phase CLI processes resolve the same configured forge name,
-preserving the adapter's optional `prAttachments` capability. Workspace
-selection consumes registered plugin factories through `[workspace]`. Only
-the agent-runtime selector remains builtin-only.
+`[tickets].source`, the root `forge` scalar, `[workspace].provider`, and every
+`[roles.*].runtime` can select loaded registrations. Omitted forge and workspace
+selectors use `github` and `git-worktree`. Selected factories receive their
+adapter config, the process environment, and the absolute repository root;
+runtime and forge config is currently empty. Unknown names list all available
+adapters for that port. Dispatch and scoped phase CLI processes resolve the same
+configured forge name, preserving the adapter's optional `prAttachments`
+capability.
+
+Plugin runtimes participate in the same eager exact-name, model-family, and
+default-model role validation and session attribution as builtins. Their
+optional one-shot capability serves slug and upgrade judgments; absence retains
+each caller's existing safe fallback. Plugin authors should run the exported
+contract suite for every adapter, including the AgentRunner suite for runtimes.
 
 ### `[pr]`
 
@@ -424,7 +430,9 @@ With no `[roles.default]`, the base is empty: sessions use the wiring-fallback
 runtime (`claude`) and that runtime's built-in default model, with no
 extensions. Two runtimes ship: **`claude`** (Claude models) and **`pi`** (SDK
 mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
-[query]` looks them up).
+[query]` looks them up). Trusted plugins may register additional runtime names;
+they use the same role inheritance, default-model compatibility validation,
+session event attribution, and optional one-shot capability path as builtins.
 
 The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
 plus each verify/finalize step by name. The repository workflow resolves

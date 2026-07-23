@@ -125,22 +125,32 @@ first plugin failure before opening stores or claiming work. `test` invokes one
 unchanged shared suite under `bun test`; Bun's per-test output and exit status
 are authoritative. A missing `contract.factory` is an actionable error. A
 `live = true` descriptor cannot launch or create its harness unless
-`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
+`AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set. Plugin authors should run the
+corresponding contract suite against every adapter, including
+`describeAgentRunnerContract` for each runtime.
 
-Ticket-source, forge, and workspace selection are open. Set `[tickets].source`,
-the root `forge` scalar, or `[workspace].provider` to a registered name;
-omission selects the builtin defaults where applicable. Only the agent-runtime
-selector remains restricted to shipped builtins. A selected plugin forge
-factory receives an empty adapter-specific `config` object, while a workspace
-factory receives `[workspace.config]`; both receive the process environment
-and absolute repository root and are invoked lazily after the complete plugin
-catalog loads. Unknown names fail with the available names for that port, and
-factory failures are contextualized with the adapter and plugin names. Scoped
-build-session CLI processes repeat forge config/plugin loading from the build
-worktree, so phase terminal plumbing uses the same configured forge. The
-returned forge is not wrapped: an absent `prAttachments` capability
-intentionally selects text-only attachment summaries, while a present
-capability serves upload and terminal reclamation.
+Ticket-source, forge, workspace, and agent-runtime selection are open. Set
+`[tickets].source`, the root `forge` scalar, `[workspace].provider`, or any
+`[roles.*].runtime` to a registered name; omission selects the builtin defaults
+where applicable. A selected plugin forge factory receives an empty
+adapter-specific `config` object, while a workspace factory receives
+`[workspace.config]`; both receive the process environment and absolute
+repository root and are invoked lazily after the complete plugin catalog loads.
+Unknown names fail with the available names for that port, and factory failures
+are contextualized with the adapter and plugin names. Scoped build-session CLI
+processes repeat forge config/plugin loading from the build worktree, so phase
+terminal plumbing uses the same configured forge. The returned forge is not
+wrapped: an absent `prAttachments` capability intentionally selects text-only
+attachment summaries, while a present capability serves upload and terminal
+reclamation.
+
+Plugin runtimes receive empty adapter config, the process environment, and the
+absolute repository root. They participate in the same eager exact-name,
+model-family, and default-model role validation as builtins, and their
+registration key is used for session event and transcript attribution. A
+runtime's optional one-shot capability serves slug naming and lazy upgrade
+conflict resolution; when absent, each caller retains its existing safe
+fallback.
 
 ## `[pr]`
 
@@ -468,11 +478,15 @@ to serve a configured model and never substitutes a different model to repair
 an invalid pair. The only implicit fill is when neither the role nor `default`
 names a model, in which case the selected runtime uses its own default.
 
-Two runtimes ship: `claude` and `pi`. With no configured model, Claude uses
-the SDK's built-in default and Pi uses `kimi-coding/k3`. Use
-`ab models [query]` to find provider-qualified Pi model ids. Extension entries
-match installed Pi package sources case-insensitively; runtimes without an
-extension mechanism ignore this axis. Tool-free one-shot judgments disable
+Two runtimes ship: `claude` and `pi`; trusted plugins may register additional
+names. Builtin and plugin runtimes use the same exact-pair validation and event
+attribution. With no configured model, the selected runtime uses its declared
+default when present (Claude otherwise uses the SDK default; Pi declares
+`kimi-coding/k3`). Use `ab models [query]` to find provider-qualified Pi model
+ids. Extension entries match installed Pi package sources case-insensitively;
+runtimes without an extension mechanism ignore this axis. A plugin may declare
+optional tool-free one-shot completion for `slug` and `upgrade`; absence keeps
+each caller's existing fail-safe behavior. One-shot judgments disable
 extensions even if their role grants them.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
@@ -484,7 +498,8 @@ keys are accepted, but only a name selected by one of these routes affects a
 session.
 
 Resolver construction validates `default` and every declared role eagerly and
-aggregates all unknown-runtime and incompatible-model problems. A deliberately
+aggregates all unknown-runtime and incompatible-model problems. Unknown-runtime
+diagnostics list every builtin and materialized plugin runtime. A deliberately
 different reviewer model is valid and often useful; mixed models are not a
 configuration inconsistency.
 
@@ -798,8 +813,9 @@ the wrong step kind, or source-specific ticket fields used together.
 
 Runtime routing failures use a separate heading and list all bad roles. Check
 the merged `default` plus child values, not just the child table: each axis
-inherits independently. Confirm the runtime name is shipped and use
-`ab models [query]` to choose a model family that runtime serves.
+inherits independently. Confirm the runtime name is shipped or registered by a configured plugin and
+use `ab models [query]` (or the plugin's documentation) to choose a model family
+that runtime serves.
 
 ### `tick: idle` with expected work
 

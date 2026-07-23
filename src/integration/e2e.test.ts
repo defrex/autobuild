@@ -1767,6 +1767,100 @@ test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default run
   expect(planTranscript.metadata['model']).toBeUndefined()
 }, 30_000)
 
+const PLUGIN_RUNTIME_TOML = `${CONFIG_TOML}
+[roles.default]
+runtime = "plugin-scripted"
+`
+
+test('g2. a plugin-registered runtime and its default model drive a full build', async () => {
+  const h = await track(
+    makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-PLUGIN')],
+      configToml: PLUGIN_RUNTIME_TOML,
+    }),
+  )
+
+  expect(await h.dispatcher.tick()).toEqual({
+    ...emptyTickReport(),
+    dispatched: 1,
+  })
+  const state = await h.runLatest()
+  expect(state.prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+
+  const events = await h.events(SLUG)
+  const started = ofType(events, 'session.started')
+  expect(started).toHaveLength(5)
+  expect(
+    started.map((event) => [event.payload.runner, event.payload.model]),
+  ).toEqual(Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']))
+
+  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
+  expect(transcripts).toHaveLength(5)
+  expect(
+    transcripts.map((artifact) => [
+      artifact.metadata['runner'],
+      artifact.metadata['model'],
+    ]),
+  ).toEqual(Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']))
+  expect(h.agents.sessions.size).toBe(5)
+  expect([...h.agents.sessions.values()].every((session) => session.ended)).toBe(true)
+}, 30_000)
+
+const PLUGIN_PHASE_OVERRIDE_TOML = `${CONFIG_TOML}
+[roles.default]
+runtime = "scripted"
+
+[roles.plan]
+runtime = "plugin-scripted"
+`
+
+test('g3. a phase role can override the configured default with a plugin runtime', async () => {
+  const h = await track(
+    makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-PLUGIN-PHASE')],
+      configToml: PLUGIN_PHASE_OVERRIDE_TOML,
+    }),
+  )
+
+  expect(await h.dispatcher.tick()).toEqual({
+    ...emptyTickReport(),
+    dispatched: 1,
+  })
+  const state = await h.runLatest()
+  expect(state.prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+
+  const started = ofType(await h.events(SLUG), 'session.started')
+  const plan = started.find((event) => event.payload.role === 'plan')!
+  expect(plan.payload.runner).toBe('plugin-scripted')
+  expect(plan.payload.model).toBe('plugin/default')
+
+  for (const role of ['plan-review', 'implement', 'code-review', 'finalize']) {
+    const session = started.find((event) => event.payload.role === role)!
+    expect(session.payload.runner).toBe('scripted')
+    expect(session.payload.model).toBeUndefined()
+  }
+
+  const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
+  const planTranscript = transcripts.find(
+    (artifact) => artifact.metadata['phase'] === 'plan',
+  )!
+  expect(planTranscript.metadata['runner']).toBe('plugin-scripted')
+  expect(planTranscript.metadata['model']).toBe('plugin/default')
+  expect(
+    transcripts
+      .filter((artifact) => artifact.metadata['phase'] !== 'plan')
+      .every(
+        (artifact) =>
+          artifact.metadata['runner'] === 'scripted' &&
+          artifact.metadata['model'] === undefined,
+      ),
+  ).toBe(true)
+}, 30_000)
+
 // ── h. Observation harvest through dispatcher + real CLI (§12) ──────────────
 
 test('h. harvest e2e: threshold → revise → file once → wait for K new observations', async () => {

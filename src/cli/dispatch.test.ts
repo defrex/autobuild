@@ -295,6 +295,85 @@ describe('abDispatch guards', () => {
     }
   })
 
+  test('loads, materializes, resolves, and runs a configured plugin runtime', async () => {
+    const toml =
+      'plugins = ["./runtime-plugin.ts"]\n' +
+      DISPATCH_CONFIG_TOML +
+      '\n[roles.default]\nruntime = "custom-runtime"\n'
+    const fx = await makeFixture(
+      readyTicket('PLUG-1', { title: 'Use plugin runtime' }),
+      happyHandlers(),
+      toml,
+    )
+    const globals = globalThis as Record<string, unknown>
+    globals.__abDispatchPluginRunner = fx.agents
+    try {
+      await writeFile(
+        join(fx.origin, 'runtime-plugin.ts'),
+        `export default {
+          name: 'dispatch-runtime-fixture',
+          apiVersion: '^1.0.0',
+          agentRuntimes: {
+            'custom-runtime': (context: unknown) => {
+              globalThis.__abDispatchPluginContext = context
+              return {
+                runner: globalThis.__abDispatchPluginRunner,
+                servesModels: ['custom/'],
+                defaultModel: 'custom/default',
+                oneShot: {
+                  complete: async (input: unknown) => {
+                    globalThis.__abDispatchPluginOneShot = input
+                    return { text: 'plugin-runtime-build' }
+                  },
+                },
+              }
+            },
+          },
+        }\n`,
+      )
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: { PLUGIN_TOKEN: 'secret' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      const context = globals.__abDispatchPluginContext as {
+        config: Record<string, unknown>
+        env: Record<string, string | undefined>
+        repoRoot: string
+      }
+      expect(context.config).toEqual({})
+      expect(context.env.PLUGIN_TOKEN).toBe('secret')
+      expect(context.repoRoot).toBe(fx.origin)
+      const oneShot = globals.__abDispatchPluginOneShot as {
+        model?: string
+        cwd: string
+      }
+      expect(oneShot.model).toBe('custom/default')
+      expect(oneShot.cwd).toBe(fx.origin)
+
+      const events = await fx.store.getEvents('plugin-runtime-build')
+      const sessions = events.filter((event) => event.type === 'session.started')
+      expect(sessions).toHaveLength(5)
+      expect(sessions.every((event) => event.payload.runner === 'custom-runtime')).toBe(true)
+      expect(sessions.every((event) => event.payload.model === 'custom/default')).toBe(true)
+      expect(fx.agents.sessions.size).toBe(5)
+      expect(fx.forge.opened).toHaveLength(1)
+      expect(fx.cliErrors).toEqual([])
+      expect(fx.err).toEqual([])
+    } finally {
+      delete globals.__abDispatchPluginRunner
+      delete globals.__abDispatchPluginContext
+      delete globals.__abDispatchPluginOneShot
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('production wiring selects a plugin-registered ticket source', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-source-'))
     const origin = join(tmp, 'repo')

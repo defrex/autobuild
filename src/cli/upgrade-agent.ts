@@ -6,6 +6,9 @@
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
+import { loadPlugins } from '../plugins/load'
+import type { PluginRegistry } from '../plugins/registry'
+import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { OneShotCompletion } from '../ports/runner/one-shot'
 import { createProductionRuntimes, type ProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
@@ -22,6 +25,11 @@ export interface UpgradeAgentResolverOpts {
   env: Record<string, string | undefined>
   /** Test seam; production constructs the shared Claude/Pi registry lazily. */
   runtimeFactory?: () => ProductionRuntimes
+  /** Test seam; production loads configured plugin manifests lazily. */
+  pluginLoader?: (
+    modules: readonly string[],
+    repoRoot: string,
+  ) => Promise<PluginRegistry>
   /** Test seam; production loads <targetRepo>/autobuild.toml lazily. */
   load?: (path: string) => Promise<Config>
   /** Fixed in production; injectable only for deterministic deadline tests. */
@@ -97,13 +105,20 @@ export function createUpgradeAgentResolver(
       const config = await (opts.load ?? loadConfig)(
         join(opts.targetRepo, 'autobuild.toml'),
       )
-      const { runtimes, defaultRuntime } = (
-        opts.runtimeFactory ?? createProductionRuntimes
-      )()
+      const plugins = await (opts.pluginLoader ?? loadPlugins)(
+        config.plugins,
+        opts.targetRepo,
+      )
+      const production = (opts.runtimeFactory ?? createProductionRuntimes)()
+      const runtimes = await materializePluginRuntimes(
+        production.runtimes,
+        plugins,
+        { repoRoot: opts.targetRepo, env: opts.env },
+      )
       const selected = createRuntimeResolver(
         runtimes,
         config.roles,
-        defaultRuntime,
+        production.defaultRuntime,
       ).resolve('upgrade')
       const oneShot = runtimes[selected.runtime]?.oneShot
       if (oneShot === undefined) {

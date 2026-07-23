@@ -154,8 +154,15 @@ environment, and absolute repository root, and is invoked before store opening.
 Unknown names list the complete available forge catalog. Dispatch and scoped
 build CLI processes resolve the same configured name independently, and all
 forge plumbing receives the selected adapter unchanged. Workspace selection is
-open through `[workspace].provider` as described above; only the agent-runtime
-plugin selector remains closed pending its follow-up work.
+open through `[workspace].provider` as described above.
+
+Agent runtime selection is open through every `[roles.*].runtime`: dispatch
+materializes registered runtime factories before eager role validation, and the
+lazy upgrade conflict resolver does the same only when its first conflict needs
+judgment. Plugin registrations use the same exact-name routing, model-family and
+default-model validation, event attribution, and optional one-shot capability
+selection as builtins.
+
 `TelemetrySource` remains deferred, and BuildStore's third-party extension
 surface remains the remote HTTP protocol rather than in-process registration.
 
@@ -688,18 +695,21 @@ resolution (§16.3). A runtime without it is valid; each caller owns its
 deterministic fail-safe.
 
 - **Adapters:** Claude Agent SDK for Claude models; pi in SDK mode for other
-  model families. Both are registered runtimes behind the interface. A future
-  access path registers as a *distinct runtime name*, never a mode flag on an
-  existing one.
+  model families. Both are registered runtimes behind the interface. Plugins
+  may register additional adapters, each under a *distinct runtime name*, never
+  as a mode flag on an existing one. Plugin adapters must pass the exported
+  AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and
   extension allowlist live in one open `[roles]` map whose reserved `default`
   entry is the inheritance base. Every concrete role merges over it
   independently per field; the merged runtime/model pair must be compatible —
   the resolver never silently substitutes a runtime or model. All roles
   resolve **eagerly, before any session launches**, with problems aggregated
-  into one error. Adding a runtime touches only the adapter registry, never
-  the kernel. Mixing models across roles is intentional — a different
-  reviewer catches more. The resolved runtime and model are recorded on every
+  into one error. Builtin and plugin registrations use the same model-family,
+  default-model, session, and optional one-shot capability path; adding a
+  runtime touches only the adapter registry, never the kernel. Mixing models
+  across roles is intentional — a different reviewer catches more. The
+  resolved runtime and model are recorded on every
   `session.started`, so an experiment's outcome is attributable to the
   configuration that produced it.
 - **Transcripts come back through the interface**, not scraped from disk, so

@@ -27,6 +27,7 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
+import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
 import {
@@ -167,7 +168,8 @@ export interface DispatchWiring {
   ids: IdSource
   uuids: UuidSource
   clock: Clock
-  /** Validated startup catalog used by selected plugin adapters. */
+  /** Validated startup catalog used by selected plugin adapters. Runtime
+   * factories are materialized into `runtimes` before role resolution. */
   plugins?: PluginRegistry
 }
 
@@ -1457,8 +1459,13 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   resolveForgeRegistration(config.forge, plugins)
   const wire = resolvedOpts.wire ?? defaultWire
   const wired = await wire(config, resolvedOpts, state, plugins)
+  const runtimes = await materializePluginRuntimes(wired.runtimes, plugins, {
+    repoRoot: resolvedOpts.targetRepo,
+    env: resolvedOpts.env,
+  })
   const wiring: DispatchWiring = {
     ...wired,
+    runtimes,
     plugins: wired.plugins ?? plugins,
   }
   // §9: resolve the whole config against the registry ONCE, at startup — a

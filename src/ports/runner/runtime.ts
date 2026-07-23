@@ -49,6 +49,72 @@ export interface RuntimeRegistration {
 /** name → registration. The one place a runtime's name lives (§9). */
 export type RuntimeRegistry = Record<string, RuntimeRegistration>
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/**
+ * Validate an untrusted plugin factory result at the composition boundary.
+ * TypeScript's structural types disappear at runtime, so factories must not be
+ * able to smuggle a partial adapter or inconsistent capability declaration
+ * into the eager role resolver.
+ */
+export function validateRuntimeRegistration(
+  value: unknown,
+): RuntimeRegistration {
+  if (!isObject(value)) {
+    throw new Error('must be an object')
+  }
+
+  const runner = value.runner
+  if (!isObject(runner)) {
+    throw new Error('runner must be an AgentRunner-shaped object')
+  }
+  if (typeof runner.name !== 'string' || runner.name.trim().length === 0) {
+    throw new Error('runner.name must be a nonblank string')
+  }
+  for (const method of ['start', 'continue', 'end'] as const) {
+    if (typeof runner[method] !== 'function') {
+      throw new Error(`runner.${method} must be a function`)
+    }
+  }
+
+  const servesModels = value.servesModels
+  if (
+    !Array.isArray(servesModels) ||
+    servesModels.some(
+      (family) => typeof family !== 'string' || family.trim().length === 0,
+    )
+  ) {
+    throw new Error('servesModels must be an array of nonblank strings')
+  }
+
+  const defaultModel = value.defaultModel
+  if (
+    defaultModel !== undefined &&
+    (typeof defaultModel !== 'string' || defaultModel.trim().length === 0)
+  ) {
+    throw new Error('defaultModel must be a nonblank string when provided')
+  }
+
+  const oneShot = value.oneShot
+  if (
+    oneShot !== undefined &&
+    (!isObject(oneShot) || typeof oneShot.complete !== 'function')
+  ) {
+    throw new Error('oneShot.complete must be a function when provided')
+  }
+
+  const registration = value as unknown as RuntimeRegistration
+  if (defaultModel !== undefined && !serves(registration, defaultModel)) {
+    throw new Error(
+      `defaultModel "${defaultModel}" is not served by servesModels ` +
+        `[${servesModels.join(', ')}]`,
+    )
+  }
+  return registration
+}
+
 /**
  * Does this registration serve `model`? Prefix-family match:
  * `openai/gpt-5.6-sol` is served by a registration declaring `openai/`. Empty

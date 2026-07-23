@@ -7,6 +7,7 @@ import type {
 } from '../ports/runner/one-shot'
 import type { ProductionRuntimes } from '../ports/runner/production'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
+import { createPluginRegistry } from '../plugins/registry'
 import {
   createUpgradeAgentResolver,
   UPGRADE_CONFLICT_DECLINE,
@@ -132,6 +133,99 @@ describe('createUpgradeAgentResolver', () => {
 
     expect(await resolve(INPUT)).toBe('beta result')
     expect(selected).toEqual(['beta'])
+  })
+
+  test('routes lazily through a plugin one-shot and materializes it only once', async () => {
+    const plugins = createPluginRegistry()
+    const factoryContexts: unknown[] = []
+    const calls: OneShotCompletionInput[] = []
+    plugins.register({
+      name: 'upgrade-runtime-pack',
+      apiVersion: '^1.0.0',
+      agentRuntimes: {
+        custom: (context) => {
+          factoryContexts.push(context)
+          return registration(
+            {
+              complete: async (input) => {
+                calls.push(input)
+                return { text: 'plugin resolution' }
+              },
+            },
+            ['custom/'],
+            'custom/default',
+          )
+        },
+      },
+    })
+    let pluginLoads = 0
+    let runtimeConstructions = 0
+    const resolve = createUpgradeAgentResolver({
+      targetRepo: '/plugin-repo',
+      env: { PLUGIN_TOKEN: 'secret', OMIT: undefined },
+      load: async () => config('[roles.default]\nruntime = "custom"\n'),
+      pluginLoader: async (modules, repoRoot) => {
+        pluginLoads += 1
+        expect(modules).toEqual([])
+        expect(repoRoot).toBe('/plugin-repo')
+        return plugins
+      },
+      runtimeFactory: () => {
+        runtimeConstructions += 1
+        return {
+          runtimes: { alpha: registration(undefined, ['alpha-']) },
+          defaultRuntime: 'alpha',
+        }
+      },
+    })
+
+    expect(pluginLoads).toBe(0)
+    expect(runtimeConstructions).toBe(0)
+    expect(await resolve(INPUT)).toBe('plugin resolution')
+    expect(await resolve({ ...INPUT, skill: 'ab-review' })).toBe('plugin resolution')
+    expect(pluginLoads).toBe(1)
+    expect(runtimeConstructions).toBe(1)
+    expect(factoryContexts).toHaveLength(1)
+    expect(factoryContexts[0]).toEqual({
+      config: {},
+      env: { PLUGIN_TOKEN: 'secret', OMIT: undefined },
+      repoRoot: '/plugin-repo',
+    })
+    expect(calls).toHaveLength(2)
+    expect(calls.every((call) => call.model === 'custom/default')).toBe(true)
+  })
+
+  test('a plugin runtime without one-shot or with a failing factory fails safely', async () => {
+    const pluginResolver = (factory: () => ReturnType<typeof registration>) => {
+      const plugins = createPluginRegistry()
+      plugins.register({
+        name: 'upgrade-runtime-pack',
+        apiVersion: '^1.0.0',
+        agentRuntimes: { custom: factory },
+      })
+      return createUpgradeAgentResolver({
+        targetRepo: '/plugin-repo',
+        env: {},
+        load: async () => config('[roles.default]\nruntime = "custom"\n'),
+        pluginLoader: async () => plugins,
+        runtimeFactory: () => ({
+          runtimes: { alpha: registration(undefined, ['alpha-']) },
+          defaultRuntime: 'alpha',
+        }),
+      })
+    }
+
+    await expect(
+      pluginResolver(() => registration(undefined, ['custom/']))(INPUT),
+    ).rejects.toThrow(/runtime "custom".*does not provide tool-free one-shot/)
+
+    await expect(
+      pluginResolver(() => {
+        throw new Error('plugin setup failed')
+      })(INPUT),
+    ).rejects.toThrow(
+      /agent runtime "custom" factory from plugin "upgrade-runtime-pack" failed: plugin setup failed/,
+    )
   })
 
   test('only the reserved decline token maps to null', async () => {
