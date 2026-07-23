@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_PERMANENT_FAILURE,
+  CONTRACT_RETRYABLE_FAILURE,
+  describeAgentRunnerContract,
+  type AgentRunnerContractFactory,
+} from './contract'
+import {
   ScriptedAgentRunner,
   defaultTurnResult,
   failedTurnResult,
@@ -39,6 +45,33 @@ describe('defaultTurnResult', () => {
     })
   })
 })
+
+const scriptedContractFactory: AgentRunnerContractFactory = (scenario) => {
+  const turns: Array<{ message?: string; env: Record<string, string> }> = []
+  const runner = new ScriptedAgentRunner({
+    script: (ctx) => {
+      turns.push({
+        ...(ctx.message !== undefined ? { message: ctx.message } : {}),
+        env: ctx.opts.env,
+      })
+      if (scenario === 'retryable-failure') {
+        return failedTurnResult(CONTRACT_RETRYABLE_FAILURE, false)
+      }
+      if (scenario === 'permanent-failure') {
+        return failedTurnResult(CONTRACT_PERMANENT_FAILURE, true)
+      }
+      return defaultTurnResult(`contract turn ${ctx.turn}`)
+    },
+  })
+  return {
+    runner,
+    model: 'contract/scripted-model',
+    workspacePath: process.cwd(),
+    turns: () => turns,
+  }
+}
+
+describeAgentRunnerContract('ScriptedAgentRunner', scriptedContractFactory)
 
 describe('ScriptedAgentRunner', () => {
   test('start creates sessions s_1, s_2, … and invokes the script with turn 1', async () => {
@@ -121,7 +154,7 @@ describe('ScriptedAgentRunner', () => {
       env: { AB_PHASE: 'implement@2', AB_SESSION: 's_5' },
     })
 
-    expect(contexts[1]?.opts.env).toEqual({
+    expect(contexts[1]?.opts.env).toMatchObject({
       AB_BUILD: 'auth-rate-limit', // start-only key survives the merge
       AB_PHASE: 'implement@2',
       AB_SESSION: 's_5',

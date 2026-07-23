@@ -8,6 +8,7 @@ const READY = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
 const COMPLETE_EXAMPLE = `baseBranch = "main"
 capacity = 3
+forge = "gitlab"
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 [pr.imageHost]
@@ -90,6 +91,7 @@ describe('parseConfig — complete flattened surface', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       baseBranch: 'main',
       capacity: 3,
+      forge: 'gitlab',
       plugins: ['./plugins/local.ts', '@acme/autobuild-plugin'],
       pr: {
         imageHost: {
@@ -157,6 +159,7 @@ describe('parseConfig — defaults', () => {
     expect(parseConfig(READY)).toEqual({
       baseBranch: 'main',
       capacity: 1,
+      forge: 'github',
       plugins: [],
       commands: {},
       verify: { steps: [], stepConfigs: {} },
@@ -171,6 +174,14 @@ describe('parseConfig — defaults', () => {
       },
       tickets: { source: 'file', readyState: 'ready' },
     })
+  })
+
+  test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
+    expect(parseConfig(READY).forge).toBe('github')
+    expect(parseConfig(`forge = "gitlab"\n${READY}`).forge).toBe('gitlab')
+    for (const value of ['""', '"   "', '1']) {
+      expect(() => parseConfig(`forge = ${value}\n${READY}`)).toThrow(/forge/)
+    }
   })
 
   test('plugins default empty and accept repository paths and package specifiers', () => {

@@ -59,7 +59,7 @@ import {
 } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
-import { GitHubForge } from '../ports/forge/github'
+import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -166,8 +166,7 @@ export interface DispatchWiring {
   ids: IdSource
   uuids: UuidSource
   clock: Clock
-  /** Validated startup catalog. Ticket-source selection consumes it here;
-   * remaining plugin port selectors are opened by follow-up releases. */
+  /** Validated startup catalog used by selected plugin adapters. */
   plugins?: PluginRegistry
 }
 
@@ -253,14 +252,21 @@ function openWorkspaceRef(events: AbEvent[]): string | null {
   return open
 }
 
-/** Production wiring: the local (or remote) store, the configured
- * TicketSource, the GitHub forge, git worktrees, and shipped runtimes. */
+/** Production wiring: the local (or remote) store, configured adapters,
+ * git worktrees, and shipped runtimes. Forge construction deliberately happens
+ * before store opening so a plugin factory failure cannot precede a claim. */
 async function defaultWire(
   config: Config,
   opts: DispatchOpts,
   state: RepoStatePaths,
   plugins: PluginRegistry,
 ): Promise<DispatchWiring> {
+  const forge = await createForge({
+    name: config.forge,
+    registry: plugins,
+    env: opts.env,
+    repoRoot: opts.targetRepo,
+  })
   const opened = openStoreForRepoState(state, { env: opts.env })
 
   const tickets = await createTicketSource(
@@ -275,7 +281,7 @@ async function defaultWire(
   return {
     store: opened.store,
     tickets,
-    forge: new GitHubForge(),
+    forge,
     // A local override relocates the whole tree. Remote stores still need
     // local Git scratch, which stays beneath the repository's default root.
     workspaces: new GitWorktreeProvider({ root: opened.worktreeRoot }),
@@ -1437,6 +1443,9 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // must resolve, evaluate, validate, and register before production wiring
   // opens a store, claims a ticket, or launches a runner.
   const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo)
+  // Validate the selector against the complete catalog before either custom
+  // wiring or production wiring can open state or perform side effects.
+  resolveForgeRegistration(config.forge, plugins)
   const wire = resolvedOpts.wire ?? defaultWire
   const wired = await wire(config, resolvedOpts, state, plugins)
   const wiring: DispatchWiring = {

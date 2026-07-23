@@ -314,6 +314,11 @@ const configRootSchema = z.strictObject({
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */
   capacity: z.number().int().positive().default(1),
+  /** Forge adapter selected from builtins and configured plugins. */
+  forge: z.string().refine(
+    (value) => value.trim().length > 0,
+    'forge adapter name must be nonblank',
+  ).default('github'),
   /** Trusted in-process plugin modules, loaded in declaration order from the
    * consuming repository before production adapters are constructed. */
   plugins: z
@@ -345,7 +350,7 @@ const configRootSchema = z.strictObject({
 })
 
 /** Root metadata keeps strict error prose and documentation coverage honest. */
-export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity', 'plugins'] as const
+export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity', 'forge', 'plugins'] as const
 export const TOP_LEVEL_TABLES = Object.keys(configRootSchema.shape).filter(
   (key) => !(TOP_LEVEL_SCALARS as readonly string[]).includes(key),
 )

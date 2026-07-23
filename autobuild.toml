@@ -7,6 +7,8 @@
 # Root scalars must appear before the first TOML table.
 baseBranch = "main"
 capacity = 3             # concurrent builds for this repo
+# Forge adapter: builtin GitHub by default, or a name registered below.
+#forge = "github"
 # Trusted Bun modules loaded from this repository before dispatch starts.
 # Relative paths and installed package specifiers are both supported.
 #plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]

@@ -37,9 +37,12 @@ runtimes (Claude or Pi), the forge (GitHub via `gh`), workspaces, and the
 build store all sit behind narrow interfaces. Trusted Bun plugins declared in
 `autobuild.toml` can register third-party ticket, runtime, workspace, and forge
 adapters against the versioned `autobuild/plugin-sdk` surface. Third-party
-ticket sources are selectable today and serve dispatch, harvest, completion,
-and every `ab ticket` operation; runtime/workspace/forge selector support is
-still rolling out. The build store keeps remote HTTP as its extension surface.
+ticket sources are selectable for dispatch, harvest, completion, and every
+`ab ticket` operation. The root `forge` setting likewise selects a registered
+forge (`github` by default); runtime and workspace selection will follow.
+BuildStore is deliberately excluded from in-process plugins: its extension
+surface is the documented [remote HTTP protocol](docs/remote-store-protocol.md),
+so an independent server can use any language or storage.
 
 ## Quickstart
 
@@ -185,5 +188,7 @@ pipe or a script sees exactly what you do.
   configuration, as a worked example of the config surface.
 - [`docs/architecture.md`](docs/architecture.md) — how the design maps to the
   codebase: kernel, ports, processes, and stores.
+- [`docs/remote-store-protocol.md`](docs/remote-store-protocol.md) — the
+  complete HTTP server contract and BuildStore conformance instructions.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and its
   terminology.

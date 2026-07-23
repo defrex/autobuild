@@ -18,6 +18,8 @@ export type RegistrationOwner =
 
 export interface AdapterRegistration<Factory> {
   owner: RegistrationOwner
+  /** Builtins reserve their names; host construction may remain outside the
+   * plugin factory map while selectors consume plugin registrations lazily. */
   factory?: Factory
   /** Host-enforced ticket-source credential declarations. Undefined for
    * builtins and every other plugin port. */
