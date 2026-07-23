@@ -160,25 +160,30 @@ describe('ab-guide — finalize publication boundary', () => {
 })
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
-  test('canonical and pristine guide copies stay synchronized', async () => {
+  test('canonical and pristine guide trees stay synchronized', async () => {
     const canonical = (await readDistSkills(DIST_ROOT)).find(
       (skill) => skill.name === 'guide',
     )
     expect(canonical).toBeDefined()
-    const pristine = await readFile(
-      join(
-        DIST_ROOT,
-        '.agents',
-        'skills',
-        '.ab-pristine',
-        'ab-guide',
-        'SKILL.md',
-      ),
-      'utf8',
+    expect(canonical!.files.map((file) => file.path)).toEqual(
+      canonical!.files.map((file) => file.path).sort((a, b) => a.localeCompare(b)),
     )
-    // The live installed copy is repository-editable by design; pristine is
-    // the distribution baseline that must stay synchronized for upgrades.
-    expect(pristine).toBe(canonical!.content)
+    for (const file of canonical!.files) {
+      const pristine = await readFile(
+        join(
+          DIST_ROOT,
+          '.agents',
+          'skills',
+          '.ab-pristine',
+          'ab-guide',
+          ...file.path.split('/'),
+        ),
+        'utf8',
+      )
+      // The live installed tree is repository-editable by design; pristine is
+      // the distribution baseline that must stay synchronized for upgrades.
+      expect(pristine).toBe(file.content)
+    }
   })
 
   test('every skill in the distribution has a row in the skills rundown', async () => {

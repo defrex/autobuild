@@ -15,6 +15,7 @@ import {
 
 const INPUT = {
   skill: 'ab-plan',
+  path: 'SKILL.md',
   base: '---\nname: ab-plan\n---\nbase bytes\n',
   local: '---\nname: ab-plan\n---\nlocal bytes\n',
   incoming: '---\nname: ab-plan\n---\nincoming bytes\n',
@@ -95,6 +96,7 @@ describe('createUpgradeAgentResolver', () => {
     expect(call.model).toBe('alpha-upgrade')
     expect(call.signal).toBeInstanceOf(AbortSignal)
     expect(call.signal?.aborted).toBe(false)
+    expect(call.prompt).toContain('The file path inside that skill is SKILL.md')
     expect(call.prompt).toContain('Standing bias: preserve the local customization')
     expect(call.prompt).toContain('incorporate every incoming change that does not collide')
     expect(call.prompt).toContain(`<pristine-base>\n${INPUT.base}\n</pristine-base>`)

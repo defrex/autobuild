@@ -1,8 +1,11 @@
 /**
  * `ab upgrade` — the classic vendoring problem (SPEC §16.3, D11). `ab init`
- * recorded the pristine bytes of every installed skill; upgrade three-way
- * merges pristine (base) × local (ours) × new default (theirs) so local
- * customization survives and divergence is visible instead of silent:
+ * recorded the pristine bytes of every distributed skill file; upgrade
+ * three-way merges pristine (base) × local (ours) × new default (theirs) so
+ * local customization survives and divergence is visible instead of silent:
+ *
+ * The cases below apply independently to every distributed file; their
+ * outcomes are folded into one deterministic per-skill report.
  *
  * - new default == pristine → nothing changed upstream; the local file
  *   stands, whatever the repo did to it (`current`).
@@ -31,23 +34,23 @@
  * Like init, upgrade runs OUTSIDE build sessions — no AB_* environment.
  */
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   defaultDistRoot,
   ensureClaudeSkillLink,
-  installSkillFiles,
-  installedSkillPath,
+  installedSkillFilePath,
   listInstalledSkills,
   migrateLegacyAgentSkills,
   migrateLegacySkill,
-  pristineSkillPath,
+  pristineSkillFilePath,
   readDistSkills,
   readIfExists,
-  writePristine,
+  writeInstalledSkillFile,
+  writePristineFile,
 } from './init'
 
 export type UpgradeSkillAction =
@@ -74,6 +77,8 @@ export interface UpgradeReport {
  */
 export type ResolveConflict = (input: {
   skill: string
+  /** POSIX-style path relative to the installed skill directory. */
+  path: string
   base: string
   local: string
   incoming: string
@@ -308,16 +313,19 @@ function frontmatterName(candidate: string): { name?: string; error?: string } {
 /** Return an actionable reason when an agent proposal is unsafe. */
 export function validateConflictResolution(input: {
   skill: string
+  path?: string
   candidate: string
   markedMerge: string
   labels: MergeConflictLabels
 }): string | undefined {
   if (input.candidate.trim() === '') return 'output was empty'
 
-  const frontmatter = frontmatterName(input.candidate)
-  if (frontmatter.error !== undefined) return frontmatter.error
-  if (frontmatter.name !== input.skill) {
-    return `frontmatter names "${frontmatter.name}" instead of "${input.skill}"`
+  if ((input.path ?? 'SKILL.md') === 'SKILL.md') {
+    const frontmatter = frontmatterName(input.candidate)
+    if (frontmatter.error !== undefined) return frontmatter.error
+    if (frontmatter.name !== input.skill) {
+      return `frontmatter names "${frontmatter.name}" instead of "${input.skill}"`
+    }
   }
 
   let regions: string[]
@@ -362,133 +370,206 @@ export async function abUpgrade(opts: {
   const stdout = opts.stdout ?? (() => {})
   const { targetRepo } = opts
 
-  // Normalize old installations first so pristine bases, local additions,
-  // and supporting files participate in the normal upgrade flow.
   await migrateLegacyAgentSkills(targetRepo)
 
   const skills: UpgradeReport['skills'] = []
   const report = (skill: string, action: UpgradeSkillAction, detail?: string): void => {
     skills.push({ skill, action, ...(detail !== undefined ? { detail } : {}) })
   }
+  const precedence: UpgradeSkillAction[] = [
+    'current',
+    'adopted',
+    'merged',
+    'resolved',
+    'conflicted',
+  ]
 
   const dist = await readDistSkills(distRoot)
   for (const skill of dist) {
     const name = skill.installName
-    const incoming = skill.content
-    const migrated = await migrateLegacySkill(targetRepo, name)
-    const local = migrated ?? (await readIfExists(installedSkillPath(targetRepo, name)))
-    if (local !== undefined) await ensureClaudeSkillLink(targetRepo, name)
+    const migrated = await migrateLegacySkill(targetRepo, name, stdout)
+    await ensureClaudeSkillLink(targetRepo, name)
 
-    if (local === undefined) {
-      // In the distribution but not installed — install fresh, like init.
-      await installSkillFiles(targetRepo, name, incoming)
-      report(name, 'installed')
-      stdout(`${name}: installed`)
-      continue
-    }
-
-    const pristine = await readIfExists(pristineSkillPath(targetRepo, name))
-
-    if (pristine === undefined) {
-      // Pre-record install: without a base, edits are indistinguishable
-      // from an older default. Adopt only the provably-safe direction.
-      if (local === incoming) {
-        await writePristine(targetRepo, name, incoming)
-        report(name, 'adopted', 'no pristine record; local already matches the new default')
-        stdout(`${name}: adopted (no pristine record; local already matched)`)
-      } else {
-        const detail =
-          'no pristine record and local differs from the new default — refusing to ' +
-          'clobber; merge by hand or re-run `ab init --force` to adopt the default'
-        report(name, 'conflicted', detail)
-        stdout(`${name}: conflicted — ${detail}`)
+    const incoming = new Map(skill.files.map((file) => [file.path, file.content]))
+    const pristineRoot = pristineSkillFilePath(targetRepo, name, 'SKILL.md')
+    const pristineFiles = new Set<string>()
+    const collectPristine = async (dir: string, prefix = ''): Promise<void> => {
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
       }
-      continue
+      for (const entry of entries) {
+        const path = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+        if (entry.isDirectory()) await collectPristine(join(dir, entry.name), path)
+        else if (entry.isFile()) pristineFiles.add(path)
+      }
     }
+    await collectPristine(dirname(pristineRoot))
 
-    if (incoming === pristine) {
-      // Nothing changed upstream; local stands, edited or not.
-      report(name, 'current')
-      stdout(`${name}: current`)
-      continue
+    const paths = [...new Set([...incoming.keys(), ...pristineFiles])].sort()
+    const initialLocals = new Map<string, string>()
+    for (const path of paths) {
+      const local =
+        path === 'SKILL.md' && migrated !== undefined
+          ? migrated
+          : await readIfExists(installedSkillFilePath(targetRepo, name, path))
+      if (local !== undefined) initialLocals.set(path, local)
     }
+    const freshInstall = pristineFiles.size === 0 && initialLocals.size === 0
+    const outcomes: UpgradeSkillAction[] = []
+    const details: string[] = []
+    const conflictHints: Array<{ path: string; reason: string }> = []
 
-    if (local === pristine) {
-      // No local edits; adopt the new default wholesale.
-      await installSkillFiles(targetRepo, name, incoming)
-      report(name, 'adopted')
-      stdout(`${name}: adopted`)
-      continue
-    }
+    for (const path of paths) {
+      const incomingText = incoming.get(path)
+      const livePath = installedSkillFilePath(targetRepo, name, path)
+      const pristinePath = pristineSkillFilePath(targetRepo, name, path)
+      const local = initialLocals.get(path)
+      const pristine = await readIfExists(pristinePath)
 
-    // Both diverged: three-way merge base=pristine, ours=local, theirs=new.
-    const merge = await mergeFile(exec, { base: pristine, local, incoming })
-    if (merge.clean) {
-      await writeFile(installedSkillPath(targetRepo, name), merge.text)
-      await writePristine(targetRepo, name, incoming)
-      report(name, 'merged')
-      stdout(`${name}: merged`)
-      continue
-    }
+      // New upstream support file (or an old install without a per-file base).
+      if (pristine === undefined) {
+        if (incomingText === undefined) continue
+        if (local === undefined || local === incomingText) {
+          await writeInstalledSkillFile(targetRepo, name, path, incomingText)
+          await writePristineFile(targetRepo, name, path, incomingText)
+          outcomes.push('adopted')
+          if (path === 'SKILL.md' && local === incomingText) {
+            details.push(
+              'SKILL.md: no pristine record; local already matches the new default',
+            )
+          }
+        } else {
+          const reason =
+            'no pristine record and local differs from the new default — refusing to ' +
+            'clobber; merge by hand or re-run `ab init --force` to adopt the default'
+          outcomes.push('conflicted')
+          details.push(`${path}: ${reason}`)
+          conflictHints.push({ path, reason })
+        }
+        continue
+      }
 
-    // Every agent-side failure converges on this one fail-safe result. Neither
-    // live nor pristine has been touched at this point; the marked merge stays
-    // report-only as a diagnostic for the manual recovery path.
-    const keepConflict = (reason: string): void => {
-      report(
-        name,
-        'conflicted',
-        `${reason}\n\nmarked merge diagnostic (not written):\n${merge.text}`,
-      )
-      stdout(
-        `${name}: conflicted — ${reason}; kept your local file ` +
-          `(merge by hand against .agents/skills/.ab-pristine/${name}/SKILL.md)`,
-      )
-    }
+      // Upstream removed a formerly distributed support file. An unedited
+      // copy can be removed safely. A customized copy becomes an ordinary
+      // repository-local support file and is never silently deleted.
+      if (incomingText === undefined) {
+        if (local === undefined || local === pristine) {
+          await rm(livePath, { force: true })
+          await rm(pristinePath, { force: true })
+          outcomes.push('adopted')
+        } else {
+          await rm(pristinePath, { force: true })
+          outcomes.push('merged')
+          details.push(
+            `${path}: upstream removed this file; kept the locally customized copy`,
+          )
+        }
+        continue
+      }
 
-    if (opts.resolveConflict === undefined) {
-      keepConflict('agent resolution unavailable')
-      continue
-    }
-
-    let resolved: string | null
-    try {
-      resolved = await opts.resolveConflict({
-        skill: name,
+      // A missing live file is restored independently. This must not make a
+      // partially present skill overwrite customized siblings.
+      if (local === undefined) {
+        await writeInstalledSkillFile(targetRepo, name, path, incomingText)
+        await writePristineFile(targetRepo, name, path, incomingText)
+        outcomes.push('adopted')
+        continue
+      }
+      if (incomingText === pristine) {
+        outcomes.push('current')
+        continue
+      }
+      if (local === pristine) {
+        await writeInstalledSkillFile(targetRepo, name, path, incomingText)
+        await writePristineFile(targetRepo, name, path, incomingText)
+        outcomes.push('adopted')
+        continue
+      }
+      const merge = await mergeFile(exec, {
         base: pristine,
         local,
-        incoming,
+        incoming: incomingText,
       })
-    } catch (error) {
-      keepConflict(`agent resolution failed: ${errorMessage(error)}`)
-      continue
-    }
-    if (resolved === null) {
-      keepConflict('agent declined because the correct resolution is ambiguous')
-      continue
+      if (merge.clean) {
+        await writeInstalledSkillFile(targetRepo, name, path, merge.text)
+        await writePristineFile(targetRepo, name, path, incomingText)
+        outcomes.push('merged')
+        continue
+      }
+
+      const keepConflict = (reason: string): void => {
+        outcomes.push('conflicted')
+        details.push(
+          `${path}: ${reason}\n\nmarked merge diagnostic (not written):\n${merge.text}`,
+        )
+        conflictHints.push({ path, reason })
+      }
+      if (opts.resolveConflict === undefined) {
+        keepConflict('agent resolution unavailable')
+        continue
+      }
+
+      let resolved: string | null
+      try {
+        resolved = await opts.resolveConflict({
+          skill: name,
+          path,
+          base: pristine,
+          local,
+          incoming: incomingText,
+        })
+      } catch (error) {
+        keepConflict(`agent resolution failed: ${errorMessage(error)}`)
+        continue
+      }
+      if (resolved === null) {
+        keepConflict('agent declined because the correct resolution is ambiguous')
+        continue
+      }
+
+      const invalid = validateConflictResolution({
+        skill: name,
+        path,
+        candidate: resolved,
+        markedMerge: merge.text,
+        labels: merge.labels,
+      })
+      if (invalid !== undefined) {
+        keepConflict(`agent resolution was invalid: ${invalid}`)
+        continue
+      }
+
+      await writeInstalledSkillFile(targetRepo, name, path, resolved)
+      await writePristineFile(targetRepo, name, path, incomingText)
+      outcomes.push('resolved')
     }
 
-    const invalid = validateConflictResolution({
-      skill: name,
-      candidate: resolved,
-      markedMerge: merge.text,
-      labels: merge.labels,
-    })
-    if (invalid !== undefined) {
-      keepConflict(`agent resolution was invalid: ${invalid}`)
-      continue
+    const aggregatedAction = outcomes.reduce<UpgradeSkillAction>(
+      (highest, outcome) =>
+        precedence.indexOf(outcome) > precedence.indexOf(highest) ? outcome : highest,
+      'current',
+    )
+    const action: UpgradeSkillAction = freshInstall ? 'installed' : aggregatedAction
+    const detail = details.length === 0 ? undefined : details.join('\n\n')
+    report(name, action, detail)
+    if (action === 'conflicted') {
+      const conflict = conflictHints[0] ?? {
+        path: 'SKILL.md',
+        reason: 'manual merge required',
+      }
+      stdout(
+        `${name}: conflicted — ${conflict.reason}; kept your local file ` +
+          `(merge by hand against .agents/skills/.ab-pristine/${name}/${conflict.path})`,
+      )
+    } else {
+      stdout(`${name}: ${action}`)
     }
-
-    // Validation is complete before either write. Disk failures remain real
-    // command errors; only untrusted agent-resolution failures are downgraded.
-    await writeFile(installedSkillPath(targetRepo, name), resolved)
-    await writePristine(targetRepo, name, incoming)
-    report(name, 'resolved')
-    stdout(`${name}: resolved`)
   }
 
-  // Installed ab-* skills absent from the distribution: local additions are
-  // legitimate — left alone, surfaced as unknown.
   const distNames = new Set(dist.map((skill) => skill.installName))
   for (const name of await listInstalledSkills(targetRepo)) {
     if (distNames.has(name)) continue

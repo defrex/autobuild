@@ -1,8 +1,9 @@
 /**
  * `ab init` — vendor the canonical default skills into a repo (SPEC §16.3,
  * D11). Copies, not references: per-repo customization is the point, so each
- * skill lands in the Agent Skills standard `.agents/skills/ab-<name>/SKILL.md`
- * where the repo may edit it freely. Pi discovers that project directory
+ * complete skill tree lands in the Agent Skills standard
+ * `.agents/skills/ab-<name>/`, where the repo may edit every file freely. Pi
+ * discovers that project directory
  * directly; Claude discovers the same skill through a
  * `.claude/skills/ab-<name>` symlink, so there is only one editable copy.
  * Alongside the live copy, init records the PRISTINE installed bytes under
@@ -57,9 +58,32 @@ export function defaultDistRoot(): string {
   return resolve(import.meta.dir, '..', '..')
 }
 
+function assertSkillRelativePath(file: string): void {
+  if (
+    file === '' ||
+    file.startsWith('/') ||
+    file.startsWith('\\') ||
+    file
+      .split(/[\\/]/)
+      .some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`invalid skill-relative file path "${file}"`)
+  }
+}
+
+/** Live path for one file in an installed skill directory. */
+export function installedSkillFilePath(
+  targetRepo: string,
+  installName: string,
+  file: string,
+): string {
+  assertSkillRelativePath(file)
+  return join(targetRepo, AGENTS_SKILLS_DIR, installName, ...file.split('/'))
+}
+
 /** Live install path: `<target>/.agents/skills/ab-<name>/SKILL.md`. */
 export function installedSkillPath(targetRepo: string, installName: string): string {
-  return join(targetRepo, AGENTS_SKILLS_DIR, installName, 'SKILL.md')
+  return installedSkillFilePath(targetRepo, installName, 'SKILL.md')
 }
 
 /** Claude discovery path: a directory symlink to the live `.agents` skill. */
@@ -67,9 +91,25 @@ export function claudeSkillPath(targetRepo: string, installName: string): string
   return join(targetRepo, CLAUDE_SKILLS_DIR, installName)
 }
 
+/** Pristine path for one distributed file in a skill directory. */
+export function pristineSkillFilePath(
+  targetRepo: string,
+  installName: string,
+  file: string,
+): string {
+  assertSkillRelativePath(file)
+  return join(
+    targetRepo,
+    AGENTS_SKILLS_DIR,
+    PRISTINE_DIR,
+    installName,
+    ...file.split('/'),
+  )
+}
+
 /** Pristine record: `<target>/.agents/skills/.ab-pristine/ab-<name>/SKILL.md`. */
 export function pristineSkillPath(targetRepo: string, installName: string): string {
-  return join(targetRepo, AGENTS_SKILLS_DIR, PRISTINE_DIR, installName, 'SKILL.md')
+  return pristineSkillFilePath(targetRepo, installName, 'SKILL.md')
 }
 
 function legacyInstalledSkillPath(targetRepo: string, installName: string): string {
@@ -268,28 +308,61 @@ export function rewriteSkillSource(source: string, skillName: string): string {
   return ['---', ...front, ...lines.slice(close)].join('\n')
 }
 
+export interface DistSkillFile {
+  /** POSIX-style path relative to `skills/<name>/`. */
+  path: string
+  /** Install-ready text. Only SKILL.md receives frontmatter rewriting. */
+  content: string
+}
+
 export interface DistSkill {
   /** Bare name in the distribution (`plan`). */
   name: string
   /** Namespaced install name (`ab-plan`). */
   installName: string
-  /** Install content: the source with its frontmatter rewritten (§16.3). */
+  /** SKILL.md install content, retained as a convenience for existing callers. */
   content: string
+  /** Every regular file in the canonical skill tree, path-sorted. */
+  files: DistSkillFile[]
 }
 
-/** Enumerate `<distRoot>/skills/<name>/SKILL.md`, sorted, install-ready. */
+async function readSkillTree(root: string, prefix = ''): Promise<DistSkillFile[]> {
+  const entries = await readdir(join(root, ...prefix.split('/').filter(Boolean)), {
+    withFileTypes: true,
+  })
+  const files: DistSkillFile[] = []
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+    if (entry.isDirectory()) {
+      files.push(...(await readSkillTree(root, path)))
+    } else if (entry.isFile()) {
+      assertSkillRelativePath(path)
+      files.push({
+        path,
+        content: await readFile(join(root, ...path.split('/')), 'utf8'),
+      })
+    }
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+/** Enumerate complete `<distRoot>/skills/<name>/` trees, sorted, install-ready. */
 export async function readDistSkills(distRoot: string): Promise<DistSkill[]> {
   const skillsDir = join(distRoot, 'skills')
   const entries = await readdir(skillsDir, { withFileTypes: true })
   const skills: DistSkill[] = []
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue
-    const source = await readIfExists(join(skillsDir, entry.name, 'SKILL.md'))
-    if (source === undefined) continue
+    const root = join(skillsDir, entry.name)
+    const files = await readSkillTree(root)
+    const skillFile = files.find((file) => file.path === 'SKILL.md')
+    if (skillFile === undefined) continue
+    skillFile.content = rewriteSkillSource(skillFile.content, entry.name)
     skills.push({
       name: entry.name,
       installName: installedSkillName(entry.name),
-      content: rewriteSkillSource(source, entry.name),
+      content: skillFile.content,
+      files,
     })
   }
   return skills
@@ -395,6 +468,7 @@ export async function migrateLegacyAgentSkills(targetRepo: string): Promise<void
 export async function migrateLegacySkill(
   targetRepo: string,
   installName: string,
+  warning?: (line: string) => void,
 ): Promise<string | undefined> {
   let migrated: string | undefined
   if ((await readIfExists(installedSkillPath(targetRepo, installName))) === undefined) {
@@ -411,19 +485,32 @@ export async function migrateLegacySkill(
     }
   }
 
-  const legacyPristinePath = legacyPristineSkillPath(targetRepo, installName)
-  const legacyPristine = await readIfExists(legacyPristinePath)
-  if (legacyPristine !== undefined) {
-    if ((await readIfExists(pristineSkillPath(targetRepo, installName))) === undefined) {
-      await writePristine(targetRepo, installName, legacyPristine)
+  const legacyPristineDir = dirname(legacyPristineSkillPath(targetRepo, installName))
+  try {
+    const stat = await lstat(legacyPristineDir)
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      await moveMissingEntries(
+        legacyPristineDir,
+        dirname(pristineSkillPath(targetRepo, installName)),
+      )
+      try {
+        await rmdir(join(targetRepo, CLAUDE_SKILLS_DIR, PRISTINE_DIR))
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'ENOTEMPTY') throw error
+      }
+      try {
+        await lstat(legacyPristineDir)
+        warning?.(
+          `${installName}: warning — conflicting legacy pristine files remain at ` +
+            `${relative(targetRepo, legacyPristineDir)} for manual recovery`,
+        )
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
     }
-    await rm(dirname(legacyPristinePath), { recursive: true, force: true })
-    try {
-      await rmdir(join(targetRepo, CLAUDE_SKILLS_DIR, PRISTINE_DIR))
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT' && code !== 'ENOTEMPTY') throw error
-    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   return migrated
 }
@@ -447,28 +534,61 @@ export async function listInstalledSkills(targetRepo: string): Promise<string[]>
   return names.sort()
 }
 
-/** Write a skill's live copy, pristine record, and Claude discovery link. */
+/** Write one live skill file and create its parent directories. */
+export async function writeInstalledSkillFile(
+  targetRepo: string,
+  installName: string,
+  file: string,
+  content: string,
+): Promise<void> {
+  const live = installedSkillFilePath(targetRepo, installName, file)
+  await mkdir(dirname(live), { recursive: true })
+  await writeFile(live, content)
+}
+
+/** Write one pristine skill file and create its parent directories. */
+export async function writePristineFile(
+  targetRepo: string,
+  installName: string,
+  file: string,
+  content: string,
+): Promise<void> {
+  const pristine = pristineSkillFilePath(targetRepo, installName, file)
+  await mkdir(dirname(pristine), { recursive: true })
+  await writeFile(pristine, content)
+}
+
+/** Write a skill's complete distributed tree and Claude discovery link. */
+export async function installSkillTree(
+  targetRepo: string,
+  skill: Pick<DistSkill, 'installName' | 'files'>,
+): Promise<void> {
+  for (const file of skill.files) {
+    await writeInstalledSkillFile(targetRepo, skill.installName, file.path, file.content)
+    await writePristineFile(targetRepo, skill.installName, file.path, file.content)
+  }
+  await ensureClaudeSkillLink(targetRepo, skill.installName)
+}
+
+/** Backward-compatible SKILL.md-only install helper. */
 export async function installSkillFiles(
   targetRepo: string,
   installName: string,
   content: string,
 ): Promise<void> {
-  const live = installedSkillPath(targetRepo, installName)
-  await mkdir(dirname(live), { recursive: true })
-  await writeFile(live, content)
-  await writePristine(targetRepo, installName, content)
-  await ensureClaudeSkillLink(targetRepo, installName)
+  await installSkillTree(targetRepo, {
+    installName,
+    files: [{ path: 'SKILL.md', content }],
+  })
 }
 
-/** Update only the pristine record for a skill. */
+/** Update only the pristine SKILL.md record for a skill. */
 export async function writePristine(
   targetRepo: string,
   installName: string,
   content: string,
 ): Promise<void> {
-  const pristine = pristineSkillPath(targetRepo, installName)
-  await mkdir(dirname(pristine), { recursive: true })
-  await writeFile(pristine, content)
+  await writePristineFile(targetRepo, installName, 'SKILL.md', content)
 }
 
 export type InitSkillAction = 'installed' | 'kept' | 'unchanged' | 'overwritten'
@@ -518,28 +638,66 @@ export async function abInit(opts: {
 
   const skills: InitReport['skills'] = []
   for (const skill of await readDistSkills(distRoot)) {
-    const migrated = await migrateLegacySkill(opts.targetRepo, skill.installName)
-    const local =
+    const migrated = await migrateLegacySkill(
+      opts.targetRepo,
+      skill.installName,
+      stdout,
+    )
+    const rootLocal =
       migrated ?? (await readIfExists(installedSkillPath(opts.targetRepo, skill.installName)))
-    let action: InitSkillAction
-    if (local === undefined) {
-      await installSkillFiles(opts.targetRepo, skill.installName, skill.content)
-      action = 'installed'
-    } else if (local === skill.content) {
-      // Byte-identical to what init would write. Refreshing the pristine
-      // record is safe here — local == new default means there is no local
-      // divergence a future merge could need the old base for — and it
-      // self-heals a missing record.
-      await writePristine(opts.targetRepo, skill.installName, skill.content)
-      action = 'unchanged'
-    } else if (force) {
-      await installSkillFiles(opts.targetRepo, skill.installName, skill.content)
-      action = 'overwritten'
-    } else {
-      // Local edits are NEVER clobbered by init (§16.3) — upgrading an
-      // edited skill is `ab upgrade`'s three-way-merge job, not init's.
-      action = 'kept'
+    let divergent = false
+    for (const file of skill.files) {
+      const livePath = installedSkillFilePath(
+        opts.targetRepo,
+        skill.installName,
+        file.path,
+      )
+      const local =
+        file.path === 'SKILL.md' && migrated !== undefined
+          ? migrated
+          : await readIfExists(livePath)
+      if (local === undefined || local === file.content) {
+        // Missing distributed files are added independently. Equality proves
+        // refreshing (or self-healing) their pristine base is safe.
+        await writeInstalledSkillFile(
+          opts.targetRepo,
+          skill.installName,
+          file.path,
+          file.content,
+        )
+        await writePristineFile(
+          opts.targetRepo,
+          skill.installName,
+          file.path,
+          file.content,
+        )
+      } else if (force) {
+        divergent = true
+        await writeInstalledSkillFile(
+          opts.targetRepo,
+          skill.installName,
+          file.path,
+          file.content,
+        )
+        await writePristineFile(
+          opts.targetRepo,
+          skill.installName,
+          file.path,
+          file.content,
+        )
+      } else {
+        // Local edits are NEVER clobbered by init (§16.3), even when SKILL.md
+        // is missing. Other files in the tree are handled independently.
+        divergent = true
+      }
     }
+    const action: InitSkillAction = divergent
+      ? force
+        ? 'overwritten'
+        : 'kept'
+      : rootLocal === undefined
+        ? 'installed'
+        : 'unchanged'
     await ensureClaudeSkillLink(opts.targetRepo, skill.installName)
     stdout(`${skill.installName}: ${action}`)
     skills.push({ skill: skill.installName, action })

@@ -166,47 +166,17 @@ under the preceding table.
 | `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
 | `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
-Relative paths and npm package specifiers resolve from the consuming repository,
-so packages come from its installed dependencies rather than Autobuild's.
-Modules default-export a strict manifest with `name`, a semver `apiVersion`
-range, and optional `ticketSources`, `agentRuntimes`, `workspaceProviders`, and
-`forges` factory maps; one plugin may register across ports. Missing, throwing,
-malformed, incompatible, or colliding plugins fail before any claim or build.
-Builtin and earlier-plugin names cannot be shadowed. Plugin code runs in-process
-with the same trust as configured commands and is not sandboxed.
+Relative paths and npm package specifiers resolve from the consuming repository.
+Modules are trusted, in-process Bun code and cannot shadow builtin or
+previously registered names. All four registration maps have production
+selectors: `[tickets].source`, the root `forge` scalar, `[workspace].provider`,
+and `[roles.*].runtime`. BuildStore uses the remote HTTP protocol, not this
+manifest, and TelemetrySource has no registration map.
 
-`autobuild/plugin-sdk` is the supported authoring entry point for manifest and
-factory types, frozen port types, TicketSource/AgentRunner/WorkspaceProvider/
-Forge contract suites, and fake adapters. Plugins may use type-only imports with
-Autobuild as a dev/peer dependency and need no runtime Autobuild dependency. An
-adapter value may remain a bare factory or use
-`{ factory, contract: { factory, live? } }`; ticket sources may additionally
-declare `requiredEnv`. The contract factory returns that port suite's fixture
-factory, while the host checks every ticket credential before adapter
-invocation.
-
-Use `ab plugin list` for registrations, module resolution/API status, and
-contract availability. `ab plugin doctor` exhaustively reports every configured
-module and exits nonzero on any failure; `ab dispatch` remains first-failure
-fail-fast. Certify one adapter with
-`ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>`.
-The command forwards Bun's per-test output and status. A live descriptor is
-refused unless `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
-
-`[tickets].source`, the root `forge` scalar, `[workspace].provider`, and every
-`[roles.*].runtime` can select loaded registrations. Omitted forge and workspace
-selectors use `github` and `git-worktree`. Selected factories receive their
-adapter config, the process environment, and the absolute repository root;
-runtime and forge config is currently empty. Unknown names list all available
-adapters for that port. Dispatch and scoped phase CLI processes resolve the same
-configured forge name, preserving the adapter's optional `prAttachments`
-capability.
-
-Plugin runtimes participate in the same eager exact-name, model-family, and
-default-model role validation and session attribution as builtins. Their
-optional one-shot capability serves slug and upgrade judgments; absence retains
-each caller's existing safe fallback. Plugin authors should run the exported
-contract suite for every adapter, including the AgentRunner suite for runtimes.
+For the complete author workflow—from choosing one of the four open ports,
+through the strict versioned manifest and environment-only secrets, to the
+unchanged shared contract suite and optional npm publication—read
+[`references/plugin-authoring.md`](references/plugin-authoring.md).
 
 ### `[pr]`
 
@@ -565,13 +535,14 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   with `--force`; the repo's config is the repo's from the first re-run onward.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
   preserving every existing byte/rule and handling a missing trailing newline.
-- **Copies** each canonical skill to `.agents/skills/ab-<name>/SKILL.md` —
-  copies, not references. These are **editable**: per-repo customization is the
-  point, and this repo's review standards belong in its vendored skill.
+- **Copies each complete canonical skill directory** to
+  `.agents/skills/ab-<name>/` — `SKILL.md` plus references/supporting files,
+  not links. Every file is **editable**: per-repo customization is the point.
+  Unknown repository-local support files are left alone.
 - Links `.claude/skills/ab-<name>` → the `.agents` directory, so Claude and Pi
-  discover **one** editable copy rather than two diverging ones.
-- Records the **pristine** installed bytes at
-  `.agents/skills/.ab-pristine/ab-<name>/SKILL.md` — repo-versioned, and the
+  discover **one** editable tree rather than two diverging copies.
+- Records the **pristine** installed tree at
+  `.agents/skills/.ab-pristine/ab-<name>/` — repo-versioned, and the per-file
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
@@ -581,9 +552,12 @@ Per-skill outcomes: `installed` (new), `unchanged` (byte-identical to the
 default), `kept` (locally edited — **init never clobbers an edit**), or
 `overwritten` (only under `--force`, the explicit human override).
 
-**`ab upgrade <target>`** three-way merges *pristine base × local edits × new
-default*, with a standing bias toward **the local customization** — upstream is
-adopted only where it doesn't collide with what the repo deliberately changed.
+**`ab upgrade <target>`** three-way merges every distributed skill file as
+*pristine base × local edits × new default*, with a standing bias toward **the
+local customization** — upstream is adopted only where it doesn't collide with
+what the repo deliberately changed. New upstream files are delivered; an
+upstream-removed unedited file is removed, while a customized copy becomes a
+preserved repository-local support file.
 Outcomes:
 
 | Outcome | Meaning for the repo's files |
@@ -591,19 +565,19 @@ Outcomes:
 | `current` | Local already matches the new default, or the repo's edit stands as-is. Nothing written. |
 | `adopted` | Upstream's version taken; pristine advanced. |
 | `merged` | Clean three-way merge; live file and pristine both advanced. |
-| `resolved` | Merge conflicted; a local-biased agent proposal passed deterministic validation, so the live skill was resolved and pristine advanced to incoming. |
-| `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Live and pristine stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
+| `resolved` | Merge conflicted; a local-biased agent proposal passed deterministic validation, so that live file was resolved and its pristine base advanced to incoming. |
+| `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Both sides of that file stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
 The agent runs under a fixed caller-owned deadline, and its output is only an
 untrusted proposal. Each merge uses unguessable labels so marker-looking skill
 content cannot impersonate that merge's structure. `ab upgrade` requires a
-complete skill with the same namespaced frontmatter and every region outside the
-uniquely labelled conflict hunks unchanged and in order; standard marker lines
-are rejected in agent-authored hunk gaps but allowed when already protected as
-exact clean content. Validation finishes before either file is written. A
-rejected proposal remains report-only alongside the marked merge diagnostic;
+complete file with every region outside the uniquely labelled conflict hunks
+unchanged and in order; `SKILL.md` additionally requires the same namespaced
+frontmatter identity. Standard marker lines are rejected in agent-authored hunk
+gaps but allowed when already protected as exact clean content. Validation
+finishes before either file is written. A rejected proposal remains report-only alongside the marked merge diagnostic;
 the CLI prints the exact pristine path to merge by hand. Local customization
 survives upgrades, and divergence is visible instead of silent.
 

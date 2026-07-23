@@ -24,7 +24,9 @@ import { dirname, join } from 'node:path'
 import {
   abInit,
   defaultDistRoot,
+  installedSkillFilePath,
   installedSkillPath,
+  pristineSkillFilePath,
   pristineSkillPath,
   readDistSkills,
   rewriteSkillSource,
@@ -70,7 +72,11 @@ function skillSource(name: string, body: string): string {
 }
 
 /** Build a fake distribution root: skills/<name>/SKILL.md + a renderable template. */
-async function writeDist(dist: string, skills: Record<string, string>): Promise<void> {
+async function writeDist(
+  dist: string,
+  skills: Record<string, string>,
+  supportFiles: Record<string, Record<string, string>> = {},
+): Promise<void> {
   await mkdir(join(dist, 'templates'), { recursive: true })
   await writeFile(
     join(dist, 'templates', 'autobuild.toml'),
@@ -90,6 +96,11 @@ async function writeDist(dist: string, skills: Record<string, string>): Promise<
   for (const [name, body] of Object.entries(skills)) {
     await mkdir(join(dist, 'skills', name), { recursive: true })
     await writeFile(join(dist, 'skills', name, 'SKILL.md'), skillSource(name, body))
+    for (const [path, content] of Object.entries(supportFiles[name] ?? {})) {
+      const destination = join(dist, 'skills', name, ...path.split('/'))
+      await mkdir(dirname(destination), { recursive: true })
+      await writeFile(destination, content)
+    }
   }
 }
 
@@ -264,7 +275,7 @@ describe('abUpgrade — the four pristine-based cases', () => {
         .replace('closing line three', 'closing line three (incoming clean edit)'),
     )
 
-    const calls: Array<{ skill: string; base: string; local: string; incoming: string }> = []
+    const calls: Array<{ skill: string; path: string; base: string; local: string; incoming: string }> = []
     const report = await abUpgrade({
       targetRepo: target,
       distRoot: distV2,
@@ -278,6 +289,7 @@ describe('abUpgrade — the four pristine-based cases', () => {
     expect(calls).toEqual([
       {
         skill: 'ab-alpha',
+        path: 'SKILL.md',
         base: pristineBefore,
         local: localText,
         incoming: incomingText,
@@ -487,6 +499,162 @@ describe('abUpgrade — the four pristine-based cases', () => {
   })
 })
 
+describe('abUpgrade — complete skill trees', () => {
+  const reference = 'references/authoring.md'
+  const baseReference = [
+    '# Authoring',
+    '',
+    'intro one',
+    'intro two',
+    'middle one',
+    'middle two',
+    'closing one',
+    'closing two',
+    '',
+  ].join('\n')
+
+  test('a missing SKILL.md never lets upgrade clobber a customized distributed sibling', async () => {
+    await writeDist(distV1, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+    await install()
+    const rootSkill = installedSkillPath(target, 'ab-alpha')
+    const live = installedSkillFilePath(target, 'ab-alpha', reference)
+    const pristine = pristineSkillFilePath(target, 'ab-alpha', reference)
+    const pristineBefore = await readFile(pristine, 'utf8')
+    await rm(rootSkill)
+    await writeFile(live, `${baseReference}local appendix\n`)
+    await writeDist(distV2, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(report.skills[0]?.action).toBe('adopted')
+    expect(existsSync(rootSkill)).toBe(true)
+    expect(await readFile(live, 'utf8')).toBe(`${baseReference}local appendix\n`)
+    expect(await readFile(pristine, 'utf8')).toBe(pristineBefore)
+  })
+
+  test('an upgrade delivers a newly distributed reference to an old install', async () => {
+    await install()
+    await writeDist(distV2, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(report.skills).toEqual([{ skill: 'ab-alpha', action: 'adopted' }])
+    expect(await readFile(installedSkillFilePath(target, 'ab-alpha', reference), 'utf8')).toBe(
+      baseReference,
+    )
+    expect(await readFile(pristineSkillFilePath(target, 'ab-alpha', reference), 'utf8')).toBe(
+      baseReference,
+    )
+  })
+
+  test('auxiliary files use the same clean three-way merge model', async () => {
+    await writeDist(distV1, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+    await install()
+    const live = installedSkillFilePath(target, 'ab-alpha', reference)
+    await writeFile(live, baseReference.replace('intro one', 'intro one (local)'))
+    const incoming = baseReference.replace('closing two', 'closing two (upstream)')
+    await writeDist(distV2, { alpha: BODY }, { alpha: { [reference]: incoming } })
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(report.skills).toEqual([{ skill: 'ab-alpha', action: 'merged' }])
+    const merged = await readFile(live, 'utf8')
+    expect(merged).toContain('intro one (local)')
+    expect(merged).toContain('closing two (upstream)')
+    expect(await readFile(pristineSkillFilePath(target, 'ab-alpha', reference), 'utf8')).toBe(
+      incoming,
+    )
+  })
+
+  test('auxiliary conflicts are path-qualified, locally resolved, and need no frontmatter', async () => {
+    await writeDist(distV1, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+    await install()
+    const live = installedSkillFilePath(target, 'ab-alpha', reference)
+    const local = baseReference.replace('middle two', 'middle two (local)')
+    const incoming = baseReference.replace('middle two', 'middle two (upstream)')
+    await writeFile(live, local)
+    await writeDist(distV2, { alpha: BODY }, { alpha: { [reference]: incoming } })
+    const calls: string[] = []
+
+    const report = await abUpgrade({
+      targetRepo: target,
+      distRoot: distV2,
+      resolveConflict: async (input) => {
+        calls.push(input.path)
+        return local
+      },
+    })
+
+    expect(calls).toEqual([reference])
+    expect(report.skills).toEqual([{ skill: 'ab-alpha', action: 'resolved' }])
+    expect(await readFile(live, 'utf8')).toBe(local)
+    expect(await readFile(pristineSkillFilePath(target, 'ab-alpha', reference), 'utf8')).toBe(
+      incoming,
+    )
+  })
+
+  test('conflicted stdout selects the actual conflict rather than an earlier non-conflict detail', async () => {
+    await writeDist(distV1, { alpha: BODY }, { alpha: { [reference]: baseReference } })
+    await install()
+    await rm(pristineSkillPath(target, 'ab-alpha'))
+    await writeFile(
+      installedSkillFilePath(target, 'ab-alpha', reference),
+      baseReference.replace('middle two', 'middle two (local)'),
+    )
+    await writeDist(distV2, { alpha: BODY }, {
+      alpha: {
+        [reference]: baseReference.replace('middle two', 'middle two (incoming)'),
+      },
+    })
+    const lines: string[] = []
+
+    const report = await abUpgrade({
+      targetRepo: target,
+      distRoot: distV2,
+      stdout: (line) => lines.push(line),
+    })
+
+    expect(report.skills[0]?.action).toBe('conflicted')
+    expect(report.skills[0]?.detail).toContain(
+      'SKILL.md: no pristine record; local already matches the new default',
+    )
+    expect(lines).toContain(
+      'ab-alpha: conflicted — agent resolution unavailable; kept your local file ' +
+        '(merge by hand against ' +
+        '.agents/skills/.ab-pristine/ab-alpha/references/authoring.md)',
+    )
+  })
+
+  test('upstream removal deletes an unedited file but preserves local customization and extras', async () => {
+    const uneditedReference = 'references/removed.md'
+    await writeDist(distV1, { alpha: BODY }, {
+      alpha: {
+        [reference]: baseReference,
+        [uneditedReference]: 'upstream-owned\n',
+      },
+    })
+    await install()
+    const live = installedSkillFilePath(target, 'ab-alpha', reference)
+    const pristine = pristineSkillFilePath(target, 'ab-alpha', reference)
+    const unedited = installedSkillFilePath(target, 'ab-alpha', uneditedReference)
+    const uneditedPristine = pristineSkillFilePath(target, 'ab-alpha', uneditedReference)
+    const extra = installedSkillFilePath(target, 'ab-alpha', 'references/local.md')
+    await writeFile(live, `${baseReference}local appendix\n`)
+    await writeFile(extra, 'repo-only\n')
+    await writeDist(distV2, { alpha: BODY })
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(report.skills[0]?.action).toBe('merged')
+    expect(report.skills[0]?.detail).toContain(`${reference}: upstream removed`)
+    expect(await readFile(live, 'utf8')).toContain('local appendix')
+    expect(existsSync(pristine)).toBe(false)
+    expect(existsSync(unedited)).toBe(false)
+    expect(existsSync(uneditedPristine)).toBe(false)
+    expect(await readFile(extra, 'utf8')).toBe('repo-only\n')
+  })
+})
+
 describe('abUpgrade — missing pristine record (pre-record install)', () => {
   test('local == new default → adopted; pristine record created', async () => {
     await install()
@@ -585,6 +753,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
         return async (input) => {
           expect(input).toEqual({
             skill: 'ab-plan',
+            path: 'SKILL.md',
             base: fixture.base,
             local: fixture.local,
             incoming: fixture.incoming,
