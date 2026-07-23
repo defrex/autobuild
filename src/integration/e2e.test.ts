@@ -21,6 +21,9 @@ import { randomUuids } from '../ids'
 import { decideNext } from '../kernel/engine'
 import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
+import { createPluginRegistry } from '../plugins/registry'
+import type { PluginFactoryContext } from '../plugins/manifest'
+import type { WorkspaceHandle, WorkspaceProvider } from '../ports/types'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 import { FileTicketSource } from '../ports/tickets/file'
@@ -33,7 +36,8 @@ import {
   HarvestRunner,
   type HarvestRunnerResult,
 } from '../processes/harvest-runner'
-import { spawnExec } from '../ports/workspace/git-worktree'
+import { createWorkspaceProvider } from '../ports/workspace/create'
+import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { textContent } from '../store/types'
 import { steppingClock } from '../testing/fixed'
@@ -260,6 +264,102 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const reduced = reduceBuild(final)
   expect(reduced.status).toBe('done')
   expect(reduced.outcome).toBe('merged')
+}, 30_000)
+
+test('plugin-selected workspace drives runner, PR polling, and terminal release with distinct ref and path', async () => {
+  const configToml = CONFIG_TOML.replace(
+    '[commands]',
+    '[workspace]\nprovider = "plugin-workspace"\n\n[workspace.config]\nprofile = "integration"\n\n[commands]',
+  )
+  let factoryContext: PluginFactoryContext | undefined
+  let selected: (WorkspaceProvider & { releases: WorkspaceHandle[] }) | undefined
+
+  const h = await track(
+    makeHarness({
+      configToml,
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-1')],
+      createWorkspaceProvider: async ({ config, repoRoot, worktreeRoot }) => {
+        const registry = createPluginRegistry()
+        const backing = new GitWorktreeProvider({ root: worktreeRoot })
+        registry.register({
+          name: 'integration-workspaces',
+          apiVersion: '^1.0.0',
+          workspaceProviders: {
+            'plugin-workspace': (context) => {
+              factoryContext = context
+              const releases: WorkspaceHandle[] = []
+              selected = {
+                name: 'plugin-workspace',
+                releases,
+                async provision(opts) {
+                  const handle = await backing.provision(opts)
+                  return {
+                    ...handle,
+                    provider: 'plugin-workspace',
+                    ref: `plugin:${opts.branch}`,
+                  }
+                },
+                async release(handle) {
+                  releases.push({ ...handle })
+                  await backing.release({
+                    ...handle,
+                    provider: backing.name,
+                    ref: handle.path,
+                  })
+                },
+              }
+              return selected
+            },
+          },
+        })
+        return createWorkspaceProvider(config.workspace, {
+          registry,
+          worktreeRoot,
+          repoRoot,
+          env: { INTEGRATION_TOKEN: 'present' },
+        })
+      },
+    }),
+  )
+
+  expect((await h.dispatcher.tick()).dispatched).toBe(1)
+  const provisioned = ofType(await h.events(SLUG), 'workspace.provisioned')[0]!
+  expect(provisioned.payload.provider).toBe('plugin-workspace')
+  expect(provisioned.payload.ref).toBe(`plugin:${BRANCH}`)
+  const workspacePath = provisioned.payload.path
+  if (workspacePath === undefined) throw new Error('new workspace event omitted path')
+  expect(workspacePath).not.toBe(provisioned.payload.ref)
+  expect(provisioned.payload.base.source).toBe('remote')
+  expect(factoryContext).toEqual({
+    config: { profile: 'integration' },
+    env: { INTEGRATION_TOKEN: 'present' },
+    repoRoot: h.origin,
+  })
+
+  expect((await h.runLatest()).prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+  await h.dispatcher.tick()
+  expect(h.forge.getPrStateCalls.at(-1)).toEqual({
+    workspacePath,
+    number: 1,
+  })
+
+  h.forge.setPrState(1, { state: 'merged', sha: 'plugin-squash' })
+  expect((await h.dispatcher.tick()).merged).toBe(1)
+  expect(selected?.releases).toEqual([
+    {
+      provider: 'plugin-workspace',
+      ref: `plugin:${BRANCH}`,
+      path: workspacePath,
+      branch: BRANCH,
+    },
+  ])
+  expect(typesOf(await h.events(SLUG)).slice(-3)).toEqual([
+    'pr.merged',
+    'workspace.released',
+    'build.completed',
+  ])
 }, 30_000)
 
 const FINALIZE_CONTENT_TOML = `${CONFIG_TOML}

@@ -38,6 +38,11 @@ export interface CommentRecord {
   body: string
 }
 
+export interface GetPrStateRecord {
+  workspacePath: string
+  number: number
+}
+
 export interface AutoMergeRecord {
   workspacePath: string
   number: number
@@ -69,6 +74,7 @@ export class FakeForge implements Forge {
   readonly pushes: PushRecord[] = []
   readonly opened: OpenPrRecord[] = []
   readonly comments: CommentRecord[] = []
+  readonly getPrStateCalls: GetPrStateRecord[] = []
   readonly autoMergeCalls: AutoMergeRecord[] = []
   readonly squashMergeCalls: SquashMergeRecord[] = []
   readonly prAttachmentUploads: PrAttachmentUploadRecord[] = []
@@ -305,7 +311,8 @@ export class FakeForge implements Forge {
     }
   }
 
-  async getPrState(_workspacePath: string, number: number): Promise<PrState> {
+  async getPrState(workspacePath: string, number: number): Promise<PrState> {
+    this.getPrStateCalls.push({ workspacePath, number })
     const state = this.prs.get(number)
     if (!state) throw new Error(`FakeForge: unknown PR #${number}`)
     return state

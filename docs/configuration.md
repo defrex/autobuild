@@ -127,20 +127,20 @@ are authoritative. A missing `contract.factory` is an actionable error. A
 `live = true` descriptor cannot launch or create its harness unless
 `AB_RUN_LIVE_PORT_CONTRACTS=1` is explicitly set.
 
-Set `[tickets].source` to a registered ticket adapter name. Agent runtime and
-workspace selectors remain restricted to shipped builtins. Forge selection is
-also open: set the root `forge` scalar to a registered name; omission selects
-`github`. A selected plugin forge factory receives an empty adapter-specific
-`config` object, the process environment, and the absolute repository root. It
-is invoked lazily after the complete plugin catalog has loaded and before the
-production store is opened. Unknown names fail with the available forge list;
+Ticket-source, forge, and workspace selection are open. Set `[tickets].source`,
+the root `forge` scalar, or `[workspace].provider` to a registered name;
+omission selects the builtin defaults where applicable. Only the agent-runtime
+selector remains restricted to shipped builtins. A selected plugin forge
+factory receives an empty adapter-specific `config` object, while a workspace
+factory receives `[workspace.config]`; both receive the process environment
+and absolute repository root and are invoked lazily after the complete plugin
+catalog loads. Unknown names fail with the available names for that port, and
 factory failures are contextualized with the adapter and plugin names. Scoped
-build-session CLI processes repeat config/plugin loading from the build
-worktree, so implement publication, finalization, reconciliation, late
-attachment summaries, epilogue polling, and janitor operations all use the
-same configured adapter name. The returned adapter is not wrapped: an absent
-`prAttachments` capability intentionally selects text-only attachment
-summaries, while a present capability serves upload and terminal reclamation.
+build-session CLI processes repeat forge config/plugin loading from the build
+worktree, so phase terminal plumbing uses the same configured forge. The
+returned forge is not wrapped: an absent `prAttachments` capability
+intentionally selects text-only attachment summaries, while a present
+capability serves upload and terminal reclamation.
 
 ## `[pr]`
 
@@ -193,6 +193,38 @@ durable and retry on later dispatcher ticks. Upload, target-validation, and
 timeout failures create follow-up observations but preserve every text download
 command and do not fail verification or finalize. BuildStore artifacts remain
 the authoritative copies under the store's own retention policy.
+
+## `[workspace]`
+
+Optional. Omission preserves the shipped git-worktree behavior. The surrounding
+table is strict; only the explicit nested `config` table is plugin-owned.
+
+| Field | Default | Constraints | Purpose |
+|---|---:|---|---|
+| `provider` | `"git-worktree"` | nonblank builtin or plugin-registered name | Select the provider used for provisioning, recovery, PR epilogue working-directory calls, and release. |
+| `config` | `{}` | nested open table; must be empty for `git-worktree` | Adapter-specific declarative configuration passed unchanged to the selected plugin factory. |
+
+<!-- config-fragment:workspace -->
+```toml
+[workspace]
+provider = "company-container"
+
+[workspace.config]
+image = "ghcr.io/acme/build:bun"
+writableCache = true
+```
+
+The builtin `git-worktree` provider needs no table and accepts no adapter
+configuration. A plugin factory receives exactly `[workspace.config]`, the
+process environment, and the absolute repository root. Factory invocation is
+lazy: registering an unselected provider constructs nothing. An unknown name
+fails before claims and lists every available builtin and plugin provider.
+
+Every provider must satisfy the exported `WorkspaceProvider` contract and
+return a locally reachable absolute working-copy `path`. Its provider-scoped
+`ref` need not be that path; both are retained as durable workspace evidence.
+Remote sandbox execution, where build processes run off-host, is a separate
+architecture and is not enabled by this selector.
 
 ## `[commands]`
 
@@ -565,6 +597,12 @@ capacity = 2
 forge = "github"
 plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
+[workspace]
+provider = "company-container"
+
+[workspace.config]
+image = "ghcr.io/acme/build:bun"
+
 [pr.imageHost]
 provider = "github-release"
 repository = "acme/public-review-assets"
@@ -647,6 +685,7 @@ On the first `ab init [target]`, when `autobuild.toml` is absent, Autobuild
 renders a valid setup-oriented baseline with:
 
 - `baseBranch = "main"` and `capacity = 1`;
+- the omitted `[workspace]` default, selecting `git-worktree` with empty config;
 - `setup = "bun install"` in `[commands]`;
 - no verify or finalize steps unless recognized package scripts add checks;
 - the default policy values above;

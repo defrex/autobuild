@@ -23,6 +23,7 @@ import {
   TOP_LEVEL_TABLES,
   verifyAgentStepSchema,
   verifyCheckStepSchema,
+  workspaceSchema,
 } from './schema'
 import { parseConfig } from './load'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
@@ -88,6 +89,7 @@ function unique(fields: readonly string[]): string[] {
  */
 const TABLE_HEADINGS: Record<string, string> = {
   pr: '`[pr]`',
+  workspace: '`[workspace]`',
   commands: '`[commands]`',
   server: '`[server]`',
   verify: '`[verify]` and `[verify.<step>]`',
@@ -99,6 +101,7 @@ const TABLE_HEADINGS: Record<string, string> = {
 
 const TABLE_FIELDS: Record<string, string[]> = {
   pr: Object.keys(prSchema.shape),
+  workspace: Object.keys(workspaceSchema.shape),
   // Open map: command names are repository-defined.
   commands: [],
   server: Object.keys(serverSchema.shape),
