@@ -163,6 +163,23 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
+| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order before dispatch wiring. |
+
+Relative paths and npm package specifiers resolve from the consuming repository,
+so packages come from its installed dependencies rather than Autobuild's.
+Modules default-export a strict manifest with `name`, a semver `apiVersion`
+range, and optional `ticketSources`, `agentRuntimes`, `workspaceProviders`, and
+`forges` factory maps; one plugin may register across ports. Missing, throwing,
+malformed, incompatible, or colliding plugins fail before any claim or build.
+Builtin and earlier-plugin names cannot be shadowed. Plugin code runs in-process
+with the same trust as configured commands and is not sandboxed.
+
+`autobuild/plugin-sdk` is the supported authoring entry point for manifest and
+factory types, frozen port types, contract suites, and fake adapters. Plugins
+may use type-only imports with Autobuild as a dev/peer dependency and need no
+runtime Autobuild dependency. This foundation release loads and registers
+factories but the ticket/runtime/workspace/forge selectors remain builtin-only
+until their follow-up releases.
 
 ### `[pr]`
 
