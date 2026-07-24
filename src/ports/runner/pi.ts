@@ -1,8 +1,8 @@
 /**
  * PiAgentRunner (SPEC §9): AgentRunner over the `pi` runtime (the real
- * `@earendil-works/pi-coding-agent` SDK) — the second registered runtime,
- * serving the models the Claude Agent SDK does not (Moonshot/Kimi, OpenAI/GPT,
- * and anything else Pi's provider catalog reaches). Structurally a sibling of
+ * `@earendil-works/pi-coding-agent` SDK) — the non-Claude model-family runtime,
+ * serving Moonshot/Kimi, OpenAI/GPT, and anything else Pi's provider catalog
+ * reaches. Structurally a sibling of
  * ClaudeAgentRunner, but Pi's SDK is session-shaped, not request-shaped: you
  * `createAgentSession(...)` once and drive it with `session.prompt(text)`, so
  * the injectable boundary here is a session FACTORY, not a query function.

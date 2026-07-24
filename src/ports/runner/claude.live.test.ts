@@ -16,7 +16,7 @@ function requiredModel(): string {
 
 describe.skipIf(!enabled)('Claude live AgentRunner contract (opt-in)', () => {
   test(
-    'runs start, continue, end, ambient/PATH probe, and one-shot against the real SDK',
+    'runs start, continue, end, ambient/PATH probe, and one-shot against the real Claude Code CLI',
     async () => {
       await runLiveAgentRunnerContract(new ClaudeAgentRunner(), requiredModel())
     },
