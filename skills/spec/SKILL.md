@@ -88,3 +88,11 @@ idempotent; adding validates the blocker exists and rejects a self-block.
 - Don't gold-plate: a spec is buildable when a planner could start, not when
   every question is answered. Thin-but-groomed is a valid state — dispatch
   can author the final spec if the ticket is honest about its gaps.
+- **Showing a draft ends the turn.** When presenting the spec (or any
+  ticket body) for review, make it the final text of your message and ask
+  for approval in prose — the user replies in chat. Never pair the draft
+  with a structured question tool (AskUserQuestion or similar) in the same
+  turn: text written before a tool call is not shown to the user, so they
+  would be asked to approve a document they cannot see. Reserve structured
+  questions for standalone decisions that don't depend on reading something
+  you just wrote.
