@@ -656,12 +656,13 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(d.err.join('\n')).toContain('usage: ab init [target] [--force]')
   })
 
-  test('help distinguishes first-time config creation from forced skill replacement', async () => {
+  test('detailed help distinguishes first-time config creation from forced skill replacement', async () => {
     const d = sessionless()
-    expect(await runCli(['--help'], d)).toBe(0)
+    expect(await runCli(['init', '--help'], d)).toBe(0)
+    expect(await runCli(['help', 'upgrade'], d)).toBe(0)
     const help = d.out.join('\n')
     expect(help).toContain('ab init [target] [--force]')
-    expect(help).toContain('create autobuild.toml only when absent')
+    expect(help).toContain('Create autobuild.toml only when absent')
     expect(help).toContain('vendor the default ab-* skills')
     expect(help).toContain('--force overwrites edited vendored skills only')
     expect(help).toContain('never overwrites an existing autobuild.toml')
