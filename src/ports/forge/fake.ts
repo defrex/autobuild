@@ -9,6 +9,7 @@ import {
   type MergeStateStatus,
 } from '../../kernel/auto-merge'
 import type {
+  AutoMergeDeferralReason,
   AutoMergeResult,
   PrAttachmentHosting,
   PrAttachmentReclaimRequest,
@@ -64,7 +65,7 @@ export type PrAttachmentReclaimRecord = PrAttachmentReclaimRequest
 export type HeadSha = string | ((number: number) => string)
 export type MergeSha = string | ((number: number) => string)
 
-type FakeGateState = MergeGatePresence | { error: string }
+type FakeGateState = MergeGatePresence | AutoMergeDeferralReason
 
 export class FakeForge implements Forge {
   readonly name = 'fake'
@@ -90,7 +91,7 @@ export class FakeForge implements Forge {
   private readonly mergeStates = new Map<number, MergeStateStatus>()
   private readonly gates = new Map<number, FakeGateState>()
   private readonly autoMerge = new Map<number, boolean>()
-  private readonly nativeErrors = new Map<number, string>()
+  private readonly nativeDeferrals = new Map<number, AutoMergeDeferralReason>()
   private readonly squashErrors = new Map<number, string>()
   private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
   private readonly attachmentUploadErrors: string[] = []
@@ -178,16 +179,43 @@ export class FakeForge implements Forge {
     this.gates.set(number, presence)
   }
 
-  /** Seed a fail-closed gate-probe/auth/schema error. */
-  setGateProbeError(number: number, message: string): void {
+  /** Seed a typed, fail-closed gate-probe/application deferral. */
+  setAutoMergeDeferral(number: number, reason: AutoMergeDeferralReason): void {
     this.assertPr(number)
-    this.gates.set(number, { error: message })
+    this.gates.set(number, reason)
   }
 
-  /** Simulate a native auto-merge mutation failure. */
+  /** Compatibility convenience for generic gate-probe/auth/schema failures. */
+  setGateProbeError(number: number, message: string): void {
+    this.setAutoMergeDeferral(number, { code: 'unproven-gate-state', detail: message })
+  }
+
+  setRulesetsPlanLimitation(
+    number: number,
+    message = 'rulesets require a paid account plan',
+  ): void {
+    this.setAutoMergeDeferral(number, { code: 'github-plan-limitation', detail: message })
+  }
+
+  setRepositoryAutoMergeDisabled(
+    number: number,
+    message = 'GitHub reports allow_auto_merge=false',
+  ): void {
+    this.setAutoMergeDeferral(number, {
+      code: 'repository-auto-merge-disabled',
+      detail: message,
+    })
+  }
+
+  /** Simulate a typed native auto-merge mutation/application failure. */
   setNativeAutoMergeError(number: number, message: string): void {
     this.assertPr(number)
-    this.nativeErrors.set(number, message)
+    this.nativeDeferrals.set(number, { code: 'unproven-gate-state', detail: message })
+  }
+
+  clearNativeAutoMergeError(number: number): void {
+    this.assertPr(number)
+    this.nativeDeferrals.delete(number)
   }
 
   /** Simulate a guarded direct-squash command failure. */
@@ -328,13 +356,19 @@ export class FakeForge implements Forge {
     }
 
     const gate = this.gates.get(number) ?? this.defaultGatePresence
-    if (typeof gate === 'object') throw new Error(gate.error)
+    if (typeof gate === 'object') {
+      this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+      return { kind: 'deferred', reason: gate }
+    }
     const mergeState = this.mergeStates.get(number) ?? 'UNKNOWN'
     const disposition = classifyAutoMergeEnable(mergeState, gate)
     switch (disposition.kind) {
       case 'native': {
-        const error = this.nativeErrors.get(number)
-        if (error !== undefined) throw new Error(error)
+        const reason = this.nativeDeferrals.get(number)
+        if (reason !== undefined) {
+          this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+          return { kind: 'deferred', reason }
+        }
         this.autoMerge.set(number, true)
         this.autoMergeCalls.push({
           workspacePath,
@@ -361,7 +395,11 @@ export class FakeForge implements Forge {
         })
         return { kind: 'deferred' }
       case 'error':
-        throw new Error(disposition.reason)
+        this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+        return {
+          kind: 'deferred',
+          reason: { code: 'unproven-gate-state', detail: disposition.reason },
+        }
     }
   }
 
@@ -381,7 +419,7 @@ export class FakeForge implements Forge {
       )
     }
     const gate = this.gates.get(number) ?? this.defaultGatePresence
-    if (typeof gate === 'object') throw new Error(gate.error)
+    if (typeof gate === 'object') throw new Error(gate.detail)
     if (gate !== 'absent') {
       throw new Error(`FakeForge: PR #${number} is protected by a merge-blocking gate`)
     }

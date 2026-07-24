@@ -19,7 +19,14 @@ import {
   mergeStateStatuses,
   type MergeGatePresence,
 } from '../../kernel/auto-merge'
-import type { AutoMergeResult, PrAttachmentHosting, Forge, PrRef, PrState } from '../types'
+import type {
+  AutoMergeDeferralReason,
+  AutoMergeResult,
+  PrAttachmentHosting,
+  Forge,
+  PrRef,
+  PrState,
+} from '../types'
 import { GitHubPrAttachmentHosting, type PrAttachmentTempFileWriter } from './github-pr-attachments'
 
 export interface ExecResult {
@@ -106,6 +113,18 @@ const autoMergeJson = z.strictObject({
 
 const repoIdentityJson = z.strictObject({
   nameWithOwner: z.string().min(3),
+})
+
+const repositoryAutoMergeJson = z.strictObject({
+  allow_auto_merge: z.boolean(),
+})
+
+const rulesetPlanLimitationJson = z.strictObject({
+  message: z.literal(
+    'Upgrade to GitHub Pro or make this repository public to enable this feature.',
+  ),
+  documentation_url: z.literal('https://docs.github.com/rest/repos/rules#get-rules-for-a-branch'),
+  status: z.union([z.literal('403'), z.literal(403)]),
 })
 
 const classicProtectionJson = z.strictObject({
@@ -349,23 +368,37 @@ export class GitHubForge implements Forge {
     }
   }
 
-  /** Probe both GitHub gate systems for the PR's exact base branch. Only two
-   * successful negative probes prove absence; command/schema/auth failures
-   * throw and therefore can never authorize a direct merge. */
+  /** Probe both GitHub gate systems for the PR's exact base branch. The one
+   * non-success ruleset response that proves absence is GitHub's documented
+   * account-plan limitation; even then classic protection must independently
+   * parse successfully. Every other uncertainty is returned as a typed,
+   * fail-closed deferral rather than escaping into finalize or the janitor. */
   private async mergeGatePresence(
     workspacePath: string,
     baseRefName: string,
-  ): Promise<MergeGatePresence> {
+  ): Promise<
+    | { kind: 'proved'; presence: MergeGatePresence; owner: string; name: string }
+    | { kind: 'deferred'; reason: AutoMergeDeferralReason }
+  > {
+    const unproven = (detail: string) =>
+      ({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state', detail },
+      }) as const
+    const errorMessage = (error: unknown): string =>
+      error instanceof Error ? error.message : String(error)
+
     const repoCmd = ['gh', 'repo', 'view', '--json', 'nameWithOwner']
-    const identity = this.parseJson(
-      repoIdentityJson,
-      await this.run(repoCmd, workspacePath),
-      repoCmd,
-    )
+    let identity: z.infer<typeof repoIdentityJson>
+    try {
+      identity = this.parseJson(repoIdentityJson, await this.run(repoCmd, workspacePath), repoCmd)
+    } catch (error) {
+      return unproven(`GitHub auto-merge gate repository inspection failed: ${errorMessage(error)}`)
+    }
     const parts = identity.nameWithOwner.split('/')
     if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
-      throw new Error(
-        `unexpected GitHub repository identity ${JSON.stringify(identity.nameWithOwner)}`,
+      return unproven(
+        `GitHub auto-merge gate returned unexpected repository identity ${JSON.stringify(identity.nameWithOwner)}`,
       )
     }
     const [owner, name] = parts as [string, string]
@@ -383,43 +416,96 @@ export class GitHubForge implements Forge {
       '-F',
       `qualifiedRef=refs/heads/${baseRefName}`,
     ]
-    const classic = this.parseJson(
-      classicProtectionJson,
-      await this.run(classicCmd, workspacePath),
-      classicCmd,
-    )
-    if (classic.data.repository === null) {
-      throw new Error(`GitHub gate probe could not resolve repository ${identity.nameWithOwner}`)
-    }
-    if (classic.data.repository.ref === null) {
-      throw new Error(
-        `GitHub gate probe could not resolve base branch ${JSON.stringify(baseRefName)}`,
+    let classicGate: boolean | undefined
+    let classicError: string | undefined
+    try {
+      const classic = this.parseJson(
+        classicProtectionJson,
+        await this.run(classicCmd, workspacePath),
+        classicCmd,
       )
+      if (classic.data.repository === null) {
+        throw new Error(`GitHub gate probe could not resolve repository ${identity.nameWithOwner}`)
+      }
+      if (classic.data.repository.ref === null) {
+        throw new Error(
+          `GitHub gate probe could not resolve base branch ${JSON.stringify(baseRefName)}`,
+        )
+      }
+      const protection = classic.data.repository.ref.branchProtectionRule
+      classicGate =
+        protection !== null &&
+        (protection.requiresStatusChecks ||
+          protection.requiresApprovingReviews ||
+          protection.requiredApprovingReviewCount > 0 ||
+          protection.requiresCodeOwnerReviews ||
+          protection.requireLastPushApproval ||
+          protection.requiresConversationResolution ||
+          protection.requiresDeployments ||
+          protection.requiresCommitSignatures)
+    } catch (error) {
+      classicError = errorMessage(error)
     }
-    const protection = classic.data.repository.ref.branchProtectionRule
-    const classicGate =
-      protection !== null &&
-      (protection.requiresStatusChecks ||
-        protection.requiresApprovingReviews ||
-        protection.requiredApprovingReviewCount > 0 ||
-        protection.requiresCodeOwnerReviews ||
-        protection.requireLastPushApproval ||
-        protection.requiresConversationResolution ||
-        protection.requiresDeployments ||
-        protection.requiresCommitSignatures)
 
     const rulesCmd = [
       'gh',
       'api',
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/rules/branches/${encodeURIComponent(baseRefName)}`,
     ]
-    const rules = this.parseJson(
-      rulesetRulesJson,
-      await this.run(rulesCmd, workspacePath),
-      rulesCmd,
-    )
-    const rulesetGate = rulesetsHaveMergeGate(rules)
-    return classicGate || rulesetGate ? 'present' : 'absent'
+    let rulesResult: ExecResult
+    try {
+      rulesResult = await this.exec(rulesCmd, { cwd: workspacePath })
+    } catch (error) {
+      return unproven(`GitHub auto-merge ruleset probe failed: ${errorMessage(error)}`)
+    }
+
+    if (rulesResult.exitCode !== 0) {
+      let planLimited = false
+      try {
+        planLimited =
+          rulesetPlanLimitationJson.safeParse(JSON.parse(rulesResult.stdout)).success &&
+          rulesResult.stderr.trim() ===
+            'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)'
+      } catch {
+        // Non-JSON command output is ordinary unproven gate state.
+      }
+      if (!planLimited) {
+        return unproven(
+          `GitHub auto-merge ruleset probe failed (exit ${rulesResult.exitCode}): ${rulesResult.stderr.trim()}`,
+        )
+      }
+      if (classicGate === undefined) {
+        return {
+          kind: 'deferred',
+          reason: {
+            code: 'github-plan-limitation',
+            detail:
+              'GitHub returned its documented rulesets plan-limitation response, but classic ' +
+              `branch protection could not be proven absent: ${classicError ?? 'unknown failure'}`,
+          },
+        }
+      }
+      return { kind: 'proved', presence: classicGate ? 'present' : 'absent', owner, name }
+    }
+
+    let rulesetGate: boolean
+    try {
+      const rules = this.parseJson(rulesetRulesJson, rulesResult.stdout, rulesCmd)
+      rulesetGate = rulesetsHaveMergeGate(rules)
+    } catch (error) {
+      return unproven(`GitHub auto-merge ruleset classification failed: ${errorMessage(error)}`)
+    }
+    if (classicGate === undefined) {
+      return unproven(
+        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}`,
+      )
+    }
+    return {
+      kind: 'proved',
+      presence: classicGate || rulesetGate ? 'present' : 'absent',
+      owner,
+      name,
+    }
   }
 
   /** [D1]: rebase is banned and branches are never rewritten — never force. */
@@ -543,31 +629,66 @@ export class GitHubForge implements Forge {
         : { kind: 'applied' }
     }
 
-    const viewCmd = [
-      'gh',
-      'pr',
-      'view',
-      String(number),
-      '--json',
-      'autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
-    ]
-    const view = this.parseJson(autoMergeJson, await this.run(viewCmd, workspacePath), viewCmd)
-    if (view.autoMergeRequest !== null) return { kind: 'applied' }
+    try {
+      const viewCmd = [
+        'gh',
+        'pr',
+        'view',
+        String(number),
+        '--json',
+        'autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
+      ]
+      const view = this.parseJson(autoMergeJson, await this.run(viewCmd, workspacePath), viewCmd)
+      if (view.autoMergeRequest !== null) return { kind: 'applied' }
 
-    const gate = await this.mergeGatePresence(workspacePath, view.baseRefName)
-    const disposition = classifyAutoMergeEnable(view.mergeStateStatus, gate)
-    switch (disposition.kind) {
-      case 'native':
-        await this.run(['gh', 'pr', 'merge', String(number), '--auto', '--squash'], workspacePath)
-        return (await this.nativeAutoMergeEnabled(workspacePath, number))
-          ? { kind: 'applied' }
-          : { kind: 'deferred' }
-      case 'direct':
-        return { kind: 'ungated', headSha: view.headRefOid }
-      case 'deferred':
-        return { kind: 'deferred' }
-      case 'error':
-        throw new Error(disposition.reason)
+      const gate = await this.mergeGatePresence(workspacePath, view.baseRefName)
+      if (gate.kind === 'deferred') return gate
+      const disposition = classifyAutoMergeEnable(view.mergeStateStatus, gate.presence)
+      switch (disposition.kind) {
+        case 'native': {
+          const repoCmd = [
+            'gh',
+            'api',
+            `repos/${encodeURIComponent(gate.owner)}/${encodeURIComponent(gate.name)}`,
+            '--jq',
+            '{allow_auto_merge: .allow_auto_merge}',
+          ]
+          const repository = this.parseJson(
+            repositoryAutoMergeJson,
+            await this.run(repoCmd, workspacePath),
+            repoCmd,
+          )
+          if (!repository.allow_auto_merge) {
+            return {
+              kind: 'deferred',
+              reason: {
+                code: 'repository-auto-merge-disabled',
+                detail: 'GitHub reports allow_auto_merge=false; the PR was left open for a human',
+              },
+            }
+          }
+          await this.run(['gh', 'pr', 'merge', String(number), '--auto', '--squash'], workspacePath)
+          return (await this.nativeAutoMergeEnabled(workspacePath, number))
+            ? { kind: 'applied' }
+            : { kind: 'deferred' }
+        }
+        case 'direct':
+          return { kind: 'ungated', headSha: view.headRefOid }
+        case 'deferred':
+          return { kind: 'deferred' }
+        case 'error':
+          throw new Error(disposition.reason)
+      }
+    } catch (error) {
+      return {
+        kind: 'deferred',
+        reason: {
+          code: 'unproven-gate-state',
+          detail:
+            'GitHub auto-merge gate inspection or native application failed: ' +
+            (error instanceof Error ? error.message : String(error)),
+        },
+      }
     }
   }
 

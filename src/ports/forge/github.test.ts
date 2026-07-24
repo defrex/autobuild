@@ -359,6 +359,9 @@ describe('GitHubForge.setAutoMerge', () => {
       autoMergeRequest: enabled ? { mergeMethod: 'SQUASH' } : null,
     }),
   })
+  const repositoryAutoMerge = (enabled: boolean) => ({
+    stdout: JSON.stringify({ allow_auto_merge: enabled }),
+  })
 
   test('CLEAN plus a real gate uses native squash auto-merge even though requirements are satisfied', async () => {
     const { forge, calls } = makeForge([
@@ -366,6 +369,7 @@ describe('GitHubForge.setAutoMerge', () => {
       repo,
       classic(classicRule({ requiresStatusChecks: true })),
       { stdout: '[]' },
+      repositoryAutoMerge(true),
       {},
       nativeState(true),
     ])
@@ -393,6 +397,10 @@ describe('GitHubForge.setAutoMerge', () => {
       cmd: ['gh', 'api', 'repos/acme/app/rules/branches/main'],
       cwd: '/ws/build-1',
     })
+    expect(calls.at(-3)).toEqual({
+      cmd: ['gh', 'api', 'repos/acme/app', '--jq', '{allow_auto_merge: .allow_auto_merge}'],
+      cwd: '/ws/build-1',
+    })
     expect(calls.at(-2)).toEqual({
       cmd: ['gh', 'pr', 'merge', '42', '--auto', '--squash'],
       cwd: '/ws/build-1',
@@ -417,6 +425,7 @@ describe('GitHubForge.setAutoMerge', () => {
       repo,
       classic(),
       { stdout: JSON.stringify(rules) },
+      repositoryAutoMerge(true),
       {},
       nativeState(true),
     ])
@@ -438,7 +447,7 @@ describe('GitHubForge.setAutoMerge', () => {
     }
   })
 
-  test('ungated transient/conflict states defer, while an unexplained blocker fails', async () => {
+  test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
     for (const state of ['UNKNOWN', 'DIRTY'] as const) {
       const { forge } = makeForge([view(state), ...noGate])
       expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
@@ -446,11 +455,20 @@ describe('GitHubForge.setAutoMerge', () => {
       })
     }
     const blocked = makeForge([view('BLOCKED'), ...noGate])
-    await expect(blocked.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow('BLOCKED')
+    expect(await blocked.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('BLOCKED') },
+    })
   })
 
   test('HAS_HOOKS is never treated as ungated and delegates to native auto-merge', async () => {
-    const { forge, calls } = makeForge([view('HAS_HOOKS'), ...noGate, {}, nativeState(true)])
+    const { forge, calls } = makeForge([
+      view('HAS_HOOKS'),
+      ...noGate,
+      repositoryAutoMerge(true),
+      {},
+      nativeState(true),
+    ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
     })
@@ -492,6 +510,7 @@ describe('GitHubForge.setAutoMerge', () => {
       repo,
       classic(classicRule({ requiresStatusChecks: true })),
       { stdout: '[]' },
+      repositoryAutoMerge(true),
       {},
       nativeState(false),
     ])
@@ -520,6 +539,7 @@ describe('GitHubForge.setAutoMerge', () => {
       repo,
       classic(classicRule({ requiresStatusChecks: true })),
       { stdout: '[]' },
+      repositoryAutoMerge(true),
       {},
       nativeState(true),
       view('UNKNOWN', { mergeMethod: 'SQUASH' }),
@@ -536,61 +556,132 @@ describe('GitHubForge.setAutoMerge', () => {
     ).toHaveLength(1)
   })
 
-  test('probe, inspection, and native mutation failures propagate and never return direct eligibility', async () => {
-    const inspect = makeForge([{ exitCode: 1, stderr: 'not found' }])
-    await expect(inspect.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'gh pr view 42 --json autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
-    )
+  test('probe, inspection, and native mutation failures become typed fail-closed deferrals', async () => {
+    const expectUnproven = async (forge: GitHubForge, detail: string) => {
+      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state', detail: expect.stringContaining(detail) },
+      })
+    }
 
-    const probe = makeForge([view(), repo, { exitCode: 1, stderr: 'resource not accessible' }])
-    await expect(probe.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'gh api graphql',
+    await expectUnproven(makeForge([{ exitCode: 1, stderr: 'not found' }]).forge, 'gh pr view')
+    await expectUnproven(
+      makeForge([
+        view(),
+        repo,
+        { exitCode: 1, stderr: 'resource not accessible' },
+        { stdout: '[]' },
+      ]).forge,
+      'classic branch-protection probe failed',
     )
-
-    const mutate = makeForge([
-      view(),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
-      { exitCode: 1, stderr: 'permission denied' },
-    ])
-    await expect(mutate.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+    await expectUnproven(
+      makeForge([
+        view(),
+        repo,
+        classic(classicRule({ requiresStatusChecks: true })),
+        { stdout: '[]' },
+        repositoryAutoMerge(true),
+        { exitCode: 1, stderr: 'permission denied' },
+      ]).forge,
       'gh pr merge 42 --auto --squash',
     )
   })
 
-  test('unknown or malformed active rules fail closed', async () => {
-    const unknown = makeForge([
+  test('the exact plan-limitation response plus classic absence proves the branch ungated', async () => {
+    const planLimitation = {
+      stdout: JSON.stringify({
+        message: 'Upgrade to GitHub Pro or make this repository public to enable this feature.',
+        documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
+        status: '403',
+      }),
+      stderr:
+        'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)',
+      exitCode: 1,
+    }
+    const direct = makeForge([view(), repo, classic(), planLimitation])
+    expect(await direct.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+
+    const unprovedClassic = makeForge([view(), repo, { stdout: '{}' }, planLimitation])
+    expect(await unprovedClassic.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'github-plan-limitation' },
+    })
+
+    for (const nearMiss of [
+      { ...planLimitation, stderr: 'gh: forbidden (HTTP 403)' },
+      {
+        ...planLimitation,
+        stdout: JSON.stringify({
+          message: 'Resource not accessible by integration',
+          documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
+          status: '403',
+        }),
+      },
+    ]) {
+      const generic = makeForge([view(), repo, classic(), nearMiss])
+      expect(await generic.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state' },
+      })
+    }
+  })
+
+  test('repository-level auto-merge disablement is classified before mutation', async () => {
+    const { forge, calls } = makeForge([
       view(),
       repo,
-      classic(),
-      { stdout: JSON.stringify([{ type: 'future_required_ai_review' }]) },
+      classic(classicRule({ requiresStatusChecks: true })),
+      { stdout: '[]' },
+      repositoryAutoMerge(false),
     ])
-    await expect(unknown.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'unknown active GitHub ruleset rule type',
-    )
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'deferred',
+      reason: {
+        code: 'repository-auto-merge-disabled',
+        detail: 'GitHub reports allow_auto_merge=false; the PR was left open for a human',
+      },
+    })
+    expect(calls.some((call) => call.cmd.includes('--auto'))).toBe(false)
 
     const malformed = makeForge([
       view(),
       repo,
-      classic(),
-      { stdout: JSON.stringify([{ type: 'pull_request', parameters: {} }]) },
+      classic(classicRule({ requiresStatusChecks: true })),
+      { stdout: '[]' },
+      { stdout: JSON.stringify({ allow_auto_merge: 'yes' }) },
     ])
-    await expect(malformed.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'unexpected parameters',
-    )
+    expect(await malformed.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('allow_auto_merge') },
+    })
+    expect(malformed.calls.some((call) => call.cmd.includes('--auto'))).toBe(false)
   })
 
-  test('malformed or future PR state is rejected rather than guessed', async () => {
-    const malformed = makeForge([{ stdout: '{}' }])
-    await expect(malformed.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'unexpected output',
-    )
-
-    const future = makeForge([view('FUTURE_STATE')])
-    await expect(future.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
-      'unexpected output',
-    )
+  test('unknown/malformed gate data and future PR states become fail-closed deferrals', async () => {
+    for (const responses of [
+      [
+        view(),
+        repo,
+        classic(),
+        { stdout: JSON.stringify([{ type: 'future_required_ai_review' }]) },
+      ],
+      [
+        view(),
+        repo,
+        classic(),
+        { stdout: JSON.stringify([{ type: 'pull_request', parameters: {} }]) },
+      ],
+      [{ stdout: '{}' }],
+      [view('FUTURE_STATE')],
+    ]) {
+      expect(await makeForge(responses).forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state' },
+      })
+    }
   })
 })
 

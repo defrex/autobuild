@@ -158,10 +158,22 @@ export type PrState =
 /** Result of reconciling durable auto-merge intent with the forge. Native
  * state is acknowledged only by `applied`; the other results deliberately
  * leave the command pending for a later janitor poll. */
+export type AutoMergeDeferralCode =
+  | 'github-plan-limitation'
+  | 'repository-auto-merge-disabled'
+  | 'unproven-gate-state'
+
+export interface AutoMergeDeferralReason {
+  /** Stable machine-readable family used by durable operator observations. */
+  code: AutoMergeDeferralCode
+  /** Provider detail. It must identify auto-merge inspection/application, not PR creation. */
+  detail: string
+}
+
 export type AutoMergeResult =
   | { kind: 'applied' }
   | { kind: 'ungated'; headSha: string }
-  | { kind: 'deferred' }
+  | { kind: 'deferred'; reason?: AutoMergeDeferralReason }
 
 /** One explicitly designated image artifact to copy to a review-window host. */
 export interface PrAttachmentUploadRequest {
@@ -205,8 +217,9 @@ export interface Forge {
   /**
    * Reconcile GitHub-native auto-merge desired state. Enabling returns an
    * ungated candidate only after proving the base branch has no merge-blocking
-   * gate; transient merge states are deferred. The operation is idempotent and
-   * safe to retry across the forge-call/event-append crash window.
+   * gate. Transient merge states defer quietly; non-transient inability to
+   * inspect or apply consent returns a reason-bearing deferral. The operation
+   * is idempotent and safe to retry across the forge-call/event-append crash window.
    */
   setAutoMerge(workspacePath: string, number: number, enabled: boolean): Promise<AutoMergeResult>
   /**
