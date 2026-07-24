@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#93](https://github.com/defrex/autobuild/pull/93) — Add interactive adapter onboarding to `ab init`
 - [#91](https://github.com/defrex/autobuild/pull/91) — Add a plugin authoring guide
 - [#90](https://github.com/defrex/autobuild/pull/90) — Open role routing to plugin agent runtimes
 - [#89](https://github.com/defrex/autobuild/pull/89) — Add workspace provider selection
