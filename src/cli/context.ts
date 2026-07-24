@@ -202,11 +202,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
 
   /** Latest rev when `rev` omitted; silently skips absent kinds — the tree is
    * a projection of what exists, and the manifest shows what materialized. */
-  async function writeArtifact(
-    relPath: string,
-    kind: string,
-    rev?: number,
-  ): Promise<void> {
+  async function writeArtifact(relPath: string, kind: string, rev?: number): Promise<void> {
     const artifact = await store.getArtifact(build, kind, rev)
     if (artifact === null) return
     const target = join(abDir, relPath)
@@ -315,14 +311,9 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     // Every prior round's findings, for `persists` marking (§15.4), plus the
     // human-dismissed ids — the reviewer is told so (§15.6-B).
     const loop =
-      phase === 'plan-review'
-        ? state.reviewFindings.planReview
-        : state.reviewFindings.codeReview
+      phase === 'plan-review' ? state.reviewFindings.planReview : state.reviewFindings.codeReview
     for (let r = 1; r < round && r <= loop.length; r += 1) {
-      await writeDerived(
-        `history/findings-r${r}.json`,
-        `${JSON.stringify(loop[r - 1], null, 2)}\n`,
-      )
+      await writeDerived(`history/findings-r${r}.json`, `${JSON.stringify(loop[r - 1], null, 2)}\n`)
     }
     manifest.dismissedFindingIds = dismissedIds(state)
   }

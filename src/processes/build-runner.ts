@@ -57,12 +57,7 @@ import {
 } from '../ontology'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type {
-  AgentRunner,
-  AgentSessionHandle,
-  AgentTurnResult,
-  Forge,
-} from '../ports/types'
+import type { AgentRunner, AgentSessionHandle, AgentTurnResult, Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -260,8 +255,7 @@ function roundMatches(event: AbEvent, round: number): boolean {
  * the message is a pointer, the CLI context is the real carrier.
  */
 function continueMessage(spec: SessionSpec): string {
-  const refresh =
-    'run `ab context` to refresh .ab/, then finish with your terminal command'
+  const refresh = 'run `ab context` to refresh .ab/, then finish with your terminal command'
   const { feedback } = spec
   if (feedback === undefined) {
     return `Continue ${spec.phase} (round ${spec.round}): ${refresh}.`
@@ -310,11 +304,7 @@ export class BuildRunner {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
-    this.resolver = createRuntimeResolver(
-      deps.runtimes,
-      deps.config.roles,
-      deps.defaultRuntime,
-    )
+    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles, deps.defaultRuntime)
   }
 
   /**
@@ -368,7 +358,7 @@ export class BuildRunner {
     // running verify without them routes a bogus infra report into the code
     // loop (§15.6-A). Idempotent by convention, so re-attach re-runs it.
     // After the heartbeat starts, so a slow install cannot outlive the lease.
-    const setup = this.deps.config.commands['setup']
+    const setup = this.deps.config.commands.setup
     if (setup !== undefined) {
       try {
         const result = await this.deps.exec(['sh', '-c', setup], {
@@ -554,8 +544,7 @@ export class BuildRunner {
       ...(spec.kind === 'producer' ? { producerPhase: phase } : {}),
       ...(decision.feedback !== undefined ? { feedback: decision.feedback } : {}),
       priorFailures: failures.count,
-      isTerminal: (event) =>
-        event.type === spec.terminalEvent && roundMatches(event, round),
+      isTerminal: (event) => event.type === spec.terminalEvent && roundMatches(event, round),
     })
   }
 
@@ -610,22 +599,10 @@ export class BuildRunner {
    * a canonical kernel-authored skip and launches no command, session, or
    * server. Inclusion delegates to the existing verifier path unchanged.
    */
-  private async evaluateVerify(
-    decision: EvaluateVerifyDecision,
-    events: AbEvent[],
-  ): Promise<void> {
+  private async evaluateVerify(decision: EvaluateVerifyDecision, events: AbEvent[]): Promise<void> {
     const { exec, workspacePath } = this.deps
     const baseSha = selectVerifyDiffBase(events)
-    const args = [
-      'git',
-      'diff',
-      '--no-renames',
-      '--name-only',
-      '-z',
-      baseSha,
-      'HEAD',
-      '--',
-    ]
+    const args = ['git', 'diff', '--no-renames', '--name-only', '-z', baseSha, 'HEAD', '--']
     const result = await exec(args, { cwd: workspacePath })
     if (result.exitCode !== 0) {
       throw new Error(
@@ -698,8 +675,7 @@ export class BuildRunner {
     }
 
     const output = [result.stdout, result.stderr].filter((s) => s !== '').join('\n')
-    const content =
-      output.length > REPORT_TAIL_CHARS ? output.slice(-REPORT_TAIL_CHARS) : output
+    const content = output.length > REPORT_TAIL_CHARS ? output.slice(-REPORT_TAIL_CHARS) : output
     // Atomic deposit (D6): report artifact + verify.completed in one bundle;
     // the report routes back to implement via the engine (§15.6-A).
     await store.appendWithArtifacts(
@@ -730,10 +706,7 @@ export class BuildRunner {
 
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict; the kernel
    * owns the dev server around it (D10). */
-  private async runAgentVerify(
-    decision: RunAgentVerifyDecision,
-    events: AbEvent[],
-  ): Promise<void> {
+  private async runAgentVerify(decision: RunAgentVerifyDecision, events: AbEvent[]): Promise<void> {
     const { store, slug, server } = this.deps
     const { step, skill, needsServer, attempt } = decision
     const phase = verifyPhase(step)
@@ -971,8 +944,7 @@ export class BuildRunner {
       payload: {
         id: ids('o'),
         kind: 'followup',
-        summary:
-          `finalize step "${step}" failed — needs manual follow-up: ` + failureNote,
+        summary: `finalize step "${step}" failed — needs manual follow-up: ${failureNote}`,
       },
     } satisfies EventWrite<'observation.recorded'>)
   }
@@ -1011,13 +983,7 @@ export class BuildRunner {
     publishedHead: string,
     currentHead: string,
   ): Promise<void> {
-    const args = [
-      'git',
-      'merge-base',
-      '--is-ancestor',
-      publishedHead,
-      currentHead,
-    ]
+    const args = ['git', 'merge-base', '--is-ancestor', publishedHead, currentHead]
     const result = await this.deps.exec(args, { cwd: this.deps.workspacePath })
     if (result.exitCode === 0) return
     if (result.exitCode === 1) {
@@ -1060,9 +1026,7 @@ export class BuildRunner {
     const preSeq = startedEnvelope.seq
 
     const live =
-      spec.producerPhase !== undefined
-        ? this.producerSessions.get(spec.producerPhase)
-        : undefined
+      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
 
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
@@ -1137,9 +1101,7 @@ export class BuildRunner {
             session,
             phase: spec.phase,
             round: spec.round,
-            note:
-              'producer session kept live for §10 continuation; ' +
-              'per-round turn transcript',
+            note: 'producer session kept live for §10 continuation; ' + 'per-round turn transcript',
             turn: { text: result.text, usage: result.usage },
           },
           null,
@@ -1260,7 +1222,10 @@ export class BuildRunner {
       const expected = phase === 'plan-review' ? 'plan-review.verdict' : 'code-review.verdict'
       if (event.type !== expected) continue
       if (event.payload.round !== round || event.payload.verdict !== 'escalate') continue
-      verdict = { seq: event.seq, ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}) }
+      verdict = {
+        seq: event.seq,
+        ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}),
+      }
     }
     if (verdict === undefined) return
     const raisedSeq = verdict.seq
@@ -1420,10 +1385,7 @@ export class BuildRunner {
   }
 
   /** The phase's started event, payload per the catalog (§15.3). */
-  private startedWrite(
-    decision: RunPhaseDecision,
-    reconcileBaseSha?: string,
-  ): EventWrite {
+  private startedWrite(decision: RunPhaseDecision, reconcileBaseSha?: string): EventWrite {
     const { phase, round } = decision
     switch (phase) {
       case 'plan':
@@ -1471,9 +1433,7 @@ export class BuildRunner {
         if (reconcile === undefined || reconcileBaseSha === undefined) {
           // The engine supplies the attempt; runPhase resolves the current
           // base before calling this helper. Keep the runner total anyway.
-          throw new Error(
-            'run-phase reconcile start requires an attempt and refreshed base SHA',
-          )
+          throw new Error('run-phase reconcile start requires an attempt and refreshed base SHA')
         }
         return {
           actor: KERNEL,

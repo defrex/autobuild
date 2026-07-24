@@ -37,20 +37,11 @@ import {
   type OpenSession,
   type PrLifecycle,
 } from '../kernel/reducer'
-import type {
-  BuildOutcome,
-  BuildStatus,
-  Phase,
-  TicketRef,
-  VerifyOutcome,
-} from '../ontology'
+import type { BuildOutcome, BuildStatus, Phase, TicketRef, VerifyOutcome } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { resolveMainRepo } from './repo-state'
-import {
-  withSessionlessStore,
-  type StoreOpener,
-} from './store-opening'
+import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
 export const currentRepo = resolveMainRepo
@@ -223,9 +214,7 @@ export function detail(
       // from the reducer's full-log high-water, never from cycle membership.
       attempt: state.verify.maxAttemptSeen,
       steps,
-      ...(state.verify.currentStep !== undefined
-        ? { currentStep: state.verify.currentStep }
-        : {}),
+      ...(state.verify.currentStep !== undefined ? { currentStep: state.verify.currentStep } : {}),
     },
     ...(state.lastEvent !== undefined
       ? {
@@ -313,11 +302,7 @@ function padColumns(rows: string[][]): string[] {
  * is nothing to show, so an empty result is an honest answer rather than a
  * blank that reads like a bug.
  */
-export function renderSummaries(
-  summaries: BuildSummary[],
-  now: Date,
-  emptyNote: string,
-): string[] {
+export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote: string): string[] {
   if (summaries.length === 0) return [emptyNote]
   // The two free-text columns (ticket title, PR link) go last, where their
   // width costs no alignment on the scannable columns to their left.
@@ -358,11 +343,15 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(`  heartbeat: ${d.lease.heartbeatAt} (${relativeTime(d.lease.heartbeatAt, now)})`)
   }
   if (d.status === 'running' && d.lease.health === 'expired') {
-    lines.push('  note:     running with an expired lease — the runner is gone; the lease sweep will re-attach it')
+    lines.push(
+      '  note:     running with an expired lease — the runner is gone; the lease sweep will re-attach it',
+    )
   }
 
   if (d.pr !== undefined) {
-    lines.push(`  pr:       #${d.pr.number}${d.pr.state !== undefined ? ` (${d.pr.state})` : ''} ${d.pr.url}`)
+    lines.push(
+      `  pr:       #${d.pr.number}${d.pr.state !== undefined ? ` (${d.pr.state})` : ''} ${d.pr.url}`,
+    )
   }
 
   if (d.openEscalations.length > 0) {
@@ -375,7 +364,9 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.openSessions.length > 0) {
     lines.push(`  open sessions (${d.openSessions.length}):`)
     for (const session of d.openSessions) {
-      lines.push(`    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})`)
+      lines.push(
+        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})`,
+      )
     }
   }
 
@@ -468,7 +459,11 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
     // the flags that would actually widen it — telling a caller who passed
     // --queued to "try --queued" reads as a broken command.
     const scope =
-      opts.all === true ? 'builds' : opts.queued === true ? 'active or queued builds' : 'active builds'
+      opts.all === true
+        ? 'builds'
+        : opts.queued === true
+          ? 'active or queued builds'
+          : 'active builds'
     const hint =
       opts.all === true ? '' : opts.queued === true ? ' — try --all' : ' — try --queued or --all'
     for (const line of renderSummaries(summaries, now, `no ${scope} for ${repo}${hint}`)) {
@@ -490,13 +485,11 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     if (record === null) {
       throw new Error(
         `no build "${opts.slug}" in this store — run 'ab builds --all' to list ` +
-          'this repo\'s builds, or pass --store <ref> if it lives in another store',
+          "this repo's builds, or pass --store <ref> if it lives in another store",
       )
     }
     if (record.repo !== repo) {
-      throw new Error(
-        `build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`,
-      )
+      throw new Error(`build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`)
     }
     const d = detail(record, await store.getEvents(opts.slug), now, opts.events)
     if (opts.json === true) {

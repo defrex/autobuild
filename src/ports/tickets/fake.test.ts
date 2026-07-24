@@ -148,9 +148,7 @@ describe('FakeTicketSource', () => {
       labels: ['new'],
       state: 'Ready',
     })
-    expect(source.updates).toEqual([
-      { id: 't-1', patch: { title: 'Renamed', labels: ['new'] } },
-    ])
+    expect(source.updates).toEqual([{ id: 't-1', patch: { title: 'Renamed', labels: ['new'] } }])
   })
 
   test('blocker journals include idempotent retries but rejected calls are absent', async () => {

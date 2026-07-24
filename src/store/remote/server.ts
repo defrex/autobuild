@@ -84,11 +84,7 @@ async function readBody<T>(req: Request, schema: ZodType<T>): Promise<T> {
   }
   const parsed = schema.safeParse(raw)
   if (!parsed.success) {
-    throw new RequestError(
-      400,
-      'validation',
-      `invalid request body: ${parsed.error.message}`,
-    )
+    throw new RequestError(400, 'validation', `invalid request body: ${parsed.error.message}`)
   }
   return parsed.data
 }
@@ -136,8 +132,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       resource.kind === 'admin' ||
       (kind !== 'admin' && resource.kind === kind && resource.id === id)
     if (!allowed) {
-      const target =
-        kind === 'admin' ? 'admin operations' : `${kind} "${id}"`
+      const target = kind === 'admin' ? 'admin operations' : `${kind} "${id}"`
       throw new RequestError(
         403,
         'auth',
@@ -212,25 +207,17 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
         authorizeSession(scope, body.actor)
-        return json(
-          201,
-          await store.appendRepo(repo, body as RepositoryEventWrite),
-        )
+        return json(201, await store.appendRepo(repo, body as RepositoryEventWrite))
       }
       case 'GET events':
-        return json(
-          200,
-          await store.getRepoEvents(repo, intParam(url, 'since') ?? 0),
-        )
+        return json(200, await store.getRepoEvents(repo, intParam(url, 'since') ?? 0))
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
         authorizeSession(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
           content: decodeBase64(artifact.contentBase64),
-          ...(artifact.metadata !== undefined
-            ? { metadata: artifact.metadata }
-            : {}),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         }))
         const result = await store.appendRepoWithArtifacts(
           repo,
@@ -239,10 +226,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
             ({
               actor: body.event.actor,
               type: body.event.type,
-              payload: substitutePlaceholderRefs(
-                body.event.payload,
-                deposited,
-              ),
+              payload: substitutePlaceholderRefs(body.event.payload, deposited),
             }) as RepositoryEventWrite,
         )
         return json(201, result)
@@ -254,26 +238,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           await store.putRepoArtifact(repo, {
             kind: body.kind,
             content: decodeBase64(body.contentBase64),
-            ...(body.metadata !== undefined
-              ? { metadata: body.metadata }
-              : {}),
+            ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
           }),
         )
       }
       case 'GET artifacts': {
         const kind = url.searchParams.get('kind')
         if (kind === null || kind === '') {
-          throw new RequestError(
-            400,
-            'validation',
-            'query parameter "kind" is required',
-          )
+          throw new RequestError(400, 'validation', 'query parameter "kind" is required')
         }
-        const artifact = await store.getRepoArtifact(
-          repo,
-          kind,
-          intParam(url, 'rev'),
-        )
+        const artifact = await store.getRepoArtifact(repo, kind, intParam(url, 'rev'))
         return artifact === null
           ? json(200, null)
           : json(200, {
@@ -284,10 +258,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       case 'GET artifact-list':
         return json(
           200,
-          await store.listRepoArtifacts(
-            repo,
-            url.searchParams.get('kind') ?? undefined,
-          ),
+          await store.listRepoArtifacts(repo, url.searchParams.get('kind') ?? undefined),
         )
       case 'POST lease/claim': {
         const body = await readBody(req, leaseClaimBodySchema)
@@ -307,11 +278,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(200, { ok: true })
       }
       default:
-        return fail(
-          404,
-          'not-found',
-          `no route: ${req.method} /repos/:repo/${rest}`,
-        )
+        return fail(404, 'not-found', `no route: ${req.method} /repos/:repo/${rest}`)
     }
   }
 
@@ -337,9 +304,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
           content: decodeBase64(artifact.contentBase64),
-          ...(artifact.metadata !== undefined
-            ? { metadata: artifact.metadata }
-            : {}),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         }))
         // The wire's makeEvent: substitute the deposited revisions for the
         // payload's negative placeholders (protocol.ts). Runs inside the
@@ -461,8 +426,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     if (
       error instanceof Error &&
-      (error.message.startsWith('unknown build') ||
-        error.message.startsWith('unknown repo'))
+      (error.message.startsWith('unknown build') || error.message.startsWith('unknown repo'))
     ) {
       return fail(404, 'not-found', error.message)
     }

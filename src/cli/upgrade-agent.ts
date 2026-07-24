@@ -26,19 +26,14 @@ export interface UpgradeAgentResolverOpts {
   /** Test seam; production constructs the shared Claude/Pi registry lazily. */
   runtimeFactory?: () => ProductionRuntimes
   /** Test seam; production loads configured plugin manifests lazily. */
-  pluginLoader?: (
-    modules: readonly string[],
-    repoRoot: string,
-  ) => Promise<PluginRegistry>
+  pluginLoader?: (modules: readonly string[], repoRoot: string) => Promise<PluginRegistry>
   /** Test seam; production loads <targetRepo>/autobuild.toml lazily. */
   load?: (path: string) => Promise<Config>
   /** Fixed in production; injectable only for deterministic deadline tests. */
   timeoutMs?: number
 }
 
-function definedEnv(
-  env: Record<string, string | undefined>,
-): Record<string, string> {
+function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) result[key] = value
@@ -100,26 +95,18 @@ interface ResolvedCompletion {
  * resolves the optional `[roles.upgrade]` entry through normal role
  * inheritance and caches that capability for subsequent conflicting skills.
  */
-export function createUpgradeAgentResolver(
-  opts: UpgradeAgentResolverOpts,
-): ResolveConflict {
+export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): ResolveConflict {
   let resolved: Promise<ResolvedCompletion> | undefined
 
   const completion = (): Promise<ResolvedCompletion> => {
     resolved ??= (async () => {
-      const config = await (opts.load ?? loadConfig)(
-        join(opts.targetRepo, 'autobuild.toml'),
-      )
-      const plugins = await (opts.pluginLoader ?? loadPlugins)(
-        config.plugins,
-        opts.targetRepo,
-      )
+      const config = await (opts.load ?? loadConfig)(join(opts.targetRepo, 'autobuild.toml'))
+      const plugins = await (opts.pluginLoader ?? loadPlugins)(config.plugins, opts.targetRepo)
       const production = (opts.runtimeFactory ?? createProductionRuntimes)()
-      const runtimes = await materializePluginRuntimes(
-        production.runtimes,
-        plugins,
-        { repoRoot: opts.targetRepo, env: opts.env },
-      )
+      const runtimes = await materializePluginRuntimes(production.runtimes, plugins, {
+        repoRoot: opts.targetRepo,
+        env: opts.env,
+      })
       const selected = createRuntimeResolver(
         runtimes,
         config.roles,
@@ -142,20 +129,13 @@ export function createUpgradeAgentResolver(
 
   return async (input) => {
     const selected = await completion()
-    const timeoutMs = Math.max(
-      0,
-      opts.timeoutMs ?? DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS,
-    )
+    const timeoutMs = Math.max(0, opts.timeoutMs ?? DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS)
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort()
-        reject(
-          new Error(
-            `upgrade conflict resolution deadline exceeded after ${timeoutMs}ms`,
-          ),
-        )
+        reject(new Error(`upgrade conflict resolution deadline exceeded after ${timeoutMs}ms`))
       }, timeoutMs)
     })
 
@@ -170,9 +150,7 @@ export function createUpgradeAgentResolver(
         }),
         deadline,
       ])
-      return result.text.trim() === UPGRADE_CONFLICT_DECLINE
-        ? null
-        : result.text
+      return result.text.trim() === UPGRADE_CONFLICT_DECLINE ? null : result.text
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }

@@ -4,12 +4,7 @@
  * This is where the ontology is *enforced*, not just described (SPEC §8).
  */
 import { actorSchema, type Actor, type ActorKind } from './envelope'
-import {
-  eventPayloadSchemas,
-  isEventType,
-  type EventPayload,
-  type EventType,
-} from './payloads'
+import { eventPayloadSchemas, isEventType, type EventPayload, type EventType } from './payloads'
 
 /**
  * A stored event: envelope (SPEC §15.1) with a known type. `seq` is per-build

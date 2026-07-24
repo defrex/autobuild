@@ -7,7 +7,6 @@ import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   CONFIG_TOML,
   GIT_ID,
-  commitAll,
   happyHandlers,
   makeHarness,
   ofType,
@@ -22,12 +21,14 @@ const PLUGIN_CONFIG = CONFIG_TOML.replace(
   'baseBranch = "main"\nforge = "plugin-fake"',
 )
 
-async function openPluginBuild(opts: {
-  handlers?: SkillHandlers
-  configToml?: string
-  prAttachments?: boolean
-  ticket?: string
-} = {}): Promise<{ h: E2eHarness; slug: string }> {
+async function openPluginBuild(
+  opts: {
+    handlers?: SkillHandlers
+    configToml?: string
+    prAttachments?: boolean
+    ticket?: string
+  } = {},
+): Promise<{ h: E2eHarness; slug: string }> {
   const h = await makeHarness({
     handlers: opts.handlers ?? happyHandlers(),
     tickets: [readyTicket(opts.ticket ?? 'PF-1')],
@@ -79,9 +80,9 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
   const handlers = happyHandlers()
   handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(
-      await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8'),
-    ) as { conflict?: { baseSha: string } }
+    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+      conflict?: { baseSha: string }
+    }
     const baseSha = context.conflict?.baseSha
     if (baseSha === undefined) throw new Error('reconcile context omitted baseSha')
     const merge = await spawnExec(

@@ -116,20 +116,14 @@ export function parseHarvestPhase(raw: string): {
   }
 }
 
-export function resolveHarvestCliEnv(
-  env: Record<string, string | undefined>,
-): HarvestCliEnv {
+export function resolveHarvestCliEnv(env: Record<string, string | undefined>): HarvestCliEnv {
   const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
   const repo = requireVar(env, 'AB_REPO', 'the repository identity')
   const run = requireVar(env, 'AB_HARVEST', 'the harvest run id')
-  const rawPhase = requireVar(
-    env,
-    'AB_PHASE',
-    `'synthesize@<round>' or 'review@<round>'`,
-  )
+  const rawPhase = requireVar(env, 'AB_PHASE', `'synthesize@<round>' or 'review@<round>'`)
   const session = requireVar(env, 'AB_SESSION', 'the session id')
   const { phase, round } = parseHarvestPhase(rawPhase)
-  const token = env['AB_TOKEN']
+  const token = env.AB_TOKEN
   return {
     store,
     repo,
@@ -144,14 +138,10 @@ export function resolveHarvestCliEnv(
 export function resolveCliEnv(env: Record<string, string | undefined>): CliEnv {
   const store = requireVar(env, 'AB_STORE', 'the store URL or local path')
   const build = requireVar(env, 'AB_BUILD', 'the build slug')
-  const rawPhase = requireVar(
-    env,
-    'AB_PHASE',
-    `the current phase in the format ${PHASE_FORMAT}`,
-  )
+  const rawPhase = requireVar(env, 'AB_PHASE', `the current phase in the format ${PHASE_FORMAT}`)
   const session = requireVar(env, 'AB_SESSION', 'the session id')
   const { phase, round } = parseAbPhase(rawPhase)
-  const token = env['AB_TOKEN']
+  const token = env.AB_TOKEN
   return {
     store,
     build,

@@ -161,11 +161,7 @@ export class FakeForge implements Forge {
     if (known && state.state === 'open') {
       this.mergeStates.set(
         number,
-        state.mergeable === true
-          ? 'CLEAN'
-          : state.mergeable === false
-            ? 'DIRTY'
-            : 'UNKNOWN',
+        state.mergeable === true ? 'CLEAN' : state.mergeable === false ? 'DIRTY' : 'UNKNOWN',
       )
     }
   }
@@ -249,9 +245,7 @@ export class FakeForge implements Forge {
     return asset
   }
 
-  private async reclaimPrAttachment(
-    request: PrAttachmentReclaimRequest,
-  ): Promise<void> {
+  private async reclaimPrAttachment(request: PrAttachmentReclaimRequest): Promise<void> {
     this.prAttachmentReclaims.push({ ...request, asset: { ...request.asset } })
     const error = this.attachmentReclaimErrors.shift()
     if (error !== undefined) throw new Error(error)
@@ -371,11 +365,7 @@ export class FakeForge implements Forge {
     }
   }
 
-  async squashMerge(
-    workspacePath: string,
-    number: number,
-    expectedHeadSha: string,
-  ): Promise<void> {
+  async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
     this.assertPr(number)
     const error = this.squashErrors.get(number)
     if (error !== undefined) throw new Error(error)
@@ -395,10 +385,7 @@ export class FakeForge implements Forge {
     if (gate !== 'absent') {
       throw new Error(`FakeForge: PR #${number} is protected by a merge-blocking gate`)
     }
-    const disposition = classifyAutoMergeEnable(
-      this.mergeStates.get(number) ?? 'UNKNOWN',
-      gate,
-    )
+    const disposition = classifyAutoMergeEnable(this.mergeStates.get(number) ?? 'UNKNOWN', gate)
     if (disposition.kind !== 'direct') {
       throw new Error(`FakeForge: PR #${number} is no longer direct-merge eligible`)
     }
@@ -407,11 +394,7 @@ export class FakeForge implements Forge {
     this.prs.set(number, { state: 'merged', sha: this.resolveMergeSha(number) })
   }
 
-  async commentOnPr(
-    workspacePath: string,
-    number: number,
-    body: string,
-  ): Promise<void> {
+  async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {
     this.assertPr(number)
     this.comments.push({ workspacePath, number, body })
   }

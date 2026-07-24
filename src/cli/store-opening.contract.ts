@@ -161,9 +161,7 @@ export function describeStoreOpeningContract(
         exec: mainRepoExec,
         openStore: () => store,
       })
-      expect(adapter.canonicalMarker(stdout)).toBe(
-        adapter.expectedCanonicalMarker,
-      )
+      expect(adapter.canonicalMarker(stdout)).toBe(adapter.expectedCanonicalMarker)
     })
 
     test('closes exactly once on success, store failure, and output failure', async () => {

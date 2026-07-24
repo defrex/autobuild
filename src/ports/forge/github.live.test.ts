@@ -2,16 +2,8 @@ import { describe } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  describeForgeContract,
-  type ForgeContractFactory,
-} from './contract'
-import {
-  bunExec,
-  GitHubForge,
-  rulesetsHaveMergeGate,
-  type ExecResult,
-} from './github'
+import { describeForgeContract, type ForgeContractFactory } from './contract'
+import { bunExec, GitHubForge, rulesetsHaveMergeGate, type ExecResult } from './github'
 
 const GIT_ID = [
   '-c',
@@ -102,9 +94,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
   const repoSlug = requiredEnv('AB_GITHUB_CONTRACT_REPO')
   const match = /^([^/\s]+)\/([^/\s]+)$/.exec(repoSlug)
   if (!match) {
-    throw new Error(
-      'AB_GITHUB_CONTRACT_REPO must be an owner/name scratch repository',
-    )
+    throw new Error('AB_GITHUB_CONTRACT_REPO must be an owner/name scratch repository')
   }
   const owner = match[1]!
   const name = match[2]!
@@ -182,17 +172,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
     // as well as using the normal explicit registrations.
     if (cloneReady) {
       const listed = await execute(
-        [
-          'gh',
-          'pr',
-          'list',
-          '--head',
-          head,
-          '--state',
-          'open',
-          '--json',
-          'number',
-        ],
+        ['gh', 'pr', 'list', '--head', head, '--state', 'open', '--json', 'number'],
         workspacePath,
       )
       if (listed.exitCode === 0) {
@@ -208,9 +188,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
         }
       } else {
         failures.push(
-          new Error(
-            `GitHub cleanup could not discover PRs for ${head}: ${listed.stderr.trim()}`,
-          ),
+          new Error(`GitHub cleanup could not discover PRs for ${head}: ${listed.stderr.trim()}`),
         )
       }
     }
@@ -246,9 +224,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
           )
           if (closed.exitCode !== 0) {
             failures.push(
-              new Error(
-                `GitHub cleanup could not close PR #${number}: ${closed.stderr.trim()}`,
-              ),
+              new Error(`GitHub cleanup could not close PR #${number}: ${closed.stderr.trim()}`),
             )
           }
         }
@@ -264,9 +240,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
       )
       if (removed.exitCode !== 0 && !/404|not found/i.test(removed.stderr)) {
         failures.push(
-          new Error(
-            `GitHub cleanup could not remove ${base} protection: ${removed.stderr.trim()}`,
-          ),
+          new Error(`GitHub cleanup could not remove ${base} protection: ${removed.stderr.trim()}`),
         )
       }
       protectionInstalled = false
@@ -274,18 +248,13 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
 
     if (cloneReady) {
       for (const branch of [head, base]) {
-        const deleted = await execute(
-          ['git', 'push', 'origin', '--delete', branch],
-          workspacePath,
-        )
+        const deleted = await execute(['git', 'push', 'origin', '--delete', branch], workspacePath)
         if (
           deleted.exitCode !== 0 &&
           !/remote ref does not exist|unable to delete/i.test(deleted.stderr)
         ) {
           failures.push(
-            new Error(
-              `GitHub cleanup could not delete ${branch}: ${deleted.stderr.trim()}`,
-            ),
+            new Error(`GitHub cleanup could not delete ${branch}: ${deleted.stderr.trim()}`),
           )
         }
       }
@@ -328,9 +297,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
     )
     const repository = setup.data?.repository
     if (!repository || repository.nameWithOwner.toLowerCase() !== repoSlug.toLowerCase()) {
-      throw new Error(
-        `GitHub live Forge contract cannot access scratch repository ${repoSlug}`,
-      )
+      throw new Error(`GitHub live Forge contract cannot access scratch repository ${repoSlug}`)
     }
     if (repository.viewerPermission !== 'ADMIN') {
       throw new Error(
@@ -339,9 +306,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
       )
     }
     if (!repository.autoMergeAllowed) {
-      throw new Error(
-        `GitHub scratch repository ${repoSlug} must have native auto-merge enabled`,
-      )
+      throw new Error(`GitHub scratch repository ${repoSlug} must have native auto-merge enabled`)
     }
     const defaultBranch = repository.defaultBranchRef?.name
     if (!defaultBranch) {
@@ -358,17 +323,12 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
     await run(['git', 'checkout', '-q', '-b', head, base], workspacePath)
     await writeFile(join(workspacePath, `contract-${suffix}.txt`), 'head fixture\n')
     await run(['git', 'add', `contract-${suffix}.txt`], workspacePath)
-    await run(
-      ['git', ...GIT_ID, 'commit', '-q', '-m', `ab contract head ${suffix}`],
-      workspacePath,
-    )
+    await run(['git', ...GIT_ID, 'commit', '-q', '-m', `ab contract head ${suffix}`], workspacePath)
 
     // A unique branch can still inherit an organization ruleset or wildcard
     // classic protection. The ungated contract must never silently run under
     // one; gated tests install only the known temporary check below.
-    const rules = parseJson<
-      Array<{ type: string; parameters?: unknown; [key: string]: unknown }>
-    >(
+    const rules = parseJson<Array<{ type: string; parameters?: unknown; [key: string]: unknown }>>(
       await ghApi([
         `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/rules/branches/${encodeURIComponent(base)}`,
       ]),
@@ -380,14 +340,9 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
           'the live contract requires an otherwise ungated scratch repository',
       )
     }
-    const existingProtection = await execute(
-      ['gh', 'api', protectionEndpoint],
-      workspacePath,
-    )
+    const existingProtection = await execute(['gh', 'api', protectionEndpoint], workspacePath)
     if (existingProtection.exitCode === 0) {
-      throw new Error(
-        `GitHub scratch base ${base} unexpectedly inherits classic branch protection`,
-      )
+      throw new Error(`GitHub scratch base ${base} unexpectedly inherits classic branch protection`)
     }
     if (!/404|branch not protected|not found/i.test(existingProtection.stderr)) {
       throw new Error(
@@ -503,8 +458,7 @@ const githubForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
           )
           return sha
         },
-        nativeAutoMergeEnabled: async (number) =>
-          (await prProbe(number)).autoMergeRequest !== null,
+        nativeAutoMergeEnabled: async (number) => (await prProbe(number)).autoMergeRequest !== null,
         commentExists: async (number, body) => {
           await waitFor(
             `PR #${number} comment delivery`,

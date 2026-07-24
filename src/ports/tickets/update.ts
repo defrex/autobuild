@@ -14,10 +14,7 @@ const ticketUpdateSchema = z
     labels: z.array(z.string()).optional(),
   })
   .refine(
-    (patch) =>
-      patch.title !== undefined ||
-      patch.body !== undefined ||
-      patch.labels !== undefined,
+    (patch) => patch.title !== undefined || patch.body !== undefined || patch.labels !== undefined,
     'update must name at least one of title, body, or labels',
   )
 
@@ -44,8 +41,6 @@ export function validateTicketUpdate(patch: TicketUpdate): TicketUpdate {
   return {
     ...(result.data.title !== undefined ? { title: result.data.title } : {}),
     ...(result.data.body !== undefined ? { body: result.data.body } : {}),
-    ...(result.data.labels !== undefined
-      ? { labels: [...result.data.labels] }
-      : {}),
+    ...(result.data.labels !== undefined ? { labels: [...result.data.labels] } : {}),
   }
 }

@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
 import { parseConfig } from '../config/load'
-import {
-  validateEventWrite,
-  type AbEvent,
-  type EventWrite,
-} from '../events/catalog'
+import { validateEventWrite, type AbEvent, type EventWrite } from '../events/catalog'
 import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import type { Feedback, Finding, Verdict } from '../ontology'
@@ -47,11 +43,7 @@ function scriptedReviewer(verdicts: Verdict[]) {
   const calls: { artifact: Draft; round: number; priorRounds: Finding[][] }[] = []
   return {
     calls,
-    review: async (
-      artifact: Draft,
-      round: number,
-      priorRounds: Finding[][],
-    ): Promise<Verdict> => {
+    review: async (artifact: Draft, round: number, priorRounds: Finding[][]): Promise<Verdict> => {
       calls.push({ artifact, round, priorRounds })
       const verdict = verdicts[calls.length - 1]
       if (verdict === undefined) {
@@ -379,9 +371,7 @@ interface LoopTrace {
 
 // decideNext's policy knobs come from config defaults: stallRounds 3,
 // maxReviewRounds 4 (§16.1). converge gets the same numbers below.
-const diffConfig = parseConfig(
-  '[tickets]\nsource = "file"\nreadyState = "ready"\n',
-)
+const diffConfig = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')
 const DIFF_POLICY = {
   maxRounds: diffConfig.policy.maxReviewRounds,
   stallRounds: diffConfig.policy.stallRounds,
@@ -491,11 +481,7 @@ function runEngineLoop(verdicts: Verdict[], dismissed?: readonly string[]): Loop
       if (verdict === undefined) throw new Error(`no scripted verdict for round ${round}`)
       writes.push(
         diffEv('plan.started', { round }),
-        diffEv(
-          'plan.completed',
-          { round, artifact: { kind: 'plan', rev: round - 1 } },
-          DIFF_AGENT,
-        ),
+        diffEv('plan.completed', { round, artifact: { kind: 'plan', rev: round - 1 } }, DIFF_AGENT),
         diffEv('plan-review.started', { round }),
         diffEv(
           'plan-review.verdict',

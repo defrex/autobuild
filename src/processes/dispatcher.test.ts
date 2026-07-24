@@ -85,10 +85,7 @@ function harness(
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
     launchResult?: LaunchRunnerResult
-    onLaunch?: (
-      slug: string,
-      store: MemoryBuildStore,
-    ) => Promise<void> | void
+    onLaunch?: (slug: string, store: MemoryBuildStore) => Promise<void> | void
     workspaceBase?: WorkspaceBase
     prAttachments?: boolean
   } = {},
@@ -202,12 +199,7 @@ async function seedBuild(
   return slug
 }
 
-async function seedHostedPrAttachment(
-  h: Harness,
-  slug: string,
-  name = 'screenshot',
-  assetId = 7,
-) {
+async function seedHostedPrAttachment(h: Harness, slug: string, name = 'screenshot', assetId = 7) {
   const designated = await h.store.append(slug, {
     actor: agentActor('verify:visual', 's_visual'),
     type: 'pr-attachment.designated',
@@ -247,7 +239,12 @@ async function seedLoopsApproved(h: Harness, slug: string): Promise<void> {
   await h.store.append(slug, {
     actor: agentActor('plan-review', 's_seed'),
     type: 'plan-review.verdict',
-    payload: { round: 1, verdict: 'approve', findings: [], artifact: { kind: 'plan-review', rev: 0 } },
+    payload: {
+      round: 1,
+      verdict: 'approve',
+      findings: [],
+      artifact: { kind: 'plan-review', rev: 0 },
+    },
   })
   await h.store.append(slug, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
   await h.store.append(slug, {
@@ -263,7 +260,12 @@ async function seedLoopsApproved(h: Harness, slug: string): Promise<void> {
   await h.store.append(slug, {
     actor: agentActor('code-review', 's_seed'),
     type: 'code-review.verdict',
-    payload: { round: 1, verdict: 'approve', findings: [], artifact: { kind: 'code-review', rev: 0 } },
+    payload: {
+      round: 1,
+      verdict: 'approve',
+      findings: [],
+      artifact: { kind: 'code-review', rev: 0 },
+    },
   })
 }
 
@@ -323,8 +325,7 @@ describe('specConformance', () => {
   })
 
   test('an h1 section spans an h2 subheading; a later h1 still ends it', () => {
-    const body =
-      'Why.\n\n# Acceptance criteria\n- one\n\n## Details\n\nprose\n\n# Out of scope\n'
+    const body = 'Why.\n\n# Acceptance criteria\n- one\n\n## Details\n\nprose\n\n# Out of scope\n'
     expect(specConformance(body)).toEqual({ conforms: true, missing: [] })
   })
 
@@ -529,9 +530,7 @@ describe('build slug helpers', () => {
   })
 
   test('fallbackSlug keeps only the first three normalized title tokens', () => {
-    expect(fallbackSlug('Please add support for login throttling')).toBe(
-      'please-add-support',
-    )
+    expect(fallbackSlug('Please add support for login throttling')).toBe('please-add-support')
     expect(fallbackSlug('Fix OAuth2 / SSO now')).toBe('fix-oauth2-sso')
     expect(fallbackSlug('!!!')).toBe('build')
   })
@@ -607,9 +606,7 @@ describe('Dispatcher dispatch', () => {
     expect(h.workspaces.provisions).toEqual([
       { repo: REPO, baseBranch: 'main', branch: 'ab/add-rate-limiting' },
     ])
-    expect(h.tickets.comments).toEqual([
-      { id: 'T-1', body: 'build add-rate-limiting dispatched' },
-    ])
+    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: 'build add-rate-limiting dispatched' }])
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
@@ -662,9 +659,7 @@ releaseId = 42
     const h = harness({
       tickets: [readyTicket('T-auto')],
       onLaunch: async (slug, store) => {
-        launchSnapshot = (await store.getEvents(slug)).map(
-          (event) => event.type,
-        )
+        launchSnapshot = (await store.getEvents(slug)).map((event) => event.type)
       },
     })
 
@@ -695,11 +690,7 @@ releaseId = 42
       autoMergeUser: 'unused-operator',
     })
 
-    expect(
-      (await h.store.getEvents('add-rate-limiting')).map(
-        (event) => event.type,
-      ),
-    ).toEqual([
+    expect((await h.store.getEvents('add-rate-limiting')).map((event) => event.type)).toEqual([
       'build.created',
       'workspace.provisioned',
       'spec.imported',
@@ -778,9 +769,7 @@ releaseId = 42
 
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(receivedSpec).toBe(CONFORMING_BODY)
-    expect((await h.store.listBuilds()).map((build) => build.slug)).toEqual([
-      'login-rate-limit',
-    ])
+    expect((await h.store.listBuilds()).map((build) => build.slug)).toEqual(['login-rate-limit'])
     expect(h.workspaces.provisions[0]?.branch).toBe('ab/login-rate-limit')
   })
 
@@ -834,9 +823,7 @@ releaseId = 42
       })
       const report = await h.dispatcher.tick()
       expect(report.dispatched, scenario.name).toBe(1)
-      expect((await h.store.listBuilds())[0]?.slug, scenario.name).toBe(
-        'please-add-support',
-      )
+      expect((await h.store.listBuilds())[0]?.slug, scenario.name).toBe('please-add-support')
     }
   })
 
@@ -871,12 +858,7 @@ releaseId = 42
     const backlog = readyTicket('T-2', { title: 'Backlog idea', state: 'Backlog' })
     const h = harness({
       tickets: [ready, backlog],
-      toml: [
-        'capacity = 2',
-        '[tickets]',
-        'source = "file"',
-        'readyState = "Ready"',
-      ].join('\n'),
+      toml: ['capacity = 2', '[tickets]', 'source = "file"', 'readyState = "Ready"'].join('\n'),
     })
 
     const report = await h.dispatcher.tick()
@@ -1000,7 +982,12 @@ releaseId = 42
     await blocked.store.append('stuck', {
       actor: KERNEL,
       type: 'escalation.raised',
-      payload: { id: 'e_1', phase: 'implement', source: 'stall', question: 'same finding 3 rounds' },
+      payload: {
+        id: 'e_1',
+        phase: 'implement',
+        source: 'stall',
+        question: 'same finding 3 rounds',
+      },
     })
     expect(await blocked.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
@@ -1112,8 +1099,7 @@ releaseId = 42
         readyTicket('T-1', { body: 'thin', title: 'One' }),
         readyTicket('T-2', { body: 'thin', title: 'Two' }),
       ],
-      authorSpec: async (ticket) =>
-        ticket.ref.id === 'T-1' ? 'still not a spec' : null,
+      authorSpec: async (ticket) => (ticket.ref.id === 'T-1' ? 'still not a spec' : null),
     })
 
     const report = await h.dispatcher.tick()
@@ -1136,14 +1122,8 @@ releaseId = 42
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), dispatched: 2 })
     const builds = await h.store.listBuilds()
-    expect(builds.map((b) => b.slug)).toEqual([
-      'login-rate-limit',
-      'login-rate-limit-2',
-    ])
-    expect(builds.map((b) => b.branch)).toEqual([
-      'ab/login-rate-limit',
-      'ab/login-rate-limit-2',
-    ])
+    expect(builds.map((b) => b.slug)).toEqual(['login-rate-limit', 'login-rate-limit-2'])
+    expect(builds.map((b) => b.branch)).toEqual(['ab/login-rate-limit', 'ab/login-rate-limit-2'])
     expect(h.launches).toEqual(['login-rate-limit', 'login-rate-limit-2'])
   })
 
@@ -1209,9 +1189,7 @@ describe('Dispatcher harvest coordination', () => {
 
     const result = await Promise.race([
       h.dispatcher.tick(),
-      new Promise<'timed-out'>((resolve) =>
-        setTimeout(() => resolve('timed-out'), 20),
-      ),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 20)),
     ])
     expect(result).not.toBe('timed-out')
     expect(started).toBe(true)
@@ -1270,9 +1248,7 @@ describe('Dispatcher harvest coordination', () => {
       payload: {},
     })
 
-    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
-      emptyTickReport(),
-    )
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
     expect(calls).toBe(1)
     expect(h.launches).toEqual([])
   })
@@ -1333,9 +1309,7 @@ describe('Dispatcher harvest coordination', () => {
     })
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
-      emptyTickReport(),
-    )
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
     expect(calls).toBe(2)
 
     await h.store.appendRepo(REPO, {
@@ -1343,9 +1317,7 @@ describe('Dispatcher harvest coordination', () => {
       type: 'harvest.resume-requested',
       payload: {},
     })
-    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(
-      emptyTickReport(),
-    )
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
     expect(calls).toBe(3)
     expect(h.launches).toEqual([])
   })
@@ -1530,12 +1502,9 @@ describe('Dispatcher dependency gate', () => {
   /** readyState pins the candidate set to Ready tickets, so a blocker parked
    * in another state is a dependency and not itself dispatchable work — the
    * arrangement these tests are actually about. */
-  const CAPACITY_2 = [
-    'capacity = 2',
-    '[tickets]',
-    'source = "file"',
-    'readyState = "Ready"',
-  ].join('\n')
+  const CAPACITY_2 = ['capacity = 2', '[tickets]', 'source = "file"', 'readyState = "Ready"'].join(
+    '\n',
+  )
 
   test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
     const h = harness({
@@ -1549,18 +1518,12 @@ describe('Dispatcher dependency gate', () => {
     const report = await h.dispatcher.tick()
 
     expect(report.dependencyBlocked).toBe(1)
-    expect(report.dependencyDiagnostics).toEqual([
-      'ticket T-1 blocked by T-9 (not complete)',
-    ])
+    expect(report.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
     // Never claimed (§12: the gate precedes claim-before-launch)…
     expect(h.tickets.claims).not.toContain('T-1')
     // …no build, no workspace, no projection outward.
-    expect((await h.store.listBuilds()).map((b) => b.slug)).not.toContain(
-      'blocked-work',
-    )
-    expect(h.workspaces.provisions.map((p) => p.branch)).not.toContain(
-      'ab/blocked-work',
-    )
+    expect((await h.store.listBuilds()).map((b) => b.slug)).not.toContain('blocked-work')
+    expect(h.workspaces.provisions.map((p) => p.branch)).not.toContain('ab/blocked-work')
     expect(h.tickets.comments.map((c) => c.id)).not.toContain('T-1')
     expect(h.launches).not.toContain('blocked-work')
   })
@@ -1575,12 +1538,7 @@ describe('Dispatcher dependency gate', () => {
         readyTicket('T-2', { title: 'Free work' }),
         readyTicket('T-9', { title: 'The blocker', state: 'In Progress' }),
       ],
-      toml: [
-        'capacity = 1',
-        '[tickets]',
-        'source = "file"',
-        'readyState = "Ready"',
-      ].join('\n'),
+      toml: ['capacity = 1', '[tickets]', 'source = "file"', 'readyState = "Ready"'].join('\n'),
     })
 
     const report = await h.dispatcher.tick()
@@ -1624,9 +1582,7 @@ describe('Dispatcher dependency gate', () => {
     const second = await h.dispatcher.tick()
     expect(second.dependencyBlocked).toBe(1)
     expect(second.dispatched).toBe(0)
-    expect(second.dependencyDiagnostics).toEqual([
-      'ticket T-1 blocked by T-9 (not complete)',
-    ])
+    expect(second.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
 
     await h.tickets.transition('T-9', 'Done')
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
@@ -1751,9 +1707,7 @@ describe('Dispatcher dependency gate', () => {
 
     expect(report.dependencyBlocked).toBe(0)
     expect(report.dependencyDiagnostics).toEqual([])
-    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain(
-      'unblocked-work',
-    )
+    expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('unblocked-work')
   })
 
   /** A shared blocker is fetched once per tick, not once per dependent. */
@@ -1798,12 +1752,7 @@ describe('Dispatcher dependency gate', () => {
         readyTicket('T-2', { title: 'Second', state: 'Done', blockedBy: ['T-1'] }),
         readyTicket('T-3', { title: 'Third', state: 'Done', blockedBy: ['T-2'] }),
       ],
-      toml: [
-        'capacity = 5',
-        '[tickets]',
-        'source = "file"',
-        'readyState = "Done"',
-      ].join('\n'),
+      toml: ['capacity = 5', '[tickets]', 'source = "file"', 'readyState = "Done"'].join('\n'),
     })
 
     const report = await h.dispatcher.tick()
@@ -1828,9 +1777,7 @@ describe('Dispatcher dependency gate', () => {
 
     // T-1's DIRECT blocker T-2 is incomplete, which alone holds it — the
     // deeper walk exists only so a cycle could be named.
-    expect(report.dependencyDiagnostics).toContain(
-      'ticket T-1 blocked by T-2 (not complete)',
-    )
+    expect(report.dependencyDiagnostics).toContain('ticket T-1 blocked by T-2 (not complete)')
     expect(h.tickets.dependencyQueries).toEqual([['T-2'], ['T-3']])
   })
 })
@@ -1858,9 +1805,7 @@ describe('Dispatcher janitor', () => {
     const prMerged = events.find((e) => e.type === 'pr.merged')
     expect(prMerged?.payload).toEqual({ sha: 'squash-1' })
     expect(events.at(-1)?.payload).toEqual({ outcome: 'merged' })
-    expect(h.forge.getPrStateCalls).toEqual([
-      { workspacePath: '/local/workspace-1', number: 1 },
-    ])
+    expect(h.forge.getPrStateCalls).toEqual([{ workspacePath: '/local/workspace-1', number: 1 }])
     expect(h.workspaces.releases).toEqual([
       {
         provider: 'fake',
@@ -1870,9 +1815,7 @@ describe('Dispatcher janitor', () => {
       },
     ])
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Done' }])
-    expect(h.tickets.comments).toEqual([
-      { id: 'T-1', body: expect.stringContaining(PR.url) },
-    ])
+    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining(PR.url) }])
 
     // Second tick: the build is done — the whole pass is a no-op.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
@@ -1987,7 +1930,9 @@ describe('Dispatcher janitor', () => {
     }
 
     await expect(h.dispatcher.tick()).rejects.toThrow('forge temporarily unavailable')
-    expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.auto-merge-enabled')).toBe(false)
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.auto-merge-enabled')).toBe(
+      false,
+    )
 
     await h.dispatcher.tick()
     // Native state was already true, so this is an idempotent no-op call whose
@@ -2162,9 +2107,7 @@ describe('Dispatcher janitor', () => {
 
     await expect(h.dispatcher.tick()).rejects.toThrow('head changed')
     expect(h.forge.squashMergeCalls).toEqual([])
-    expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(
-      false,
-    )
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(false)
   })
 
   test('BLOCKED/probe failures surface; HAS_HOOKS delegates to native and never falls back', async () => {
@@ -2466,17 +2409,12 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), abandoned: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-2)).toEqual([
-      'workspace.released',
-      'build.completed',
-    ])
+    expect(events.map((e) => e.type).slice(-2)).toEqual(['workspace.released', 'build.completed'])
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     expect(h.workspaces.releases.map((r) => r.ref)).toEqual([`/ws/ab/${slug}`])
     // Aborted work goes back to a human (D1 discipline), never to Done.
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([
-      { id: 'T-1', body: expect.stringContaining('aborted') },
-    ])
+    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
@@ -2512,9 +2450,7 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([
-      { id: 'T-1', body: expect.stringContaining('aborted') },
-    ])
+    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('build.completed')
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
@@ -2552,9 +2488,7 @@ describe('Dispatcher janitor', () => {
       })
       const events = await h.store.getEvents(slug)
       const completed = events.find((event) => event.type === 'build.completed')!
-      const reclaimed = events.find(
-        (event) => event.type === 'pr-attachment.reclaimed',
-      )!
+      const reclaimed = events.find((event) => event.type === 'pr-attachment.reclaimed')!
       expect(reclaimed.seq).toBeGreaterThan(completed.seq)
       expect(reclaimed.payload).toEqual({ hostedSeq: hosted.seq })
       expect(h.forge.prAttachmentReclaims).toEqual([
@@ -2583,9 +2517,7 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     let events = await h.store.getEvents(slug)
-    const failed = events.find(
-      (event) => event.type === 'pr-attachment.reclaim-failed',
-    )
+    const failed = events.find((event) => event.type === 'pr-attachment.reclaim-failed')
     expect(failed?.payload).toEqual({
       hostedSeq: hosted.seq,
       attempt: 1,
@@ -2595,9 +2527,7 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     events = await h.store.getEvents(slug)
-    expect(
-      events.filter((event) => event.type === 'pr-attachment.reclaimed'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'pr-attachment.reclaimed')).toHaveLength(1)
     expect(h.forge.prAttachmentReclaims).toHaveLength(2)
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
@@ -2627,9 +2557,7 @@ describe('Dispatcher startup resume', () => {
 
     // Startup owns this tick's launch attempt, so its per-tick slug set also
     // prevents the stale-lease stage from asking twice.
-    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(
-      emptyTickReport(),
-    )
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
     // A later stale-lease poll asks again, but the launcher still knows the
     // process-local run is live. Neither no-op is observable as resumed/swept.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
@@ -2695,9 +2623,7 @@ describe('Dispatcher startup resume', () => {
     })
     expect(await blocked.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
     expect(blocked.launches).toEqual([])
-    expect((await blocked.store.getEvents('blocked')).at(-1)?.type).toBe(
-      'escalation.raised',
-    )
+    expect((await blocked.store.getEvents('blocked')).at(-1)?.type).toBe('escalation.raised')
   })
 })
 
@@ -2892,7 +2818,7 @@ describe('Dispatcher lease sweep', () => {
 // ── Repo scoping (§16.1, §12, §7.2) ──────────────────────────────────────────
 
 describe('Dispatcher repo scoping', () => {
-  test('another repo\'s builds are invisible: not janitored, not swept, not counted against capacity', async () => {
+  test("another repo's builds are invisible: not janitored, not swept, not counted against capacity", async () => {
     // Regression: janitor, sweep, and the capacity count iterated every build
     // in the (shared, §7.2) store — repo B's dispatcher would count repo A's
     // builds against its capacity, re-attach ITS runner to repo A's builds,
@@ -2940,9 +2866,7 @@ describe('Dispatcher tick idempotency', () => {
     })
     const eventCounts = async () =>
       Promise.all(
-        (await h.store.listBuilds()).map(
-          async (b) => (await h.store.getEvents(b.slug)).length,
-        ),
+        (await h.store.listBuilds()).map(async (b) => (await h.store.getEvents(b.slug)).length),
       )
     const before = await eventCounts()
 
@@ -3005,15 +2929,18 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
   })
 
   test('an explicit readyLabels wins for every source — config is never ignored', () => {
-    expect(
-      criteria(`${FILE}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
-    ).toEqual({ labels: ['urgent'], state: 'Ready' })
-    expect(
-      criteria(`${LINEAR}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
-    ).toEqual({ labels: ['urgent'], state: 'Ready' })
-    expect(
-      criteria(`${PLUGIN}readyLabels = ["urgent"]\nreadyState = "Ready"\n`),
-    ).toEqual({ labels: ['urgent'], state: 'Ready' })
+    expect(criteria(`${FILE}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
+      labels: ['urgent'],
+      state: 'Ready',
+    })
+    expect(criteria(`${LINEAR}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
+      labels: ['urgent'],
+      state: 'Ready',
+    })
+    expect(criteria(`${PLUGIN}readyLabels = ["urgent"]\nreadyState = "Ready"\n`)).toEqual({
+      labels: ['urgent'],
+      state: 'Ready',
+    })
   })
 
   test('an explicit empty readyLabels is honored, not treated as unset', () => {

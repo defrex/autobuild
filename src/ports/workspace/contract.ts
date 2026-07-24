@@ -13,8 +13,7 @@ export interface WorkspaceProviderContractHarness {
   cleanup?: () => Promise<void>
 }
 
-export type WorkspaceProviderContractFactory =
-  () => Promise<WorkspaceProviderContractHarness>
+export type WorkspaceProviderContractFactory = () => Promise<WorkspaceProviderContractHarness>
 
 async function withWorkspace(
   factory: WorkspaceProviderContractFactory,
@@ -66,9 +65,9 @@ export function describeWorkspaceProviderContract(
         expect(result.ref).not.toBe('')
         expect(isAbsolute(result.path)).toBe(true)
         expect((await stat(result.path)).isDirectory()).toBe(true)
-        expect(
-          await readFile(join(result.path, harness.fixture.relativePath), 'utf8'),
-        ).toBe(harness.fixture.content)
+        expect(await readFile(join(result.path, harness.fixture.relativePath), 'utf8')).toBe(
+          harness.fixture.content,
+        )
         expect(result.base).toEqual(harness.expectedBase)
 
         const writeProbe = join(result.path, 'contract-write-probe.txt')
@@ -91,9 +90,7 @@ export function describeWorkspaceProviderContract(
           source: 'existing',
           sha: first.base.sha,
         })
-        expect(await readFile(writeProbe, 'utf8')).toBe(
-          'preserve in-progress work\n',
-        )
+        expect(await readFile(writeProbe, 'utf8')).toBe('preserve in-progress work\n')
 
         await harness.provider.release(reprovisioned)
       })
@@ -109,12 +106,9 @@ export function describeWorkspaceProviderContract(
         expect(reprovisioned.path).toBe(first.path)
         expect(reprovisioned.branch).toBe(harness.provision.branch)
         expect((await stat(reprovisioned.path)).isDirectory()).toBe(true)
-        expect(
-          await readFile(
-            join(reprovisioned.path, harness.fixture.relativePath),
-            'utf8',
-          ),
-        ).toBe(harness.fixture.content)
+        expect(await readFile(join(reprovisioned.path, harness.fixture.relativePath), 'utf8')).toBe(
+          harness.fixture.content,
+        )
         expect(reprovisioned.base).toEqual({
           source: 'existing',
           sha: first.base.sha,
@@ -122,9 +116,7 @@ export function describeWorkspaceProviderContract(
 
         const writeProbe = join(reprovisioned.path, 'contract-recovery-probe.txt')
         await writeFile(writeProbe, 'recovered workspace is writable\n')
-        expect(await readFile(writeProbe, 'utf8')).toBe(
-          'recovered workspace is writable\n',
-        )
+        expect(await readFile(writeProbe, 'utf8')).toBe('recovered workspace is writable\n')
         await harness.provider.release(reprovisioned)
       })
     })

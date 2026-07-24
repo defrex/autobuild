@@ -10,13 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type {
-  Ticket,
-  TicketDraft,
-  TicketListing,
-  TicketSource,
-  TicketUpdate,
-} from '../ports/types'
+import type { Ticket, TicketDraft, TicketListing, TicketSource, TicketUpdate } from '../ports/types'
 import { runCli } from './main'
 import {
   abTicketBlock,
@@ -101,11 +95,13 @@ function fakeFactory(
         return Promise.resolve()
       },
       addBlocker: (id, blockerId) => {
-        ;(created.blockerAdds ??= []).push({ id, blockerId })
+        if (created.blockerAdds === undefined) created.blockerAdds = []
+        created.blockerAdds.push({ id, blockerId })
         return Promise.resolve()
       },
       removeBlocker: (id, blockerId) => {
-        ;(created.blockerRemovals ??= []).push({ id, blockerId })
+        if (created.blockerRemovals === undefined) created.blockerRemovals = []
+        created.blockerRemovals.push({ id, blockerId })
         return Promise.resolve()
       },
       dependencyStates: (ids: string[]) =>
@@ -222,9 +218,7 @@ describe('abTicketCreate', () => {
       body: '## What and why\n\nBecause.\n',
       labels: ['autobuild'],
     })
-    expect(out).toEqual([
-      'ticket created: fake:fake-1 (Triage) — https://example.test/fake-1',
-    ])
+    expect(out).toEqual(['ticket created: fake:fake-1 (Triage) — https://example.test/fake-1'])
   })
 
   test('with source = "file" and no factory override, writes a real ticket file', async () => {
@@ -265,10 +259,7 @@ describe('abTicketCreate', () => {
   })
 
   test('a config without [tickets] fails at the mandatory ready-state path', async () => {
-    await writeFile(
-      join(tmp, 'autobuild.toml'),
-      'baseBranch = "main"\n',
-    )
+    await writeFile(join(tmp, 'autobuild.toml'), 'baseBranch = "main"\n')
     const bodyFile = join(tmp, 'spec.md')
     await writeFile(bodyFile, '## What and why\n\nBecause.\n')
 
@@ -316,10 +307,7 @@ describe('abTicketCreate', () => {
     })
 
     expect(
-      await readFile(
-        join(tmp, 'alternate-state', 'tickets', 'triage', 'file-1.md'),
-        'utf8',
-      ),
+      await readFile(join(tmp, 'alternate-state', 'tickets', 'triage', 'file-1.md'), 'utf8'),
     ).toContain('title = "Alternate tracker"')
   })
 
@@ -498,9 +486,7 @@ describe('abTicket update/block/unblock', () => {
     await abTicketUnblock(common)
 
     expect(created.blockerAdds).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
-    expect(created.blockerRemovals).toEqual([
-      { id: 'AUT-9', blockerId: 'AUT-8' },
-    ])
+    expect(created.blockerRemovals).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
     expect(out).toEqual([
       'ticket blocker added: fake:AUT-9 — blocked by AUT-8',
       'ticket blocker removed: fake:AUT-9 — no longer blocked by AUT-8',
@@ -563,8 +549,7 @@ describe('abTicketList', () => {
         expected: { labels: [], state: 'ready' },
       },
       {
-        config:
-          '[tickets]\nsource = "linear"\nteamKey = "AUT"\nreadyState = "Todo"\n',
+        config: '[tickets]\nsource = "linear"\nteamKey = "AUT"\nreadyState = "Todo"\n',
         expected: { labels: ['autobuild'], state: 'Todo' },
       },
     ]
@@ -621,9 +606,7 @@ describe('abTicketList', () => {
     ])
     const out: string[] = []
     const errors: string[] = []
-    source.diagnostics.push(
-      '/repo/tickets/done/notes.md: invalid frontmatter — title is required',
-    )
+    source.diagnostics.push('/repo/tickets/done/notes.md: invalid frontmatter — title is required')
 
     await abTicketList({
       targetRepo: tmp,
@@ -637,9 +620,7 @@ describe('abTicketList', () => {
 
     const parsed = JSON.parse(out.join('\n')) as Ticket[]
     expect(parsed.map((ticket) => ticket.ref.id)).toEqual(['AUT-1'])
-    expect(errors).toEqual([
-      '/repo/tickets/done/notes.md: invalid frontmatter — title is required',
-    ])
+    expect(errors).toEqual(['/repo/tickets/done/notes.md: invalid frontmatter — title is required'])
     expect(source.listCriteria).toEqual([{ labels: ['security', 'api'] }])
   })
 
@@ -668,9 +649,7 @@ describe('abTicketList', () => {
       stderr: () => {},
       sourceFactory: () => new FakeTicketSource(),
     })
-    expect(empty).toEqual([
-      'no tickets matched in the configured fake ticket source',
-    ])
+    expect(empty).toEqual(['no tickets matched in the configured fake ticket source'])
   })
 })
 
@@ -684,8 +663,7 @@ describe('abTicketShow', () => {
       id: 'AUT-1',
       env: {},
       stdout: (line) => out.push(line),
-      sourceFactory: () =>
-        new FakeTicketSource([seededTicket({ body })]),
+      sourceFactory: () => new FakeTicketSource([seededTicket({ body })]),
     })
 
     expect(out.slice(0, -1).join('\n')).toContain('ticket fake:AUT-1')
@@ -923,12 +901,8 @@ describe('runCli — ticket routing', () => {
 
     expect(await runCli(['ticket', 'list', '--json'], deps)).toBe(0)
 
-    expect((JSON.parse(out.at(-1)!) as Ticket[]).map((ticket) => ticket.ref.id)).toEqual([
-      'file-1',
-    ])
-    expect(err).toContain(
-      `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
-    )
+    expect((JSON.parse(out.at(-1)!) as Ticket[]).map((ticket) => ticket.ref.id)).toEqual(['file-1'])
+    expect(err).toContain(`${malformedPath}: malformed ticket file — missing opening "+++" fence`)
   })
 
   test('update partially replaces a real file ticket and explicit empty labels clear', async () => {
@@ -941,29 +915,13 @@ describe('runCli — ticket routing', () => {
 
     expect(
       await runCli(
-        [
-          'ticket',
-          'create',
-          'Original title',
-          '--body',
-          originalBody,
-          '--labels',
-          'bug,api',
-        ],
+        ['ticket', 'create', 'Original title', '--body', originalBody, '--labels', 'bug,api'],
         deps,
       ),
     ).toBe(0)
     expect(
       await runCli(
-        [
-          'ticket',
-          'update',
-          'file-1',
-          '--title',
-          'Renamed title',
-          '--body',
-          replacementBody,
-        ],
+        ['ticket', 'update', 'file-1', '--title', 'Renamed title', '--body', replacementBody],
         deps,
       ),
     ).toBe(0)
@@ -976,9 +934,7 @@ describe('runCli — ticket routing', () => {
     expect(written).not.toContain('original body')
     expect(written).not.toContain('state =')
 
-    expect(
-      await runCli(['ticket', 'update', 'file-1', '--labels', ''], deps),
-    ).toBe(0)
+    expect(await runCli(['ticket', 'update', 'file-1', '--labels', ''], deps)).toBe(0)
     written = await readFile(path, 'utf8')
     expect(written).not.toContain('labels =')
     expect(written).toContain('replacement body')
@@ -993,29 +949,17 @@ describe('runCli — ticket routing', () => {
     await runCli(['ticket', 'create', 'Blocker', '--body', bodyFile], deps)
     await runCli(['ticket', 'create', 'Dependent', '--body', bodyFile], deps)
 
-    expect(
-      await runCli(['ticket', 'block', 'file-2', 'file-1'], deps),
-    ).toBe(0)
-    expect(
-      await runCli(['ticket', 'block', 'file-2', 'file-1'], deps),
-    ).toBe(0)
+    expect(await runCli(['ticket', 'block', 'file-2', 'file-1'], deps)).toBe(0)
+    expect(await runCli(['ticket', 'block', 'file-2', 'file-1'], deps)).toBe(0)
     const path = join(tmp, 'tickets', 'triage', 'file-2.md')
     const blocked = await readFile(path, 'utf8')
-    expect((blocked.match(/file-1/g) ?? [])).toHaveLength(1)
+    expect(blocked.match(/file-1/g) ?? []).toHaveLength(1)
 
-    expect(
-      await runCli(['ticket', 'unblock', 'file-2', 'file-1'], deps),
-    ).toBe(0)
-    expect(
-      await runCli(['ticket', 'unblock', 'file-2', 'file-404'], deps),
-    ).toBe(0)
+    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-1'], deps)).toBe(0)
+    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-404'], deps)).toBe(0)
     expect(await readFile(path, 'utf8')).not.toContain('blockedBy')
-    expect(out).toContain(
-      'ticket blocker added: file:file-2 — blocked by file-1',
-    )
-    expect(out).toContain(
-      'ticket blocker removed: file:file-2 — no longer blocked by file-1',
-    )
+    expect(out).toContain('ticket blocker added: file:file-2 — blocked by file-1')
+    expect(out).toContain('ticket blocker removed: file:file-2 — no longer blocked by file-1')
   })
 
   test('new write failures name self, missing blocker, unknown target, and invalid fields', async () => {
@@ -1025,25 +969,17 @@ describe('runCli — ticket routing', () => {
     const { deps, err } = sessionlessDeps()
     await runCli(['ticket', 'create', 'Target', '--body', bodyFile], deps)
 
-    expect(
-      await runCli(['ticket', 'block', 'file-1', 'file-1'], deps),
-    ).toBe(1)
+    expect(await runCli(['ticket', 'block', 'file-1', 'file-1'], deps)).toBe(1)
     expect(err.at(-1)).toContain('file-1')
-    expect(
-      await runCli(['ticket', 'block', 'file-1', 'file-404'], deps),
-    ).toBe(1)
+    expect(await runCli(['ticket', 'block', 'file-1', 'file-404'], deps)).toBe(1)
     expect(err.at(-1)).toContain('file-404')
-    expect(
-      await runCli(['ticket', 'update', 'file-404', '--title', 'New'], deps),
-    ).toBe(1)
+    expect(await runCli(['ticket', 'update', 'file-404', '--title', 'New'], deps)).toBe(1)
     expect(err.at(-1)).toContain('file-404')
-    expect(
-      await runCli(['ticket', 'update', 'file-1', '--title', '   '], deps),
-    ).toBe(1)
+    expect(await runCli(['ticket', 'update', 'file-1', '--title', '   '], deps)).toBe(1)
     expect(err.at(-1)).toContain('title')
-    expect(
-      await readFile(join(tmp, 'tickets', 'triage', 'file-1.md'), 'utf8'),
-    ).not.toContain('blockedBy')
+    expect(await readFile(join(tmp, 'tickets', 'triage', 'file-1.md'), 'utf8')).not.toContain(
+      'blockedBy',
+    )
   })
 
   test('update resolves an autobuild worktree cwd back to the main tracker', async () => {
@@ -1054,17 +990,9 @@ describe('runCli — ticket routing', () => {
     await runCli(['ticket', 'create', 'Original', '--body', bodyFile], deps)
     deps.workspacePath = join(tmp, 'linked-worktree')
 
+    expect(await runCli(['ticket', 'update', 'file-1', '--title', 'From worktree'], deps)).toBe(0)
     expect(
-      await runCli(
-        ['ticket', 'update', 'file-1', '--title', 'From worktree'],
-        deps,
-      ),
-    ).toBe(0)
-    expect(
-      await readFile(
-        join(tmp, '.autobuild', 'tickets', 'triage', 'file-1.md'),
-        'utf8',
-      ),
+      await readFile(join(tmp, '.autobuild', 'tickets', 'triage', 'file-1.md'), 'utf8'),
     ).toContain('title = "From worktree"')
   })
 

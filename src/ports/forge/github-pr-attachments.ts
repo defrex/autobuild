@@ -33,25 +33,22 @@ export interface PrAttachmentTempFile {
   cleanup(): Promise<void>
 }
 
-export type PrAttachmentTempFileWriter = (
-  content: Uint8Array,
-) => Promise<PrAttachmentTempFile>
+export type PrAttachmentTempFileWriter = (content: Uint8Array) => Promise<PrAttachmentTempFile>
 
-export const defaultPrAttachmentTempFileWriter: PrAttachmentTempFileWriter =
-  async (content) => {
-    const dir = await mkdtemp(join(tmpdir(), 'ab-pr-attachment-'))
-    const path = join(dir, 'attachment.bin')
-    try {
-      await writeFile(path, content)
-    } catch (error) {
-      await rm(dir, { recursive: true, force: true })
-      throw error
-    }
-    return {
-      path,
-      cleanup: () => rm(dir, { recursive: true, force: true }),
-    }
+export const defaultPrAttachmentTempFileWriter: PrAttachmentTempFileWriter = async (content) => {
+  const dir = await mkdtemp(join(tmpdir(), 'ab-pr-attachment-'))
+  const path = join(dir, 'attachment.bin')
+  try {
+    await writeFile(path, content)
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true })
+    throw error
   }
+  return {
+    path,
+    cleanup: () => rm(dir, { recursive: true, force: true }),
+  }
+}
 
 const repositoryJson = z
   .object({
@@ -59,8 +56,7 @@ const repositoryJson = z
     visibility: z.enum(['public', 'private', 'internal']).optional(),
   })
   .refine(
-    (repository) =>
-      repository.private !== undefined || repository.visibility !== undefined,
+    (repository) => repository.private !== undefined || repository.visibility !== undefined,
     'GitHub repository response must expose private or visibility',
   )
 
@@ -83,10 +79,7 @@ const releaseAssetJson = z.object({
 })
 type ReleaseAsset = z.infer<typeof releaseAssetJson>
 
-const pagedAssetsJson = z.union([
-  z.array(releaseAssetJson),
-  z.array(z.array(releaseAssetJson)),
-])
+const pagedAssetsJson = z.union([z.array(releaseAssetJson), z.array(z.array(releaseAssetJson))])
 
 const SHA256 = /^[0-9a-f]{64}$/
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000
@@ -135,9 +128,7 @@ function uploadEndpoint(uploadUrl: string, name: string): string {
 
 function flattenAssets(value: z.infer<typeof pagedAssetsJson>): ReleaseAsset[] {
   if (value.length === 0) return []
-  return Array.isArray(value[0])
-    ? (value as ReleaseAsset[][]).flat()
-    : (value as ReleaseAsset[])
+  return Array.isArray(value[0]) ? (value as ReleaseAsset[][]).flat() : (value as ReleaseAsset[])
 }
 
 function isNotFound(result: PrAttachmentExecResult): boolean {
@@ -155,10 +146,7 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
   private readonly commandTimeoutMs: number
   /** One GitHubForge instance serves one plumbing operation in production;
    * share the target probe across that operation's attachment uploads. */
-  private readonly targetValidations = new Map<
-    string,
-    Promise<z.infer<typeof releaseJson>>
-  >()
+  private readonly targetValidations = new Map<string, Promise<z.infer<typeof releaseJson>>>()
 
   constructor(opts: {
     exec: PrAttachmentExec
@@ -166,33 +154,28 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
     commandTimeoutMs?: number
   }) {
     this.exec = opts.exec
-    this.writeTempFile =
-      opts.writeTempFile ?? defaultPrAttachmentTempFileWriter
-    this.commandTimeoutMs =
-      opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+    this.writeTempFile = opts.writeTempFile ?? defaultPrAttachmentTempFileWriter
+    this.commandTimeoutMs = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   }
 
-  private async execute(
-    cmd: string[],
-    cwd: string,
-  ): Promise<PrAttachmentExecResult> {
+  private async execute(cmd: string[], cwd: string): Promise<PrAttachmentExecResult> {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(
-          new Error(
-            `PR attachment GitHub command timed out after ${this.commandTimeoutMs}ms: ${cmd.join(' ')}`,
-          ),
-        )
-      }, Math.max(0, this.commandTimeoutMs))
+      timer = setTimeout(
+        () => {
+          controller.abort()
+          reject(
+            new Error(
+              `PR attachment GitHub command timed out after ${this.commandTimeoutMs}ms: ${cmd.join(' ')}`,
+            ),
+          )
+        },
+        Math.max(0, this.commandTimeoutMs),
+      )
     })
     try {
-      return await Promise.race([
-        this.exec(cmd, { cwd, signal: controller.signal }),
-        timeout,
-      ])
+      return await Promise.race([this.exec(cmd, { cwd, signal: controller.signal }), timeout])
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
@@ -209,17 +192,11 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
     return result.stdout
   }
 
-  private parseJson<S extends z.ZodType>(
-    schema: S,
-    stdout: string,
-    cmd: string[],
-  ): z.infer<S> {
+  private parseJson<S extends z.ZodType>(schema: S, stdout: string, cmd: string[]): z.infer<S> {
     try {
       return schema.parse(JSON.parse(stdout))
     } catch (error) {
-      throw new Error(
-        `unexpected output from \`${cmd.join(' ')}\`: ${errorMessage(error)}`,
-      )
+      throw new Error(`unexpected output from \`${cmd.join(' ')}\`: ${errorMessage(error)}`)
     }
   }
 
@@ -243,11 +220,7 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
       )
     }
 
-    const releaseCmd = [
-      'gh',
-      'api',
-      `${root}/releases/${target.releaseId}`,
-    ]
+    const releaseCmd = ['gh', 'api', `${root}/releases/${target.releaseId}`]
     const release = this.parseJson(
       releaseJson,
       await this.run(releaseCmd, request.workspacePath),
@@ -285,9 +258,7 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
     return pending
   }
 
-  private async listAssets(
-    request: PrAttachmentUploadRequest,
-  ): Promise<ReleaseAsset[]> {
+  private async listAssets(request: PrAttachmentUploadRequest): Promise<ReleaseAsset[]> {
     const root = repositoryEndpoint(request.target.repository)
     const cmd = [
       'gh',
@@ -296,11 +267,7 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
       '--slurp',
       `${root}/releases/${request.target.releaseId}/assets?per_page=100`,
     ]
-    const parsed = this.parseJson(
-      pagedAssetsJson,
-      await this.run(cmd, request.workspacePath),
-      cmd,
-    )
+    const parsed = this.parseJson(pagedAssetsJson, await this.run(cmd, request.workspacePath), cmd)
     return flattenAssets(parsed)
   }
 
@@ -343,18 +310,14 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
     })
   }
 
-  async upload(
-    request: PrAttachmentUploadRequest,
-  ): Promise<HostedPrAttachmentAsset> {
+  async upload(request: PrAttachmentUploadRequest): Promise<HostedPrAttachmentAsset> {
     const target = prImageHostSchema.parse(request.target)
     if (!SHA256.test(request.sha256)) {
       throw new Error('PR attachment upload requires a full lowercase SHA-256 blob ref')
     }
     const actual = createHash('sha256').update(request.content).digest('hex')
     if (actual !== request.sha256) {
-      throw new Error(
-        `PR attachment bytes hash to ${actual}, not expected blob ${request.sha256}`,
-      )
+      throw new Error(`PR attachment bytes hash to ${actual}, not expected blob ${request.sha256}`)
     }
     const attachment = prAttachmentSchema.parse(request.attachment)
     if (!attachment.mediaType.startsWith('image/')) {
@@ -375,20 +338,14 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
       size: normalized.content.byteLength,
       digest: `sha256:${normalized.sha256}`,
     }
-    const existing = (await this.listAssets(normalized)).find(
-      (asset) => asset.name === filename,
-    )
+    const existing = (await this.listAssets(normalized)).find((asset) => asset.name === filename)
 
     if (existing !== undefined) {
       // GitHub may leave an incomplete starter/open row when an upload dies.
       // It is safe to remove because its deterministic name belongs to this
       // exact PR/attachment/blob identity; an uploaded mismatch is never clobbered.
       if (existing.state === 'starter' || existing.state === 'open') {
-        await this.deleteAsset(
-          normalized.workspacePath,
-          target.repository,
-          existing.id,
-        )
+        await this.deleteAsset(normalized.workspacePath, target.repository, existing.id)
       } else {
         return this.assertCompatibleAsset(existing, expected, target)
       }
@@ -426,20 +383,14 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
         // failed attempts cannot accumulate untracked release storage.
         let candidate: ReleaseAsset | undefined
         try {
-          candidate = (await this.listAssets(normalized)).find(
-            (asset) => asset.name === filename,
-          )
+          candidate = (await this.listAssets(normalized)).find((asset) => asset.name === filename)
         } catch {
           throw uploadError
         }
         if (candidate === undefined) throw uploadError
         if (candidate.state === 'starter' || candidate.state === 'open') {
           try {
-            await this.deleteAsset(
-              normalized.workspacePath,
-              target.repository,
-              candidate.id,
-            )
+            await this.deleteAsset(normalized.workspacePath, target.repository, candidate.id)
           } catch {
             // Preserve the primary upload error; its deterministic name keeps
             // the remnant identifiable to a later explicit retry or cleanup.

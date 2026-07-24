@@ -47,13 +47,7 @@ describe('GitHubForge.pushBranch', () => {
     await forge.pushBranch('/ws/build-1', 'ab/fix-login')
     expect(calls).toEqual([
       {
-        cmd: [
-          'git',
-          'push',
-          '-u',
-          'origin',
-          'HEAD:refs/heads/ab/fix-login',
-        ],
+        cmd: ['git', 'push', '-u', 'origin', 'HEAD:refs/heads/ab/fix-login'],
         cwd: '/ws/build-1',
       },
     ])
@@ -75,9 +69,7 @@ describe('GitHubForge.pushBranch', () => {
       .pushBranch('/ws/build-1', 'ab/fix-login')
       .then(() => null)
       .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain(
-      'git push -u origin HEAD:refs/heads/ab/fix-login',
-    )
+    expect(error?.message).toContain('git push -u origin HEAD:refs/heads/ab/fix-login')
     expect(error?.message).toContain('non-fast-forward')
     expect(error?.message).toContain('exit 1')
   })
@@ -258,9 +250,7 @@ describe('GitHubForge.getPrState', () => {
 
   test('MERGED without a mergeCommit throws', async () => {
     const { forge } = makeForge([{ stdout: stateJson('MERGED') }])
-    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow(
-      'merged with no mergeCommit',
-    )
+    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('merged with no mergeCommit')
   })
 
   test('CLOSED → closed', async () => {
@@ -271,9 +261,7 @@ describe('GitHubForge.getPrState', () => {
   })
 
   test('nonzero exit throws with the command and stderr', async () => {
-    const { forge } = makeForge([
-      { exitCode: 1, stderr: 'no pull requests found' },
-    ])
+    const { forge } = makeForge([{ exitCode: 1, stderr: 'no pull requests found' }])
     const error = await forge
       .getPrState('/ws/build-1', 42)
       .then(() => null)
@@ -284,9 +272,7 @@ describe('GitHubForge.getPrState', () => {
 
   test('an unexpected state value throws rather than misreporting', async () => {
     const { forge } = makeForge([{ stdout: stateJson('DRAFT') }])
-    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow(
-      'unexpected output',
-    )
+    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('unexpected output')
   })
 })
 
@@ -437,22 +423,8 @@ describe('GitHubForge.setAutoMerge', () => {
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
     })
-    expect(calls.at(-2)!.cmd).toEqual([
-      'gh',
-      'pr',
-      'merge',
-      '42',
-      '--auto',
-      '--squash',
-    ])
-    expect(calls.at(-1)!.cmd).toEqual([
-      'gh',
-      'pr',
-      'view',
-      '42',
-      '--json',
-      'autoMergeRequest',
-    ])
+    expect(calls.at(-2)!.cmd).toEqual(['gh', 'pr', 'merge', '42', '--auto', '--squash'])
+    expect(calls.at(-1)!.cmd).toEqual(['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'])
   })
 
   test('CLEAN or UNSTABLE with two successful negative probes returns a guarded direct candidate', async () => {
@@ -474,37 +446,16 @@ describe('GitHubForge.setAutoMerge', () => {
       })
     }
     const blocked = makeForge([view('BLOCKED'), ...noGate])
-    await expect(
-      blocked.forge.setAutoMerge('/ws/build-1', 42, true),
-    ).rejects.toThrow('BLOCKED')
+    await expect(blocked.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow('BLOCKED')
   })
 
   test('HAS_HOOKS is never treated as ungated and delegates to native auto-merge', async () => {
-    const { forge, calls } = makeForge([
-      view('HAS_HOOKS'),
-      ...noGate,
-      {},
-      nativeState(true),
-    ])
+    const { forge, calls } = makeForge([view('HAS_HOOKS'), ...noGate, {}, nativeState(true)])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'applied',
     })
-    expect(calls.at(-2)!.cmd).toEqual([
-      'gh',
-      'pr',
-      'merge',
-      '42',
-      '--auto',
-      '--squash',
-    ])
-    expect(calls.at(-1)!.cmd).toEqual([
-      'gh',
-      'pr',
-      'view',
-      '42',
-      '--json',
-      'autoMergeRequest',
-    ])
+    expect(calls.at(-2)!.cmd).toEqual(['gh', 'pr', 'merge', '42', '--auto', '--squash'])
+    expect(calls.at(-1)!.cmd).toEqual(['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'])
   })
 
   test('disabling inspects only native state, so future merge-state enums cannot block cancellation', async () => {
@@ -544,14 +495,10 @@ describe('GitHubForge.setAutoMerge', () => {
       {},
       nativeState(false),
     ])
-    expect(
-      await enable.forge.setAutoMerge('/ws/build-1', 42, true),
-    ).toEqual({ kind: 'deferred' })
+    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
 
     const disable = makeForge([nativeState(true), {}, nativeState(true)])
-    expect(
-      await disable.forge.setAutoMerge('/ws/build-1', 42, false),
-    ).toEqual({ kind: 'deferred' })
+    expect(await disable.forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({ kind: 'deferred' })
   })
 
   test('idempotent desired state only inspects the PR', async () => {
@@ -585,10 +532,7 @@ describe('GitHubForge.setAutoMerge', () => {
       kind: 'applied',
     })
     expect(
-      calls.filter(
-        (call) =>
-          call.cmd.join(' ') === 'gh pr merge 42 --auto --squash',
-      ),
+      calls.filter((call) => call.cmd.join(' ') === 'gh pr merge 42 --auto --squash'),
     ).toHaveLength(1)
   })
 
@@ -598,11 +542,7 @@ describe('GitHubForge.setAutoMerge', () => {
       'gh pr view 42 --json autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
     )
 
-    const probe = makeForge([
-      view(),
-      repo,
-      { exitCode: 1, stderr: 'resource not accessible' },
-    ])
+    const probe = makeForge([view(), repo, { exitCode: 1, stderr: 'resource not accessible' }])
     await expect(probe.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
       'gh api graphql',
     )
@@ -626,9 +566,9 @@ describe('GitHubForge.setAutoMerge', () => {
       classic(),
       { stdout: JSON.stringify([{ type: 'future_required_ai_review' }]) },
     ])
-    await expect(
-      unknown.forge.setAutoMerge('/ws/build-1', 42, true),
-    ).rejects.toThrow('unknown active GitHub ruleset rule type')
+    await expect(unknown.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'unknown active GitHub ruleset rule type',
+    )
 
     const malformed = makeForge([
       view(),
@@ -636,16 +576,16 @@ describe('GitHubForge.setAutoMerge', () => {
       classic(),
       { stdout: JSON.stringify([{ type: 'pull_request', parameters: {} }]) },
     ])
-    await expect(
-      malformed.forge.setAutoMerge('/ws/build-1', 42, true),
-    ).rejects.toThrow('unexpected parameters')
+    await expect(malformed.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'unexpected parameters',
+    )
   })
 
   test('malformed or future PR state is rejected rather than guessed', async () => {
     const malformed = makeForge([{ stdout: '{}' }])
-    await expect(
-      malformed.forge.setAutoMerge('/ws/build-1', 42, true),
-    ).rejects.toThrow('unexpected output')
+    await expect(malformed.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
+      'unexpected output',
+    )
 
     const future = makeForge([view('FUTURE_STATE')])
     await expect(future.forge.setAutoMerge('/ws/build-1', 42, true)).rejects.toThrow(
@@ -660,15 +600,7 @@ describe('GitHubForge.squashMerge', () => {
     await forge.squashMerge('/ws/build-1', 42, 'head-42')
     expect(calls).toEqual([
       {
-        cmd: [
-          'gh',
-          'pr',
-          'merge',
-          '42',
-          '--squash',
-          '--match-head-commit',
-          'head-42',
-        ],
+        cmd: ['gh', 'pr', 'merge', '42', '--squash', '--match-head-commit', 'head-42'],
         cwd: '/ws/build-1',
       },
     ])
@@ -680,9 +612,9 @@ describe('GitHubForge.squashMerge', () => {
 
   test('command failures remain visible', async () => {
     const { forge } = makeForge([{ exitCode: 1, stderr: 'head sha mismatch' }])
-    await expect(
-      forge.squashMerge('/ws/build-1', 42, 'stale-head'),
-    ).rejects.toThrow('head sha mismatch')
+    await expect(forge.squashMerge('/ws/build-1', 42, 'stale-head')).rejects.toThrow(
+      'head sha mismatch',
+    )
   })
 })
 

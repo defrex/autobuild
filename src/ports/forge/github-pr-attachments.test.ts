@@ -45,8 +45,7 @@ const request: PrAttachmentUploadRequest = {
   sha256,
 }
 const filename = githubPrAttachmentAssetName(request)
-const downloadUrl =
-  `https://github.com/acme/review-assets/releases/download/review/${filename}`
+const downloadUrl = `https://github.com/acme/review-assets/releases/download/review/${filename}`
 
 const PUBLIC = { stdout: JSON.stringify({ private: false }) }
 const RELEASE = {
@@ -90,12 +89,7 @@ function tempWriter() {
 
 describe('GitHubPrAttachmentHosting.upload', () => {
   test('validates the public release, pages assets, uploads exact PNG bytes, and returns a durable handle', async () => {
-    const { exec, calls } = scripted([
-      PUBLIC,
-      RELEASE,
-      { stdout: '[[]]' },
-      { stdout: asset() },
-    ])
+    const { exec, calls } = scripted([PUBLIC, RELEASE, { stdout: '[[]]' }, { stdout: asset() }])
     const temp = tempWriter()
     const hosting = new GitHubPrAttachmentHosting({
       exec,
@@ -141,10 +135,7 @@ describe('GitHubPrAttachmentHosting.upload', () => {
       PUBLIC,
       RELEASE,
       {
-        stdout: JSON.stringify([
-          [],
-          [JSON.parse(asset())],
-        ]),
+        stdout: JSON.stringify([[], [JSON.parse(asset())]]),
       },
     ])
     const temp = tempWriter()
@@ -189,9 +180,7 @@ describe('GitHubPrAttachmentHosting.upload', () => {
     for (const responses of cases) {
       const { exec } = scripted(responses)
       const hosting = new GitHubPrAttachmentHosting({ exec })
-      await expect(hosting.upload(request)).rejects.toThrow(
-        /private|not published|immutable/,
-      )
+      await expect(hosting.upload(request)).rejects.toThrow(/private|not published|immutable/)
     }
   })
 
@@ -208,9 +197,7 @@ describe('GitHubPrAttachmentHosting.upload', () => {
         { stdout: JSON.stringify([[JSON.parse(asset(mismatch))]]) },
       ])
       const hosting = new GitHubPrAttachmentHosting({ exec })
-      await expect(hosting.upload(request)).rejects.toThrow(
-        /content type|size|digest|state/,
-      )
+      await expect(hosting.upload(request)).rejects.toThrow(/content type|size|digest|state/)
       expect(calls).toHaveLength(3)
     }
   })
@@ -287,9 +274,9 @@ describe('GitHubPrAttachmentHosting.upload', () => {
   test('checks the supplied blob hash before any GitHub call', async () => {
     const { exec, calls } = scripted([])
     const hosting = new GitHubPrAttachmentHosting({ exec })
-    await expect(
-      hosting.upload({ ...request, sha256: '0'.repeat(64) }),
-    ).rejects.toThrow(/bytes hash to/)
+    await expect(hosting.upload({ ...request, sha256: '0'.repeat(64) })).rejects.toThrow(
+      /bytes hash to/,
+    )
     expect(calls).toEqual([])
   })
 
@@ -388,13 +375,7 @@ describe('GitHubPrAttachmentHosting.reclaim', () => {
     await hosting.reclaim(reclaim)
     expect(calls).toEqual([
       {
-        cmd: [
-          'gh',
-          'api',
-          '--method',
-          'DELETE',
-          'repos/acme/review-assets/releases/assets/77',
-        ],
+        cmd: ['gh', 'api', '--method', 'DELETE', 'repos/acme/review-assets/releases/assets/77'],
         cwd: '/repos/main',
         signal: expect.any(AbortSignal),
       },
@@ -402,9 +383,7 @@ describe('GitHubPrAttachmentHosting.reclaim', () => {
   })
 
   test('treats an HTTP 404 as successful idempotent cleanup', async () => {
-    const { exec } = scripted([
-      { exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' },
-    ])
+    const { exec } = scripted([{ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }])
     const hosting = new GitHubPrAttachmentHosting({ exec })
     await expect(hosting.reclaim(reclaim)).resolves.toBeUndefined()
   })

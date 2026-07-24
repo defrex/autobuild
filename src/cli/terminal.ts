@@ -97,10 +97,7 @@ interface Keypress {
  * what printable characters mean. In particular, `m`, `p`, and `d` remain
  * text here: the dispatch controller maps them to commands only while no text
  * input is active, so they can be typed into blocked-build feedback. */
-function dashboardInput(
-  text: string | undefined,
-  key: Keypress,
-): TerminalInputEvent | undefined {
+function dashboardInput(text: string | undefined, key: Keypress): TerminalInputEvent | undefined {
   if ((key.ctrl === true && key.name === 'c') || key.sequence === '\u0003') {
     return { type: 'interrupt' }
   }
@@ -114,11 +111,7 @@ function dashboardInput(
   ) {
     return { type: 'enter' }
   }
-  if (
-    key.name === 'backspace' ||
-    key.sequence === '\b' ||
-    key.sequence === '\u007f'
-  ) {
+  if (key.name === 'backspace' || key.sequence === '\b' || key.sequence === '\u007f') {
     return { type: 'backspace' }
   }
   if (key.name === 'escape' || key.sequence === '\u001b') {
@@ -128,11 +121,7 @@ function dashboardInput(
 
   const printable =
     text ??
-    (key.name?.length === 1
-      ? key.name
-      : key.sequence !== undefined
-        ? key.sequence
-        : undefined)
+    (key.name?.length === 1 ? key.name : key.sequence !== undefined ? key.sequence : undefined)
   if (
     printable === undefined ||
     printable.length === 0 ||
@@ -148,9 +137,7 @@ function dashboardInput(
  * support, disables terminal echo through raw mode, and restores the stream's
  * prior raw/flow state on every idempotent cleanup path.
  */
-export function processTerminalInput(
-  stream: NodeJS.ReadStream = process.stdin,
-): TerminalInput {
+export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin): TerminalInput {
   return {
     start(onKey): () => void {
       if (stream.isTTY !== true || typeof stream.setRawMode !== 'function') {

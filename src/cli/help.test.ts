@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  HELP_CATALOG,
-  recognizeHelpRequest,
-  renderCommandHelp,
-  renderTopLevelHelp,
-} from './help'
+import { HELP_CATALOG, recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
 import { isSessionlessInvocation, runCli } from './main'
 
 const COMMANDS = [
@@ -53,19 +48,11 @@ function deps(): {
 describe('layered CLI help catalog', () => {
   test('contains every routed command family once in audience order', () => {
     expect(HELP_CATALOG.map((entry) => entry.name)).toEqual([...COMMANDS])
-    expect(new Set(HELP_CATALOG.map((entry) => entry.name)).size).toBe(
-      HELP_CATALOG.length,
-    )
+    expect(new Set(HELP_CATALOG.map((entry) => entry.name)).size).toBe(HELP_CATALOG.length)
     const firstAi = HELP_CATALOG.findIndex((entry) => entry.audience === 'ai')
     expect(firstAi).toBeGreaterThan(0)
-    expect(
-      HELP_CATALOG.slice(0, firstAi).every(
-        (entry) => entry.audience === 'human',
-      ),
-    ).toBe(true)
-    expect(
-      HELP_CATALOG.slice(firstAi).every((entry) => entry.audience === 'ai'),
-    ).toBe(true)
+    expect(HELP_CATALOG.slice(0, firstAi).every((entry) => entry.audience === 'human')).toBe(true)
+    expect(HELP_CATALOG.slice(firstAi).every((entry) => entry.audience === 'ai')).toBe(true)
   })
 
   test('overview orients before exactly two audience sections and keeps entries one-line', () => {
@@ -86,11 +73,9 @@ describe('layered CLI help catalog', () => {
       'AI-first commands:',
     ])
 
-    const entries = lines.filter((line) => /^  ab [a-z-]+\s{2,}\S/.test(line))
+    const entries = lines.filter((line) => /^ {2}ab [a-z-]+\s{2,}\S/.test(line))
     expect(entries).toHaveLength(COMMANDS.length)
-    expect(
-      entries.map((line) => /^  ab ([a-z-]+)/.exec(line)?.[1]),
-    ).toEqual([...COMMANDS])
+    expect(entries.map((line) => /^ {2}ab ([a-z-]+)/.exec(line)?.[1])).toEqual([...COMMANDS])
     for (const line of entries) {
       expect(line).not.toContain('[')
       expect(line).not.toContain('<')
@@ -164,13 +149,32 @@ describe('layered CLI help catalog', () => {
       models: ['models [query] [--available]', 'provider-qualified', 'outside sessions'],
       plugin: ['plugin list', 'plugin doctor', 'plugin test', 'AB_RUN_LIVE_PORT_CONTRACTS=1'],
       context: ['context [--json]', 'Hydrate .ab/', 'inside a build session'],
-      artifact: ['artifact put', '--attach', 'artifact get', 'artifact download', 'exact artifact bytes', 'sessionless'],
+      artifact: [
+        'artifact put',
+        '--attach',
+        'artifact get',
+        'artifact download',
+        'exact artifact bytes',
+        'sessionless',
+      ],
       observe: ['followup|refactor|latent-bug', '--files', '--refs', 'not a terminal'],
       server: ['server start', 'server logs [n]', 'implement and verify', 'kernel owns teardown'],
       done: ['done [--notes <file>]', 'terminal command', 'exactly one terminal'],
-      verdict: ['approve|revise|escalate|pass|fail|skip', '--findings', '--report', 'phase-dependent'],
+      verdict: [
+        'approve|revise|escalate|pass|fail|skip',
+        '--findings',
+        '--report',
+        'phase-dependent',
+      ],
       escalate: ['escalate <question>', '--refs', 'Park the build', 'terminal command'],
-      harvest: ['harvest status', 'harvest context', 'harvest submit', 'harvest verdict', 'sessionless', 'harvest session'],
+      harvest: [
+        'harvest status',
+        'harvest context',
+        'harvest submit',
+        'harvest verdict',
+        'sessionless',
+        'harvest session',
+      ],
     }
 
     for (const command of COMMANDS) {
@@ -206,7 +210,16 @@ describe('layered CLI help catalog', () => {
     })
     expect(recognizeHelpRequest(['context', '--help', 'extra'])).toBeUndefined()
 
-    for (const command of ['context', 'artifact', 'observe', 'server', 'done', 'verdict', 'escalate', 'harvest']) {
+    for (const command of [
+      'context',
+      'artifact',
+      'observe',
+      'server',
+      'done',
+      'verdict',
+      'escalate',
+      'harvest',
+    ]) {
       expect(isSessionlessInvocation([command, '--help'])).toBe(true)
     }
     expect(isSessionlessInvocation(['context'])).toBe(false)

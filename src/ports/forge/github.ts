@@ -19,17 +19,8 @@ import {
   mergeStateStatuses,
   type MergeGatePresence,
 } from '../../kernel/auto-merge'
-import type {
-  AutoMergeResult,
-  PrAttachmentHosting,
-  Forge,
-  PrRef,
-  PrState,
-} from '../types'
-import {
-  GitHubPrAttachmentHosting,
-  type PrAttachmentTempFileWriter,
-} from './github-pr-attachments'
+import type { AutoMergeResult, PrAttachmentHosting, Forge, PrRef, PrState } from '../types'
+import { GitHubPrAttachmentHosting, type PrAttachmentTempFileWriter } from './github-pr-attachments'
 
 export interface ExecResult {
   stdout: string
@@ -166,9 +157,7 @@ const requiredStatusRuleParameters = z
 const requiredDeploymentsRuleParameters = z
   .object({ required_deployment_environments: z.array(z.string()) })
   .passthrough()
-const requiredWorkflowsRuleParameters = z
-  .object({ workflows: z.array(z.unknown()) })
-  .passthrough()
+const requiredWorkflowsRuleParameters = z.object({ workflows: z.array(z.unknown()) }).passthrough()
 const requiredCodeScanningRuleParameters = z
   .object({
     code_scanning_tools: z.array(z.unknown()).optional(),
@@ -176,8 +165,7 @@ const requiredCodeScanningRuleParameters = z
   })
   .refine(
     (value) =>
-      value.code_scanning_tools !== undefined ||
-      value.required_code_scanning_tools !== undefined,
+      value.code_scanning_tools !== undefined || value.required_code_scanning_tools !== undefined,
     { message: 'a code-scanning tools array is required' },
   )
   .passthrough()
@@ -224,18 +212,14 @@ function parseRuleParameters<S extends z.ZodType>(
 ): z.infer<S> {
   const parsed = schema.safeParse(parameters)
   if (!parsed.success) {
-    throw new Error(
-      `unexpected parameters for active GitHub ruleset rule ${type}: ${parsed.error}`,
-    )
+    throw new Error(`unexpected parameters for active GitHub ruleset rule ${type}: ${parsed.error}`)
   }
   return parsed.data
 }
 
 /** Whether any active repository/organization rule matching one branch
  * carries a real merge-blocking requirement. Unknown future types fail closed. */
-export function rulesetsHaveMergeGate(
-  rules: z.infer<typeof rulesetRulesJson>,
-): boolean {
+export function rulesetsHaveMergeGate(rules: z.infer<typeof rulesetRulesJson>): boolean {
   let present = false
   for (const rule of rules) {
     switch (rule.type) {
@@ -282,9 +266,7 @@ export function rulesetsHaveMergeGate(
           rule.type,
         )
         const tools =
-          parameters.code_scanning_tools ??
-          parameters.required_code_scanning_tools ??
-          []
+          parameters.code_scanning_tools ?? parameters.required_code_scanning_tools ?? []
         present = tools.length > 0 || present
         break
       }
@@ -353,24 +335,17 @@ export class GitHubForge implements Forge {
     const result = await this.exec(cmd, { cwd })
     if (result.exitCode !== 0) {
       throw new Error(
-        `forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
-          result.stderr.trim(),
+        `forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n${result.stderr.trim()}`,
       )
     }
     return result.stdout
   }
 
-  private parseJson<S extends z.ZodType>(
-    schema: S,
-    stdout: string,
-    cmd: string[],
-  ): z.infer<S> {
+  private parseJson<S extends z.ZodType>(schema: S, stdout: string, cmd: string[]): z.infer<S> {
     try {
       return schema.parse(JSON.parse(stdout))
     } catch (error) {
-      throw new Error(
-        `unexpected output from \`${cmd.join(' ')}\`: ${String(error)}`,
-      )
+      throw new Error(`unexpected output from \`${cmd.join(' ')}\`: ${String(error)}`)
     }
   }
 
@@ -449,10 +424,7 @@ export class GitHubForge implements Forge {
 
   /** [D1]: rebase is banned and branches are never rewritten — never force. */
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
-    await this.run(
-      ['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
-      workspacePath,
-    )
+    await this.run(['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`], workspacePath)
   }
 
   async openPr(opts: {
@@ -511,14 +483,7 @@ export class GitHubForge implements Forge {
     )
     // The number is unknown until the PR exists, so the follow-up view
     // selects by head branch — gh resolves an open PR from its head ref.
-    const viewCmd = [
-      'gh',
-      'pr',
-      'view',
-      opts.head,
-      '--json',
-      'number,url,headRefOid',
-    ]
+    const viewCmd = ['gh', 'pr', 'view', opts.head, '--json', 'number,url,headRefOid']
     const stdout = await this.run(viewCmd, opts.workspacePath)
     const view = this.parseJson(prViewJson, stdout, viewCmd)
     return { number: view.number, url: view.url, headSha: view.headRefOid }
@@ -526,14 +491,7 @@ export class GitHubForge implements Forge {
 
   /** Janitor poll (SPEC §15.7): merged / closed / mergeability for one PR. */
   async getPrState(workspacePath: string, number: number): Promise<PrState> {
-    const cmd = [
-      'gh',
-      'pr',
-      'view',
-      String(number),
-      '--json',
-      'state,mergeable,mergeCommit',
-    ]
+    const cmd = ['gh', 'pr', 'view', String(number), '--json', 'state,mergeable,mergeCommit']
     const stdout = await this.run(cmd, workspacePath)
     const view = this.parseJson(prStateJson, stdout, cmd)
     switch (view.state) {
@@ -555,23 +513,9 @@ export class GitHubForge implements Forge {
   /** Read the provider's projected native desired state. Mutations are not
    * acknowledgements: only this independent follow-up observation can make an
    * `applied` result durable. */
-  private async nativeAutoMergeEnabled(
-    workspacePath: string,
-    number: number,
-  ): Promise<boolean> {
-    const cmd = [
-      'gh',
-      'pr',
-      'view',
-      String(number),
-      '--json',
-      'autoMergeRequest',
-    ]
-    const view = this.parseJson(
-      nativeAutoMergeJson,
-      await this.run(cmd, workspacePath),
-      cmd,
-    )
+  private async nativeAutoMergeEnabled(workspacePath: string, number: number): Promise<boolean> {
+    const cmd = ['gh', 'pr', 'view', String(number), '--json', 'autoMergeRequest']
+    const view = this.parseJson(nativeAutoMergeJson, await this.run(cmd, workspacePath), cmd)
     return view.autoMergeRequest !== null
   }
 
@@ -593,10 +537,7 @@ export class GitHubForge implements Forge {
       if (!(await this.nativeAutoMergeEnabled(workspacePath, number))) {
         return { kind: 'applied' }
       }
-      await this.run(
-        ['gh', 'pr', 'merge', String(number), '--disable-auto'],
-        workspacePath,
-      )
+      await this.run(['gh', 'pr', 'merge', String(number), '--disable-auto'], workspacePath)
       return (await this.nativeAutoMergeEnabled(workspacePath, number))
         ? { kind: 'deferred' }
         : { kind: 'applied' }
@@ -610,21 +551,14 @@ export class GitHubForge implements Forge {
       '--json',
       'autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
     ]
-    const view = this.parseJson(
-      autoMergeJson,
-      await this.run(viewCmd, workspacePath),
-      viewCmd,
-    )
+    const view = this.parseJson(autoMergeJson, await this.run(viewCmd, workspacePath), viewCmd)
     if (view.autoMergeRequest !== null) return { kind: 'applied' }
 
     const gate = await this.mergeGatePresence(workspacePath, view.baseRefName)
     const disposition = classifyAutoMergeEnable(view.mergeStateStatus, gate)
     switch (disposition.kind) {
       case 'native':
-        await this.run(
-          ['gh', 'pr', 'merge', String(number), '--auto', '--squash'],
-          workspacePath,
-        )
+        await this.run(['gh', 'pr', 'merge', String(number), '--auto', '--squash'], workspacePath)
         return (await this.nativeAutoMergeEnabled(workspacePath, number))
           ? { kind: 'applied' }
           : { kind: 'deferred' }
@@ -638,35 +572,16 @@ export class GitHubForge implements Forge {
   }
 
   /** Normal guarded squash — no admin, force, rebase, or native-auto flag. */
-  async squashMerge(
-    workspacePath: string,
-    number: number,
-    expectedHeadSha: string,
-  ): Promise<void> {
+  async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
     await this.run(
-      [
-        'gh',
-        'pr',
-        'merge',
-        String(number),
-        '--squash',
-        '--match-head-commit',
-        expectedHeadSha,
-      ],
+      ['gh', 'pr', 'merge', String(number), '--squash', '--match-head-commit', expectedHeadSha],
       workspacePath,
     )
   }
 
   /** The build's summary comment (SPEC §7.5) — links into the store. */
-  async commentOnPr(
-    workspacePath: string,
-    number: number,
-    body: string,
-  ): Promise<void> {
+  async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {
     const bodyPath = await this.writeTempFile(body)
-    await this.run(
-      ['gh', 'pr', 'comment', String(number), '--body-file', bodyPath],
-      workspacePath,
-    )
+    await this.run(['gh', 'pr', 'comment', String(number), '--body-file', bodyPath], workspacePath)
   }
 }

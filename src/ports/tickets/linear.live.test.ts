@@ -1,8 +1,5 @@
 import { describe } from 'bun:test'
-import {
-  describeTicketSourceContract,
-  type TicketSourceContractHarness,
-} from './contract'
+import { describeTicketSourceContract, type TicketSourceContractHarness } from './contract'
 import { LINEAR_API_URL, LinearTicketSource } from './linear'
 
 interface LinearErrorShape {
@@ -116,19 +113,18 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
       )
     }
 
-    const findState = (
-      purpose: string,
-      types: readonly string[],
-    ): WorkflowState => {
+    const findState = (purpose: string, types: readonly string[]): WorkflowState => {
       const state = types
         .map((type) => team.states.nodes.find((candidate) => candidate.type === type))
         .find((candidate) => candidate !== undefined)
       if (!state) {
         throw new Error(
           `Linear scratch team ${teamKey} needs a ${purpose} workflow state ` +
-            `(type ${types.join(' or ')}); found ${team.states.nodes
-              .map((candidate) => `${candidate.name}:${candidate.type}`)
-              .join(', ') || 'none'}`,
+            `(type ${types.join(' or ')}); found ${
+              team.states.nodes
+                .map((candidate) => `${candidate.name}:${candidate.type}`)
+                .join(', ') || 'none'
+            }`,
         )
       }
       return state
@@ -227,8 +223,7 @@ async function linearHarness(): Promise<TicketSourceContractHarness> {
 }
 
 const runLiveLinear =
-  process.env.AB_RUN_LIVE_PORT_CONTRACTS === '1' &&
-  nonblank(process.env.LINEAR_API_KEY)
+  process.env.AB_RUN_LIVE_PORT_CONTRACTS === '1' && nonblank(process.env.LINEAR_API_KEY)
 
 describe.skipIf(!runLiveLinear)('Linear live port contracts (opt-in)', () => {
   describeTicketSourceContract('LinearTicketSource (live)', linearHarness)

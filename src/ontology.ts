@@ -46,10 +46,9 @@ export function verifyPhase(step: string): VerifyPhase {
   return `verify:${step}`
 }
 
-export const phaseSchema = z.custom<Phase>(
-  (value) => typeof value === 'string' && isPhase(value),
-  { message: 'not a phase: expected a core phase or "verify:<step>"' },
-)
+export const phaseSchema = z.custom<Phase>((value) => typeof value === 'string' && isPhase(value), {
+  message: 'not a phase: expected a core phase or "verify:<step>"',
+})
 
 // ── Findings (SPEC §15.4) ────────────────────────────────────────────────────
 
@@ -214,9 +213,7 @@ export const hostedPrAttachmentAssetSchema = z.strictObject({
     .url()
     .refine((url) => url.startsWith('https://'), 'hosted PR attachment URL must use HTTPS'),
 })
-export type HostedPrAttachmentAsset = z.infer<
-  typeof hostedPrAttachmentAssetSchema
->
+export type HostedPrAttachmentAsset = z.infer<typeof hostedPrAttachmentAssetSchema>
 
 // ── Builds ───────────────────────────────────────────────────────────────────
 
@@ -224,14 +221,7 @@ export const buildOutcomeSchema = z.enum(['merged', 'closed-unmerged', 'abandone
 export type BuildOutcome = z.infer<typeof buildOutcomeSchema>
 
 /** Derived status — a reduction of events, never stored (SPEC §15.5). */
-export const BUILD_STATUSES = [
-  'queued',
-  'running',
-  'paused',
-  'blocked',
-  'done',
-  'aborted',
-] as const
+export const BUILD_STATUSES = ['queued', 'running', 'paused', 'blocked', 'done', 'aborted'] as const
 export type BuildStatus = (typeof BUILD_STATUSES)[number]
 
 export const commitRangeSchema = z.strictObject({

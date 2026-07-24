@@ -4,18 +4,13 @@ import { renderDashboardFrameImage } from './frame-image'
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10]
 
 function pngDimension(bytes: Uint8Array, offset: number): number {
-  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(
-    offset,
-  )
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset)
 }
 
 describe('renderDashboardFrameImage', () => {
   test('ANSI SGR and OSC hyperlinks cost no cells and produce plain text from the same parse', () => {
     const frame = renderDashboardFrameImage(
-      [
-        '\x1b[31mRED\x1b[0m ' +
-          '\x1b]8;;https://example.invalid/pr/1\x07link\x1b]8;;\x07',
-      ],
+      ['\x1b[31mRED\x1b[0m ' + '\x1b]8;;https://example.invalid/pr/1\x07link\x1b]8;;\x07'],
       { columns: 8 },
     )
 
@@ -48,31 +43,29 @@ describe('renderDashboardFrameImage', () => {
   })
 
   test('rejects overflow, unsupported controls, and unknown terminal sequences clearly', () => {
-    expect(() =>
-      renderDashboardFrameImage(['too wide'], { columns: 3 }),
-    ).toThrow('exceeding declared terminal width 3')
-    expect(() =>
-      renderDashboardFrameImage(['tab\there'], { columns: 20 }),
-    ).toThrow('unsupported control U+0009')
-    expect(() =>
-      renderDashboardFrameImage(['\x1b[35mmagenta\x1b[0m'], { columns: 20 }),
-    ).toThrow('unsupported SGR code 35')
+    expect(() => renderDashboardFrameImage(['too wide'], { columns: 3 })).toThrow(
+      'exceeding declared terminal width 3',
+    )
+    expect(() => renderDashboardFrameImage(['tab\there'], { columns: 20 })).toThrow(
+      'unsupported control U+0009',
+    )
+    expect(() => renderDashboardFrameImage(['\x1b[35mmagenta\x1b[0m'], { columns: 20 })).toThrow(
+      'unsupported SGR code 35',
+    )
     expect(() =>
       renderDashboardFrameImage(['\x1b]8;;https://example.invalid\x07open'], {
         columns: 20,
       }),
     ).toThrow('hyperlink was not closed')
-    expect(() =>
-      renderDashboardFrameImage(['\x1b[31mleaked'], { columns: 20 }),
-    ).toThrow('SGR style was not reset')
+    expect(() => renderDashboardFrameImage(['\x1b[31mleaked'], { columns: 20 })).toThrow(
+      'SGR style was not reset',
+    )
   })
 
   test('rejects empty frames and invalid terminal dimensions', () => {
-    expect(() => renderDashboardFrameImage([], { columns: 80 })).toThrow(
-      'dashboard frame is empty',
+    expect(() => renderDashboardFrameImage([], { columns: 80 })).toThrow('dashboard frame is empty')
+    expect(() => renderDashboardFrameImage(['x'], { columns: 0 })).toThrow(
+      'columns must be a positive integer',
     )
-    expect(() =>
-      renderDashboardFrameImage(['x'], { columns: 0 }),
-    ).toThrow('columns must be a positive integer')
   })
 })

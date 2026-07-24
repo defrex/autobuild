@@ -25,6 +25,9 @@
   "scripts": {
     "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
+    "check": "bun tools/biome-check.ts",
+    "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
+    "prepare": "husky",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
@@ -36,11 +39,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.5",
     "@resvg/resvg-js": "2.6.2",
     "@types/bun": "^1.3.14",
     "@types/semver": "^7.7.1",
     "dejavu-fonts-ttf": "2.37.0",
     "drizzle-kit": "^0.31.10",
+    "git-format-staged": "4.0.1",
+    "husky": "9.1.7",
     "typescript": "^7.0.2"
   }
 }

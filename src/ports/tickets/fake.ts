@@ -22,9 +22,7 @@ function cloneTicket(ticket: Ticket): Ticket {
     body: ticket.body,
     state: ticket.state,
     labels: [...ticket.labels],
-    ...(ticket.blockedBy !== undefined
-      ? { blockedBy: [...ticket.blockedBy] }
-      : {}),
+    ...(ticket.blockedBy !== undefined ? { blockedBy: [...ticket.blockedBy] } : {}),
   }
 }
 
@@ -77,10 +75,7 @@ export class FakeTicketSource implements TicketSource {
     this.tickets.set(ticket.ref.id, cloneTicket(ticket))
   }
 
-  async listReady(criteria: {
-    labels?: string[]
-    state?: string
-  }): Promise<TicketListing> {
+  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     return {
       tickets: [...this.tickets.values()]
@@ -118,10 +113,7 @@ export class FakeTicketSource implements TicketSource {
     this.transitions.push({ id, state })
   }
 
-  async create(
-    draft: TicketDraft,
-    opts: TicketCreateOptions = {},
-  ): Promise<Ticket> {
+  async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     if (opts.idempotencyKey !== undefined) {
       const adopted = this.idempotency.get(opts.idempotencyKey)
       if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'))
@@ -176,9 +168,7 @@ export class FakeTicketSource implements TicketSource {
     const ticket = this.require(id, 'removeBlocker')
     this.blockerRemovals.push({ id, blockerId })
 
-    const remaining = (ticket.blockedBy ?? []).filter(
-      (candidate) => candidate !== blockerId,
-    )
+    const remaining = (ticket.blockedBy ?? []).filter((candidate) => candidate !== blockerId)
     if (remaining.length === 0) delete ticket.blockedBy
     else ticket.blockedBy = remaining
   }

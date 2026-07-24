@@ -21,9 +21,7 @@ describe('createWorkspaceProvider', () => {
     )
     expect(provider).toBeInstanceOf(GitWorktreeProvider)
     expect(provider.name).toBe('git-worktree')
-    expect((provider as unknown as { root: string }).root).toBe(
-      resolve('./state/worktrees'),
-    )
+    expect((provider as unknown as { root: string }).root).toBe(resolve('./state/worktrees'))
   })
 
   test('plugin factories stay lazy and receive exact config, env, and absolute repo root', async () => {
@@ -61,8 +59,7 @@ describe('createWorkspaceProvider', () => {
 
   test('unknown selectors list every available provider deterministically', async () => {
     const opts = baseOpts()
-    const factory = (): WorkspaceProvider =>
-      new FakeWorkspaceProvider({ mode: 'logical' })
+    const factory = (): WorkspaceProvider => new FakeWorkspaceProvider({ mode: 'logical' })
     opts.registry.register({
       name: 'extra',
       apiVersion: '^1.0.0',
@@ -88,8 +85,6 @@ describe('createWorkspaceProvider', () => {
     })
     await expect(
       createWorkspaceProvider({ provider: 'container', config: {} }, opts),
-    ).rejects.toThrow(
-      'workspace provider "container" failed to initialize: daemon unavailable',
-    )
+    ).rejects.toThrow('workspace provider "container" failed to initialize: daemon unavailable')
   })
 })

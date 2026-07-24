@@ -27,15 +27,8 @@ import type { WorkspaceHandle, WorkspaceProvider } from '../ports/types'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 import { FileTicketSource } from '../ports/tickets/file'
-import {
-  Dispatcher,
-  emptyTickReport,
-  type LaunchRunnerResult,
-} from '../processes/dispatcher'
-import {
-  HarvestRunner,
-  type HarvestRunnerResult,
-} from '../processes/harvest-runner'
+import { Dispatcher, emptyTickReport, type LaunchRunnerResult } from '../processes/dispatcher'
+import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { createWorkspaceProvider } from '../ports/workspace/create'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
@@ -105,9 +98,7 @@ const HAPPY_PREFIX = [
 // ── a. Happy path, outer loop to merged (§15.6, §12, §15.7) ──────────────────
 
 test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor merges (§15.6)', async () => {
-  const h = await track(
-    makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }),
-  )
+  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
 
   // Dispatch (§12): claim → build → real worktree → spec import → launch.
   const tick1 = await h.dispatcher.tick()
@@ -214,7 +205,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'transcript@4',
   ])
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  expect(transcripts.map((m) => m.metadata['phase'])).toEqual([
+  expect(transcripts.map((m) => m.metadata.phase)).toEqual([
     'plan',
     'plan-review',
     'implement',
@@ -418,7 +409,9 @@ test('content-producing finalize post-steps extend the open PR branch through ke
 
   // Exactly one post-step commit extends (never rewrites) the implementation.
   await git(['merge-base', '--is-ancestor', implementHead, finalizeHead], workspace)
-  expect(await git(['rev-list', '--count', `${implementHead}..${finalizeHead}`], workspace)).toBe('1')
+  expect(await git(['rev-list', '--count', `${implementHead}..${finalizeHead}`], workspace)).toBe(
+    '1',
+  )
   expect(await git(['log', '--format=%s'], workspace)).toBe(
     'finalize: add repository content\nimplement: rate limiting r1\ninitial',
   )
@@ -514,9 +507,7 @@ test('a0. approved plan selects optional verification while mandatory gates rema
     'selected',
   ])
   expect(
-    ofType(events, 'verify.completed').map((event) =>
-      normalizeVerifyCompletion(event.payload),
-    ),
+    ofType(events, 'verify.completed').map((event) => normalizeVerifyCompletion(event.payload)),
   ).toEqual([
     { step: 'mandatory', attempt: 1, outcome: 'pass' },
     {
@@ -537,9 +528,7 @@ test('a0. approved plan selects optional verification while mandatory gates rema
   ])
 
   const ws = ofType(events, 'workspace.provisioned')[0]!.payload.ref
-  expect(await readFile(join(ws, 'verify-order.log'), 'utf8')).toBe(
-    'mandatory\nselected\n',
-  )
+  expect(await readFile(join(ws, 'verify-order.log'), 'utf8')).toBe('mandatory\nselected\n')
   expect(
     ofType(events, 'session.started').some(
       (event) => event.payload.phase === 'verify:omitted-agent',
@@ -577,10 +566,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     await cli.run(['context'])
     // Capture during code review: later phase contexts intentionally replace
     // the gitignored .ab/ tree.
-    codeReviewContext = await readFile(
-      join(cli.ws, '.ab', 'context.json'),
-      'utf8',
-    )
+    codeReviewContext = await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')
     const notes = await writeFileIn(
       cli.ws,
       '.ab/code-review.md',
@@ -588,9 +574,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     )
     await cli.run(['verdict', 'approve', '--notes', notes])
   }
-  const h = await track(
-    makeHarness({ handlers, tickets: [readyTicket('T-1')] }),
-  )
+  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
   const staleLocalSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
   const branchCut = await h.advanceRemote(
     { 'remote-only.txt': 'landed before dispatch\n' },
@@ -604,11 +588,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual([
-    'build.created',
-    'workspace.provisioned',
-    'spec.imported',
-  ])
+  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
   expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(branchCut)
@@ -628,9 +608,7 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
   // Provisioning and implementation fetch only private destinations;
   // operator-owned local refs remain exactly as stale as before dispatch.
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
-  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(
-    staleLocalSha,
-  )
+  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(staleLocalSha)
 
   expect((await h.runLatest()).prState).toBe('open')
   expect(h.cliErrors).toEqual([])
@@ -665,15 +643,11 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
   )
   // Running implementation/review must not mutate the operator-owned refs.
   expect(await git(['rev-parse', 'refs/heads/main'], h.origin)).toBe(staleLocalSha)
-  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(
-    staleLocalSha,
-  )
+  expect(await git(['rev-parse', 'refs/remotes/origin/main'], h.origin)).toBe(staleLocalSha)
 }, 30_000)
 
 test('a1. unavailable origin still dispatches from local main and records why', async () => {
-  const h = await track(
-    makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }),
-  )
+  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
   const localSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
   await git(['remote', 'remove', 'origin'], h.origin)
 
@@ -682,30 +656,20 @@ test('a1. unavailable origin still dispatches from local main and records why', 
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual([
-    'build.created',
-    'workspace.provisioned',
-    'spec.imported',
-  ])
+  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base.source).toBe('local')
   if (provisioned.payload.base.source !== 'local') {
     throw new Error('expected local fallback evidence')
   }
   expect(provisioned.payload.base.sha).toBe(localSha)
-  expect(provisioned.payload.base.remoteError).toContain(
-    'fetch --no-tags --no-write-fetch-head',
-  )
-  expect(provisioned.payload.base.remoteError).toMatch(
-    /origin.*repository|repository.*origin/i,
-  )
+  expect(provisioned.payload.base.remoteError).toContain('fetch --no-tags --no-write-fetch-head')
+  expect(provisioned.payload.base.remoteError).toMatch(/origin.*repository|repository.*origin/i)
   expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(localSha)
 }, 30_000)
 
 test('gated CLEAN auto-merge requested before finalize remains GitHub-native', async () => {
-  const h = await track(
-    makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }),
-  )
+  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
 
   await h.dispatcher.tick()
   const realOpen = h.forge.openPr.bind(h.forge)
@@ -743,11 +707,7 @@ test('gated CLEAN auto-merge requested before finalize remains GitHub-native', a
   h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual([
-    'pr.merged',
-    'workspace.released',
-    'build.completed',
-  ])
+  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
   expect(reduceBuild(final).outcome).toBe('merged')
 }, 30_000)
 
@@ -801,11 +761,7 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   // The next ordinary observation settles the existing lifecycle vocabulary.
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual([
-    'pr.merged',
-    'workspace.released',
-    'build.completed',
-  ])
+  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
   expect(reduceBuild(final).status).toBe('done')
   expect(reduceBuild(final).outcome).toBe('merged')
   expect(typesOf(final)).not.toContain('escalation.raised')
@@ -817,11 +773,11 @@ test('a2. reconcile merges the current base when main advances after conflict de
   let suppliedBase: string | undefined
   let mergeCommit: string | undefined
   const handlers = happyHandlers()
-  handlers['reconcile'] = async (cli) => {
+  handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(
-      await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8'),
-    ) as { conflict?: { baseSha: string } }
+    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+      conflict?: { baseSha: string }
+    }
     suppliedBase = context.conflict?.baseSha
     if (suppliedBase === undefined) {
       throw new Error('reconcile context omitted conflict.baseSha')
@@ -830,10 +786,9 @@ test('a2. reconcile merges the current base when main advances after conflict de
     // The advanced base and feature both added rate-limit.txt, so real Git
     // must stop for a resolution. The scripted agent preserves both sides and
     // finishes through the real `ab done` reconcile terminal.
-    const merge = await spawnExec(
-      ['git', ...GIT_ID, 'merge', '--no-edit', suppliedBase],
-      { cwd: cli.ws },
-    )
+    const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-edit', suppliedBase], {
+      cwd: cli.ws,
+    })
     expect(merge.exitCode).not.toBe(0)
     expect(`${merge.stdout}\n${merge.stderr}`).toContain('CONFLICT')
     await writeFileIn(
@@ -850,9 +805,7 @@ test('a2. reconcile merges the current base when main advances after conflict de
     await cli.run(['done', '--notes', notes])
   }
 
-  const h = await track(
-    makeHarness({ handlers, tickets: [readyTicket('T-1')] }),
-  )
+  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
   expect((await h.runLatest()).prState).toBe('open')
 
@@ -862,9 +815,9 @@ test('a2. reconcile merges the current base when main advances after conflict de
   const featureBeforeReconcile = await git(['rev-parse', 'HEAD'], ws)
   // This is the original failure shape: the SHA captured at detection is
   // already in the feature branch, so merging that snapshot would be a no-op.
-  expect(
-    await git(['merge-base', '--is-ancestor', detectedBase, featureBeforeReconcile], ws),
-  ).toBe('')
+  expect(await git(['merge-base', '--is-ancestor', detectedBase, featureBeforeReconcile], ws)).toBe(
+    '',
+  )
 
   // Let the parked runner lease expire, then have the janitor observe a
   // conflict while main is still at the old (already-merged) SHA.
@@ -908,9 +861,7 @@ test('a2. reconcile merges the current base when main advances after conflict de
   if (mergeCommit === undefined) {
     throw new Error('reconcile handler did not create a merge commit')
   }
-  const parents = (
-    await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)
-  ).split(/\s+/)
+  const parents = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)).split(/\s+/)
   expect(parents).toEqual([mergeCommit, featureBeforeReconcile, currentBase])
   expect(ofType(events, 'reconcile.completed')[0]!.payload.mergeCommit).toBe(mergeCommit)
   expect(h.forge.pushes.at(-1)).toEqual({ workspacePath: ws, branch: BRANCH })
@@ -958,35 +909,24 @@ readyState = "Ready"
       '.ab/evidence/reconciled-ui.png',
       'simulated image evidence\n',
     )
-    await cli.run([
-      'artifact',
-      'put',
-      'visual:reconciled-ui',
-      screenshot,
-      '--attach',
-    ])
+    await cli.run(['artifact', 'put', 'visual:reconciled-ui', screenshot, '--attach'])
     await cli.run(['verdict', 'pass'])
   }
-  handlers['reconcile'] = async (cli) => {
+  handlers.reconcile = async (cli) => {
     await cli.run(['context'])
-    const context = JSON.parse(
-      await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8'),
-    ) as { conflict?: { baseSha: string } }
+    const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+      conflict?: { baseSha: string }
+    }
     const baseSha = context.conflict?.baseSha
     if (baseSha === undefined) throw new Error('reconcile context omitted baseSha')
 
-    const merge = await spawnExec(
-      ['git', ...GIT_ID, 'merge', '--no-ff', '--no-commit', baseSha],
-      { cwd: cli.ws },
-    )
+    const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-ff', '--no-commit', baseSha], {
+      cwd: cli.ws,
+    })
     expect(merge.exitCode).toBe(0)
     // This build-owned reconciliation change brings visual verification
     // into scope. The upstream-only base-only/ file must remain excluded.
-    await writeFileIn(
-      cli.ws,
-      'src/ui/reconciled.ts',
-      'export const reconciled = true\n',
-    )
+    await writeFileIn(cli.ws, 'src/ui/reconciled.ts', 'export const reconciled = true\n')
     await commitAll(cli.ws, 'reconcile: add visual resolution')
     const notes = await writeFileIn(
       cli.ws,
@@ -1017,9 +957,7 @@ readyState = "Ready"
   // failure attempt; the first actual session appears only after a path match.
   expect(visualSessions).toBe(0)
   expect(
-    [...h.agents.sessions.values()].some(
-      (session) => session.opts.skill === 'ab-verify-visual',
-    ),
+    [...h.agents.sessions.values()].some((session) => session.opts.skill === 'ab-verify-visual'),
   ).toBe(false)
 
   // Advance only the remote base with a path covered by base-only's selector.
@@ -1047,9 +985,7 @@ readyState = "Ready"
   expect(results[2]?.outcome).toBe('pass')
   expect(visualSessions).toBe(1)
   expect(
-    [...h.agents.sessions.values()].filter(
-      (session) => session.opts.skill === 'ab-verify-visual',
-    ),
+    [...h.agents.sessions.values()].filter((session) => session.opts.skill === 'ab-verify-visual'),
   ).toHaveLength(1)
   expect(results[3]).toMatchObject({
     outcome: 'skipped',
@@ -1063,9 +999,7 @@ readyState = "Ready"
     filename: 'reconciled-ui.png',
     mediaType: 'image/png',
   })
-  expect(h.forge.comments.at(-1)?.body).toContain(
-    '<code>visual:reconciled-ui@0</code>',
-  )
+  expect(h.forge.comments.at(-1)?.body).toContain('<code>visual:reconciled-ui@0</code>')
   expect(h.forge.comments.at(-1)?.body).toContain('ab artifact download')
   expect(h.cliErrors).toEqual([])
 }, 30_000)
@@ -1077,7 +1011,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
   const handlers = happyHandlers()
   // r1 does NOT create ok.marker (the check fails); r2 keys off the
   // materialized .ab/verify/ report and fixes it.
-  handlers['implement'] = async (cli) => {
+  handlers.implement = async (cli) => {
     await cli.run(['context'])
     const routed = existsSync(join(cli.ws, '.ab', 'verify', 'unit.md'))
     if (routed) {
@@ -1200,9 +1134,9 @@ test('b. verify failure routes back to implement with the report, then re-verifi
   // …and round 2's bracket still deposited its own transcript (§7.1).
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
   expect(transcripts).toHaveLength(7)
-  expect(transcripts[4]!.metadata['phase']).toBe('implement')
-  expect(transcripts[4]!.metadata['round']).toBe(2)
-  expect(transcripts[4]!.metadata['session']).toBe('s_5')
+  expect(transcripts[4]!.metadata.phase).toBe('implement')
+  expect(transcripts[4]!.metadata.round).toBe(2)
+  expect(transcripts[4]!.metadata.session).toBe('s_5')
 
   // Both implement rounds pushed the branch (D7 plumbing on each `ab done`).
   const ws = ofType(events, 'workspace.provisioned')[0]!.payload.ref
@@ -1219,7 +1153,7 @@ const GUIDANCE_ANSWER = 'A fixed 5-minute window is correct; approve unless it r
 test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-B)', async () => {
   const guidanceSeen: Array<{ round: number; escalation: string; answer: string }> = []
   const handlers = happyHandlers()
-  handlers['implement'] = async (cli) => {
+  handlers.implement = async (cli) => {
     await cli.run(['context'])
     const guidancePath = join(cli.ws, '.ab', 'guidance.json')
     if (existsSync(guidancePath)) {
@@ -1250,9 +1184,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     const persists: string[] = []
     if (cli.round > 1) {
       const prior = JSON.parse(
-        await Bun.file(
-          join(cli.ws, '.ab', 'history', `findings-r${cli.round - 1}.json`),
-        ).text(),
+        await Bun.file(join(cli.ws, '.ab', 'history', `findings-r${cli.round - 1}.json`)).text(),
       ) as Array<{ id: string }>
       persists.push(prior[0]!.id)
     }
@@ -1274,8 +1206,15 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   expect(blocked.status).toBe('blocked') // runner exited parked (§11)
 
   let events = await h.events(SLUG)
-  const codeRound = ['session.started', 'implement.completed', 'session.ended',
-    'code-review.started', 'session.started', 'code-review.verdict', 'session.ended']
+  const codeRound = [
+    'session.started',
+    'implement.completed',
+    'session.ended',
+    'code-review.started',
+    'session.started',
+    'code-review.verdict',
+    'session.ended',
+  ]
   expect(typesOf(events)).toEqual([
     'build.created',
     'workspace.provisioned',
@@ -1289,9 +1228,12 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'session.started',
     'plan-review.verdict',
     'session.ended',
-    'implement.started', ...codeRound, // r1
-    'implement.started', ...codeRound, // r2
-    'implement.started', ...codeRound, // r3
+    'implement.started',
+    ...codeRound, // r1
+    'implement.started',
+    ...codeRound, // r2
+    'implement.started',
+    ...codeRound, // r3
     'escalation.raised', // stall threshold hit (§15.4)
   ])
 
@@ -1486,9 +1428,7 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
     const second = await h.dispatcher.tick()
     expect(second.dependencyBlocked).toBe(0)
     expect(second.dispatched).toBe(1)
-    expect((await h.store.listBuilds()).map((b) => b.ticket?.id)).toContain(
-      dependent.ref.id,
-    )
+    expect((await h.store.listBuilds()).map((b) => b.ticket?.id)).toContain(dependent.ref.id)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1514,9 +1454,9 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
     })
 
     await source.addBlocker(dependent.ref.id, blocker.ref.id)
-    expect(
-      await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8'),
-    ).toContain(`blockedBy = [ "${blocker.ref.id}" ]`)
+    expect(await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')).toContain(
+      `blockedBy = [ "${blocker.ref.id}" ]`,
+    )
 
     const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
     const held = await h.dispatcher.tick()
@@ -1525,10 +1465,7 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
     expect((await source.get(dependent.ref.id))?.state).toBe('Ready')
 
     await source.removeBlocker(dependent.ref.id, blocker.ref.id)
-    const unblockedFile = await readFile(
-      join(dir, 'ready', `${dependent.ref.id}.md`),
-      'utf8',
-    )
+    const unblockedFile = await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')
     expect(unblockedFile).not.toContain('blockedBy')
     expect((await source.get(blocker.ref.id))?.state).toBe('Doing')
 
@@ -1556,10 +1493,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     // `ab done` validates the exact plan against the provisioned workspace's
     // normal config and records the effective default selection.
     await writeFile(join(ws, 'autobuild.toml'), CONFIG_TOML)
-    await writeFile(
-      join(conflictBin, 'ab'),
-      '#!/bin/sh\necho host-conflicting-ab\nexit 91\n',
-    )
+    await writeFile(join(conflictBin, 'ab'), '#!/bin/sh\necho host-conflicting-ab\nexit 91\n')
     await chmod(join(conflictBin, 'ab'), 0o755)
     const slug = 'local-e2e'
     const ticket = { source: 'fake', id: 'T-local', title: 'Local e2e' }
@@ -1599,7 +1533,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     // The inherited host path resolves a hostile `ab` first. The runner's
     // shared environment builder must override that ordering, after all
     // scoped values are merged, without requiring a global Autobuild install.
-    const inheritedPath = [conflictBin, process.env['PATH'] ?? '']
+    const inheritedPath = [conflictBin, process.env.PATH ?? '']
       .filter((entry) => entry !== '')
       .join(delimiter)
     const env = sessionEnv(
@@ -1612,10 +1546,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
       },
       { ...process.env, PATH: inheritedPath },
     )
-    expect(env['PATH']!.split(delimiter).slice(0, 2)).toEqual([
-      AGENT_BIN_DIR,
-      conflictBin,
-    ])
+    expect(env.PATH!.split(delimiter).slice(0, 2)).toEqual([AGENT_BIN_DIR, conflictBin])
 
     // Invoke by the documented spelling — no process.execPath or repository
     // path escape hatch. This also executes the checked-in launcher's mode.
@@ -1639,9 +1570,7 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     const context = await ab(['context'])
     expect(context).toMatchObject({ code: 0, stderr: '' })
     expect(context.stdout).toContain(`context materialized for ${slug} — plan@1`)
-    expect(await readFile(join(ws, '.ab', 'spec.md'), 'utf8')).toBe(
-      '# Spec: local e2e\n',
-    )
+    expect(await readFile(join(ws, '.ab', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
 
     const got = await ab(['artifact', 'get', 'spec'])
     expect(got).toEqual({
@@ -1759,12 +1688,12 @@ test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default run
   // The stored transcripts record the resolved runtime + model, so any
   // experiment's outcome is attributable to the config that produced it.
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  const crTranscript = transcripts.find((m) => m.metadata['phase'] === 'code-review')!
-  expect(crTranscript.metadata['runner']).toBe('pi')
-  expect(crTranscript.metadata['model']).toBe('kimi-k3')
-  const planTranscript = transcripts.find((m) => m.metadata['phase'] === 'plan')!
-  expect(planTranscript.metadata['runner']).toBe('scripted')
-  expect(planTranscript.metadata['model']).toBeUndefined()
+  const crTranscript = transcripts.find((m) => m.metadata.phase === 'code-review')!
+  expect(crTranscript.metadata.runner).toBe('pi')
+  expect(crTranscript.metadata.model).toBe('kimi-k3')
+  const planTranscript = transcripts.find((m) => m.metadata.phase === 'plan')!
+  expect(planTranscript.metadata.runner).toBe('scripted')
+  expect(planTranscript.metadata.model).toBeUndefined()
 }, 30_000)
 
 const PLUGIN_RUNTIME_TOML = `${CONFIG_TOML}
@@ -1792,17 +1721,14 @@ test('g2. a plugin-registered runtime and its default model drive a full build',
   const events = await h.events(SLUG)
   const started = ofType(events, 'session.started')
   expect(started).toHaveLength(5)
-  expect(
-    started.map((event) => [event.payload.runner, event.payload.model]),
-  ).toEqual(Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']))
+  expect(started.map((event) => [event.payload.runner, event.payload.model])).toEqual(
+    Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']),
+  )
 
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
   expect(transcripts).toHaveLength(5)
   expect(
-    transcripts.map((artifact) => [
-      artifact.metadata['runner'],
-      artifact.metadata['model'],
-    ]),
+    transcripts.map((artifact) => [artifact.metadata.runner, artifact.metadata.model]),
   ).toEqual(Array.from({ length: 5 }, () => ['plugin-scripted', 'plugin/default']))
   expect(h.agents.sessions.size).toBe(5)
   expect([...h.agents.sessions.values()].every((session) => session.ended)).toBe(true)
@@ -1845,18 +1771,15 @@ test('g3. a phase role can override the configured default with a plugin runtime
   }
 
   const transcripts = await h.store.listArtifacts(SLUG, 'transcript')
-  const planTranscript = transcripts.find(
-    (artifact) => artifact.metadata['phase'] === 'plan',
-  )!
-  expect(planTranscript.metadata['runner']).toBe('plugin-scripted')
-  expect(planTranscript.metadata['model']).toBe('plugin/default')
+  const planTranscript = transcripts.find((artifact) => artifact.metadata.phase === 'plan')!
+  expect(planTranscript.metadata.runner).toBe('plugin-scripted')
+  expect(planTranscript.metadata.model).toBe('plugin/default')
   expect(
     transcripts
-      .filter((artifact) => artifact.metadata['phase'] !== 'plan')
+      .filter((artifact) => artifact.metadata.phase !== 'plan')
       .every(
         (artifact) =>
-          artifact.metadata['runner'] === 'scripted' &&
-          artifact.metadata['model'] === undefined,
+          artifact.metadata.runner === 'scripted' && artifact.metadata.model === undefined,
       ),
   ).toBe(true)
 }, 30_000)
@@ -1868,10 +1791,7 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
     makeHarness({
       handlers: {},
       tickets: [],
-      configToml: CONFIG_TOML.replace(
-        'stallRounds = 3',
-        'stallRounds = 3\nharvestThreshold = 2',
-      ),
+      configToml: CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 2'),
     }),
   )
   const cliErrors: string[] = []
@@ -1935,19 +1855,9 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
           const findings = join(h.origin, '.ab', 'e2e-findings.json')
           await writeFile(
             findings,
-            JSON.stringify([
-              { severity: 'important', summary: 'Make the proposal more specific' },
-            ]),
+            JSON.stringify([{ severity: 'important', summary: 'Make the proposal more specific' }]),
           )
-          await run([
-            'harvest',
-            'verdict',
-            'revise',
-            '--notes',
-            notes,
-            '--findings',
-            findings,
-          ])
+          await run(['harvest', 'verdict', 'revise', '--notes', notes, '--findings', findings])
         } else {
           await run(['harvest', 'verdict', 'approve', '--notes', notes])
         }
@@ -2053,9 +1963,7 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
     },
     ledger: [{ action: 'filed' }, { action: 'filed' }],
   })
-  const reserved = firstRepoEvents.find(
-    (event) => event.type === 'harvest.proposal.id-reserved',
-  )
+  const reserved = firstRepoEvents.find((event) => event.type === 'harvest.proposal.id-reserved')
   const filed = firstRepoEvents.find(
     (event) =>
       event.type === 'harvest.proposal.filed' &&
@@ -2086,7 +1994,5 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
 
   const sessions = [...harvestAgents.sessions.values()]
   expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest')).toHaveLength(2)
-  expect(
-    sessions.filter((entry) => entry.opts.skill === 'ab-harvest-review'),
-  ).toHaveLength(3)
+  expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest-review')).toHaveLength(3)
 }, 30_000)

@@ -21,10 +21,7 @@ const FRAME_SPECS = [
   { id: 'mixed-narrow', columns: 64, rows: 50 },
 ] as const
 
-const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace(
-  'capacity = 2',
-  'capacity = 3',
-)
+const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 3')
 
 export interface CapturedDashboardFrame {
   id: string
@@ -56,10 +53,10 @@ export interface DashboardCaptureOptions {
 
 function captureHandlers(): SkillHandlers {
   const handlers = happyHandlers()
-  const happyPlan = handlers['plan']!
-  const happyImplement = handlers['implement']!
+  const happyPlan = handlers.plan!
+  const happyImplement = handlers.implement!
 
-  handlers['plan'] = async (cli) => {
+  handlers.plan = async (cli) => {
     if (cli.env.build === 'plan-blocked-dashboard') {
       await cli.run(['context'])
       await cli.run([
@@ -70,7 +67,7 @@ function captureHandlers(): SkillHandlers {
     }
     return happyPlan(cli)
   }
-  handlers['implement'] = async (cli) => {
+  handlers.implement = async (cli) => {
     if (cli.env.build === 'implement-blocked-dashboard') {
       await cli.run(['context'])
       await cli.run([
@@ -120,13 +117,9 @@ async function prepareScenario(): Promise<E2eHarness> {
     }
 
     const completeEvents = await harness.events('complete-dashboard-evidence')
-    const observation = completeEvents.find(
-      (event) => event.type === 'observation.recorded',
-    )
+    const observation = completeEvents.find((event) => event.type === 'observation.recorded')
     if (observation === undefined) {
-      throw new Error(
-        'dashboard capture complete build produced no scripted observation',
-      )
+      throw new Error('dashboard capture complete build produced no scripted observation')
     }
 
     await harness.store.ensureRepo(harness.origin)
@@ -138,9 +131,7 @@ async function prepareScenario(): Promise<E2eHarness> {
         type: 'harvest.started',
         payload: {
           run: 'harvest_dashboard_capture',
-          observations: [
-            { build: 'complete-dashboard-evidence', seq: observation.seq },
-          ],
+          observations: [{ build: 'complete-dashboard-evidence', seq: observation.seq }],
           scan: {
             kind: deposited[0]!.kind,
             rev: deposited[0]!.revision,
@@ -209,11 +200,7 @@ const NO_INPUT: TerminalInput = {
   start: () => () => {},
 }
 
-function validateCapturedFrame(
-  id: string,
-  lines: string[] | undefined,
-  columns: number,
-): string[] {
+function validateCapturedFrame(id: string, lines: string[] | undefined, columns: number): string[] {
   if (lines === undefined || lines.length === 0) {
     throw new Error(`dashboard capture ${id}: dispatch painted no frame`)
   }
@@ -242,9 +229,7 @@ function validateCapturedFrame(
     }
   }
   if (id === 'mixed-narrow' && !text.includes('~')) {
-    throw new Error(
-      'dashboard capture mixed-narrow: width did not exercise dashboard truncation',
-    )
+    throw new Error('dashboard capture mixed-narrow: width did not exercise dashboard truncation')
   }
   return [...lines]
 }
@@ -278,9 +263,7 @@ async function capturePaint(
   })
 
   if (stderr.length > 0) {
-    throw new Error(
-      `dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`,
-    )
+    throw new Error(`dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`)
   }
   return validateCapturedFrame(spec.id, captured, spec.columns)
 }
@@ -290,9 +273,7 @@ function assertOutputUnderScratch(workspacePath: string, outputDir: string): voi
   const output = resolve(outputDir)
   const rel = relative(scratch, output)
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
-    throw new Error(
-      `dashboard frame output must be below ${scratch}, got ${output}`,
-    )
+    throw new Error(`dashboard frame output must be below ${scratch}, got ${output}`)
   }
 }
 
@@ -361,9 +342,7 @@ export async function captureDashboardFrames(
       frames,
       diagnostics: {
         buildSlugs: harness.launched.map((entry) => entry.slug),
-        agentSkills: [...harness.agents.sessions.values()].map(
-          (session) => session.opts.skill,
-        ),
+        agentSkills: [...harness.agents.sessions.values()].map((session) => session.opts.skill),
         forgeOpened: harness.forge.opened.length,
         forgeComments: harness.forge.comments.length,
         cliErrors: [...harness.cliErrors],

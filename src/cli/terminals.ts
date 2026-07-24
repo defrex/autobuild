@@ -21,10 +21,7 @@ import { loadConfig } from '../config/load'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
-import {
-  autoMergeApplicationType,
-  pendingAutoMerge,
-} from '../kernel/auto-merge'
+import { autoMergeApplicationType, pendingAutoMerge } from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { reduceBuild } from '../kernel/reducer'
@@ -138,11 +135,7 @@ function assertNoPriorTerminal(events: AbEvent[], env: CliEnv): void {
   }
 }
 
-function terminalMatchesRound(
-  event: AbEvent,
-  env: CliEnv,
-  reconcileAttempt: number,
-): boolean {
+function terminalMatchesRound(event: AbEvent, env: CliEnv, reconcileAttempt: number): boolean {
   switch (event.type) {
     case 'plan.completed':
     case 'plan-review.verdict':
@@ -197,9 +190,7 @@ function gitObjectIds(output: string, command: string): string[] {
   const ids = body.split('\n')
   const malformed = ids.find((id) => !GIT_OBJECT_ID.test(id))
   if (malformed !== undefined) {
-    throw new Error(
-      `${command} returned malformed commit output: ${JSON.stringify(output)}`,
-    )
+    throw new Error(`${command} returned malformed commit output: ${JSON.stringify(output)}`)
   }
   return ids
 }
@@ -207,9 +198,7 @@ function gitObjectIds(output: string, command: string): string[] {
 function singleGitObjectId(output: string, command: string): string {
   const ids = gitObjectIds(output, command)
   if (ids.length !== 1) {
-    throw new Error(
-      `${command} expected exactly one commit SHA, found ${ids.length}`,
-    )
+    throw new Error(`${command} expected exactly one commit SHA, found ${ids.length}`)
   }
   return ids[0]!
 }
@@ -229,9 +218,7 @@ function baseBranchOf(events: AbEvent[]): string {
   for (const event of events) {
     if (event.type === 'build.created') return event.payload.baseBranch
   }
-  throw new Error(
-    'this build has no build.created event — cannot resolve its baseBranch (§15.3)',
-  )
+  throw new Error('this build has no build.created event — cannot resolve its baseBranch (§15.3)')
 }
 
 function requireImplementationProvisioning(events: AbEvent[]): void {
@@ -336,10 +323,7 @@ export interface DoneOpts {
   notes?: string
 }
 
-export async function done(
-  deps: TerminalDeps,
-  opts: DoneOpts = {},
-): Promise<EventEnvelope> {
+export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<EventEnvelope> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
   if (spec.kind !== 'producer') {
@@ -480,11 +464,7 @@ export async function done(
       const autoMergeResult =
         autoMerge === undefined
           ? undefined
-          : await deps.forge.setAutoMerge(
-              deps.workspacePath,
-              pr.number,
-              autoMerge.enabled,
-            )
+          : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled)
 
       const event = await store.append(env.build, {
         actor: KERNEL,
@@ -530,9 +510,7 @@ export async function done(
       await assertCleanWorktree(deps)
       // The resolution lands as a merge commit (§15.7) — HEAD must have 2+
       // parents (base merged into the branch, never rebase — D1).
-      const parentsLine = (
-        await git(deps, ['rev-list', '--parents', '-n', '1', 'HEAD'])
-      ).trim()
+      const parentsLine = (await git(deps, ['rev-list', '--parents', '-n', '1', 'HEAD'])).trim()
       const parts = parentsLine.split(/\s+/)
       const head = parts[0]!
       if (parts.length < 3) {
@@ -591,10 +569,7 @@ const FINDING_DRAFT_SHAPE = [
   ']',
 ].join('\n')
 
-export async function verdict(
-  deps: TerminalDeps,
-  opts: VerdictOpts,
-): Promise<EventEnvelope[]> {
+export async function verdict(deps: TerminalDeps, opts: VerdictOpts): Promise<EventEnvelope[]> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
   if (spec.kind === 'producer') {
@@ -868,9 +843,7 @@ export async function escalate(
 ): Promise<EventEnvelope<'escalation.raised'>> {
   const { env, store } = deps
   if (opts.question.trim() === '') {
-    throw new Error(
-      "'ab escalate' requires a question — it is what the human answers (§11)",
-    )
+    throw new Error("'ab escalate' requires a question — it is what the human answers (§11)")
   }
   const events = await store.getEvents(env.build)
   assertNoPriorTerminal(events, env)

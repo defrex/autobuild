@@ -183,9 +183,7 @@ function isActive(status: BuildState['status']): status is EffectiveStatus {
 export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
   const { requested, commandSeq, applied } = state.autoMerge
   if (requested) {
-    return applied?.enabled === true && applied.commandSeq === commandSeq
-      ? 'enabled'
-      : 'requested'
+    return applied?.enabled === true && applied.commandSeq === commandSeq ? 'enabled' : 'requested'
   }
   if (commandSeq === undefined) return 'off'
   if (applied?.enabled === false && applied.commandSeq === commandSeq) return 'off'
@@ -388,9 +386,7 @@ export function projectBuild(
   // Post-steps re-run after a restart too (engine.ts:710-712). Their reducer
   // projection is full-log history, so the same effective boundary handles
   // both a landed revision and the pending human-paced restart window.
-  const finalizeSteps = state.finalizeSteps.filter(
-    (completion) => completion.seq > restartSince,
-  )
+  const finalizeSteps = state.finalizeSteps.filter((completion) => completion.seq > restartSince)
 
   /**
    * The current phase, scoped to the current spec.
@@ -668,17 +664,11 @@ function harvestStepTiming(
  * only, pair a post-terminal human resume request with the later kernel resume
  * that consumed it. A countermanding pause invalidates the pending request,
  * matching the repository reducer's command semantics. */
-function escalationAttentionDismissed(
-  events: RepositoryEvent[],
-  terminalSeq: number,
-): boolean {
+function escalationAttentionDismissed(events: RepositoryEvent[], terminalSeq: number): boolean {
   let pendingHumanResume = false
   for (const event of events) {
     if (event.seq <= terminalSeq) continue
-    if (
-      event.type === 'harvest.resume-requested' &&
-      event.actor.kind === 'human'
-    ) {
+    if (event.type === 'harvest.resume-requested' && event.actor.kind === 'human') {
       pendingHumanResume = true
       continue
     }
@@ -697,15 +687,10 @@ function selectDashboardHarvestRun(
 ): HarvestRunState | undefined {
   const attention = state.runs.find((run) => {
     if (run.status === 'failed') {
-      return (
-        run.recoveryExhaustion?.attentionAcknowledgedSeq === undefined
-      )
+      return run.recoveryExhaustion?.attentionAcknowledgedSeq === undefined
     }
     if (run.status !== 'escalated') return false
-    return (
-      run.terminalSeq === undefined ||
-      !escalationAttentionDismissed(events, run.terminalSeq)
-    )
+    return run.terminalSeq === undefined || !escalationAttentionDismissed(events, run.terminalSeq)
   })
   return attention ?? openHarvestRun(state)
 }
@@ -725,23 +710,16 @@ function projectHarvestRun(
   const stopped = run.status !== 'running'
   const current = (name: string): boolean => {
     if (stopped || state.paused) return false
-    const latest = [...occurrences]
-      .reverse()
-      .find((occurrence) => occurrence.step === name)
+    const latest = [...occurrences].reverse().find((occurrence) => occurrence.step === name)
     return latest !== undefined && latest.completedSeq === undefined
   }
   const hasCompleted = (name: string): boolean =>
     occurrences.some(
-      (occurrence) =>
-        occurrence.step === name && occurrence.completedSeq !== undefined,
+      (occurrence) => occurrence.step === name && occurrence.completedSeq !== undefined,
     )
   const hasOutcome = (name: string, outcome: string): boolean =>
-    occurrences.some(
-      (occurrence) =>
-        occurrence.step === name && occurrence.outcome === outcome,
-    )
-  const failedAt = (name: string): boolean =>
-    run.status === 'failed' && run.failure?.step === name
+    occurrences.some((occurrence) => occurrence.step === name && occurrence.outcome === outcome)
+  const failedAt = (name: string): boolean => run.status === 'failed' && run.failure?.step === name
   const rounds = Math.max(
     0,
     ...run.proposals.map((proposal) => proposal.round),
@@ -808,13 +786,9 @@ function projectHarvestRun(
   ]
   const recoveryAttempts = run.recoveryRequests.length
   const recoveryLimit =
-    exhaustion?.limit ??
-    run.recoveryRequests.at(-1)?.limit ??
-    DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+    exhaustion?.limit ?? run.recoveryRequests.at(-1)?.limit ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   const stoppedAt = run.failure
-    ? `${run.failure.step}${
-        run.failure.round !== undefined ? ` r${run.failure.round}` : ''
-      }`
+    ? `${run.failure.step}${run.failure.round !== undefined ? ` r${run.failure.round}` : ''}`
     : undefined
   const detail =
     run.escalation !== undefined
@@ -828,9 +802,7 @@ function projectHarvestRun(
           : recoveryAttempts > 0
             ? `automatic recovery ${recoveryAttempts}/${recoveryLimit} resumed`
             : undefined
-  const hasPendingResume = state.pendingCommands.some(
-    (command) => command.command === 'resume',
-  )
+  const hasPendingResume = state.pendingCommands.some((command) => command.command === 'resume')
   const action: HarvestRunAction | undefined =
     state.paused || hasPendingResume
       ? undefined
@@ -860,9 +832,7 @@ interface RepositoryHarvestProjection {
   harvest?: DashboardHarvest
 }
 
-function projectRepositoryHarvest(
-  events: RepositoryEvent[],
-): RepositoryHarvestProjection {
+function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryHarvestProjection {
   const state = reduceHarvest(events)
   const harvest = projectHarvestRun(events, state)
   return {
@@ -871,9 +841,7 @@ function projectRepositoryHarvest(
   }
 }
 
-export function projectHarvest(
-  events: RepositoryEvent[],
-): DashboardHarvest | undefined {
+export function projectHarvest(events: RepositoryEvent[]): DashboardHarvest | undefined {
   return projectRepositoryHarvest(events).harvest
 }
 
@@ -895,9 +863,7 @@ export function buildDashboardFromProjected(
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] = [],
 ): DashboardModel {
-  const builds = [...projectedBuilds].sort((a, b) =>
-    a.slug.localeCompare(b.slug),
-  )
+  const builds = [...projectedBuilds].sort((a, b) => a.slug.localeCompare(b.slug))
   const harvestProjection = projectRepositoryHarvest(repositoryEvents)
   const settings = reduceDispatchSettings(repositoryEvents)
   return {
@@ -907,14 +873,10 @@ export function buildDashboardFromProjected(
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
-    ...(header.warningLine !== undefined
-      ? { warningLine: header.warningLine }
-      : {}),
+    ...(header.warningLine !== undefined ? { warningLine: header.warningLine } : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
-    ...(harvestProjection.harvest !== undefined
-      ? { harvest: harvestProjection.harvest }
-      : {}),
+    ...(harvestProjection.harvest !== undefined ? { harvest: harvestProjection.harvest } : {}),
   }
 }
 

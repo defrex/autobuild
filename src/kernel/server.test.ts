@@ -77,7 +77,7 @@ beforeAll(async () => {
   await Bun.write(
     serverFixture,
     [
-      "const port = Number(process.env.PORT)",
+      'const port = Number(process.env.PORT)',
       "const delayMs = Number(process.env.DELAY_MS ?? '0')",
       "console.log('fixture-alpha')",
       "console.log('fixture-beta')",

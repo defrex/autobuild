@@ -84,10 +84,7 @@ async function pushAndOpen(harness: ForgeContractHarness): Promise<{
  * scratch branches/PRs; fake controls arrange the same states without changing
  * the expected answers declared here.
  */
-export function describeForgeContract(
-  name: string,
-  factory: ForgeContractFactory,
-): void {
+export function describeForgeContract(name: string, factory: ForgeContractFactory): void {
   describe(`Forge contract: ${name}`, () => {
     test('pushBranch publishes the head and openPr returns/adopts the actual PR', async () => {
       await withForge(factory, undefined, async (harness) => {
@@ -111,9 +108,10 @@ export function describeForgeContract(
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'open', mergeable: true },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'open',
+          mergeable: true,
+        })
       })
     })
 
@@ -121,9 +119,10 @@ export function describeForgeContract(
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.makeConflict(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'open', mergeable: false },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'open',
+          mergeable: false,
+        })
       })
     })
 
@@ -131,9 +130,9 @@ export function describeForgeContract(
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.closePr(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'closed' },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'closed',
+        })
       })
     })
 
@@ -141,21 +140,14 @@ export function describeForgeContract(
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
-        const candidate = await harness.forge.setAutoMerge(
-          harness.workspacePath,
-          pr.number,
-          true,
-        )
+        const candidate = await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true)
         expect(candidate).toEqual({ kind: 'ungated', headSha: pr.headSha })
-        await harness.forge.squashMerge(
-          harness.workspacePath,
-          pr.number,
-          pr.headSha,
-        )
+        await harness.forge.squashMerge(harness.workspacePath, pr.number, pr.headSha)
         const landingSha = await harness.controls.mergeSha(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'merged', sha: landingSha },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'merged',
+          sha: landingSha,
+        })
       })
     })
 
@@ -165,19 +157,19 @@ export function describeForgeContract(
         await harness.controls.prepareMergeable(pr.number)
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(false)
 
-        expect(
-          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true),
-        ).toEqual({ kind: 'applied' })
+        expect(await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true)).toEqual({
+          kind: 'applied',
+        })
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
 
-        expect(
-          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true),
-        ).toEqual({ kind: 'applied' })
+        expect(await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true)).toEqual({
+          kind: 'applied',
+        })
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
 
-        expect(
-          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, false),
-        ).toEqual({ kind: 'applied' })
+        expect(await harness.forge.setAutoMerge(harness.workspacePath, pr.number, false)).toEqual({
+          kind: 'applied',
+        })
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(false)
       })
     })
@@ -186,41 +178,27 @@ export function describeForgeContract(
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
-        const inspected = await harness.forge.setAutoMerge(
-          harness.workspacePath,
-          pr.number,
-          true,
-        )
+        const inspected = await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true)
         expect(inspected).toEqual({ kind: 'ungated', headSha: pr.headSha })
 
         const advancedHead = await harness.controls.advanceHead(pr.number)
         expect(advancedHead).not.toBe(pr.headSha)
         await expect(
-          harness.forge.squashMerge(
-            harness.workspacePath,
-            pr.number,
-            pr.headSha,
-          ),
+          harness.forge.squashMerge(harness.workspacePath, pr.number, pr.headSha),
         ).rejects.toThrow()
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'open', mergeable: true },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'open',
+          mergeable: true,
+        })
 
-        const refreshed = await harness.forge.setAutoMerge(
-          harness.workspacePath,
-          pr.number,
-          true,
-        )
+        const refreshed = await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true)
         expect(refreshed).toEqual({ kind: 'ungated', headSha: advancedHead })
-        await harness.forge.squashMerge(
-          harness.workspacePath,
-          pr.number,
-          advancedHead,
-        )
+        await harness.forge.squashMerge(harness.workspacePath, pr.number, advancedHead)
         const landingSha = await harness.controls.mergeSha(pr.number)
-        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual(
-          { state: 'merged', sha: landingSha },
-        )
+        expect(await harness.forge.getPrState(harness.workspacePath, pr.number)).toEqual({
+          state: 'merged',
+          sha: landingSha,
+        })
       })
     })
 

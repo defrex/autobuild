@@ -23,7 +23,7 @@ import {
   type EventWrite,
 } from '../../events/catalog'
 import { KERNEL, humanActor, type Actor } from '../../events/envelope'
-import { eventPayloadSchemas, type EventType } from '../../events/payloads'
+import type { eventPayloadSchemas, EventType } from '../../events/payloads'
 import { decideNext } from '../../kernel/engine'
 import { reduceBuild } from '../../kernel/reducer'
 import type { Config } from '../../config/schema'
@@ -418,50 +418,35 @@ describe('projectBuild: the active-build filter', () => {
     expect(model.warningLine).toBeUndefined()
     expect('mode' in model).toBe(false)
 
-    const alpha = projectBuild(
-      { ...RECORD, slug: 'alpha' },
-      active,
-      CONFIG,
-      activeLog,
-    )
-    const zebra = projectBuild(
-      { ...RECORD, slug: 'zebra' },
-      active,
-      CONFIG,
-      activeLog,
-    )
+    const alpha = projectBuild({ ...RECORD, slug: 'alpha' }, active, CONFIG, activeLog)
+    const zebra = projectBuild({ ...RECORD, slug: 'zebra' }, active, CONFIG, activeLog)
     if (alpha === null || zebra === null) throw new Error('expected active rows')
-    const preprojected = buildDashboardFromProjected(
-      [zebra, alpha],
-      { repo: '/repos/app', queued: 2 },
-    )
+    const preprojected = buildDashboardFromProjected([zebra, alpha], {
+      repo: '/repos/app',
+      queued: 2,
+    })
     expect(preprojected).toEqual(model)
     expect(preprojected.builds[0]).toBe(alpha)
     expect(preprojected.builds[1]).toBe(zebra)
 
-    const settings = buildDashboard(
-      [],
-      CONFIG,
-      { repo: '/repos/app', queued: 2 },
-      [
-        {
-          repo: '/repos/app',
-          seq: 1,
-          ts: '2026-07-20T00:00:00.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.intake-set',
-          payload: { enabled: false },
-        },
-        {
-          repo: '/repos/app',
-          seq: 2,
-          ts: '2026-07-20T00:00:01.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: true },
-        },
-      ],
-    )
+    const settings = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 2 }, [
+      {
+        repo: '/repos/app',
+        seq: 1,
+        ts: '2026-07-20T00:00:00.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      },
+      {
+        repo: '/repos/app',
+        seq: 2,
+        ts: '2026-07-20T00:00:01.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      },
+    ])
     expect(settings.drained).toBe(true)
     expect(settings.defaultAutoMerge).toBe(true)
   })
@@ -587,9 +572,7 @@ describe('projectBuild: native auto-merge display state', () => {
       ev('build.auto-merge-cancelled', {}),
       ev('pr.auto-merge-disabled', { commandSeq: 8 }),
     ])
-    expect(projectBuild(RECORD, reduceBuild(disabled), CONFIG, disabled)?.autoMerge).toBe(
-      'off',
-    )
+    expect(projectBuild(RECORD, reduceBuild(disabled), CONFIG, disabled)?.autoMerge).toBe('off')
   })
 })
 
@@ -958,7 +941,9 @@ describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () 
   })
 
   test('count 2 appears on the running step once verify.started a2 lands', () => {
-    const build = project(toLog([...postApprove, ev('verify.started', { step: 'lint', attempt: 2 })]))
+    const build = project(
+      toLog([...postApprove, ev('verify.started', { step: 'lint', attempt: 2 })]),
+    )
     expect(stateOf(build, 'verify:lint')).toBe('current')
     expect(stepFor(build, 'verify:lint')?.count).toBe(2)
     // …and only on the running step.
@@ -1206,7 +1191,9 @@ describe('f_7edf2816: `current` is scoped to the current spec too', () => {
   })
 
   test('no restart ⇒ current behaves exactly as before', () => {
-    const build = project(toLog([...prelude(), ...planRound(1, 'approve'), ev('implement.started', { round: 1 })]))
+    const build = project(
+      toLog([...prelude(), ...planRound(1, 'approve'), ev('implement.started', { round: 1 })]),
+    )
     expect(stateOf(build, 'implement')).toBe('current')
   })
 })

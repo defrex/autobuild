@@ -1,9 +1,6 @@
 import type { PluginFactoryContext } from './manifest'
 import type { PluginRegistry } from './registry'
-import {
-  validateRuntimeRegistration,
-  type RuntimeRegistry,
-} from '../ports/runner/runtime'
+import { validateRuntimeRegistration, type RuntimeRegistry } from '../ports/runner/runtime'
 
 export interface MaterializePluginRuntimesOpts {
   repoRoot: string
@@ -40,10 +37,7 @@ export async function materializePluginRuntimes(
     }
   }
 
-  const merged = Object.assign(
-    Object.create(null) as RuntimeRegistry,
-    builtins,
-  )
+  const merged = Object.assign(Object.create(null) as RuntimeRegistry, builtins)
   const config = Object.freeze({})
   const env = Object.freeze({ ...opts.env })
   const context: PluginFactoryContext = {
@@ -61,8 +55,7 @@ export async function materializePluginRuntimes(
       value = await adapter.factory(context)
     } catch (error) {
       throw new Error(
-        `agent runtime "${name}" factory from plugin "${owner.name}" failed: ` +
-          reason(error),
+        `agent runtime "${name}" factory from plugin "${owner.name}" failed: ${reason(error)}`,
         { cause: error },
       )
     }

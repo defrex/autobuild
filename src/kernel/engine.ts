@@ -53,9 +53,7 @@ export type VerifyAction =
       attempt: number
     }
 
-export type FinalizeAction =
-  | { kind: 'check'; command: string }
-  | { kind: 'agent'; skill: string }
+export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
 
 export type Decision =
   | { kind: 'wait'; reason: WaitReason }
@@ -418,9 +416,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     // pass or skip satisfies that step. A failure anywhere was handled above
     // and therefore can never be hidden by another step's skip.
     if (
-      cycleResults.some(
-        (v) => v.step === step && (v.outcome === 'pass' || v.outcome === 'skipped'),
-      )
+      cycleResults.some((v) => v.step === step && (v.outcome === 'pass' || v.outcome === 'skipped'))
     ) {
       continue
     }

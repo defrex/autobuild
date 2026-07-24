@@ -54,10 +54,7 @@ import type {
 } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { BuildRunner } from '../processes/build-runner'
-import {
-  Dispatcher,
-  type LaunchRunnerResult,
-} from '../processes/dispatcher'
+import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 
@@ -105,10 +102,7 @@ export const CONFORMING_BODY = [
   '',
 ].join('\n')
 
-export function readyTicket(
-  id: string,
-  over: Partial<Omit<Ticket, 'ref'>> = {},
-): Ticket {
+export function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
   const title = over.title ?? 'Add rate limiting'
   return {
     ref: { source: 'fake', id, title },
@@ -149,11 +143,7 @@ export async function commitAll(ws: string, message: string): Promise<string> {
   return git(['rev-parse', 'HEAD'], ws)
 }
 
-export async function writeFileIn(
-  dir: string,
-  rel: string,
-  content: string,
-): Promise<string> {
+export async function writeFileIn(dir: string, rel: string, content: string): Promise<string> {
   const path = join(dir, rel)
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, content)
@@ -190,9 +180,7 @@ export function ofType<T extends EventType>(
   events: AbEvent[],
   type: T,
 ): Extract<AbEvent, { type: T }>[] {
-  return events.filter(
-    (event): event is Extract<AbEvent, { type: T }> => event.type === type,
-  )
+  return events.filter((event): event is Extract<AbEvent, { type: T }> => event.type === type)
 }
 
 /** The agent session an event was emitted under (throws on non-agent actors
@@ -342,9 +330,10 @@ export async function makeHarness(opts: {
   const tickets = new FakeTicketSource(opts.tickets ?? [])
   const ticketSource: TicketSource = opts.ticketSource ?? tickets
   const worktreeRoot = join(tmp, 'worktrees')
-  const workspaces = opts.createWorkspaceProvider === undefined
-    ? new GitWorktreeProvider({ root: worktreeRoot })
-    : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
+  const workspaces =
+    opts.createWorkspaceProvider === undefined
+      ? new GitWorktreeProvider({ root: worktreeRoot })
+      : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
 
   const launched: Array<{ slug: string; runner: BuildRunner }> = []
   const cliErrors: string[] = []
@@ -508,10 +497,7 @@ export async function makeHarness(opts: {
     config,
     launched,
     cliErrors,
-    async advanceRemote(
-      changes: Record<string, string>,
-      message: string,
-    ): Promise<string> {
+    async advanceRemote(changes: Record<string, string>, message: string): Promise<string> {
       for (const [path, content] of Object.entries(changes)) {
         await writeFileIn(remoteUpdater, path, content)
       }
@@ -554,11 +540,7 @@ export function happyHandlers(): SkillHandlers {
     },
     'plan-review': async (cli) => {
       await cli.run(['context'])
-      const notes = await writeFileIn(
-        cli.ws,
-        '.ab/plan-review.md',
-        'Plan conforms to the spec.\n',
-      )
+      const notes = await writeFileIn(cli.ws, '.ab/plan-review.md', 'Plan conforms to the spec.\n')
       await cli.run(['verdict', 'approve', '--notes', notes])
     },
     implement: async (cli) => {

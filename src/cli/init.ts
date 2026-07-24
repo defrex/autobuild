@@ -15,6 +15,7 @@
  * autobuild.toml is never overwritten, and an installed skill with local
  * edits is never clobbered (`force: true` is the explicit human override).
  */
+import type { Dirent, Stats } from 'node:fs'
 import {
   cp,
   lstat,
@@ -31,11 +32,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
-import {
-  INIT_PLUGIN_HELP,
-  type InitPromptChoice,
-  type InitPrompter,
-} from './init-prompt'
+import { INIT_PLUGIN_HELP, type InitPromptChoice, type InitPrompter } from './init-prompt'
 
 export { SKILL_NAMESPACE }
 
@@ -114,9 +111,7 @@ function assertSkillRelativePath(file: string): void {
     file === '' ||
     file.startsWith('/') ||
     file.startsWith('\\') ||
-    file
-      .split(/[\\/]/)
-      .some((segment) => segment === '' || segment === '.' || segment === '..')
+    file.split(/[\\/]/).some((segment) => segment === '' || segment === '.' || segment === '..')
   ) {
     throw new Error(`invalid skill-relative file path "${file}"`)
   }
@@ -149,13 +144,7 @@ export function pristineSkillFilePath(
   file: string,
 ): string {
   assertSkillRelativePath(file)
-  return join(
-    targetRepo,
-    AGENTS_SKILLS_DIR,
-    PRISTINE_DIR,
-    installName,
-    ...file.split('/'),
-  )
+  return join(targetRepo, AGENTS_SKILLS_DIR, PRISTINE_DIR, installName, ...file.split('/'))
 }
 
 /** Pristine record: `<target>/.agents/skills/.ab-pristine/ab-<name>/SKILL.md`. */
@@ -244,11 +233,7 @@ export async function detectInitPackageScripts(targetRepo: string): Promise<Set<
   return detected
 }
 
-function replaceTemplateAnchor(
-  template: string,
-  anchor: string,
-  replacement: string,
-): string {
+function replaceTemplateAnchor(template: string, anchor: string, replacement: string): string {
   const occurrences = template.split(anchor).length - 1
   if (occurrences !== 1) {
     throw new Error(
@@ -272,20 +257,13 @@ export function renderAutobuildTemplate(
   detectedScripts: ReadonlySet<string>,
 ): string {
   const enabled = PACKAGE_SCRIPT_CONFIG.filter(({ script }) => detectedScripts.has(script))
-  const commands = enabled
-    .map(({ command, shell }) => `${command} = "${shell}"`)
-    .join('\n')
+  const commands = enabled.map(({ command, shell }) => `${command} = "${shell}"`).join('\n')
   const checks = enabled.flatMap((descriptor) =>
-    'verify' in descriptor
-      ? [{ step: descriptor.verify, command: descriptor.command }]
-      : [],
+    'verify' in descriptor ? [{ step: descriptor.verify, command: descriptor.command }] : [],
   )
   const verifySteps = checks.map(({ step }) => `  "${step}",`).join('\n')
   const verifyTables = checks
-    .map(
-      ({ step, command }) =>
-        `[verify.${step}]\nkind = "check"\ncommand = "${command}"`,
-    )
+    .map(({ step, command }) => `[verify.${step}]\nkind = "check"\ncommand = "${command}"`)
     .join('\n\n')
 
   let rendered = replaceTemplateAnchor(template, PACKAGE_COMMANDS_ANCHOR, commands)
@@ -375,11 +353,7 @@ async function resolveInitSelections(
   return { ticketSource, workspaceProvider, roleProfile }
 }
 
-function replaceSelectionFragment(
-  rendered: string,
-  current: string,
-  replacement: string,
-): string {
+function replaceSelectionFragment(rendered: string, current: string, replacement: string): string {
   const occurrences = rendered.split(current).length - 1
   if (occurrences !== 1) {
     throw new Error(
@@ -390,17 +364,10 @@ function replaceSelectionFragment(
 }
 
 /** Apply only explicitly different adapter/profile selections to the baseline. */
-export function renderInitSelections(
-  baseline: string,
-  selections: ResolvedInitSelections,
-): string {
+export function renderInitSelections(baseline: string, selections: ResolvedInitSelections): string {
   let rendered = baseline
   if (selections.ticketSource === 'linear') {
-    rendered = replaceSelectionFragment(
-      rendered,
-      'source = "file"',
-      'source = "linear"',
-    )
+    rendered = replaceSelectionFragment(rendered, 'source = "file"', 'source = "linear"')
     rendered = replaceSelectionFragment(
       rendered,
       'readyState = "ready"',
@@ -495,9 +462,7 @@ export function rewriteSkillSource(source: string, skillName: string): string {
   const front = lines
     .slice(1, close)
     .filter((line) => !line.startsWith('disable-model-invocation:'))
-    .map((line) =>
-      line.startsWith('name:') ? `name: ${installedSkillName(skillName)}` : line,
-    )
+    .map((line) => (line.startsWith('name:') ? `name: ${installedSkillName(skillName)}` : line))
   if (!MODEL_INVOCABLE_SKILLS.has(skillName)) {
     front.push('disable-model-invocation: true')
   }
@@ -598,7 +563,7 @@ export async function ensureClaudeSkillLink(
  * cannot clobber data; conflicting source entries remain for manual recovery.
  */
 async function moveMissingEntries(source: string, destination: string): Promise<void> {
-  let entries
+  let entries: Dirent[]
   try {
     entries = await readdir(source, { withFileTypes: true })
   } catch (error) {
@@ -610,7 +575,7 @@ async function moveMissingEntries(source: string, destination: string): Promise<
   for (const entry of entries) {
     const from = join(source, entry.name)
     const to = join(destination, entry.name)
-    let destinationStat
+    let destinationStat: Stats
     try {
       destinationStat = await lstat(to)
     } catch (error) {
@@ -714,7 +679,7 @@ export async function migrateLegacySkill(
 /** Installed `ab-*` skill directories under `.agents/skills`, sorted. */
 export async function listInstalledSkills(targetRepo: string): Promise<string[]> {
   const dir = join(targetRepo, AGENTS_SKILLS_DIR)
-  let entries
+  let entries: Dirent[]
   try {
     entries = await readdir(dir, { withFileTypes: true })
   } catch (error) {
@@ -821,10 +786,7 @@ export async function abInit(opts: {
   let resolvedSelections: ResolvedInitSelections | undefined
   if ((await readIfExists(configPath)) === undefined) {
     try {
-      resolvedSelections = await resolveInitSelections(
-        opts.selections ?? {},
-        opts.prompter,
-      )
+      resolvedSelections = await resolveInitSelections(opts.selections ?? {}, opts.prompter)
     } finally {
       opts.prompter?.close?.()
     }
@@ -846,8 +808,7 @@ export async function abInit(opts: {
   }
   if (
     config === 'written' &&
-    (resolvedSelections?.roleProfile === 'split' ||
-      resolvedSelections?.roleProfile === 'pi')
+    (resolvedSelections?.roleProfile === 'split' || resolvedSelections?.roleProfile === 'pi')
   ) {
     stdout(
       'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
@@ -860,53 +821,23 @@ export async function abInit(opts: {
 
   const skills: InitReport['skills'] = []
   for (const skill of await readDistSkills(distRoot)) {
-    const migrated = await migrateLegacySkill(
-      opts.targetRepo,
-      skill.installName,
-      stdout,
-    )
+    const migrated = await migrateLegacySkill(opts.targetRepo, skill.installName, stdout)
     const rootLocal =
       migrated ?? (await readIfExists(installedSkillPath(opts.targetRepo, skill.installName)))
     let divergent = false
     for (const file of skill.files) {
-      const livePath = installedSkillFilePath(
-        opts.targetRepo,
-        skill.installName,
-        file.path,
-      )
+      const livePath = installedSkillFilePath(opts.targetRepo, skill.installName, file.path)
       const local =
-        file.path === 'SKILL.md' && migrated !== undefined
-          ? migrated
-          : await readIfExists(livePath)
+        file.path === 'SKILL.md' && migrated !== undefined ? migrated : await readIfExists(livePath)
       if (local === undefined || local === file.content) {
         // Missing distributed files are added independently. Equality proves
         // refreshing (or self-healing) their pristine base is safe.
-        await writeInstalledSkillFile(
-          opts.targetRepo,
-          skill.installName,
-          file.path,
-          file.content,
-        )
-        await writePristineFile(
-          opts.targetRepo,
-          skill.installName,
-          file.path,
-          file.content,
-        )
+        await writeInstalledSkillFile(opts.targetRepo, skill.installName, file.path, file.content)
+        await writePristineFile(opts.targetRepo, skill.installName, file.path, file.content)
       } else if (force) {
         divergent = true
-        await writeInstalledSkillFile(
-          opts.targetRepo,
-          skill.installName,
-          file.path,
-          file.content,
-        )
-        await writePristineFile(
-          opts.targetRepo,
-          skill.installName,
-          file.path,
-          file.content,
-        )
+        await writeInstalledSkillFile(opts.targetRepo, skill.installName, file.path, file.content)
+        await writePristineFile(opts.targetRepo, skill.installName, file.path, file.content)
       } else {
         // Local edits are NEVER clobbered by init (§16.3), even when SKILL.md
         // is missing. Other files in the tree are handled independently.

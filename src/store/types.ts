@@ -10,11 +10,7 @@
  *
  * Every adapter must satisfy the contract suite in `store/contract.ts`.
  */
-import type {
-  AbEvent,
-  EventEnvelope,
-  EventWrite,
-} from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type {
   RepositoryEvent,
@@ -122,10 +118,7 @@ export interface BuildStore {
    * monotonic, starting at 1) and `ts` (§15.1). Writes must pass
    * `validateEventWrite` — invalid events throw `EventValidationError`.
    */
-  append<T extends EventType>(
-    slug: string,
-    event: EventWrite<T>,
-  ): Promise<EventEnvelope<T>>
+  append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>>
 
   /**
    * Atomic deposit (D6): store artifacts, then append the event that
@@ -164,11 +157,7 @@ export interface BuildStore {
    * `getEvents(since)` (§7.2). Events are delivered in seq order, each
    * exactly once per subscription.
    */
-  subscribe(
-    slug: string,
-    opts: SubscribeOptions,
-    onEvent: (event: AbEvent) => void,
-  ): Unsubscribe
+  subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe
 
   // ── Repository journal (outer-loop workflows and controls) ───────────────
   // Kept alongside, not inside, build streams: repository state is not a build.
@@ -181,23 +170,14 @@ export interface BuildStore {
   appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
-    makeEvent: (
-      deposited: RepositoryArtifactMeta[],
-    ) => RepositoryEventWrite<T>,
+    makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }>
   getRepoEvents(repo: string, sinceSeq?: number): Promise<RepositoryEvent[]>
-  putRepoArtifact(
-    repo: string,
-    artifact: ArtifactInput,
-  ): Promise<RepositoryArtifactMeta>
-  getRepoArtifact(
-    repo: string,
-    kind: string,
-    rev?: number,
-  ): Promise<RepositoryArtifact | null>
+  putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
+  getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>
   claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean>
   heartbeatRepo(repo: string, holder: string): Promise<boolean>

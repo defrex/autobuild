@@ -11,10 +11,7 @@ function runner(name = 'adapter'): ScriptedAgentRunner {
   return value
 }
 
-function registration(
-  name: string,
-  over: Partial<RuntimeRegistration> = {},
-): RuntimeRegistration {
+function registration(name: string, over: Partial<RuntimeRegistration> = {}): RuntimeRegistration {
   return {
     runner: runner(name),
     servesModels: [`${name}/`],
@@ -79,10 +76,11 @@ describe('materializePluginRuntimes', () => {
       name: 'runtime-pack',
       apiVersion: '^1.0.0',
       agentRuntimes: {
-        custom: () => registration('different-adapter-name', {
-          servesModels: ['custom-family/'],
-          defaultModel: 'custom-family/default',
-        }),
+        custom: () =>
+          registration('different-adapter-name', {
+            servesModels: ['custom-family/'],
+            defaultModel: 'custom-family/default',
+          }),
       },
     })
     const merged = await materializePluginRuntimes(builtins(), plugins, {
@@ -108,11 +106,7 @@ describe('materializePluginRuntimes', () => {
     ).toThrow(/runtime "custom".*model "other\/model".*custom-family\//s)
 
     expect(() =>
-      createRuntimeResolver(
-        merged,
-        { default: { runtime: 'missing' } },
-        'builtin',
-      ),
+      createRuntimeResolver(merged, { default: { runtime: 'missing' } }, 'builtin'),
     ).toThrow(/registered runtimes: builtin, custom/)
   })
 
@@ -213,11 +207,10 @@ describe('materializePluginRuntimes', () => {
     })
 
     await expect(
-      materializePluginRuntimes(
-        { custom: registration('existing') },
-        plugins,
-        { repoRoot: '/repo', env: {} },
-      ),
+      materializePluginRuntimes({ custom: registration('existing') }, plugins, {
+        repoRoot: '/repo',
+        env: {},
+      }),
     ).rejects.toThrow(
       'agent runtime "custom" from plugin "custom-pack" collides with an existing runtime registration',
     )

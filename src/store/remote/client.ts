@@ -100,13 +100,9 @@ export class RemoteBuildStore implements BuildStore {
     return `/repos/${encodeURIComponent(repo)}`
   }
 
-  private async raw(
-    method: 'GET' | 'POST',
-    path: string,
-    body?: unknown,
-  ): Promise<Response> {
+  private async raw(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
     const headers: Record<string, string> = {}
-    if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`
+    if (this.token !== undefined) headers.authorization = `Bearer ${this.token}`
     if (body !== undefined) headers['content-type'] = 'application/json'
     return this.fetchFn(`${this.base}${path}`, {
       method,
@@ -159,10 +155,7 @@ export class RemoteBuildStore implements BuildStore {
     return this.requestJson('GET', '/builds', buildRecordListSchema)
   }
 
-  async append<T extends EventType>(
-    slug: string,
-    event: EventWrite<T>,
-  ): Promise<EventEnvelope<T>> {
+  async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const envelope = await this.requestJson(
       'POST',
       `${this.buildPath(slug)}/events`,
@@ -204,9 +197,7 @@ export class RemoteBuildStore implements BuildStore {
         artifacts: artifacts.map((artifact) => ({
           kind: artifact.kind,
           contentBase64: encodeBase64(toBytes(artifact.content)),
-          ...(artifact.metadata !== undefined
-            ? { metadata: artifact.metadata }
-            : {}),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         })),
         event: { actor: write.actor, type: write.type, payload: write.payload },
       },
@@ -227,25 +218,14 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
-    return this.requestJson(
-      'POST',
-      `${this.buildPath(slug)}/artifacts`,
-      artifactMetaWireSchema,
-      {
-        kind: artifact.kind,
-        contentBase64: encodeBase64(toBytes(artifact.content)),
-        ...(artifact.metadata !== undefined
-          ? { metadata: artifact.metadata }
-          : {}),
-      },
-    )
+    return this.requestJson('POST', `${this.buildPath(slug)}/artifacts`, artifactMetaWireSchema, {
+      kind: artifact.kind,
+      contentBase64: encodeBase64(toBytes(artifact.content)),
+      ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
+    })
   }
 
-  async getArtifact(
-    slug: string,
-    kind: string,
-    rev?: number,
-  ): Promise<Artifact | null> {
+  async getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null> {
     const params = new URLSearchParams({ kind })
     if (rev !== undefined) params.set('rev', String(rev))
     const result = await this.requestJson(
@@ -287,21 +267,13 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async releaseLease(slug: string, holder: string): Promise<void> {
-    await this.requestJson(
-      'POST',
-      `${this.buildPath(slug)}/lease/release`,
-      okResponseSchema,
-      { holder },
-    )
+    await this.requestJson('POST', `${this.buildPath(slug)}/lease/release`, okResponseSchema, {
+      holder,
+    })
   }
 
   async ensureRepo(repo: string): Promise<RepositoryRecord> {
-    return this.requestJson(
-      'POST',
-      '/repos',
-      repositoryRecordWireSchema,
-      { repo },
-    )
+    return this.requestJson('POST', '/repos', repositoryRecordWireSchema, { repo })
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {
@@ -327,23 +299,19 @@ export class RemoteBuildStore implements BuildStore {
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
-    makeEvent: (
-      deposited: RepositoryArtifactMeta[],
-    ) => RepositoryEventWrite<T>,
+    makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }> {
-    const sentinels: RepositoryArtifactMeta[] = artifacts.map(
-      (artifact, index) => ({
-        repo,
-        kind: artifact.kind,
-        revision: placeholderRev(index),
-        blobRef: '',
-        metadata: structuredClone(artifact.metadata ?? {}),
-        createdAt: '',
-      }),
-    )
+    const sentinels: RepositoryArtifactMeta[] = artifacts.map((artifact, index) => ({
+      repo,
+      kind: artifact.kind,
+      revision: placeholderRev(index),
+      blobRef: '',
+      metadata: structuredClone(artifact.metadata ?? {}),
+      createdAt: '',
+    }))
     const write = makeEvent(sentinels)
     const result = await this.requestJson(
       'POST',
@@ -353,9 +321,7 @@ export class RemoteBuildStore implements BuildStore {
         artifacts: artifacts.map((artifact) => ({
           kind: artifact.kind,
           contentBase64: encodeBase64(toBytes(artifact.content)),
-          ...(artifact.metadata !== undefined
-            ? { metadata: artifact.metadata }
-            : {}),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         })),
         event: { actor: write.actor, type: write.type, payload: write.payload },
       },
@@ -375,10 +341,7 @@ export class RemoteBuildStore implements BuildStore {
     return events as unknown as RepositoryEvent[]
   }
 
-  async putRepoArtifact(
-    repo: string,
-    artifact: ArtifactInput,
-  ): Promise<RepositoryArtifactMeta> {
+  async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
     return this.requestJson(
       'POST',
       `${this.repoPath(repo)}/artifacts`,
@@ -386,9 +349,7 @@ export class RemoteBuildStore implements BuildStore {
       {
         kind: artifact.kind,
         contentBase64: encodeBase64(toBytes(artifact.content)),
-        ...(artifact.metadata !== undefined
-          ? { metadata: artifact.metadata }
-          : {}),
+        ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
       },
     )
   }
@@ -410,10 +371,7 @@ export class RemoteBuildStore implements BuildStore {
       : { meta: result.meta, content: decodeBase64(result.contentBase64) }
   }
 
-  async listRepoArtifacts(
-    repo: string,
-    kind?: string,
-  ): Promise<RepositoryArtifactMeta[]> {
+  async listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]> {
     const query = kind !== undefined ? `?kind=${encodeURIComponent(kind)}` : ''
     return this.requestJson(
       'GET',
@@ -422,11 +380,7 @@ export class RemoteBuildStore implements BuildStore {
     )
   }
 
-  async claimRepoLease(
-    repo: string,
-    holder: string,
-    ttlMs: number,
-  ): Promise<boolean> {
+  async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
     const result = await this.requestJson(
       'POST',
       `${this.repoPath(repo)}/lease/claim`,
@@ -447,19 +401,12 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async releaseRepoLease(repo: string, holder: string): Promise<void> {
-    await this.requestJson(
-      'POST',
-      `${this.repoPath(repo)}/lease/release`,
-      okResponseSchema,
-      { holder },
-    )
+    await this.requestJson('POST', `${this.repoPath(repo)}/lease/release`, okResponseSchema, {
+      holder,
+    })
   }
 
-  subscribe(
-    slug: string,
-    opts: SubscribeOptions,
-    onEvent: (event: AbEvent) => void,
-  ): Unsubscribe {
+  subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
   }
 

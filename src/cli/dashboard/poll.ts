@@ -47,9 +47,7 @@ function validateDelta(slug: string, sinceSeq: number, events: AbEvent[]): void 
   let expected = sinceSeq + 1
   for (const event of events) {
     if (event.build !== slug) {
-      throw new Error(
-        `dashboard poll for "${slug}" received an event for "${event.build}"`,
-      )
+      throw new Error(`dashboard poll for "${slug}" received an event for "${event.build}"`)
     }
     if (event.seq !== expected) {
       throw new Error(
@@ -100,9 +98,7 @@ export class DashboardBuildPollCache {
   }
 
   private async refreshNow(): Promise<DashboardPollSnapshot> {
-    const records = (await this.reader.listBuilds()).filter(
-      (record) => record.repo === this.repo,
-    )
+    const records = (await this.reader.listBuilds()).filter((record) => record.repo === this.repo)
     const next = new Map<string, PollEntry>()
 
     for (const record of records) {
@@ -124,8 +120,7 @@ export class DashboardBuildPollCache {
         continue
       }
 
-      const events =
-        current === undefined ? delta : [...current.events, ...delta]
+      const events = current === undefined ? delta : [...current.events, ...delta]
       const state = reduceBuild(events)
       if (isTerminal(state)) {
         next.set(record.slug, { kind: 'terminal' })

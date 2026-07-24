@@ -79,10 +79,7 @@ describe('harvest status', () => {
       payload: {},
     })
 
-    const view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view).toMatchObject({
       run: 'h_1',
       status: 'paused',
@@ -106,9 +103,7 @@ describe('harvest status', () => {
       type: 'harvest.paused',
       payload: {},
     })
-    expect(
-      projectHarvestStatus('/idle', await idle.getRepoEvents('/idle')),
-    ).toMatchObject({
+    expect(projectHarvestStatus('/idle', await idle.getRepoEvents('/idle'))).toMatchObject({
       status: 'paused',
       paused: true,
       observations: 0,
@@ -129,15 +124,9 @@ describe('harvest status', () => {
       payload: { enabled: true },
     })
 
-    const view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-      2,
-    )
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'), 2)
     expect(view.status).toBe('running')
-    expect(view.events?.map((event) => event.type)).toEqual([
-      'harvest.started',
-    ])
+    expect(view.events?.map((event) => event.type)).toEqual(['harvest.started'])
     expect(renderHarvestStatus(view).join('\n')).not.toContain('dispatcher.')
   })
 
@@ -222,10 +211,7 @@ describe('harvest status', () => {
       },
     })
 
-    const view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view).toMatchObject({
       status: 'failed',
       run: 'h_1',
@@ -291,10 +277,7 @@ describe('harvest status', () => {
       },
     })
 
-    const before = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    const before = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(before).toMatchObject({
       run: 'h_1',
       status: 'failed',
@@ -323,10 +306,7 @@ describe('harvest status', () => {
       type: 'harvest.resumed',
       payload: {},
     })
-    const after = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    const after = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(after).toMatchObject({
       run: 'h_1',
       status: 'running',
@@ -361,10 +341,7 @@ describe('harvest status', () => {
       type: 'harvest.resumed',
       payload: {},
     })
-    let view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    let view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view).toMatchObject({
       status: 'running',
       recovery: {
@@ -427,10 +404,7 @@ describe('harvest status', () => {
         ],
       },
     })
-    view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view).toMatchObject({
       status: 'failed',
       recovery: {
@@ -461,10 +435,7 @@ describe('harvest status', () => {
       type: 'harvest.resumed',
       payload: {},
     })
-    view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view.runStatus).toBe('failed')
     expect(view.recovery.attention).toEqual({
       required: false,
@@ -485,10 +456,7 @@ describe('harvest status', () => {
         observations: [{ build: 'build-a', seq: 4 }],
       },
     })
-    const view = projectHarvestStatus(
-      '/repo',
-      await deps.store.getRepoEvents('/repo'),
-    )
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view.status).toBe('escalated')
     expect(view.recovery).toMatchObject({
       recoverable: false,
@@ -526,11 +494,7 @@ describe('harvest status', () => {
     await abHarvestStatus({ ...common, env: { AB_STORE: 'environment' } })
     await abHarvestStatus({ ...common, env: {} })
 
-    expect(refs).toEqual([
-      '/main/repo/flag',
-      '/main/repo/environment',
-      '/main/repo/.autobuild',
-    ])
+    expect(refs).toEqual(['/main/repo/flag', '/main/repo/environment', '/main/repo/.autobuild'])
     expect(outputs.map((line) => JSON.parse(line).repo)).toEqual([
       '/main/repo',
       '/main/repo',
@@ -546,8 +510,7 @@ describeStoreOpeningContract('ab harvest status', {
       repo: targetRepo,
       json: true,
     }),
-  canonicalMarker: (stdout) =>
-    (JSON.parse(stdout.join('\n')) as { repo: string }).repo,
+  canonicalMarker: (stdout) => (JSON.parse(stdout.join('\n')) as { repo: string }).repo,
   expectedCanonicalMarker: '/main/repo',
 })
 
@@ -561,7 +524,14 @@ describe('harvest CLI', () => {
     ).toHaveLength(1)
 
     const bad = join(deps.workspacePath, 'bad.json')
-    await writeFile(bad, JSON.stringify({ proposals: [{ action: 'suppress', reason: 'x', observations: [{ build: 'other', seq: 1 }] }] }))
+    await writeFile(
+      bad,
+      JSON.stringify({
+        proposals: [
+          { action: 'suppress', reason: 'x', observations: [{ build: 'other', seq: 1 }] },
+        ],
+      }),
+    )
     await expect(submitHarvestProposals(deps, bad)).rejects.toThrow(
       /cover every claimed observation exactly once/,
     )
@@ -584,9 +554,7 @@ describe('harvest CLI', () => {
     )
     const submitted = await submitHarvestProposals(deps, good)
     expect(submitted.type).toBe('harvest.proposals.submitted')
-    await expect(submitHarvestProposals(deps, good)).rejects.toThrow(
-      /second harvest terminal/,
-    )
+    await expect(submitHarvestProposals(deps, good)).rejects.toThrow(/second harvest terminal/)
 
     const reviewDeps = {
       ...deps,

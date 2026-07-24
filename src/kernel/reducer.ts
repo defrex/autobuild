@@ -538,8 +538,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         // matching in-flight occurrence before complete() clears that context.
         // An unmatched completion remains a bare context rather than borrowing
         // the aggregate reconcileAttempts high-water.
-        const attempt =
-          currentPhase?.phase === 'reconcile' ? currentPhase.attempt : undefined
+        const attempt = currentPhase?.phase === 'reconcile' ? currentPhase.attempt : undefined
         // §15.7: conflicted until a reconcile.completed appears after the
         // pr.conflicted — the PR is open again while verify:* re-runs.
         if (prState === 'conflicted') prState = 'open'
@@ -591,13 +590,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   // overlap rule.
   const status: BuildStatus =
     terminal ??
-    (pausedFlag
-      ? 'paused'
-      : openEscalations.size > 0
-        ? 'blocked'
-        : attached
-          ? 'running'
-          : 'queued')
+    (pausedFlag ? 'paused' : openEscalations.size > 0 ? 'blocked' : attached ? 'running' : 'queued')
 
   const active = currentPhase ?? lastCompletedPhase
 

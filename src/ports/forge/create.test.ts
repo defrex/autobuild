@@ -86,9 +86,7 @@ describe('createForge', () => {
         },
       },
     })
-    await expect(
-      createForge({ name: 'broken', registry, env: {}, repoRoot: '.' }),
-    ).rejects.toThrow(
+    await expect(createForge({ name: 'broken', registry, env: {}, repoRoot: '.' })).rejects.toThrow(
       'forge adapter "broken" from plugin "broken-plugin" failed to initialize: credentials unavailable',
     )
   })

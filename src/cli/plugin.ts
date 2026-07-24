@@ -1,10 +1,6 @@
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
-import {
-  CONTRACT_ADAPTER_ENV,
-  CONTRACT_PORT_ENV,
-  CONTRACT_REPO_ENV,
-} from '../plugins/contract-env'
+import { CONTRACT_ADAPTER_ENV, CONTRACT_PORT_ENV, CONTRACT_REPO_ENV } from '../plugins/contract-env'
 import { diagnosePlugins, type PluginDiagnosis } from '../plugins/load'
 import {
   PLUGIN_PORTS,
@@ -24,9 +20,7 @@ export interface PluginContractProcessInput {
   stderr: (line: string) => void
 }
 
-export type PluginContractSubprocess = (
-  input: PluginContractProcessInput,
-) => Promise<number>
+export type PluginContractSubprocess = (input: PluginContractProcessInput) => Promise<number>
 
 export interface PluginCliOpts {
   targetRepo: string
@@ -72,14 +66,13 @@ export const spawnPluginContract: PluginContractSubprocess = async (input) => {
   return status
 }
 
-function renderModuleReport(
-  report: PluginDiagnosis['reports'][number],
-): string {
+function renderModuleReport(report: PluginDiagnosis['reports'][number]): string {
   const location = report.resolved === undefined ? '' : ` resolved=${report.resolved}`
   const plugin = report.pluginName === undefined ? '' : ` plugin=${report.pluginName}`
-  const api = report.api === undefined
-    ? ''
-    : ` api=${report.api.declaredRange} host=${report.api.hostVersion} ${report.api.status}`
+  const api =
+    report.api === undefined
+      ? ''
+      : ` api=${report.api.declaredRange} host=${report.api.hostVersion} ${report.api.status}`
   return report.status === 'loaded'
     ? `OK ${report.module} kind=${report.resolutionKind}${location}${plugin}${api}`
     : `FAIL ${report.module} kind=${report.resolutionKind} stage=${report.stage}${location}${plugin}${api}: ${report.error}`
@@ -87,7 +80,9 @@ function renderModuleReport(
 
 function renderAdapter(adapter: AdapterProjection): string {
   const contract = adapter.hasContract
-    ? adapter.live ? 'contract=live' : 'contract=available'
+    ? adapter.live
+      ? 'contract=live'
+      : 'contract=available'
     : 'contract=missing'
   if (adapter.source.kind === 'builtin') {
     return `  ${adapter.name} owner=builtin module=(builtin) resolution=builtin api=host-compatible ${contract}`
@@ -116,7 +111,7 @@ async function loadDiagnosis(opts: PluginCliOpts): Promise<{
 }> {
   const repoRoot = await resolveMainRepo(opts.targetRepo, opts.exec)
   const configPath = join(repoRoot, 'autobuild.toml')
-  let config
+  let config: Awaited<ReturnType<typeof loadConfig>>
   try {
     config = await loadConfig(configPath)
   } catch (error) {
@@ -135,18 +130,13 @@ async function loadDiagnosis(opts: PluginCliOpts): Promise<{
 
 function parsePort(value: string): PluginPort {
   if (!PLUGIN_PORTS.includes(value as PluginPort)) {
-    throw new Error(
-      `unknown plugin port "${value}" — expected one of: ${PLUGIN_PORTS.join(', ')}`,
-    )
+    throw new Error(`unknown plugin port "${value}" — expected one of: ${PLUGIN_PORTS.join(', ')}`)
   }
   return value as PluginPort
 }
 
 /** Sessionless `ab plugin` operator/authoring namespace. */
-export async function abPlugin(
-  argv: readonly string[],
-  opts: PluginCliOpts,
-): Promise<number> {
+export async function abPlugin(argv: readonly string[], opts: PluginCliOpts): Promise<number> {
   const [command, ...rest] = argv
   if (command === 'list') {
     if (rest.length !== 0) throw new Error('usage: ab plugin list')
@@ -211,10 +201,7 @@ export async function abPlugin(
           'Register the adapter as { factory, contract: { factory } } where the contract factory returns the shared suite harness factory.',
       )
     }
-    if (
-      registration.contract.live === true &&
-      opts.env['AB_RUN_LIVE_PORT_CONTRACTS'] !== '1'
-    ) {
+    if (registration.contract.live === true && opts.env.AB_RUN_LIVE_PORT_CONTRACTS !== '1') {
       throw new Error(
         `${pluginPortLabel(port)} adapter "${adapter}" declares a live contract; ` +
           'set AB_RUN_LIVE_PORT_CONTRACTS=1 to explicitly allow external side effects',

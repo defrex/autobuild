@@ -105,17 +105,10 @@ export const harvestPendingProposalSchema = z.strictObject({
   action: z.enum(['create', 'join', 'suppress']),
   observations: z.array(occurrenceKeySchema).min(1),
 })
-export type HarvestPendingProposal = z.infer<
-  typeof harvestPendingProposalSchema
->
+export type HarvestPendingProposal = z.infer<typeof harvestPendingProposalSchema>
 
 export const harvestStepSchema = z.enum(['scan', 'synthesize', 'review', 'file'])
 export type HarvestStep = z.infer<typeof harvestStepSchema>
 
-export const harvestStatusSchema = z.enum([
-  'running',
-  'completed',
-  'escalated',
-  'failed',
-])
+export const harvestStatusSchema = z.enum(['running', 'completed', 'escalated', 'failed'])
 export type HarvestStatus = z.infer<typeof harvestStatusSchema>

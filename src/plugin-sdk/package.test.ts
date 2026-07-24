@@ -145,15 +145,7 @@ describe('autobuild/plugin-sdk package surface', () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
     temporary.push(destination)
     const packed = Bun.spawn(
-      [
-        'bun',
-        'pm',
-        'pack',
-        '--destination',
-        destination,
-        '--ignore-scripts',
-        '--quiet',
-      ],
+      ['bun', 'pm', 'pack', '--destination', destination, '--ignore-scripts', '--quiet'],
       { cwd: root, stdout: 'pipe', stderr: 'pipe' },
     )
     const exit = await packed.exited
@@ -180,13 +172,13 @@ describe('autobuild/plugin-sdk package surface', () => {
       expect(listing).toContain(path)
     }
 
-    const manifestProcess = Bun.spawn(
-      ['tar', '-xOf', archive, 'package/package.json'],
-      { stdout: 'pipe', stderr: 'pipe' },
-    )
-    const packedManifest = JSON.parse(
-      await new Response(manifestProcess.stdout).text(),
-    ) as { exports?: Record<string, { types?: string; import?: string }> }
+    const manifestProcess = Bun.spawn(['tar', '-xOf', archive, 'package/package.json'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
+      exports?: Record<string, { types?: string; import?: string }>
+    }
     expect(await manifestProcess.exited).toBe(0)
     expect(packedManifest.exports?.['./plugin-sdk']).toMatchObject({
       types: './src/plugin-sdk/index.ts',

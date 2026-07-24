@@ -9,12 +9,7 @@ import { join, resolve } from 'node:path'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
-import {
-  artifactDownload,
-  artifactGet,
-  artifactPut,
-  parseArtifactSpec,
-} from './artifact'
+import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
 import { makeEnv, seedStore } from './testkit'
 
 let tmp: string
@@ -76,11 +71,7 @@ describe('artifact put/get', () => {
     await writeFile(path, bytes)
 
     const meta = await artifactPut(deps(), 'visual:screenshot', path)
-    const artifact = await store.getArtifact(
-      'auth-rate-limit',
-      'visual:screenshot',
-      meta.revision,
-    )
+    const artifact = await store.getArtifact('auth-rate-limit', 'visual:screenshot', meta.revision)
     expect(artifact?.content).toEqual(bytes)
   })
 
@@ -102,9 +93,7 @@ describe('artifact put/get', () => {
     })
 
     expect(meta.revision).toBe(0)
-    expect(
-      (await store.getArtifact('auth-rate-limit', 'visual:home', 0))?.content,
-    ).toEqual(bytes)
+    expect((await store.getArtifact('auth-rate-limit', 'visual:home', 0))?.content).toEqual(bytes)
     const event = (await store.getEvents('auth-rate-limit')).at(-1)
     expect(event).toMatchObject({
       actor: {
@@ -125,9 +114,7 @@ describe('artifact put/get', () => {
     const textPath = join(tmp, 'trace.txt')
     await writeFile(textPath, 'trace\n')
     await artifactPut(deps(), 'visual:trace', textPath, { attach: true })
-    expect(
-      (await store.getEvents('auth-rate-limit')).at(-1)?.payload,
-    ).toMatchObject({
+    expect((await store.getEvents('auth-rate-limit')).at(-1)?.payload).toMatchObject({
       filename: 'trace.txt',
       mediaType: 'text/plain',
     })
@@ -135,9 +122,9 @@ describe('artifact put/get', () => {
     const unsafe = join(tmp, 'bad\nname.png')
     await writeFile(unsafe, new Uint8Array([1]))
     const before = await store.listArtifacts('auth-rate-limit')
-    await expect(
-      artifactPut(deps(), 'visual:unsafe', unsafe, { attach: true }),
-    ).rejects.toThrow(/attachment filename/)
+    await expect(artifactPut(deps(), 'visual:unsafe', unsafe, { attach: true })).rejects.toThrow(
+      /attachment filename/,
+    )
     expect(await store.listArtifacts('auth-rate-limit')).toEqual(before)
   })
 
@@ -174,9 +161,7 @@ describe('artifact put/get', () => {
   })
 
   test('get of an absent rev names the rev', async () => {
-    await expect(artifactGet(deps(), 'spec@7')).rejects.toThrow(
-      /no "spec" artifact at rev 7/,
-    )
+    await expect(artifactGet(deps(), 'spec@7')).rejects.toThrow(/no "spec" artifact at rev 7/)
   })
 })
 
@@ -218,9 +203,7 @@ describe('artifact download', () => {
       },
     })
 
-    expect(opens).toEqual([
-      { ref: resolve(tmp, 'explicit-store'), token: ' scoped-token ' },
-    ])
+    expect(opens).toEqual([{ ref: resolve(tmp, 'explicit-store'), token: ' scoped-token ' }])
     expect(result.artifact.meta.revision).toBe(0)
     expect(result.outputPath).toBe(output)
     expect(new Uint8Array(await readFile(output))).toEqual(first)
@@ -304,12 +287,12 @@ describe('artifact download', () => {
         return store
       },
     }
-    await expect(
-      artifactDownload({ ...common, build: '  ', spec: 'frame' }),
-    ).rejects.toThrow(/non-empty <build>/)
-    await expect(
-      artifactDownload({ ...common, build: 'build', spec: '  ' }),
-    ).rejects.toThrow(/non-empty <kind>/)
+    await expect(artifactDownload({ ...common, build: '  ', spec: 'frame' })).rejects.toThrow(
+      /non-empty <build>/,
+    )
+    await expect(artifactDownload({ ...common, build: 'build', spec: '  ' })).rejects.toThrow(
+      /non-empty <kind>/,
+    )
     expect(opens).toBe(0)
   })
 })

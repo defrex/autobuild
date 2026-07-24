@@ -194,7 +194,9 @@ describe('parseConfig — defaults', () => {
       config: {},
     })
     expect(
-      parseConfig(`[workspace]\nprovider = "container"\n[workspace.config]\nimage = "bun:latest"\nlimits = { cpu = 2 }\n${READY}`).workspace,
+      parseConfig(
+        `[workspace]\nprovider = "container"\n[workspace.config]\nimage = "bun:latest"\nlimits = { cpu = 2 }\n${READY}`,
+      ).workspace,
     ).toEqual({
       provider: 'container',
       config: { image: 'bun:latest', limits: { cpu: 2 } },
@@ -202,15 +204,15 @@ describe('parseConfig — defaults', () => {
   })
 
   test('workspace envelope is strict and the configless builtin rejects adapter config', () => {
-    expect(() =>
-      parseConfig(`[workspace]\nprovider = "   "\n${READY}`),
-    ).toThrow(/workspace\.provider/)
+    expect(() => parseConfig(`[workspace]\nprovider = "   "\n${READY}`)).toThrow(
+      /workspace\.provider/,
+    )
     expect(() =>
       parseConfig(`[workspace]\nprovider = "git-worktree"\nextra = true\n${READY}`),
     ).toThrow(/workspace:.*extra/)
-    expect(() =>
-      parseConfig(`[workspace.config]\nroot = "elsewhere"\n${READY}`),
-    ).toThrow(/workspace\.config/)
+    expect(() => parseConfig(`[workspace.config]\nroot = "elsewhere"\n${READY}`)).toThrow(
+      /workspace\.config/,
+    )
   })
 
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
@@ -251,9 +253,9 @@ harvestThreshold = 2
       expect(() => parseConfig(`${field} = ${value}\n${READY}`)).toThrow(field)
     }
     for (const value of ['0', '-1', '1.5']) {
-      expect(() =>
-        parseConfig(`${READY}[policy]\nharvestThreshold = ${value}\n`),
-      ).toThrow(/policy\.harvestThreshold/)
+      expect(() => parseConfig(`${READY}[policy]\nharvestThreshold = ${value}\n`)).toThrow(
+        /policy\.harvestThreshold/,
+      )
     }
   })
 
@@ -301,14 +303,28 @@ releaseId = 123456
   })
 
   test('is strict and validates provider, repository, and release id', () => {
-    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "s3"\nrepository = "a/b"\nreleaseId = 1\n`)).toThrow(/pr\.imageHost/)
-    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "bad"\nreleaseId = 1\n`)).toThrow(/pr\.imageHost\.repository/)
-    expect(() => parseConfig(`${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 0\n`)).toThrow(/pr\.imageHost\.releaseId/)
+    expect(() =>
+      parseConfig(`${READY}[pr.imageHost]\nprovider = "s3"\nrepository = "a/b"\nreleaseId = 1\n`),
+    ).toThrow(/pr\.imageHost/)
+    expect(() =>
+      parseConfig(
+        `${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "bad"\nreleaseId = 1\n`,
+      ),
+    ).toThrow(/pr\.imageHost\.repository/)
+    expect(() =>
+      parseConfig(
+        `${READY}[pr.imageHost]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 0\n`,
+      ),
+    ).toThrow(/pr\.imageHost\.releaseId/)
     expect(() => parseConfig(`${READY}[pr]\nunknown = true\n`)).toThrow(/pr/)
   })
 
   test('rejects the removed dashboardFrames table', () => {
-    expect(() => parseConfig(`${READY}[dashboardFrames]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 1\n`)).toThrow(/dashboardFrames/)
+    expect(() =>
+      parseConfig(
+        `${READY}[dashboardFrames]\nprovider = "github-release"\nrepository = "a/b"\nreleaseId = 1\n`,
+      ),
+    ).toThrow(/dashboardFrames/)
   })
 })
 
@@ -381,17 +397,23 @@ describe('parseConfig — verify cross-validation', () => {
     expect(missing.message).toContain('verify.steps[0]')
     expect(missing.message).toContain('[verify.types]')
 
-    const orphan = parseError(`${READY}[commands]\ntypecheck = "tsc"\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`)
+    const orphan = parseError(
+      `${READY}[commands]\ntypecheck = "tsc"\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`,
+    )
     expect(orphan.message).toContain('verify.types')
     expect(orphan.message).toContain('not listed')
 
-    const command = parseError(`${READY}[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`)
+    const command = parseError(
+      `${READY}[verify]\nsteps = ["types"]\n[verify.types]\nkind = "check"\ncommand = "typecheck"\n`,
+    )
     expect(command.message).toContain('verify.types.command')
     expect(command.message).toContain('[commands] has no entries')
   })
 
   test('needsServer = true requires [server]', () => {
-    const error = parseError(`${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\n`)
+    const error = parseError(
+      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\n`,
+    )
     expect(error.message).toContain('verify.e2e.needsServer')
     expect(error.message).toContain('requires a [server] table')
   })
@@ -425,17 +447,23 @@ skill = "custom-release-notes"
     expect(missing.message).toContain('finalize.steps[0]')
     expect(missing.message).toContain('[finalize.publish]')
 
-    const orphan = parseError(`${READY}[commands]\npublish = "bun publish"\n[finalize.publish]\nkind = "check"\ncommand = "publish"\n`)
+    const orphan = parseError(
+      `${READY}[commands]\npublish = "bun publish"\n[finalize.publish]\nkind = "check"\ncommand = "publish"\n`,
+    )
     expect(orphan.message).toContain('finalize.publish')
     expect(orphan.message).toContain('not listed')
 
-    const command = parseError(`${READY}[finalize]\nsteps = ["publish"]\n[finalize.publish]\nkind = "check"\ncommand = "missing"\n`)
+    const command = parseError(
+      `${READY}[finalize]\nsteps = ["publish"]\n[finalize.publish]\nkind = "check"\ncommand = "missing"\n`,
+    )
     expect(command.message).toContain('finalize.publish.command')
     expect(command.message).toContain('does not name a key in [commands]')
   })
 
   test('rejects empty entries, malformed kinds, unknown fields, and verify-only fields', () => {
-    expect(parseError(`${READY}[finalize]\nsteps = ["notes", ""]\n`).message).toContain('finalize.steps[1]')
+    expect(parseError(`${READY}[finalize]\nsteps = ["notes", ""]\n`).message).toContain(
+      'finalize.steps[1]',
+    )
 
     for (const body of [
       'kind = "chek"\ncommand = "publish"',
@@ -460,7 +488,9 @@ ${body}
 describe('parseConfig — [tickets]', () => {
   test('valid file and Linear sources parse', () => {
     expect(parseConfig(READY).tickets).toEqual({ source: 'file', readyState: 'ready' })
-    expect(parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n').tickets).toEqual({
+    expect(
+      parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n').tickets,
+    ).toEqual({
       source: 'linear',
       teamKey: 'ENG',
       readyState: 'Todo',
@@ -483,19 +513,31 @@ describe('parseConfig — [tickets]', () => {
       'tickets.source',
     )
     expect(parseError('[tickets]\nsource = "file"\n').message).toContain('tickets.readyState')
-    expect(parseError('[tickets]\nsource = "file"\nreadyState = "   "\n').message).toContain('must not be blank')
+    expect(parseError('[tickets]\nsource = "file"\nreadyState = "   "\n').message).toContain(
+      'must not be blank',
+    )
   })
 
   test('source-specific fields are cross-validated', () => {
-    expect(parseError('[tickets]\nsource = "linear"\nreadyState = "Todo"\n').message).toContain('tickets.teamKey')
-    expect(parseError('[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\ndir = "tickets"\n').message).toContain('tickets.dir')
-    const file = parseError('[tickets]\nsource = "file"\nreadyState = "ready"\nteamKey = "ENG"\nclaimedState = "Doing"\n')
+    expect(parseError('[tickets]\nsource = "linear"\nreadyState = "Todo"\n').message).toContain(
+      'tickets.teamKey',
+    )
+    expect(
+      parseError(
+        '[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\ndir = "tickets"\n',
+      ).message,
+    ).toContain('tickets.dir')
+    const file = parseError(
+      '[tickets]\nsource = "file"\nreadyState = "ready"\nteamKey = "ENG"\nclaimedState = "Doing"\n',
+    )
     expect(file.message).toContain('tickets.teamKey')
     expect(file.message).toContain('tickets.claimedState')
   })
 
   test('readiness labels and lifecycle states retain their surface', () => {
-    const config = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\ndir = "tickets"\n')
+    const config = parseConfig(
+      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\ndir = "tickets"\n',
+    )
     expect(config.tickets).toEqual({
       source: 'file',
       readyState: 'ready',
@@ -556,7 +598,9 @@ extensions = []
 
 describe('parseConfig — TOML syntax errors', () => {
   test('surface with the source name', () => {
-    expect(parseError('[unclosed\n', 'repo/autobuild.toml').message).toContain('repo/autobuild.toml: TOML syntax error')
+    expect(parseError('[unclosed\n', 'repo/autobuild.toml').message).toContain(
+      'repo/autobuild.toml: TOML syntax error',
+    )
   })
 })
 

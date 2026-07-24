@@ -10,16 +10,7 @@
  * bin/ab.ts must work with no AB_* environment set at all.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readlink,
-  rm,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -38,10 +29,7 @@ import {
   renderAutobuildTemplate,
   rewriteSkillSource,
 } from './init'
-import type {
-  InitPrompter,
-  InitPromptQuestion,
-} from './init-prompt'
+import type { InitPrompter, InitPromptQuestion } from './init-prompt'
 import { INIT_PLUGIN_HELP } from './init-prompt'
 import { runCli, type SessionlessCliDeps } from './main'
 import { parseConfig } from '../config/load'
@@ -268,9 +256,7 @@ describe('abInit — package-script-aware config rendering', () => {
         ...(has('test') ? ['unit'] : []),
       ])
       expect(config.verify.stepConfigs).toEqual({
-        ...(has('type-check')
-          ? { types: { kind: 'check', command: 'typecheck' } }
-          : {}),
+        ...(has('type-check') ? { types: { kind: 'check', command: 'typecheck' } } : {}),
         ...(has('test') ? { unit: { kind: 'check', command: 'test' } } : {}),
       })
       for (const step of Object.values(config.verify.stepConfigs)) {
@@ -293,9 +279,7 @@ describe('abInit — package-script-aware config rendering', () => {
   test('malformed package JSON fails with the manifest path', async () => {
     const manifestPath = join(target, 'package.json')
     await writeFile(manifestPath, '{"scripts":')
-    await expect(abInit({ targetRepo: target })).rejects.toThrow(
-      `${manifestPath}: invalid JSON`,
-    )
+    await expect(abInit({ targetRepo: target })).rejects.toThrow(`${manifestPath}: invalid JSON`)
     expect(existsSync(join(target, 'autobuild.toml'))).toBe(false)
   })
 
@@ -369,10 +353,7 @@ describe('abInit — interactive adapter onboarding', () => {
       JSON.stringify({ scripts: { lint: 'eslint', 'type-check': 'tsc', test: 'vitest' } }),
     )
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
-    const expected = renderAutobuildTemplate(
-      template,
-      new Set(['lint', 'type-check', 'test']),
-    )
+    const expected = renderAutobuildTemplate(template, new Set(['lint', 'type-check', 'test']))
 
     await abInit({ targetRepo: target })
     expect(await generated(target)).toBe(expected)
@@ -413,9 +394,7 @@ describe('abInit — interactive adapter onboarding', () => {
       'git-worktree',
       'split',
     ])
-    expect(prompter.questions.every((question) => question.help === INIT_PLUGIN_HELP)).toBe(
-      true,
-    )
+    expect(prompter.questions.every((question) => question.help === INIT_PLUGIN_HELP)).toBe(true)
     expect(prompter.closed).toBe(true)
 
     const config = parseConfig(await generated(target))
@@ -470,9 +449,7 @@ describe('abInit — interactive adapter onboarding', () => {
         config.roles,
         production.defaultRuntime,
       )
-      const resolved = Object.fromEntries(
-        roles.map((role) => [role, resolver.resolve(role)]),
-      )
+      const resolved = Object.fromEntries(roles.map((role) => [role, resolver.resolve(role)]))
       for (const role of roles) expect(resolved[role]?.runtime).toBe('pi')
 
       if (roleProfile === 'split') {
@@ -542,11 +519,7 @@ describe('abInit — interactive adapter onboarding', () => {
       const flagged = join(target, 'flagged')
       await abInit({
         targetRepo: interactive,
-        prompter: new ScriptedInitPrompter([
-          ticketSource,
-          'git-worktree',
-          'claude',
-        ]),
+        prompter: new ScriptedInitPrompter([ticketSource, 'git-worktree', 'claude']),
       })
       await abInit({
         targetRepo: flagged,
@@ -619,18 +592,14 @@ describe('abInit — idempotence and safety', () => {
   test('appends the state rule without changing existing ignore bytes', async () => {
     await writeFile(join(target, '.gitignore'), 'dist/\n.env')
     await abInit({ targetRepo: target })
-    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe(
-      'dist/\n.env\n.autobuild/\n',
-    )
+    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('dist/\n.env\n.autobuild/\n')
   })
 
   test('does not duplicate an existing state rule on re-init', async () => {
     await writeFile(join(target, '.gitignore'), 'dist/\n.autobuild/\n')
     await abInit({ targetRepo: target })
     await abInit({ targetRepo: target })
-    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe(
-      'dist/\n.autobuild/\n',
-    )
+    expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('dist/\n.autobuild/\n')
   })
 
   test('migrates .agent skills, pristine bases, local additions, and Claude links', async () => {
@@ -662,9 +631,7 @@ describe('abInit — idempotence and safety', () => {
     expect(await readFile(installedSkillPath(target, name), 'utf8')).toBe(
       'locally customized plan\n',
     )
-    expect(await readFile(pristineSkillPath(target, name), 'utf8')).toBe(
-      'old pristine plan\n',
-    )
+    expect(await readFile(pristineSkillPath(target, name), 'utf8')).toBe('old pristine plan\n')
     expect(
       await readFile(join(dirname(installedSkillPath(target, name)), 'notes.md'), 'utf8'),
     ).toBe('local supporting file\n')
@@ -672,9 +639,7 @@ describe('abInit — idempotence and safety', () => {
       'local addition',
     )
     expect(existsSync(join(target, '.agent'))).toBe(false)
-    expect(await readlink(claudeSkillPath(target, name))).toBe(
-      `../../.agents/skills/${name}`,
-    )
+    expect(await readlink(claudeSkillPath(target, name))).toBe(`../../.agents/skills/${name}`)
     expect(await readlink(claudeSkillPath(target, customName))).toBe(
       `../../.agents/skills/${customName}`,
     )
@@ -684,14 +649,7 @@ describe('abInit — idempotence and safety', () => {
     const name = 'ab-plan'
     const live = installedSkillPath(target, name)
     const pristine = pristineSkillPath(target, name)
-    const legacyPristine = join(
-      target,
-      '.claude',
-      'skills',
-      '.ab-pristine',
-      name,
-      'SKILL.md',
-    )
+    const legacyPristine = join(target, '.claude', 'skills', '.ab-pristine', name, 'SKILL.md')
     await mkdir(dirname(live), { recursive: true })
     await mkdir(dirname(pristine), { recursive: true })
     await mkdir(dirname(legacyPristine), { recursive: true })
@@ -713,14 +671,7 @@ describe('abInit — idempotence and safety', () => {
   test('migrates a legacy .claude install, preserving local edits and its pristine base', async () => {
     const name = 'ab-plan'
     const legacyLive = join(target, '.claude', 'skills', name, 'SKILL.md')
-    const legacyPristine = join(
-      target,
-      '.claude',
-      'skills',
-      '.ab-pristine',
-      name,
-      'SKILL.md',
-    )
+    const legacyPristine = join(target, '.claude', 'skills', '.ab-pristine', name, 'SKILL.md')
     await mkdir(dirname(legacyLive), { recursive: true })
     await mkdir(dirname(legacyPristine), { recursive: true })
     await writeFile(legacyLive, 'locally customized legacy plan\n')
@@ -736,9 +687,7 @@ describe('abInit — idempotence and safety', () => {
     expect(await readFile(installedSkillPath(target, name), 'utf8')).toBe(
       'locally customized legacy plan\n',
     )
-    expect(await readFile(pristineSkillPath(target, name), 'utf8')).toBe(
-      'old pristine plan\n',
-    )
+    expect(await readFile(pristineSkillPath(target, name), 'utf8')).toBe('old pristine plan\n')
     const supportingFile = join(dirname(installedSkillPath(target, name)), 'notes.md')
     expect(await readFile(supportingFile, 'utf8')).toBe('local supporting file\n')
     expect((await lstat(claudeSkillPath(target, name))).isSymbolicLink()).toBe(true)
@@ -760,9 +709,7 @@ describe('abInit — idempotence and safety', () => {
     await writeFile(join(target, 'autobuild.toml'), 'baseBranch = "trunk"\n')
     const report = await abInit({ targetRepo: target })
     expect(report.config).toBe('skipped')
-    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe(
-      'baseBranch = "trunk"\n',
-    )
+    expect(await readFile(join(target, 'autobuild.toml'), 'utf8')).toBe('baseBranch = "trunk"\n')
   })
 
   test('an existing config skips later package inspection, including with force', async () => {
@@ -789,7 +736,7 @@ describe('abInit — idempotence and safety', () => {
     await abInit({ targetRepo: target })
     const live = installedSkillPath(target, 'ab-plan')
     const pristineBefore = await readFile(pristineSkillPath(target, 'ab-plan'), 'utf8')
-    const edited = (await readFile(live, 'utf8')) + '\nLocal repo standards here.\n'
+    const edited = `${await readFile(live, 'utf8')}\nLocal repo standards here.\n`
     await writeFile(live, edited)
 
     const report = await abInit({ targetRepo: target })
@@ -815,9 +762,7 @@ describe('abInit — idempotence and safety', () => {
 
     expect(report.skills.find((entry) => entry.skill === 'ab-guide')?.action).toBe('kept')
     expect(existsSync(root)).toBe(true)
-    expect(await readFile(live, 'utf8')).toBe(
-      'local authoring rules survive partial cleanup\n',
-    )
+    expect(await readFile(live, 'utf8')).toBe('local authoring rules survive partial cleanup\n')
     expect(await readFile(pristine, 'utf8')).toBe(pristineBefore)
   })
 
@@ -838,9 +783,7 @@ describe('abInit — idempotence and safety', () => {
     expect(await readFile(extra, 'utf8')).toBe('repo-only reference\n')
 
     const forced = await abInit({ targetRepo: target, force: true })
-    expect(forced.skills.find((entry) => entry.skill === 'ab-guide')?.action).toBe(
-      'overwritten',
-    )
+    expect(forced.skills.find((entry) => entry.skill === 'ab-guide')?.action).toBe('overwritten')
     expect(await readFile(live, 'utf8')).toBe(original)
     expect(await readFile(pristine, 'utf8')).toBe(original)
     expect(await readFile(extra, 'utf8')).toBe('repo-only reference\n')

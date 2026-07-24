@@ -1,9 +1,6 @@
 import { resolve } from 'node:path'
 import type { PluginFactoryContext } from '../../plugins/manifest'
-import type {
-  AdapterRegistration,
-  PluginRegistry,
-} from '../../plugins/registry'
+import type { AdapterRegistration, PluginRegistry } from '../../plugins/registry'
 import type { Forge } from '../types'
 import { GitHubForge } from './github'
 

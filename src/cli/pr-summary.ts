@@ -32,10 +32,7 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
 }
 
-export function renderPrAttachmentSection(
-  env: CliEnv,
-  events: readonly AbEvent[],
-): string[] {
+export function renderPrAttachmentSection(env: CliEnv, events: readonly AbEvent[]): string[] {
   const designations = currentPrAttachments(events)
   if (designations.length === 0) return []
 
@@ -73,10 +70,7 @@ export function renderPrAttachmentSection(
       '',
       ...(imageUrl === undefined
         ? []
-        : [
-            `<img src="${html(imageUrl)}" alt="PR attachment ${html(filename)}">`,
-            '',
-          ]),
+        : [`<img src="${html(imageUrl)}" alt="PR attachment ${html(filename)}">`, '']),
       `- artifact: <code>${html(ref)}</code>`,
       `- media type: <code>${html(mediaType)}</code>`,
       `<pre><code>${html(command)}</code></pre>`,
@@ -94,12 +88,8 @@ export function renderPrSummary(env: CliEnv, events: readonly AbEvent[]): string
       const phase = event.type === 'plan-review.verdict' ? 'plan-review' : 'code-review'
       const count = event.payload.findings.length
       const detail =
-        event.payload.verdict === 'revise'
-          ? ` (${count} finding${count === 1 ? '' : 's'})`
-          : ''
-      verdicts.push(
-        `- ${phase} r${event.payload.round}: ${event.payload.verdict}${detail}`,
-      )
+        event.payload.verdict === 'revise' ? ` (${count} finding${count === 1 ? '' : 's'})` : ''
+      verdicts.push(`- ${phase} r${event.payload.round}: ${event.payload.verdict}${detail}`)
     }
     if (event.type === 'verify.completed') {
       const result = normalizeVerifyCompletion(event.payload)

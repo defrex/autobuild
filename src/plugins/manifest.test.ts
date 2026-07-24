@@ -118,21 +118,17 @@ describe('plugin manifest', () => {
       throw new Error('expected incompatibility')
     } catch (error) {
       expect(error).toBeInstanceOf(PluginApiCompatibilityError)
-      expect((error as PluginApiCompatibilityError).compatibility.status).toBe(
-        'incompatible',
-      )
+      expect((error as PluginApiCompatibilityError).compatibility.status).toBe('incompatible')
     }
   })
 
   test('rejects malformed, invalid-range, and incompatible manifests', () => {
-    expect(() =>
-      parsePluginManifest({ name: 'x', apiVersion: '^1', extra: true }),
-    ).toThrow()
-    expect(() =>
-      parsePluginManifest({ name: 'x', apiVersion: 'not-semver' }),
-    ).toThrow(/invalid plugin API range.*host provides 1\.1\.0/)
-    expect(() =>
-      parsePluginManifest({ name: 'future', apiVersion: '^2.0.0' }),
-    ).toThrow(/future.*\^2\.0\.0.*1\.1\.0/)
+    expect(() => parsePluginManifest({ name: 'x', apiVersion: '^1', extra: true })).toThrow()
+    expect(() => parsePluginManifest({ name: 'x', apiVersion: 'not-semver' })).toThrow(
+      /invalid plugin API range.*host provides 1\.1\.0/,
+    )
+    expect(() => parsePluginManifest({ name: 'future', apiVersion: '^2.0.0' })).toThrow(
+      /future.*\^2\.0\.0.*1\.1\.0/,
+    )
   })
 })

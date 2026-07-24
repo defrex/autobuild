@@ -17,11 +17,9 @@ import {
 const REPO = '/repo'
 const SLUG = 'active-build'
 
-async function makeStore(opts: {
-  slug?: string
-  repo?: string
-  active?: boolean
-} = {}): Promise<MemoryBuildStore> {
+async function makeStore(
+  opts: { slug?: string; repo?: string; active?: boolean } = {},
+): Promise<MemoryBuildStore> {
   const slug = opts.slug ?? SLUG
   const store = new MemoryBuildStore({ clock: steppingClock() })
   await store.createBuild({ slug, repo: opts.repo ?? REPO })
@@ -263,10 +261,7 @@ describe('controlBuild — shared durable controls', () => {
     await raise(store, 'esc-second')
     const originalAppend = store.append.bind(store)
     let answerAttempts = 0
-    store.append = (async (
-      target: string,
-      event: Parameters<BuildStore['append']>[1],
-    ) => {
+    store.append = (async (target: string, event: Parameters<BuildStore['append']>[1]) => {
       if (event.type === 'escalation.answered') {
         answerAttempts += 1
         if (answerAttempts === 2) throw new Error('transient append failure')
@@ -300,10 +295,7 @@ describe('controlBuild — shared durable controls', () => {
     const answers = (await store.getEvents(SLUG)).filter(
       (event) => event.type === 'escalation.answered',
     )
-    expect(answers.map((event) => event.payload.id)).toEqual([
-      'esc-first',
-      'esc-second',
-    ])
+    expect(answers.map((event) => event.payload.id)).toEqual(['esc-first', 'esc-second'])
     await store.close()
   })
 
@@ -384,9 +376,7 @@ describe('abBuildControl — sessionless repository/store shell', () => {
       },
     })
 
-    expect(opened).toEqual([
-      { ref: 'https://store.example/control', token: ' remote-token ' },
-    ])
+    expect(opened).toEqual([{ ref: 'https://store.example/control', token: ' remote-token ' }])
     expect(closeCount).toBe(1)
     expect((await store.getEvents(SLUG)).at(-1)?.actor).toEqual({
       kind: 'human',

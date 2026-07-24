@@ -143,9 +143,7 @@ describe('ab done — discipline (D5)', () => {
     })
     await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
     const deps = planDeps({ round: 1 })
-    await expect(done(deps)).rejects.toThrow(
-      /this session already escalated.*esc_9/s,
-    )
+    await expect(done(deps)).rejects.toThrow(/this session already escalated.*esc_9/s)
   })
 
   test("a different session's escalation does not block this session's terminal", async () => {
@@ -289,7 +287,9 @@ describe('ab done — plan', () => {
       artifact: { kind: 'plan', rev: 1 },
       verifySteps: ['types', 'unit'],
     })
-    expect((await store.getEvents(BUILD)).filter((item) => item.type === 'plan.completed')).toHaveLength(1)
+    expect(
+      (await store.getEvents(BUILD)).filter((item) => item.type === 'plan.completed'),
+    ).toHaveLength(1)
   })
 })
 
@@ -352,9 +352,7 @@ describe('ab done — implement', () => {
     await runGit(['clone', '-q', remote, updater], tmp)
     const shas: string[] = []
     for (const commit of commits) {
-      shas.push(
-        await commitFile(updater, commit.file, commit.content, commit.message),
-      )
+      shas.push(await commitFile(updater, commit.file, commit.content, commit.message))
     }
     await runGit(['push', '-q', 'origin', 'main'], updater)
     return shas
@@ -400,17 +398,9 @@ describe('ab done — implement', () => {
     const unrelated = join(tmp, 'unrelated-target')
     await mkdir(unrelated)
     await runGit(['init', '-q', '-b', 'main'], unrelated)
-    await commitFile(
-      unrelated,
-      'unrelated.ts',
-      'export const unrelated = true\n',
-      'unrelated root',
-    )
+    await commitFile(unrelated, 'unrelated.ts', 'export const unrelated = true\n', 'unrelated root')
     await runGit(['remote', 'add', 'origin', remote], unrelated)
-    await runGit(
-      ['push', '-q', '--force', 'origin', 'main:refs/heads/main'],
-      unrelated,
-    )
+    await runGit(['push', '-q', '--force', 'origin', 'main:refs/heads/main'], unrelated)
     const deps = implementDeps()
     const notes = await stash('unrelated-target-notes.md', 'must not be deposited\n')
 
@@ -548,10 +538,9 @@ describe('ab done — implement', () => {
       'feature follow-up',
     )
     const secondNotes = await stash('notes-r2.md', 'addressed review feedback\n')
-    const second = await done(
-      implementDeps(deps.forge, { round: 2, session: 's_r2' }),
-      { notes: secondNotes },
-    )
+    const second = await done(implementDeps(deps.forge, { round: 2, session: 's_r2' }), {
+      notes: secondNotes,
+    })
 
     expect(second.payload).toEqual({
       round: 2,
@@ -639,9 +628,7 @@ describe('ab done — implement', () => {
       'export const detached = true\n',
       'detached implementation',
     )
-    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
-      'HEAD',
-    )
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe('HEAD')
     expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(attachedTip)
 
     const notes = await stash('detached-notes.md', 'completed while detached\n')
@@ -681,10 +668,7 @@ describe('ab done — implement', () => {
       'divergent remote head\n',
       'advance remote independently',
     )
-    await runGit(
-      ['push', '-q', 'origin', `${BRANCH}:refs/heads/${BRANCH}`],
-      workspace,
-    )
+    await runGit(['push', '-q', 'origin', `${BRANCH}:refs/heads/${BRANCH}`], workspace)
     await runGit(['checkout', '-q', '--detach', completedHead], workspace)
     expect(await remoteBranchHead(remote)).toBe(divergentHead)
 
@@ -748,7 +732,12 @@ describe('ab done — finalize', () => {
     await store.append(BUILD, {
       actor: agent('code-review'),
       type: 'code-review.verdict',
-      payload: { round: 2, verdict: 'approve', findings: [], artifact: { kind: 'code-review', rev: 1 } },
+      payload: {
+        round: 2,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'code-review', rev: 1 },
+      },
     })
     await store.append(BUILD, {
       actor: KERNEL,
@@ -837,9 +826,7 @@ describe('ab done — finalize', () => {
 
   test('detached HEAD still opens the PR from the durable build branch', async () => {
     await runGit(['checkout', '-q', '--detach', 'HEAD'], workspace)
-    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
-      'HEAD',
-    )
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe('HEAD')
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
       content: '# Detached finalize\n\nBody.\n',
@@ -887,10 +874,10 @@ describe('ab done — finalize', () => {
     expect(comment).toContain('<code>visual:home@0</code>')
     expect(comment).toContain('<code>visual:trace@0</code>')
     expect(comment).toContain(
-      "ab artifact download &#39;auth-rate-limit&#39; &#39;visual:home@0&#39; --output &#39;home.png&#39; --store &#39;/tmp/ab-store&#39;",
+      'ab artifact download &#39;auth-rate-limit&#39; &#39;visual:home@0&#39; --output &#39;home.png&#39; --store &#39;/tmp/ab-store&#39;',
     )
     expect(comment).toContain(
-      "ab artifact download &#39;auth-rate-limit&#39; &#39;visual:trace@0&#39; --output &#39;trace.txt&#39; --store &#39;/tmp/ab-store&#39;",
+      'ab artifact download &#39;auth-rate-limit&#39; &#39;visual:trace@0&#39; --output &#39;trace.txt&#39; --store &#39;/tmp/ab-store&#39;',
     )
     expect(comment).not.toContain('<img ')
   })
@@ -930,12 +917,8 @@ describe('ab done — finalize', () => {
 
     expect(event.type).toBe('finalize.completed')
     expect(forge.prAttachmentUploads).toHaveLength(1)
-    expect(forge.prAttachmentUploads[0]!.attachment).toEqual(
-      imageDesignation.payload,
-    )
-    expect([...forge.prAttachmentUploads[0]!.content]).toEqual([
-      137, 80, 78, 71, 1,
-    ])
+    expect(forge.prAttachmentUploads[0]!.attachment).toEqual(imageDesignation.payload)
+    expect([...forge.prAttachmentUploads[0]!.content]).toEqual([137, 80, 78, 71, 1])
     const events = await store.getEvents(BUILD)
     const hosted = events.find((item) => item.type === 'pr-attachment.hosted')
     expect(hosted?.actor).toEqual(KERNEL)
@@ -988,9 +971,7 @@ describe('ab done — finalize', () => {
     await expect(done(deps)).rejects.toThrow('store unavailable at finalize commit')
     expect(forge.prAttachmentUploads).toHaveLength(1)
     expect(
-      (await store.getEvents(BUILD)).filter(
-        (event) => event.type === 'pr-attachment.hosted',
-      ),
+      (await store.getEvents(BUILD)).filter((event) => event.type === 'pr-attachment.hosted'),
     ).toHaveLength(1)
 
     const event = await done(deps)
@@ -1025,9 +1006,7 @@ describe('ab done — finalize', () => {
 
     expect(event.type).toBe('finalize.completed')
     const events = await store.getEvents(BUILD)
-    const observation = events.findLast(
-      (item) => item.type === 'observation.recorded',
-    )
+    const observation = events.findLast((item) => item.type === 'observation.recorded')
     expect(observation?.actor).toEqual(KERNEL)
     expect(observation?.payload.summary).toContain('release upload unavailable')
     expect(events.some((item) => item.type === 'pr-attachment.hosted')).toBe(false)
@@ -1071,9 +1050,7 @@ describe('ab done — finalize', () => {
     await done(deps)
 
     const events = await store.getEvents(BUILD)
-    expect(
-      events.filter((event) => event.type === 'pr-attachment.hosted'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'pr-attachment.hosted')).toHaveLength(1)
     const comment = forge.comments[0]!.body
     expect(comment).toContain('<img ')
     expect(comment).toContain('<code>visual:first@0</code>')
@@ -1364,7 +1341,11 @@ describe('ab done — reconcile', () => {
   })
 
   test('rejected when HEAD is not a merge commit', async () => {
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'reconcile', round: 1 }), workspacePath: workspace })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+    })
     const notes = await stash('rec.md', 'merged base\n')
     await expect(done(deps, { notes })).rejects.toThrow(
       /HEAD to be a merge commit \(2\+ parents\).*has 1 parent/s,
@@ -1377,14 +1358,29 @@ describe('ab done — reconcile', () => {
     await runGit(['checkout', '-q', 'main'], workspace)
     await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
     await runGit(['checkout', '-q', BRANCH], workspace)
-    await runGit([
-      '-c', 'user.email=ab@test.invalid', '-c', 'user.name=ab-test',
-      '-c', 'commit.gpgsign=false',
-      'merge', '--no-ff', '-m', 'merge main into branch', 'main',
-    ], workspace)
+    await runGit(
+      [
+        '-c',
+        'user.email=ab@test.invalid',
+        '-c',
+        'user.name=ab-test',
+        '-c',
+        'commit.gpgsign=false',
+        'merge',
+        '--no-ff',
+        '-m',
+        'merge main into branch',
+        'main',
+      ],
+      workspace,
+    )
     const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
 
-    const deps = makeDeps({ store, env: makeEnv({ phase: 'reconcile', round: 1 }), workspacePath: workspace })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+    })
     const notes = await stash('rec.md', 'resolved conflicts against main\n')
     const event = await done(deps, { notes })
 
@@ -1423,9 +1419,7 @@ describe('ab done — reconcile', () => {
       workspace,
     )
     const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
-    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe(
-      'HEAD',
-    )
+    expect(await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).toBe('HEAD')
     expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(attachedTip)
 
     const notes = await stash('detached-rec.md', 'detached merge completed\n')
@@ -1483,9 +1477,7 @@ describe('ab done — reconcile', () => {
     })
     const notes = await stash('failed-rec.md', 'must not be deposited\n')
 
-    await expect(done(deps, { notes })).rejects.toThrow(
-      'remote rejected reconciliation',
-    )
+    await expect(done(deps, { notes })).rejects.toThrow('remote rejected reconciliation')
     expect(await eventTypes()).not.toContain('reconcile.completed')
     expect(await store.getArtifact(BUILD, 'reconcile-notes')).toBeNull()
   })
@@ -1589,9 +1581,7 @@ describe('ab verdict — review phases', () => {
     const notes = await stash('review.md', 'issues\n')
     const findings = await stash(
       'findings.json',
-      JSON.stringify([
-        { severity: 'blocking', summary: 'still broken', persists: ['f_bogus'] },
-      ]),
+      JSON.stringify([{ severity: 'blocking', summary: 'still broken', persists: ['f_bogus'] }]),
     )
     await expect(verdict(deps, { verdict: 'revise', notes, findings })).rejects.toThrow(
       /persists id "f_bogus" does not exist in prior rounds' findings.*known ids: f_prev1, f_prev2/s,
@@ -1664,10 +1654,7 @@ describe('ab verdict — review phases', () => {
       reason: 'spec is ambiguous about burst limits',
     })
 
-    expect(events.map((event) => event.type)).toEqual([
-      'plan-review.verdict',
-      'escalation.raised',
-    ])
+    expect(events.map((event) => event.type)).toEqual(['plan-review.verdict', 'escalation.raised'])
     expect(events[0]!.payload).toEqual({
       round: 1,
       verdict: 'escalate',
@@ -1823,9 +1810,7 @@ describe('ab verdict — agent-verify', () => {
       store,
       env: makeEnv({ phase: 'verify:e2e', round: 1, session: 's_dup' }),
     })
-    await expect(verdict(dup, { verdict: 'pass' })).rejects.toThrow(
-      /second terminal call rejected/,
-    )
+    await expect(verdict(dup, { verdict: 'pass' })).rejects.toThrow(/second terminal call rejected/)
   })
 })
 
@@ -1852,13 +1837,9 @@ describe('terminals — zombie sessions (D5)', () => {
       },
     })
     const deps = planDeps({ round: 1 })
-    await expect(done(deps)).rejects.toThrow(
-      /session "s_test" already ended.*only the live retry/s,
-    )
+    await expect(done(deps)).rejects.toThrow(/session "s_test" already ended.*only the live retry/s)
     // The same guard covers verdict-shaped and escalate terminals.
-    await expect(escalate(deps, { question: 'zombie question' })).rejects.toThrow(
-      /already ended/,
-    )
+    await expect(escalate(deps, { question: 'zombie question' })).rejects.toThrow(/already ended/)
   })
 
   test('a terminal after this session’s phase round failed is rejected; the retry’s own is not', async () => {

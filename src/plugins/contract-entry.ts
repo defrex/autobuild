@@ -13,11 +13,7 @@ import {
   describeWorkspaceProviderContract,
   type WorkspaceProviderContractFactory,
 } from '../ports/workspace/contract'
-import {
-  CONTRACT_ADAPTER_ENV,
-  CONTRACT_PORT_ENV,
-  CONTRACT_REPO_ENV,
-} from './contract-env'
+import { CONTRACT_ADAPTER_ENV, CONTRACT_PORT_ENV, CONTRACT_REPO_ENV } from './contract-env'
 import { loadPlugins } from './load'
 import { PLUGIN_PORTS, type PluginPort } from './registry'
 
@@ -47,13 +43,8 @@ if (registration === undefined) {
 if (registration.contract === undefined) {
   throw new Error(`${port} adapter "${adapter}" has no contract fixture descriptor`)
 }
-if (
-  registration.contract.live === true &&
-  process.env['AB_RUN_LIVE_PORT_CONTRACTS'] !== '1'
-) {
-  throw new Error(
-    'live plugin contracts require AB_RUN_LIVE_PORT_CONTRACTS=1',
-  )
+if (registration.contract.live === true && process.env.AB_RUN_LIVE_PORT_CONTRACTS !== '1') {
+  throw new Error('live plugin contracts require AB_RUN_LIVE_PORT_CONTRACTS=1')
 }
 
 const contractFactory = await registration.contract.factory({
@@ -75,10 +66,7 @@ switch (port) {
     describeAgentRunnerContract(adapter, contractFactory as AgentRunnerContractFactory)
     break
   case 'workspace-provider':
-    describeWorkspaceProviderContract(
-      adapter,
-      contractFactory as WorkspaceProviderContractFactory,
-    )
+    describeWorkspaceProviderContract(adapter, contractFactory as WorkspaceProviderContractFactory)
     break
   case 'forge':
     describeForgeContract(adapter, contractFactory as ForgeContractFactory)

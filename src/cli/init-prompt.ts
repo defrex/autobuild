@@ -116,8 +116,8 @@ class ReadlineInitPrompter implements InitPrompter {
  * retain the historical silent init behavior.
  */
 export function createProcessInitPrompter(
-  input: (Readable & { isTTY?: boolean }) = process.stdin,
-  output: (Writable & { isTTY?: boolean }) = process.stdout,
+  input: Readable & { isTTY?: boolean } = process.stdin,
+  output: Writable & { isTTY?: boolean } = process.stdout,
 ): InitPrompter | undefined {
   if (input.isTTY !== true || output.isTTY !== true) return undefined
   return new ReadlineInitPrompter(input, output)

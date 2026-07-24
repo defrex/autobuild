@@ -1,25 +1,14 @@
 import type { AbEvent } from '../events/catalog'
 import type { PrImageHostTarget } from '../ontology'
 
-export type PrAttachmentDesignationEvent = Extract<
-  AbEvent,
-  { type: 'pr-attachment.designated' }
->
-export type PrAttachmentHostedEvent = Extract<
-  AbEvent,
-  { type: 'pr-attachment.hosted' }
->
+export type PrAttachmentDesignationEvent = Extract<AbEvent, { type: 'pr-attachment.designated' }>
+export type PrAttachmentHostedEvent = Extract<AbEvent, { type: 'pr-attachment.hosted' }>
 
 /** The host consent frozen into the build at claim time. */
-export function frozenPrImageHost(
-  events: readonly AbEvent[],
-): PrImageHostTarget | undefined {
+export function frozenPrImageHost(events: readonly AbEvent[]): PrImageHostTarget | undefined {
   let created: Extract<AbEvent, { type: 'build.created' }> | undefined
   for (const event of events) {
-    if (
-      event.type === 'build.created' &&
-      (created === undefined || event.seq < created.seq)
-    ) {
+    if (event.type === 'build.created' && (created === undefined || event.seq < created.seq)) {
       created = event
     }
   }
@@ -31,9 +20,7 @@ export function frozenPrImageHost(
  * restart, with the newest exact revision replacing earlier designations of
  * the same artifact kind. Distinct kinds remain distinct attachments.
  */
-export function currentPrAttachments(
-  events: readonly AbEvent[],
-): PrAttachmentDesignationEvent[] {
+export function currentPrAttachments(events: readonly AbEvent[]): PrAttachmentDesignationEvent[] {
   let restartSeq = 0
   for (const event of events) {
     if (event.type === 'spec.revised') restartSeq = Math.max(restartSeq, event.seq)
@@ -76,14 +63,9 @@ export function hostedPrAttachments(
 }
 
 /** Every durable hosted copy that has not yet received a later reclaim fact. */
-export function pendingPrAttachmentReclaims(
-  events: readonly AbEvent[],
-): PrAttachmentHostedEvent[] {
+export function pendingPrAttachmentReclaims(events: readonly AbEvent[]): PrAttachmentHostedEvent[] {
   const hosted = events
-    .filter(
-      (event): event is PrAttachmentHostedEvent =>
-        event.type === 'pr-attachment.hosted',
-    )
+    .filter((event): event is PrAttachmentHostedEvent => event.type === 'pr-attachment.hosted')
     .sort((left, right) => left.seq - right.seq)
   const hostedSeqs = new Set(hosted.map((event) => event.seq))
   const reclaimed = new Set<number>()

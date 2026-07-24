@@ -156,10 +156,7 @@ export class MemoryBuildStore implements BuildStore {
     return [...this.builds.values()].map((state) => this.snapshot(state))
   }
 
-  async append<T extends EventType>(
-    slug: string,
-    event: EventWrite<T>,
-  ): Promise<EventEnvelope<T>> {
+  async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const state = this.state(slug)
     const validated = validateEventWrite(event)
     const envelope = {
@@ -261,11 +258,7 @@ export class MemoryBuildStore implements BuildStore {
     return structuredClone(meta)
   }
 
-  async getArtifact(
-    slug: string,
-    kind: string,
-    rev?: number,
-  ): Promise<Artifact | null> {
+  async getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null> {
     const state = this.state(slug)
     const revs = state.artifacts.get(kind)
     if (!revs || revs.length === 0) return null
@@ -281,9 +274,7 @@ export class MemoryBuildStore implements BuildStore {
     const all = [...state.artifacts.values()].flat()
     const filtered = kind ? all.filter((meta) => meta.kind === kind) : all
     return structuredClone(
-      filtered.sort(
-        (a, b) => a.kind.localeCompare(b.kind) || a.revision - b.revision,
-      ),
+      filtered.sort((a, b) => a.kind.localeCompare(b.kind) || a.revision - b.revision),
     )
   }
 
@@ -320,11 +311,7 @@ export class MemoryBuildStore implements BuildStore {
     }
   }
 
-  subscribe(
-    slug: string,
-    opts: SubscribeOptions,
-    onEvent: (event: AbEvent) => void,
-  ): Unsubscribe {
+  subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
   }
 
@@ -339,9 +326,7 @@ export class MemoryBuildStore implements BuildStore {
       repo: state.record.repo,
       createdAt: state.record.createdAt,
       updatedAt: state.record.updatedAt,
-      ...(state.record.heartbeatAt
-        ? { heartbeatAt: state.record.heartbeatAt }
-        : {}),
+      ...(state.record.heartbeatAt ? { heartbeatAt: state.record.heartbeatAt } : {}),
       ...(state.lease
         ? {
             lease: {
@@ -395,9 +380,7 @@ export class MemoryBuildStore implements BuildStore {
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifacts: ArtifactInput[],
-    makeEvent: (
-      deposited: RepositoryArtifactMeta[],
-    ) => RepositoryEventWrite<T>,
+    makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
@@ -422,8 +405,7 @@ export class MemoryBuildStore implements BuildStore {
     const ts = this.now()
     const nextRev = new Map<string, number>()
     const deposited = prepared.map((item): RepositoryArtifactMeta => {
-      const revision =
-        nextRev.get(item.kind) ?? state.artifacts.get(item.kind)?.length ?? 0
+      const revision = nextRev.get(item.kind) ?? state.artifacts.get(item.kind)?.length ?? 0
       nextRev.set(item.kind, revision + 1)
       return {
         repo,
@@ -434,9 +416,7 @@ export class MemoryBuildStore implements BuildStore {
         createdAt: ts,
       }
     })
-    const validated = validateRepositoryEventWrite(
-      makeEvent(structuredClone(deposited)),
-    )
+    const validated = validateRepositoryEventWrite(makeEvent(structuredClone(deposited)))
     for (const meta of deposited) {
       const revisions = state.artifacts.get(meta.kind) ?? []
       revisions.push(meta)
@@ -456,15 +436,10 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
-    return structuredClone(
-      this.repoState(repo).events.filter((event) => event.seq > sinceSeq),
-    )
+    return structuredClone(this.repoState(repo).events.filter((event) => event.seq > sinceSeq))
   }
 
-  async putRepoArtifact(
-    repo: string,
-    artifact: ArtifactInput,
-  ): Promise<RepositoryArtifactMeta> {
+  async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
     const state = this.repoState(repo)
     if (!artifact.kind) throw new Error('artifact kind is required')
     const bytes = toBytes(artifact.content)
@@ -498,10 +473,7 @@ export class MemoryBuildStore implements BuildStore {
     return content ? { meta: structuredClone(meta), content } : null
   }
 
-  async listRepoArtifacts(
-    repo: string,
-    kind?: string,
-  ): Promise<RepositoryArtifactMeta[]> {
+  async listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]> {
     const all = [...this.repoState(repo).artifacts.values()].flat()
     return structuredClone(
       (kind ? all.filter((meta) => meta.kind === kind) : all).sort(
@@ -510,18 +482,10 @@ export class MemoryBuildStore implements BuildStore {
     )
   }
 
-  async claimRepoLease(
-    repo: string,
-    holder: string,
-    ttlMs: number,
-  ): Promise<boolean> {
+  async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
     const state = this.repoState(repo)
     const now = this.clock().getTime()
-    if (
-      state.lease &&
-      state.lease.holder !== holder &&
-      state.lease.expiresAt > now
-    ) {
+    if (state.lease && state.lease.holder !== holder && state.lease.expiresAt > now) {
       return false
     }
     state.lease = { holder, expiresAt: now + ttlMs, ttlMs }

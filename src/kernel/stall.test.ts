@@ -27,11 +27,7 @@ describe('persistenceChains', () => {
   })
 
   test('broken chain (no persists) stays fresh — each finding is its own 1-round chain', () => {
-    const chains = persistenceChains([
-      [finding('f_1')],
-      [finding('f_2')],
-      [finding('f_3')],
-    ])
+    const chains = persistenceChains([[finding('f_1')], [finding('f_2')], [finding('f_3')]])
     expect(chains).toEqual([
       { ids: ['f_1'], rounds: 1 },
       { ids: ['f_2'], rounds: 1 },
@@ -109,10 +105,7 @@ describe('persistenceChains', () => {
   })
 
   test('persists to an unknown id is not a link — the finding roots its own chain', () => {
-    const chains = persistenceChains([
-      [finding('f_1')],
-      [finding('f_2', ['f_ghost'])],
-    ])
+    const chains = persistenceChains([[finding('f_1')], [finding('f_2', ['f_ghost'])]])
     expect(chains).toEqual([
       { ids: ['f_1'], rounds: 1 },
       { ids: ['f_2'], rounds: 1 },
@@ -130,14 +123,8 @@ describe('persistenceChains', () => {
 
 describe('stalledChains', () => {
   test('applies the threshold: chain at exactly stallRounds is stalled', () => {
-    const rounds = [
-      [finding('f_1')],
-      [finding('f_2', ['f_1'])],
-      [finding('f_3', ['f_2'])],
-    ]
-    expect(stalledChains(rounds, 3)).toEqual([
-      { ids: ['f_1', 'f_2', 'f_3'], rounds: 3 },
-    ])
+    const rounds = [[finding('f_1')], [finding('f_2', ['f_1'])], [finding('f_3', ['f_2'])]]
+    expect(stalledChains(rounds, 3)).toEqual([{ ids: ['f_1', 'f_2', 'f_3'], rounds: 3 }])
     expect(stalledChains(rounds, 4)).toEqual([])
   })
 
@@ -153,27 +140,17 @@ describe('stalledChains', () => {
       [finding('f_4', ['f_3']), finding('f_5', ['f_2'])],
     ]
     // f_1→f_3→f_4 spans rounds 1-3; f_2→f_5 spans rounds {1,3}: streak 1.
-    expect(stalledChains(rounds, 3)).toEqual([
-      { ids: ['f_1', 'f_3', 'f_4'], rounds: 3 },
-    ])
+    expect(stalledChains(rounds, 3)).toEqual([{ ids: ['f_1', 'f_3', 'f_4'], rounds: 3 }])
   })
 
   test('dismissed chain is suppressed when its tip is dismissed (§15.6-B)', () => {
-    const rounds = [
-      [finding('f_1')],
-      [finding('f_2', ['f_1'])],
-      [finding('f_3', ['f_2'])],
-    ]
+    const rounds = [[finding('f_1')], [finding('f_2', ['f_1'])], [finding('f_3', ['f_2'])]]
     expect(stalledChains(rounds, 3, new Set(['f_3']))).toEqual([])
     expect(stalledChains(rounds, 3, new Set(['f_1', 'f_2', 'f_3']))).toEqual([])
   })
 
   test('dismissing only historical members does not suppress the chain', () => {
-    const rounds = [
-      [finding('f_1')],
-      [finding('f_2', ['f_1'])],
-      [finding('f_3', ['f_2'])],
-    ]
+    const rounds = [[finding('f_1')], [finding('f_2', ['f_1'])], [finding('f_3', ['f_2'])]]
     expect(stalledChains(rounds, 3, new Set(['f_1', 'f_2']))).toEqual([
       { ids: ['f_1', 'f_2', 'f_3'], rounds: 3 },
     ])
@@ -211,17 +188,11 @@ describe('stalledChains', () => {
   test('no dismissedIds set means nothing is suppressed', () => {
     const rounds = [[finding('f_1')], [finding('f_2', ['f_1'])]]
     expect(stalledChains(rounds, 2)).toEqual([{ ids: ['f_1', 'f_2'], rounds: 2 }])
-    expect(stalledChains(rounds, 2, new Set())).toEqual([
-      { ids: ['f_1', 'f_2'], rounds: 2 },
-    ])
+    expect(stalledChains(rounds, 2, new Set())).toEqual([{ ids: ['f_1', 'f_2'], rounds: 2 }])
   })
 
   test('inputs are never mutated', () => {
-    const rounds = [
-      [finding('f_1')],
-      [finding('f_2', ['f_1'])],
-      [finding('f_3', ['f_2'])],
-    ]
+    const rounds = [[finding('f_1')], [finding('f_2', ['f_1'])], [finding('f_3', ['f_2'])]]
     const snapshot = structuredClone(rounds)
     persistenceChains(rounds)
     stalledChains(rounds, 2, new Set(['f_3']))

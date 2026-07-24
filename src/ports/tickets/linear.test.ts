@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  LINEAR_API_URL,
-  LinearTicketSource,
-  type LinearFetch,
-} from './linear'
+import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
 
 interface RecordedCall {
   url: string
@@ -107,9 +103,7 @@ const TEAM_INFO_RESPONSE = {
 
 describe('LinearTicketSource', () => {
   test('listReady sends team + state + and-of-label filters and maps issues to Tickets', async () => {
-    const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issues: { nodes: [gqlIssue()] } } } },
-    ])
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: { nodes: [gqlIssue()] } } } }])
     const source = makeSource(fetchFn)
 
     const tickets = await source.listReady({
@@ -153,9 +147,7 @@ describe('LinearTicketSource', () => {
   })
 
   test('listReady with no criteria sends only the team filter', async () => {
-    const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issues: { nodes: [] } } } },
-    ])
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: { nodes: [] } } } }])
 
     expect(await makeSource(fetchFn).listReady({})).toEqual({
       tickets: [],
@@ -285,9 +277,9 @@ describe('LinearTicketSource', () => {
       TEAM_INFO_RESPONSE,
     ])
 
-    await expect(
-      makeSource(fetchFn).transition('ENG-1', 'Shipped'),
-    ).rejects.toThrow(/Shipped.*Ready, In Progress, Done/)
+    await expect(makeSource(fetchFn).transition('ENG-1', 'Shipped')).rejects.toThrow(
+      /Shipped.*Ready, In Progress, Done/,
+    )
   })
 
   test('create resolves team and label ids by name and maps the created issue', async () => {
@@ -365,13 +357,10 @@ describe('LinearTicketSource', () => {
       createState: 'Ready',
     })
     const reservedId = crypto.randomUUID()
-    await source.create(
-      { title: 'X', body: 'y' },
-      { state: 'Done', idempotencyKey: reservedId },
-    )
-    const input = (calls[1]?.variables as { input: Record<string, unknown> }).input
-    expect(input['stateId']).toBe('st-done')
-    expect(input['id']).toBe(reservedId)
+    await source.create({ title: 'X', body: 'y' }, { state: 'Done', idempotencyKey: reservedId })
+    const input = (calls[1]!.variables as { input: Record<string, unknown> }).input
+    expect(input.stateId).toBe('st-done')
+    expect(input.id).toBe(reservedId)
   })
 
   test('a duplicate idempotent create adopts the exact reserved issue id', async () => {
@@ -414,12 +403,8 @@ describe('LinearTicketSource', () => {
     const reservedId = crypto.randomUUID()
 
     expect(
-      (
-        await makeSource(fetchFn).create(
-          { title: 'X', body: 'y' },
-          { idempotencyKey: reservedId },
-        )
-      ).ref.id,
+      (await makeSource(fetchFn).create({ title: 'X', body: 'y' }, { idempotencyKey: reservedId }))
+        .ref.id,
     ).toBe('ENG-89')
     expect(calls[2]?.variables).toEqual({ id: reservedId })
   })
@@ -427,18 +412,10 @@ describe('LinearTicketSource', () => {
   test('invalid and non-v4 idempotency keys fail before issuing a Linear request', async () => {
     const { fetchFn, calls } = fakeLinear([])
 
-    for (const idempotencyKey of [
-      'not-a-uuid',
-      Bun.randomUUIDv5('cluster-retry', 'dns'),
-    ]) {
+    for (const idempotencyKey of ['not-a-uuid', Bun.randomUUIDv5('cluster-retry', 'dns')]) {
       await expect(
-        makeSource(fetchFn).create(
-          { title: 'X', body: 'y' },
-          { idempotencyKey },
-        ),
-      ).rejects.toThrow(
-        'linear create: idempotency key must be a UUID v4',
-      )
+        makeSource(fetchFn).create({ title: 'X', body: 'y' }, { idempotencyKey }),
+      ).rejects.toThrow('linear create: idempotency key must be a UUID v4')
     }
     expect(calls).toHaveLength(0)
   })
@@ -455,9 +432,9 @@ describe('LinearTicketSource', () => {
 
     await makeSource(fetchFn).create({ title: 'X', body: 'y' })
 
-    const input = (calls[1]?.variables as { input: Record<string, unknown> }).input
-    expect(input['stateId']).toBeUndefined()
-    expect(input['id']).toBeUndefined()
+    const input = (calls[1]!.variables as { input: Record<string, unknown> }).input
+    expect(input.stateId).toBeUndefined()
+    expect(input.id).toBeUndefined()
   })
 
   test('create with a createState the team lacks throws with the known states', async () => {
@@ -487,9 +464,7 @@ describe('LinearTicketSource', () => {
   test('an HTTP error throws with status and operation context', async () => {
     const { fetchFn } = fakeLinear([{ status: 500, body: {} }])
 
-    await expect(makeSource(fetchFn).get('ENG-42')).rejects.toThrow(
-      'linear get: HTTP 500',
-    )
+    await expect(makeSource(fetchFn).get('ENG-42')).rejects.toThrow('linear get: HTTP 500')
   })
 
   test('a GraphQL errors array throws with the messages and operation context', async () => {
@@ -552,7 +527,7 @@ describe('LinearTicketSource', () => {
    * Transposing these records the exact inverse relationship — and no other
    * test in this file would notice.
    */
-  test('create with blockedBy sends Linear\'s bare blocks enum with the BLOCKER as issueId', async () => {
+  test("create with blockedBy sends Linear's bare blocks enum with the BLOCKER as issueId", async () => {
     const { fetchFn, calls } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -606,18 +581,14 @@ describe('LinearTicketSource', () => {
       blockedBy: ['ENG-8', 'ENG-9'],
     })
 
-    const relationCalls = calls.filter((call) =>
-      call.query.includes('issueRelationCreate'),
-    )
+    const relationCalls = calls.filter((call) => call.query.includes('issueRelationCreate'))
     expect(relationCalls.map((call) => call.variables)).toEqual([
       { issueId: 'uuid-8', relatedIssueId: 'uuid-new' },
       { issueId: 'uuid-9', relatedIssueId: 'uuid-new' },
     ])
     expect(
       relationCalls.every(
-        (call) =>
-          call.query.includes('type: blocks') &&
-          !call.query.includes('type: "blocks"'),
+        (call) => call.query.includes('type: blocks') && !call.query.includes('type: "blocks"'),
       ),
     ).toBe(true)
     expect(created.blockedBy).toEqual(['ENG-8', 'ENG-9'])
@@ -775,9 +746,7 @@ describe('LinearTicketSource', () => {
       })),
     )
 
-    const states = await makeSource(fetchFn).dependencyStates(
-      types.map(([type]) => type),
-    )
+    const states = await makeSource(fetchFn).dependencyStates(types.map(([type]) => type))
 
     expect(states.map((s) => [s.id, s.resolved])).toEqual(
       types.map(([type, resolved]) => [type, resolved]),
@@ -829,9 +798,7 @@ describe('LinearTicketSource', () => {
       },
     ])
 
-    await expect(makeSource(fetchFn).get('AUT-99999')).rejects.toThrow(
-      'rate limited',
-    )
+    await expect(makeSource(fetchFn).get('AUT-99999')).rejects.toThrow('rate limited')
   })
 
   test('dependencyStates maps a live "Entity not found" error to exists: false', async () => {
@@ -866,16 +833,12 @@ describe('LinearTicketSource', () => {
     const { fetchFn } = fakeLinear([
       {
         body: {
-          errors: [
-            { message: 'rate limited', extensions: { code: 'RATELIMITED' } },
-          ],
+          errors: [{ message: 'rate limited', extensions: { code: 'RATELIMITED' } }],
         },
       },
     ])
 
-    await expect(makeSource(fetchFn).dependencyStates(['ENG-42'])).rejects.toThrow(
-      'rate limited',
-    )
+    await expect(makeSource(fetchFn).dependencyStates(['ENG-42'])).rejects.toThrow('rate limited')
   })
 
   test('a mixed error set (not-found + rate limit) is a failure, not an absence', async () => {
@@ -893,9 +856,7 @@ describe('LinearTicketSource', () => {
       },
     ])
 
-    await expect(makeSource(fetchFn).dependencyStates(['ENG-42'])).rejects.toThrow(
-      'rate limited',
-    )
+    await expect(makeSource(fetchFn).dependencyStates(['ENG-42'])).rejects.toThrow('rate limited')
   })
 
   test('an unknown blocker on create keeps adapter prose inside created-ticket context', async () => {
@@ -969,9 +930,7 @@ describe('LinearTicketSource', () => {
   // ── Post-create grooming writes ───────────────────────────────────────────
 
   test('every full issue selection explicitly requests 250 inverse relations and relation ids', async () => {
-    const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: gqlIssue() } } },
-    ])
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { issue: gqlIssue() } } }])
 
     await makeSource(fetchFn).get('ENG-42')
 
@@ -982,9 +941,9 @@ describe('LinearTicketSource', () => {
   test('update maps a missing target to an id-specific error before mutation', async () => {
     const { fetchFn, calls } = fakeLinear([ENTITY_NOT_FOUND])
 
-    await expect(
-      makeSource(fetchFn).update('ENG-404', { title: 'Renamed' }),
-    ).rejects.toThrow('unknown ticket "ENG-404"')
+    await expect(makeSource(fetchFn).update('ENG-404', { title: 'Renamed' })).rejects.toThrow(
+      'unknown ticket "ENG-404"',
+    )
     expect(calls).toHaveLength(1)
   })
 
@@ -1051,13 +1010,11 @@ describe('LinearTicketSource', () => {
       TEAM_INFO_RESPONSE,
     ])
 
-    await expect(
-      makeSource(fetchFn).update('ENG-42', { labels: ['urgent'] }),
-    ).rejects.toThrow('no label "urgent"')
-    expect(calls).toHaveLength(2)
-    expect(calls.some((call) => call.query.includes('mutation UpdateIssue'))).toBe(
-      false,
+    await expect(makeSource(fetchFn).update('ENG-42', { labels: ['urgent'] })).rejects.toThrow(
+      'no label "urgent"',
     )
+    expect(calls).toHaveLength(2)
+    expect(calls.some((call) => call.query.includes('mutation UpdateIssue'))).toBe(false)
   })
 
   test('addBlocker creates a native blocks relation in the correct direction', async () => {
@@ -1101,9 +1058,7 @@ describe('LinearTicketSource', () => {
     await makeSource(fetchFn).addBlocker('ENG-42', 'ENG-8')
 
     expect(calls).toHaveLength(1)
-    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(
-      false,
-    )
+    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(false)
   })
 
   test('addBlocker maps a missing blocker to an id-specific error before mutation', async () => {
@@ -1112,31 +1067,27 @@ describe('LinearTicketSource', () => {
       ENTITY_NOT_FOUND,
     ])
 
-    await expect(
-      makeSource(fetchFn).addBlocker('ENG-42', 'ENG-404'),
-    ).rejects.toThrow('unknown ticket "ENG-404"')
-    expect(calls).toHaveLength(2)
-    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(
-      false,
+    await expect(makeSource(fetchFn).addBlocker('ENG-42', 'ENG-404')).rejects.toThrow(
+      'unknown ticket "ENG-404"',
     )
+    expect(calls).toHaveLength(2)
+    expect(calls.some((call) => call.query.includes('issueRelationCreate'))).toBe(false)
   })
 
   test('addBlocker rejects direct and UUID-alias self-blocks', async () => {
-    const direct = fakeLinear([
-      { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
-    ])
-    await expect(
-      makeSource(direct.fetchFn).addBlocker('ENG-42', 'ENG-42'),
-    ).rejects.toThrow('ENG-42')
+    const direct = fakeLinear([{ body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } }])
+    await expect(makeSource(direct.fetchFn).addBlocker('ENG-42', 'ENG-42')).rejects.toThrow(
+      'ENG-42',
+    )
     expect(direct.calls).toHaveLength(1)
 
     const alias = fakeLinear([
       { body: { data: { issue: gqlIssue({ id: 'uuid-target' }) } } },
       { body: { data: { issue: { id: 'uuid-target' } } } },
     ])
-    await expect(
-      makeSource(alias.fetchFn).addBlocker('ENG-42', 'alias-for-42'),
-    ).rejects.toThrow('ENG-42')
+    await expect(makeSource(alias.fetchFn).addBlocker('ENG-42', 'alias-for-42')).rejects.toThrow(
+      'ENG-42',
+    )
     expect(alias.calls).toHaveLength(2)
   })
 
@@ -1168,9 +1119,7 @@ describe('LinearTicketSource', () => {
       { id: 'relation-a' },
       { id: 'relation-b' },
     ])
-    expect(
-      calls.slice(1).every((call) => call.query.includes('issueRelationDelete')),
-    ).toBe(true)
+    expect(calls.slice(1).every((call) => call.query.includes('issueRelationDelete'))).toBe(true)
   })
 
   test('removeBlocker is a no-op when the relation or blocker issue is absent', async () => {

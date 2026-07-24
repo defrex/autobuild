@@ -6,10 +6,7 @@ import {
   frozenPrImageHost,
   hostedPrAttachments,
 } from '../kernel/pr-attachments'
-import {
-  hostedPrAttachmentAssetSchema,
-  type HostedPrAttachmentAsset,
-} from '../ontology'
+import { hostedPrAttachmentAssetSchema, type HostedPrAttachmentAsset } from '../ontology'
 import type { Forge } from '../ports/types'
 import type { BuildStore } from '../store/types'
 import type { CliEnv } from './env'
@@ -80,16 +77,10 @@ export async function preparePrAttachments(
     try {
       const capability = deps.forge.prAttachments
       if (capability === undefined) {
-        throw new Error(
-          `forge ${deps.forge.name} does not support PR attachment hosting`,
-        )
+        throw new Error(`forge ${deps.forge.name} does not support PR attachment hosting`)
       }
       const ref = designation.payload.artifact
-      const artifact = await deps.store.getArtifact(
-        deps.env.build,
-        ref.kind,
-        ref.rev,
-      )
+      const artifact = await deps.store.getArtifact(deps.env.build, ref.kind, ref.rev)
       if (artifact === null) {
         throw new Error(`designated artifact ${ref.kind}@${ref.rev} is missing`)
       }
@@ -109,9 +100,7 @@ export async function preparePrAttachments(
         asset.repository !== target.repository ||
         asset.releaseId !== target.releaseId
       ) {
-        throw new Error(
-          'PR attachment host returned a deletion handle for a different target',
-        )
+        throw new Error('PR attachment host returned a deletion handle for a different target')
       }
     } catch (error) {
       await recordHostingFailure(deps, events, designation, error)
@@ -119,8 +108,7 @@ export async function preparePrAttachments(
     }
 
     const assetRef =
-      `${asset.provider}:${asset.repository}:release/${asset.releaseId}:` +
-      `asset/${asset.assetId}`
+      `${asset.provider}:${asset.repository}:release/${asset.releaseId}:` + `asset/${asset.assetId}`
     let event: EventEnvelope<'pr-attachment.hosted'>
     try {
       event = await deps.store.append(deps.env.build, {

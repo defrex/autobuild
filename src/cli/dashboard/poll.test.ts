@@ -3,10 +3,7 @@ import { parseConfig } from '../../config/load'
 import { KERNEL } from '../../events/envelope'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
-import {
-  DashboardBuildPollCache,
-  type DashboardBuildReader,
-} from './poll'
+import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
 
 const REPO = '/repos/dashboard-cache'
 const CONFIG = parseConfig(`
@@ -33,18 +30,13 @@ class CountingReader implements DashboardBuildReader {
       // Make concurrent callers overlap here if the cache does not serialize
       // refreshes itself.
       await Promise.resolve()
-      return (await this.store.listBuilds()).filter(
-        (record) => !this.hidden.has(record.slug),
-      )
+      return (await this.store.listBuilds()).filter((record) => !this.hidden.has(record.slug))
     } finally {
       this.activeLists -= 1
     }
   }
 
-  async getEvents(
-    slug: string,
-    sinceSeq = 0,
-  ): ReturnType<MemoryBuildStore['getEvents']> {
+  async getEvents(slug: string, sinceSeq = 0): ReturnType<MemoryBuildStore['getEvents']> {
     this.eventCalls.push({ slug, since: sinceSeq })
     if (this.failNextFor === slug) {
       this.failNextFor = undefined
@@ -60,10 +52,7 @@ class CountingReader implements DashboardBuildReader {
   }
 }
 
-async function addRunning(
-  store: MemoryBuildStore,
-  slug: string,
-): Promise<void> {
+async function addRunning(store: MemoryBuildStore, slug: string): Promise<void> {
   await store.createBuild({ slug, repo: REPO })
   await store.append(slug, {
     actor: KERNEL,
@@ -93,10 +82,7 @@ async function addTerminal(
   }
 }
 
-function row(
-  snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>,
-  slug: string,
-) {
+function row(snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>, slug: string) {
   return snapshot.builds.find((build) => build.slug === slug)
 }
 
@@ -129,10 +115,7 @@ describe('DashboardBuildPollCache', () => {
     const cold = await cache.refresh()
     expect(reader.listCalls).toBe(1)
     expect(reader.eventCalls).toHaveLength(42)
-    expect(cold.builds.map((build) => build.slug)).toEqual([
-      'live-alpha',
-      'live-beta',
-    ])
+    expect(cold.builds.map((build) => build.slug)).toEqual(['live-alpha', 'live-beta'])
 
     const alphaRow = row(cold, 'live-alpha')
     const betaRow = row(cold, 'live-beta')
@@ -192,21 +175,15 @@ describe('DashboardBuildPollCache', () => {
     expect(reader.eventCalls).toEqual([{ slug: 'alpha', since: 2 }])
     expect(blockedAlpha).not.toBe(initialAlpha)
     expect(blockedAlpha?.status).toBe('blocked')
-    expect(blockedAlpha?.blockers).toEqual([
-      'Which cached behavior should be used?',
-    ])
+    expect(blockedAlpha?.blockers).toEqual(['Which cached behavior should be used?'])
     expect(
-      blockedAlpha?.steps.find((step) => step.label === 'plan')?.timing
-        ?.runningSince,
+      blockedAlpha?.steps.find((step) => step.label === 'plan')?.timing?.runningSince,
     ).toBeUndefined()
 
     await addRunning(store, 'beta')
     reader.resetCalls()
     const discovered = await cache.refresh()
-    expect(discovered.builds.map((build) => build.slug)).toEqual([
-      'alpha',
-      'beta',
-    ])
+    expect(discovered.builds.map((build) => build.slug)).toEqual(['alpha', 'beta'])
     expect(reader.eventCalls).toEqual([
       { slug: 'alpha', since: 3 },
       { slug: 'beta', since: 0 },
@@ -259,9 +236,7 @@ describe('DashboardBuildPollCache', () => {
     })
     reader.failNextFor = 'beta'
     reader.resetCalls()
-    await expect(cache.refresh()).rejects.toThrow(
-      'scripted read failure for beta',
-    )
+    await expect(cache.refresh()).rejects.toThrow('scripted read failure for beta')
     expect(reader.eventCalls).toEqual([
       { slug: 'alpha', since: 1 },
       { slug: 'beta', since: 1 },
@@ -278,17 +253,12 @@ describe('DashboardBuildPollCache', () => {
     ])
     expect(
       recovered.builds.every(
-        (build) =>
-          build.steps.find((step) => step.label === 'plan')?.state ===
-          'current',
+        (build) => build.steps.find((step) => step.label === 'plan')?.state === 'current',
       ),
     ).toBe(true)
 
     reader.resetCalls()
-    const [older, newer] = await Promise.all([
-      cache.refresh(),
-      cache.refresh(),
-    ])
+    const [older, newer] = await Promise.all([cache.refresh(), cache.refresh()])
     expect(reader.maxActiveLists).toBe(1)
     expect(newer.revision).toBe(older.revision + 1)
     expect(cache.isCurrent(older)).toBe(false)

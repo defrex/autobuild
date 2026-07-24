@@ -19,7 +19,10 @@ function fencedBlock(source: string, marker: string, language: string): string {
   return source.slice(from + start.length, to)
 }
 
-async function run(root: string, ...args: string[]): Promise<{
+async function run(
+  root: string,
+  ...args: string[]
+): Promise<{
   status: number
   stdout: string
   stderr: string
@@ -89,16 +92,8 @@ describe('plugin authoring guide', () => {
 
   test('the exact zero-network walkthrough initializes, loads, lists, and passes its contract', async () => {
     const reference = await readFile(REFERENCE, 'utf8')
-    const module = fencedBlock(
-      reference,
-      'plugin-authoring-walkthrough-module',
-      'ts',
-    )
-    const config = fencedBlock(
-      reference,
-      'plugin-authoring-walkthrough-config',
-      'toml',
-    )
+    const module = fencedBlock(reference, 'plugin-authoring-walkthrough-module', 'ts')
+    const config = fencedBlock(reference, 'plugin-authoring-walkthrough-config', 'toml')
     const root = await mkdtemp(join(tmpdir(), 'ab-plugin-guide-'))
     roots.push(root)
     await writeFile(join(root, 'autobuild-plugin.ts'), module)

@@ -9,18 +9,14 @@
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
 import { parseConfig } from '../config/load'
-import {
-  KERNEL,
-  humanActor,
-  type Actor,
-} from '../events/envelope'
+import { KERNEL, humanActor, type Actor } from '../events/envelope'
 import {
   validateEventWrite,
   allowedActorKinds,
   type AbEvent,
   type EventWrite,
 } from '../events/catalog'
-import { eventPayloadSchemas, type EventType } from '../events/payloads'
+import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { decideNext, type Decision, type WaitReason } from './engine'
@@ -424,7 +420,11 @@ describe('decideNext: rule 1 — terminal states', () => {
 
   test('terminal is latest-wins in either order (§15.5)', () => {
     expect(
-      decide([...prelude(), ev('build.aborted', {}), ev('build.completed', { outcome: 'abandoned' })]),
+      decide([
+        ...prelude(),
+        ev('build.aborted', {}),
+        ev('build.completed', { outcome: 'abandoned' }),
+      ]),
     ).toEqual(wait('done'))
     expect(
       decide([...prelude(), ev('build.completed', { outcome: 'merged' }), ev('build.aborted', {})]),
@@ -454,9 +454,9 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
   })
 
   test('paused parks phase decisions (plan is due but waits)', () => {
-    expect(
-      decide([...prelude(), ev('build.pause-requested', {}), ev('build.paused', {})]),
-    ).toEqual(wait('paused'))
+    expect(decide([...prelude(), ev('build.pause-requested', {}), ev('build.paused', {})])).toEqual(
+      wait('paused'),
+    )
   })
 
   test('paused + unacknowledged resume-request → acknowledge resume', () => {
@@ -494,9 +494,9 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
   })
 
   test('abort-request wins while paused', () => {
-    expect(
-      decide([...prelude(), ev('build.paused', {}), ev('build.abort-requested', {})]),
-    ).toEqual({ kind: 'acknowledge', command: 'abort' })
+    expect(decide([...prelude(), ev('build.paused', {}), ev('build.abort-requested', {})])).toEqual(
+      { kind: 'acknowledge', command: 'abort' },
+    )
   })
 
   test('a resume-request while not paused is ignored', () => {
@@ -562,7 +562,13 @@ describe('decideNext: rule 3 — escalation gating', () => {
     expect(
       decide([
         ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', round: 1, source: 'agent', question: 'q?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'q?',
+        }),
       ]),
     ).toEqual(wait('blocked'))
   })
@@ -589,9 +595,7 @@ describe('decideNext: rule 3 — escalation gating', () => {
           source,
           question: `${source} condition still needs a retry`,
         },
-        source === 'agent'
-          ? { kind: 'agent', role: 'plan', session: `s_${source}` }
-          : KERNEL,
+        source === 'agent' ? { kind: 'agent', role: 'plan', session: `s_${source}` } : KERNEL,
       )
       expect(
         decide([
@@ -655,12 +659,21 @@ describe('decideNext: rule 3 — escalation gating', () => {
   test('answered revise-spec → wait/awaiting-spec until spec.revised lands', () => {
     const writes = [
       ...prelude(),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', round: 1, source: 'agent', question: 'spec wrong?' }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'plan',
+        round: 1,
+        source: 'agent',
+        question: 'spec wrong?',
+      }),
       ev('escalation.answered', { id: 'e_1', answer: 'Spec updated.', resolution: 'revise-spec' }),
     ]
     expect(decide(writes)).toEqual(wait('awaiting-spec'))
     expect(
-      decide([...writes, ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 })]),
+      decide([
+        ...writes,
+        ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 }),
+      ]),
     ).toEqual(runPhase('plan', 1))
   })
 })
@@ -756,13 +769,22 @@ describe('decideNext: rule 5 — plan loop', () => {
       decide([
         ...prelude(),
         ...planRound(1, 'escalate', [], 'unsure about scope'),
-        ev(
-          'escalation.raised',
-          { id: 'e_1', phase: 'plan-review', round: 1, source: 'agent', question: 'unsure about scope' },
-        ),
-        ev('escalation.answered', { id: 'e_1', answer: 'Only the API surface.', resolution: 'guidance' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan-review',
+          round: 1,
+          source: 'agent',
+          question: 'unsure about scope',
+        }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Only the API surface.',
+          resolution: 'guidance',
+        }),
       ]),
-    ).toEqual(runPhase('plan', 2, { guidance: { escalation: 'e_1', answer: 'Only the API surface.' } }))
+    ).toEqual(
+      runPhase('plan', 2, { guidance: { escalation: 'e_1', answer: 'Only the API surface.' } }),
+    )
   })
 
   test('guidance from a plan-phase escalation feeds the crashed round re-run', () => {
@@ -770,7 +792,13 @@ describe('decideNext: rule 5 — plan loop', () => {
       decide([
         ...prelude(),
         ev('plan.started', { round: 1 }),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', round: 1, source: 'agent', question: 'Which auth flow?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'Which auth flow?',
+        }),
         ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
       ]),
     ).toEqual(runPhase('plan', 1, { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }))
@@ -780,7 +808,13 @@ describe('decideNext: rule 5 — plan loop', () => {
     const writes = [
       ...prelude(),
       ev('plan.started', { round: 1 }),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', round: 1, source: 'agent', question: 'Which auth flow?' }),
+      ev('escalation.raised', {
+        id: 'e_1',
+        phase: 'plan',
+        round: 1,
+        source: 'agent',
+        question: 'Which auth flow?',
+      }),
       ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
       // The guidance-fed re-run starts, citing the answer in its payload —
       // symmetric with implement.started (§15.3); this is what consumes it.
@@ -815,7 +849,13 @@ describe('decideNext: rule 5 — plan loop', () => {
       decide([
         ...prelude(),
         ev('plan.started', { round: 1 }),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', round: 1, source: 'agent', question: 'Which auth flow?' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'Which auth flow?',
+        }),
         ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
         ev('plan.started', { round: 1 }), // crashed before `ab context` — no feedback carried
       ]),
@@ -881,10 +921,16 @@ describe('decideNext: rule 5 — plan loop', () => {
     expect(
       decide([
         ...writes,
-        ev('escalation.answered', { id: 'e_1', answer: 'One more round: drop scope X.', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'One more round: drop scope X.',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual(
-      runPhase('plan', 5, { guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' } }),
+      runPhase('plan', 5, {
+        guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' },
+      }),
     )
   })
 })
@@ -918,14 +964,19 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
 
   test('revise verdict → implement R+1 with findings feedback', () => {
     expect(
-      decide([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1'), ...codeReview(1, 'revise', [finding('f_1')])]),
+      decide([
+        ...prelude(),
+        ...planApproved(),
+        ...implementRound(1, 'sha-r1'),
+        ...codeReview(1, 'revise', [finding('f_1')]),
+      ]),
     ).toEqual(runPhase('implement', 2, { findings: ['f_1'] }))
   })
 
   test('implement completed without a verdict → code-review is due', () => {
-    expect(
-      decide([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1')]),
-    ).toEqual(runPhase('code-review', 1))
+    expect(decide([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1')])).toEqual(
+      runPhase('code-review', 1),
+    )
   })
 
   test('walkthrough C: log ending at implement.started r2 re-runs implement r2', () => {
@@ -973,7 +1024,10 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
         ...threeReviseRounds,
         stallRaised,
         ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
-        ev('implement.started', { round: 4, feedback: { guidance: { escalation: 'e_1', answer: GUIDANCE } } }),
+        ev('implement.started', {
+          round: 4,
+          feedback: { guidance: { escalation: 'e_1', answer: GUIDANCE } },
+        }),
       ]),
     ).toEqual(runPhase('implement', 4, { findings: ['f_3'] }))
   })
@@ -1014,7 +1068,11 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decide([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: 'Not a real issue.', resolution: 'dismiss-finding' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Not a real issue.',
+          resolution: 'dismiss-finding',
+        }),
       ]),
     ).toEqual(runPhase('implement', 4, { findings: ['f_3'] }))
   })
@@ -1024,7 +1082,11 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decideRoomy([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: 'Not a real issue.', resolution: 'dismiss-finding' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Not a real issue.',
+          resolution: 'dismiss-finding',
+        }),
         ...implementRound(4, 'sha-r4', { findings: ['f_3'] }),
         ...codeReview(4, 'revise', [finding('f_5')]), // fresh disagreement only
       ]),
@@ -1036,7 +1098,11 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
       decide([
         ...threeReviseRounds,
         stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: 'Not a real issue.', resolution: 'dismiss-finding' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Not a real issue.',
+          resolution: 'dismiss-finding',
+        }),
         ...implementRound(4, 'sha-r4', { findings: ['f_3'] }),
         ...codeReview(4, 'revise', [finding('f_5', ['f_3'])]), // continues the dismissed tip
       ]),
@@ -1067,11 +1133,23 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
     expect(
       decide([
         ...writes,
-        ev('escalation.raised', { id: 'e_1', phase: 'code-review', round: 1, source: 'agent', question: 'risky migration' }),
-        ev('escalation.answered', { id: 'e_1', answer: 'Migration is fine, ship it.', resolution: 'guidance' }),
+        ev('escalation.raised', {
+          id: 'e_1',
+          phase: 'code-review',
+          round: 1,
+          source: 'agent',
+          question: 'risky migration',
+        }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Migration is fine, ship it.',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual(
-      runPhase('implement', 2, { guidance: { escalation: 'e_1', answer: 'Migration is fine, ship it.' } }),
+      runPhase('implement', 2, {
+        guidance: { escalation: 'e_1', answer: 'Migration is fine, ship it.' },
+      }),
     )
   })
 })
@@ -1102,13 +1180,19 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     expect(
       decide([
         ...failAtUnit,
-        ev('implement.started', { round: 2, feedback: { verify: { step: 'unit', report: report0 } } }),
+        ev('implement.started', {
+          round: 2,
+          feedback: { verify: { step: 'unit', report: report0 } },
+        }),
       ]),
     ).toEqual(runPhase('implement', 2, { verify: { step: 'unit', report: report0 } }))
   })
 
   test('the fixed round goes to code-review, then verify re-runs from the FIRST step at attempt 2', () => {
-    const fixed = [...failAtUnit, ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } })]
+    const fixed = [
+      ...failAtUnit,
+      ...implementRound(2, 'sha-r2', { verify: { step: 'unit', report: report0 } }),
+    ]
     expect(decide(fixed)).toEqual(runPhase('code-review', 2))
     expect(decide([...fixed, ...codeReview(2, 'approve')])).toEqual({
       kind: 'run-check',
@@ -1133,10 +1217,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       ...implementRound(1, 'sha-r1'),
       ...codeReview(1, 'approve'),
     ]
-    const typesSkipped = [
-      ...approved,
-      ...verifySkip('types', 1, 'No TypeScript files changed'),
-    ]
+    const typesSkipped = [...approved, ...verifySkip('types', 1, 'No TypeScript files changed')]
     expect(decide(typesSkipped)).toEqual({
       kind: 'run-check',
       step: 'unit',
@@ -1225,7 +1306,12 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         ...exhausted,
         ev(
           'escalation.raised',
-          { id: 'e_1', phase: 'verify:unit', source: 'policy', question: expected.kind === 'raise-escalation' ? expected.question : '' },
+          {
+            id: 'e_1',
+            phase: 'verify:unit',
+            source: 'policy',
+            question: expected.kind === 'raise-escalation' ? expected.question : '',
+          },
           KERNEL,
         ),
       ]),
@@ -1241,10 +1327,16 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
           { id: 'e_1', phase: 'verify:unit', source: 'policy', question: 'stuck' },
           KERNEL,
         ),
-        ev('escalation.answered', { id: 'e_1', answer: 'Skip the flaky asserts.', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Skip the flaky asserts.',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual(
-      runPhase('implement', 4, { guidance: { escalation: 'e_1', answer: 'Skip the flaky asserts.' } }),
+      runPhase('implement', 4, {
+        guidance: { escalation: 'e_1', answer: 'Skip the flaky asserts.' },
+      }),
     )
   })
 
@@ -1274,12 +1366,15 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
   })
 
   test('no verify steps configured → straight to finalize', () => {
-    const bare = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n',
-    )
+    const bare = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')
     expect(
       decideNext(
-        toLog([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1'), ...codeReview(1, 'approve')]),
+        toLog([
+          ...prelude(),
+          ...planApproved(),
+          ...implementRound(1, 'sha-r1'),
+          ...codeReview(1, 'approve'),
+        ]),
         bare,
       ),
     ).toEqual(runPhase('finalize', 1))
@@ -1503,10 +1598,12 @@ command = "unit"
 
   test('selection exclusion precedes paths, while a selected conditional step evaluates paths', () => {
     const typesPass = verifyRun('types', 1, true)
-    expect(decideNext(toLog([...approved(['types']), ...typesPass]), selectedConfig)).toMatchObject({
-      kind: 'skip-verify',
-      step: 'dashboard',
-    })
+    expect(decideNext(toLog([...approved(['types']), ...typesPass]), selectedConfig)).toMatchObject(
+      {
+        kind: 'skip-verify',
+        step: 'dashboard',
+      },
+    )
     expect(
       decideNext(toLog([...approved(['types', 'dashboard']), ...typesPass]), selectedConfig),
     ).toEqual({
@@ -1532,10 +1629,7 @@ command = "unit"
     })
     expect(
       decideNext(
-        toLog([
-          ...start,
-          ...verifySkip('dashboard', 1, 'excluded by approved plan selection'),
-        ]),
+        toLog([...start, ...verifySkip('dashboard', 1, 'excluded by approved plan selection')]),
         optionalConfig,
       ),
     ).toMatchObject({ kind: 'skip-verify', step: 'unit', attempt: 1 })
@@ -1701,21 +1795,25 @@ skill = "custom-screenshot-skill"
     })
     // ok:false still counts — post-steps are failure-tolerant (§5): a failed
     // step files an observation, never re-runs, never kills a green build.
-    const firstFailed = [...done, ev('finalize.step-completed', { step: 'release-notes', ok: false, note: 'no template' })]
+    const firstFailed = [
+      ...done,
+      ev('finalize.step-completed', { step: 'release-notes', ok: false, note: 'no template' }),
+    ]
     expect(decideNext(toLog(firstFailed), twoSteps)).toEqual({
       kind: 'run-finalize-step',
       step: 'screenshots',
       action: { kind: 'agent', skill: 'custom-screenshot-skill' },
     })
     expect(
-      decideNext(toLog([...firstFailed, ev('finalize.step-completed', { step: 'screenshots', ok: true })]), twoSteps),
+      decideNext(
+        toLog([...firstFailed, ev('finalize.step-completed', { step: 'screenshots', ok: true })]),
+        twoSteps,
+      ),
     ).toEqual(wait('awaiting-pr'))
   })
 
   test('no post-steps configured → straight to awaiting-pr', () => {
-    const bare = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n',
-    )
+    const bare = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')
     expect(
       decideNext(
         toLog([
@@ -1829,9 +1927,9 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
   })
 
   test('a green verify re-run returns to awaiting-pr without re-running post-steps', () => {
-    expect(
-      decide([...throughFinalize, ...reconcileCycle(1, 'sha-main-2')]),
-    ).toEqual(wait('awaiting-pr'))
+    expect(decide([...throughFinalize, ...reconcileCycle(1, 'sha-main-2')])).toEqual(
+      wait('awaiting-pr'),
+    )
   })
 
   test('conflicts past maxReconcileAttempts → policy escalation, once per conflict', () => {
@@ -1854,7 +1952,12 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         ...thrash,
         ev(
           'escalation.raised',
-          { id: 'e_9', phase: 'reconcile', source: 'policy', question: 'maxReconcileAttempts (3) exhausted' },
+          {
+            id: 'e_9',
+            phase: 'reconcile',
+            source: 'policy',
+            question: 'maxReconcileAttempts (3) exhausted',
+          },
           KERNEL,
         ),
       ]),
@@ -1871,10 +1974,19 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         ev('pr.conflicted', { baseSha: 'sha-main-5' }),
         ev(
           'escalation.raised',
-          { id: 'e_9', phase: 'reconcile', source: 'policy', question: 'maxReconcileAttempts (3) exhausted' },
+          {
+            id: 'e_9',
+            phase: 'reconcile',
+            source: 'policy',
+            question: 'maxReconcileAttempts (3) exhausted',
+          },
           KERNEL,
         ),
-        ev('escalation.answered', { id: 'e_9', answer: 'Keep trying, base settled.', resolution: 'guidance' }),
+        ev('escalation.answered', {
+          id: 'e_9',
+          answer: 'Keep trying, base settled.',
+          resolution: 'guidance',
+        }),
       ]),
     ).toEqual({
       kind: 'run-phase',
@@ -1927,9 +2039,7 @@ describe('decideNext: spec revision restart (§6.3)', () => {
   })
 
   test('post-restart rounds continue monotonically in the code loop too', () => {
-    expect(
-      decide([...revised, ...planRound(2, 'approve')]),
-    ).toEqual(runPhase('implement', 2))
+    expect(decide([...revised, ...planRound(2, 'approve')])).toEqual(runPhase('implement', 2))
   })
 
   test('pre-restart verify results are ignored for routing, but attempt numbers continue', () => {
@@ -1988,9 +2098,9 @@ describe('decideNext: spec revision restart (§6.3)', () => {
     })
     // The crashed-step rule still holds at the continued number: a started-
     // but-not-completed step re-runs at the SAME attempt (§15.6-C).
-    expect(
-      decide([...twoFailCycles, ev('verify.started', { step: 'types', attempt: 3 })]),
-    ).toEqual({ kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 3 })
+    expect(decide([...twoFailCycles, ev('verify.started', { step: 'types', attempt: 3 })])).toEqual(
+      { kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 3 },
+    )
   })
 
   test('a crashed plan round after the restart re-runs at the continued number', () => {

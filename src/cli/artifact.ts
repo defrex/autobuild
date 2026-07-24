@@ -11,10 +11,7 @@ import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import type { CliEnv } from './env'
-import {
-  withSessionlessStore,
-  type StoreOpener,
-} from './store-opening'
+import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 export interface ArtifactDeps {
   store: BuildStore
@@ -109,10 +106,7 @@ export async function artifactPut(
 }
 
 /** Fetch `<kind>[@rev]` within the own build; latest when rev is omitted. */
-export async function artifactGet(
-  deps: ArtifactDeps,
-  spec: string,
-): Promise<Artifact> {
+export async function artifactGet(deps: ArtifactDeps, spec: string): Promise<Artifact> {
   const { kind, rev } = parseArtifactSpec(spec)
   const artifact = await deps.store.getArtifact(deps.env.build, kind, rev)
   if (artifact === null) {
@@ -155,9 +149,7 @@ export async function artifactDownload(
   }
   const { kind, rev } = parseArtifactSpec(opts.spec)
   if (kind.trim() === '') {
-    throw new Error(
-      "'ab artifact download' requires a non-empty <kind>[@rev]",
-    )
+    throw new Error("'ab artifact download' requires a non-empty <kind>[@rev]")
   }
   return withSessionlessStore(opts, async ({ store, repo }) => {
     const record = await store.getBuild(opts.build)
@@ -167,9 +159,7 @@ export async function artifactDownload(
       )
     }
     if (record.repo !== repo) {
-      throw new Error(
-        `build "${opts.build}" belongs to repository "${record.repo}", not "${repo}"`,
-      )
+      throw new Error(`build "${opts.build}" belongs to repository "${record.repo}", not "${repo}"`)
     }
     const artifact = await store.getArtifact(opts.build, kind, rev)
     if (artifact === null) {

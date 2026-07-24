@@ -130,17 +130,13 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
       calls
         .filter((call) => promptOf(call) !== CONTRACT_ONE_SHOT_PROMPT)
         .map((call) => ({
-          ...(promptOf(call) === CONTRACT_FOLLOW_UP
-            ? { message: promptOf(call) }
-            : {}),
+          ...(promptOf(call) === CONTRACT_FOLLOW_UP ? { message: promptOf(call) } : {}),
           env: call.env,
         })),
     oneShot: {
       completion: runner,
       observation: () => {
-        const call = calls.find(
-          (candidate) => promptOf(candidate) === CONTRACT_ONE_SHOT_PROMPT,
-        )
+        const call = calls.find((candidate) => promptOf(candidate) === CONTRACT_ONE_SHOT_PROMPT)
         if (call === undefined) return undefined
         const modelIndex = call.args.indexOf('--model')
         return {
@@ -154,14 +150,11 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
   }
 }
 
-describeAgentRunnerContract(
-  'ClaudeAgentRunner (injected Claude Code CLI)',
-  claudeContractFactory,
-)
+describeAgentRunnerContract('ClaudeAgentRunner (injected Claude Code CLI)', claudeContractFactory)
 
 afterEach(() => {
-  delete process.env['AB_TEST_AMBIENT']
-  delete process.env['AB_TEST_OVERRIDE']
+  delete process.env.AB_TEST_AMBIENT
+  delete process.env.AB_TEST_OVERRIDE
 })
 
 describe('ClaudeAgentRunner start and continue', () => {
@@ -226,12 +219,9 @@ describe('ClaudeAgentRunner start and continue', () => {
   })
 
   test('refreshes scoped env on resume and keeps managed ab first on PATH', async () => {
-    process.env['AB_TEST_AMBIENT'] = 'from-process'
-    process.env['AB_TEST_OVERRIDE'] = 'ambient-loses'
-    const cli = fakeCli([
-      output([result('ignored', 1, 1)]),
-      output([result('ignored', 1, 1)]),
-    ])
+    process.env.AB_TEST_AMBIENT = 'from-process'
+    process.env.AB_TEST_OVERRIDE = 'ambient-loses'
+    const cli = fakeCli([output([result('ignored', 1, 1)]), output([result('ignored', 1, 1)])])
     const runner = new ClaudeAgentRunner({ runCli: cli.runCli, createSessionId: () => 's1' })
     const { session } = await runner.start(
       startOpts({
@@ -247,14 +237,14 @@ describe('ClaudeAgentRunner start and continue', () => {
       env: { AB_PHASE: 'implement@2', AB_SESSION: 'round-2' },
     })
 
-    expect(cli.calls[0]?.env['AB_TEST_AMBIENT']).toBe('from-process')
-    expect(cli.calls[0]?.env['AB_TEST_OVERRIDE']).toBe('scoped-wins')
+    expect(cli.calls[0]?.env.AB_TEST_AMBIENT).toBe('from-process')
+    expect(cli.calls[0]?.env.AB_TEST_OVERRIDE).toBe('scoped-wins')
     expect(cli.calls[1]?.env).toMatchObject({
       AB_BUILD: 'auth-rate-limit',
       AB_PHASE: 'implement@2',
       AB_SESSION: 'round-2',
     })
-    expect(cli.calls[1]?.env['PATH']?.split(delimiter)[0]).toBe(AGENT_BIN_DIR)
+    expect(cli.calls[1]?.env.PATH?.split(delimiter)[0]).toBe(AGENT_BIN_DIR)
     await runner.end(session)
   })
 
@@ -332,11 +322,18 @@ describe('ClaudeAgentRunner failures', () => {
   })
 
   test.each([
-    ['malformed stream', { stdout: 'not-json\n', stderr: '', exitCode: 0 }, 'malformed stream-json'],
+    [
+      'malformed stream',
+      { stdout: 'not-json\n', stderr: '', exitCode: 0 },
+      'malformed stream-json',
+    ],
     ['missing result', output([assistant('partial')]), 'without a result event'],
   ])('returns an endable retryable handle for %s', async (_name, script, message) => {
     const cli = fakeCli([script])
-    const runner = new ClaudeAgentRunner({ runCli: cli.runCli, createSessionId: () => 's-protocol' })
+    const runner = new ClaudeAgentRunner({
+      runCli: cli.runCli,
+      createSessionId: () => 's-protocol',
+    })
     const { session, result: turn } = await runner.start(startOpts())
     expect(turn.kind).toBe('failed')
     if (turn.kind !== 'failed') throw new Error('unreachable')
@@ -367,9 +364,7 @@ describe('ClaudeAgentRunner failures', () => {
 
 describe('ClaudeAgentRunner complete', () => {
   test('is tool-free, single-turn, non-persistent, verbatim, and forwards cancellation', async () => {
-    const cli = fakeCli([
-      output([result('unused', 2, 1, { result: 'slug-name' })]),
-    ])
+    const cli = fakeCli([output([result('unused', 2, 1, { result: 'slug-name' })])])
     const runner = new ClaudeAgentRunner({ runCli: cli.runCli })
     const controller = new AbortController()
     const completed = await runner.complete({
@@ -382,7 +377,7 @@ describe('ClaudeAgentRunner complete', () => {
 
     expect(completed).toEqual({ text: 'slug-name' })
     expect(cli.calls[0]).toMatchObject({ cwd: '/repos/app', signal: controller.signal })
-    expect(cli.calls[0]?.env['NAMING_TOKEN']).toBe('secret')
+    expect(cli.calls[0]?.env.NAMING_TOKEN).toBe('secret')
     expect(cli.calls[0]?.args).toEqual([
       '-p',
       '--output-format',
@@ -419,14 +414,12 @@ describe('ClaudeAgentRunner complete', () => {
 
 describe('ClaudeAgentRunner transcript and lifecycle', () => {
   test('retains complete raw stdout/stderr and sums per-turn usage', async () => {
-    const first = output(
-      [assistant('one'), result('ignored', 10, 5, { result: 'one' })],
-      { stderr: 'first diagnostic\n' },
-    )
-    const second = output(
-      [assistant('two'), result('ignored', 7, 3, { result: 'two' })],
-      { stderr: 'second diagnostic\n' },
-    )
+    const first = output([assistant('one'), result('ignored', 10, 5, { result: 'one' })], {
+      stderr: 'first diagnostic\n',
+    })
+    const second = output([assistant('two'), result('ignored', 7, 3, { result: 'two' })], {
+      stderr: 'second diagnostic\n',
+    })
     const cli = fakeCli([first, second])
     const runner = new ClaudeAgentRunner({ runCli: cli.runCli, createSessionId: () => 's1' })
     const { session } = await runner.start(startOpts({ model: 'claude-opus-4' }))

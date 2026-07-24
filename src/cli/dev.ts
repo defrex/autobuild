@@ -1,7 +1,4 @@
-import type {
-  DashboardRenderer,
-  DashboardRendererResolver,
-} from './dashboard/render'
+import type { DashboardRenderer, DashboardRendererResolver } from './dashboard/render'
 
 /** State retained on `globalThis` across Bun hot module evaluations. */
 export interface DevCliState {

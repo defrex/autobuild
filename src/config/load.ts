@@ -9,12 +9,7 @@
  */
 import { parse as parseToml, TomlError } from 'smol-toml'
 import type { z } from 'zod'
-import {
-  configSchema,
-  TOP_LEVEL_SCALARS,
-  TOP_LEVEL_TABLES,
-  type Config,
-} from './schema'
+import { configSchema, TOP_LEVEL_SCALARS, TOP_LEVEL_TABLES, type Config } from './schema'
 
 /**
  * Config failures are feedback to whoever edits the file: the message carries

@@ -154,9 +154,7 @@ export class ServerControl {
       if (exited || !processAlive(child.pid)) {
         killGroup(child.pid, 'SIGKILL')
         rmSync(this.pidPath, { force: true })
-        throw this.failWithLogTail(
-          `dev server exited before becoming ready: ${config.start}`,
-        )
+        throw this.failWithLogTail(`dev server exited before becoming ready: ${config.start}`)
       }
       try {
         await this.fetchFn(config.url)

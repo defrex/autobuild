@@ -9,8 +9,6 @@ describe('randomUuids', () => {
     const uuid = randomUuids()()
 
     expect(uuidV4Schema.safeParse(uuid).success).toBe(true)
-    expect(
-      uuidV4Schema.safeParse(Bun.randomUUIDv5('harvest-proposal', 'dns')).success,
-    ).toBe(false)
+    expect(uuidV4Schema.safeParse(Bun.randomUUIDv5('harvest-proposal', 'dns')).success).toBe(false)
   })
 })

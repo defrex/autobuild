@@ -36,10 +36,7 @@ describe('resolvePlanVerifySteps', () => {
 
   test('an explicit selection is canonicalized to config order', () => {
     expect(
-      resolvePlanVerifySteps(
-        '+++\nverifySteps = ["docs", "types"]\n+++\n# Plan\n',
-        config,
-      ),
+      resolvePlanVerifySteps('+++\nverifySteps = ["docs", "types"]\n+++\n# Plan\n', config),
     ).toEqual(['types', 'docs'])
   })
 
@@ -66,9 +63,9 @@ command = "unit"
     expect(() =>
       resolvePlanVerifySteps('+++\nverifySteps = ["types", "unit", "unit"]\n+++\n', config),
     ).toThrow(/duplicate step "unit"/)
-    expect(() =>
-      resolvePlanVerifySteps('+++\nverifySteps = ["types", ""]\n+++\n', config),
-    ).toThrow(/verifySteps\.1.*nonempty/s)
+    expect(() => resolvePlanVerifySteps('+++\nverifySteps = ["types", ""]\n+++\n', config)).toThrow(
+      /verifySteps\.1.*nonempty/s,
+    )
     expect(() =>
       resolvePlanVerifySteps('+++\nverifySteps = ["types", " unit "]\n+++\n', config),
     ).toThrow(/verifySteps\.1.*blank or padded/s)
@@ -104,10 +101,7 @@ command = "unit"
 
   test('CRLF fences are accepted without changing the Markdown body', () => {
     expect(
-      resolvePlanVerifySteps(
-        '+++\r\nverifySteps = ["types", "unit"]\r\n+++\r\n# Plan\r\n',
-        config,
-      ),
+      resolvePlanVerifySteps('+++\r\nverifySteps = ["types", "unit"]\r\n+++\r\n# Plan\r\n', config),
     ).toEqual(['types', 'unit'])
   })
 })

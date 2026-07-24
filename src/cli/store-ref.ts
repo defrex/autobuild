@@ -22,7 +22,7 @@ export function resolveStore(ref: string, opts: ResolveStoreOpts = {}): BuildSto
     if (opts.remoteFactory === undefined) {
       throw new Error(
         `remote store support not wired: cannot open "${ref}" from this entry ` +
-          "point — supply the remote HTTP adapter (SPEC §7.2.2) as " +
+          'point — supply the remote HTTP adapter (SPEC §7.2.2) as ' +
           "resolveStore's remoteFactory; production composition lives in " +
           'src/cli/store-opening.ts',
       )

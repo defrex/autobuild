@@ -1,14 +1,5 @@
 import { expect } from 'bun:test'
-import {
-  chmod,
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentRunner, AgentTurnResult, Transcript } from '../types'
@@ -82,11 +73,7 @@ function expectCompleted(result: AgentTurnResult): void {
   expect(result.usage.turns).toBeGreaterThan(0)
 }
 
-function expectTranscript(
-  transcript: Transcript,
-  runner: AgentRunner,
-  model: string,
-): void {
+function expectTranscript(transcript: Transcript, runner: AgentRunner, model: string): void {
   expect(transcript.content.trim()).not.toBe('')
   expect(transcript.metadata.runner).toBe(runner.name)
   expect(transcript.metadata.model).toBe(model)

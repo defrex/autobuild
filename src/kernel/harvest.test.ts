@@ -96,10 +96,7 @@ describe('reduceHarvest', () => {
     expect(state.latest).toMatchObject({ status: 'completed' })
     expect(state.latest?.filed).toHaveLength(1)
     expect(state.ledger).toHaveLength(2)
-    expect(state.ledger.map((entry) => entry.action)).toEqual([
-      'filed',
-      'suppressed',
-    ])
+    expect(state.ledger.map((entry) => entry.action)).toEqual(['filed', 'suppressed'])
 
     await store.appendRepo('/repo', {
       actor: KERNEL,
@@ -207,9 +204,7 @@ describe('reduceHarvest', () => {
       payload: {},
     })
     state = reduceHarvest(await store.getRepoEvents('/repo'))
-    expect(state.pendingCommands.map((command) => command.command)).toEqual([
-      'resume',
-    ])
+    expect(state.pendingCommands.map((command) => command.command)).toEqual(['resume'])
     expect(decideHarvestControl(state)).toEqual({
       kind: 'acknowledge',
       command: 'resume',
@@ -345,9 +340,7 @@ describe('reduceHarvest', () => {
     expect(state.latest).toMatchObject({
       run: 'h_failed',
       status: 'running',
-      recoveryRequests: [
-        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-      ],
+      recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
     })
     expect(state.latest?.failure).toBeUndefined()
     expect(state.latest?.terminalSeq).toBeUndefined()
@@ -519,9 +512,7 @@ describe('reduceHarvest', () => {
 
     let state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.latest?.run).toBe('h_later_escalated')
-    expect(parkedHarvestRuns(state).map((run) => run.run)).toEqual([
-      'h_shadowed',
-    ])
+    expect(parkedHarvestRuns(state).map((run) => run.run)).toEqual(['h_shadowed'])
     expect(actionableHarvestRun(state)?.run).toBe('h_shadowed')
     expect(decideHarvestControl(state)).toEqual({
       kind: 'request-recovery',
@@ -547,19 +538,11 @@ describe('reduceHarvest', () => {
       scan: { kind: 'harvest-scan', rev: 7 },
       reservations: [{ proposalKey: 'old-proposal' }],
       filed: [{ proposalKey: 'old-proposal', ticket: { id: 'T-old' } }],
-      recoveryRequests: [
-        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-      ],
+      recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
     })
-    expect(state.runs.find((run) => run.run === 'h_later_running')?.status).toBe(
-      'running',
-    )
-    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe(
-      'completed',
-    )
-    expect(state.runs.find((run) => run.run === 'h_later_escalated')?.status).toBe(
-      'escalated',
-    )
+    expect(state.runs.find((run) => run.run === 'h_later_running')?.status).toBe('running')
+    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe('completed')
+    expect(state.runs.find((run) => run.run === 'h_later_escalated')?.status).toBe('escalated')
   })
 
   test('one human acknowledgement reopens every ordinary failure and settles every exhaustion barrier', async () => {
@@ -623,14 +606,11 @@ describe('reduceHarvest', () => {
       })
       await fail('h_exhausted', 'exhausted stopped', attempt + 1)
     }
-    const afterAutomaticResumes = reduceHarvest(
-      await store.getRepoEvents('/repo'),
-    )
-    expect(
-      afterAutomaticResumes.runs.find(
-        (run) => run.run === 'h_first_failed',
-      ),
-    ).toMatchObject({ status: 'failed', recoveryRequests: [] })
+    const afterAutomaticResumes = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(afterAutomaticResumes.runs.find((run) => run.run === 'h_first_failed')).toMatchObject({
+      status: 'failed',
+      recoveryRequests: [],
+    })
 
     await store.appendRepo('/repo', {
       actor: KERNEL,
@@ -667,9 +647,7 @@ describe('reduceHarvest', () => {
     })
 
     let state = reduceHarvest(await store.getRepoEvents('/repo'))
-    expect(unresolvedHarvestAttentionRuns(state).map((run) => run.run)).toEqual([
-      'h_exhausted',
-    ])
+    expect(unresolvedHarvestAttentionRuns(state).map((run) => run.run)).toEqual(['h_exhausted'])
     expect(decideHarvestControl(state)).toEqual({ kind: 'park' })
 
     await store.appendRepo('/repo', {
@@ -695,12 +673,8 @@ describe('reduceHarvest', () => {
       state.runs.find((run) => run.run === 'h_exhausted')?.recoveryExhaustion
         ?.attentionAcknowledgedSeq,
     ).toEqual(expect.any(Number))
-    expect(state.runs.find((run) => run.run === 'h_completed')?.status).toBe(
-      'completed',
-    )
-    expect(state.runs.find((run) => run.run === 'h_escalated')?.status).toBe(
-      'escalated',
-    )
+    expect(state.runs.find((run) => run.run === 'h_completed')?.status).toBe('completed')
+    expect(state.runs.find((run) => run.run === 'h_escalated')?.status).toBe('escalated')
     expect(openHarvestRun(state)?.run).toBe('h_first_failed')
     expect([...claimedOccurrenceKeys(state)].sort()).toEqual([
       'completed:1',
@@ -760,11 +734,7 @@ describe('reduceHarvest', () => {
       })
     }
 
-    expect(
-      decideHarvestControl(
-        reduceHarvest(await store.getRepoEvents('/repo')),
-      ),
-    ).toEqual({
+    expect(decideHarvestControl(reduceHarvest(await store.getRepoEvents('/repo')))).toEqual({
       kind: 'exhaust-recovery',
       run: 'h_exhausted',
       attempts: 2,
@@ -825,11 +795,10 @@ describe('reduceHarvest', () => {
       type: 'harvest.resume-requested',
       payload: {},
     })
-    expect(
-      decideHarvestControl(
-        reduceHarvest(await store.getRepoEvents('/repo')),
-      ),
-    ).toEqual({ kind: 'acknowledge', command: 'resume' })
+    expect(decideHarvestControl(reduceHarvest(await store.getRepoEvents('/repo')))).toEqual({
+      kind: 'acknowledge',
+      command: 'resume',
+    })
     await store.appendRepo('/repo', {
       actor: KERNEL,
       type: 'harvest.resumed',
@@ -837,9 +806,7 @@ describe('reduceHarvest', () => {
     })
     state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.latest?.status).toBe('failed')
-    expect(
-      state.latest?.recoveryExhaustion?.attentionAcknowledgedSeq,
-    ).toEqual(expect.any(Number))
+    expect(state.latest?.recoveryExhaustion?.attentionAcknowledgedSeq).toEqual(expect.any(Number))
     expect(decideHarvestControl(state)).toEqual({ kind: 'proceed' })
   })
 
@@ -1026,17 +993,14 @@ describe('reduceHarvest', () => {
         type: 'harvest.proposal.id-reserved',
         payload: {
           run: 'h_contradiction',
-          proposalKey:
-            contradiction === 'key-remapped' ? 'cluster-1' : 'cluster-2',
+          proposalKey: contradiction === 'key-remapped' ? 'cluster-1' : 'cluster-2',
           id: contradiction === 'key-remapped' ? crypto.randomUUID() : firstId,
         },
       })
 
       const events = await store.getRepoEvents('/repo')
       expect(() => reduceHarvest(events)).toThrow(
-        contradiction === 'key-remapped'
-          ? /cannot replace it/
-          : /cannot reuse it/,
+        contradiction === 'key-remapped' ? /cannot replace it/ : /cannot reuse it/,
       )
     })
   }

@@ -41,9 +41,7 @@ describe('loadPlugins', () => {
       kind: 'plugin',
       name: 'local',
     })
-    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual([
-      'JIRA_TOKEN',
-    ])
+    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual(['JIRA_TOKEN'])
   })
 
   test('resolves a package export from the consuming repository, not an outer decoy', async () => {
@@ -78,10 +76,7 @@ describe('loadPlugins', () => {
       join(repo, 'good.ts'),
       `export default { name: 'good', apiVersion: '^1.1.0', forges: { gitlab: () => ({}) } }\n`,
     )
-    const diagnosis = await diagnosePlugins(
-      ['./missing.ts', './throws.ts', './good.ts'],
-      repo,
-    )
+    const diagnosis = await diagnosePlugins(['./missing.ts', './throws.ts', './good.ts'], repo)
     expect(diagnosis.healthy).toBe(false)
     expect(diagnosis.reports.map((report) => [report.module, report.stage])).toEqual([
       ['./missing.ts', 'resolution'],

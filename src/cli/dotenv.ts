@@ -23,11 +23,7 @@ export function parseDotEnv(raw: string): Record<string, string> {
     if (!KEY_PATTERN.test(key)) continue
     let value = trimmed.slice(eq + 1).trim()
     const quote = value[0]
-    if (
-      (quote === '"' || quote === "'") &&
-      value.length >= 2 &&
-      value.endsWith(quote)
-    ) {
+    if ((quote === '"' || quote === "'") && value.length >= 2 && value.endsWith(quote)) {
       value = value.slice(1, -1)
     }
     result[key] = value
@@ -39,10 +35,7 @@ export function parseDotEnv(raw: string): Record<string, string> {
  * Load `path` into `env` if the file exists (silently a no-op otherwise).
  * Only keys not already set in `env` are written.
  */
-export function loadDotEnv(
-  path: string,
-  env: Record<string, string | undefined>,
-): void {
+export function loadDotEnv(path: string, env: Record<string, string | undefined>): void {
   let raw: string
   try {
     raw = readFileSync(path, 'utf8')

@@ -6,10 +6,7 @@
  */
 import { resolve } from 'node:path'
 import type { TicketsConfig } from '../../config/schema'
-import {
-  createPluginRegistry,
-  type PluginRegistry,
-} from '../../plugins/registry'
+import { createPluginRegistry, type PluginRegistry } from '../../plugins/registry'
 import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { TicketSource } from '../types'
 import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
@@ -30,7 +27,7 @@ export async function createTicketSource(
   plugins: PluginRegistry = createPluginRegistry(),
 ): Promise<TicketSource> {
   if (config.source === 'linear') {
-    const apiKey = env['LINEAR_API_KEY']
+    const apiKey = env.LINEAR_API_KEY
     if (apiKey === undefined || apiKey === '') {
       throw new Error(
         'LINEAR_API_KEY is not set — expected a Linear personal API key; ' +
@@ -48,12 +45,8 @@ export async function createTicketSource(
     return new LinearTicketSource({
       apiKey,
       teamKey: config.teamKey,
-      ...(config.claimedState !== undefined
-        ? { claimedState: config.claimedState }
-        : {}),
-      ...(config.createState !== undefined
-        ? { createState: config.createState }
-        : {}),
+      ...(config.claimedState !== undefined ? { claimedState: config.claimedState } : {}),
+      ...(config.createState !== undefined ? { createState: config.createState } : {}),
     })
   }
 
@@ -66,9 +59,7 @@ export async function createTicketSource(
       // Only the DEFAULTED backlog hides itself from git. An explicit dir is
       // user-owned and may intentionally be tracked.
       selfIgnore: config.dir === undefined,
-      ...(config.createState !== undefined
-        ? { createState: config.createState }
-        : {}),
+      ...(config.createState !== undefined ? { createState: config.createState } : {}),
     })
   }
 
