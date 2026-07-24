@@ -27,6 +27,9 @@ import {
   abInit,
   claudeSkillPath,
   defaultDistRoot,
+  INIT_ROLE_PROFILE_CHOICES,
+  INIT_SPLIT_AUTHOR_MODEL,
+  INIT_SPLIT_REVIEWER_MODEL,
   installedSkillFilePath,
   installedSkillPath,
   MODEL_INVOCABLE_SKILLS,
@@ -35,6 +38,11 @@ import {
   renderAutobuildTemplate,
   rewriteSkillSource,
 } from './init'
+import type {
+  InitPrompter,
+  InitPromptQuestion,
+} from './init-prompt'
+import { INIT_PLUGIN_HELP } from './init-prompt'
 import { runCli, type SessionlessCliDeps } from './main'
 import { parseConfig } from '../config/load'
 
@@ -326,6 +334,237 @@ describe('abInit — package-script-aware config rendering', () => {
     expect(() => renderAutobuildTemplate(`${template}\n${template}`, new Set())).toThrow(
       /must occur exactly once; found 2/,
     )
+  })
+})
+
+class ScriptedInitPrompter implements InitPrompter {
+  readonly questions: InitPromptQuestion[] = []
+  closed = false
+
+  constructor(private readonly answers: string[] = []) {}
+
+  async select<T extends string>(question: InitPromptQuestion<T>): Promise<T> {
+    this.questions.push(question)
+    const answer = this.answers.shift() ?? question.defaultValue
+    const choice = question.choices.find((candidate) => candidate.value === answer)
+    if (choice === undefined) throw new Error(`test answer ${answer} is not a choice`)
+    return choice.value
+  }
+
+  close(): void {
+    this.closed = true
+  }
+}
+
+describe('abInit — interactive adapter onboarding', () => {
+  async function generated(repo: string): Promise<string> {
+    return readFile(join(repo, 'autobuild.toml'), 'utf8')
+  }
+
+  test('headless and explicit skip preserve the exact historical package-rendered bytes', async () => {
+    await writeFile(
+      join(target, 'package.json'),
+      JSON.stringify({ scripts: { lint: 'eslint', 'type-check': 'tsc', test: 'vitest' } }),
+    )
+    const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
+    const expected = renderAutobuildTemplate(
+      template,
+      new Set(['lint', 'type-check', 'test']),
+    )
+
+    await abInit({ targetRepo: target })
+    expect(await generated(target)).toBe(expected)
+
+    const skipped = join(target, 'skip')
+    await mkdir(skipped)
+    await writeFile(join(skipped, 'package.json'), await readFile(join(target, 'package.json')))
+    const prompter = new ScriptedInitPrompter(['linear', 'git-worktree', 'split'])
+    await abInit({
+      targetRepo: skipped,
+      selections: { noInteractive: true },
+      prompter,
+    })
+    expect(await generated(skipped)).toBe(expected)
+    expect(prompter.questions).toHaveLength(0)
+  })
+
+  test('prompt order, defaults, local-first options, and common plugin help are fixed', async () => {
+    await writeFile(
+      join(target, 'package.json'),
+      JSON.stringify({ scripts: { 'type-check': 'tsc', test: 'vitest' } }),
+    )
+    const prompter = new ScriptedInitPrompter()
+    await abInit({ targetRepo: target, prompter })
+
+    expect(prompter.questions.map((question) => question.message)).toEqual([
+      'Choose a ticket source',
+      'Choose a workspace provider',
+      'Choose a role runtime/model arrangement',
+    ])
+    expect(prompter.questions.map((question) => question.defaultValue)).toEqual([
+      'file',
+      'git-worktree',
+      'split',
+    ])
+    expect(prompter.questions.map((question) => question.choices[0]?.value)).toEqual([
+      'file',
+      'git-worktree',
+      'split',
+    ])
+    expect(prompter.questions.every((question) => question.help === INIT_PLUGIN_HELP)).toBe(
+      true,
+    )
+    expect(prompter.closed).toBe(true)
+
+    const config = parseConfig(await generated(target))
+    expect(config.tickets.source).toBe('file')
+    expect(config.workspace).toEqual({ provider: 'git-worktree', config: {} })
+    expect(config.commands).toMatchObject({
+      setup: 'bun install',
+      typecheck: 'bun run type-check',
+      test: 'bun run test',
+    })
+    expect(config.verify.steps).toEqual(['types', 'unit'])
+    expect(config.roles.plan).toEqual({ runtime: 'pi', model: INIT_SPLIT_AUTHOR_MODEL })
+    expect(config.roles.implement).toEqual({
+      runtime: 'pi',
+      model: INIT_SPLIT_AUTHOR_MODEL,
+    })
+    expect(config.roles['plan-review']).toEqual({
+      runtime: 'pi',
+      model: INIT_SPLIT_REVIEWER_MODEL,
+    })
+    expect(config.roles['code-review']).toEqual({
+      runtime: 'pi',
+      model: INIT_SPLIT_REVIEWER_MODEL,
+    })
+    expect(INIT_SPLIT_AUTHOR_MODEL).not.toBe(INIT_SPLIT_REVIEWER_MODEL)
+  })
+
+  test('partial flags suppress only their prompts; fully specified flags never select', async () => {
+    const partial = new ScriptedInitPrompter(['git-worktree', 'pi'])
+    await abInit({
+      targetRepo: target,
+      selections: { ticketSource: 'linear' },
+      prompter: partial,
+    })
+    expect(partial.questions.map((question) => question.message)).toEqual([
+      'Choose a workspace provider',
+      'Choose a role runtime/model arrangement',
+    ])
+
+    const fullRepo = join(target, 'full')
+    const full = new ScriptedInitPrompter()
+    await abInit({
+      targetRepo: fullRepo,
+      selections: {
+        ticketSource: 'file',
+        workspaceProvider: 'git-worktree',
+        roleProfile: 'claude',
+      },
+      prompter: full,
+    })
+    expect(full.questions).toHaveLength(0)
+  })
+
+  for (const roleProfile of INIT_ROLE_PROFILE_CHOICES.map((choice) => choice.value)) {
+    test(`interactive ${roleProfile} profile is byte-identical to equivalent flags`, async () => {
+      const interactive = join(target, 'interactive')
+      const flagged = join(target, 'flagged')
+      await abInit({
+        targetRepo: interactive,
+        prompter: new ScriptedInitPrompter(['file', 'git-worktree', roleProfile]),
+      })
+      await abInit({
+        targetRepo: flagged,
+        selections: {
+          ticketSource: 'file',
+          workspaceProvider: 'git-worktree',
+          roleProfile,
+        },
+      })
+      expect(await generated(interactive)).toBe(await generated(flagged))
+      const flaggedSource = await generated(flagged)
+      expect(() => parseConfig(flaggedSource)).not.toThrow()
+    })
+  }
+
+  for (const ticketSource of ['file', 'linear'] as const) {
+    test(`interactive ${ticketSource} tickets are byte-identical to equivalent flags`, async () => {
+      const interactive = join(target, 'interactive')
+      const flagged = join(target, 'flagged')
+      await abInit({
+        targetRepo: interactive,
+        prompter: new ScriptedInitPrompter([
+          ticketSource,
+          'git-worktree',
+          'claude',
+        ]),
+      })
+      await abInit({
+        targetRepo: flagged,
+        selections: {
+          ticketSource,
+          workspaceProvider: 'git-worktree',
+          roleProfile: 'claude',
+        },
+      })
+      expect(await generated(interactive)).toBe(await generated(flagged))
+      expect(parseConfig(await generated(flagged)).tickets.source).toBe(ticketSource)
+    })
+  }
+
+  test('Linear writes valid placeholders, prints non-secret setup, and never stores a secret', async () => {
+    const lines: string[] = []
+    await abInit({
+      targetRepo: target,
+      selections: {
+        ticketSource: 'linear',
+        workspaceProvider: 'git-worktree',
+        roleProfile: 'claude',
+      },
+      stdout: (line) => lines.push(line),
+    })
+    const source = await generated(target)
+    const config = parseConfig(source)
+    expect(config.tickets).toMatchObject({
+      source: 'linear',
+      teamKey: 'REPLACE_WITH_LINEAR_TEAM_KEY',
+      readyState: 'REPLACE_WITH_LINEAR_READY_STATE',
+    })
+    expect(lines.join('\n')).toContain('LINEAR_API_KEY')
+    expect(lines.join('\n')).toContain('[tickets].teamKey')
+    expect(lines.join('\n')).toContain('[tickets].readyState')
+    expect(source).not.toMatch(/LINEAR_API_KEY\s*=/)
+  })
+
+  test('fresh invalid and contradictory selections fail, while an existing config ignores them', async () => {
+    await expect(
+      abInit({ targetRepo: target, selections: { ticketSource: 'jira' } }),
+    ).rejects.toThrow(/invalid --ticket-source.*file\|linear/)
+    await expect(
+      abInit({
+        targetRepo: target,
+        selections: { noInteractive: true, roleProfile: 'split' },
+      }),
+    ).rejects.toThrow(/--no-interactive cannot be combined/)
+
+    await writeFile(join(target, 'autobuild.toml'), 'baseBranch = "kept"\n')
+    const prompter = new ScriptedInitPrompter()
+    const report = await abInit({
+      targetRepo: target,
+      force: true,
+      selections: {
+        ticketSource: 'not-real',
+        workspaceProvider: 'also-not-real',
+        roleProfile: 'invalid',
+        noInteractive: true,
+      },
+      prompter,
+    })
+    expect(report.config).toBe('skipped')
+    expect(await generated(target)).toBe('baseBranch = "kept"\n')
+    expect(prompter.questions).toHaveLength(0)
   })
 })
 
@@ -648,6 +887,31 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     } finally {
       await rm(explicit, { recursive: true, force: true })
     }
+  })
+
+  test('ab init routes adapter flags and a fully specified run never prompts', async () => {
+    const d = sessionless()
+    const prompter = new ScriptedInitPrompter()
+    d.initPrompter = prompter
+    expect(
+      await runCli(
+        [
+          'init',
+          '--ticket-source',
+          'linear',
+          '--workspace-provider',
+          'git-worktree',
+          '--role-profile',
+          'split',
+        ],
+        d,
+      ),
+    ).toBe(0)
+    expect(prompter.questions).toHaveLength(0)
+    const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.tickets.source).toBe('linear')
+    expect(config.roles.plan?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
+    expect(config.roles['plan-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
   })
 
   test('ab init rejects unknown flags with usage feedback', async () => {

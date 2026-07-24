@@ -29,6 +29,7 @@ import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
+import type { InitPrompter } from './init-prompt'
 import { abModels } from './models'
 import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
@@ -130,6 +131,9 @@ export interface SessionlessCliDeps {
   terminal?: TerminalOut
   /** Raw keyboard seam for the interactive dispatch dashboard. */
   input?: TerminalInput
+  /** First-config onboarding seam. Production supplies it only when stdin and
+   * stdout are both TTYs; absence preserves historical non-interactive init. */
+  initPrompter?: InitPrompter
   /** Optional per-paint presentation lookup used only by the repo-local dev
    * entry. The published binary never supplies it. */
   resolveDashboardRenderer?: DashboardRendererResolver
@@ -202,8 +206,10 @@ const HELP = [
   '                                         complete a review/verify phase (TERMINAL; vocabulary is phase-dependent)',
   '  ab escalate <question> [--refs a,b]    park the build for human input (TERMINAL)',
   '',
-  '  ab init [target] [--force]             create autobuild.toml only when absent; vendor the default ab-* skills (§16.3; runs outside sessions)',
-  '                                         on reruns, --force overwrites edited vendored skills only; it never overwrites an existing autobuild.toml',
+  '  ab init [target] [--force] [--ticket-source file|linear] [--workspace-provider git-worktree]',
+  '          [--role-profile split|claude|pi] [--no-interactive]',
+  '                                         create autobuild.toml only when absent; offer TTY onboarding; vendor the default ab-* skills (§16.3)',
+  '                                         on reruns, selection flags are ignored; --force overwrites edited vendored skills only and never overwrites an existing autobuild.toml',
   '  ab upgrade [target]                    three-way merge vendored ab-* skills with the new defaults (§16.3; runs outside sessions)',
   '  ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
   '                                         file a ticket to the configured [tickets] source (§8.8; runs outside sessions).',
@@ -371,13 +377,33 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
     case 'init': {
-      const usage = 'usage: ab init [target] [--force] (§16.3)'
-      const parsed = parseArgs(rest, { force: 'boolean' }, usage)
+      const usage =
+        'usage: ab init [target] [--force] [--ticket-source file|linear] ' +
+        '[--workspace-provider git-worktree] [--role-profile split|claude|pi] ' +
+        '[--no-interactive] (§16.3)'
+      const parsed = parseArgs(
+        rest,
+        {
+          force: 'boolean',
+          'ticket-source': 'value',
+          'workspace-provider': 'value',
+          'role-profile': 'value',
+          'no-interactive': 'boolean',
+        },
+        usage,
+      )
       if (parsed.positionals.length > 1) throw new Error(usage)
       await abInit({
         targetRepo: parsed.positionals[0] ?? deps.workspacePath,
         force: parsed.flags.has('force'),
         stdout,
+        selections: {
+          ticketSource: stringFlag(parsed, 'ticket-source'),
+          workspaceProvider: stringFlag(parsed, 'workspace-provider'),
+          roleProfile: stringFlag(parsed, 'role-profile'),
+          noInteractive: parsed.flags.has('no-interactive'),
+        },
+        ...(deps.initPrompter !== undefined ? { prompter: deps.initPrompter } : {}),
       })
       return 0
     }

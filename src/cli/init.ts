@@ -31,8 +31,59 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
+import {
+  INIT_PLUGIN_HELP,
+  type InitPromptChoice,
+  type InitPrompter,
+} from './init-prompt'
 
 export { SKILL_NAMESPACE }
+
+export type InitTicketSource = 'file' | 'linear'
+export type InitWorkspaceProvider = 'git-worktree'
+export type InitRoleProfile = 'split' | 'claude' | 'pi'
+
+export const INIT_SPLIT_AUTHOR_MODEL = 'openai-codex/gpt-5.6-sol'
+export const INIT_SPLIT_REVIEWER_MODEL = 'kimi-coding/k3'
+
+export const INIT_TICKET_SOURCE_CHOICES = [
+  {
+    value: 'file',
+    label: 'Local file tracker',
+    help: 'Stores markdown tickets locally under .autobuild/tickets; no account or secret required.',
+  },
+  {
+    value: 'linear',
+    label: 'Linear',
+    help: 'Uses Linear; you will set team/workflow fields and LINEAR_API_KEY after init.',
+  },
+] as const satisfies readonly InitPromptChoice<InitTicketSource>[]
+
+export const INIT_WORKSPACE_PROVIDER_CHOICES = [
+  {
+    value: 'git-worktree',
+    label: 'Git worktree',
+    help: 'Uses the shipped local git-worktree workspace provider; no infrastructure required.',
+  },
+] as const satisfies readonly InitPromptChoice<InitWorkspaceProvider>[]
+
+export const INIT_ROLE_PROFILE_CHOICES = [
+  {
+    value: 'split',
+    label: 'Independent author/reviewer models',
+    help: `Pi runs plan + implement on ${INIT_SPLIT_AUTHOR_MODEL}, and both review roles on ${INIT_SPLIT_REVIEWER_MODEL}.`,
+  },
+  {
+    value: 'claude',
+    label: 'Claude default',
+    help: "Uses the Claude runtime's own default model for every role (the historical template default).",
+  },
+  {
+    value: 'pi',
+    label: 'Pi default',
+    help: "Uses the Pi runtime's own default model for every role.",
+  },
+] as const satisfies readonly InitPromptChoice<InitRoleProfile>[]
 
 /** Agent Skills standard project directory for vendored skills. */
 export const AGENTS_SKILLS_DIR = join('.agents', 'skills')
@@ -240,6 +291,151 @@ export function renderAutobuildTemplate(
   let rendered = replaceTemplateAnchor(template, PACKAGE_COMMANDS_ANCHOR, commands)
   rendered = replaceTemplateAnchor(rendered, PACKAGE_VERIFY_STEPS_ANCHOR, verifySteps)
   return replaceTemplateAnchor(rendered, PACKAGE_VERIFY_TABLES_ANCHOR, verifyTables)
+}
+
+export interface InitSelectionInput {
+  ticketSource?: string
+  workspaceProvider?: string
+  roleProfile?: string
+  noInteractive?: boolean
+}
+
+export interface ResolvedInitSelections {
+  ticketSource: InitTicketSource
+  workspaceProvider: InitWorkspaceProvider
+  roleProfile: InitRoleProfile
+}
+
+function selectionValue<T extends string>(
+  surface: string,
+  raw: string,
+  choices: readonly InitPromptChoice<T>[],
+): T {
+  const choice = choices.find((candidate) => candidate.value === raw)
+  if (choice !== undefined) return choice.value
+  throw new Error(
+    `invalid --${surface} value "${raw}" — expected ${choices
+      .map((candidate) => candidate.value)
+      .join('|')}`,
+  )
+}
+
+async function resolveInitSelections(
+  input: InitSelectionInput,
+  prompter?: InitPrompter,
+): Promise<ResolvedInitSelections> {
+  const supplied =
+    input.ticketSource !== undefined ||
+    input.workspaceProvider !== undefined ||
+    input.roleProfile !== undefined
+  if (input.noInteractive === true && supplied) {
+    throw new Error(
+      '--no-interactive cannot be combined with --ticket-source, --workspace-provider, or --role-profile',
+    )
+  }
+
+  const canPrompt = input.noInteractive !== true && prompter !== undefined
+  const ticketSource =
+    input.ticketSource !== undefined
+      ? selectionValue('ticket-source', input.ticketSource, INIT_TICKET_SOURCE_CHOICES)
+      : canPrompt
+        ? await prompter.select({
+            message: 'Choose a ticket source',
+            help: INIT_PLUGIN_HELP,
+            choices: INIT_TICKET_SOURCE_CHOICES,
+            defaultValue: 'file',
+          })
+        : 'file'
+  const workspaceProvider =
+    input.workspaceProvider !== undefined
+      ? selectionValue(
+          'workspace-provider',
+          input.workspaceProvider,
+          INIT_WORKSPACE_PROVIDER_CHOICES,
+        )
+      : canPrompt
+        ? await prompter.select({
+            message: 'Choose a workspace provider',
+            help: INIT_PLUGIN_HELP,
+            choices: INIT_WORKSPACE_PROVIDER_CHOICES,
+            defaultValue: 'git-worktree',
+          })
+        : 'git-worktree'
+  const roleProfile =
+    input.roleProfile !== undefined
+      ? selectionValue('role-profile', input.roleProfile, INIT_ROLE_PROFILE_CHOICES)
+      : canPrompt
+        ? await prompter.select({
+            message: 'Choose a role runtime/model arrangement',
+            help: INIT_PLUGIN_HELP,
+            choices: INIT_ROLE_PROFILE_CHOICES,
+            defaultValue: 'split',
+          })
+        : 'claude'
+  return { ticketSource, workspaceProvider, roleProfile }
+}
+
+function replaceSelectionFragment(
+  rendered: string,
+  current: string,
+  replacement: string,
+): string {
+  const occurrences = rendered.split(current).length - 1
+  if (occurrences !== 1) {
+    throw new Error(
+      `autobuild.toml selection fragment must occur exactly once; found ${occurrences}: ${JSON.stringify(current)}`,
+    )
+  }
+  return rendered.replace(current, replacement)
+}
+
+/** Apply only explicitly different adapter/profile selections to the baseline. */
+export function renderInitSelections(
+  baseline: string,
+  selections: ResolvedInitSelections,
+): string {
+  let rendered = baseline
+  if (selections.ticketSource === 'linear') {
+    rendered = replaceSelectionFragment(
+      rendered,
+      'source = "file"',
+      'source = "linear"',
+    )
+    rendered = replaceSelectionFragment(
+      rendered,
+      'readyState = "ready"',
+      'readyState = "REPLACE_WITH_LINEAR_READY_STATE"',
+    )
+    rendered = replaceSelectionFragment(
+      rendered,
+      '# To use Linear, change source above and add the following. The API key is a\n' +
+        '# secret: set LINEAR_API_KEY in the environment (a local .env works), never here.\n' +
+        '#teamKey = "ENG"                 # Linear team key (required)',
+      '# Linear selected by ab init. Replace this required non-secret placeholder.\n' +
+        '# Keep the API key in LINEAR_API_KEY (a local .env works), never in this file.\n' +
+        'teamKey = "REPLACE_WITH_LINEAR_TEAM_KEY"',
+    )
+  }
+
+  const claudeRole =
+    '[roles.default]\nruntime = "claude"   # no configured model ⇒ this runtime\'s own default'
+  if (selections.roleProfile === 'pi') {
+    rendered = replaceSelectionFragment(
+      rendered,
+      claudeRole,
+      '[roles.default]\nruntime = "pi"       # no configured model ⇒ this runtime\'s own default',
+    )
+  } else if (selections.roleProfile === 'split') {
+    rendered = replaceSelectionFragment(
+      rendered,
+      claudeRole,
+      `[roles.plan]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
+        `[roles.implement]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
+        `[roles.plan-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"\n\n` +
+        `[roles.code-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"`,
+    )
+  }
+  return rendered
 }
 
 /**
@@ -606,6 +802,8 @@ export async function abInit(opts: {
   distRoot?: string
   stdout?: (line: string) => void
   force?: boolean
+  selections?: InitSelectionInput
+  prompter?: InitPrompter
 }): Promise<InitReport> {
   const distRoot = opts.distRoot ?? defaultDistRoot()
   const stdout = opts.stdout ?? (() => {})
@@ -620,10 +818,20 @@ export async function abInit(opts: {
   // from the very first re-run, even if package scripts later change.
   const configPath = join(opts.targetRepo, 'autobuild.toml')
   let config: InitConfigAction
+  let resolvedSelections: ResolvedInitSelections | undefined
   if ((await readIfExists(configPath)) === undefined) {
+    try {
+      resolvedSelections = await resolveInitSelections(
+        opts.selections ?? {},
+        opts.prompter,
+      )
+    } finally {
+      opts.prompter?.close?.()
+    }
     const template = await readFile(join(distRoot, 'templates', 'autobuild.toml'), 'utf8')
     const detectedScripts = await detectInitPackageScripts(opts.targetRepo)
-    const rendered = renderAutobuildTemplate(template, detectedScripts)
+    const baseline = renderAutobuildTemplate(template, detectedScripts)
+    const rendered = renderInitSelections(baseline, resolvedSelections)
     await mkdir(opts.targetRepo, { recursive: true })
     await writeFile(configPath, rendered)
     config = 'written'
@@ -631,6 +839,18 @@ export async function abInit(opts: {
     config = 'skipped'
   }
   stdout(`autobuild.toml: ${config}`)
+  if (config === 'written' && resolvedSelections?.ticketSource === 'linear') {
+    stdout(
+      'Linear setup required: replace [tickets].teamKey and [tickets].readyState, then set LINEAR_API_KEY in the environment (never in autobuild.toml).',
+    )
+  }
+  if (
+    config === 'written' &&
+    (resolvedSelections?.roleProfile === 'split' ||
+      resolvedSelections?.roleProfile === 'pi')
+  ) {
+    stdout('Pi setup required: run `pi login` for the providers used by your selected role profile.')
+  }
 
   // State is repository-local by default and must never appear as source.
   // This append-only/idempotent update preserves every user-authored rule.
