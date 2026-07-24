@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { classifyAutoMergeEnable, mergeStateStatuses, type MergeGatePresence } from './auto-merge'
+import type { AbEvent } from '../events/catalog'
+import {
+  autoMergeDeferralObservation,
+  autoMergeDeferralRef,
+  classifyAutoMergeEnable,
+  hasAutoMergeDeferralObservation,
+  mergeStateStatuses,
+  type MergeGatePresence,
+} from './auto-merge'
 
 describe('classifyAutoMergeEnable', () => {
   const expected = {
@@ -24,5 +32,28 @@ describe('classifyAutoMergeEnable', () => {
   test('CLEAN never chooses direct ownership from current satisfaction alone', () => {
     expect(classifyAutoMergeEnable('CLEAN', 'present')).toEqual({ kind: 'native' })
     expect(classifyAutoMergeEnable('CLEAN', 'absent')).toEqual({ kind: 'direct' })
+  })
+})
+
+describe('auto-merge deferral observations', () => {
+  test('uses an auto-merge-gate-specific summary and stable PR/command marker', () => {
+    const write = autoMergeDeferralObservation(
+      { code: 'repository-auto-merge-disabled', detail: 'allow_auto_merge=false' },
+      42,
+      17,
+      'obs_1',
+    )
+    expect(write.payload.summary).toContain('Auto-merge gate')
+    expect(write.payload.summary).toContain('repository-level auto-merge is disabled')
+    expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
+
+    const event = {
+      build: 'build-1',
+      seq: 18,
+      ts: '2026-01-01T00:00:00.000Z',
+      ...write,
+    } as AbEvent
+    expect(hasAutoMergeDeferralObservation([event], 42, 17)).toBe(true)
+    expect(hasAutoMergeDeferralObservation([event], 42, 19)).toBe(false)
   })
 })

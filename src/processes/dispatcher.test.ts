@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -1876,6 +1877,48 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.autoMergeCalls).toHaveLength(1)
   })
 
+  test('a finalize diagnostic landing during the forge probe prevents a stale-snapshot duplicate', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { pr: PR })
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setGateProbeError(1, 'ruleset probe forbidden')
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+
+    const realSet = h.forge.setAutoMerge.bind(h.forge)
+    h.forge.setAutoMerge = async (...args) => {
+      const result = await realSet(...args)
+      if (result.kind !== 'deferred' || result.reason === undefined) {
+        throw new Error('expected a reason-bearing deferral')
+      }
+      // Models finalize's best-effort append after this janitor tick already
+      // captured its initial event snapshot but before the probe returns.
+      await h.store.append(
+        slug,
+        autoMergeDeferralObservation(result.reason, 1, command.seq, 'obs_finalize'),
+      )
+      return result
+    }
+
+    await h.dispatcher.tick()
+
+    const observations = (await h.store.getEvents(slug)).filter(
+      (event) =>
+        event.type === 'observation.recorded' &&
+        event.payload.refs?.includes(`auto-merge-gate:pr:1:command:${command.seq}`),
+    )
+    expect(observations).toHaveLength(1)
+    const observation = observations[0]
+    if (observation?.type !== 'observation.recorded') {
+      throw new Error('expected the correlated observation')
+    }
+    expect(observation.payload.id).toBe('obs_finalize')
+  })
+
   test('a cancellation supersedes enable, including a stale enable acknowledgement', async () => {
     const h = harness()
     const slug = await seedBuild(h, { pr: PR })
@@ -2110,7 +2153,7 @@ describe('Dispatcher janitor', () => {
     expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(false)
   })
 
-  test('BLOCKED/probe failures surface; HAS_HOOKS delegates to native and never falls back', async () => {
+  test('BLOCKED/probe failures are observed once; HAS_HOOKS delegates to native and never falls back', async () => {
     const blocked = harness()
     const blockedSlug = await seedAwaitingPr(blocked)
     await blocked.store.append(blockedSlug, {
@@ -2122,7 +2165,14 @@ describe('Dispatcher janitor', () => {
     blocked.forge.setMergeStateStatus(1, 'BLOCKED')
     blocked.forge.setGatePresence(1, 'absent')
     await blocked.store.claimLease(blockedSlug, 'runner-live', 60_000)
-    await expect(blocked.dispatcher.tick()).rejects.toThrow('BLOCKED')
+    await blocked.dispatcher.tick()
+    await blocked.dispatcher.tick()
+    const blockedObservations = (await blocked.store.getEvents(blockedSlug)).filter(
+      (event) => event.type === 'observation.recorded',
+    )
+    expect(blockedObservations).toHaveLength(1)
+    expect(blockedObservations[0]?.payload.summary).toContain('Auto-merge gate')
+    expect(blockedObservations[0]?.payload.summary).toContain('BLOCKED')
     expect(blocked.forge.squashMergeCalls).toEqual([])
 
     const probe = harness()
@@ -2135,8 +2185,24 @@ describe('Dispatcher janitor', () => {
     probe.forge.setPrState(1, { state: 'open', mergeable: true })
     probe.forge.setGateProbeError(1, 'ruleset probe forbidden')
     await probe.store.claimLease(probeSlug, 'runner-live', 60_000)
-    await expect(probe.dispatcher.tick()).rejects.toThrow('ruleset probe forbidden')
+    await probe.dispatcher.tick()
+    await probe.dispatcher.tick()
+    const probeEvents = await probe.store.getEvents(probeSlug)
+    expect(probeEvents.filter((event) => event.type === 'observation.recorded')).toHaveLength(1)
+    expect(
+      probeEvents.find((event) => event.type === 'observation.recorded')?.payload.summary,
+    ).toContain('ruleset probe forbidden')
     expect(probe.forge.squashMergeCalls).toEqual([])
+
+    // Pending consent is retried and can apply once the condition clears.
+    probe.forge.setGatePresence(1, 'present')
+    await probe.dispatcher.tick()
+    expect(probe.forge.isAutoMergeEnabled(1)).toBe(true)
+    expect(
+      (await probe.store.getEvents(probeSlug)).some(
+        (event) => event.type === 'pr.auto-merge-enabled',
+      ),
+    ).toBe(true)
 
     const hooks = harness()
     const hooksSlug = await seedAwaitingPr(hooks)

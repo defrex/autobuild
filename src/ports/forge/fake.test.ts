@@ -269,17 +269,41 @@ describe('FakeForge', () => {
     })
   })
 
-  test('gate-probe errors and unexplained blockers surface instead of self-merging', async () => {
+  test('gate-probe errors and unexplained blockers return observable deferrals instead of self-merging', async () => {
     const forge = new FakeForge({ gatePresence: 'absent' })
     const pr = await forge.openPr(prOpts())
     forge.setPrState(pr.number, { state: 'open', mergeable: true })
     forge.setGateProbeError(pr.number, 'rulesets forbidden')
-    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow('rulesets forbidden')
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toEqual({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: 'rulesets forbidden' },
+    })
 
     forge.setGatePresence(pr.number, 'absent')
     forge.setMergeStateStatus(pr.number, 'BLOCKED')
-    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow('BLOCKED')
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('BLOCKED') },
+    })
     expect(forge.squashMergeCalls).toEqual([])
+  })
+
+  test('all non-transient reason families are configurable and leave native state off', async () => {
+    const forge = new FakeForge()
+    const pr = await forge.openPr(prOpts())
+    forge.setPrState(pr.number, { state: 'open', mergeable: true })
+
+    forge.setRulesetsPlanLimitation(pr.number)
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'github-plan-limitation' },
+    })
+    forge.setRepositoryAutoMergeDisabled(pr.number)
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'repository-auto-merge-disabled' },
+    })
+    expect(forge.isAutoMergeEnabled(pr.number)).toBe(false)
   })
 
   test('commentOnPr journals comments in order', async () => {

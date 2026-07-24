@@ -1213,13 +1213,15 @@ describe('ab done — finalize', () => {
     expect(applied?.payload).toEqual({ commandSeq: cancellation!.seq })
   })
 
-  test('auto-merge forge failure leaves finalize uncommitted and retryable', async () => {
-    class RejectingAutoMergeForge extends FakeForge {
-      override async setAutoMerge(): Promise<never> {
-        throw new Error('repository policy disables auto-merge')
+  test('a reason-bearing auto-merge refusal completes finalize and records one kernel follow-up', async () => {
+    class DisabledAutoMergeForge extends FakeForge {
+      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
+        const pr = await super.openPr(opts)
+        this.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
+        return pr
       }
     }
-    await store.append(BUILD, {
+    const command = await store.append(BUILD, {
       actor: humanActor('operator'),
       type: 'build.auto-merge-requested',
       payload: {},
@@ -1228,17 +1230,26 @@ describe('ab done — finalize', () => {
       kind: 'pr-description',
       content: '# Add auth rate limiting\n\nBody.\n',
     })
-    await expect(
-      done(
-        makeDeps({
-          store,
-          env: makeEnv({ phase: 'finalize' }),
-          workspacePath: workspace,
-          forge: new RejectingAutoMergeForge(),
-        }),
-      ),
-    ).rejects.toThrow('repository policy disables auto-merge')
-    expect(await eventTypes()).not.toContain('finalize.completed')
+    const event = await done(
+      makeDeps({
+        store,
+        env: makeEnv({ phase: 'finalize' }),
+        workspacePath: workspace,
+        forge: new DisabledAutoMergeForge(),
+      }),
+    )
+
+    expect(event.type).toBe('finalize.completed')
+    const events = await store.getEvents(BUILD)
+    expect(events.some((entry) => entry.type === 'pr.auto-merge-enabled')).toBe(false)
+    expect(events.some((entry) => entry.type === 'escalation.raised')).toBe(false)
+    const observations = events.filter((entry) => entry.type === 'observation.recorded')
+    expect(observations).toHaveLength(1)
+    expect(observations[0]?.actor).toEqual(KERNEL)
+    expect(observations[0]?.payload.summary).toContain('Auto-merge gate')
+    expect(observations[0]?.payload.summary).toContain('repository-level auto-merge is disabled')
+    expect(observations[0]?.payload.summary).not.toContain('PR creation')
+    expect(observations[0]?.payload.refs).toEqual([`auto-merge-gate:pr:1:command:${command.seq}`])
   })
 
   test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {

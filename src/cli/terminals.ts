@@ -21,7 +21,12 @@ import { loadConfig } from '../config/load'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
-import { autoMergeApplicationType, pendingAutoMerge } from '../kernel/auto-merge'
+import {
+  autoMergeApplicationType,
+  autoMergeDeferralObservation,
+  hasAutoMergeDeferralObservation,
+  pendingAutoMerge,
+} from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { reduceBuild } from '../kernel/reducer'
@@ -475,15 +480,31 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       // The PR terminal is the D5 commit point. Its secondary correlated fact
       // is best-effort after that point: if this append fails, the janitor sees
       // the still-unmatched command and retries the idempotent forge operation.
-      if (autoMerge !== undefined && autoMergeResult?.kind === 'applied') {
+      if (autoMerge !== undefined) {
         try {
-          await store.append(env.build, {
-            actor: KERNEL,
-            type: autoMergeApplicationType(autoMerge.enabled),
-            payload: { commandSeq: autoMerge.commandSeq },
-          })
+          if (autoMergeResult?.kind === 'applied') {
+            await store.append(env.build, {
+              actor: KERNEL,
+              type: autoMergeApplicationType(autoMerge.enabled),
+              payload: { commandSeq: autoMerge.commandSeq },
+            })
+          } else if (autoMergeResult?.kind === 'deferred' && autoMergeResult.reason !== undefined) {
+            const current = await store.getEvents(env.build)
+            if (!hasAutoMergeDeferralObservation(current, pr.number, autoMerge.commandSeq)) {
+              await store.append(
+                env.build,
+                autoMergeDeferralObservation(
+                  autoMergeResult.reason,
+                  pr.number,
+                  autoMerge.commandSeq,
+                  deps.ids('obs'),
+                ),
+              )
+            }
+          }
         } catch {
-          // Recoverable by Dispatcher.checkPr on its next open-PR poll.
+          // Both application facts and diagnostics are recoverable by
+          // Dispatcher.checkPr on its next open-PR poll.
         }
       }
 

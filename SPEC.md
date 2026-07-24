@@ -1084,10 +1084,20 @@ merge-blocking gate, consent is applied as GitHub-native auto-merge, so the
 forge's own checks decide when the PR lands. Only when the forge
 authoritatively reports no gate may the janitor perform a normal,
 head-guarded squash itself — never admin, force, or rebase — and only after
-all verification and finalize work is complete. Unknown gate data, opaque
-blockers, and auth failures all fail closed. No merge is ever assumed: a
-build reaches `merged` only when a later poll observes that the PR actually
-landed.
+all verification and finalize work is complete. GitHub's exact documented
+account-plan refusal for the branch-rulesets endpoint proves that no ruleset
+can exist only when the independent classic-protection probe also
+successfully reports no protection. Every near miss, generic authorization
+failure, malformed or unknown response, and tooling failure remains unknown
+and fails closed.
+
+Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
+creation failure: finalize still records the open PR and completes, consent
+stays pending for later janitor polls, and the first non-transient refusal for
+that PR and consent command records one kernel-authored follow-up. A repository
+with native auto-merge disabled is left open for a human; Autobuild never
+changes the setting. No merge is ever assumed: a build reaches `merged` only
+when a later poll observes that the PR actually landed.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted` and re-attaches a

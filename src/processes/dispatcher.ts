@@ -30,7 +30,12 @@ import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { IdSource } from '../ids'
-import { autoMergeApplicationType, pendingAutoMerge } from '../kernel/auto-merge'
+import {
+  autoMergeApplicationType,
+  autoMergeDeferralObservation,
+  hasAutoMergeDeferralObservation,
+  pendingAutoMerge,
+} from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
@@ -614,6 +619,22 @@ export class Dispatcher {
           type: autoMergeApplicationType(true),
           payload: { commandSeq: autoMerge.commandSeq },
         })
+      } else if (result.kind === 'deferred' && result.reason !== undefined) {
+        // Finalize can append the same diagnostic after this tick's initial
+        // event snapshot but while the forge probe is in flight. Re-read at
+        // the append seam so the shared PR/command marker remains one-shot.
+        const latestEvents = await store.getEvents(record.slug)
+        if (!hasAutoMergeDeferralObservation(latestEvents, pr.number, autoMerge.commandSeq)) {
+          await store.append(
+            record.slug,
+            autoMergeDeferralObservation(
+              result.reason,
+              pr.number,
+              autoMerge.commandSeq,
+              this.deps.ids('obs'),
+            ),
+          )
+        }
       } else if (result.kind === 'ungated' && prState.mergeable === true) {
         // Re-read at the last possible point. A cancellation, replacement
         // command, newly due pipeline work, or application fact suppresses

@@ -767,6 +767,61 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   expect(typesOf(final)).not.toContain('escalation.raised')
 }, 30_000)
 
+test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, and later recovers', async () => {
+  const h = await track(makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('T-1')] }))
+
+  await h.dispatcher.tick()
+  const realOpen = h.forge.openPr.bind(h.forge)
+  h.forge.openPr = async (opts) => {
+    const pr = await realOpen(opts)
+    h.forge.setPrState(pr.number, { state: 'open', mergeable: true })
+    h.forge.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
+    return pr
+  }
+  const command = await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+
+  const parked = await h.runLatest()
+  expect(h.cliErrors).toEqual([])
+  expect(parked.prState).toBe('open')
+  expect(parked.autoMerge.applied).toBeUndefined()
+  let events = await h.events(SLUG)
+  expect(typesOf(events)).toContain('finalize.completed')
+  expect(typesOf(events)).not.toContain('escalation.raised')
+  let autoMergeObservations = ofType(events, 'observation.recorded').filter((event) =>
+    event.payload.refs?.some((ref) => ref.startsWith('auto-merge-gate:')),
+  )
+  expect(autoMergeObservations).toHaveLength(1)
+  expect(autoMergeObservations[0]?.payload.summary).toContain(
+    'repository-level auto-merge is disabled',
+  )
+  expect(autoMergeObservations[0]?.payload.refs).toEqual([
+    `auto-merge-gate:pr:1:command:${command.seq}`,
+  ])
+
+  await h.dispatcher.tick()
+  await h.dispatcher.tick()
+  events = await h.events(SLUG)
+  autoMergeObservations = ofType(events, 'observation.recorded').filter((event) =>
+    event.payload.refs?.some((ref) => ref.startsWith('auto-merge-gate:')),
+  )
+  expect(autoMergeObservations).toHaveLength(1)
+  expect(typesOf(events)).not.toContain('pr.auto-merge-enabled')
+
+  // The command stayed pending, so a later poll can apply it when the
+  // repository condition clears; ordinary lifecycle observation still lands.
+  h.forge.setGatePresence(1, 'present')
+  await h.dispatcher.tick()
+  expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+  expect(ofType(await h.events(SLUG), 'pr.auto-merge-enabled')).toHaveLength(1)
+  h.forge.setPrState(1, { state: 'merged', sha: 'native-after-recovery' })
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+  expect(reduceBuild(await h.events(SLUG)).outcome).toBe('merged')
+}, 30_000)
+
 // ── a2. Reconcile refreshes a moved base at execution time (§15.7) ──────────
 
 test('a2. reconcile merges the current base when main advances after conflict detection', async () => {

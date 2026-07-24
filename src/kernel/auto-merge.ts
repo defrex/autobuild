@@ -1,3 +1,6 @@
+import type { AbEvent, EventWrite } from '../events/catalog'
+import { KERNEL } from '../events/envelope'
+import type { AutoMergeDeferralReason } from '../ports/types'
 import type { BuildState } from './reducer'
 
 /** The complete GitHub `mergeStateStatus` enum. Keeping this list closed is a
@@ -93,4 +96,49 @@ export function autoMergeApplicationType(
   enabled: boolean,
 ): 'pr.auto-merge-enabled' | 'pr.auto-merge-disabled' {
   return enabled ? 'pr.auto-merge-enabled' : 'pr.auto-merge-disabled'
+}
+
+/** Stable correlation key for the one follow-up allowed per PR/consent command. */
+export function autoMergeDeferralRef(prNumber: number, commandSeq: number): string {
+  return `auto-merge-gate:pr:${prNumber}:command:${commandSeq}`
+}
+
+export function hasAutoMergeDeferralObservation(
+  events: AbEvent[],
+  prNumber: number,
+  commandSeq: number,
+): boolean {
+  const marker = autoMergeDeferralRef(prNumber, commandSeq)
+  return events.some(
+    (event) =>
+      event.type === 'observation.recorded' && event.payload.refs?.includes(marker) === true,
+  )
+}
+
+const DEFERRAL_SUMMARIES = {
+  'github-plan-limitation':
+    'GitHub rulesets are unavailable because of the repository account plan',
+  'repository-auto-merge-disabled': 'repository-level auto-merge is disabled',
+  'unproven-gate-state': 'merge-gate state or native auto-merge application could not be proven',
+} as const satisfies Record<AutoMergeDeferralReason['code'], string>
+
+/** Kernel-authored durable diagnostic for a non-transient declined consent. */
+export function autoMergeDeferralObservation(
+  reason: AutoMergeDeferralReason,
+  prNumber: number,
+  commandSeq: number,
+  id: string,
+): EventWrite<'observation.recorded'> {
+  return {
+    actor: KERNEL,
+    type: 'observation.recorded',
+    payload: {
+      id,
+      kind: 'followup',
+      summary:
+        `Auto-merge gate could not apply consent for PR #${prNumber}: ` +
+        `${DEFERRAL_SUMMARIES[reason.code]} — ${reason.detail}`,
+      refs: [autoMergeDeferralRef(prNumber, commandSeq)],
+    },
+  }
 }
