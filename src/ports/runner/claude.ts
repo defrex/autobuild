@@ -49,6 +49,10 @@ const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
   const proc = Bun.spawn(['claude', ...invocation.args], {
     cwd: invocation.cwd,
     env: invocation.env,
+    // The positional prompt is the turn's only input. Claude Code also reads
+    // non-TTY stdin in print mode, so inheriting a supervisor's pipe could
+    // inject unrelated bytes into the conversation or delay process exit.
+    stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
     ...(invocation.signal !== undefined ? { signal: invocation.signal } : {}),

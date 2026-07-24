@@ -287,7 +287,6 @@ describe('ClaudeAgentRunner failures', () => {
         result('ignored', 0, 0, {
           subtype: 'success',
           is_error: true,
-          error: 'authentication_failed',
           result: message,
         }),
       ]),
