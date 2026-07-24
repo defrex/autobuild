@@ -73,7 +73,7 @@ function fakeCli(
 }
 
 function promptOf(call: ClaudeCliInvocation): string {
-  const index = call.args.indexOf('-p')
+  const index = call.args.indexOf('--')
   return call.args[index + 1] ?? ''
 }
 
@@ -165,7 +165,7 @@ afterEach(() => {
 })
 
 describe('ClaudeAgentRunner start and continue', () => {
-  test('uses exact headless start/resume argv, cwd, model, and a preallocated session id', async () => {
+  test('uses exact headless argv and -- terminates a leading-dash resume prompt', async () => {
     const cli = fakeCli([
       output([result('cli-echoed-id', 1, 1, { result: 'started' })]),
       output([result('cli-echoed-id', 2, 1, { result: 'continued' })]),
@@ -175,7 +175,7 @@ describe('ClaudeAgentRunner start and continue', () => {
       createSessionId: () => '11111111-1111-4111-8111-111111111111',
     })
     const { session } = await runner.start(startOpts({ model: 'claude-opus-4' }))
-    await runner.continue(session, 'address findings')
+    await runner.continue(session, '- address findings')
 
     expect(session).toEqual({
       id: '11111111-1111-4111-8111-111111111111',
@@ -184,7 +184,6 @@ describe('ClaudeAgentRunner start and continue', () => {
     })
     expect(cli.calls[0]?.args).toEqual([
       '-p',
-      '/ab-plan auth-rate-limit',
       '--output-format',
       'stream-json',
       '--verbose',
@@ -193,10 +192,11 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--',
+      '/ab-plan auth-rate-limit',
     ])
     expect(cli.calls[1]?.args).toEqual([
       '-p',
-      'address findings',
       '--output-format',
       'stream-json',
       '--verbose',
@@ -205,6 +205,8 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--',
+      '- address findings',
     ])
     expect(cli.calls[0]?.cwd).toBe('/ws/auth-rate-limit')
     expect(cli.calls[1]?.cwd).toBe('/ws/auth-rate-limit')
@@ -384,7 +386,6 @@ describe('ClaudeAgentRunner complete', () => {
     expect(cli.calls[0]?.env['NAMING_TOKEN']).toBe('secret')
     expect(cli.calls[0]?.args).toEqual([
       '-p',
-      'name this spec verbatim',
       '--output-format',
       'stream-json',
       '--verbose',
@@ -396,6 +397,8 @@ describe('ClaudeAgentRunner complete', () => {
       '--no-session-persistence',
       '--model',
       'claude-haiku-4',
+      '--',
+      'name this spec verbatim',
     ])
     expect(cli.calls[0]?.args).not.toContain('--session-id')
     expect(cli.calls[0]?.args).not.toContain('--resume')

@@ -126,9 +126,10 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   /** Non-phase judgment: one verbatim prompt, one model turn, and no tools or
    * resumable session persistence. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
-    const args = this.baseArgs(input.prompt)
+    const args = this.baseArgs()
     args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
     if (input.model !== undefined) args.push('--model', input.model)
+    args.push('--', input.prompt)
 
     const turn = await this.runPrompt({
       args,
@@ -226,10 +227,11 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     opts: AgentStartOpts,
     session: { sessionId: string } | { resume: string },
   ): Promise<ClaudeTurn> {
-    const args = this.baseArgs(prompt)
+    const args = this.baseArgs()
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
     if (opts.model !== undefined) args.push('--model', opts.model)
+    args.push('--', prompt)
 
     return this.runPrompt({
       args,
@@ -238,10 +240,9 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     })
   }
 
-  private baseArgs(prompt: string): string[] {
+  private baseArgs(): string[] {
     return [
       '-p',
-      prompt,
       '--output-format',
       'stream-json',
       '--verbose',
