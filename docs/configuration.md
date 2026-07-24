@@ -481,9 +481,10 @@ names a model, in which case the selected runtime uses its own default.
 Two runtimes ship: `claude` and `pi`; trusted plugins may register additional
 names. Builtin and plugin runtimes use the same exact-pair validation and event
 attribution. With no configured model, the selected runtime uses its declared
-default when present (Claude otherwise uses the SDK default; Pi declares
-`kimi-coding/k3`). Use `ab models [query]` to find provider-qualified Pi model
-ids. Extension entries match installed Pi package sources case-insensitively;
+default when present (Claude otherwise uses the local Claude Code CLI's
+selected default; Pi declares `kimi-coding/k3`). Use `ab models [query]` to
+find provider-qualified Pi model ids. Extension entries match installed Pi
+package sources case-insensitively;
 runtimes without an extension mechanism ignore this axis. A plugin may declare
 optional tool-free one-shot completion for `slug` and `upgrade`; absence keeps
 each caller's existing fail-safe behavior. One-shot judgments disable
@@ -816,7 +817,8 @@ Forge and agent credentials remain adapter-owned:
 
 - authenticate GitHub CLI operations with `gh auth login`, and separately make
   sure the Git remote can fetch/push with the process's Git credentials;
-- Claude sessions use the Claude Agent SDK's credentials;
+- Claude sessions invoke the local `claude` CLI and use its configured login;
+  install Claude Code, launch `claude`, and complete login before dispatching;
 - Pi sessions use Pi's provider authentication (for example `pi login` or the
   provider credentials Pi supports).
 

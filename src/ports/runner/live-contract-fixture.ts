@@ -131,7 +131,7 @@ export async function runLiveAgentRunnerContract(
 
       const continued = await runner.continue(
         started.session,
-        'Use the bash tool to execute `./contract-probe` exactly once, wait for it, then reply `probed`.',
+        'Use the bash tool to execute `./contract-probe` exactly once, wait for it, then reply with exactly the same single word as your previous response.',
         {
           env: {
             AB_CONTRACT_PHASE: 'continue',
@@ -140,6 +140,7 @@ export async function runLiveAgentRunnerContract(
         },
       )
       expectCompleted(continued)
+      expect(continued.text.trim()).toBe('probed')
       expect(await evidence(fixture.evidencePath)).toEqual([
         {
           phase: 'start',

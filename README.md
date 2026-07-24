@@ -66,10 +66,13 @@ the explicit environment opt-in.
 
 ## Quickstart
 
-You need [Bun](https://bun.sh), `git`, and the
-[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`). Agent
-sessions authenticate through the Claude Agent SDK's own credentials; add
-`LINEAR_API_KEY` only if you use Linear tickets.
+You need [Bun](https://bun.sh), `git`, the
+[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and the
+local [`claude` CLI](https://code.claude.com/docs/en/setup). Launch `claude`
+once and complete its browser login before running Autobuild. The default
+`claude` runtime invokes that local authenticated executable in headless mode,
+so it uses the subscription or other Claude Code authentication configured by
+the operator. Add `LINEAR_API_KEY` only if you use Linear tickets.
 
 ```sh
 # No published package yet — link `ab` from a clone

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#94](https://github.com/defrex/autobuild/pull/94) — Run Claude sessions through the Claude Code CLI
 - [#93](https://github.com/defrex/autobuild/pull/93) — Add interactive adapter onboarding to `ab init`
 - [#92](https://github.com/defrex/autobuild/pull/92) — Layer CLI help by audience and command
 - [#91](https://github.com/defrex/autobuild/pull/91) — Add a plugin authoring guide

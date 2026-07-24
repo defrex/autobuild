@@ -1,16 +1,12 @@
 /**
- * ClaudeAgentRunner (SPEC §9): AgentRunner over the Claude Agent SDK
- * (subscription billing). The SDK sits behind an injectable `QueryFn`
- * boundary so tests never load it; the default lazily dynamic-imports
- * `@anthropic-ai/claude-agent-sdk`.
+ * ClaudeAgentRunner (SPEC §9): AgentRunner over the locally installed Claude
+ * Code CLI. Each turn runs `claude -p` with structured streaming output;
+ * Claude Code's native session ids preserve context across review rounds.
  *
- * The SDK has native session resumption, so `continue` uses `resume` rather
- * than the start-with-rehydrate-from-store fallback other adapters need (§9).
- * Sessions are deliberately non-interactive: build workspaces are disposable,
- * agents must be able to invoke `ab` and development tools without a human
- * approval prompt, and the pipeline's typed CLI remains the state boundary.
- * `sessionEnv` gives the SDK its complete process environment (SDK `env`
- * replaces rather than augments it) and pins this distribution's CLI first.
+ * The subprocess sits behind an injectable boundary so normal tests stay
+ * deterministic and offline. Production uses direct argv (never a shell),
+ * inherits the operator's Claude Code login, and receives a fresh `sessionEnv`
+ * on every turn so the current scoped Autobuild identity reaches tool calls.
  */
 import {
   agentInvocation,
@@ -30,76 +26,66 @@ import type {
   OneShotCompletionResult,
 } from './one-shot'
 
-// ── Structural SDK types ─────────────────────────────────────────────────────
-//
-// Minimal shapes for exactly what we consume from the stream; the SDK's real
-// message union is far wider and everything else is ignored.
-
-export interface SdkAssistantMessage {
-  type: 'assistant'
-  message: { content: Array<{ type: string; text?: string }> }
-  /** Claude SDK's structured API failure code, when this assistant message
-   * represents an API failure rather than model output. */
-  error?: string
+export interface ClaudeCliInvocation {
+  /** Arguments after the `claude` executable. */
+  args: string[]
+  cwd: string
+  env: Record<string, string>
+  signal?: AbortSignal
 }
 
-export interface SdkResultMessage {
-  type: 'result'
-  session_id: string
-  usage: { input_tokens: number; output_tokens: number }
-  subtype?: string
-  is_error?: boolean
-  errors?: string[]
-  api_error_status?: number | null
+export interface ClaudeCliResult {
+  stdout: string
+  stderr: string
+  exitCode: number
 }
 
-export type SdkMessage =
-  | SdkAssistantMessage
-  | SdkResultMessage
-  | { type: string }
+/** Injectable direct-process boundary used by the offline contract suite. */
+export type ClaudeCliRunFn = (
+  invocation: ClaudeCliInvocation,
+) => Promise<ClaudeCliResult>
 
-function isAssistant(m: SdkMessage): m is SdkAssistantMessage {
-  return m.type === 'assistant'
+const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
+  const proc = Bun.spawn(['claude', ...invocation.args], {
+    cwd: invocation.cwd,
+    env: invocation.env,
+    // The positional prompt is the turn's only input. Claude Code also reads
+    // non-TTY stdin in print mode, so inheriting a supervisor's pipe could
+    // inject unrelated bytes into the conversation or delay process exit.
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    ...(invocation.signal !== undefined ? { signal: invocation.signal } : {}),
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { stdout, stderr, exitCode }
 }
 
-function isResult(m: SdkMessage): m is SdkResultMessage {
-  return m.type === 'result'
+interface JsonRecord {
+  [key: string]: unknown
 }
 
-export type QueryFn = (opts: {
-  prompt: string
-  options: {
-    cwd: string
-    env: Record<string, string>
-    model?: string
-    resume?: string
-    abortController?: AbortController
-    maxTurns?: number
-    tools?: string[]
-    permissionMode: 'bypassPermissions'
-    allowDangerouslySkipPermissions: true
-  }
-}) => AsyncIterable<SdkMessage>
-
-/**
- * The single cast point: the SDK's `query()` accepts a superset of our
- * options and yields a superset of `SdkMessage`; we consume only the
- * structural subset above, so narrowing the stream type here is safe.
- * Deliberately untested — tests inject a fake QueryFn instead (offline).
- */
-const sdkQueryFn: QueryFn = async function* (opts) {
-  const sdk = await import('@anthropic-ai/claude-agent-sdk')
-  yield* sdk.query({
-    prompt: opts.prompt,
-    options: opts.options,
-  }) as AsyncIterable<SdkMessage>
+interface ParsedCliOutput {
+  events: JsonRecord[]
+  malformedLines: string[]
+  result?: JsonRecord
+  assistantText: string[]
+  assistantErrors: string[]
+  statuses: number[]
+  codes: Array<string | number>
 }
 
 interface ClaudeTurn {
   text: string
   usage: { inputTokens: number; outputTokens: number }
-  sessionId: string
   failure?: AgentTurnFailure
+  cli: ClaudeCliResult
+  events: JsonRecord[]
+  malformedLines: string[]
 }
 
 interface TurnRecord {
@@ -108,6 +94,9 @@ interface TurnRecord {
   text: string
   usage: { inputTokens: number; outputTokens: number }
   failure?: AgentTurnFailure
+  cli: ClaudeCliResult
+  events: JsonRecord[]
+  malformedLines: string[]
 }
 
 interface SessionState {
@@ -116,49 +105,55 @@ interface SessionState {
   turns: TurnRecord[]
 }
 
+const MISSING_CLI_MESSAGE =
+  'claude runtime: Claude Code CLI executable "claude" was not found. ' +
+  'Install Claude Code (https://code.claude.com/docs/en/setup), run `claude`, ' +
+  'and complete login before running Autobuild.'
+
 export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'claude'
 
-  private readonly queryFn: QueryFn
+  private readonly runCli: ClaudeCliRunFn
+  private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
-  constructor(opts: { queryFn?: QueryFn } = {}) {
-    this.queryFn = opts.queryFn ?? sdkQueryFn
+  constructor(
+    opts: {
+      runCli?: ClaudeCliRunFn
+      createSessionId?: () => string
+    } = {},
+  ) {
+    this.runCli = opts.runCli ?? runClaudeCli
+    this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
-  /** Non-phase judgment: one verbatim prompt, one model turn, and no tools.
-   * It deliberately creates no resumable AgentRunner session state. */
+  /** Non-phase judgment: one verbatim prompt, one model turn, and no tools or
+   * resumable session persistence. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
-    const cancellation = linkAbortSignal(input.signal)
-    try {
-      const turn = await this.runPrompt(input.prompt, {
-        cwd: input.cwd,
-        env: sessionEnv(input.env),
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 1,
-        tools: [],
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(cancellation.abortController !== undefined
-          ? { abortController: cancellation.abortController }
-          : {}),
-      })
-      if (turn.failure !== undefined) throw new Error(turn.failure.message)
-      return { text: turn.text }
-    } finally {
-      cancellation.dispose()
-    }
+    const args = this.baseArgs()
+    args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
+    if (input.model !== undefined) args.push('--model', input.model)
+    args.push('--', input.prompt)
+
+    const turn = await this.runPrompt({
+      args,
+      cwd: input.cwd,
+      env: sessionEnv(input.env),
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    })
+    if (turn.failure !== undefined) throw new Error(turn.failure.message)
+    return { text: turn.text }
   }
 
   async start(
     opts: AgentStartOpts,
   ): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }> {
-    // Every phase skill takes only the build slug (§4).
+    const sessionId = this.createSessionId()
     const prompt = `/${opts.skill} ${agentInvocation(opts)}`
-    const turn = await this.runTurn(prompt, opts)
+    const turn = await this.runTurn(prompt, opts, { sessionId })
 
     const session: AgentSessionHandle = {
-      id: turn.sessionId,
+      id: sessionId,
       runner: this.name,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
     }
@@ -176,14 +171,13 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     opts?: AgentContinueOpts,
   ): Promise<AgentTurnResult> {
     const state = this.liveState(session, 'continue')
-    // §10/D8: a continued turn is a new session bracket — the refreshed
-    // ambient env (new AB_PHASE round, new AB_SESSION) merges over the start
-    // env, so the CLI resolves THIS round, not round 1's stale identity.
+    // §10/D8: a continued turn gets this round's AB_PHASE/AB_SESSION while
+    // retaining start-only values. A fresh process env is built below.
     const turnOpts =
       opts?.env !== undefined
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts
-    const turn = await this.runTurn(message, turnOpts, session.id)
+    const turn = await this.runTurn(message, turnOpts, { resume: session.id })
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
@@ -232,81 +226,108 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     return state
   }
 
-  /** Build-session wrapper around the shared stream consumer. */
   private runTurn(
     prompt: string,
     opts: AgentStartOpts,
-    resume?: string,
+    session: { sessionId: string } | { resume: string },
   ): Promise<ClaudeTurn> {
-    return this.runPrompt(prompt, {
+    const args = this.baseArgs()
+    if ('sessionId' in session) args.push('--session-id', session.sessionId)
+    else args.push('--resume', session.resume)
+    if (opts.model !== undefined) args.push('--model', opts.model)
+    args.push('--', prompt)
+
+    return this.runPrompt({
+      args,
       cwd: opts.workspacePath,
-      // Ambient auth (D8) plus a runner-owned PATH prefix: scoped AB_*
-      // values win, and the distribution's `ab` cannot be host-shadowed.
       env: sessionEnv(opts.env),
-      // The SDK is headless here: no user exists to answer permission
-      // prompts. Build sessions therefore opt into unattended execution
-      // explicitly; isolation and credentials remain launcher concerns.
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      ...(opts.model !== undefined ? { model: opts.model } : {}),
-      ...(resume !== undefined ? { resume } : {}),
     })
   }
 
-  /** Consume one SDK stream for both phase sessions and one-shot prompts. */
-  private async runPrompt(
-    prompt: string,
-    options: Parameters<QueryFn>[0]['options'],
-  ): Promise<ClaudeTurn> {
-    const stream = this.queryFn({ prompt, options })
-    const texts: string[] = []
-    let assistantError: string | undefined
-    let result: SdkResultMessage | undefined
-    for await (const message of stream) {
-      if (isAssistant(message)) {
-        assistantError = message.error
-        for (const block of message.message.content) {
-          if (block.type === 'text' && block.text !== undefined) texts.push(block.text)
-        }
-      } else if (isResult(message)) {
-        result = message
-      }
-    }
-    if (!result) {
-      throw new Error(
-        `${this.name}: SDK stream ended without a result message (prompt "${prompt}")`,
-      )
-    }
+  private baseArgs(): string[] {
+    return [
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--dangerously-skip-permissions',
+    ]
+  }
 
-    const usage = {
-      inputTokens: result.usage.input_tokens,
-      outputTokens: result.usage.output_tokens,
-    }
-    const failed =
-      result.is_error === true ||
-      (result.subtype !== undefined && result.subtype !== 'success')
-    if (!failed) {
+  private async runPrompt(invocation: ClaudeCliInvocation): Promise<ClaudeTurn> {
+    let cli: ClaudeCliResult
+    try {
+      cli = await this.runCli(invocation)
+    } catch (error) {
+      const missing = isEnoent(error)
+      const message = missing
+        ? MISSING_CLI_MESSAGE
+        : `${this.name} runtime: failed to launch Claude Code CLI: ${errorText(error)}`
       return {
-        text: texts.join('\n'),
-        usage,
-        sessionId: result.session_id,
+        text: '',
+        usage: { inputTokens: 0, outputTokens: 0 },
+        failure: missing
+          ? { message, permanent: true }
+          : classifyProviderError(message),
+        cli: {
+          stdout: '',
+          stderr: errorText(error),
+          exitCode: -1,
+        },
+        events: [],
+        malformedLines: [],
       }
     }
 
-    const suppliedErrors = (result.errors ?? []).filter((error) => error.length > 0)
-    const message =
-      suppliedErrors.length > 0
-        ? suppliedErrors.join('\n')
-        : assistantError ??
-          `${this.name}: SDK result ${result.subtype ?? 'error'} supplied no error text`
+    const parsed = parseCliOutput(cli.stdout)
+    const usage = resultUsage(parsed.result)
+    const resultText = stringField(parsed.result, 'result')
+    const text = resultText ?? parsed.assistantText.join('\n')
+
+    let failureMessage: string | undefined
+    if (cli.exitCode !== 0 || parsed.result?.['is_error'] === true) {
+      failureMessage =
+        nonempty(resultText) ??
+        firstStringArray(parsed.result?.['errors']) ??
+        nonempty(stringField(parsed.result, 'error')) ??
+        parsed.assistantErrors.find((value) => value.length > 0) ??
+        nonempty(cli.stderr) ??
+        `${this.name} runtime: Claude Code CLI exited with code ${cli.exitCode} without error text`
+    } else if (parsed.malformedLines.length > 0) {
+      failureMessage = `${this.name} runtime: Claude Code CLI emitted malformed stream-json output`
+    } else if (parsed.result === undefined) {
+      failureMessage = `${this.name} runtime: Claude Code CLI stream ended without a result event`
+    }
+
+    const resultStatus = numberField(
+      parsed.result,
+      'api_error_status',
+      'status',
+      'status_code',
+      'statusCode',
+    )
+    const resultCodes = [
+      stringOrNumberField(parsed.result, 'error'),
+      stringOrNumberField(parsed.result, 'code'),
+      stringOrNumberField(parsed.result, 'category'),
+      stringOrNumberField(parsed.result, 'subtype'),
+      ...parsed.codes,
+    ]
+
     return {
-      text: texts.join('\n'),
+      text,
       usage,
-      sessionId: result.session_id,
-      failure: classifyProviderError(message, {
-        status: result.api_error_status,
-        codes: [assistantError, result.subtype],
-      }),
+      ...(failureMessage !== undefined
+        ? {
+            failure: classifyProviderError(failureMessage, {
+              status: resultStatus ?? parsed.statuses[0],
+              codes: [...parsed.assistantErrors, ...resultCodes],
+            }),
+          }
+        : {}),
+      cli,
+      events: parsed.events,
+      malformedLines: parsed.malformedLines,
     }
   }
 
@@ -321,6 +342,9 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       text: turn.text,
       usage: turn.usage,
       ...(turn.failure !== undefined ? { failure: turn.failure } : {}),
+      cli: turn.cli,
+      events: turn.events,
+      malformedLines: turn.malformedLines,
     }
   }
 
@@ -332,17 +356,130 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   }
 }
 
-function linkAbortSignal(signal?: AbortSignal): {
-  abortController?: AbortController
-  dispose: () => void
-} {
-  if (signal === undefined) return { dispose: () => {} }
-  const abortController = new AbortController()
-  const abort = (): void => abortController.abort(signal.reason)
-  if (signal.aborted) abort()
-  else signal.addEventListener('abort', abort, { once: true })
-  return {
-    abortController,
-    dispose: () => signal.removeEventListener('abort', abort),
+function parseCliOutput(stdout: string): ParsedCliOutput {
+  const parsed: ParsedCliOutput = {
+    events: [],
+    malformedLines: [],
+    assistantText: [],
+    assistantErrors: [],
+    statuses: [],
+    codes: [],
   }
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.trim() === '') continue
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      parsed.malformedLines.push(line)
+      continue
+    }
+    if (!isRecord(value)) {
+      parsed.malformedLines.push(line)
+      continue
+    }
+    parsed.events.push(value)
+    if (value['type'] === 'assistant') collectAssistant(value, parsed)
+    if (value['type'] === 'result') parsed.result = value
+    if (value['type'] === 'system' || value['type'] === 'api_retry') {
+      collectHints(value, parsed)
+    }
+  }
+  return parsed
+}
+
+function collectAssistant(event: JsonRecord, parsed: ParsedCliOutput): void {
+  const error = stringField(event, 'error')
+  if (error !== undefined) parsed.assistantErrors.push(error)
+  const message = event['message']
+  if (!isRecord(message) || !Array.isArray(message['content'])) return
+  for (const block of message['content']) {
+    if (!isRecord(block) || block['type'] !== 'text') continue
+    const text = stringField(block, 'text')
+    if (text !== undefined) parsed.assistantText.push(text)
+  }
+}
+
+function collectHints(event: JsonRecord, parsed: ParsedCliOutput): void {
+  const status = numberField(
+    event,
+    'api_error_status',
+    'status',
+    'status_code',
+    'statusCode',
+  )
+  if (status !== undefined) parsed.statuses.push(status)
+  for (const key of ['code', 'error', 'category', 'subtype']) {
+    const code = stringOrNumberField(event, key)
+    if (code !== undefined) parsed.codes.push(code)
+  }
+}
+
+function resultUsage(result: JsonRecord | undefined): ClaudeTurn['usage'] {
+  const usage = result?.['usage']
+  if (!isRecord(usage)) return { inputTokens: 0, outputTokens: 0 }
+  return {
+    inputTokens: tokenCount(usage['input_tokens']),
+    outputTokens: tokenCount(usage['output_tokens']),
+  }
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.round(value))
+    : 0
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringField(
+  value: JsonRecord | undefined,
+  key: string,
+): string | undefined {
+  const field = value?.[key]
+  return typeof field === 'string' ? field : undefined
+}
+
+function stringOrNumberField(
+  value: JsonRecord | undefined,
+  key: string,
+): string | number | undefined {
+  const field = value?.[key]
+  return typeof field === 'string' || typeof field === 'number'
+    ? field
+    : undefined
+}
+
+function numberField(
+  value: JsonRecord | undefined,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const field = value?.[key]
+    if (typeof field === 'number' && Number.isFinite(field)) return field
+  }
+  return undefined
+}
+
+function firstStringArray(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  const strings = value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  )
+  return strings.length > 0 ? strings.join('\n') : undefined
+}
+
+function nonempty(value: string | undefined): string | undefined {
+  return value !== undefined && value.length > 0 ? value : undefined
+}
+
+function isEnoent(error: unknown): boolean {
+  if (!isRecord(error)) return false
+  return error['code'] === 'ENOENT'
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

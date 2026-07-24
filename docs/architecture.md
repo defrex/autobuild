@@ -255,7 +255,8 @@ behavioral assertions against every implementation:
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and
-local-git adapters, and the complete injected-SDK contracts for Claude and Pi.
+local-git adapters, the injected Claude CLI subprocess contract, and the
+injected Pi SDK contract.
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
 through readiness, dependency, harvest, and completion paths. The Linear,
@@ -313,11 +314,15 @@ AB_PI_CONTRACT_MODEL=openai/gpt-… \
 bun test src/ports/runner/pi.live.test.ts
 ```
 
-Claude uses the Agent SDK's configured authentication. Pi uses the credentials
+Claude uses the locally installed Claude Code CLI and its configured login; the
+live command therefore requires an installed `claude` executable whose browser
+login has already completed. Its offline suite injects a subprocess executor
+and covers direct argv, native resume, stream-json parsing, usage, transcripts,
+and failure classification without launching the CLI. Pi uses the credentials
 required by the provider named in `AB_PI_CONTRACT_MODEL`. The live fixtures
 create isolated temporary project skills and probe files and remove them after
-each run; provider failures remain in the deterministic injected-SDK contract
-because they cannot be manufactured safely against a live account.
+each run; provider failures remain in the deterministic injected adapter
+contracts because they cannot be manufactured safely against a live account.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit.
