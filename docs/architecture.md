@@ -220,6 +220,7 @@ failure path leaves live and pristine byte-untouched.
 
 ```sh
 bun install
+bun run check     # Biome lint + format, zero diagnostics
 bun test          # unit tests, colocated *.test.ts
 bun typecheck     # tsc --noEmit
 ```
