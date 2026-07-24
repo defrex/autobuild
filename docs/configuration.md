@@ -733,7 +733,8 @@ Choosing Linear writes valid conspicuous placeholders for the required
 `[tickets].teamKey` and `[tickets].readyState` fields. Init prints those
 follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment;
 it never prompts for or writes a secret. Choosing either Pi profile similarly
-prints the `pi login` authentication follow-up.
+prints the real provider-authentication flow: run `pi` and use `/login`, or set
+the provider API key in the environment.
 
 Regardless of onboarding choices, the generated baseline has:
 

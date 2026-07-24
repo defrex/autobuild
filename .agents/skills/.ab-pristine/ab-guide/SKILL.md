@@ -549,7 +549,8 @@ needs no `AB_*` environment, and is safe to re-run. It:
 - Linear selection writes placeholders for required non-secret `teamKey` and
   `readyState`, then prints those fields and the required `LINEAR_API_KEY`
   environment variable. It never asks for or writes a secret. Pi selections
-  print the `pi login` follow-up.
+  say to run `pi` and use `/login`, or set the provider API key in the
+  environment.
 - It **never prompts, validates selection flags, inspects package scripts, or
   overwrites config once the file exists**, even with `--force`; the repo's
   config is the repo's from the first re-run onward.

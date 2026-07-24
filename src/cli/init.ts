@@ -849,7 +849,9 @@ export async function abInit(opts: {
     (resolvedSelections?.roleProfile === 'split' ||
       resolvedSelections?.roleProfile === 'pi')
   ) {
-    stdout('Pi setup required: run `pi login` for the providers used by your selected role profile.')
+    stdout(
+      'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
+    )
   }
 
   // State is repository-local by default and must never appear as source.

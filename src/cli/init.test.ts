@@ -449,6 +449,7 @@ describe('abInit — interactive adapter onboarding', () => {
 
     for (const roleProfile of ['split', 'pi'] as const) {
       const repo = join(target, roleProfile)
+      const output: string[] = []
       await abInit({
         targetRepo: repo,
         selections: {
@@ -456,7 +457,13 @@ describe('abInit — interactive adapter onboarding', () => {
           workspaceProvider: 'git-worktree',
           roleProfile,
         },
+        stdout: (line) => output.push(line),
       })
+      const setupNotice = output.find((line) => line.startsWith('Pi setup required:'))
+      expect(setupNotice).toContain('run `pi` and use `/login`')
+      expect(setupNotice).toContain('provider API key in the environment')
+      expect(setupNotice).not.toContain('pi login')
+
       const config = parseConfig(await generated(repo))
       const resolver = createRuntimeResolver(
         production.runtimes,
