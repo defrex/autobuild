@@ -13,11 +13,7 @@ import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
 
-export type PluginPort =
-  | 'ticket-source'
-  | 'agent-runtime'
-  | 'workspace-provider'
-  | 'forge'
+export type PluginPort = 'ticket-source' | 'agent-runtime' | 'workspace-provider' | 'forge'
 
 export const PLUGIN_PORTS: readonly PluginPort[] = [
   'ticket-source',
@@ -41,9 +37,7 @@ export interface ConfiguredPluginSource {
   api: PluginApiCompatibility
 }
 
-export type RegistrationSource =
-  | { kind: 'builtin' }
-  | ConfiguredPluginSource
+export type RegistrationSource = { kind: 'builtin' } | ConfiguredPluginSource
 
 export interface AdapterRegistration<Factory, ContractFactory = unknown> {
   owner: RegistrationOwner
@@ -72,24 +66,24 @@ const BUILTIN = { kind: 'builtin', name: 'autobuild' } as const
 function reserved<Factory, ContractFactory>(
   names: readonly string[],
 ): Map<string, AdapterRegistration<Factory, ContractFactory>> {
-  return new Map(
-    names.map((name) => [name, { owner: BUILTIN, source: { kind: 'builtin' } }]),
-  )
+  return new Map(names.map((name) => [name, { owner: BUILTIN, source: { kind: 'builtin' } }]))
 }
 
 export function pluginPortLabel(port: PluginPort): string {
   switch (port) {
-    case 'ticket-source': return 'ticket source'
-    case 'agent-runtime': return 'agent runtime'
-    case 'workspace-provider': return 'workspace provider'
-    case 'forge': return 'forge'
+    case 'ticket-source':
+      return 'ticket source'
+    case 'agent-runtime':
+      return 'agent runtime'
+    case 'workspace-provider':
+      return 'workspace provider'
+    case 'forge':
+      return 'forge'
   }
 }
 
 function ownerDescription(owner: RegistrationOwner): string {
-  return owner.kind === 'builtin'
-    ? 'builtin adapter'
-    : `plugin "${owner.name}"`
+  return owner.kind === 'builtin' ? 'builtin adapter' : `plugin "${owner.name}"`
 }
 
 interface PendingRegistration {
@@ -126,9 +120,7 @@ function normalize<AdapterFactory, ContractFactory>(
   }
   return {
     factory: object.factory,
-    ...(object.requiredEnv !== undefined
-      ? { requiredEnv: [...object.requiredEnv] }
-      : {}),
+    ...(object.requiredEnv !== undefined ? { requiredEnv: [...object.requiredEnv] } : {}),
     ...(object.contract !== undefined ? { contract: object.contract } : {}),
   }
 }
@@ -165,10 +157,9 @@ export class PluginRegistry {
     const pending: PendingRegistration[] = []
     const collect = <AdapterFactory, ContractFactory>(
       port: PluginPort,
-      registrations: Record<
-        string,
-        InternalRegistration<AdapterFactory, ContractFactory>
-      > | undefined,
+      registrations:
+        | Record<string, InternalRegistration<AdapterFactory, ContractFactory>>
+        | undefined,
       target: Map<string, AdapterRegistration<AdapterFactory, ContractFactory>>,
     ): void => {
       for (const [name, registration] of Object.entries(registrations ?? {})) {
@@ -184,9 +175,7 @@ export class PluginRegistry {
           port,
           name,
           factory: normalized.factory,
-          ...(normalized.requiredEnv !== undefined
-            ? { requiredEnv: normalized.requiredEnv }
-            : {}),
+          ...(normalized.requiredEnv !== undefined ? { requiredEnv: normalized.requiredEnv } : {}),
           ...(normalized.contract !== undefined
             ? { contract: normalized.contract as PluginContractDescriptor<unknown> }
             : {}),
@@ -197,10 +186,12 @@ export class PluginRegistry {
 
     collect(
       'ticket-source',
-      plugin.ticketSources as Record<
-        string,
-        InternalRegistration<TicketSourcePluginFactory, TicketSourceContractFactory>
-      > | undefined,
+      plugin.ticketSources as
+        | Record<
+            string,
+            InternalRegistration<TicketSourcePluginFactory, TicketSourceContractFactory>
+          >
+        | undefined,
       this.ticketSources,
     )
     collect('agent-runtime', plugin.agentRuntimes, this.agentRuntimes)
@@ -226,22 +217,20 @@ export class PluginRegistry {
         ...(registration.requiredEnv !== undefined
           ? { requiredEnv: registration.requiredEnv }
           : {}),
-        ...(registration.contract !== undefined
-          ? { contract: registration.contract }
-          : {}),
+        ...(registration.contract !== undefined ? { contract: registration.contract } : {}),
         source,
       })
     }
   }
 
   adapters(port?: PluginPort): AdapterProjection[] {
-    const maps: Array<[
-      PluginPort,
-      Map<string, AdapterRegistration<unknown, unknown>>,
-    ]> = [
+    const maps: Array<[PluginPort, Map<string, AdapterRegistration<unknown, unknown>>]> = [
       ['ticket-source', this.ticketSources as Map<string, AdapterRegistration<unknown, unknown>>],
       ['agent-runtime', this.agentRuntimes as Map<string, AdapterRegistration<unknown, unknown>>],
-      ['workspace-provider', this.workspaceProviders as Map<string, AdapterRegistration<unknown, unknown>>],
+      [
+        'workspace-provider',
+        this.workspaceProviders as Map<string, AdapterRegistration<unknown, unknown>>,
+      ],
       ['forge', this.forges as Map<string, AdapterRegistration<unknown, unknown>>],
     ]
     const result: AdapterProjection[] = []
@@ -263,10 +252,14 @@ export class PluginRegistry {
 
   registration(port: PluginPort, name: string): AdapterRegistration<unknown, unknown> | undefined {
     switch (port) {
-      case 'ticket-source': return this.ticketSources.get(name)
-      case 'agent-runtime': return this.agentRuntimes.get(name)
-      case 'workspace-provider': return this.workspaceProviders.get(name)
-      case 'forge': return this.forges.get(name)
+      case 'ticket-source':
+        return this.ticketSources.get(name)
+      case 'agent-runtime':
+        return this.agentRuntimes.get(name)
+      case 'workspace-provider':
+        return this.workspaceProviders.get(name)
+      case 'forge':
+        return this.forges.get(name)
     }
   }
 }

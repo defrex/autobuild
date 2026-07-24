@@ -60,9 +60,7 @@ function isEntityNotFound(error: unknown): boolean {
     error instanceof LinearGqlError &&
     error.errors.length > 0 &&
     error.errors.every(
-      (e) =>
-        e.extensions?.code === 'INPUT_ERROR' &&
-        /entity not found/i.test(e.message),
+      (e) => e.extensions?.code === 'INPUT_ERROR' && /entity not found/i.test(e.message),
     )
   )
 }
@@ -115,11 +113,7 @@ function blockerRelationsOf(issue: GqlIssue): GqlIssueRelation[] {
 
 /** The identifiers blocking `issue`; unrelated relation kinds are ignored. */
 function blockersOf(issue: GqlIssue): string[] {
-  return [
-    ...new Set(
-      blockerRelationsOf(issue).map((relation) => relation.issue!.identifier),
-    ),
-  ]
+  return [...new Set(blockerRelationsOf(issue).map((relation) => relation.issue!.identifier))]
 }
 
 function errorMessage(error: unknown): string {
@@ -223,27 +217,22 @@ export class LinearTicketSource implements TicketSource {
     this.fetchFn = opts.fetchFn ?? ((url, init) => fetch(url, init))
   }
 
-  async listReady(criteria: {
-    labels?: string[]
-    state?: string
-  }): Promise<TicketListing> {
+  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const filter: Record<string, unknown> = {
       team: { key: { eq: this.teamKey } },
     }
     if (criteria.state !== undefined) {
-      filter['state'] = { name: { eq: criteria.state } }
+      filter.state = { name: { eq: criteria.state } }
     }
     if (criteria.labels && criteria.labels.length > 0) {
       // and-of-somes: every requested label must be present.
-      filter['and'] = criteria.labels.map((label) => ({
+      filter.and = criteria.labels.map((label) => ({
         labels: { some: { name: { eq: label } } },
       }))
     }
-    const data = await this.gql<{ issues: { nodes: GqlIssue[] } }>(
-      'listReady',
-      LIST_READY_QUERY,
-      { filter },
-    )
+    const data = await this.gql<{ issues: { nodes: GqlIssue[] } }>('listReady', LIST_READY_QUERY, {
+      filter,
+    })
     return {
       tickets: data.issues.nodes.map((issue) => this.toTicket(issue)),
       diagnostics: [],
@@ -253,11 +242,7 @@ export class LinearTicketSource implements TicketSource {
   async get(id: string): Promise<Ticket | null> {
     let data: { issue: GqlIssue | null }
     try {
-      data = await this.gql<{ issue: GqlIssue | null }>(
-        'get',
-        GET_ISSUE_QUERY,
-        { id },
-      )
+      data = await this.gql<{ issue: GqlIssue | null }>('get', GET_ISSUE_QUERY, { id })
     } catch (error) {
       // Linear's `issue(id:)` field is non-null in the live schema: an unknown
       // identifier arrives as INPUT_ERROR / Entity not found rather than the
@@ -303,15 +288,9 @@ export class LinearTicketSource implements TicketSource {
     await this.updateState('transition', issueId, state)
   }
 
-  async create(
-    draft: TicketDraft,
-    opts: TicketCreateOptions = {},
-  ): Promise<Ticket> {
+  async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     const reservedId = opts.idempotencyKey
-    if (
-      reservedId !== undefined &&
-      !linearReservedIssueIdSchema.safeParse(reservedId).success
-    ) {
+    if (reservedId !== undefined && !linearReservedIssueIdSchema.safeParse(reservedId).success) {
       throw new Error('linear create: idempotency key must be a UUID v4')
     }
     const team = await this.getTeamInfo('create')
@@ -340,9 +319,9 @@ export class LinearTicketSource implements TicketSource {
             `${this.teamKey} (known: ${[...team.stateIds.keys()].join(', ')})`,
         )
       }
-      input['stateId'] = stateId
+      input.stateId = stateId
     }
-    if (reservedId !== undefined) input['id'] = reservedId
+    if (reservedId !== undefined) input.id = reservedId
 
     let data: { issueCreate: { success: boolean; issue: GqlIssue | null } }
     try {
@@ -372,9 +351,7 @@ export class LinearTicketSource implements TicketSource {
       try {
         const createdId = issue.id
         if (createdId === undefined) {
-          throw new Error(
-            'linear create: issueCreate returned no id — cannot record blockers',
-          )
+          throw new Error('linear create: issueCreate returned no id — cannot record blockers')
         }
         this.issueIds.set(issue.identifier, createdId)
         for (const blockerId of blockedBy) {
@@ -411,14 +388,14 @@ export class LinearTicketSource implements TicketSource {
     const issueId = await this.resolveIssueId('update', id)
     const input: Record<string, unknown> = {}
 
-    if (validated.title !== undefined) input['title'] = validated.title
-    if (validated.body !== undefined) input['description'] = validated.body
+    if (validated.title !== undefined) input.title = validated.title
+    if (validated.body !== undefined) input.description = validated.body
     if (validated.labels !== undefined) {
       if (validated.labels.length === 0) {
-        input['labelIds'] = []
+        input.labelIds = []
       } else {
         const team = await this.getTeamInfo('update')
-        input['labelIds'] = validated.labels.map((label) => {
+        input.labelIds = validated.labels.map((label) => {
           const labelId = team.labelIds.get(label)
           if (!labelId) {
             throw new Error(
@@ -449,9 +426,7 @@ export class LinearTicketSource implements TicketSource {
 
     if (
       blockerRelationsOf(target).some(
-        (relation) =>
-          relation.issue?.identifier === blockerId ||
-          relation.issue?.id === blockerId,
+        (relation) => relation.issue?.identifier === blockerId || relation.issue?.id === blockerId,
       )
     ) {
       return
@@ -482,9 +457,7 @@ export class LinearTicketSource implements TicketSource {
   async removeBlocker(id: string, blockerId: string): Promise<void> {
     const target = await this.lookupIssue('removeBlocker', id)
     const matches = blockerRelationsOf(target).filter(
-      (relation) =>
-        relation.issue?.identifier === blockerId ||
-        relation.issue?.id === blockerId,
+      (relation) => relation.issue?.identifier === blockerId || relation.issue?.id === blockerId,
     )
     if (matches.length === 0) return
 
@@ -523,11 +496,9 @@ export class LinearTicketSource implements TicketSource {
     for (const id of ids) {
       let data: { issue: GqlIssue | null }
       try {
-        data = await this.gql<{ issue: GqlIssue | null }>(
-          'dependencyStates',
-          GET_ISSUE_QUERY,
-          { id },
-        )
+        data = await this.gql<{ issue: GqlIssue | null }>('dependencyStates', GET_ISSUE_QUERY, {
+          id,
+        })
       } catch (error) {
         // An unknown identifier is a MISSING dependency, not a failed check:
         // the dispatcher must be able to say "AUT-99 does not exist" rather
@@ -557,11 +528,7 @@ export class LinearTicketSource implements TicketSource {
   private async lookupIssue(operation: string, id: string): Promise<GqlIssue> {
     let data: { issue: GqlIssue | null }
     try {
-      data = await this.gql<{ issue: GqlIssue | null }>(
-        operation,
-        GET_ISSUE_QUERY,
-        { id },
-      )
+      data = await this.gql<{ issue: GqlIssue | null }>(operation, GET_ISSUE_QUERY, { id })
     } catch (error) {
       if (isEntityNotFound(error)) {
         throw new Error(`linear ${operation}: unknown ticket "${id}"`)
@@ -584,26 +551,18 @@ export class LinearTicketSource implements TicketSource {
     return data.issue
   }
 
-  private requiredIssueId(
-    operation: string,
-    requestedId: string,
-    issue: GqlIssue,
-  ): string {
+  private requiredIssueId(operation: string, requestedId: string, issue: GqlIssue): string {
     if (issue.id === undefined) {
-      throw new Error(
-        `linear ${operation}: ticket "${requestedId}" response has no issue id`,
-      )
+      throw new Error(`linear ${operation}: ticket "${requestedId}" response has no issue id`)
     }
     return issue.id
   }
 
   private async adoptCreatedIssue(id: string): Promise<Ticket | null> {
     try {
-      const adopted = await this.gql<{ issue: GqlIssue | null }>(
-        'create-adopt',
-        GET_ISSUE_QUERY,
-        { id },
-      )
+      const adopted = await this.gql<{ issue: GqlIssue | null }>('create-adopt', GET_ISSUE_QUERY, {
+        id,
+      })
       return adopted.issue ? this.toTicket(adopted.issue) : null
     } catch {
       // Preserve the original create failure; an adoption probe is recovery,
@@ -634,10 +593,7 @@ export class LinearTicketSource implements TicketSource {
     }
     if (payload.errors && payload.errors.length > 0) {
       const messages = payload.errors.map((e) => e.message).join('; ')
-      throw new LinearGqlError(
-        `linear ${operation}: GraphQL errors — ${messages}`,
-        payload.errors,
-      )
+      throw new LinearGqlError(`linear ${operation}: GraphQL errors — ${messages}`, payload.errors)
     }
     if (payload.data === undefined || payload.data === null) {
       throw new Error(`linear ${operation}: response has no data`)
@@ -650,11 +606,9 @@ export class LinearTicketSource implements TicketSource {
     if (cached) return cached
     let data: { issue: { id: string } | null }
     try {
-      data = await this.gql<{ issue: { id: string } | null }>(
-        operation,
-        RESOLVE_ISSUE_QUERY,
-        { id },
-      )
+      data = await this.gql<{ issue: { id: string } | null }>(operation, RESOLVE_ISSUE_QUERY, {
+        id,
+      })
     } catch (error) {
       // Live Linear raises a GraphQL error for an unknown identifier rather
       // than returning null — surface this adapter's own actionable message
@@ -693,11 +647,7 @@ export class LinearTicketSource implements TicketSource {
     return this.teamInfo
   }
 
-  private async updateState(
-    operation: string,
-    issueId: string,
-    stateName: string,
-  ): Promise<void> {
+  private async updateState(operation: string, issueId: string, stateName: string): Promise<void> {
     const team = await this.getTeamInfo(operation)
     const stateId = team.stateIds.get(stateName)
     if (!stateId) {

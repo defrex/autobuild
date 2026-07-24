@@ -8,16 +8,8 @@
  * timestamps (§15.1) are only testable deterministically with time control.
  */
 import { describe, expect, test } from 'bun:test'
-import {
-  EventValidationError,
-  type EventWrite,
-} from '../events/catalog'
-import {
-  agentActor,
-  DISPATCHER,
-  humanActor,
-  KERNEL,
-} from '../events/envelope'
+import { EventValidationError, type EventWrite } from '../events/catalog'
+import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { manualClock } from '../testing/fixed'
 import {
@@ -41,9 +33,7 @@ export interface BuildStoreHarness {
  * Adapters are constructed with an injectable clock (see MemoryBuildStore's
  * constructor); the factory passes it through so the suite controls time.
  */
-export type BuildStoreFactory = (opts?: {
-  clock?: Clock
-}) => Promise<BuildStoreHarness>
+export type BuildStoreFactory = (opts?: { clock?: Clock }) => Promise<BuildStoreHarness>
 
 export interface BlobStoreHarness {
   blobs: BlobStore
@@ -85,10 +75,7 @@ export function sampleEventWrite(
   }
 }
 
-export function harvestStartedWrite(
-  run = 'h_1',
-  rev = 0,
-): RepositoryEventWrite<'harvest.started'> {
+export function harvestStartedWrite(run = 'h_1', rev = 0): RepositoryEventWrite<'harvest.started'> {
   return {
     actor: KERNEL,
     type: 'harvest.started',
@@ -117,10 +104,7 @@ export function buildCreatedWrite(): EventWrite<'build.created'> {
   }
 }
 
-export function planCompletedWrite(
-  rev: number,
-  round = 1,
-): EventWrite<'plan.completed'> {
+export function planCompletedWrite(rev: number, round = 1): EventWrite<'plan.completed'> {
   return {
     actor: agentActor('plan', 's_plan'),
     type: 'plan.completed',
@@ -152,10 +136,7 @@ function atT0(offsetMs: number): string {
 
 // ── The BuildStore contract ──────────────────────────────────────────────────
 
-export function describeBuildStoreContract(
-  name: string,
-  factory: BuildStoreFactory,
-): void {
+export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
     describe('builds', () => {
       test('createBuild returns a record with store-assigned createdAt/updatedAt', async () => {
@@ -176,9 +157,7 @@ export function describeBuildStoreContract(
       test('duplicate slug rejects', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('dupe'))
-          const err = await store
-            .createBuild(sampleBuildInput('dupe'))
-            .catch((e: unknown) => e)
+          const err = await store.createBuild(sampleBuildInput('dupe')).catch((e: unknown) => e)
           expect(err).toBeInstanceOf(Error)
           expect((await store.listBuilds()).length).toBe(1)
         })
@@ -314,9 +293,10 @@ export function describeBuildStoreContract(
               .catch((caught: unknown) => caught)
             expect(error).toBeInstanceOf(EventValidationError)
           }
-          expect(
-            (await store.getRepoEvents('acme/control')).map((event) => event.type),
-          ).toEqual(['harvest.pause-requested', 'harvest.paused'])
+          expect((await store.getRepoEvents('acme/control')).map((event) => event.type)).toEqual([
+            'harvest.pause-requested',
+            'harvest.paused',
+          ])
         })
       })
 
@@ -326,34 +306,25 @@ export function describeBuildStoreContract(
           const result = await store.appendRepoWithArtifacts(
             'acme/a',
             [{ kind: 'harvest-scan', content: '{"observations":[]}' }],
-            (deposited) =>
-              harvestStartedWrite('h_atomic', deposited[0]!.revision),
+            (deposited) => harvestStartedWrite('h_atomic', deposited[0]!.revision),
           )
           expect(result.artifacts[0]?.revision).toBe(0)
           expect(result.event.payload.scan).toEqual({
             kind: 'harvest-scan',
             rev: 0,
           })
-          const artifact = await store.getRepoArtifact(
-            'acme/a',
-            'harvest-scan',
-          )
-          expect(new TextDecoder().decode(artifact?.content)).toBe(
-            '{"observations":[]}',
-          )
+          const artifact = await store.getRepoArtifact('acme/a', 'harvest-scan')
+          expect(new TextDecoder().decode(artifact?.content)).toBe('{"observations":[]}')
 
           const error = await store
-            .appendRepoWithArtifacts(
-              'acme/a',
-              [{ kind: 'harvest-scan', content: 'bad' }],
-              () => ({ ...harvestStartedWrite('bad'), actor: agentActor('x', 's') }),
-            )
+            .appendRepoWithArtifacts('acme/a', [{ kind: 'harvest-scan', content: 'bad' }], () => ({
+              ...harvestStartedWrite('bad'),
+              actor: agentActor('x', 's'),
+            }))
             .catch((caught: unknown) => caught)
           expect(error).toBeInstanceOf(EventValidationError)
           expect(
-            (await store.listRepoArtifacts('acme/a', 'harvest-scan')).map(
-              (meta) => meta.revision,
-            ),
+            (await store.listRepoArtifacts('acme/a', 'harvest-scan')).map((meta) => meta.revision),
           ).toEqual([0])
         })
       })
@@ -444,9 +415,7 @@ export function describeBuildStoreContract(
             type: 'build.created',
             payload: { repo: 'acme/rate-limiter' },
           } as unknown as EventWrite
-          const err = await store
-            .append('val-missing', missing)
-            .catch((e: unknown) => e)
+          const err = await store.append('val-missing', missing).catch((e: unknown) => e)
           expect(err).toBeInstanceOf(EventValidationError)
           expect((await store.getEvents('val-missing')).length).toBe(1)
         })
@@ -528,9 +497,7 @@ export function describeBuildStoreContract(
 
       test('write operations on an unknown build reject', async () => {
         await withStore(factory, undefined, async (store) => {
-          const appendErr = await store
-            .append('ghost', sampleEventWrite())
-            .catch((e: unknown) => e)
+          const appendErr = await store.append('ghost', sampleEventWrite()).catch((e: unknown) => e)
           expect(appendErr).toBeInstanceOf(Error)
           const putErr = await store
             .putArtifact('ghost', { kind: 'plan', content: 'x' })
@@ -817,10 +784,8 @@ export function describeBuildStoreContract(
           await store.append('sub-from', sampleEventWrite('one'))
           await store.append('sub-from', sampleEventWrite('two'))
           const received: number[] = []
-          const unsubscribe = store.subscribe(
-            'sub-from',
-            { fromSeq: 1, pollMs: 10 },
-            (event) => received.push(event.seq),
+          const unsubscribe = store.subscribe('sub-from', { fromSeq: 1, pollMs: 10 }, (event) =>
+            received.push(event.seq),
           )
           await store.append('sub-from', sampleEventWrite('three'))
           await Bun.sleep(50)
@@ -850,14 +815,9 @@ export function describeBuildStoreContract(
 
 // ── The BlobStore contract ───────────────────────────────────────────────────
 
-export function describeBlobStoreContract(
-  name: string,
-  factory: BlobStoreFactory,
-): void {
+export function describeBlobStoreContract(name: string, factory: BlobStoreFactory): void {
   describe(`BlobStore contract: ${name}`, () => {
-    async function withBlobs(
-      run: (blobs: BlobStore) => Promise<void>,
-    ): Promise<void> {
+    async function withBlobs(run: (blobs: BlobStore) => Promise<void>): Promise<void> {
       const { blobs, cleanup } = await factory()
       try {
         await run(blobs)

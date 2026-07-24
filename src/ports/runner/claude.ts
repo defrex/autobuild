@@ -20,11 +20,7 @@ import {
 } from '../types'
 import { classifyProviderError } from './provider-error'
 import { sessionEnv } from './session-env'
-import type {
-  OneShotCompletion,
-  OneShotCompletionInput,
-  OneShotCompletionResult,
-} from './one-shot'
+import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 
 export interface ClaudeCliInvocation {
   /** Arguments after the `claude` executable. */
@@ -41,9 +37,7 @@ export interface ClaudeCliResult {
 }
 
 /** Injectable direct-process boundary used by the offline contract suite. */
-export type ClaudeCliRunFn = (
-  invocation: ClaudeCliInvocation,
-) => Promise<ClaudeCliResult>
+export type ClaudeCliRunFn = (invocation: ClaudeCliInvocation) => Promise<ClaudeCliResult>
 
 const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
   const proc = Bun.spawn(['claude', ...invocation.args], {
@@ -199,9 +193,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
           session: session.id,
           skill: state.opts.skill,
           invocation: agentInvocation(state.opts),
-          ...(state.opts.buildSlug !== undefined
-            ? { buildSlug: state.opts.buildSlug }
-            : {}),
+          ...(state.opts.buildSlug !== undefined ? { buildSlug: state.opts.buildSlug } : {}),
           turns: state.turns,
         },
         null,
@@ -215,10 +207,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     }
   }
 
-  private liveState(
-    session: AgentSessionHandle,
-    op: 'continue' | 'end',
-  ): SessionState {
+  private liveState(session: AgentSessionHandle, op: 'continue' | 'end'): SessionState {
     const state = this.sessions.get(session.id)
     if (!state) {
       throw new Error(`${this.name}: ${op} on unknown session "${session.id}"`)
@@ -245,13 +234,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   }
 
   private baseArgs(): string[] {
-    return [
-      '-p',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--dangerously-skip-permissions',
-    ]
+    return ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions']
   }
 
   private async runPrompt(invocation: ClaudeCliInvocation): Promise<ClaudeTurn> {
@@ -266,9 +249,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       return {
         text: '',
         usage: { inputTokens: 0, outputTokens: 0 },
-        failure: missing
-          ? { message, permanent: true }
-          : classifyProviderError(message),
+        failure: missing ? { message, permanent: true } : classifyProviderError(message),
         cli: {
           stdout: '',
           stderr: errorText(error),
@@ -285,10 +266,10 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     const text = resultText ?? parsed.assistantText.join('\n')
 
     let failureMessage: string | undefined
-    if (cli.exitCode !== 0 || parsed.result?.['is_error'] === true) {
+    if (cli.exitCode !== 0 || parsed.result?.is_error === true) {
       failureMessage =
         nonempty(resultText) ??
-        firstStringArray(parsed.result?.['errors']) ??
+        firstStringArray(parsed.result?.errors) ??
         nonempty(stringField(parsed.result, 'error')) ??
         parsed.assistantErrors.find((value) => value.length > 0) ??
         nonempty(cli.stderr) ??
@@ -331,11 +312,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     }
   }
 
-  private turnRecord(
-    turnNumber: number,
-    prompt: string,
-    turn: ClaudeTurn,
-  ): TurnRecord {
+  private turnRecord(turnNumber: number, prompt: string, turn: ClaudeTurn): TurnRecord {
     return {
       turn: turnNumber,
       prompt,
@@ -379,9 +356,9 @@ function parseCliOutput(stdout: string): ParsedCliOutput {
       continue
     }
     parsed.events.push(value)
-    if (value['type'] === 'assistant') collectAssistant(value, parsed)
-    if (value['type'] === 'result') parsed.result = value
-    if (value['type'] === 'system' || value['type'] === 'api_retry') {
+    if (value.type === 'assistant') collectAssistant(value, parsed)
+    if (value.type === 'result') parsed.result = value
+    if (value.type === 'system' || value.type === 'api_retry') {
       collectHints(value, parsed)
     }
   }
@@ -391,23 +368,17 @@ function parseCliOutput(stdout: string): ParsedCliOutput {
 function collectAssistant(event: JsonRecord, parsed: ParsedCliOutput): void {
   const error = stringField(event, 'error')
   if (error !== undefined) parsed.assistantErrors.push(error)
-  const message = event['message']
-  if (!isRecord(message) || !Array.isArray(message['content'])) return
-  for (const block of message['content']) {
-    if (!isRecord(block) || block['type'] !== 'text') continue
+  const message = event.message
+  if (!isRecord(message) || !Array.isArray(message.content)) return
+  for (const block of message.content) {
+    if (!isRecord(block) || block.type !== 'text') continue
     const text = stringField(block, 'text')
     if (text !== undefined) parsed.assistantText.push(text)
   }
 }
 
 function collectHints(event: JsonRecord, parsed: ParsedCliOutput): void {
-  const status = numberField(
-    event,
-    'api_error_status',
-    'status',
-    'status_code',
-    'statusCode',
-  )
+  const status = numberField(event, 'api_error_status', 'status', 'status_code', 'statusCode')
   if (status !== undefined) parsed.statuses.push(status)
   for (const key of ['code', 'error', 'category', 'subtype']) {
     const code = stringOrNumberField(event, key)
@@ -416,28 +387,23 @@ function collectHints(event: JsonRecord, parsed: ParsedCliOutput): void {
 }
 
 function resultUsage(result: JsonRecord | undefined): ClaudeTurn['usage'] {
-  const usage = result?.['usage']
+  const usage = result?.usage
   if (!isRecord(usage)) return { inputTokens: 0, outputTokens: 0 }
   return {
-    inputTokens: tokenCount(usage['input_tokens']),
-    outputTokens: tokenCount(usage['output_tokens']),
+    inputTokens: tokenCount(usage.input_tokens),
+    outputTokens: tokenCount(usage.output_tokens),
   }
 }
 
 function tokenCount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(0, Math.round(value))
-    : 0
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
 }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function stringField(
-  value: JsonRecord | undefined,
-  key: string,
-): string | undefined {
+function stringField(value: JsonRecord | undefined, key: string): string | undefined {
   const field = value?.[key]
   return typeof field === 'string' ? field : undefined
 }
@@ -447,15 +413,10 @@ function stringOrNumberField(
   key: string,
 ): string | number | undefined {
   const field = value?.[key]
-  return typeof field === 'string' || typeof field === 'number'
-    ? field
-    : undefined
+  return typeof field === 'string' || typeof field === 'number' ? field : undefined
 }
 
-function numberField(
-  value: JsonRecord | undefined,
-  ...keys: string[]
-): number | undefined {
+function numberField(value: JsonRecord | undefined, ...keys: string[]): number | undefined {
   for (const key of keys) {
     const field = value?.[key]
     if (typeof field === 'number' && Number.isFinite(field)) return field
@@ -477,7 +438,7 @@ function nonempty(value: string | undefined): string | undefined {
 
 function isEnoent(error: unknown): boolean {
   if (!isRecord(error)) return false
-  return error['code'] === 'ENOENT'
+  return error.code === 'ENOENT'
 }
 
 function errorText(error: unknown): string {

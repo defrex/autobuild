@@ -61,7 +61,7 @@ Only `verify:*` and `finalize:*` are configurable extension points. Agents inter
 
 - Runtime/tooling: Bun, strict TypeScript ESM, Zod, Drizzle.
 - Keep tests colocated as `*.test.ts`; integration scenarios are in `src/integration/`.
-- Run `bun test` and `bun typecheck` before finishing changes.
+- Run `bun run check`, `bun test`, and `bun typecheck` before finishing changes.
 - Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `src/store/contract.ts`.
 - Validate every event write and derive status through `src/kernel/reducer.ts`; events record facts, never derived state.
 - Keep phase behavior centralized in `src/kernel/phases.ts` and deterministic transitions in `src/kernel/engine.ts`.

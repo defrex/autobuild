@@ -25,42 +25,30 @@ describe('parseArgs', () => {
   })
 
   test('rejects a value flag with no following token using the supplied usage', () => {
-    expect(() =>
-      parseArgs(['--output'], { output: 'value' }, USAGE),
-    ).toThrow(`--output requires a value — ${USAGE}`)
+    expect(() => parseArgs(['--output'], { output: 'value' }, USAGE)).toThrow(
+      `--output requires a value — ${USAGE}`,
+    )
   })
 
   test('rejects a following flag token instead of consuming it as a value', () => {
     expect(() =>
-      parseArgs(
-        ['--output', '--json'],
-        { output: 'value', json: 'boolean' },
-        USAGE,
-      ),
+      parseArgs(['--output', '--json'], { output: 'value', json: 'boolean' }, USAGE),
     ).toThrow(`--output requires a value, got "--json" — ${USAGE}`)
   })
 
   test('rejects duplicate value and boolean singleton flags', () => {
     expect(() =>
-      parseArgs(
-        ['--output', 'one', '--output', 'two'],
-        { output: 'value' },
-        USAGE,
-      ),
+      parseArgs(['--output', 'one', '--output', 'two'], { output: 'value' }, USAGE),
     ).toThrow(`--output may be supplied only once — ${USAGE}`)
 
-    expect(() =>
-      parseArgs(['--json', '--json'], { json: 'boolean' }, USAGE),
-    ).toThrow(`--json may be supplied only once — ${USAGE}`)
+    expect(() => parseArgs(['--json', '--json'], { json: 'boolean' }, USAGE)).toThrow(
+      `--json may be supplied only once — ${USAGE}`,
+    )
   })
 
   test('rejects unknown and prototype-looking flag names', () => {
-    expect(() => parseArgs(['--other'], {}, USAGE)).toThrow(
-      `unknown flag --other — ${USAGE}`,
-    )
-    expect(() => parseArgs(['--toString'], {}, USAGE)).toThrow(
-      `unknown flag --toString — ${USAGE}`,
-    )
+    expect(() => parseArgs(['--other'], {}, USAGE)).toThrow(`unknown flag --other — ${USAGE}`)
+    expect(() => parseArgs(['--toString'], {}, USAGE)).toThrow(`unknown flag --toString — ${USAGE}`)
 
     const inherited = Object.create({ inherited: 'boolean' }) as FlagSpec
     expect(() => parseArgs(['--inherited'], inherited, USAGE)).toThrow(
@@ -69,9 +57,9 @@ describe('parseArgs', () => {
   })
 
   test('does not add equals-form flags or an end-of-options delimiter', () => {
-    expect(() =>
-      parseArgs(['--output=result.txt'], { output: 'value' }, USAGE),
-    ).toThrow(`unknown flag --output=result.txt — ${USAGE}`)
+    expect(() => parseArgs(['--output=result.txt'], { output: 'value' }, USAGE)).toThrow(
+      `unknown flag --output=result.txt — ${USAGE}`,
+    )
     expect(() => parseArgs(['--', '--json'], { json: 'boolean' }, USAGE)).toThrow(
       `unknown flag -- — ${USAGE}`,
     )
@@ -81,9 +69,7 @@ describe('parseArgs', () => {
     const first = { store: 'value', json: 'boolean' } as const
     const second = { notes: 'value' } as const
 
-    expect(stringFlag(parseArgs(['--store', 'state'], first, USAGE), 'store')).toBe(
-      'state',
-    )
+    expect(stringFlag(parseArgs(['--store', 'state'], first, USAGE), 'store')).toBe('state')
     expect(() => parseArgs(['--store', 'state'], second, USAGE)).toThrow(
       `unknown flag --store — ${USAGE}`,
     )

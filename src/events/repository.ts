@@ -158,9 +158,7 @@ export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
   (typeof repositoryEventPayloadSchemas)[T]
 >
 
-export interface RepositoryEventEnvelope<
-  T extends RepositoryEventType = RepositoryEventType,
-> {
+export interface RepositoryEventEnvelope<T extends RepositoryEventType = RepositoryEventType> {
   repo: string
   seq: number
   ts: string
@@ -173,29 +171,23 @@ export type RepositoryEvent = {
   [T in RepositoryEventType]: RepositoryEventEnvelope<T>
 }[RepositoryEventType]
 
-export interface RepositoryEventWrite<
-  T extends RepositoryEventType = RepositoryEventType,
-> {
+export interface RepositoryEventWrite<T extends RepositoryEventType = RepositoryEventType> {
   actor: Actor
   type: T
   payload: RepositoryEventPayload<T>
 }
 
 export type HarvestEventType = keyof typeof harvestEventPayloadSchemas
-export type HarvestEventPayload<T extends HarvestEventType> =
-  RepositoryEventPayload<T>
-export type HarvestEventEnvelope<
-  T extends HarvestEventType = HarvestEventType,
-> = RepositoryEventEnvelope<T>
+export type HarvestEventPayload<T extends HarvestEventType> = RepositoryEventPayload<T>
+export type HarvestEventEnvelope<T extends HarvestEventType = HarvestEventType> =
+  RepositoryEventEnvelope<T>
 export type HarvestEvent = {
   [T in HarvestEventType]: RepositoryEventEnvelope<T>
 }[HarvestEventType]
 export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
   RepositoryEventWrite<T>
 
-export const HARVEST_EVENT_TYPES = Object.keys(
-  harvestEventPayloadSchemas,
-) as HarvestEventType[]
+export const HARVEST_EVENT_TYPES = Object.keys(harvestEventPayloadSchemas) as HarvestEventType[]
 
 const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.pause-requested': ['human'],
@@ -228,9 +220,7 @@ export function isHarvestEvent(event: RepositoryEvent): event is HarvestEvent {
   return isHarvestEventType(event.type)
 }
 
-export function isRepositoryEventType(
-  value: string,
-): value is RepositoryEventType {
+export function isRepositoryEventType(value: string): value is RepositoryEventType {
   return Object.hasOwn(repositoryEventPayloadSchemas, value)
 }
 
@@ -258,9 +248,7 @@ export function validateRepositoryEventWrite(input: {
       `actor kind "${actor.kind}" may not emit "${input.type}" (allowed: ${allowed.join(', ')})`,
     )
   }
-  const result = repositoryEventPayloadSchemas[input.type].safeParse(
-    input.payload,
-  )
+  const result = repositoryEventPayloadSchemas[input.type].safeParse(input.payload)
   if (!result.success) {
     throw new EventValidationError(
       `invalid payload for "${input.type}": ${result.error.message}`,

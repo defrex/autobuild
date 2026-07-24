@@ -68,10 +68,7 @@ describe('paintableRows: the frame needs one row fewer than the screen', () => {
   test('a maximum-paintable frame starts at row 1 and keeps the spare row below it', () => {
     const rows = 5
     const term = fakeTerm(rows)
-    const lines = Array.from(
-      { length: paintableRows(rows) },
-      (_, i) => `line-${i}`,
-    )
+    const lines = Array.from({ length: paintableRows(rows) }, (_, i) => `line-${i}`)
 
     new LiveRegion(term).update(lines)
 
@@ -106,10 +103,7 @@ describe('LiveRegion: alternate-screen replacement', () => {
 
     region.update(['x'])
 
-    expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(1),
-      'x\n',
-    ])
+    expect(term.writes.slice(before)).toEqual([CLEAR_DISPLAY + CURSOR_POSITION(1), 'x\n'])
   })
 
   test('an initial empty frame is inert', () => {
@@ -136,19 +130,13 @@ describe('LiveRegion: terminal resize', () => {
     const shrunk = ['summary', 'toggles', 'controls']
     let before = term.writes.length
     region.update(shrunk)
-    expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(1),
-      frame(shrunk),
-    ])
+    expect(term.writes.slice(before)).toEqual([CLEAR_DISPLAY + CURSOR_POSITION(1), frame(shrunk)])
 
     // An ordinary changed repaint is likewise a whole-display replacement.
     const changed = ['summary', 'changed']
     before = term.writes.length
     region.update(changed)
-    expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(1),
-      frame(changed),
-    ])
+    expect(term.writes.slice(before)).toEqual([CLEAR_DISPLAY + CURSOR_POSITION(1), frame(changed)])
 
     // Equal frame and equal height remains the zero-write fast path, including
     // after the shrink.
@@ -162,10 +150,7 @@ describe('LiveRegion: terminal resize', () => {
     term.rows = 9
     before = term.writes.length
     region.update(changed)
-    expect(term.writes.slice(before)).toEqual([
-      CLEAR_DISPLAY + CURSOR_POSITION(1),
-      frame(changed),
-    ])
+    expect(term.writes.slice(before)).toEqual([CLEAR_DISPLAY + CURSOR_POSITION(1), frame(changed)])
 
     before = term.writes.length
     region.update(changed)
@@ -195,11 +180,7 @@ describe('LiveRegion: finish() leaves the last frame on the normal screen', () =
     region.finish()
 
     const teardown = term.writes.slice(before)
-    expect(teardown).toEqual([
-      LEAVE_ALTERNATE_SCREEN,
-      'final-frame\n',
-      SHOW_CURSOR,
-    ])
+    expect(teardown).toEqual([LEAVE_ALTERNATE_SCREEN, 'final-frame\n', SHOW_CURSOR])
     expect(teardown.join('')).not.toContain(CLEAR_DISPLAY)
   })
 

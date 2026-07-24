@@ -177,10 +177,7 @@ function requireRun(
 export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
   const runs = new Map<string, HarvestRunState>()
   const order: HarvestRunState[] = []
-  const claimed = new Map<
-    string,
-    { occurrence: OccurrenceKey; run: string }
-  >()
+  const claimed = new Map<string, { occurrence: OccurrenceKey; run: string }>()
   const ledger: HarvestLedgerEntry[] = []
   const pending: Record<HarvestPendingCommand['command'], HarvestPendingCommand[]> = {
     pause: [],
@@ -228,10 +225,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
             // Give-up is terminal. A human acknowledgement removes every
             // outstanding repository attention barrier without resurrecting
             // a run or changing its selectively retained claims.
-            if (
-              hadHumanResume &&
-              exhaustion.attentionAcknowledgedSeq === undefined
-            ) {
+            if (hadHumanResume && exhaustion.attentionAcknowledgedSeq === undefined) {
               exhaustion.attentionAcknowledgedSeq = event.seq
               exhaustion.attentionAcknowledgedAt = event.ts
             }
@@ -266,11 +260,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
               `ordinary failed run; "${run.run}" is ${run.status}`,
           )
         }
-        if (
-          run.recoveryRequests.some(
-            (request) => request.acknowledgedSeq === undefined,
-          )
-        ) {
+        if (run.recoveryRequests.some((request) => request.acknowledgedSeq === undefined)) {
           throw new Error(
             `harvest run "${run.run}" already has an unacknowledged automatic recovery request`,
           )
@@ -283,10 +273,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           )
         }
         const appliedLimit = run.recoveryRequests[0]?.limit
-        if (
-          appliedLimit !== undefined &&
-          event.payload.limit !== appliedLimit
-        ) {
+        if (appliedLimit !== undefined && event.payload.limit !== appliedLimit) {
           throw new Error(
             `harvest run "${run.run}" recovery limit was already applied as ` +
               `${appliedLimit}; repo seq ${event.seq} cannot change it to ${event.payload.limit}`,
@@ -331,9 +318,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         if (
           event.payload.attempts !== run.recoveryRequests.length ||
           event.payload.attempts !== event.payload.limit ||
-          run.recoveryRequests.some(
-            (request) => request.limit !== event.payload.limit,
-          )
+          run.recoveryRequests.some((request) => request.limit !== event.payload.limit)
         ) {
           throw new Error(
             `harvest run "${run.run}" exhaustion must record its exact recovery ` +
@@ -341,11 +326,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
               `after ${run.recoveryRequests.length} requests`,
           )
         }
-        if (
-          run.recoveryRequests.some(
-            (request) => request.acknowledgedSeq === undefined,
-          )
-        ) {
+        if (run.recoveryRequests.some((request) => request.acknowledgedSeq === undefined)) {
           throw new Error(
             `harvest run "${run.run}" cannot exhaust with an unacknowledged recovery request`,
           )
@@ -411,9 +392,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           }
           claimed.delete(key)
         }
-        run.dispositions = structuredClone(
-          event.payload.committedDispositions,
-        )
+        run.dispositions = structuredClone(event.payload.committedDispositions)
         for (const disposition of event.payload.committedDispositions) {
           ledger.push({
             ...structuredClone(disposition),
@@ -423,18 +402,12 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         }
         run.recoveryExhaustion = {
           step: event.payload.step,
-          ...(event.payload.round !== undefined
-            ? { round: event.payload.round }
-            : {}),
+          ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
           error: event.payload.error,
           attempts: event.payload.attempts,
           limit: event.payload.limit,
-          releasedObservations: structuredClone(
-            event.payload.releasedObservations,
-          ),
-          committedDispositions: structuredClone(
-            event.payload.committedDispositions,
-          ),
+          releasedObservations: structuredClone(event.payload.releasedObservations),
+          committedDispositions: structuredClone(event.payload.committedDispositions),
           pendingProposals: structuredClone(event.payload.pendingProposals),
           seq: event.seq,
           at: event.ts,
@@ -483,9 +456,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         const run = requireRun(runs, event.payload.run, event)
         run.steps.push({
           step: event.payload.step,
-          ...(event.payload.round !== undefined
-            ? { round: event.payload.round }
-            : {}),
+          ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
           startedSeq: event.seq,
           startedAt: event.ts,
         })
@@ -505,9 +476,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           occurrence ??
           ({
             step: event.payload.step,
-            ...(event.payload.round !== undefined
-              ? { round: event.payload.round }
-              : {}),
+            ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
             startedSeq: event.seq,
             startedAt: event.ts,
           } satisfies HarvestStepOccurrence)
@@ -537,9 +506,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           verdict: event.payload.verdict,
           findings: structuredClone(event.payload.findings),
           artifact: cloneRef(event.payload.artifact),
-          ...(event.payload.reason !== undefined
-            ? { reason: event.payload.reason }
-            : {}),
+          ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}),
           seq: event.seq,
         })
         break
@@ -561,9 +528,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           // Exact replay is one logical reservation.
           break
         }
-        const existingId = run.reservations.find(
-          (entry) => entry.id.toLowerCase() === normalizedId,
-        )
+        const existingId = run.reservations.find((entry) => entry.id.toLowerCase() === normalizedId)
         if (existingId !== undefined) {
           throw new Error(
             `harvest reserved id "${event.payload.id}" already belongs to proposal ` +
@@ -582,9 +547,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         const run = requireRun(runs, event.payload.run, event)
         // Idempotent projection: a retry may adopt the external ticket and see
         // the already-journaled fact. Keep one entry per stable proposal key.
-        const existing = run.filed.find(
-          (entry) => entry.proposalKey === event.payload.proposalKey,
-        )
+        const existing = run.filed.find((entry) => entry.proposalKey === event.payload.proposalKey)
         if (!existing) {
           run.filed.push({
             proposalKey: event.payload.proposalKey,
@@ -618,9 +581,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         run.escalation = {
           source: event.payload.source,
           reason: event.payload.reason,
-          ...(event.payload.round !== undefined
-            ? { round: event.payload.round }
-            : {}),
+          ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
         }
         run.terminalSeq = event.seq
         run.terminalAt = event.ts
@@ -634,9 +595,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         if (run.status !== 'running') break
         run.failure = {
           step: event.payload.step,
-          ...(event.payload.round !== undefined
-            ? { round: event.payload.round }
-            : {}),
+          ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
           attempt: event.payload.attempt,
           error: event.payload.error,
           willRetry: event.payload.willRetry,
@@ -688,9 +647,7 @@ export function parkedHarvestRuns(state: HarvestState): HarvestRunState[] {
   return state.runs.filter(isOrdinaryParkedRun)
 }
 
-export function unresolvedHarvestAttentionRuns(
-  state: HarvestState,
-): HarvestRunState[] {
+export function unresolvedHarvestAttentionRuns(state: HarvestState): HarvestRunState[] {
   return state.runs.filter(hasUnresolvedExhaustion)
 }
 
@@ -701,9 +658,7 @@ export function openHarvestRuns(state: HarvestState): HarvestRunState[] {
 /** The concrete run a control boundary should report if it parks. Exhaustion
  * barriers are repository-global, then ordinary parked work takes priority,
  * then the oldest open workflow is the run execution should continue. */
-export function actionableHarvestRun(
-  state: HarvestState,
-): HarvestRunState | undefined {
+export function actionableHarvestRun(state: HarvestState): HarvestRunState | undefined {
   return (
     unresolvedHarvestAttentionRuns(state)[0] ??
     parkedHarvestRuns(state)[0] ??
@@ -723,9 +678,7 @@ export function decideHarvestControl(
   if (!Number.isInteger(maxRecoveryAttempts) || maxRecoveryAttempts <= 0) {
     throw new Error('max harvest recovery attempts must be a positive integer')
   }
-  const wantsResume = state.pendingCommands.some(
-    (command) => command.command === 'resume',
-  )
+  const wantsResume = state.pendingCommands.some((command) => command.command === 'resume')
   if (state.paused) {
     if (wantsResume) return { kind: 'acknowledge', command: 'resume' }
     return { kind: 'park' }
@@ -744,9 +697,7 @@ export function decideHarvestControl(
   const parked = parkedHarvestRuns(state)
   if (
     parked.some((run) =>
-      run.recoveryRequests.some(
-        (request) => request.acknowledgedSeq === undefined,
-      ),
+      run.recoveryRequests.some((request) => request.acknowledgedSeq === undefined),
     )
   ) {
     return { kind: 'acknowledge', command: 'resume' }
@@ -783,7 +734,5 @@ export function proposalArtifactForRound(
   run: HarvestRunState,
   round: number,
 ): ArtifactRef | undefined {
-  return [...run.proposals]
-    .reverse()
-    .find((proposal) => proposal.round === round)?.artifact
+  return [...run.proposals].reverse().find((proposal) => proposal.round === round)?.artifact
 }

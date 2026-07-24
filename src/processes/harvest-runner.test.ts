@@ -9,11 +9,7 @@ import { KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
-import {
-  ScriptedAgentRunner,
-  defaultTurnResult,
-  failedTurnResult,
-} from '../ports/runner/fake'
+import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -39,7 +35,11 @@ function countingUuids() {
   }
 }
 
-async function seedObservation(store: MemoryBuildStore, build: string, summary: string): Promise<void> {
+async function seedObservation(
+  store: MemoryBuildStore,
+  build: string,
+  summary: string,
+): Promise<void> {
   if ((await store.getBuild(build)) === null) {
     await store.createBuild({ slug: build, repo: '/repo' })
   }
@@ -50,10 +50,7 @@ async function seedObservation(store: MemoryBuildStore, build: string, summary: 
   })
 }
 
-function config(
-  threshold = 2,
-  policy: { maxReviewRounds?: number; stallRounds?: number } = {},
-) {
+function config(threshold = 2, policy: { maxReviewRounds?: number; stallRounds?: number } = {}) {
   return parseConfig(
     [
       '[tickets]',
@@ -212,9 +209,7 @@ describe('HarvestRunner', () => {
         if (opts.skill === 'ab-harvest') {
           if (turn === 2) {
             expect(
-              JSON.parse(
-                await readFile(join(workspace, '.ab', 'findings.json'), 'utf8'),
-              ),
+              JSON.parse(await readFile(join(workspace, '.ab', 'findings.json'), 'utf8')),
             ).toHaveLength(1)
           }
           const observations = JSON.parse(
@@ -245,9 +240,7 @@ describe('HarvestRunner', () => {
             const findings = join(workspace, '.ab', 'review-findings.json')
             await writeFile(
               findings,
-              JSON.stringify([
-                { severity: 'important', summary: 'Make the title specific' },
-              ]),
+              JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
             )
             await submitHarvestVerdict(deps, {
               verdict: 'revise',
@@ -279,9 +272,7 @@ describe('HarvestRunner', () => {
     expect(result.outcome).toBe('completed')
     const journals = [...scripted.sessions.values()]
     const producers = journals.filter((session) => session.opts.skill === 'ab-harvest')
-    const reviewers = journals.filter(
-      (session) => session.opts.skill === 'ab-harvest-review',
-    )
+    const reviewers = journals.filter((session) => session.opts.skill === 'ab-harvest-review')
     expect(producers).toHaveLength(1)
     expect(producers[0]?.turns).toHaveLength(2)
     expect(reviewers).toHaveLength(2)
@@ -368,9 +359,7 @@ describe('HarvestRunner', () => {
 
   for (const pauseDuring of ['synthesize', 'review'] as const) {
     test(`pauses after the in-flight ${pauseDuring} boundary and resumes without repeating completed work`, async () => {
-      const workspace = await mkdtemp(
-        join(tmpdir(), `ab-harvest-pause-${pauseDuring}-`),
-      )
+      const workspace = await mkdtemp(join(tmpdir(), `ab-harvest-pause-${pauseDuring}-`))
       roots.push(workspace)
       const store = new MemoryBuildStore({ clock: steppingClock() })
       const tickets = new FakeTicketSource()
@@ -461,18 +450,12 @@ describe('HarvestRunner', () => {
         run: run.run,
       })
       const afterResumeEvents = await store.getRepoEvents('/repo')
+      expect(afterResumeEvents.filter((event) => event.type === 'harvest.started')).toHaveLength(1)
       expect(
-        afterResumeEvents.filter((event) => event.type === 'harvest.started'),
+        afterResumeEvents.filter((event) => event.type === 'harvest.proposals.submitted'),
       ).toHaveLength(1)
       expect(
-        afterResumeEvents.filter(
-          (event) => event.type === 'harvest.proposals.submitted',
-        ),
-      ).toHaveLength(1)
-      expect(
-        afterResumeEvents.filter(
-          (event) => event.type === 'harvest.review.verdict',
-        ),
+        afterResumeEvents.filter((event) => event.type === 'harvest.review.verdict'),
       ).toHaveLength(1)
       expect(producers).toBe(1)
       expect(reviewers).toBe(1)
@@ -611,9 +594,7 @@ describe('HarvestRunner', () => {
       })
       expect(producers).toBe(stage === 'started' ? 1 : 0)
       expect(reviewers).toBe(stage === 'started' || stage === 'proposals' ? 1 : 0)
-      expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.status).toBe(
-        'completed',
-      )
+      expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.status).toBe('completed')
       expect(await tickets.get('fake-1')).not.toBeNull()
       expect(await tickets.get('fake-2')).toBeNull()
       expect(uuids.allocated).toHaveLength(stage === 'filed' ? 0 : 1)
@@ -692,12 +673,8 @@ describe('HarvestRunner', () => {
     ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
 
     const events = await store.getRepoEvents('/repo')
-    expect(
-      events.filter((event) => event.type === 'harvest.recovery-requested'),
-    ).toHaveLength(1)
-    expect(
-      events.filter((event) => event.type === 'harvest.resumed'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.recovery-requested')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.resumed')).toHaveLength(1)
     expect(reduceHarvest(events).latest?.recoveryRequests).toEqual([
       expect.objectContaining({
         attempt: 1,
@@ -812,9 +789,7 @@ describe('HarvestRunner', () => {
     const recovered = state.runs.find((run) => run.run === seeded.run)!
     expect(recovered).toMatchObject({
       status: 'completed',
-      recoveryRequests: [
-        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-      ],
+      recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
     })
     expect({
       scan: recovered.scan,
@@ -823,13 +798,9 @@ describe('HarvestRunner', () => {
       reservations: recovered.reservations,
       filed: recovered.filed,
     }).toEqual(preserved)
-    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe(
-      'completed',
-    )
+    expect(state.runs.find((run) => run.run === 'h_later_completed')?.status).toBe('completed')
     expect(
-      (await store.getRepoEvents('/repo')).filter(
-        (event) => event.type === 'harvest.started',
-      ),
+      (await store.getRepoEvents('/repo')).filter((event) => event.type === 'harvest.started'),
     ).toHaveLength(2)
     expect(
       (await scanUnclaimedObservations(store, '/repo')).observations.map(
@@ -901,12 +872,8 @@ describe('HarvestRunner', () => {
     expect(producers).toBe(0)
     expect(reviewers).toBe(1)
     const events = await store.getRepoEvents('/repo')
-    expect(
-      events.filter((event) => event.type === 'harvest.proposals.submitted'),
-    ).toHaveLength(1)
-    expect(
-      events.filter((event) => event.type === 'harvest.recovery-requested'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.proposals.submitted')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.recovery-requested')).toHaveLength(1)
   })
 
   test('a held repository lease excludes a duplicate launch', async () => {
@@ -914,9 +881,7 @@ describe('HarvestRunner', () => {
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await store.ensureRepo('/repo')
-    expect(await store.claimRepoLease('/repo', 'other-dispatcher', 3_600_000)).toBe(
-      true,
-    )
+    expect(await store.claimRepoLease('/repo', 'other-dispatcher', 3_600_000)).toBe(true)
     let calls = 0
     const scripted = new ScriptedAgentRunner({
       script: () => {
@@ -1000,9 +965,7 @@ describe('HarvestRunner', () => {
     expect(producerCalls).toBe(1)
     expect(reviewerCalls).toBe(0)
     expect(
-      (await store.getRepoEvents('/repo')).some(
-        (event) => event.type === 'harvest.failed',
-      ),
+      (await store.getRepoEvents('/repo')).some((event) => event.type === 'harvest.failed'),
     ).toBe(false)
   })
 
@@ -1083,14 +1046,10 @@ describe('HarvestRunner', () => {
       },
     })
     expect(
-      exhaustedEvents.filter(
-        (event) => event.type === 'harvest.recovery-requested',
-      ),
+      exhaustedEvents.filter((event) => event.type === 'harvest.recovery-requested'),
     ).toHaveLength(2)
     expect(
-      exhaustedEvents.filter(
-        (event) => event.type === 'harvest.recovery-exhausted',
-      ),
+      exhaustedEvents.filter((event) => event.type === 'harvest.recovery-exhausted'),
     ).toHaveLength(1)
     expect(calls).toBe(4)
     expect(await makeRunner('attention-barrier').run()).toEqual({
@@ -1161,9 +1120,7 @@ describe('HarvestRunner', () => {
       error: KIMI_QUOTA,
       willRetry: false,
     })
-    expect(
-      events.filter((event) => event.type === 'harvest.session.started'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.session.started')).toHaveLength(1)
     const ended = events.find((event) => event.type === 'harvest.session.ended')
     expect(ended).toBeDefined()
     if (ended?.type !== 'harvest.session.ended') throw new Error('unreachable')
@@ -1190,21 +1147,15 @@ describe('HarvestRunner', () => {
       run: 'harvest_1',
       status: 'completed',
       observations: [{ build: 'provider-error', seq: 1 }],
-      recoveryRequests: [
-        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-      ],
+      recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
     })
+    expect(repairedEvents.filter((event) => event.type === 'harvest.started')).toHaveLength(1)
     expect(
-      repairedEvents.filter((event) => event.type === 'harvest.started'),
+      repairedEvents.filter((event) => event.type === 'harvest.proposals.submitted'),
     ).toHaveLength(1)
-    expect(
-      repairedEvents.filter(
-        (event) => event.type === 'harvest.proposals.submitted',
-      ),
-    ).toHaveLength(1)
-    expect(
-      repairedEvents.filter((event) => event.type === 'harvest.review.verdict'),
-    ).toHaveLength(1)
+    expect(repairedEvents.filter((event) => event.type === 'harvest.review.verdict')).toHaveLength(
+      1,
+    )
     expect(calls).toBe(3)
     expect(await tickets.get('fake-1')).not.toBeNull()
   })
@@ -1294,9 +1245,7 @@ describe('HarvestRunner', () => {
               {
                 severity: 'important',
                 summary: 'Same unresolved issue',
-                ...(previousFinding === undefined
-                  ? {}
-                  : { persists: [previousFinding] }),
+                ...(previousFinding === undefined ? {} : { persists: [previousFinding] }),
               },
             ]),
           )
@@ -1345,15 +1294,11 @@ describe('HarvestRunner', () => {
         const reservedId = args[1]?.idempotencyKey
         expect(reservedId).toBeDefined()
         const current = reduceHarvest(await store.getRepoEvents('/repo')).latest
-        const reservation = current?.reservations.find(
-          (entry) => entry.id === reservedId,
-        )
+        const reservation = current?.reservations.find((entry) => entry.id === reservedId)
         expect(reservation).toBeDefined()
-        expect(
-          current?.filed.some(
-            (entry) => entry.proposalKey === reservation?.proposalKey,
-          ),
-        ).toBe(false)
+        expect(current?.filed.some((entry) => entry.proposalKey === reservation?.proposalKey)).toBe(
+          false,
+        )
         createIds.push(reservedId!)
         return super.create(...args)
       }
@@ -1407,12 +1352,8 @@ describe('HarvestRunner', () => {
     expect(await tickets.get('fake-1')).not.toBeNull()
     expect(await tickets.get('fake-2')).not.toBeNull()
     const events = await store.getRepoEvents('/repo')
-    const reservations = events.filter(
-      (event) => event.type === 'harvest.proposal.id-reserved',
-    )
-    const filings = events.filter(
-      (event) => event.type === 'harvest.proposal.filed',
-    )
+    const reservations = events.filter((event) => event.type === 'harvest.proposal.id-reserved')
+    const filings = events.filter((event) => event.type === 'harvest.proposal.filed')
     expect(reservations).toHaveLength(2)
     expect(filings).toHaveLength(2)
     for (const reservation of reservations) {
@@ -1502,11 +1443,7 @@ describe('HarvestRunner', () => {
       observations: claimed,
     })
     expect(state.latest?.filed).toHaveLength(1)
-    expect(createTitles).toEqual([
-      'Harvested defect 1',
-      'Harvested defect 2',
-      'Harvested defect 2',
-    ])
+    expect(createTitles).toEqual(['Harvested defect 1', 'Harvested defect 2', 'Harvested defect 2'])
     expect(await tickets.get('fake-1')).not.toBeNull()
     expect(await tickets.get('fake-2')).toBeNull()
 
@@ -1523,9 +1460,7 @@ describe('HarvestRunner', () => {
       run: seeded.run,
       status: 'completed',
       observations: claimed,
-      recoveryRequests: [
-        { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-      ],
+      recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
     })
     expect(state.latest?.filed).toHaveLength(2)
     expect(createTitles).toEqual([
@@ -1536,23 +1471,13 @@ describe('HarvestRunner', () => {
     ])
     expect(await tickets.get('fake-1')).not.toBeNull()
     expect(await tickets.get('fake-2')).not.toBeNull()
-    expect(
-      events.filter((event) => event.type === 'harvest.started'),
-    ).toHaveLength(1)
-    expect(
-      events.filter((event) => event.type === 'harvest.proposals.submitted'),
-    ).toHaveLength(1)
-    expect(
-      events.filter((event) => event.type === 'harvest.review.verdict'),
-    ).toHaveLength(1)
-    const filings = events.filter(
-      (event) => event.type === 'harvest.proposal.filed',
-    )
+    expect(events.filter((event) => event.type === 'harvest.started')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.proposals.submitted')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.review.verdict')).toHaveLength(1)
+    const filings = events.filter((event) => event.type === 'harvest.proposal.filed')
     expect(filings).toHaveLength(2)
     expect(new Set(filings.map((event) => event.payload.proposalKey)).size).toBe(2)
-    expect(
-      events.filter((event) => event.type === 'harvest.completed'),
-    ).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'harvest.completed')).toHaveLength(1)
   })
 
   test('an approved tombstone join exhausts into pending work instead of relaunching forever', async () => {
@@ -1679,9 +1604,7 @@ describe('HarvestRunner', () => {
         step: 'file',
         attempts: 2,
         limit: 2,
-        releasedObservations: scan.observations.map(
-          (item) => item.occurrence,
-        ),
+        releasedObservations: scan.observations.map((item) => item.occurrence),
         pendingProposals: [
           {
             proposalKey: harvestProposalKey(proposal),
@@ -1690,15 +1613,9 @@ describe('HarvestRunner', () => {
         ],
       },
     })
+    expect(events.filter((event) => event.type === 'harvest.recovery-exhausted')).toHaveLength(1)
     expect(
-      events.filter(
-        (event) => event.type === 'harvest.recovery-exhausted',
-      ),
-    ).toHaveLength(1)
-    expect(
-      (await scanUnclaimedObservations(store, '/repo')).observations.map(
-        (item) => item.occurrence,
-      ),
+      (await scanUnclaimedObservations(store, '/repo')).observations.map((item) => item.occurrence),
     ).toEqual(scan.observations.map((item) => item.occurrence))
     expect(await makeRunner('tombstone-attention-barrier').run()).toEqual({
       outcome: 'parked',

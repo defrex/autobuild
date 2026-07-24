@@ -4,23 +4,13 @@ import { join, resolve } from 'node:path'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
-const tickets = await readFile(
-  join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'),
-  'utf8',
-)
+const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
 const installedTickets = await readFile(
   join(DIST_ROOT, '.agents', 'skills', 'ab-tickets', 'SKILL.md'),
   'utf8',
 )
 const pristineTickets = await readFile(
-  join(
-    DIST_ROOT,
-    '.agents',
-    'skills',
-    '.ab-pristine',
-    'ab-tickets',
-    'SKILL.md',
-  ),
+  join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-tickets', 'SKILL.md'),
   'utf8',
 )
 const ticketGuides = [tickets, installedTickets] as const
@@ -31,9 +21,7 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).toContain('ab ticket block <ticket> <blocker-id>')
     expect(spec).toContain('ab ticket unblock <ticket> <blocker-id>')
     expect(spec).toContain('Omitted metadata is preserved')
-    expect(spec).not.toContain(
-      "Changing* an existing ticket's dependencies is not available",
-    )
+    expect(spec).not.toContain("Changing* an existing ticket's dependencies is not available")
   })
 
   test('tickets keeps file lifecycle transitions local but blocker edits source-agnostic', () => {
@@ -69,10 +57,7 @@ describe('ticket grooming skill guidance', () => {
   })
 
   test('checked-in live and pristine ticket skills match the canonical install form', () => {
-    const expectedInstalled = tickets.replace(
-      '\nname: tickets\n',
-      '\nname: ab-tickets\n',
-    )
+    const expectedInstalled = tickets.replace('\nname: tickets\n', '\nname: ab-tickets\n')
     expect(expectedInstalled).not.toBe(tickets)
     expect(installedTickets).toBe(expectedInstalled)
     expect(pristineTickets).toBe(expectedInstalled)

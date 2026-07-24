@@ -5,11 +5,7 @@
  * plumbing (D7), so the CLI, the context builder, and the engine all validate
  * against the same data.
  */
-import {
-  isVerifyPhase,
-  type CorePhase,
-  type Phase,
-} from '../ontology'
+import { isVerifyPhase, type CorePhase, type Phase } from '../ontology'
 import type { EventType } from '../events/payloads'
 import { installedSkillName } from '../skills'
 

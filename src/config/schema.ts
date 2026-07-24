@@ -82,7 +82,7 @@ export function verifyPathGlobError(pattern: string): string | undefined {
   if (pattern.startsWith('!')) {
     return 'path selectors are positive globs; negation is unsupported'
   }
-  if (/[\[\]{}]/.test(pattern)) {
+  if (/[[\]{}]/.test(pattern)) {
     return 'path selectors support only literal characters, *, ?, and whole-segment **; character classes and brace expansion are unsupported'
   }
   if (/[?*+@!]\(/.test(pattern)) {
@@ -272,10 +272,12 @@ export type PolicyConfig = z.infer<typeof policySchema>
 export const ticketsSchema = z.strictObject({
   /** Builtin or plugin-registered TicketSource name. Registry membership is
    * validated after configured plugins load. */
-  source: z.string().refine(
-    (value) => value.trim().length > 0,
-    '[tickets].source must be a nonblank builtin or plugin ticket source name',
-  ),
+  source: z
+    .string()
+    .refine(
+      (value) => value.trim().length > 0,
+      '[tickets].source must be a nonblank builtin or plugin ticket source name',
+    ),
   /**
    * Ticket labels that additionally narrow the mandatory readyState gate
    * (§3.3). A nonempty list is conjunctive: every configured label must be
@@ -331,18 +333,17 @@ const configRootSchema = z.strictObject({
   /** Concurrent builds for this repository (§16.1). */
   capacity: z.number().int().positive().default(1),
   /** Forge adapter selected from builtins and configured plugins. */
-  forge: z.string().refine(
-    (value) => value.trim().length > 0,
-    'forge adapter name must be nonblank',
-  ).default('github'),
+  forge: z
+    .string()
+    .refine((value) => value.trim().length > 0, 'forge adapter name must be nonblank')
+    .default('github'),
   /** Trusted in-process plugin modules, loaded in declaration order from the
    * consuming repository before production adapters are constructed. */
   plugins: z
     .array(
-      z.string().refine(
-        (value) => value.trim().length > 0,
-        'plugin module specifiers must be nonblank',
-      ),
+      z
+        .string()
+        .refine((value) => value.trim().length > 0, 'plugin module specifiers must be nonblank'),
     )
     .default([]),
   pr: prSchema.optional(),
@@ -428,8 +429,7 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
         ctx.addIssue({
           code: 'custom',
           path: ['verify', step, 'command'],
-          message:
-            `[verify.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
+          message: `[verify.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
         })
       }
       if (stepConfig.kind === 'agent' && stepConfig.needsServer && config.server === undefined) {
@@ -472,8 +472,7 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
         ctx.addIssue({
           code: 'custom',
           path: ['finalize', step, 'command'],
-          message:
-            `[finalize.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
+          message: `[finalize.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
         })
       }
     }
@@ -485,16 +484,14 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
       ctx.addIssue({
         code: 'custom',
         path: ['tickets', 'teamKey'],
-        message:
-          '[tickets].source = "linear" requires teamKey — the Linear team key (e.g. "ENG")',
+        message: '[tickets].source = "linear" requires teamKey — the Linear team key (e.g. "ENG")',
       })
     }
     if (tickets.dir !== undefined) {
       ctx.addIssue({
         code: 'custom',
         path: ['tickets', 'dir'],
-        message:
-          '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
+        message: '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
       })
     }
   } else if (tickets.source === 'file') {

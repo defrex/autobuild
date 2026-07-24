@@ -80,13 +80,10 @@ describe('ab plugin', () => {
   })
 
   test('doctor continues after multiple failures and retains a later success', async () => {
-    const root = await repo(
-      ['./missing.ts', './throws.ts', './good.ts'],
-      {
-        'throws.ts': `throw new Error('boom')`,
-        'good.ts': basic,
-      },
-    )
+    const root = await repo(['./missing.ts', './throws.ts', './good.ts'], {
+      'throws.ts': `throw new Error('boom')`,
+      'good.ts': basic,
+    })
     const io = output(root)
     expect(await abPlugin(['doctor'], io.opts)).toBe(1)
     expect(io.stderr.join('\n')).toContain('FAIL ./missing.ts')
@@ -102,9 +99,9 @@ describe('ab plugin', () => {
     )
 
     const missing = output(root)
-    await expect(
-      abPlugin(['test', 'ticket-source', 'jira'], missing.opts),
-    ).rejects.toThrow(/ticketSources\.jira\.contract\.factory.*\{ factory, contract/)
+    await expect(abPlugin(['test', 'ticket-source', 'jira'], missing.opts)).rejects.toThrow(
+      /ticketSources\.jira\.contract\.factory.*\{ factory, contract/,
+    )
   })
 
   test('live contracts require opt-in before launch and child status is authoritative', async () => {
@@ -125,10 +122,12 @@ describe('ab plugin', () => {
     expect(launches).toBe(0)
 
     const allowed = output(root, { AB_RUN_LIVE_PORT_CONTRACTS: '1' })
-    expect(await abPlugin(['test', 'ticket-source', 'jira'], {
-      ...allowed.opts,
-      subprocess,
-    })).toBe(7)
+    expect(
+      await abPlugin(['test', 'ticket-source', 'jira'], {
+        ...allowed.opts,
+        subprocess,
+      }),
+    ).toBe(7)
     expect(launches).toBe(1)
   })
 
@@ -160,25 +159,25 @@ export default {
 
     const red = output(root)
     expect(await abPlugin(['test', 'ticket-source', 'red'], red.opts)).not.toBe(0)
-    expect(red.stdout.concat(red.stderr).join('\n')).toContain(
-      'deliberately broken fixture',
-    )
+    expect(red.stdout.concat(red.stderr).join('\n')).toContain('deliberately broken fixture')
   })
 
   test('forwards the exact contract selection and output seams to the child', async () => {
     const root = await repo(['./plugin.ts'], { 'plugin.ts': contractPlugin(false) })
     const io = output(root)
-    expect(await abPlugin(['test', 'ticket-source', 'jira'], {
-      ...io.opts,
-      subprocess: async (input) => {
-        expect(input.repoRoot).toBe(root)
-        expect(input.port).toBe('ticket-source')
-        expect(input.adapter).toBe('jira')
-        input.stdout('pass: create is idempotent')
-        input.stderr('fixture warning')
-        return 0
-      },
-    })).toBe(0)
+    expect(
+      await abPlugin(['test', 'ticket-source', 'jira'], {
+        ...io.opts,
+        subprocess: async (input) => {
+          expect(input.repoRoot).toBe(root)
+          expect(input.port).toBe('ticket-source')
+          expect(input.adapter).toBe('jira')
+          input.stdout('pass: create is idempotent')
+          input.stderr('fixture warning')
+          return 0
+        },
+      }),
+    ).toBe(0)
     expect(io.stdout).toContain('pass: create is idempotent')
     expect(io.stderr).toContain('fixture warning')
   })

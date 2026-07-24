@@ -311,9 +311,7 @@ export type EventType = keyof typeof eventPayloadSchemas
 
 export const EVENT_TYPES = Object.keys(eventPayloadSchemas) as EventType[]
 
-export type EventPayload<T extends EventType> = z.infer<
-  (typeof eventPayloadSchemas)[T]
->
+export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloadSchemas)[T]>
 
 /** Canonical read shape shared by the reducer, engine, and query surfaces. */
 export interface NormalizedVerifyCompletion {

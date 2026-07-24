@@ -31,21 +31,14 @@ import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 const ROOT = resolve(import.meta.dir, '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
 const README_PATH = join(ROOT, 'README.md')
-const [doc, readme] = await Promise.all([
-  readFile(DOC_PATH, 'utf8'),
-  readFile(README_PATH, 'utf8'),
-])
+const [doc, readme] = await Promise.all([readFile(DOC_PATH, 'utf8'), readFile(README_PATH, 'utf8')])
 
 function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** Exact heading contents, up to the next heading at the same or higher level. */
-function headingSection(
-  markdown: string,
-  level: number,
-  heading: string,
-): string | undefined {
+function headingSection(markdown: string, level: number, heading: string): string | undefined {
   const marker = `${'#'.repeat(level)} ${heading}`
   const lines = markdown.split('\n')
   const boundary = new RegExp(`^#{1,${level}} `)
@@ -135,8 +128,7 @@ function expectRows(
 ): void {
   expect(section, `${location} section is missing`).toBeDefined()
   const missing = fields.filter(
-    (field) =>
-      !new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm').test(section ?? ''),
+    (field) => !new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm').test(section ?? ''),
   )
   expect(
     missing,
@@ -172,9 +164,7 @@ function hasTicketsTable(source: string): boolean {
 
 describe('docs/configuration.md — schema coverage', () => {
   test('the explicit scalar/table maps cover exactly the root schema', () => {
-    expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual(
-      [...TOP_LEVEL_KEYS].sort(),
-    )
+    expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual([...TOP_LEVEL_KEYS].sort())
     expect(Object.keys(TABLE_HEADINGS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
     expect(Object.keys(TABLE_FIELDS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
   })
@@ -229,24 +219,20 @@ describe('docs/configuration.md — executable examples', () => {
   })
 
   test('every repository-config fragment composes with the required scaffold', () => {
-    const fragments = markedTomlBlocks().filter(
-      (block) => block.kind === 'config-fragment',
-    )
+    const fragments = markedTomlBlocks().filter((block) => block.kind === 'config-fragment')
     expect(fragments.length).toBeGreaterThan(1)
     for (const fragment of fragments) {
       const source = hasTicketsTable(fragment.source)
         ? fragment.source
         : `${fragment.source}\n\n${MINIMAL_TICKETS}`
-      expect(
-        () => parseConfig(source, `docs/configuration.md#${fragment.name ?? 'fragment'}`),
+      expect(() =>
+        parseConfig(source, `docs/configuration.md#${fragment.name ?? 'fragment'}`),
       ).not.toThrow()
     }
   })
 
   test('the delimited complete example parses as-is', () => {
-    const examples = markedTomlBlocks().filter(
-      (block) => block.kind === 'complete-config',
-    )
+    const examples = markedTomlBlocks().filter((block) => block.kind === 'complete-config')
     expect(examples).toHaveLength(1)
     expect(() =>
       parseConfig(examples[0]!.source, 'docs/configuration.md#complete-example'),
@@ -254,12 +240,8 @@ describe('docs/configuration.md — executable examples', () => {
   })
 
   test('the plan metadata example resolves against the complete config', () => {
-    const plans = markedTomlBlocks().filter(
-      (block) => block.kind === 'plan-front-matter',
-    )
-    const complete = markedTomlBlocks().find(
-      (block) => block.kind === 'complete-config',
-    )
+    const plans = markedTomlBlocks().filter((block) => block.kind === 'plan-front-matter')
+    const complete = markedTomlBlocks().find((block) => block.kind === 'complete-config')
     expect(plans).toHaveLength(1)
     expect(complete).toBeDefined()
     const config = parseConfig(complete!.source)
@@ -277,9 +259,7 @@ describe('README configuration entry points', () => {
     const learnMore = headingSection(readme, 2, 'Learn more')
     expect(quickstart).toBeDefined()
     expect(quickstart).toMatch(link)
-    expect(quickstart!.indexOf('ab init')).toBeLessThan(
-      quickstart!.search(link),
-    )
+    expect(quickstart!.indexOf('ab init')).toBeLessThan(quickstart!.search(link))
     expect(learnMore).toBeDefined()
     expect(learnMore).toMatch(link)
   })

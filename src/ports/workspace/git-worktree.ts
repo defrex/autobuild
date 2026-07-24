@@ -9,11 +9,7 @@
 import { mkdir, realpath } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
-import type {
-  WorkspaceHandle,
-  WorkspaceProvider,
-  WorkspaceProvisionResult,
-} from '../types'
+import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
 
 export interface ExecResult {
   stdout: string
@@ -22,10 +18,7 @@ export interface ExecResult {
 }
 
 /** Injectable exec seam — the default shells out via Bun.spawn. */
-export type Exec = (
-  cmd: string[],
-  opts: { cwd?: string },
-) => Promise<ExecResult>
+export type Exec = (cmd: string[], opts: { cwd?: string }) => Promise<ExecResult>
 
 export const spawnExec: Exec = async (cmd, opts) => {
   const proc = Bun.spawn(cmd, {
@@ -58,9 +51,7 @@ export class GitError extends Error {
 
 /** `ab/build-123` → `ab-build-123` — one subdir per branch under the root. */
 function sanitizeBranch(branch: string): string {
-  const cleaned = branch
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^[.-]+/, '')
+  const cleaned = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '')
   return cleaned || 'branch'
 }
 
@@ -136,11 +127,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return result
   }
 
-  private shaFrom(
-    dir: string,
-    args: string[],
-    result: ExecResult,
-  ): string {
+  private shaFrom(dir: string, args: string[], result: ExecResult): string {
     if (result.exitCode !== 0) {
       throw new GitError(['-C', dir, ...args], result)
     }
@@ -160,10 +147,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return this.shaFrom(repo, args, await this.git(repo, args))
   }
 
-  private async resolveOptionalCommit(
-    repo: string,
-    ref: string,
-  ): Promise<string | null> {
+  private async resolveOptionalCommit(repo: string, ref: string): Promise<string | null> {
     const args = ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]
     const result = await this.git(repo, args)
     if (result.exitCode === 0) return this.shaFrom(repo, args, result)
@@ -171,11 +155,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     throw new GitError(['-C', repo, ...args], result)
   }
 
-  private async isAncestor(
-    repo: string,
-    ancestor: string,
-    descendant: string,
-  ): Promise<boolean> {
+  private async isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
     const args = ['merge-base', '--is-ancestor', ancestor, descendant]
     const result = await this.git(repo, args)
     if (result.exitCode === 0) return true
@@ -197,12 +177,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     if (!publishedSha || publishedSha === localSha) return localSha
 
     if (await this.isAncestor(repo, localSha, publishedSha)) {
-      await this.gitOrThrow(repo, [
-        'update-ref',
-        branchRef,
-        publishedSha,
-        localSha,
-      ])
+      await this.gitOrThrow(repo, ['update-ref', branchRef, publishedSha, localSha])
       return publishedSha
     }
 
@@ -316,12 +291,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
     const rootDir = await this.realRoot()
     const worktreePath = join(rootDir, sanitizeBranch(branch))
-    const worktrees = await this.findWorktrees(
-      repo,
-      branch,
-      rootDir,
-      worktreePath,
-    )
+    const worktrees = await this.findWorktrees(repo, branch, rootDir, worktreePath)
     if (worktrees.attached) {
       // Idempotent provision (constitution #2): the registered worktree — at
       // the branch's current tip — is the resume point, not a fresh checkout.
@@ -393,19 +363,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     const base = await this.selectNewBranchBase(repo, baseBranch, branch)
     // Consume the selected immutable commit, not a mutable name that could
     // move between fetch and branch creation.
-    await this.gitOrThrow(repo, [
-      'worktree',
-      'add',
-      '-b',
-      branch,
-      worktreePath,
-      base.sha,
-    ])
+    await this.gitOrThrow(repo, ['worktree', 'add', '-b', branch, worktreePath, base.sha])
     const actualSha = await this.resolveCommit(repo, branchRef)
     if (actualSha !== base.sha) {
-      throw new Error(
-        `created ${branchRef} at ${actualSha}, expected selected base ${base.sha}`,
-      )
+      throw new Error(`created ${branchRef} at ${actualSha}, expected selected base ${base.sha}`)
     }
 
     this.repos.set(worktreePath, repo)
@@ -424,20 +385,13 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     // No repo to prune against means nothing was ever provisioned here (or it
     // is already fully gone) — releasing it is a no-op, not an error.
     if (!repo) return
-    const removed = await this.git(repo, [
-      'worktree',
-      'remove',
-      '--force',
-      path,
-    ])
+    const removed = await this.git(repo, ['worktree', 'remove', '--force', path])
     // Already-gone worktrees are a no-op: unregistered paths say "is not a
     // working tree"; registered-but-deleted dirs say "validation failed …"
     // on older gits (2.50 removes them silently). Prune below cleans up.
     if (
       removed.exitCode !== 0 &&
-      !/is not a working tree|validation failed, cannot remove working tree/i.test(
-        removed.stderr,
-      )
+      !/is not a working tree|validation failed, cannot remove working tree/i.test(removed.stderr)
     ) {
       throw new GitError(['-C', repo, 'worktree', 'remove', '--force', path], removed)
     }
@@ -455,23 +409,16 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     rootDir: string,
     worktreePath: string,
   ): Promise<WorktreeSelection> {
-    const list = await this.gitOrThrow(repo, [
-      'worktree',
-      'list',
-      '--porcelain',
-    ])
+    const list = await this.gitOrThrow(repo, ['worktree', 'list', '--porcelain'])
     const entries = parseWorktreeList(list.stdout).map((entry) => ({
       ...entry,
       path: resolve(entry.path),
     }))
     return {
       attached: entries.find(
-        (entry) =>
-          entry.branch === branch && entry.path.startsWith(rootDir + sep),
+        (entry) => entry.branch === branch && entry.path.startsWith(rootDir + sep),
       ),
-      detached: entries.find(
-        (entry) => entry.detached && entry.path === worktreePath,
-      ),
+      detached: entries.find((entry) => entry.detached && entry.path === worktreePath),
       branchAttached: entries.some((entry) => entry.branch === branch),
     }
   }
@@ -485,8 +432,6 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     const commonDir = resolve(path, result.stdout.trim())
     // The common dir is the main repo's `.git`; worktree commands need the
     // repo directory itself (a bare common dir already is one).
-    return commonDir.endsWith(`${sep}.git`)
-      ? commonDir.slice(0, -`${sep}.git`.length)
-      : commonDir
+    return commonDir.endsWith(`${sep}.git`) ? commonDir.slice(0, -`${sep}.git`.length) : commonDir
   }
 }

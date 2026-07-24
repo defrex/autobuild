@@ -22,7 +22,9 @@ function parsePlanMetadata(plan: string): z.infer<typeof planMetadataSchema> | u
   const firstBreak = plan.indexOf('\n')
   const opening = (firstBreak === -1 ? plan : plan.slice(0, firstBreak)).replace(/\r$/, '')
   if (opening !== '+++') {
-    throw new Error('plan front matter has a malformed opening fence — expected a line containing only "+++"')
+    throw new Error(
+      'plan front matter has a malformed opening fence — expected a line containing only "+++"',
+    )
   }
   if (firstBreak === -1) {
     throw new Error('plan front matter is missing its closing "+++" fence')
@@ -82,10 +84,7 @@ export function resolvePlanVerifySteps(plan: string, config: Config): string[] {
     }
     selected.add(step)
 
-    if (
-      !config.verify.steps.includes(step) ||
-      !Object.hasOwn(config.verify.stepConfigs, step)
-    ) {
+    if (!config.verify.steps.includes(step) || !Object.hasOwn(config.verify.stepConfigs, step)) {
       throw new Error(
         `plan verifySteps names unknown step ${JSON.stringify(step)} — ` +
           `no [verify.${step}] table is configured`,

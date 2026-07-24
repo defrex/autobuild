@@ -54,11 +54,7 @@ import {
 } from '../types'
 import { classifyProviderError } from './provider-error'
 import { sessionEnv } from './session-env'
-import type {
-  OneShotCompletion,
-  OneShotCompletionInput,
-  OneShotCompletionResult,
-} from './one-shot'
+import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 
 /** Built-in tool set enabled for a build session. `bash` is mandatory — the
  * agent invokes the `ab` CLI through it — and is the one we override with an
@@ -175,11 +171,9 @@ export class PiTurnCapture {
     const completion =
       event.type === 'message_end'
         ? event.message
-        : event.type === 'message_update' &&
-            event.assistantMessageEvent?.type === 'error'
+        : event.type === 'message_update' && event.assistantMessageEvent?.type === 'error'
           ? event.assistantMessageEvent.error
-          : event.type === 'message_update' &&
-              event.assistantMessageEvent?.type === 'done'
+          : event.type === 'message_update' && event.assistantMessageEvent?.type === 'done'
             ? event.assistantMessageEvent.message
             : undefined
     if (completion?.role !== 'assistant') return
@@ -225,7 +219,7 @@ const piSdkCreateSession: PiCreateSessionFn = async (opts) => {
   const { createAgentSession, ModelRuntime, SessionManager, createBashToolDefinition } = sdk
 
   const modelRuntime = await ModelRuntime.create()
-  let model: ReturnType<typeof modelRuntime.getModel> = undefined
+  let model: ReturnType<typeof modelRuntime.getModel>
   if (opts.model !== undefined) {
     model = modelRuntime.getModel(opts.model.provider, opts.model.id)
     if (model === undefined) {
@@ -357,11 +351,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       extensions: [],
     })
     try {
-      const turn = await session.prompt(
-        input.prompt,
-        sessionEnv(input.env),
-        input.signal,
-      )
+      const turn = await session.prompt(input.prompt, sessionEnv(input.env), input.signal)
       if (turn.failure !== undefined) throw new Error(turn.failure.message)
       return { text: turn.text }
     } finally {
@@ -407,8 +397,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     // §10/D8: a continued turn refreshes the ambient env (new AB_PHASE round,
     // new AB_SESSION) merged over the start env, so the CLI — and the bash
     // subprocess it runs in — resolve THIS round, not round 1's stale identity.
-    const scoped =
-      opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
+    const scoped = opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
     const turn = await state.session.prompt(message, this.turnEnv(scoped))
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
@@ -432,9 +421,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
           session: session.id,
           skill: state.opts.skill,
           invocation: agentInvocation(state.opts),
-          ...(state.opts.buildSlug !== undefined
-            ? { buildSlug: state.opts.buildSlug }
-            : {}),
+          ...(state.opts.buildSlug !== undefined ? { buildSlug: state.opts.buildSlug } : {}),
           turns: state.turns,
         },
         null,

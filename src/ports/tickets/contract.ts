@@ -28,15 +28,11 @@ export interface TicketSourceContractHarness {
   beforeCreate?: (idempotencyKey: string) => Promise<void> | void
   /** Fixture-only bookkeeping, such as attaching a Linear issue to the
    * explicitly configured scratch project. */
-  afterCreate?: (
-    ticket: Ticket,
-    idempotencyKey: string,
-  ) => Promise<void> | void
+  afterCreate?: (ticket: Ticket, idempotencyKey: string) => Promise<void> | void
   cleanup?: () => Promise<void>
 }
 
-export type TicketSourceContractFactory =
-  () => Promise<TicketSourceContractHarness>
+export type TicketSourceContractFactory = () => Promise<TicketSourceContractHarness>
 
 /** Shared live-safe fixtures. UUID suffixes prevent collisions in scratch
  * providers while keeping failures recognizable to an operator. */
@@ -160,21 +156,15 @@ export function describeTicketSourceContract(
           state: harness.states.ready,
         })
         expect(initiallyReady.diagnostics).toEqual([])
-        expect(
-          initiallyReady.tickets.some((ticket) => ticket.ref.id === created.ref.id),
-        ).toBe(true)
+        expect(initiallyReady.tickets.some((ticket) => ticket.ref.id === created.ref.id)).toBe(true)
 
         await harness.source.transition(created.ref.id, harness.states.completed)
-        expect((await harness.source.get(created.ref.id))?.state).toBe(
-          harness.states.completed,
-        )
+        expect((await harness.source.get(created.ref.id))?.state).toBe(harness.states.completed)
         const stillReady = await harness.source.listReady({
           state: harness.states.ready,
         })
         expect(stillReady.diagnostics).toEqual([])
-        expect(
-          stillReady.tickets.some((ticket) => ticket.ref.id === created.ref.id),
-        ).toBe(false)
+        expect(stillReady.tickets.some((ticket) => ticket.ref.id === created.ref.id)).toBe(false)
       })
     })
 
@@ -218,9 +208,9 @@ export function describeTicketSourceContract(
           { id: completed.ref.id, exists: true, resolved: true, blockedBy: [] },
           { id: unresolved.ref.id, exists: true, resolved: false, blockedBy: [] },
         ]
-        expect(
-          await harness.source.dependencyStates(expected.map((state) => state.id)),
-        ).toEqual(expected)
+        expect(await harness.source.dependencyStates(expected.map((state) => state.id))).toEqual(
+          expected,
+        )
       })
     })
 
@@ -301,9 +291,7 @@ export function describeTicketSourceContract(
         )
         const before = await harness.source.get(created.ref.id)
 
-        await expect(harness.source.update(created.ref.id, {})).rejects.toThrow(
-          'at least one',
-        )
+        await expect(harness.source.update(created.ref.id, {})).rejects.toThrow('at least one')
         await expect(
           harness.source.update(created.ref.id, {
             state: harness.states.completed,
@@ -329,9 +317,7 @@ export function describeTicketSourceContract(
           ['title', { title: '   ' }],
           ['body', { body: '\n\t' }],
         ] as const) {
-          await expect(
-            harness.source.update(created.ref.id, patch),
-          ).rejects.toThrow(field)
+          await expect(harness.source.update(created.ref.id, patch)).rejects.toThrow(field)
           expect(await harness.source.get(created.ref.id)).toEqual(before)
         }
 
@@ -364,9 +350,7 @@ export function describeTicketSourceContract(
 
         await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
         await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
-        expect((await harness.source.get(dependent.ref.id))?.blockedBy).toEqual([
-          blocker.ref.id,
-        ])
+        expect((await harness.source.get(dependent.ref.id))?.blockedBy).toEqual([blocker.ref.id])
         expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
           {
             id: dependent.ref.id,
@@ -379,10 +363,7 @@ export function describeTicketSourceContract(
         await harness.source.removeBlocker(dependent.ref.id, blocker.ref.id)
         await harness.source.removeBlocker(dependent.ref.id, blocker.ref.id)
         // Removing an unrelated/missing blocker has the same intended state.
-        await harness.source.removeBlocker(
-          dependent.ref.id,
-          contractIdempotencyKey(),
-        )
+        await harness.source.removeBlocker(dependent.ref.id, contractIdempotencyKey())
         expect((await harness.source.get(dependent.ref.id))?.blockedBy).toBeUndefined()
         expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
           {
@@ -406,13 +387,11 @@ export function describeTicketSourceContract(
           { state: harness.states.ready },
         )
 
-        await expect(
-          harness.source.addBlocker(dependent.ref.id, dependent.ref.id),
-        ).rejects.toThrow(dependent.ref.id)
+        await expect(harness.source.addBlocker(dependent.ref.id, dependent.ref.id)).rejects.toThrow(
+          dependent.ref.id,
+        )
         const missing = contractIdempotencyKey()
-        await expect(
-          harness.source.addBlocker(dependent.ref.id, missing),
-        ).rejects.toThrow(missing)
+        await expect(harness.source.addBlocker(dependent.ref.id, missing)).rejects.toThrow(missing)
         expect((await harness.source.get(dependent.ref.id))?.blockedBy).toBeUndefined()
       })
     })
@@ -429,12 +408,12 @@ export function describeTicketSourceContract(
         )
         const missingTarget = contractIdempotencyKey()
 
-        await expect(
-          harness.source.addBlocker(missingTarget, blocker.ref.id),
-        ).rejects.toThrow(missingTarget)
-        await expect(
-          harness.source.removeBlocker(missingTarget, blocker.ref.id),
-        ).rejects.toThrow(missingTarget)
+        await expect(harness.source.addBlocker(missingTarget, blocker.ref.id)).rejects.toThrow(
+          missingTarget,
+        )
+        await expect(harness.source.removeBlocker(missingTarget, blocker.ref.id)).rejects.toThrow(
+          missingTarget,
+        )
       })
     })
 
@@ -464,9 +443,7 @@ export function describeTicketSourceContract(
           state: harness.states.ready,
         })
         expect(listing.diagnostics).toEqual([])
-        const matching = listing.tickets.filter(
-          (ticket) => ticket.ref.id === first.ref.id,
-        )
+        const matching = listing.tickets.filter((ticket) => ticket.ref.id === first.ref.id)
         expect(matching).toHaveLength(1)
       })
     })

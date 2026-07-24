@@ -51,9 +51,7 @@ export function classifyProviderError(
   hints: ProviderErrorHints = {},
 ): AgentTurnFailure {
   const permanent =
-    (hints.status !== null &&
-      hints.status !== undefined &&
-      PERMANENT_STATUSES.has(hints.status)) ||
+    (hints.status !== null && hints.status !== undefined && PERMANENT_STATUSES.has(hints.status)) ||
     (hints.codes ?? []).some(isPermanentCode) ||
     hasPermanentHttpStatus(message) ||
     PERMANENT_TEXT_PATTERNS.some((pattern) => pattern.test(message))
@@ -74,8 +72,6 @@ function hasPermanentHttpStatus(message: string): boolean {
       message,
     ) ||
     /\bhttp(?:\s+status)?\s*[:=]?\s*(?:401|402|403)\b/i.test(message) ||
-    /["']?(?:status|status_code|statusCode)["']?\s*[:=]\s*["']?(?:401|402|403)\b/.test(
-      message,
-    )
+    /["']?(?:status|status_code|statusCode)["']?\s*[:=]\s*["']?(?:401|402|403)\b/.test(message)
   )
 }

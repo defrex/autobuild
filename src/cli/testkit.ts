@@ -33,9 +33,9 @@ export function makeEnv(overrides: Partial<CliEnv> = {}): CliEnv {
 }
 
 /** Build + `build.created` + spec@0 (`spec.imported`) — every phase's floor. */
-export async function seedStore(opts: {
-  imageHost?: PrImageHostTarget
-} = {}): Promise<MemoryBuildStore> {
+export async function seedStore(
+  opts: { imageHost?: PrImageHostTarget } = {},
+): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore({ clock: steppingClock() })
   await store.createBuild({ slug: BUILD, repo: 'acme/app', branch: BRANCH })
   await store.append(BUILD, {
@@ -50,9 +50,7 @@ export async function seedStore(opts: {
       },
       repo: 'acme/app',
       baseBranch: 'main',
-      ...(opts.imageHost !== undefined
-        ? { pr: { imageHost: opts.imageHost } }
-        : {}),
+      ...(opts.imageHost !== undefined ? { pr: { imageHost: opts.imageHost } } : {}),
     },
   })
   await store.putArtifact(BUILD, {
@@ -151,18 +149,12 @@ export async function initBareOrigin(
   await mkdir(remote, { recursive: true })
   await runGit(['init', '-q', '--bare'], remote)
   await runGit(['remote', 'add', 'origin', remote], workspace)
-  await runGit(
-    ['push', '-q', 'origin', `${branch}:refs/heads/${branch}`],
-    workspace,
-  )
+  await runGit(['push', '-q', 'origin', `${branch}:refs/heads/${branch}`], workspace)
   await runGit(['update-ref', 'refs/heads/main', targetSha], remote)
   await runGit(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote)
 }
 
-export function remoteBranchHead(
-  remote: string,
-  branch = BRANCH,
-): Promise<string> {
+export function remoteBranchHead(remote: string, branch = BRANCH): Promise<string> {
   return runGit(['rev-parse', `refs/heads/${branch}`], remote)
 }
 

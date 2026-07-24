@@ -17,33 +17,16 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
-import {
-  abDispatch,
-  type DispatchOpts,
-  type DispatchWiring,
-} from './dispatch'
-import {
-  renderDashboard,
-  stripAnsi,
-  type DashboardRenderer,
-} from './dashboard/render'
-import type {
-  TerminalInput,
-  TerminalInputEvent,
-  TerminalOut,
-} from './terminal'
-import type { Config } from '../config/schema'
+import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
+import { renderDashboard, stripAnsi, type DashboardRenderer } from './dashboard/render'
+import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
 import type { OneShotCompletionInput } from '../ports/runner/one-shot'
-import {
-  defaultTurnResult,
-  ScriptedAgentRunner,
-  type ScriptContext,
-} from '../ports/runner/fake'
+import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../ports/runner/fake'
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
@@ -241,10 +224,7 @@ describe('abDispatch guards', () => {
   test('a config with no [tickets] table fails at tickets.readyState before wiring', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-'))
     try {
-      await writeFile(
-        join(tmp, 'autobuild.toml'),
-        'baseBranch = "main"\ncapacity = 1\n',
-      )
+      await writeFile(join(tmp, 'autobuild.toml'), 'baseBranch = "main"\ncapacity = 1\n')
       let wired = false
 
       await expect(
@@ -441,9 +421,7 @@ describe('abDispatch guards', () => {
             throw new Error('wire must not run for an unknown forge')
           },
         }),
-      ).rejects.toThrow(
-        'unknown forge adapter "missing"; available forges: github',
-      )
+      ).rejects.toThrow('unknown forge adapter "missing"; available forges: github')
       expect(wired).toBe(false)
     } finally {
       await rm(tmp, { recursive: true, force: true })
@@ -675,9 +653,7 @@ triageState = "Triage"
 
       const [build] = await fx.store.listBuilds()
       expect(build?.ticket?.id).toBe('P-1')
-      expect(textContent((await fx.store.getArtifact(build!.slug, 'spec'))!)).toBe(
-        CONFORMING_BODY,
-      )
+      expect(textContent((await fx.store.getArtifact(build!.slug, 'spec'))!)).toBe(CONFORMING_BODY)
 
       fx.forge.setPrState(1, {
         state: 'merged',
@@ -738,9 +714,7 @@ triageState = "Triage"
       expect(types.indexOf('build.auto-merge-requested')).toBeLessThan(
         types.indexOf('workspace.provisioned'),
       )
-      const request = events.find(
-        (event) => event.type === 'build.auto-merge-requested',
-      )
+      const request = events.find((event) => event.type === 'build.auto-merge-requested')
       expect(request?.actor).toEqual({ kind: 'human', user: 'dispatch-op' })
 
       const firstBuildFrame = firstTerminal.frames.find((frame) =>
@@ -785,15 +759,10 @@ triageState = "Triage"
         wire: fx.wire,
         terminal: overrideTerminal,
       })
-      expect(stripAnsi(overrideTerminal.all())).toContain(
-        'auto merge OFF',
-      )
+      expect(stripAnsi(overrideTerminal.all())).toContain('auto merge OFF')
       expect(
         (await fx.store.getRepoEvents(fx.origin))
-          .filter(
-            (event) =>
-              event.type === 'dispatcher.auto-merge-default-set',
-          )
+          .filter((event) => event.type === 'dispatcher.auto-merge-default-set')
           .map((event) => ({ actor: event.actor, enabled: event.payload.enabled })),
       ).toEqual([
         { actor: { kind: 'human', user: 'dispatch-op' }, enabled: true },
@@ -838,13 +807,10 @@ triageState = "Triage"
       })
 
       expect(fx.tickets.claims).toEqual(['T-existing'])
-      expect((await fx.store.listBuilds()).map((record) => record.slug)).toEqual([
-        existing!.slug,
-      ])
+      expect((await fx.store.listBuilds()).map((record) => record.slug)).toEqual([existing!.slug])
       expect(
         (await fx.store.getEvents(existing!.slug)).some(
-          (event) =>
-            event.type === 'build.completed' && event.payload.outcome === 'merged',
+          (event) => event.type === 'build.completed' && event.payload.outcome === 'merged',
         ),
       ).toBe(true)
 
@@ -918,7 +884,7 @@ model = "gpt-slug-name"
         runtimes: {
           ...wiring.runtimes,
           namer: {
-            runner: wiring.runtimes['scripted']!.runner,
+            runner: wiring.runtimes.scripted!.runner,
             oneShot,
             servesModels: ['gpt-'],
           },
@@ -941,7 +907,7 @@ model = "gpt-slug-name"
       expect(calls[0]?.prompt).toContain(CONFORMING_BODY)
       expect(calls[0]?.prompt).toContain('one to three meaningful words')
       expect(calls[0]?.cwd).toBe(fx.origin)
-      expect(calls[0]?.env['NAMING_API_KEY']).toBe('secret')
+      expect(calls[0]?.env.NAMING_API_KEY).toBe('secret')
       expect(calls[0]?.model).toBe('gpt-slug-name')
       expect(calls[0]?.signal).toBeInstanceOf(AbortSignal)
 
@@ -1007,8 +973,7 @@ model = "gpt-slug-name"
   test('prints invalid-ticket diagnostics to stderr and keeps numeric counts on stdout', async () => {
     const fx = await makeFixture(readyTicket('T-valid'), happyHandlers())
     const originalListReady = fx.tickets.listReady.bind(fx.tickets)
-    const diagnostic =
-      '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    const diagnostic = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
     fx.tickets.listReady = async (criteria) => {
       const listing = await originalListReady(criteria)
       return { ...listing, diagnostics: [diagnostic] }
@@ -1030,9 +995,7 @@ model = "gpt-slug-name"
       expect(tick).toContain('dispatched=1')
       expect(tick).toContain('invalidTickets=1')
       expect(tick).not.toContain('ticketDiagnostics')
-      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([
-        'T-valid',
-      ])
+      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-valid'])
     } finally {
       await fx.cleanup()
     }
@@ -1085,8 +1048,7 @@ model = "gpt-slug-name"
 
       const events = await fx.store.getEvents(slug)
       const retry = events.find(
-        (event) =>
-          event.type === 'escalation.answered' && event.payload.resolution === 'retry',
+        (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
       )
       expect(retry?.actor).toEqual({ kind: 'dispatcher' })
       expect(events.map((event) => event.type)).toContain('finalize.completed')
@@ -1101,10 +1063,7 @@ model = "gpt-slug-name"
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      DISPATCH_CONFIG_TOML.replace(
-        'stallRounds = 3',
-        'stallRounds = 3\nharvestThreshold = 1',
-      ),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
     )
     const run = 'h_dispatch_resume'
     const out: string[] = []
@@ -1252,10 +1211,7 @@ model = "gpt-slug-name"
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      DISPATCH_CONFIG_TOML.replace(
-        'stallRounds = 3',
-        'stallRounds = 3\nharvestThreshold = 1',
-      ),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
     )
     const run = 'h_failed_dispatch'
     const out: string[] = []
@@ -1305,9 +1261,7 @@ model = "gpt-slug-name"
                   whatWhy: 'The approved work must survive an infrastructure stop.',
                   acceptanceCriteria: ['The frozen proposal is filed once.'],
                   outOfScope: ['Starting a replacement harvest run.'],
-                  observations: scan.observations.map(
-                    (item) => item.occurrence,
-                  ),
+                  observations: scan.observations.map((item) => item.occurrence),
                 },
               ],
             }),
@@ -1364,21 +1318,11 @@ model = "gpt-slug-name"
       expect(reduceHarvest(events).latest).toMatchObject({
         run,
         status: 'completed',
-        recoveryRequests: [
-          { attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) },
-        ],
+        recoveryRequests: [{ attempt: 1, limit: 2, acknowledgedSeq: expect.any(Number) }],
       })
-      expect(
-        events.filter((event) => event.type === 'harvest.started'),
-      ).toHaveLength(1)
-      expect(
-        events.filter(
-          (event) => event.type === 'harvest.recovery-requested',
-        ),
-      ).toHaveLength(1)
-      expect(
-        events.filter((event) => event.type === 'harvest.proposal.filed'),
-      ).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'harvest.started')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'harvest.recovery-requested')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'harvest.proposal.filed')).toHaveLength(1)
       expect(await fx.tickets.get('fake-1')).not.toBeNull()
       expect(await fx.tickets.get('fake-2')).toBeNull()
       expect(out).toContain('tick: harvestResumed=1 harvestCompleted=1')
@@ -1502,21 +1446,16 @@ describe('abDispatch watch build-runner coordination', () => {
       const events = await fx.store.getEvents(record!.slug)
       const reviewSessionIds = new Set(
         events.flatMap((event) =>
-          event.type === 'session.started' &&
-          event.payload.phase === 'code-review'
+          event.type === 'session.started' && event.payload.phase === 'code-review'
             ? [event.payload.session]
             : [],
         ),
       )
       const reviewStarts = events.filter(
-        (event) =>
-          event.type === 'session.started' &&
-          event.payload.phase === 'code-review',
+        (event) => event.type === 'session.started' && event.payload.phase === 'code-review',
       )
       const reviewEnds = events.filter(
-        (event) =>
-          event.type === 'session.ended' &&
-          reviewSessionIds.has(event.payload.session),
+        (event) => event.type === 'session.ended' && reviewSessionIds.has(event.payload.session),
       )
       const reviewFailures = events.filter(
         (event) =>
@@ -1524,18 +1463,14 @@ describe('abDispatch watch build-runner coordination', () => {
           event.payload.phase === 'code-review' &&
           event.payload.round === 1,
       )
-      const verdicts = events.filter(
-        (event) => event.type === 'code-review.verdict',
-      )
+      const verdicts = events.filter((event) => event.type === 'code-review.verdict')
 
       expect(reviewStarts).toHaveLength(2)
       expect(reviewEnds).toHaveLength(2)
       expect(reviewFailures).toHaveLength(1)
       expect(verdicts).toHaveLength(1)
       expect(reviewEnds[0]!.seq).toBeLessThan(reviewStarts[1]!.seq)
-      expect(
-        events.filter((event) => event.type === 'runner.attached'),
-      ).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'runner.attached')).toHaveLength(1)
       // Suppressed sweeps are no-ops, not inflated observability counters;
       // one successful verdict also means there was no D5 terminal race.
       expect(out.some((line) => line.includes('swept='))).toBe(false)
@@ -1550,10 +1485,7 @@ describe('abDispatch watch build-runner coordination', () => {
   }, 30_000)
 
   test('a launch preflight failure releases the slug for a later sweep', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-launch-preflight-retry'),
-      happyHandlers(),
-    )
+    const fx = await makeFixture(readyTicket('T-launch-preflight-retry'), happyHandlers())
     const originalGetBuild = fx.store.getBuild.bind(fx.store)
     let failedPreflight = false
     fx.store.getBuild = async (slug) => {
@@ -1599,9 +1531,7 @@ describe('abDispatch watch build-runner coordination', () => {
 
       expect(failedPreflight).toBe(true)
       expect(sleeps).toBe(2)
-      expect(err).toEqual([
-        'tick failed: scripted launch preflight failure',
-      ])
+      expect(err).toEqual(['tick failed: scripted launch preflight failure'])
       const [record] = await fx.store.listBuilds()
       expect(
         (await fx.store.getEvents(record!.slug)).filter(
@@ -1622,10 +1552,7 @@ describe('abDispatch watch harvest coordination', () => {
     const fx = await makeFixture(
       [],
       happyHandlers(),
-      DISPATCH_CONFIG_TOML.replace(
-        'stallRounds = 3',
-        'stallRounds = 3\nharvestThreshold = 1',
-      ),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
     )
     let releaseTurn!: () => void
     const turnGate = new Promise<void>((resolve) => {
@@ -1725,9 +1652,7 @@ describe('abDispatch watch harvest coordination', () => {
       releaseTurn()
       await waitFor(async () =>
         (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) =>
-            event.type === 'harvest.step.completed' &&
-            event.payload.outcome === 'failed',
+          (event) => event.type === 'harvest.step.completed' && event.payload.outcome === 'failed',
         ),
       )
       await waitFor(async () => (await fx.store.getRepo(fx.origin))?.lease === undefined)
@@ -1819,7 +1744,10 @@ function deferred(): {
   return { promise, resolve, reject }
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
   const end = Date.now() + timeoutMs
   while (!(await predicate())) {
     if (Date.now() >= end) throw new Error('timed out waiting for condition')
@@ -1846,9 +1774,7 @@ function fakeTerminal(
 
 function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
-    [...term.frames]
-      .reverse()
-      .find((frame) => stripAnsi(frame).includes('Auto Build')) ?? '',
+    [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Auto Build')) ?? '',
   )
 }
 
@@ -1889,13 +1815,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       const slug = builds[0]!.slug
       const painted = term.all()
       const header = latestDashboardFrame(term).split('\n')[0]!
-      const firstPaintOrigin = term.frames.findIndex(
-        (chunk) => chunk === '\x1b[2J\x1b[1;1H',
-      )
+      const firstPaintOrigin = term.frames.indexOf('\x1b[2J\x1b[1;1H')
       expect(firstPaintOrigin).toBeGreaterThanOrEqual(0)
-      expect(
-        stripAnsi(term.frames[firstPaintOrigin + 1] ?? '').split('\n')[0],
-      ).toContain('Auto Build')
+      expect(stripAnsi(term.frames[firstPaintOrigin + 1] ?? '').split('\n')[0]).toContain(
+        'Auto Build',
+      )
       expect(header).toContain('queue 0 | active 1')
       expect(header).not.toMatch(/\bonce\b/)
       expect(painted).toContain(slug)
@@ -2302,9 +2226,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).toContain('no active builds')
       expect(
         (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) =>
-            event.type === 'dispatcher.intake-set' &&
-            event.payload.enabled === false,
+          (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
         ),
       ).toBe(true)
     } finally {
@@ -2335,9 +2257,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).not.toContain('no active row is selected')
       expect(
         (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) =>
-            event.type === 'dispatcher.intake-set' &&
-            event.payload.enabled === false,
+          (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
         ),
       ).toBe(true)
       expect(fx.err).toEqual([])
@@ -2362,10 +2282,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: term,
       })
       expect(term.all()).toBe('')
-      expect(out).toEqual([
-        `ab dispatch — one pass over ${fx.origin} (capacity 1)`,
-        'tick: idle',
-      ])
+      expect(out).toEqual([`ab dispatch — one pass over ${fx.origin} (capacity 1)`, 'tick: idle'])
       expect(out.join('\n')).not.toContain('\x1b')
       expect(fx.err).toEqual([])
     } finally {
@@ -2412,26 +2329,20 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const diagnostic = 'ticket T-blocked-tty blocked by T-9 (not complete)'
-      const invalidFrame = term.frames.find((chunk) =>
-        stripAnsi(chunk).includes(invalid),
-      )
+      const invalidFrame = term.frames.find((chunk) => stripAnsi(chunk).includes(invalid))
       const painted = stripAnsi(term.all())
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
       expect(invalidFrame).toBeDefined()
       expect(painted).not.toContain(diagnostic)
-      expect(painted).not.toContain(
-        'tick: invalidTickets=1 dependencyBlocked=1',
-      )
+      expect(painted).not.toContain('tick: invalidTickets=1 dependencyBlocked=1')
       const warningLines = stripAnsi(invalidFrame!).split('\n').slice(0, -1)
       expect(warningLines[0]).toContain('Auto Build')
       expect(warningLines[0]).toContain('queue 0 | active 0')
       expect(warningLines[0]).not.toMatch(/\bwatch\b/)
       expect(warningLines[1]).toContain('intake ON')
       expect(warningLines[2]).toBe(`  ${invalid}`)
-      expect(warningLines[2]!.search(/\S/)).toBe(
-        warningLines[0]!.indexOf('Auto Build'),
-      )
+      expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Auto Build'))
     } finally {
       await fx.cleanup()
     }
@@ -2477,10 +2388,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.cliErrors).toEqual([])
       // T-late really was on offer by the time the pass drained…
       const ready = await fx.tickets.listReady({ labels: ['autobuild'], state: 'Ready' })
-      expect(ready.tickets.map((t) => t.ref.id).sort()).toEqual([
-        'T-first',
-        'T-late',
-      ])
+      expect(ready.tickets.map((t) => t.ref.id).sort()).toEqual(['T-first', 'T-late'])
 
       // …and the pass still built only the ticket its ONE tick selected.
       const builds = await fx.store.listBuilds()
@@ -2523,12 +2431,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       return originalListReady(criteria)
     }
 
-    const markedRenderer = (marker: string): DashboardRenderer =>
+    const markedRenderer =
+      (marker: string): DashboardRenderer =>
       (model, opts) => {
         const lines = renderDashboard(model, opts)
-        return lines.length === 0
-          ? lines
-          : [`${marker}  ${lines[0]}`, ...lines.slice(1)]
+        return lines.length === 0 ? lines : [`${marker}  ${lines[0]}`, ...lines.slice(1)]
       }
     let currentRenderer = markedRenderer('renderer A')
     const term = fakeTerminal(true, { columns: 160 })
@@ -2570,9 +2477,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       await planStarted
-      await waitFor(() =>
-        stripAnsi(term.all()).includes('renderer A'),
-      )
+      await waitFor(() => stripAnsi(term.all()).includes('renderer A'))
       await waitFor(() => input.starts === 1 && sleeps === 1)
 
       const [record] = await fx.store.listBuilds()
@@ -2595,9 +2500,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       // Simulate Bun re-evaluating the dev entry: only the mutable renderer
       // pointer changes. The existing tick timer performs the next paint.
       currentRenderer = markedRenderer('renderer B')
-      await waitFor(() =>
-        stripAnsi(term.all()).includes('renderer B'),
-      )
+      await waitFor(() => stripAnsi(term.all()).includes('renderer B'))
 
       expect(dispatchLaunches).toBe(1)
       expect(readyScans).toBe(1)
@@ -2606,9 +2509,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.agents.sessions.size).toBe(1)
       expect(fx.agents.sessions.get(openSession!.session.id)?.ended).toBe(false)
       expect(
-        (await fx.store.getEvents(slug)).filter(
-          (event) => event.type === 'runner.attached',
-        ),
+        (await fx.store.getEvents(slug)).filter((event) => event.type === 'runner.attached'),
       ).toHaveLength(1)
       expect((await fx.store.getBuild(slug))?.lease?.holder).toBe(leaseHolder)
 
@@ -2617,15 +2518,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       releasePlan()
       await waitFor(
         async () =>
-          (await fx.store.getEvents(slug)).some(
-            (event) => event.type === 'finalize.completed',
-          ),
+          (await fx.store.getEvents(slug)).some((event) => event.type === 'finalize.completed'),
         10_000,
       )
       expect(
-        (await fx.store.getEvents(slug)).filter(
-          (event) => event.type === 'runner.attached',
-        ),
+        (await fx.store.getEvents(slug)).filter((event) => event.type === 'runner.attached'),
       ).toHaveLength(1)
       expect((await fx.store.getBuild(slug))?.lease?.holder).toBe(leaseHolder)
 
@@ -2736,58 +2633,50 @@ describe('abDispatch interactive keyboard controls', () => {
       inputA.press('pause')
       await waitFor(async () =>
         (await fx.store.getRepoEvents(fx.origin)).some(
-          (event) =>
-            event.type === 'dispatcher.intake-set' &&
-            event.payload.enabled === false,
+          (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
         ),
       )
       await waitFor(() => latestDashboardFrame(termB).includes('intake OFF'))
 
       inputA.press('auto-merge')
-      await waitFor(async () =>
-        reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-          .defaultAutoMerge,
+      await waitFor(
+        async () =>
+          reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
       )
-      await waitFor(() =>
-        latestDashboardFrame(termB).includes('auto merge ON'),
-      )
+      await waitFor(() => latestDashboardFrame(termB).includes('auto merge ON'))
 
       // B started from intake ON / auto-merge OFF. It must invert A's newer
       // values, not those stale startup views.
       inputB.press('pause')
-      await waitFor(async () =>
-        reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
+      await waitFor(
+        async () => reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
       )
       await waitFor(() => latestDashboardFrame(termA).includes('intake ON'))
       inputB.press('auto-merge')
-      await waitFor(async () =>
-        !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-          .defaultAutoMerge,
+      await waitFor(
+        async () =>
+          !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
       )
-      await waitFor(() =>
-        latestDashboardFrame(termA).includes('auto merge OFF'),
-      )
+      await waitFor(() => latestDashboardFrame(termA).includes('auto merge OFF'))
 
       // Turn intake off once more, add work only after both processes have
       // observed it, and allow several ticks in each process. Neither may
       // claim from a value cached at startup or from its prior tick.
       inputA.press('pause')
-      await waitFor(async () =>
-        !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
+      await waitFor(
+        async () => !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
       )
       await waitFor(
         () =>
           latestDashboardFrame(termA).includes('intake OFF') &&
           latestDashboardFrame(termB).includes('intake OFF'),
       )
-      fx.tickets.add(
-        readyTicket('T-cross-process', { body: 'not a conforming spec' }),
-      )
+      fx.tickets.add(readyTicket('T-cross-process', { body: 'not a conforming spec' }))
       await new Promise((resolve) => setTimeout(resolve, 120))
       expect(fx.tickets.claims).toEqual([])
 
-      const settings = (await fx.store.getRepoEvents(fx.origin)).filter(
-        (event) => event.type.startsWith('dispatcher.'),
+      const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
+        event.type.startsWith('dispatcher.'),
       )
       expect(
         settings.map((event) => [
@@ -2856,10 +2745,9 @@ describe('abDispatch interactive keyboard controls', () => {
       const beforeRepo = await fx.store.getRepoEvents(fx.origin)
       const beforeBuilds = new Map(
         await Promise.all(
-          ['alpha-work', 'beta-work'].map(async (slug) => [
-            slug,
-            await fx.store.getEvents(slug),
-          ] as const),
+          ['alpha-work', 'beta-work'].map(
+            async (slug) => [slug, await fx.store.getEvents(slug)] as const,
+          ),
         ),
       )
       const term = fakeTerminal()
@@ -2879,25 +2767,23 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => stripAnsi(term.all()).includes('> Auto Build'))
 
       input.press('auto-merge')
-      await waitFor(async () =>
-        reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-          .defaultAutoMerge,
+      await waitFor(
+        async () =>
+          reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
       )
       await waitFor(() => latestDashboardFrame(term).includes('auto merge ON'))
       input.press('auto-merge')
-      await waitFor(async () =>
-        !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-          .defaultAutoMerge,
+      await waitFor(
+        async () =>
+          !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
       )
       await waitFor(() => latestDashboardFrame(term).includes('auto merge OFF'))
       expect(
-        (await fx.store.getRepoEvents(fx.origin))
-          .slice(beforeRepo.length)
-          .map((event) => ({
-            actor: event.actor,
-            type: event.type,
-            payload: event.payload,
-          })),
+        (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length).map((event) => ({
+          actor: event.actor,
+          type: event.type,
+          payload: event.payload,
+        })),
       ).toEqual([
         {
           actor: { kind: 'human', user: 'harvest-op' },
@@ -2916,18 +2802,18 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('harvest-gate')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length).some(
-          (event) => event.type === 'harvest.pause-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(beforeRepo.length)
+          .some((event) => event.type === 'harvest.pause-requested'),
       )
       // A request is not an acknowledgement: the durable header remains ON.
       expect(stripAnsi(term.all())).toContain('harvest ON')
 
       input.press('harvest-gate')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length).some(
-          (event) => event.type === 'harvest.resume-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(beforeRepo.length)
+          .some((event) => event.type === 'harvest.resume-requested'),
       )
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -2944,16 +2830,12 @@ describe('abDispatch interactive keyboard controls', () => {
       // both routine no-op actions; neither gets a transient message row.
       input.press('down')
       await waitFor(() => /^> .*alpha-work/m.test(stripAnsi(term.all())))
-      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(
-        beforeRunningAction,
-      )
+      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(beforeRunningAction)
       expect(stripAnsi(term.all())).toContain('intake ON')
       expect(stripAnsi(term.all())).not.toContain('Harvest auto-merge unavailable')
       expect(stripAnsi(term.all())).not.toContain('harvest run has no available action')
 
-      const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(
-        beforeRepo.length,
-      )
+      const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length)
       expect(repoAdded.map((event) => event.type)).toEqual([
         'dispatcher.auto-merge-default-set',
         'dispatcher.auto-merge-default-set',
@@ -2992,9 +2874,11 @@ describe('abDispatch interactive keyboard controls', () => {
         'build.auto-merge-requested',
         'build.pause-requested',
       ])
-      expect(human.slice(-2).every(
-        (event) => event.actor.kind === 'human' && event.actor.user === 'harvest-op',
-      )).toBe(true)
+      expect(
+        human
+          .slice(-2)
+          .every((event) => event.actor.kind === 'human' && event.actor.user === 'harvest-op'),
+      ).toBe(true)
     } finally {
       await fx.cleanup()
     }
@@ -3031,18 +2915,16 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => latestDashboardFrame(term).includes('harvest OFF'))
-      expect(latestDashboardFrame(term)).not.toMatch(/^  Harvest/m)
+      expect(latestDashboardFrame(term)).not.toMatch(/^ {2}Harvest/m)
 
       input.press('harvest-gate')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(before).some(
-          (event) => event.type === 'harvest.resume-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(before)
+          .some((event) => event.type === 'harvest.resume-requested'),
       )
       expect(latestDashboardFrame(term)).toContain('harvest OFF')
-      expect(stripAnsi(term.all())).not.toContain(
-        'harvest gate: resume requested',
-      )
+      expect(stripAnsi(term.all())).not.toContain('harvest gate: resume requested')
       const request = (await fx.store.getRepoEvents(fx.origin)).at(-1)
       expect(request?.actor).toEqual({
         kind: 'human',
@@ -3102,16 +2984,12 @@ describe('abDispatch interactive keyboard controls', () => {
           sleeps += 1
           if (sleeps === 1) {
             input.press('auto-merge')
-            await waitFor(async () =>
-              reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-                .defaultAutoMerge,
+            await waitFor(
+              async () =>
+                reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
             )
-            await waitFor(() =>
-              latestDashboardFrame(term).includes('auto merge ON'),
-            )
-            fx.tickets.add(
-              readyTicket('T-seeded-default', { title: 'Seeded work' }),
-            )
+            await waitFor(() => latestDashboardFrame(term).includes('auto merge ON'))
+            fx.tickets.add(readyTicket('T-seeded-default', { title: 'Seeded work' }))
             return
           }
           if (sleeps === 2) {
@@ -3120,20 +2998,14 @@ describe('abDispatch interactive keyboard controls', () => {
                 (event) => event.type === 'build.auto-merge-requested',
               ),
             )
-            await waitFor(() =>
-              /^  .*seeded-work.*RUNNING/m.test(stripAnsi(term.all())),
-            )
+            await waitFor(() => /^ {2}.*seeded-work.*RUNNING/m.test(stripAnsi(term.all())))
 
             // Global → existing-work → seeded-work. Cancelling this seeded
             // build is authoritative even while the global default stays on.
             input.press('down')
-            await waitFor(() =>
-              /^> .*existing-work/m.test(stripAnsi(term.all())),
-            )
+            await waitFor(() => /^> .*existing-work/m.test(stripAnsi(term.all())))
             input.press('down')
-            await waitFor(() =>
-              /^> .*seeded-work/m.test(stripAnsi(term.all())),
-            )
+            await waitFor(() => /^> .*seeded-work/m.test(stripAnsi(term.all())))
             input.press('auto-merge')
             await waitFor(async () =>
               (await fx.store.getEvents('seeded-work')).some(
@@ -3146,16 +3018,12 @@ describe('abDispatch interactive keyboard controls', () => {
             input.press('up')
             input.press('up')
             input.press('auto-merge')
-            await waitFor(async () =>
-              !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-                .defaultAutoMerge,
+            await waitFor(
+              async () =>
+                !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).defaultAutoMerge,
             )
-            await waitFor(() =>
-              latestDashboardFrame(term).includes('auto merge OFF'),
-            )
-            fx.tickets.add(
-              readyTicket('T-unseeded-default', { title: 'Unseeded work' }),
-            )
+            await waitFor(() => latestDashboardFrame(term).includes('auto merge OFF'))
+            fx.tickets.add(readyTicket('T-unseeded-default', { title: 'Unseeded work' }))
             return
           }
           if (sleeps === 3) {
@@ -3164,13 +3032,14 @@ describe('abDispatch interactive keyboard controls', () => {
                 (event) => event.type === 'spec.imported',
               ),
             )
-            await waitFor(async () =>
-              (await fx.store.getEvents('seeded-work')).some(
-                (event) => event.type === 'finalize.completed',
-              ) &&
-              (await fx.store.getEvents('unseeded-work')).some(
-                (event) => event.type === 'finalize.completed',
-              ),
+            await waitFor(
+              async () =>
+                (await fx.store.getEvents('seeded-work')).some(
+                  (event) => event.type === 'finalize.completed',
+                ) &&
+                (await fx.store.getEvents('unseeded-work')).some(
+                  (event) => event.type === 'finalize.completed',
+                ),
               10_000,
             )
             return
@@ -3186,21 +3055,12 @@ describe('abDispatch interactive keyboard controls', () => {
 
       expect(await fx.store.getEvents('existing-work')).toEqual(existingBefore)
       const seeded = await fx.store.getEvents('seeded-work')
-      expect(
-        seeded.filter(
-          (event) => event.type === 'build.auto-merge-requested',
-        ),
-      ).toHaveLength(1)
-      expect(
-        seeded.filter(
-          (event) => event.type === 'build.auto-merge-cancelled',
-        ),
-      ).toHaveLength(1)
-      expect(
-        seeded.find(
-          (event) => event.type === 'build.auto-merge-requested',
-        )?.actor,
-      ).toEqual({ kind: 'human', user: 'default-op' })
+      expect(seeded.filter((event) => event.type === 'build.auto-merge-requested')).toHaveLength(1)
+      expect(seeded.filter((event) => event.type === 'build.auto-merge-cancelled')).toHaveLength(1)
+      expect(seeded.find((event) => event.type === 'build.auto-merge-requested')?.actor).toEqual({
+        kind: 'human',
+        user: 'default-op',
+      })
       expect(
         (await fx.store.getEvents('unseeded-work')).some(
           (event) => event.type === 'build.auto-merge-requested',
@@ -3267,13 +3127,7 @@ describe('abDispatch interactive keyboard controls', () => {
           report: { kind: 'harvest-report', rev: 1 },
         },
       })
-      expect(
-        await fx.store.claimRepoLease(
-          fx.origin,
-          'other-dispatcher',
-          3_600_000,
-        ),
-      ).toBe(true)
+      expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
       const before = (await fx.store.getRepoEvents(fx.origin)).length
 
       run = abDispatch({
@@ -3292,18 +3146,14 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^> .*Harvest.*FAILED/m.test(latestDashboardFrame(term)))
       input.press('pause')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(before).some(
-          (event) => event.type === 'harvest.resume-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(before)
+          .some((event) => event.type === 'harvest.resume-requested'),
       )
       const added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      expect(added.map((event) => event.type)).toEqual([
-        'harvest.resume-requested',
-      ])
+      expect(added.map((event) => event.type)).toEqual(['harvest.resume-requested'])
       expect(added[0]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
-      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(
-        false,
-      )
+      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -3430,18 +3280,14 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('pause')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(before).some(
-          (event) => event.type === 'harvest.resume-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(before)
+          .some((event) => event.type === 'harvest.resume-requested'),
       )
       let added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      expect(added.map((event) => event.type)).toEqual([
-        'harvest.resume-requested',
-      ])
+      expect(added.map((event) => event.type)).toEqual(['harvest.resume-requested'])
       expect(added[0]?.actor).toEqual({ kind: 'human', user: 'error-op' })
-      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(
-        false,
-      )
+      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       // A second p while the request is pending is a no-op. The queued Up is
       // its serialization fence; neither action needs a transient notice.
@@ -3449,9 +3295,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('up')
       await waitFor(() => /^> Auto Build/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 1)
-      expect(stripAnsi(term.all())).not.toContain(
-        'harvest run: resume acknowledgement pending',
-      )
+      expect(stripAnsi(term.all())).not.toContain('harvest run: resume acknowledgement pending')
 
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -3462,9 +3306,11 @@ describe('abDispatch interactive keyboard controls', () => {
         const latest = [...term.frames]
           .reverse()
           .find((frame) => stripAnsi(frame).includes('Auto Build'))
-        return latest !== undefined &&
+        return (
+          latest !== undefined &&
           !/Harvest.*FAILED/.test(stripAnsi(latest)) &&
           /^> Auto Build/m.test(stripAnsi(latest))
+        )
       })
 
       // A deliberate escalation uses the same run-attention request and stays
@@ -3498,19 +3344,11 @@ describe('abDispatch interactive keyboard controls', () => {
           .slice(beforeEscalatedAction)
           .some((event) => event.type === 'harvest.resume-requested'),
       )
-      added = (await fx.store.getRepoEvents(fx.origin)).slice(
-        beforeEscalatedAction,
-      )
-      expect(added.map((event) => event.type)).toEqual([
-        'harvest.resume-requested',
-      ])
-      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(
-        false,
-      )
+      added = (await fx.store.getRepoEvents(fx.origin)).slice(beforeEscalatedAction)
+      expect(added.map((event) => event.type)).toEqual(['harvest.resume-requested'])
+      expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
       expect(stripAnsi(term.all())).toMatch(/Harvest.*ESCALATED/)
-      expect(stripAnsi(term.all())).not.toContain(
-        'harvest: escalation acknowledgement requested',
-      )
+      expect(stripAnsi(term.all())).not.toContain('harvest: escalation acknowledgement requested')
 
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -3521,9 +3359,11 @@ describe('abDispatch interactive keyboard controls', () => {
         const latest = [...term.frames]
           .reverse()
           .find((frame) => stripAnsi(frame).includes('Auto Build'))
-        return latest !== undefined &&
+        return (
+          latest !== undefined &&
           !/Harvest.*ESCALATED/.test(stripAnsi(latest)) &&
           /^> Auto Build/m.test(stripAnsi(latest))
+        )
       })
 
       input.press('interrupt')
@@ -3591,9 +3431,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return frame.includes('harvest OFF') && /Harvest.*ESCALATED/.test(frame)
       })
       input.press('down')
-      await waitFor(() =>
-        /^> .*Harvest.*ESCALATED/m.test(latestDashboardFrame(term)),
-      )
+      await waitFor(() => /^> .*Harvest.*ESCALATED/m.test(latestDashboardFrame(term)))
       input.press('pause')
       input.press('up')
       // The selection move is serialized after the no-op run action.
@@ -3605,9 +3443,9 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('harvest-gate')
       await waitFor(async () =>
-        (await fx.store.getRepoEvents(fx.origin)).slice(before).some(
-          (event) => event.type === 'harvest.resume-requested',
-        ),
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(before)
+          .some((event) => event.type === 'harvest.resume-requested'),
       )
       expect(latestDashboardFrame(term)).toContain('harvest OFF')
       const request = (await fx.store.getRepoEvents(fx.origin)).at(-1)
@@ -3620,9 +3458,11 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => {
         const frame = latestDashboardFrame(term)
-        return frame.includes('harvest ON') &&
+        return (
+          frame.includes('harvest ON') &&
           !/Harvest.*ESCALATED/.test(frame) &&
           /^> Auto Build/m.test(frame)
+        )
       })
 
       input.press('interrupt')
@@ -3652,13 +3492,7 @@ describe('abDispatch interactive keyboard controls', () => {
           scan: { kind: 'harvest-scan', rev: 0 },
         },
       })
-      expect(
-        await fx.store.claimRepoLease(
-          fx.origin,
-          'other-dispatcher',
-          3_600_000,
-        ),
-      ).toBe(true)
+      expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
 
       run = abDispatch({
         targetRepo: fx.origin,
@@ -3692,9 +3526,11 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => {
         const frame = latestDashboardFrame(term)
-        return !/^> .*Harvest/m.test(frame) &&
-          !/^  Harvest/m.test(frame) &&
+        return (
+          !/^> .*Harvest/m.test(frame) &&
+          !/^ {2}Harvest/m.test(frame) &&
           /^> Auto Build/m.test(frame)
+        )
       })
 
       input.press('interrupt')
@@ -3729,9 +3565,7 @@ describe('abDispatch interactive keyboard controls', () => {
         once: true,
         wire: fx.wire,
       })
-      const records = (await fx.store.listBuilds()).sort((a, b) =>
-        a.slug.localeCompare(b.slug),
-      )
+      const records = (await fx.store.listBuilds()).sort((a, b) => a.slug.localeCompare(b.slug))
       expect(records.map((record) => record.slug)).toEqual(['alpha-work', 'beta-work'])
 
       const term = fakeTerminal()
@@ -3757,13 +3591,15 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('auto-merge')
       await waitFor(async () => {
         const events = await fx.store.getEvents('beta-work')
-        return events.filter((event) =>
-          [
-            'build.pause-requested',
-            'build.auto-merge-requested',
-            'build.auto-merge-cancelled',
-          ].includes(event.type),
-        ).length === 3
+        return (
+          events.filter((event) =>
+            [
+              'build.pause-requested',
+              'build.auto-merge-requested',
+              'build.auto-merge-cancelled',
+            ].includes(event.type),
+          ).length === 3
+        )
       })
 
       // Removing the selected final row chooses its predecessor, not a stale
@@ -3786,17 +3622,19 @@ describe('abDispatch interactive keyboard controls', () => {
 
       const alpha = await fx.store.getEvents('alpha-work')
       expect(alpha.at(-1)?.type).toBe('build.pause-requested')
-      const commands = (await fx.store.getEvents('beta-work')).filter((event) =>
-        event.actor.kind === 'human',
+      const commands = (await fx.store.getEvents('beta-work')).filter(
+        (event) => event.actor.kind === 'human',
       )
       expect(commands.map((event) => event.type).slice(-3)).toEqual([
         'build.pause-requested',
         'build.auto-merge-requested',
         'build.auto-merge-cancelled',
       ])
-      expect(commands.slice(-3).every((event) =>
-        event.actor.kind === 'human' && event.actor.user === 'dashboard-op'
-      )).toBe(true)
+      expect(
+        commands
+          .slice(-3)
+          .every((event) => event.actor.kind === 'human' && event.actor.user === 'dashboard-op'),
+      ).toBe(true)
       expect(input.starts).toBe(1)
       expect(input.cleanups).toBe(1)
       expect(term.all()).toContain('\x1b[?25h')
@@ -3850,7 +3688,9 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: term,
         input,
       })
-      await waitFor(() => stripAnsi(term.all()).includes('Should finalize use the manual merge path?'))
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('Should finalize use the manual merge path?'),
+      )
       input.press('down')
       await waitFor(() => /^> .*guidance-work/m.test(stripAnsi(term.all())))
 
@@ -3897,10 +3737,7 @@ describe('abDispatch interactive keyboard controls', () => {
   }, 30_000)
 
   test('blank blocked resume retries every captured source and also unpauses a paused+blocked build', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-retry', { title: 'Retry work' }),
-      happyHandlers(),
-    )
+    const fx = await makeFixture(readyTicket('T-retry', { title: 'Retry work' }), happyHandlers())
     try {
       await abDispatch({
         targetRepo: fx.origin,
@@ -3922,10 +3759,7 @@ describe('abDispatch interactive keyboard controls', () => {
         ['esc_policy', 'policy'],
       ] as const) {
         await fx.store.append('retry-work', {
-          actor:
-            source === 'agent'
-              ? agentActor('finalize', 's_blocked')
-              : KERNEL,
+          actor: source === 'agent' ? agentActor('finalize', 's_blocked') : KERNEL,
           type: 'escalation.raised',
           payload: {
             id,
@@ -3989,9 +3823,7 @@ describe('abDispatch interactive keyboard controls', () => {
             event.actor.user === 'dashboard',
         ),
       ).toBe(true)
-      expect(added.map((event) => event.type).slice(-1)).toEqual([
-        'build.resume-requested',
-      ])
+      expect(added.map((event) => event.type).slice(-1)).toEqual(['build.resume-requested'])
       expect(added.some((event) => event.type === 'build.pause-requested')).toBe(false)
     } finally {
       await fx.cleanup()
@@ -4035,11 +3867,7 @@ describe('abDispatch interactive keyboard controls', () => {
       clock,
     )
     const nativeSetAutoMerge = fx.forge.setAutoMerge.bind(fx.forge)
-    fx.forge.setAutoMerge = async (
-      workspacePath: string,
-      number: number,
-      enabled: boolean,
-    ) => {
+    fx.forge.setAutoMerge = async (workspacePath: string, number: number, enabled: boolean) => {
       if (enabled) {
         throw new Error('permission denied enabling native auto-merge')
       }
@@ -4074,10 +3902,11 @@ describe('abDispatch interactive keyboard controls', () => {
       )
       releasePlan()
 
-      await waitFor(async () =>
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'escalation.raised',
-        ),
+      await waitFor(
+        async () =>
+          (await fx.store.getEvents('finalize-retry')).some(
+            (event) => event.type === 'escalation.raised',
+          ),
         5_000,
       )
       await waitFor(() => stripAnsi(term.all()).includes(blocker), 5_000)
@@ -4102,16 +3931,15 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('enter')
       await waitFor(async () =>
         (await fx.store.getEvents('finalize-retry')).some(
-          (event) =>
-            event.type === 'escalation.answered' &&
-            event.payload.resolution === 'retry',
+          (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
         ),
       )
       clock.advance(120_000)
-      await waitFor(async () =>
-        (await fx.store.getEvents('finalize-retry')).some(
-          (event) => event.type === 'finalize.completed',
-        ),
+      await waitFor(
+        async () =>
+          (await fx.store.getEvents('finalize-retry')).some(
+            (event) => event.type === 'finalize.completed',
+          ),
         5_000,
       )
       input.press('interrupt')
@@ -4120,13 +3948,9 @@ describe('abDispatch interactive keyboard controls', () => {
 
       const events = await fx.store.getEvents('finalize-retry')
       const retry = events.find(
-        (event) =>
-          event.type === 'escalation.answered' &&
-          event.payload.resolution === 'retry',
+        (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
       )
-      const cancellation = events.find(
-        (event) => event.type === 'build.auto-merge-cancelled',
-      )
+      const cancellation = events.find((event) => event.type === 'build.auto-merge-cancelled')
       const completed = events.find((event) => event.type === 'finalize.completed')
       expect(retry?.actor).toEqual({ kind: 'human', user: 'manual-merge-op' })
       expect(retry?.payload).toMatchObject({
@@ -4142,9 +3966,7 @@ describe('abDispatch interactive keyboard controls', () => {
         enabled: false,
       })
       expect(await fx.forge.getPrState('', 1)).toMatchObject({ state: 'open' })
-      expect(
-        events.filter((event) => event.type === 'escalation.raised'),
-      ).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'escalation.raised')).toHaveLength(1)
       expect(fx.cliErrors).toHaveLength(1)
       expect(fx.cliErrors[0]).toContain('permission denied enabling native auto-merge')
     } finally {
@@ -4156,10 +3978,7 @@ describe('abDispatch interactive keyboard controls', () => {
   }, 30_000)
 
   test('Escape cancels blocked resume with no event and leaves the blocker visible', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-cancel', { title: 'Cancel work' }),
-      happyHandlers(),
-    )
+    const fx = await makeFixture(readyTicket('T-cancel', { title: 'Cancel work' }), happyHandlers())
     try {
       await abDispatch({
         targetRepo: fx.origin,
@@ -4194,7 +4013,9 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: term,
         input,
       })
-      await waitFor(() => stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'))
+      await waitFor(() =>
+        stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'),
+      )
       input.press('down')
       await waitFor(() => /^> .*cancel-work/m.test(stripAnsi(term.all())))
       input.press('pause')
@@ -4270,10 +4091,7 @@ describe('abDispatch interactive keyboard controls', () => {
   }, 30_000)
 
   test('explicit intake and global p persist, a no-flag restart reuses them, and removed d stays inert', async () => {
-    const fx = await makeFixture(
-      readyTicket('T-intake-off', { body: 'not a conforming spec' }),
-      {},
-    )
+    const fx = await makeFixture(readyTicket('T-intake-off', { body: 'not a conforming spec' }), {})
     try {
       const input = fakeInput()
       const term = fakeTerminal()
@@ -4295,13 +4113,10 @@ describe('abDispatch interactive keyboard controls', () => {
             await new Promise((resolve) => setTimeout(resolve, 0))
             expect(stripAnsi(term.all())).toContain('intake OFF')
             input.press('pause')
-            await waitFor(async () =>
-              reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin))
-                .intake,
+            await waitFor(
+              async () => reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
             )
-            await waitFor(() =>
-              latestDashboardFrame(term).includes('intake ON'),
-            )
+            await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
           } else {
             input.press('interrupt')
           }

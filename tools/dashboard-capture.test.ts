@@ -3,10 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnExec } from '../src/ports/workspace/git-worktree'
-import {
-  captureDashboardFrames,
-  type DashboardCaptureResult,
-} from './dashboard-capture'
+import { captureDashboardFrames, type DashboardCaptureResult } from './dashboard-capture'
 
 let tmp: string
 
@@ -61,10 +58,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.status).toBe('')
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
-  expect(first.result.frames.map((frame) => frame.id)).toEqual([
-    'mixed-wide',
-    'mixed-narrow',
-  ])
+  expect(first.result.frames.map((frame) => frame.id)).toEqual(['mixed-wide', 'mixed-narrow'])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
   expect(report).toContain('mixed-wide.png')
@@ -75,9 +69,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     const again = second.result.frames.find((item) => item.id === frame.id)!
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
-    expect(frame.png.slice(0, 8)).toEqual(
-      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
-    )
+    expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
     expect(frame.text).toContain('CAP-PLAN')
     expect(frame.text).toContain('CAP-IMPLEMENT')
     expect(frame.text).toContain('CAP-COMPLETE')
@@ -87,9 +79,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toContain('PAUSED')
     expect(frame.text).not.toContain('\x1b')
   }
-  expect(
-    first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text,
-  ).toContain('~')
+  expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
 
   for (const frame of first.result.frames) {
     expect(await readFile(frame.textPath, 'utf8')).toBe(frame.text)

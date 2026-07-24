@@ -48,9 +48,7 @@ export async function resolveMainRepo(targetRepo: string, exec: Exec): Promise<s
       { cwd: target },
     )
     if (result.exitCode !== 0) return target
-    const [gitDirRaw, commonDirRaw, topLevelRaw] = result.stdout
-      .trimEnd()
-      .split('\n')
+    const [gitDirRaw, commonDirRaw, topLevelRaw] = result.stdout.trimEnd().split('\n')
     if (!gitDirRaw || !commonDirRaw || !topLevelRaw) return target
 
     const gitDir = absoluteGitPath(gitDirRaw, target)
@@ -58,10 +56,7 @@ export async function resolveMainRepo(targetRepo: string, exec: Exec): Promise<s
     const topLevel = absoluteGitPath(topLevelRaw, target)
     if (gitDir === commonDir) return topLevel
 
-    const worktrees = await exec(
-      ['git', 'worktree', 'list', '--porcelain', '-z'],
-      { cwd: target },
-    )
+    const worktrees = await exec(['git', 'worktree', 'list', '--porcelain', '-z'], { cwd: target })
     if (worktrees.exitCode === 0) {
       const main = worktrees.stdout
         .split('\0')

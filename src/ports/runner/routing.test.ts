@@ -16,10 +16,7 @@ const registry: RuntimeRegistry = {
   gemini: { runner: gemini, servesModels: ['gpt-'] },
 }
 
-function resolver(
-  roles: Record<string, RuntimeSpec> = {},
-  fallback = 'claude',
-) {
+function resolver(roles: Record<string, RuntimeSpec> = {}, fallback = 'claude') {
   return createRuntimeResolver(registry, roles, fallback)
 }
 
@@ -118,9 +115,7 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
 describe('createRuntimeResolver — exact compatibility', () => {
   test('an explicit runtime/model pair resolves exactly', () => {
     expect(
-      resolver({ 'code-review': { runtime: 'pi', model: 'kimi-k3' } }).resolve(
-        'code-review',
-      ),
+      resolver({ 'code-review': { runtime: 'pi', model: 'kimi-k3' } }).resolve('code-review'),
     ).toMatchObject({ runner: pi, runtime: 'pi', model: 'kimi-k3' })
   })
 
@@ -144,9 +139,7 @@ describe('createRuntimeResolver — exact compatibility', () => {
   })
 
   test('the default role itself must be compatible', () => {
-    expect(() =>
-      resolver({ default: { runtime: 'claude', model: 'kimi-k3' } }),
-    ).toThrow(
+    expect(() => resolver({ default: { runtime: 'claude', model: 'kimi-k3' } })).toThrow(
       /\[roles\.default\] resolves runtime "claude" with model "kimi-k3".*serves only \[claude-\]/,
     )
   })

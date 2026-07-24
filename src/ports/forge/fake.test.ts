@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Forge, PrState } from '../types'
-import {
-  describeForgeContract,
-  type ForgeContractFactory,
-} from './contract'
+import { describeForgeContract, type ForgeContractFactory } from './contract'
 import { FakeForge } from './fake'
 
 const prOpts = (over: Partial<Parameters<Forge['openPr']>[0]> = {}) => ({
@@ -52,12 +49,9 @@ const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
         forge.setPrState(number, { state: 'open', mergeable: true })
         return sha
       },
-      nativeAutoMergeEnabled: async (number) =>
-        forge.isAutoMergeEnabled(number),
+      nativeAutoMergeEnabled: async (number) => forge.isAutoMergeEnabled(number),
       commentExists: async (number, body) =>
-        forge.comments.some(
-          (comment) => comment.number === number && comment.body === body,
-        ),
+        forge.comments.some((comment) => comment.number === number && comment.body === body),
       mergeSha: async () => landingSha,
       trackPr: () => {},
     },
@@ -167,9 +161,7 @@ describe('FakeForge', () => {
     forge.setPrState(99, state)
     expect(await forge.getPrState('/ws/a', 99)).toEqual(state)
     await forge.commentOnPr('/ws/a', 99, 'seeded')
-    expect(forge.comments).toEqual([
-      { workspacePath: '/ws/a', number: 99, body: 'seeded' },
-    ])
+    expect(forge.comments).toEqual([{ workspacePath: '/ws/a', number: 99, body: 'seeded' }])
   })
 
   test('setAutoMerge tracks native state and journals idempotent retries', async () => {
@@ -269,9 +261,7 @@ describe('FakeForge', () => {
     expect(candidate).toEqual({ kind: 'ungated', headSha: 'old-head' })
     forge.setPrHeadSha(pr.number, 'new-head')
 
-    await expect(
-      forge.squashMerge('/ws/a', pr.number, 'old-head'),
-    ).rejects.toThrow('head changed')
+    await expect(forge.squashMerge('/ws/a', pr.number, 'old-head')).rejects.toThrow('head changed')
     expect(forge.squashMergeCalls).toEqual([])
     expect(await forge.getPrState('/ws/a', pr.number)).toEqual({
       state: 'open',
@@ -284,15 +274,11 @@ describe('FakeForge', () => {
     const pr = await forge.openPr(prOpts())
     forge.setPrState(pr.number, { state: 'open', mergeable: true })
     forge.setGateProbeError(pr.number, 'rulesets forbidden')
-    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow(
-      'rulesets forbidden',
-    )
+    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow('rulesets forbidden')
 
     forge.setGatePresence(pr.number, 'absent')
     forge.setMergeStateStatus(pr.number, 'BLOCKED')
-    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow(
-      'BLOCKED',
-    )
+    await expect(forge.setAutoMerge('/ws/a', pr.number, true)).rejects.toThrow('BLOCKED')
     expect(forge.squashMergeCalls).toEqual([])
   })
 
@@ -314,9 +300,7 @@ describe('FakeForge', () => {
 
   test('commentOnPr throws on an unknown PR number and journals nothing', async () => {
     const forge = new FakeForge()
-    await expect(forge.commentOnPr('/ws/a', 7, 'hi')).rejects.toThrow(
-      'unknown PR #7',
-    )
+    await expect(forge.commentOnPr('/ws/a', 7, 'hi')).rejects.toThrow('unknown PR #7')
     expect(forge.comments).toEqual([])
   })
 
@@ -374,9 +358,7 @@ describe('FakeForge', () => {
       sha256: 'b'.repeat(64),
     }
     forge.failNextPrAttachmentUpload('upload unavailable')
-    await expect(forge.prAttachments!.upload(request)).rejects.toThrow(
-      'upload unavailable',
-    )
+    await expect(forge.prAttachments!.upload(request)).rejects.toThrow('upload unavailable')
     const asset = await forge.prAttachments!.upload(request)
     forge.failNextPrAttachmentReclaim('delete unavailable')
     await expect(

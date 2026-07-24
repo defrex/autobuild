@@ -9,10 +9,7 @@ import type { Config } from '../config/schema'
 import type { RepositoryEvent } from '../events/repository'
 import { KERNEL } from '../events/envelope'
 import type { IdSource, UuidSource } from '../ids'
-import {
-  occurrenceKey,
-  type HarvestDisposition,
-} from '../harvest/schema'
+import { occurrenceKey, type HarvestDisposition } from '../harvest/schema'
 import { converge } from '../kernel/converge'
 import { stalledChains } from '../kernel/stall'
 import {
@@ -27,12 +24,7 @@ import {
 import type { ArtifactRef, Feedback, Verdict } from '../ontology'
 import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type {
-  AgentRunner,
-  AgentSessionHandle,
-  AgentTurnResult,
-  TicketSource,
-} from '../ports/types'
+import type { AgentRunner, AgentSessionHandle, AgentTurnResult, TicketSource } from '../ports/types'
 import { installedSkillName } from '../skills'
 import { defaultTriageState } from './dispatcher'
 import {
@@ -111,10 +103,7 @@ class HarvestParkedSignal extends Error {
  * failure: the replacement resumes the same journal at the next boundary. */
 class HarvestLeaseLostError extends Error {
   constructor(repo: string, instance: string) {
-    super(
-      `harvest lease for ${repo} is held by another runner ` +
-        `(former holder ${instance})`,
-    )
+    super(`harvest lease for ${repo} is held by another runner ` + `(former holder ${instance})`)
     this.name = 'HarvestLeaseLostError'
   }
 }
@@ -153,19 +142,11 @@ export class HarvestRunner {
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.maxSessionAttempts = deps.opts?.maxSessionAttempts ?? 2
     this.maxRecoveryAttempts =
-      deps.opts?.maxRecoveryAttempts ??
-      DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
-    if (
-      !Number.isInteger(this.maxRecoveryAttempts) ||
-      this.maxRecoveryAttempts <= 0
-    ) {
+      deps.opts?.maxRecoveryAttempts ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+    if (!Number.isInteger(this.maxRecoveryAttempts) || this.maxRecoveryAttempts <= 0) {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
-    this.resolver = createRuntimeResolver(
-      deps.runtimes,
-      deps.config.roles,
-      deps.defaultRuntime,
-    )
+    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles, deps.defaultRuntime)
   }
 
   async run(): Promise<HarvestRunnerResult> {
@@ -247,10 +228,7 @@ export class HarvestRunner {
         const outcome = await this.executeWorkflow(run)
         return { outcome, launch: initial, run: run.run }
       } catch (error) {
-        if (
-          error instanceof HarvestLeaseLostError ||
-          error instanceof HarvestParkedSignal
-        ) {
+        if (error instanceof HarvestLeaseLostError || error instanceof HarvestParkedSignal) {
           throw error
         }
         if (error instanceof SessionFailure) {
@@ -378,13 +356,7 @@ export class HarvestRunner {
         await this.controlBoundary(run.run)
         const existing = proposalArtifactForRound(run, round)
         if (existing !== undefined) {
-          await this.ensureStepCompleted(
-            run.run,
-            'synthesize',
-            round,
-            'completed',
-            existing,
-          )
+          await this.ensureStepCompleted(run.run, 'synthesize', round, 'completed', existing)
           await this.controlBoundary(run.run)
           return existing
         }
@@ -393,9 +365,7 @@ export class HarvestRunner {
       review: async (_artifact, round) => {
         run = await this.refreshRun(run.run)
         await this.controlBoundary(run.run)
-        const existing = [...run.reviews]
-          .reverse()
-          .find((review) => review.round === round)
+        const existing = [...run.reviews].reverse().find((review) => review.round === round)
         if (existing !== undefined) {
           await this.ensureStepCompleted(
             run.run,
@@ -405,10 +375,9 @@ export class HarvestRunner {
             existing.artifact,
           )
           const event = (await this.deps.store.getRepoEvents(this.deps.repo)).find(
-            (candidate): candidate is Extract<
-              RepositoryEvent,
-              { type: 'harvest.review.verdict' }
-            > =>
+            (
+              candidate,
+            ): candidate is Extract<RepositoryEvent, { type: 'harvest.review.verdict' }> =>
               candidate.type === 'harvest.review.verdict' &&
               candidate.payload.run === run.run &&
               candidate.payload.round === round,
@@ -430,10 +399,7 @@ export class HarvestRunner {
     return 'escalated'
   }
 
-  private async synthesize(
-    run: HarvestRunState,
-    round: number,
-  ): Promise<ArtifactRef> {
+  private async synthesize(run: HarvestRunState, round: number): Promise<ArtifactRef> {
     await this.controlBoundary(run.run)
     await this.startStep(run.run, 'synthesize', round)
     await this.executeSession({
@@ -453,13 +419,7 @@ export class HarvestRunner {
     const refreshed = await this.refreshRun(run.run)
     const artifact = proposalArtifactForRound(refreshed, round)
     if (!artifact) throw new Error(`synthesize@${round} terminal has no artifact`)
-    await this.completeStep(
-      run.run,
-      'synthesize',
-      round,
-      'completed',
-      artifact,
-    )
+    await this.completeStep(run.run, 'synthesize', round, 'completed', artifact)
     await this.controlBoundary(run.run)
     return artifact
   }
@@ -485,10 +445,7 @@ export class HarvestRunner {
     const verdict = [...events]
       .reverse()
       .find(
-        (event): event is Extract<
-          RepositoryEvent,
-          { type: 'harvest.review.verdict' }
-        > =>
+        (event): event is Extract<RepositoryEvent, { type: 'harvest.review.verdict' }> =>
           event.type === 'harvest.review.verdict' &&
           event.payload.run === run.run &&
           event.payload.round === round,
@@ -526,9 +483,7 @@ export class HarvestRunner {
     )
     const failures = matchingFailures.length
     const latestFailure = matchingFailures.at(-1)
-    const current = reduceHarvest(events).runs.find(
-      (candidate) => candidate.run === spec.run,
-    )
+    const current = reduceHarvest(events).runs.find((candidate) => candidate.run === spec.run)
     // A stopping failure may already have consumed the ordinary retry budget.
     // harvest.resumed deliberately clears that reduced stop and grants one real
     // re-entry without deleting history or resetting attempt numbers. The next
@@ -537,10 +492,7 @@ export class HarvestRunner {
       latestFailure?.payload.willRetry === false &&
       current?.status === 'running' &&
       current.failure === undefined &&
-      events.some(
-        (event) =>
-          event.type === 'harvest.resumed' && event.seq > latestFailure.seq,
-      )
+      events.some((event) => event.type === 'harvest.resumed' && event.seq > latestFailure.seq)
     if (failures >= this.maxSessionAttempts && !resumedAfterTerminalFailure) {
       throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
     }
@@ -580,9 +532,7 @@ export class HarvestRunner {
           invocation: spec.run,
           workspacePath,
           ...(resolved.model !== undefined ? { model: resolved.model } : {}),
-          ...(resolved.extensions !== undefined
-            ? { extensions: resolved.extensions }
-            : {}),
+          ...(resolved.extensions !== undefined ? { extensions: resolved.extensions } : {}),
           env: this.sessionEnv(spec.run, spec.step, spec.round, session),
         })
         handle = turn.session
@@ -609,9 +559,7 @@ export class HarvestRunner {
     }
 
     const since = await store.getRepoEvents(repo, started.seq)
-    const terminal =
-      turnError === undefined &&
-      since.some((event) => spec.terminal(event, session))
+    const terminal = turnError === undefined && since.some((event) => spec.terminal(event, session))
 
     if (terminal && handle !== undefined && result !== undefined) {
       if (spec.producer) {
@@ -669,15 +617,12 @@ export class HarvestRunner {
     if (spec.producer) this.producer = undefined
     const attempt = failures + 1
     const structuredFailure =
-      turnError === undefined && result?.kind === 'failed'
-        ? result.failure
-        : undefined
+      turnError === undefined && result?.kind === 'failed' ? result.failure : undefined
     const failureMessage =
       turnError !== undefined
         ? errorMessage(turnError)
-        : structuredFailure?.message ?? 'no-terminal'
-    const willRetry =
-      structuredFailure?.permanent !== true && attempt < this.maxSessionAttempts
+        : (structuredFailure?.message ?? 'no-terminal')
+    const willRetry = structuredFailure?.permanent !== true && attempt < this.maxSessionAttempts
     await this.ensureLease()
     await store.appendRepo(repo, {
       actor: KERNEL,
@@ -703,9 +648,7 @@ export class HarvestRunner {
         detail: failureMessage,
       },
     })
-    throw new SessionFailure(
-      `${spec.step}@${spec.round} failed: ${failureMessage}`,
-    )
+    throw new SessionFailure(`${spec.step}@${spec.round} failed: ${failureMessage}`)
   }
 
   private async depositTranscript(
@@ -771,17 +714,10 @@ export class HarvestRunner {
     const packet = await loadScanPacket(store, repo, current.scan)
     const observations = packet.observations
     const knownLedger = new Map(
-      packet.ledger.map((entry) => [
-        `${entry.ticket.source}:${entry.ticket.id}`,
-        entry,
-      ]),
+      packet.ledger.map((entry) => [`${entry.ticket.source}:${entry.ticket.id}`, entry]),
     )
-    const alreadyFiled = new Map(
-      current.filed.map((entry) => [entry.proposalKey, entry.ticket]),
-    )
-    const reservations = new Map(
-      current.reservations.map((entry) => [entry.proposalKey, entry.id]),
-    )
+    const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry.ticket]))
+    const reservations = new Map(current.reservations.map((entry) => [entry.proposalKey, entry.id]))
     const dispositions: HarvestDisposition[] = []
     const report: Array<Record<string, unknown>> = []
 
@@ -834,9 +770,7 @@ export class HarvestRunner {
         }
         report.push({ action: 'filed', proposalKey, ticket })
       } else if (proposal.action === 'join') {
-        const known = knownLedger.get(
-          `${proposal.ticket.source}:${proposal.ticket.id}`,
-        )
+        const known = knownLedger.get(`${proposal.ticket.source}:${proposal.ticket.id}`)
         if (!known) {
           throw new Error(
             `approved join target ${proposal.ticket.source}:${proposal.ticket.id} is not in the ledger context`,
@@ -931,15 +865,12 @@ export class HarvestRunner {
     })
   }
 
-  private async recordWorkflowFailure(
-    run: string,
-    error: unknown,
-  ): Promise<void> {
+  private async recordWorkflowFailure(run: string, error: unknown): Promise<void> {
     await this.ensureLease()
     const events = await this.deps.store.getRepoEvents(this.deps.repo)
     const state = reduceHarvest(events)
     const current = state.runs.find((candidate) => candidate.run === run)
-    if (!current || current.status !== 'running') return
+    if (current?.status !== 'running') return
     const open = [...current.steps]
       .reverse()
       .find((occurrence) => occurrence.completedSeq === undefined)
@@ -989,16 +920,10 @@ export class HarvestRunner {
    * outer budget and therefore remain recoverable. */
   private async settleRecoveryExhaustion(run: string): Promise<void> {
     await this.ensureLease()
-    const state = reduceHarvest(
-      await this.deps.store.getRepoEvents(this.deps.repo),
-    )
+    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (decision.kind !== 'exhaust-recovery' || decision.run !== run) return
-    await this.finalizeRecoveryExhaustion(
-      decision.run,
-      decision.attempts,
-      decision.limit,
-    )
+    await this.finalizeRecoveryExhaustion(decision.run, decision.attempts, decision.limit)
   }
 
   /** Compute and append the selective-release boundary. The second decision
@@ -1020,9 +945,7 @@ export class HarvestRunner {
     })
 
     await this.ensureLease()
-    const state = reduceHarvest(
-      await this.deps.store.getRepoEvents(this.deps.repo),
-    )
+    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (
       decision.kind !== 'exhaust-recovery' ||
@@ -1041,9 +964,7 @@ export class HarvestRunner {
       payload: {
         run: runId,
         step: run.failure.step,
-        ...(run.failure.round !== undefined
-          ? { round: run.failure.round }
-          : {}),
+        ...(run.failure.round !== undefined ? { round: run.failure.round } : {}),
         error: run.failure.error,
         attempts,
         limit,
@@ -1060,9 +981,7 @@ export class HarvestRunner {
   private async controlBoundary(run?: string): Promise<void> {
     while (true) {
       await this.ensureLease()
-      const state = reduceHarvest(
-        await this.deps.store.getRepoEvents(this.deps.repo),
-      )
+      const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
       const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
       if (decision.kind === 'park') {
@@ -1095,10 +1014,7 @@ export class HarvestRunner {
       await this.ensureLease()
       await this.deps.store.appendRepo(this.deps.repo, {
         actor: KERNEL,
-        type:
-          decision.command === 'pause'
-            ? 'harvest.paused'
-            : 'harvest.resumed',
+        type: decision.command === 'pause' ? 'harvest.paused' : 'harvest.resumed',
         payload: {},
       })
       // Re-reduce after every acknowledgement. An opposing request may have
@@ -1108,9 +1024,7 @@ export class HarvestRunner {
   }
 
   private async refreshRun(run: string): Promise<HarvestRunState> {
-    const state = reduceHarvest(
-      await this.deps.store.getRepoEvents(this.deps.repo),
-    )
+    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
     const found = state.runs.find((candidate) => candidate.run === run)
     if (!found) throw new Error(`unknown harvest run "${run}"`)
     return found
@@ -1126,8 +1040,7 @@ export class HarvestRunner {
     )
     if (completed) return
     const open = run.steps.some(
-      (occurrence) =>
-        occurrence.step === 'scan' && occurrence.completedSeq === undefined,
+      (occurrence) => occurrence.step === 'scan' && occurrence.completedSeq === undefined,
     )
     if (!open) {
       await this.ensureLease()

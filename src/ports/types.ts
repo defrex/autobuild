@@ -208,20 +208,12 @@ export interface Forge {
    * gate; transient merge states are deferred. The operation is idempotent and
    * safe to retry across the forge-call/event-append crash window.
    */
-  setAutoMerge(
-    workspacePath: string,
-    number: number,
-    enabled: boolean,
-  ): Promise<AutoMergeResult>
+  setAutoMerge(workspacePath: string, number: number, enabled: boolean): Promise<AutoMergeResult>
   /**
    * Perform a normal squash merge, guarded by the inspected PR head. This is
    * never an admin/force operation: forge-side protection still applies.
    */
-  squashMerge(
-    workspacePath: string,
-    number: number,
-    expectedHeadSha: string,
-  ): Promise<void>
+  squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void>
   /** Post the build's summary comment (§7.5). */
   commentOnPr(workspacePath: string, number: number, body: string): Promise<void>
 }
@@ -320,9 +312,7 @@ export interface AgentContinueOpts {
 
 export interface AgentRunner {
   readonly name: string
-  start(
-    opts: AgentStartOpts,
-  ): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>
+  start(opts: AgentStartOpts): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>
   /** Review-loop rounds (§10). Adapters without native resumption implement
    * this as start-with-rehydrate-from-store (§9). */
   continue(

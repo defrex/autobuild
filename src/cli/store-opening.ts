@@ -9,10 +9,7 @@
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
 import type { BuildStore } from '../store/types'
-import {
-  resolveRepoState,
-  type RepoStatePaths,
-} from './repo-state'
+import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { resolveStore } from './store-ref'
 
 /** Shared injection seam used by every command that opens a BuildStore. */
@@ -29,8 +26,7 @@ function optionalToken(value: string | undefined): string | undefined {
 export const openProductionStore: StoreOpener = (ref, token) => {
   const forwardedToken = optionalToken(token)
   return resolveStore(ref, {
-    remoteFactory: (url, remoteToken) =>
-      new RemoteBuildStore({ url, token: remoteToken }),
+    remoteFactory: (url, remoteToken) => new RemoteBuildStore({ url, token: remoteToken }),
     ...(forwardedToken !== undefined ? { token: forwardedToken } : {}),
   })
 }
@@ -51,7 +47,7 @@ export function openStoreForRepoState(
   state: RepoStatePaths,
   opts: OpenStoreForRepoStateOpts,
 ): OpenedStoreContext {
-  const token = optionalToken(opts.env['AB_TOKEN'])
+  const token = optionalToken(opts.env.AB_TOKEN)
   const store = (opts.openStore ?? openProductionStore)(state.storeRef, token)
   return {
     ...state,
@@ -76,9 +72,7 @@ export async function openSessionlessStore(
     targetRepo: opts.targetRepo,
     exec: opts.exec,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined
-      ? { envStore: opts.env['AB_STORE'] }
-      : {}),
+    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
   return openStoreForRepoState(state, opts)
 }

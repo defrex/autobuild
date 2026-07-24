@@ -4,11 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import {
-  resolveMainRepo,
-  resolveRepoState,
-  resolveRepoStatePaths,
-} from './repo-state'
+import { resolveMainRepo, resolveRepoState, resolveRepoStatePaths } from './repo-state'
 
 const cleanup: string[] = []
 
@@ -46,9 +42,7 @@ describe('resolveMainRepo', () => {
     const exec: Exec = async () => {
       throw new Error('git unavailable')
     }
-    expect(await resolveMainRepo('./plain-directory', exec)).toBe(
-      resolve('./plain-directory'),
-    )
+    expect(await resolveMainRepo('./plain-directory', exec)).toBe(resolve('./plain-directory'))
   })
 
   test('returns the main checkout from both a checkout and a linked worktree', async () => {
@@ -88,24 +82,8 @@ describe('resolveMainRepo', () => {
     await Bun.write(join(parent, 'README.md'), 'parent\n')
     await git(parent, 'add', 'README.md')
     await git(parent, 'commit', '-m', 'parent fixture')
-    await git(
-      parent,
-      '-c',
-      'protocol.file.allow=always',
-      'submodule',
-      'add',
-      child,
-      'sub-a',
-    )
-    await git(
-      parent,
-      '-c',
-      'protocol.file.allow=always',
-      'submodule',
-      'add',
-      child,
-      'sub-b',
-    )
+    await git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', child, 'sub-a')
+    await git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', child, 'sub-b')
 
     const subA = await realpath(join(parent, 'sub-a'))
     const subB = await realpath(join(parent, 'sub-b'))
@@ -140,9 +118,7 @@ describe('resolveRepoStatePaths', () => {
   })
 
   test('preserves remote URLs and keeps their worktrees repository-local', () => {
-    expect(
-      resolveRepoStatePaths({ repo, storeRef: 'https://store.example/api' }),
-    ).toMatchObject({
+    expect(resolveRepoStatePaths({ repo, storeRef: 'https://store.example/api' })).toMatchObject({
       storeRef: 'https://store.example/api',
       worktreeRoot: '/code/example/.autobuild/worktrees',
     })
@@ -155,9 +131,9 @@ describe('resolveRepoStatePaths', () => {
     expect(resolveRepoStatePaths({ repo, envStore: 'environment' }).storeRef).toBe(
       '/code/example/environment',
     )
-    expect(
-      resolveRepoStatePaths({ repo, storeRef: '', envStore: 'environment' }).storeRef,
-    ).toBe('/code/example/environment')
+    expect(resolveRepoStatePaths({ repo, storeRef: '', envStore: 'environment' }).storeRef).toBe(
+      '/code/example/environment',
+    )
     expect(resolveRepoStatePaths({ repo, storeRef: '  ', envStore: '' })).toMatchObject({
       storeRef: '/code/example/.autobuild',
       localStateRoot: '/code/example/.autobuild',
@@ -170,8 +146,7 @@ test('resolveRepoState selects paths after resolving repository identity', async
   const exec: Exec = async (cmd) =>
     cmd[1] === 'rev-parse'
       ? {
-          stdout:
-            '/main/repo/.git/worktrees/linked\n/main/repo/.git\n/linked\n',
+          stdout: '/main/repo/.git/worktrees/linked\n/main/repo/.git\n/linked\n',
           stderr: '',
           exitCode: 0,
         }

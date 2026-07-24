@@ -56,10 +56,7 @@ const ENABLE_DISPOSITIONS = {
   HAS_HOOKS: { present: NATIVE, absent: NATIVE },
   UNKNOWN: { present: NATIVE, absent: DEFERRED },
   UNSTABLE: { present: NATIVE, absent: DIRECT },
-} as const satisfies Record<
-  MergeStateStatus,
-  Record<MergeGatePresence, AutoMergeEnableDisposition>
->
+} as const satisfies Record<MergeStateStatus, Record<MergeGatePresence, AutoMergeEnableDisposition>>
 
 export function classifyAutoMergeEnable(
   mergeState: MergeStateStatus,

@@ -6,18 +6,14 @@
  */
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
-import {
-  KERNEL,
-  humanActor,
-  type Actor,
-} from '../events/envelope'
+import { KERNEL, humanActor, type Actor } from '../events/envelope'
 import {
   validateEventWrite,
   allowedActorKinds,
   type AbEvent,
   type EventWrite,
 } from '../events/catalog'
-import { eventPayloadSchemas, type EventType } from '../events/payloads'
+import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { reduceBuild, type BuildState } from './reducer'
@@ -759,7 +755,11 @@ describe('reduceBuild: abort — requested vs acknowledged (D2)', () => {
     expect(abortedLast.status).toBe('aborted')
 
     const doneLast = reduceBuild(
-      toLog([...prelude(), ev('build.aborted', {}), ev('build.completed', { outcome: 'abandoned' })]),
+      toLog([
+        ...prelude(),
+        ev('build.aborted', {}),
+        ev('build.completed', { outcome: 'abandoned' }),
+      ]),
     )
     expect(doneLast.status).toBe('done')
     expect(doneLast.outcome).toBe('abandoned')
@@ -1043,7 +1043,12 @@ describe('reduceBuild: restartSince', () => {
 
 describe('reduceBuild: standing approvals carry seq and round', () => {
   test('plan.approval and codeReviewApproval mirror their booleans in both directions', () => {
-    const log = toLog([...prelude(), ...planApproved(), ...implementRound(1, 'sha-r1'), ...codeReview(1, 'approve')])
+    const log = toLog([
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+    ])
 
     const planned = stateAfter(log, 'plan-review.verdict')
     expect(planned.plan.approved).toBe(true)
@@ -1162,9 +1167,9 @@ describe('reduceBuild: finalize projections', () => {
       { step: 'changelog', ok: true, seq: 7 },
       { step: 'changelog', ok: false, seq: 11 },
     ])
-    expect(state.finalizeSteps.filter((completion) => completion.seq > state.restartSince)).toEqual([
-      { step: 'changelog', ok: false, seq: 11 },
-    ])
+    expect(state.finalizeSteps.filter((completion) => completion.seq > state.restartSince)).toEqual(
+      [{ step: 'changelog', ok: false, seq: 11 }],
+    )
   })
 })
 
@@ -1247,9 +1252,9 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
 
     // The result that lands after the boundary IS the current cycle.
     const verified = reduceBuild(log)
-    expect(
-      verified.verify.results.filter((r) => r.seq > verified.verify.cycleSince),
-    ).toHaveLength(1)
+    expect(verified.verify.results.filter((r) => r.seq > verified.verify.cycleSince)).toHaveLength(
+      1,
+    )
   })
 
   test('cycleSince moves to a later reconcile.completed — reconciliation changed the code', () => {

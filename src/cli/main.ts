@@ -18,11 +18,7 @@ import type { IdSource } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactGet, artifactPut } from './artifact'
 import { parseArgs, stringFlag, type ParsedArgs } from './args'
-import {
-  abBuildControl,
-  type BuildControlAction,
-  type BuildControlResult,
-} from './build-control'
+import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
 import type { DashboardRendererResolver } from './dashboard/render'
@@ -31,11 +27,7 @@ import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import type { InitPrompter } from './init-prompt'
 import { abModels } from './models'
-import {
-  recognizeHelpRequest,
-  renderCommandHelp,
-  renderTopLevelHelp,
-} from './help'
+import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
 import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
@@ -161,10 +153,7 @@ export interface SessionlessCliDeps {
 }
 
 /** Narrow to full session deps, or fail with agent feedback (D6). */
-function requireHarvestSession(
-  command: string,
-  deps: SessionlessCliDeps,
-): HarvestCliDeps {
+function requireHarvestSession(command: string, deps: SessionlessCliDeps): HarvestCliDeps {
   const { store, harvestEnv: env, ids } = deps
   if (store === undefined || env === undefined || ids === undefined) {
     throw new Error(
@@ -207,16 +196,11 @@ function buildControlConfirmation(result: BuildControlResult): string {
       return `build ${result.slug}: ${outcome[result.command]}`
     }
     case 'answered':
-      return (
-        `build ${result.slug}: answered ${result.count} open escalation${
-          result.count === 1 ? '' : 's'
-        } with ${result.resolution}` +
-        (result.resumed ? '; resume requested' : '')
-      )
+      return `build ${result.slug}: answered ${result.count} open escalation${
+        result.count === 1 ? '' : 's'
+      } with ${result.resolution}${result.resumed ? '; resume requested' : ''}`
     case 'answer-required':
-      throw new Error(
-        'build-control requested interactive feedback for an explicit CLI command',
-      )
+      throw new Error('build-control requested interactive feedback for an explicit CLI command')
   }
 }
 
@@ -228,7 +212,7 @@ async function runBuildControl(
 ): Promise<void> {
   if (deps.exec === undefined) {
     throw new Error(
-      "build-control commands need an exec seam — this is a wiring bug in the ab binary",
+      'build-control commands need an exec seam — this is a wiring bug in the ab binary',
     )
   }
   const result = await abBuildControl({
@@ -314,9 +298,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'help':
     case '--help':
     case '-h': {
-      throw new Error(
-        'usage: ab help [command]\n       ab <command> --help',
-      )
+      throw new Error('usage: ab help [command]\n       ab <command> --help')
     }
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
@@ -386,9 +368,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // declarations and one configured-source seam own every pre-build operation.
     case 'ticket': {
       if (deps.exec === undefined) {
-        throw new Error(
-          "'ab ticket' needs an exec seam — this is a wiring bug in the ab binary",
-        )
+        throw new Error("'ab ticket' needs an exec seam — this is a wiring bug in the ab binary")
       }
       await abTicket(rest, {
         targetRepo: deps.workspacePath,
@@ -432,9 +412,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         throw new Error(`--intake and --no-intake cannot be combined — ${usage}`)
       }
       if (sawAutoMerge && sawNoAutoMerge) {
-        throw new Error(
-          `--auto-merge and --no-auto-merge cannot be combined — ${usage}`,
-        )
+        throw new Error(`--auto-merge and --no-auto-merge cannot be combined — ${usage}`)
       }
 
       const interval = stringFlag(parsed, 'interval')
@@ -448,11 +426,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       }
       const storeRef = stringFlag(parsed, 'store')
       const intake = sawIntake ? true : sawNoIntake ? false : undefined
-      const defaultAutoMerge = sawAutoMerge
-        ? true
-        : sawNoAutoMerge
-          ? false
-          : undefined
+      const defaultAutoMerge = sawAutoMerge ? true : sawNoAutoMerge ? false : undefined
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
       }
@@ -488,9 +462,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         exec: deps.exec,
         stdout,
         stderr,
-        ...(deps.pluginSubprocess !== undefined
-          ? { subprocess: deps.pluginSubprocess }
-          : {}),
+        ...(deps.pluginSubprocess !== undefined ? { subprocess: deps.pluginSubprocess } : {}),
       })
     }
 
@@ -501,9 +473,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const usage = 'usage: ab models [query] [--available] (§9)'
       const parsed = parseArgs(rest, { available: 'boolean' }, usage)
       await abModels({
-        ...(parsed.positionals.length > 0
-          ? { query: parsed.positionals.join(' ') }
-          : {}),
+        ...(parsed.positionals.length > 0 ? { query: parsed.positionals.join(' ') } : {}),
         availableOnly: parsed.flags.has('available'),
         stdout,
       })
@@ -540,18 +510,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'build': {
-      const usage =
-        'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)'
+      const usage = 'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)'
       const [sub, ...more] = rest
       // Only `status` today; the subcommand shape keeps room for `ab build <verb>`.
       if (sub !== 'status') {
         throw new Error(usage)
       }
-      const parsed = parseArgs(
-        more,
-        { events: 'value', json: 'boolean', store: 'value' },
-        usage,
-      )
+      const parsed = parseArgs(more, { events: 'value', json: 'boolean', store: 'value' }, usage)
       const [slug] = parsed.positionals
       if (slug === undefined || parsed.positionals.length !== 1) {
         throw new Error(usage)
@@ -561,9 +526,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (eventCount !== undefined) {
         const count = Number(eventCount)
         if (!Number.isInteger(count) || count <= 0) {
-          throw new Error(
-            `--events requires a positive integer, got "${eventCount}" — ${usage}`,
-          )
+          throw new Error(`--events requires a positive integer, got "${eventCount}" — ${usage}`)
         }
         events = count
       }
@@ -601,8 +564,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'auto-merge': {
-      const usage =
-        'usage: ab auto-merge <slug> <on|off> [--store <ref>]'
+      const usage = 'usage: ab auto-merge <slug> <on|off> [--store <ref>]'
       const parsed = parseArgs(rest, { store: 'value' }, usage)
       const [slug, setting] = parsed.positionals
       if (
@@ -622,8 +584,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'answer': {
-      const usage =
-        'usage: ab answer <slug> [<text>] [--store <ref>]'
+      const usage = 'usage: ab answer <slug> [<text>] [--store <ref>]'
       const parsed = parseArgs(rest, { store: 'value' }, usage)
       const [slug, ...text] = parsed.positionals
       if (slug === undefined) throw new Error(usage)
@@ -643,13 +604,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'harvest': {
       const [sub, ...more] = rest
       if (sub === 'status') {
-        const usage =
-          'usage: ab harvest status [--events <n>] [--json] [--store <ref>]'
-        const parsed = parseArgs(
-          more,
-          { events: 'value', json: 'boolean', store: 'value' },
-          usage,
-        )
+        const usage = 'usage: ab harvest status [--events <n>] [--json] [--store <ref>]'
+        const parsed = parseArgs(more, { events: 'value', json: 'boolean', store: 'value' }, usage)
         if (parsed.positionals.length > 0) throw new Error(usage)
         const eventCount = stringFlag(parsed, 'events')
         let events: number | undefined
@@ -662,7 +618,9 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         }
         const storeRef = stringFlag(parsed, 'store')
         if (deps.exec === undefined) {
-          throw new Error("'ab harvest status' needs an exec seam — this is a wiring bug in the ab binary")
+          throw new Error(
+            "'ab harvest status' needs an exec seam — this is a wiring bug in the ab binary",
+          )
         }
         await abHarvestStatus({
           repo: deps.workspacePath,
@@ -679,9 +637,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         const usage = 'usage: ab harvest context [--json]'
         const parsed = parseArgs(more, { json: 'boolean' }, usage)
         if (parsed.positionals.length > 0) throw new Error(usage)
-        const manifest = await buildHarvestContext(
-          requireHarvestSession('context', deps),
-        )
+        const manifest = await buildHarvestContext(requireHarvestSession('context', deps))
         if (parsed.flags.get('json') === true) {
           stdout(JSON.stringify(manifest, null, 2))
         } else {
@@ -700,10 +656,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         if (file === undefined || parsed.positionals.length !== 1) {
           throw new Error(usage)
         }
-        const event = await submitHarvestProposals(
-          requireHarvestSession('submit', deps),
-          file,
-        )
+        const event = await submitHarvestProposals(requireHarvestSession('submit', deps), file)
         stdout(`${event.type} recorded (repo seq ${event.seq})`)
         return 0
       }
@@ -718,32 +671,23 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         )
         const [kind] = parsed.positionals
         const notes = stringFlag(parsed, 'notes')
-        if (
-          kind === undefined ||
-          parsed.positionals.length !== 1 ||
-          notes === undefined
-        ) {
+        if (kind === undefined || parsed.positionals.length !== 1 || notes === undefined) {
           throw new Error(usage)
         }
-        const event = await submitHarvestVerdict(
-          requireHarvestSession('verdict', deps),
-          {
-            verdict: kind,
-            notes,
-            ...(stringFlag(parsed, 'findings') !== undefined
-              ? { findings: stringFlag(parsed, 'findings')! }
-              : {}),
-            ...(stringFlag(parsed, 'reason') !== undefined
-              ? { reason: stringFlag(parsed, 'reason')! }
-              : {}),
-          },
-        )
+        const event = await submitHarvestVerdict(requireHarvestSession('verdict', deps), {
+          verdict: kind,
+          notes,
+          ...(stringFlag(parsed, 'findings') !== undefined
+            ? { findings: stringFlag(parsed, 'findings')! }
+            : {}),
+          ...(stringFlag(parsed, 'reason') !== undefined
+            ? { reason: stringFlag(parsed, 'reason')! }
+            : {}),
+        })
         stdout(`${event.type} recorded (repo seq ${event.seq})`)
         return 0
       }
-      throw new Error(
-        'usage: ab harvest <status|context|submit|verdict> …',
-      )
+      throw new Error('usage: ab harvest <status|context|submit|verdict> …')
     }
 
     case 'context': {
@@ -765,11 +709,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (sub === 'download') {
         const usage =
           'usage: ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>] (§8.2)'
-        const parsed = parseArgs(
-          more,
-          { output: 'value', store: 'value' },
-          usage,
-        )
+        const parsed = parseArgs(more, { output: 'value', store: 'value' }, usage)
         const [build, spec] = parsed.positionals
         const outputPath = stringFlag(parsed, 'output')
         if (
@@ -806,11 +746,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         const usage = 'usage: ab artifact put <kind> <file> [--attach] (§8.2)'
         const parsed = parseArgs(more, { attach: 'boolean' }, usage)
         const [kind, file] = parsed.positionals
-        if (
-          kind === undefined ||
-          file === undefined ||
-          parsed.positionals.length !== 2
-        ) {
+        if (kind === undefined || file === undefined || parsed.positionals.length !== 2) {
           throw new Error(usage)
         }
         const attach = parsed.flags.has('attach')
@@ -835,10 +771,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                 await session.forge.commentOnPr(
                   session.workspacePath,
                   pr.number,
-                  renderPrSummary(
-                    session.env,
-                    await session.store.getEvents(session.env.build),
-                  ),
+                  renderPrSummary(session.env, await session.store.getEvents(session.env.build)),
                 )
               } catch {
                 // The exact artifact and designation are already durable. A
@@ -871,16 +804,10 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'observe': {
       const usage =
         'usage: ab observe --kind <followup|refactor|latent-bug> [--files a,b] [--refs x,y] <summary> (§8.2)'
-      const parsed = parseArgs(
-        rest,
-        { kind: 'value', files: 'value', refs: 'value' },
-        usage,
-      )
+      const parsed = parseArgs(rest, { kind: 'value', files: 'value', refs: 'value' }, usage)
       const kind = stringFlag(parsed, 'kind')
       if (kind === undefined) {
-        throw new Error(
-          "'ab observe' requires --kind <followup|refactor|latent-bug> (§8.2)",
-        )
+        throw new Error("'ab observe' requires --kind <followup|refactor|latent-bug> (§8.2)")
       }
       const session = requireSession(command, deps)
       const summary = parsed.positionals.join(' ')
@@ -898,8 +825,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'server': {
       const session = requireSession(command, deps)
-      const usage =
-        'usage: ab server <start|stop|restart|status|logs> [n] (§8.2)'
+      const usage = 'usage: ab server <start|stop|restart|status|logs> [n] (§8.2)'
       const parsed = parseArgs(rest, {}, usage)
       const [sub, count, ...extra] = parsed.positionals
       const control = new ServerControl({
@@ -935,9 +861,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           if (extra.length > 0) throw new Error(usage)
           const lines = count === undefined ? undefined : Number(count)
           if (lines !== undefined && (!Number.isInteger(lines) || lines <= 0)) {
-            throw new Error(
-              `'ab server logs [n]' — n must be a positive integer, got "${count}"`,
-            )
+            throw new Error(`'ab server logs [n]' — n must be a positive integer, got "${count}"`)
           }
           for (const line of control.logs(lines)) stdout(line)
           return 0

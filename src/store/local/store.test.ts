@@ -75,9 +75,7 @@ describe('SqliteBuildStore durability', () => {
           // heartbeat at T0+1s extended expiry to T0+1s+ttl
           expiresAt: new Date(Date.parse(CONTRACT_T0) + 61_000).toISOString(),
         })
-        expect(record?.heartbeatAt).toBe(
-          new Date(Date.parse(CONTRACT_T0) + 1000).toISOString(),
-        )
+        expect(record?.heartbeatAt).toBe(new Date(Date.parse(CONTRACT_T0) + 1000).toISOString())
 
         const log = await second.getEvents('persist')
         expect(log.map((e) => [e.seq, e.type])).toEqual([[1, 'build.created']])
@@ -223,79 +221,68 @@ async function runWorker(script: string, args: string[]): Promise<WorkerReport> 
 }
 
 describe('SqliteBuildStore cross-process contention', () => {
-  test(
-    'concurrent cross-process appends: no write is lost, seq serializes 1..N ([D2], §7.2.1)',
-    async () => {
-      const root = await freshRoot()
+  test('concurrent cross-process appends: no write is lost, seq serializes 1..N ([D2], §7.2.1)', async () => {
+    const root = await freshRoot()
+    try {
+      const setup = openLocalStore(root)
+      await setup.createBuild(sampleBuildInput('shared'))
+      await setup.close()
+      const script = join(root, 'worker.ts')
+      await Bun.write(script, WORKER_SOURCE)
+
+      const COUNT = 50
+      const [a, b] = await Promise.all([
+        runWorker(script, [root, 'a', 'append', String(COUNT)]),
+        runWorker(script, [root, 'b', 'append', String(COUNT)]),
+      ])
+      // No append may fail with a raw "database is locked" — a lost
+      // `ab done`/heartbeat collision becomes a spurious phase.failed.
+      expect(a.errors).toEqual([])
+      expect(b.errors).toEqual([])
+      expect(a.errorCount + b.errorCount).toBe(0)
+
+      const check = openLocalStore(root)
       try {
-        const setup = openLocalStore(root)
-        await setup.createBuild(sampleBuildInput('shared'))
-        await setup.close()
-        const script = join(root, 'worker.ts')
-        await Bun.write(script, WORKER_SOURCE)
-
-        const COUNT = 50
-        const [a, b] = await Promise.all([
-          runWorker(script, [root, 'a', 'append', String(COUNT)]),
-          runWorker(script, [root, 'b', 'append', String(COUNT)]),
-        ])
-        // No append may fail with a raw "database is locked" — a lost
-        // `ab done`/heartbeat collision becomes a spurious phase.failed.
-        expect(a.errors).toEqual([])
-        expect(b.errors).toEqual([])
-        expect(a.errorCount + b.errorCount).toBe(0)
-
-        const check = openLocalStore(root)
-        try {
-          const log = await check.getEvents('shared')
-          expect(log.map((e) => e.seq)).toEqual(
-            Array.from({ length: COUNT * 2 }, (_, i) => i + 1),
-          )
-          for (const session of ['s_a', 's_b']) {
-            expect(
-              log.filter((e) => e.actor.kind === 'agent' && e.actor.session === session)
-                .length,
-            ).toBe(COUNT)
-          }
-        } finally {
-          await check.close()
+        const log = await check.getEvents('shared')
+        expect(log.map((e) => e.seq)).toEqual(Array.from({ length: COUNT * 2 }, (_, i) => i + 1))
+        for (const session of ['s_a', 's_b']) {
+          expect(
+            log.filter((e) => e.actor.kind === 'agent' && e.actor.session === session).length,
+          ).toBe(COUNT)
         }
       } finally {
-        await rm(root, { recursive: true, force: true })
+        await check.close()
       }
-    },
-    30_000,
-  )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
 
-  test(
-    'cross-process lease contention: losers get a clean false, never a raw sqlite error; one holder at a time (§7.4, §15.2.6)',
-    async () => {
-      const root = await freshRoot()
-      try {
-        const setup = openLocalStore(root)
-        await setup.createBuild(sampleBuildInput('contested'))
-        await setup.close()
-        const script = join(root, 'worker.ts')
-        await Bun.write(script, WORKER_SOURCE)
+  test('cross-process lease contention: losers get a clean false, never a raw sqlite error; one holder at a time (§7.4, §15.2.6)', async () => {
+    const root = await freshRoot()
+    try {
+      const setup = openLocalStore(root)
+      await setup.createBuild(sampleBuildInput('contested'))
+      await setup.close()
+      const script = join(root, 'worker.ts')
+      await Bun.write(script, WORKER_SOURCE)
 
-        const ITERATIONS = 150
-        const [a, b] = await Promise.all([
-          runWorker(script, [root, 'a', 'lease', String(ITERATIONS)]),
-          runWorker(script, [root, 'b', 'lease', String(ITERATIONS)]),
-        ])
-        // The dispatcher's sweep and a live runner's attach share this
-        // claim path: a contended loser must see `false`, not a crash.
-        expect(a.errors).toEqual([])
-        expect(b.errors).toEqual([])
-        expect(a.errorCount + b.errorCount).toBe(0)
-        // Exactly one holder at a time — no double grants.
-        expect(a.exclusionViolations + b.exclusionViolations).toBe(0)
-        // The loop was not vacuous: claims really succeeded.
-        expect(a.wins + b.wins).toBeGreaterThan(0)
-      } finally {
-        await rm(root, { recursive: true, force: true })
-      }
-    },
-    30_000,
-  )
+      const ITERATIONS = 150
+      const [a, b] = await Promise.all([
+        runWorker(script, [root, 'a', 'lease', String(ITERATIONS)]),
+        runWorker(script, [root, 'b', 'lease', String(ITERATIONS)]),
+      ])
+      // The dispatcher's sweep and a live runner's attach share this
+      // claim path: a contended loser must see `false`, not a crash.
+      expect(a.errors).toEqual([])
+      expect(b.errors).toEqual([])
+      expect(a.errorCount + b.errorCount).toBe(0)
+      // Exactly one holder at a time — no double grants.
+      expect(a.exclusionViolations + b.exclusionViolations).toBe(0)
+      // The loop was not vacuous: claims really succeeded.
+      expect(a.wins + b.wins).toBeGreaterThan(0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
 })

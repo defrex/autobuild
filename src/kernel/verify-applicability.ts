@@ -9,19 +9,11 @@ export type VerifyApplicabilityRule =
   | { kind: 'always' }
   | { kind: 'paths'; step: string; paths: readonly string[] }
 
-export type VerifyApplicabilityResult =
-  | { applies: true }
-  | { applies: false; reason: string }
+export type VerifyApplicabilityResult = { applies: true } | { applies: false; reason: string }
 
 /** Stable, queryable reason used by the kernel-authored skipped outcome. */
-export function pathExclusionReason(
-  step: string,
-  paths: readonly string[],
-): string {
-  return (
-    `excluded by [verify.${step}].paths: no changed path matched ` +
-    JSON.stringify(paths)
-  )
+export function pathExclusionReason(step: string, paths: readonly string[]): string {
+  return `excluded by [verify.${step}].paths: no changed path matched ${JSON.stringify(paths)}`
 }
 
 /**
@@ -41,7 +33,9 @@ export function evaluateVerifyApplicability(
   for (const path of rule.paths) {
     const error = verifyPathGlobError(path)
     if (error !== undefined) {
-      throw new Error(`invalid [verify.${rule.step}].paths selector ${JSON.stringify(path)}: ${error}`)
+      throw new Error(
+        `invalid [verify.${rule.step}].paths selector ${JSON.stringify(path)}: ${error}`,
+      )
     }
   }
 

@@ -35,9 +35,7 @@ export async function createWorkspaceProvider(
       )
     }
     if (Object.keys(config.config).length > 0) {
-      throw new Error(
-        '[workspace.config] is not supported by the builtin "git-worktree" provider',
-      )
+      throw new Error('[workspace.config] is not supported by the builtin "git-worktree" provider')
     }
     return new GitWorktreeProvider({ root: resolve(opts.worktreeRoot) })
   }

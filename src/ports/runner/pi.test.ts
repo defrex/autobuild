@@ -83,17 +83,13 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
       prompts
         .filter((prompt) => prompt.text !== CONTRACT_ONE_SHOT_PROMPT)
         .map((prompt) => ({
-          ...(prompt.text === CONTRACT_FOLLOW_UP
-            ? { message: prompt.text }
-            : {}),
+          ...(prompt.text === CONTRACT_FOLLOW_UP ? { message: prompt.text } : {}),
           env: prompt.env,
         })),
     oneShot: {
       completion: runner,
       observation: () => {
-        const prompt = prompts.find(
-          (candidate) => candidate.text === CONTRACT_ONE_SHOT_PROMPT,
-        )
+        const prompt = prompts.find((candidate) => candidate.text === CONTRACT_ONE_SHOT_PROMPT)
         const create = creates[0]
         if (prompt === undefined || create === undefined) return undefined
         return {
@@ -141,9 +137,7 @@ interface RecordedPrompt {
  * every prompt. `sessionId` is fixed per session so the handle/id assertions
  * stay legible.
  */
-function fakeSessions(
-  sessions: Array<{ sessionId: string; turns: ScriptedTurn[] }>,
-): {
+function fakeSessions(sessions: Array<{ sessionId: string; turns: ScriptedTurn[] }>): {
   creates: RecordedCreate[]
   prompts: RecordedPrompt[]
   disposed: string[]
@@ -384,23 +378,21 @@ describe('PiAgentRunner.start', () => {
   })
 
   test('passes the ambient process env through, with scoped AB_* winning the merge (D8)', async () => {
-    process.env['AB_TEST_AMBIENT'] = 'from-process'
-    process.env['AB_TEST_OVERRIDE'] = 'ambient-loses'
+    process.env.AB_TEST_AMBIENT = 'from-process'
+    process.env.AB_TEST_OVERRIDE = 'ambient-loses'
     try {
       const { prompts, createSessionFn } = fakeSessions([
         { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
       ])
       const runner = new PiAgentRunner({ createSessionFn })
-      await runner.start(
-        startOpts({ env: { AB_TEST_OVERRIDE: 'scoped-wins', AB_TOKEN: 'tok' } }),
-      )
+      await runner.start(startOpts({ env: { AB_TEST_OVERRIDE: 'scoped-wins', AB_TOKEN: 'tok' } }))
       const env = prompts[0]?.env
-      expect(env?.['AB_TEST_AMBIENT']).toBe('from-process')
-      expect(env?.['AB_TEST_OVERRIDE']).toBe('scoped-wins')
-      expect(env?.['AB_TOKEN']).toBe('tok')
+      expect(env?.AB_TEST_AMBIENT).toBe('from-process')
+      expect(env?.AB_TEST_OVERRIDE).toBe('scoped-wins')
+      expect(env?.AB_TOKEN).toBe('tok')
     } finally {
-      delete process.env['AB_TEST_AMBIENT']
-      delete process.env['AB_TEST_OVERRIDE']
+      delete process.env.AB_TEST_AMBIENT
+      delete process.env.AB_TEST_OVERRIDE
     }
   })
 })
@@ -432,7 +424,7 @@ describe('PiAgentRunner.complete', () => {
       extensions: [],
     })
     expect(prompts[0]?.text).toBe('name this spec verbatim')
-    expect(prompts[0]?.env['NAMING_TOKEN']).toBe('secret')
+    expect(prompts[0]?.env.NAMING_TOKEN).toBe('secret')
     expect(prompts[0]?.signal).toBe(controller.signal)
     expect(disposed).toEqual(['one-shot-id'])
     await expect(runner.end({ id: 'one-shot-id', runner: 'pi' })).rejects.toThrow(
@@ -522,26 +514,28 @@ describe('PiAgentRunner.continue', () => {
     ])
     const runner = new PiAgentRunner({ createSessionFn })
     const { session } = await runner.start(
-      startOpts({ env: { AB_BUILD: 'auth-rate-limit', AB_PHASE: 'implement@1', AB_SESSION: 's_3' } }),
+      startOpts({
+        env: { AB_BUILD: 'auth-rate-limit', AB_PHASE: 'implement@1', AB_SESSION: 's_3' },
+      }),
     )
     await runner.continue(session, 'fix', { env: { AB_PHASE: 'implement@2', AB_SESSION: 's_5' } })
 
     const env = prompts[1]?.env
-    expect(env?.['AB_PHASE']).toBe('implement@2')
-    expect(env?.['AB_SESSION']).toBe('s_5')
+    expect(env?.AB_PHASE).toBe('implement@2')
+    expect(env?.AB_SESSION).toBe('s_5')
     // A start-only key survives the per-turn refresh.
-    expect(env?.['AB_BUILD']).toBe('auth-rate-limit')
+    expect(env?.AB_BUILD).toBe('auth-rate-limit')
   })
 
   test('keeps the distribution CLI ahead of a conflicting host ab on start and continue', async () => {
     const conflictDir = await mkdtemp(join(tmpdir(), 'ab-pi-path-'))
-    const originalPath = process.env['PATH']
+    const originalPath = process.env.PATH
     try {
       await writeConflictingAb(conflictDir)
       const inheritedPath = [conflictDir, originalPath ?? '']
         .filter((entry) => entry !== '')
         .join(delimiter)
-      process.env['PATH'] = inheritedPath
+      process.env.PATH = inheritedPath
       const { prompts, createSessionFn } = fakeSessions([
         {
           sessionId: 'pi-path',
@@ -566,7 +560,7 @@ describe('PiAgentRunner.continue', () => {
       })
 
       for (const prompt of prompts) {
-        const entries = prompt.env['PATH']!.split(delimiter)
+        const entries = prompt.env.PATH!.split(delimiter)
         expect(entries[0]).toBe(AGENT_BIN_DIR)
         expect(entries[1]).toBe(conflictDir)
       }
@@ -577,8 +571,8 @@ describe('PiAgentRunner.continue', () => {
       expect(smoke.stdout).not.toContain('host-conflicting-ab')
       await runner.end(session)
     } finally {
-      if (originalPath === undefined) delete process.env['PATH']
-      else process.env['PATH'] = originalPath
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
       await rm(conflictDir, { recursive: true, force: true })
     }
   })

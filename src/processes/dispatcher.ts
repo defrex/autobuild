@@ -30,10 +30,7 @@ import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { IdSource } from '../ids'
-import {
-  autoMergeApplicationType,
-  pendingAutoMerge,
-} from '../kernel/auto-merge'
+import { autoMergeApplicationType, pendingAutoMerge } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
@@ -92,10 +89,7 @@ export function readyCriteria(config: Config): { labels: string[]; state: string
  * Plugin sources use the neutral `Triage` fallback unless configured.
  */
 export function defaultTriageState(config: Config): string {
-  return (
-    config.tickets.triageState ??
-    (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
-  )
+  return config.tickets.triageState ?? (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
 }
 
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
@@ -174,7 +168,7 @@ export function analyzeDependencies(
       continue
     }
     const node = nodes.get(blockerId)
-    if (!node || !node.exists) {
+    if (!node?.exists) {
       unresolved.push(blockerId)
       diagnostics.push(
         `ticket ${ticketId} blocked by ${blockerId}, which does not exist in ` +
@@ -190,12 +184,7 @@ export function analyzeDependencies(
     // Gating never needs the transitive walk (an unresolved blocker already
     // holds the ticket); the walk exists only to NAME a cycle, which direct
     // blockers alone cannot express.
-    const cycle = findCycle(
-      blockerId,
-      [ticketId, blockerId],
-      nodes,
-      new Set<string>(),
-    )
+    const cycle = findCycle(blockerId, [ticketId, blockerId], nodes, new Set<string>())
     diagnostics.push(
       cycle
         ? `ticket ${ticketId}: dependency cycle ${cycle.join(' → ')}`
@@ -447,11 +436,9 @@ export class Dispatcher {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
     this.triageState = deps.opts?.triageState ?? defaultTriageState(deps.config)
     this.doneState = deps.opts?.doneState ?? 'Done'
-    this.slugNamingTimeoutMs =
-      deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
+    this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
     this.maxHarvestRecoveryAttempts =
-      deps.opts?.maxHarvestRecoveryAttempts ??
-      DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+      deps.opts?.maxHarvestRecoveryAttempts ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   }
 
   /**
@@ -464,9 +451,7 @@ export class Dispatcher {
     if (opts.defaultAutoMerge === true) {
       autoMergeUser = opts.autoMergeUser?.trim()
       if (autoMergeUser === undefined || autoMergeUser === '') {
-        throw new Error(
-          'defaultAutoMerge requires nonempty human attribution in autoMergeUser',
-        )
+        throw new Error('defaultAutoMerge requires nonempty human attribution in autoMergeUser')
       }
     }
     const report = emptyTickReport()
@@ -496,21 +481,13 @@ export class Dispatcher {
       start()
       return
     }
-    const state = reduceHarvest(
-      await this.deps.store.getRepoEvents(this.deps.repo),
-    )
-    if (
-      decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !==
-      'park'
-    ) {
+    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+    if (decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !== 'park') {
       start()
     }
   }
 
-  private async launch(
-    slug: string,
-    launched: Set<string>,
-  ): Promise<LaunchRunnerResult> {
+  private async launch(slug: string, launched: Set<string>): Promise<LaunchRunnerResult> {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
     return this.deps.launchRunner(slug)
@@ -588,8 +565,7 @@ export class Dispatcher {
     const open = openWorkspace(events)
     const workspacePath = open?.path ?? open?.ref ?? this.deps.repo
     const prState = await forge.getPrState(workspacePath, pr.number)
-    const autoMerge =
-      prState.state === 'open' ? pendingAutoMerge(state) : undefined
+    const autoMerge = prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
     // Revoking consent takes priority even while the PR is conflicted. A live
     // native request could otherwise merge immediately after reconcile pushes
@@ -597,9 +573,7 @@ export class Dispatcher {
     if (autoMerge?.enabled === false) {
       const result = await forge.setAutoMerge(workspacePath, pr.number, false)
       if (result.kind !== 'applied') {
-        throw new Error(
-          `forge returned ${result.kind} while disabling native auto-merge`,
-        )
+        throw new Error(`forge returned ${result.kind} while disabling native auto-merge`)
       }
       await store.append(record.slug, {
         actor: DISPATCHER,
@@ -674,10 +648,7 @@ export class Dispatcher {
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
           await tickets.transition(record.ticket.id, this.doneState)
-          await tickets.comment(
-            record.ticket.id,
-            `build ${record.slug} merged: ${pr.url}`,
-          )
+          await tickets.comment(record.ticket.id, `build ${record.slug} merged: ${pr.url}`)
         }
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -725,15 +696,11 @@ export class Dispatcher {
    * is deliberately post-terminal and best-effort: a provider, timeout, or
    * store failure cannot roll back build.completed/ticket/workspace work.
    * Pending handles remain derivable and are retried on every later tick. */
-  private async reclaimPrAttachments(
-    slug: string,
-    events: AbEvent[],
-  ): Promise<void> {
+  private async reclaimPrAttachments(slug: string, events: AbEvent[]): Promise<void> {
     for (const hosted of pendingPrAttachmentReclaims(events)) {
       const priorAttempts = events.filter(
         (event) =>
-          event.type === 'pr-attachment.reclaim-failed' &&
-          event.payload.hostedSeq === hosted.seq,
+          event.type === 'pr-attachment.reclaim-failed' && event.payload.hostedSeq === hosted.seq,
       ).length
       try {
         const capability = this.deps.forge.prAttachments
@@ -821,10 +788,7 @@ export class Dispatcher {
    * is the operator's explicit request to re-arm that budget. Each policy
    * raise gets an auditable dispatcher-authored `escalation.answered{retry}`.
    */
-  private async resumeCurrent(
-    report: TickReport,
-    launched: Set<string>,
-  ): Promise<void> {
+  private async resumeCurrent(report: TickReport, launched: Set<string>): Promise<void> {
     const { store, config } = this.deps
     for (const record of await store.listBuilds()) {
       if (record.repo !== this.deps.repo || launched.has(record.slug)) continue
@@ -933,9 +897,7 @@ export class Dispatcher {
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
     const listing = await tickets.listReady(readyCriteria(config))
-    const ready = listing.tickets.filter(
-      (ticket) => !activeTicketIds.has(ticket.ref.id),
-    )
+    const ready = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id))
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length
@@ -959,11 +921,7 @@ export class Dispatcher {
         let verdict: DependencyVerdict
         try {
           await this.loadDependencyGraph(ticket, nodes)
-          verdict = analyzeDependencies(
-            ticket.ref.id,
-            ticket.blockedBy ?? [],
-            nodes,
-          )
+          verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
         } catch (error) {
           // A broken graph is this ticket's problem, not the tick's: skip it
           // and let unrelated eligible tickets dispatch normally.
@@ -1109,9 +1067,7 @@ export class Dispatcher {
     ticket: Ticket,
     nodes: Map<string, DependencyState>,
   ): Promise<void> {
-    let frontier = [...new Set(ticket.blockedBy ?? [])].filter(
-      (id) => !nodes.has(id),
-    )
+    let frontier = [...new Set(ticket.blockedBy ?? [])].filter((id) => !nodes.has(id))
     while (frontier.length > 0) {
       const states = await this.deps.tickets.dependencyStates(frontier)
       for (const state of states) nodes.set(state.id, state)
@@ -1147,17 +1103,17 @@ export class Dispatcher {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(new Error('build slug naming deadline exceeded'))
-      }, Math.max(0, this.slugNamingTimeoutMs))
+      timer = setTimeout(
+        () => {
+          controller.abort()
+          reject(new Error('build slug naming deadline exceeded'))
+        },
+        Math.max(0, this.slugNamingTimeoutMs),
+      )
     })
 
     try {
-      const candidate = await Promise.race([
-        nameSlug(spec, controller.signal),
-        deadline,
-      ])
+      const candidate = await Promise.race([nameSlug(spec, controller.signal), deadline])
       return validateSlugCandidate(candidate) ?? fallback
     } catch {
       return fallback

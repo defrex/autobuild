@@ -83,9 +83,7 @@ describe('resolveCliEnv', () => {
   test.each(['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION'] as const)(
     'empty %s raises the same typed missing-context error',
     (name) => {
-      const error = thrownBy(() =>
-        resolveCliEnv({ ...FULL_ENV, [name]: '' }),
-      )
+      const error = thrownBy(() => resolveCliEnv({ ...FULL_ENV, [name]: '' }))
       expect(error).toBeInstanceOf(MissingAmbientContextError)
       expect(error).toMatchObject({ variable: name })
     },
@@ -93,14 +91,12 @@ describe('resolveCliEnv', () => {
 
   test('missing AB_PHASE names the expected format', () => {
     const env: Record<string, string | undefined> = { ...FULL_ENV }
-    delete env['AB_PHASE']
+    delete env.AB_PHASE
     expect(() => resolveCliEnv(env)).toThrow(/'<phase>\[@<round>\]'/)
   })
 
   test('a fully populated malformed AB_PHASE remains an ordinary parse error', () => {
-    const error = thrownBy(() =>
-      resolveCliEnv({ ...FULL_ENV, AB_PHASE: 'implement@nope' }),
-    )
+    const error = thrownBy(() => resolveCliEnv({ ...FULL_ENV, AB_PHASE: 'implement@nope' }))
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(MissingAmbientContextError)
     expect((error as Error).message).toMatch(
@@ -122,44 +118,32 @@ describe('resolveHarvestCliEnv', () => {
     })
   })
 
-  test.each([
-    'AB_STORE',
-    'AB_REPO',
-    'AB_HARVEST',
-    'AB_PHASE',
-    'AB_SESSION',
-  ] as const)('missing %s raises typed harvest-context feedback', (name) => {
-    const env: Record<string, string | undefined> = { ...FULL_HARVEST_ENV }
-    delete env[name]
-    const error = thrownBy(() => resolveHarvestCliEnv(env))
-    expect(error).toBeInstanceOf(MissingAmbientContextError)
-    expect(error).toMatchObject({ variable: name })
-    expect((error as Error).message).toMatch(new RegExp(`${name} is not set`))
-  })
+  test.each(['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION'] as const)(
+    'missing %s raises typed harvest-context feedback',
+    (name) => {
+      const env: Record<string, string | undefined> = { ...FULL_HARVEST_ENV }
+      delete env[name]
+      const error = thrownBy(() => resolveHarvestCliEnv(env))
+      expect(error).toBeInstanceOf(MissingAmbientContextError)
+      expect(error).toMatchObject({ variable: name })
+      expect((error as Error).message).toMatch(new RegExp(`${name} is not set`))
+    },
+  )
 
-  test.each([
-    'AB_STORE',
-    'AB_REPO',
-    'AB_HARVEST',
-    'AB_PHASE',
-    'AB_SESSION',
-  ] as const)('empty %s raises the same typed missing-context error', (name) => {
-    const error = thrownBy(() =>
-      resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, [name]: '' }),
-    )
-    expect(error).toBeInstanceOf(MissingAmbientContextError)
-    expect(error).toMatchObject({ variable: name })
-  })
+  test.each(['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION'] as const)(
+    'empty %s raises the same typed missing-context error',
+    (name) => {
+      const error = thrownBy(() => resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, [name]: '' }))
+      expect(error).toBeInstanceOf(MissingAmbientContextError)
+      expect(error).toMatchObject({ variable: name })
+    },
+  )
 
   test('a complete malformed harvest phase is not missing context', () => {
-    const error = thrownBy(() =>
-      resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, AB_PHASE: 'review' }),
-    )
+    const error = thrownBy(() => resolveHarvestCliEnv({ ...FULL_HARVEST_ENV, AB_PHASE: 'review' }))
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(MissingAmbientContextError)
-    expect((error as Error).message).toMatch(
-      /AB_PHASE "review" is not a harvest session phase/,
-    )
+    expect((error as Error).message).toMatch(/AB_PHASE "review" is not a harvest session phase/)
   })
 })
 
@@ -171,9 +155,7 @@ describe('parseAbPhase — malformations (D6: precise, named errors)', () => {
   })
 
   test('round 0 is malformed (rounds are 1-based)', () => {
-    expect(() => parseAbPhase('implement@0')).toThrow(
-      /malformed round "0".*positive integer/s,
-    )
+    expect(() => parseAbPhase('implement@0')).toThrow(/malformed round "0".*positive integer/s)
   })
 
   test('non-numeric round is malformed', () => {

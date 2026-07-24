@@ -11,11 +11,7 @@ import type { Config, TicketsConfig } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { createTicketSource } from '../ports/tickets/create'
-import type {
-  Ticket,
-  TicketSource,
-  TicketUpdate,
-} from '../ports/types'
+import type { Ticket, TicketSource, TicketUpdate } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { readyCriteria } from '../processes/dispatcher'
 import { parseArgs, stringFlag } from './args'
@@ -86,14 +82,7 @@ export interface TicketMoveOpts extends TicketCommandOpts {
   json?: boolean
 }
 
-type TicketCommandName =
-  | 'create'
-  | 'update'
-  | 'block'
-  | 'unblock'
-  | 'list'
-  | 'show'
-  | 'move'
+type TicketCommandName = 'create' | 'update' | 'block' | 'unblock' | 'list' | 'show' | 'move'
 
 interface ResolvedTicketCommand {
   config: Config
@@ -129,20 +118,12 @@ async function resolveTicketCommand(
   const plugins = await loadPlugins(config.plugins, targetRepo)
   const repoState = resolveRepoStatePaths({
     repo: targetRepo,
-    ...(opts.env['AB_STORE'] !== undefined
-      ? { envStore: opts.env['AB_STORE'] }
-      : {}),
+    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
   const factory = opts.sourceFactory ?? createTicketSource
   return {
     config,
-    source: await factory(
-      config.tickets,
-      opts.env,
-      targetRepo,
-      repoState.localStateRoot,
-      plugins,
-    ),
+    source: await factory(config.tickets, opts.env, targetRepo, repoState.localStateRoot, plugins),
   }
 }
 
@@ -151,9 +132,7 @@ async function readBody(path: string): Promise<string> {
     return await readFile(path, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(
-        `--body ${path}: file not found — expected a file holding the ticket body`,
-      )
+      throw new Error(`--body ${path}: file not found — expected a file holding the ticket body`)
     }
     throw error
   }
@@ -234,14 +213,11 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     ticket.blockedBy !== undefined && ticket.blockedBy.length > 0
       ? ` — blocked by ${ticket.blockedBy.join(', ')}`
       : ''
-  opts.stdout(
-    `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${url}`,
-  )
+  opts.stdout(`ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${url}`)
 }
 
 export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
-  const body =
-    opts.bodyFile === undefined ? undefined : await readBody(opts.bodyFile)
+  const body = opts.bodyFile === undefined ? undefined : await readBody(opts.bodyFile)
   const { source } = await resolveTicketCommand(opts, 'update')
   const patch: TicketUpdate = {
     ...(opts.title !== undefined ? { title: opts.title } : {}),
@@ -255,9 +231,7 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
 export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'block')
   await source.addBlocker(opts.id, opts.blockerId)
-  opts.stdout(
-    `ticket blocker added: ${source.name}:${opts.id} — blocked by ${opts.blockerId}`,
-  )
+  opts.stdout(`ticket blocker added: ${source.name}:${opts.id} — blocked by ${opts.blockerId}`)
 }
 
 export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
@@ -330,8 +304,7 @@ const UPDATE_USAGE =
   'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] (§8.8)'
 const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id> (§8.8)'
 const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id> (§8.8)'
-const LIST_USAGE =
-  'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
+const LIST_USAGE = 'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
 const SHOW_USAGE = 'usage: ab ticket show <id> [--json] (§8.8)'
 const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
 export const TICKET_USAGE = [
@@ -358,10 +331,7 @@ interface TicketCliOpts extends TicketCommandOpts {
 
 /** Parse and execute the complete ticket argv tail. Each subcommand supplies
  * only its own flags to the shared command-scoped parser. */
-export async function abTicket(
-  argv: string[],
-  opts: TicketCliOpts,
-): Promise<void> {
+export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<void> {
   const [command, ...args] = argv
   switch (command) {
     case 'create': {
@@ -372,11 +342,7 @@ export async function abTicket(
       )
       const title = parsed.positionals.join(' ')
       const bodyFile = stringFlag(parsed, 'body')
-      if (
-        title.trim() === '' ||
-        bodyFile === undefined ||
-        bodyFile.trim() === ''
-      ) {
+      if (title.trim() === '' || bodyFile === undefined || bodyFile.trim() === '') {
         throw new Error(TICKET_USAGE)
       }
       const labels = stringFlag(parsed, 'labels')
@@ -386,9 +352,7 @@ export async function abTicket(
         title,
         bodyFile,
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
-        ...(blockedBy !== undefined
-          ? { blockedBy: commaList(blockedBy) }
-          : {}),
+        ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
       })
       return
     }
@@ -400,12 +364,7 @@ export async function abTicket(
         TICKET_USAGE,
       )
       const [id, ...extra] = parsed.positionals
-      if (
-        id === undefined ||
-        id.trim() === '' ||
-        extra.length > 0 ||
-        parsed.flags.size === 0
-      ) {
+      if (id === undefined || id.trim() === '' || extra.length > 0 || parsed.flags.size === 0) {
         throw new Error(TICKET_USAGE)
       }
       const title = stringFlag(parsed, 'title')

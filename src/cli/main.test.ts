@@ -12,11 +12,7 @@ import { KERNEL, agentActor } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
 import type { MemoryBuildStore } from '../store/memory'
-import {
-  isSessionlessInvocation,
-  runCli,
-  SESSIONLESS_COMMANDS,
-} from './main'
+import { isSessionlessInvocation, runCli, SESSIONLESS_COMMANDS } from './main'
 import {
   BRANCH,
   BUILD,
@@ -59,7 +55,15 @@ describe('runCli — routing and exit codes', () => {
     const d = deps()
     expect(await runCli(['help'], d)).toBe(0)
     const help = d.out.join('\n')
-    for (const command of ['ab context', 'ab artifact', 'ab observe', 'ab server', 'ab done', 'ab verdict', 'ab escalate']) {
+    for (const command of [
+      'ab context',
+      'ab artifact',
+      'ab observe',
+      'ab server',
+      'ab done',
+      'ab verdict',
+      'ab escalate',
+    ]) {
       expect(help).toContain(command)
     }
     expect(help).not.toContain('ab artifact put')
@@ -87,15 +91,7 @@ describe('runCli — routing and exit codes', () => {
 
   test('detailed help documents status and every sessionless build-control command', async () => {
     const d = deps()
-    for (const command of [
-      'builds',
-      'build',
-      'pause',
-      'resume',
-      'auto-merge',
-      'answer',
-      'abort',
-    ]) {
+    for (const command of ['builds', 'build', 'pause', 'resume', 'auto-merge', 'answer', 'abort']) {
       expect(await runCli(['help', command], d)).toBe(0)
     }
     const help = d.out.join('\n')
@@ -119,7 +115,9 @@ describe('runCli — routing and exit codes', () => {
     const help = d.out.join('\n')
     expect(help).toContain('ab plugin list')
     expect(help).toContain('ab plugin doctor')
-    expect(help).toContain('ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>')
+    expect(help).toContain(
+      'ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>',
+    )
     expect(help).toContain('AB_RUN_LIVE_PORT_CONTRACTS=1')
   })
 
@@ -194,16 +192,8 @@ describe('runCli — routing and exit codes', () => {
       }),
     ).toBe(1)
     const feedback = err.join('\n')
-    expect(feedback).toContain(
-      "'ab harvest context' runs inside a harvest agent session",
-    )
-    for (const name of [
-      'AB_STORE',
-      'AB_REPO',
-      'AB_HARVEST',
-      'AB_PHASE',
-      'AB_SESSION',
-    ]) {
+    expect(feedback).toContain("'ab harvest context' runs inside a harvest agent session")
+    for (const name of ['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION']) {
       expect(feedback).toContain(name)
     }
   })
@@ -242,15 +232,7 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab harvest submit <proposals.json>',
       },
       {
-        argv: [
-          'harvest',
-          'verdict',
-          'approve',
-          '--notes',
-          'review.md',
-          '--report',
-          'report.md',
-        ],
+        argv: ['harvest', 'verdict', 'approve', '--notes', 'review.md', '--report', 'report.md'],
         flag: '--report',
         usage: 'usage: ab harvest verdict',
       },
@@ -270,15 +252,7 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab pause',
       },
       {
-        argv: [
-          'artifact',
-          'download',
-          'build-1',
-          'plan',
-          '--output',
-          'plan.md',
-          '--json',
-        ],
+        argv: ['artifact', 'download', 'build-1', 'plan', '--output', 'plan.md', '--json'],
         flag: '--json',
         usage: 'usage: ab artifact download',
       },
@@ -431,7 +405,15 @@ describe('SESSIONLESS_COMMANDS', () => {
   })
 
   test('session commands are absent — they require AB_* and must not route sessionless', () => {
-    for (const command of ['context', 'done', 'verdict', 'escalate', 'observe', 'artifact', 'server']) {
+    for (const command of [
+      'context',
+      'done',
+      'verdict',
+      'escalate',
+      'observe',
+      'artifact',
+      'server',
+    ]) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(false)
     }
   })
@@ -544,9 +526,7 @@ describe('runCli — builds / build status routing', () => {
   test('--events followed by another flag is an error', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['build', 'status', 'b1', '--events', '--json'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain(
-      '--events requires a value, got "--json"',
-    )
+    expect(d.err.join('\n')).toContain('--events requires a value, got "--json"')
     expect(d.out).toEqual([])
   })
 
@@ -630,10 +610,7 @@ describe('runCli — sessionless build controls', () => {
     await local.close()
   }
 
-  function controlDeps(
-    storeRef: string,
-    env: Record<string, string | undefined> = {},
-  ) {
+  function controlDeps(storeRef: string, env: Record<string, string | undefined> = {}) {
     const out: string[] = []
     const err: string[] = []
     return {
@@ -682,9 +659,9 @@ describe('runCli — sessionless build controls', () => {
       'Use the safe path.',
     ])
     expect(
-      events.slice(-7).every(
-        (event) => event.actor.kind === 'human' && event.actor.user === 'cli-op',
-      ),
+      events
+        .slice(-7)
+        .every((event) => event.actor.kind === 'human' && event.actor.user === 'cli-op'),
     ).toBe(true)
     await local.close()
   })
@@ -741,9 +718,7 @@ describe('runCli — sessionless build controls', () => {
     expect(await runCli(['pause', slug], d)).toBe(0)
 
     const local = openLocalStore(storeRef)
-    expect((await local.getEvents(slug)).at(-1)?.type).toBe(
-      'build.pause-requested',
-    )
+    expect((await local.getEvents(slug)).at(-1)?.type).toBe('build.pause-requested')
     await local.close()
   })
 
@@ -768,14 +743,10 @@ describe('runCli — sessionless build controls', () => {
     const explicit = join(tmp, 'explicit-controls')
     await seedControlStore(explicit)
     const d = controlDeps(join(tmp, 'wrong-store'))
-    expect(
-      await runCli(['pause', slug, '--store', explicit], d),
-    ).toBe(0)
+    expect(await runCli(['pause', slug, '--store', explicit], d)).toBe(0)
 
     const local = openLocalStore(explicit)
-    expect((await local.getEvents(slug)).at(-1)?.type).toBe(
-      'build.pause-requested',
-    )
+    expect((await local.getEvents(slug)).at(-1)?.type).toBe('build.pause-requested')
     await local.close()
   })
 
@@ -882,20 +853,15 @@ describe('runCli — artifact and observe', () => {
       forge,
     })
 
-    expect(
-      await runCli(
-        ['artifact', 'put', 'visual:late', file, '--attach'],
-        d,
-      ),
-    ).toBe(0)
+    expect(await runCli(['artifact', 'put', 'visual:late', file, '--attach'], d)).toBe(0)
     expect(d.out).toEqual(['0'])
     expect(forge.prAttachmentUploads).toHaveLength(1)
     expect(forge.comments).toHaveLength(1)
     expect(forge.comments[0]!.body).toContain('<code>visual:late@0</code>')
     expect(forge.comments[0]!.body).toContain('<img ')
-    expect(
-      (await store.getEvents(BUILD)).map((event) => event.type),
-    ).toContain('pr-attachment.designated')
+    expect((await store.getEvents(BUILD)).map((event) => event.type)).toContain(
+      'pr-attachment.designated',
+    )
   })
 
   test('a late hosted-fact write failure leaves a durable public-asset cleanup pointer', async () => {
@@ -943,38 +909,20 @@ describe('runCli — artifact and observe', () => {
       forge,
     })
 
-    expect(
-      await runCli(
-        ['artifact', 'put', 'visual:late-failure', file, '--attach'],
-        d,
-      ),
-    ).toBe(0)
+    expect(await runCli(['artifact', 'put', 'visual:late-failure', file, '--attach'], d)).toBe(0)
     expect(d.out).toEqual(['0'])
     expect(forge.prAttachmentUploads).toHaveLength(1)
     expect(forge.comments).toHaveLength(1)
-    expect(forge.comments[0]!.body).toContain(
-      '<code>visual:late-failure@0</code>',
-    )
+    expect(forge.comments[0]!.body).toContain('<code>visual:late-failure@0</code>')
     expect(forge.comments[0]!.body).not.toContain('<img ')
 
     const events = await store.getEvents(BUILD)
-    expect(events.some((event) => event.type === 'pr-attachment.hosted')).toBe(
-      false,
-    )
-    const observation = events.findLast(
-      (event) => event.type === 'observation.recorded',
-    )
+    expect(events.some((event) => event.type === 'pr-attachment.hosted')).toBe(false)
+    const observation = events.findLast((event) => event.type === 'observation.recorded')
     const assetRef = 'github-release:acme/review-assets:release/42:asset/1'
-    expect(observation?.payload.summary).toContain(
-      `public copy ${assetRef} was uploaded`,
-    )
-    expect(observation?.payload.summary).toContain(
-      'hosted fact store unavailable',
-    )
-    expect(observation?.payload.refs).toEqual([
-      'visual:late-failure@0',
-      assetRef,
-    ])
+    expect(observation?.payload.summary).toContain(`public copy ${assetRef} was uploaded`)
+    expect(observation?.payload.summary).toContain('hosted fact store unavailable')
+    expect(observation?.payload.refs).toEqual(['visual:late-failure@0', assetRef])
   })
 
   test('artifact download runs without a phase tuple and writes exact binary bytes', async () => {
@@ -991,14 +939,7 @@ describe('runCli — artifact and observe', () => {
     const err: string[] = []
     const output = join(tmp, 'frames', 'wide.png')
     const code = await runCli(
-      [
-        'artifact',
-        'download',
-        'finished',
-        'visual:wide@0',
-        '--output',
-        output,
-      ],
+      ['artifact', 'download', 'finished', 'visual:wide@0', '--output', output],
       {
         workspacePath: tmp,
         processEnv: { AB_STORE: storeRef },
@@ -1074,9 +1015,7 @@ describe('runCli — artifact and observe', () => {
 describe('runCli — escalate and server', () => {
   test('escalate joins the positional question and passes refs', async () => {
     const d = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
-    expect(
-      await runCli(['escalate', 'is', 'the', 'spec', 'right?', '--refs', 'spec@0'], d),
-    ).toBe(0)
+    expect(await runCli(['escalate', 'is', 'the', 'spec', 'right?', '--refs', 'spec@0'], d)).toBe(0)
     expect(d.out).toEqual(['escalation raised: esc_1'])
     const events = await store.getEvents(BUILD)
     const raised = events[events.length - 1]!
@@ -1161,9 +1100,9 @@ describe('runCli — §8.7 walkthrough: the implementer session over fakes', () 
     ).toBe(0)
 
     // ab done — validates clean worktree, pushes the branch, emits the event.
-    expect(
-      await runCli(['done', '--notes', join(workspace, '.ab', 'implement-notes.md')], d),
-    ).toBe(0)
+    expect(await runCli(['done', '--notes', join(workspace, '.ab', 'implement-notes.md')], d)).toBe(
+      0,
+    )
     expect(d.out[d.out.length - 1]).toMatch(/implement\.completed recorded \(seq \d+\)/)
 
     // The final event sequence, exactly (§8.7).
@@ -1264,27 +1203,16 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       processEnv: { USER: 'launch-user' },
     }
 
-    expect(
-      await runCli(
-        ['dispatch', '--once', '--plain', '--store', storeRef],
-        commandDeps,
-      ),
-    ).toBe(0)
+    expect(await runCli(['dispatch', '--once', '--plain', '--store', storeRef], commandDeps)).toBe(
+      0,
+    )
     let persisted = openLocalStore(storeRef)
     expect(await persisted.getRepoEvents(tmp)).toEqual([])
     await persisted.close()
 
     expect(
       await runCli(
-        [
-          'dispatch',
-          '--once',
-          '--plain',
-          '--store',
-          storeRef,
-          '--no-intake',
-          '--auto-merge',
-        ],
+        ['dispatch', '--once', '--plain', '--store', storeRef, '--no-intake', '--auto-merge'],
         commandDeps,
       ),
     ).toBe(0)
@@ -1311,28 +1239,18 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
 
     // A no-flag restart reuses the stored projection rather than appending
     // inferred defaults over the operator's explicit choices.
-    expect(
-      await runCli(
-        ['dispatch', '--once', '--plain', '--store', storeRef],
-        commandDeps,
-      ),
-    ).toBe(0)
+    expect(await runCli(['dispatch', '--once', '--plain', '--store', storeRef], commandDeps)).toBe(
+      0,
+    )
     persisted = openLocalStore(storeRef)
     expect((await persisted.getRepoEvents(tmp)).length).toBe(2)
     await persisted.close()
   })
 
   test('both forms of each durable repository setting parse', async () => {
-    for (const flag of [
-      '--intake',
-      '--no-intake',
-      '--auto-merge',
-      '--no-auto-merge',
-    ]) {
+    for (const flag of ['--intake', '--no-intake', '--auto-merge', '--no-auto-merge']) {
       const d = deps()
-      expect(
-        await runCli(['dispatch', '--once', flag], { ...d, workspacePath: tmp }),
-      ).toBe(1)
+      expect(await runCli(['dispatch', '--once', flag], { ...d, workspacePath: tmp })).toBe(1)
       expect(d.err.join('\n')).toContain('autobuild.toml: not found')
       expect(d.err.join('\n')).not.toContain('unknown argument')
     }
@@ -1344,9 +1262,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       ['--no-intake', '--intake'],
     ]) {
       const d = deps()
-      expect(
-        await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp }),
-      ).toBe(1)
+      expect(await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp })).toBe(1)
       const err = d.err.join('\n')
       expect(err).toContain('--intake and --no-intake cannot be combined')
       expect(err).toContain('usage: ab dispatch')
@@ -1359,13 +1275,9 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       ['--no-auto-merge', '--auto-merge'],
     ]) {
       const d = deps()
-      expect(
-        await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp }),
-      ).toBe(1)
+      expect(await runCli(['dispatch', ...flags], { ...d, workspacePath: tmp })).toBe(1)
       const err = d.err.join('\n')
-      expect(err).toContain(
-        '--auto-merge and --no-auto-merge cannot be combined',
-      )
+      expect(err).toContain('--auto-merge and --no-auto-merge cannot be combined')
       expect(err).toContain('usage: ab dispatch')
     }
   })
@@ -1373,10 +1285,10 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
   test('the intake and auto-merge flag pairs are independent', async () => {
     const d = deps()
     expect(
-      await runCli(
-        ['dispatch', '--once', '--no-intake', '--auto-merge'],
-        { ...d, workspacePath: tmp },
-      ),
+      await runCli(['dispatch', '--once', '--no-intake', '--auto-merge'], {
+        ...d,
+        workspacePath: tmp,
+      }),
     ).toBe(1)
     expect(d.err.join('\n')).toContain('autobuild.toml: not found')
     expect(d.err.join('\n')).not.toContain('cannot be combined')
@@ -1400,8 +1312,6 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
     )
     expect(help).toContain('durably set repository defaults')
-    expect(help).toContain(
-      'omission reuses stored state (fresh repo: intake on, auto-merge off)',
-    )
+    expect(help).toContain('omission reuses stored state (fresh repo: intake on, auto-merge off)')
   })
 })

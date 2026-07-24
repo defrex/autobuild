@@ -2,22 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import type {
-  AgentRunner,
-  AgentSessionHandle,
-  AgentTurnResult,
-  Transcript,
-} from '../types'
-import type {
-  OneShotCompletion,
-  OneShotCompletionInput,
-} from './one-shot'
+import type { AgentRunner, AgentSessionHandle, AgentTurnResult, Transcript } from '../types'
+import type { OneShotCompletion, OneShotCompletionInput } from './one-shot'
 import { AGENT_BIN_DIR } from './session-env'
 
-export type AgentRunnerContractScenario =
-  | 'success'
-  | 'retryable-failure'
-  | 'permanent-failure'
+export type AgentRunnerContractScenario = 'success' | 'retryable-failure' | 'permanent-failure'
 
 export const CONTRACT_INVOCATION = 'agent-runner-contract'
 export const CONTRACT_SKILL = 'ab-runner-contract'
@@ -122,11 +111,7 @@ async function withEndedSession<T>(
   return { value: value as T, transcript }
 }
 
-function expectUsage(usage: {
-  inputTokens: number
-  outputTokens: number
-  turns: number
-}): void {
+function expectUsage(usage: { inputTokens: number; outputTokens: number; turns: number }): void {
   for (const value of [usage.inputTokens, usage.outputTokens, usage.turns]) {
     expect(Number.isFinite(value)).toBe(true)
     expect(Number.isInteger(value)).toBe(true)
@@ -141,11 +126,7 @@ function expectTypedCompleted(result: AgentTurnResult): void {
   expectUsage(result.usage)
 }
 
-function expectTranscript(
-  transcript: Transcript,
-  runner: AgentRunner,
-  model: string,
-): void {
+function expectTranscript(transcript: Transcript, runner: AgentRunner, model: string): void {
   expect(transcript.content.trim().length).toBeGreaterThan(0)
   expect(transcript.metadata.runner).toBe(runner.name)
   expect(transcript.metadata.model).toBe(model)
@@ -153,7 +134,7 @@ function expectTranscript(
 }
 
 async function invokeManagedCli(env: Record<string, string>): Promise<void> {
-  const path = env['PATH']
+  const path = env.PATH
   expect(path).toBeDefined()
   expect(path!.split(delimiter)[0]).toBe(AGENT_BIN_DIR)
 
@@ -189,14 +170,11 @@ export function describeAgentRunnerContract(
         const conflictDir = await mkdtemp(join(tmpdir(), 'ab-runner-contract-path-'))
         try {
           const conflictingAb = join(conflictDir, 'ab')
-          await writeFile(
-            conflictingAb,
-            '#!/bin/sh\necho host-conflicting-ab\nexit 91\n',
-          )
+          await writeFile(conflictingAb, '#!/bin/sh\necho host-conflicting-ab\nexit 91\n')
           await chmod(conflictingAb, 0o755)
 
           const startEnv = {
-            PATH: [conflictDir, process.env['PATH'] ?? '']
+            PATH: [conflictDir, process.env.PATH ?? '']
               .filter((entry) => entry !== '')
               .join(delimiter),
             AB_CONTRACT_START_ONLY: 'retained',
@@ -220,29 +198,25 @@ export function describeAgentRunnerContract(
               expect(started.session.model).toBe(harness.model)
               expectTypedCompleted(started.result)
 
-              const continued = await harness.runner.continue(
-                started.session,
-                CONTRACT_FOLLOW_UP,
-                {
-                  env: {
-                    AB_CONTRACT_COLLIDE: 'continue-value',
-                    AB_CONTRACT_CONTINUE_ONLY: 'fresh',
-                    AB_PHASE: 'implement@2',
-                  },
+              const continued = await harness.runner.continue(started.session, CONTRACT_FOLLOW_UP, {
+                env: {
+                  AB_CONTRACT_COLLIDE: 'continue-value',
+                  AB_CONTRACT_CONTINUE_ONLY: 'fresh',
+                  AB_PHASE: 'implement@2',
                 },
-              )
+              })
               expectTypedCompleted(continued)
 
               const turns = harness.turns()
               expect(turns).toHaveLength(2)
               expect(turns[0]?.message).toBeUndefined()
               expect(turns[1]?.message).toBe(CONTRACT_FOLLOW_UP)
-              expect(turns[0]?.env['AB_CONTRACT_COLLIDE']).toBe('start-value')
-              expect(turns[0]?.env['AB_CONTRACT_START_ONLY']).toBe('retained')
-              expect(turns[1]?.env['AB_CONTRACT_COLLIDE']).toBe('continue-value')
-              expect(turns[1]?.env['AB_CONTRACT_START_ONLY']).toBe('retained')
-              expect(turns[1]?.env['AB_CONTRACT_CONTINUE_ONLY']).toBe('fresh')
-              expect(turns[1]?.env['AB_PHASE']).toBe('implement@2')
+              expect(turns[0]?.env.AB_CONTRACT_COLLIDE).toBe('start-value')
+              expect(turns[0]?.env.AB_CONTRACT_START_ONLY).toBe('retained')
+              expect(turns[1]?.env.AB_CONTRACT_COLLIDE).toBe('continue-value')
+              expect(turns[1]?.env.AB_CONTRACT_START_ONLY).toBe('retained')
+              expect(turns[1]?.env.AB_CONTRACT_CONTINUE_ONLY).toBe('fresh')
+              expect(turns[1]?.env.AB_PHASE).toBe('implement@2')
               await invokeManagedCli(turns[0]!.env)
               await invokeManagedCli(turns[1]!.env)
             },
@@ -263,20 +237,16 @@ export function describeAgentRunnerContract(
           model: harness.model,
           env: { AB_PHASE: 'implement@1' },
         })
-        const { transcript } = await withEndedSession(
-          harness.runner,
-          started.session,
-          async () => {
-            expect(started.result).toMatchObject({
-              kind: 'failed',
-              failure: {
-                message: CONTRACT_RETRYABLE_FAILURE,
-                permanent: false,
-              },
-            })
-            expectUsage(started.result.usage)
-          },
-        )
+        const { transcript } = await withEndedSession(harness.runner, started.session, async () => {
+          expect(started.result).toMatchObject({
+            kind: 'failed',
+            failure: {
+              message: CONTRACT_RETRYABLE_FAILURE,
+              permanent: false,
+            },
+          })
+          expectUsage(started.result.usage)
+        })
         expectTranscript(transcript, harness.runner, harness.model)
       })
     })
@@ -290,20 +260,16 @@ export function describeAgentRunnerContract(
           model: harness.model,
           env: { AB_PHASE: 'implement@1' },
         })
-        const { transcript } = await withEndedSession(
-          harness.runner,
-          started.session,
-          async () => {
-            expect(started.result).toMatchObject({
-              kind: 'failed',
-              failure: {
-                message: CONTRACT_PERMANENT_FAILURE,
-                permanent: true,
-              },
-            })
-            expectUsage(started.result.usage)
-          },
-        )
+        const { transcript } = await withEndedSession(harness.runner, started.session, async () => {
+          expect(started.result).toMatchObject({
+            kind: 'failed',
+            failure: {
+              message: CONTRACT_PERMANENT_FAILURE,
+              permanent: true,
+            },
+          })
+          expectUsage(started.result.usage)
+        })
         expectTranscript(transcript, harness.runner, harness.model)
       })
     })
@@ -323,7 +289,7 @@ export function describeAgentRunnerContract(
         expect(observed).toBeDefined()
         expect(observed?.prompt).toBe(input.prompt)
         expect(observed?.cwd).toBe(input.cwd)
-        expect(observed?.env['AB_CONTRACT_ONE_SHOT']).toBe('scoped-value')
+        expect(observed?.env.AB_CONTRACT_ONE_SHOT).toBe('scoped-value')
         expect(observed?.model).toBe(input.model)
       })
     })

@@ -59,9 +59,9 @@ describe('observe', () => {
 
   test('an unknown kind is rejected naming the vocabulary', async () => {
     const deps = { store, env: makeEnv(), ids: sequentialIds() }
-    await expect(
-      observe(deps, { kind: 'idea', summary: 'nope' }),
-    ).rejects.toThrow(/--kind "idea" is not an observation kind.*followup \| refactor \| latent-bug/s)
+    await expect(observe(deps, { kind: 'idea', summary: 'nope' })).rejects.toThrow(
+      /--kind "idea" is not an observation kind.*followup \| refactor \| latent-bug/s,
+    )
   })
 
   test('an empty summary is rejected', async () => {

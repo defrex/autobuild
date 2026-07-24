@@ -160,7 +160,7 @@ describe('ScriptedAgentRunner', () => {
       AB_SESSION: 's_5',
     })
     // The journal keeps the START opts — they are the session's identity.
-    expect(runner.sessions.get('s_1')?.opts.env['AB_PHASE']).toBe('implement@1')
+    expect(runner.sessions.get('s_1')?.opts.env.AB_PHASE).toBe('implement@1')
   })
 
   test('sessions are independent: histories never leak across handles', async () => {
@@ -207,9 +207,7 @@ describe('ScriptedAgentRunner', () => {
       }),
     })
 
-    const { session } = await runner.start(
-      startOpts({ model: 'claude-sonnet-4' }),
-    )
+    const { session } = await runner.start(startOpts({ model: 'claude-sonnet-4' }))
     await runner.continue(session, 'round 2 feedback')
     const transcript = await runner.end(session)
 
@@ -260,9 +258,7 @@ describe('ScriptedAgentRunner', () => {
   test('continue and end on an unknown session throw', async () => {
     const runner = new ScriptedAgentRunner({ script: () => defaultTurnResult() })
     const ghost = { id: 's_404', runner: 'scripted' }
-    await expect(runner.continue(ghost, 'hello')).rejects.toThrow(
-      'unknown session "s_404"',
-    )
+    await expect(runner.continue(ghost, 'hello')).rejects.toThrow('unknown session "s_404"')
     await expect(runner.end(ghost)).rejects.toThrow('unknown session "s_404"')
   })
 

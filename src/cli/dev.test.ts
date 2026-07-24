@@ -1,12 +1,6 @@
 import { expect, test } from 'bun:test'
-import {
-  evaluateDevCli,
-  type DevCliState,
-} from './dev'
-import type {
-  DashboardRenderer,
-  DashboardRendererResolver,
-} from './dashboard/render'
+import { evaluateDevCli, type DevCliState } from './dev'
+import type { DashboardRenderer, DashboardRendererResolver } from './dashboard/render'
 
 test('hot evaluations replace the renderer while retaining one CLI run and settlement path', async () => {
   const rendererA: DashboardRenderer = () => ['renderer A']

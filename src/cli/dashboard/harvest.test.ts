@@ -64,8 +64,7 @@ describe('dashboard harvest row', () => {
     expect(projected).toMatchObject({
       status: 'failed',
       action: 'resume',
-      detail:
-        'stopped at synthesize r1 - automatic recovery 0/2; no-terminal',
+      detail: 'stopped at synthesize r1 - automatic recovery 0/2; no-terminal',
     })
     expect(byLabel.get('scan')?.state).toBe('done')
     expect(byLabel.get('synthesize')).toMatchObject({
@@ -210,8 +209,7 @@ describe('dashboard harvest row', () => {
       run: 'h_recovery',
       status: 'failed',
       action: 'acknowledge',
-      detail:
-        'recovery exhausted - human attention required; stopped at file; pending 1',
+      detail: 'recovery exhausted - human attention required; stopped at file; pending 1',
     })
     const rendered = stripAnsi(
       renderDashboard(
@@ -282,8 +280,7 @@ describe('dashboard harvest row', () => {
       timing: { accumulatedMs: expect.any(Number) },
     })
     expect(
-      projected.steps.find((step) => step.label === 'synthesize')?.timing
-        ?.runningSince,
+      projected.steps.find((step) => step.label === 'synthesize')?.timing?.runningSince,
     ).toBeUndefined()
     const rendered = stripAnsi(
       renderDashboard(
@@ -389,9 +386,7 @@ describe('dashboard harvest row', () => {
         scan: { kind: 'harvest-scan', rev: 0 },
       },
     })
-    expect(projectHarvest(await store.getRepoEvents('/repo'))?.status).toBe(
-      'running',
-    )
+    expect(projectHarvest(await store.getRepoEvents('/repo'))?.status).toBe('running')
 
     await store.appendRepo('/repo', {
       actor: KERNEL,

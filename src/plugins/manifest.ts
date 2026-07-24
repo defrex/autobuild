@@ -23,13 +23,13 @@ export interface PluginFactoryContext<Config = Record<string, unknown>> {
 export type PluginFactory<Adapter, Config = Record<string, unknown>> = {
   /** The method-index form intentionally makes this callback bivariant, so a
    * plugin can retain its concrete config type across the erased manifest. */
-  invoke(
-    context: PluginFactoryContext<Config>,
-  ): Adapter | Promise<Adapter>
+  invoke(context: PluginFactoryContext<Config>): Adapter | Promise<Adapter>
 }['invoke']
 
-export type TicketSourcePluginFactory<Config = Record<string, unknown>> =
-  PluginFactory<TicketSource, Config>
+export type TicketSourcePluginFactory<Config = Record<string, unknown>> = PluginFactory<
+  TicketSource,
+  Config
+>
 
 /** Optional host-enforced metadata for a ticket source. Bare factories remain
  * valid for plugin API 1.0 compatibility. */
@@ -45,12 +45,15 @@ export type TicketSourcePluginRegistration<Config = Record<string, unknown>> =
   | TicketSourcePluginFactory<Config>
   | TicketSourcePluginDescriptor<Config>
 
-export type AgentRuntimePluginFactory<Config = Record<string, unknown>> =
-  PluginFactory<RuntimeRegistration, Config>
-export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> =
-  PluginFactory<WorkspaceProvider, Config>
-export type ForgePluginFactory<Config = Record<string, unknown>> =
-  PluginFactory<Forge, Config>
+export type AgentRuntimePluginFactory<Config = Record<string, unknown>> = PluginFactory<
+  RuntimeRegistration,
+  Config
+>
+export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> = PluginFactory<
+  WorkspaceProvider,
+  Config
+>
+export type ForgePluginFactory<Config = Record<string, unknown>> = PluginFactory<Forge, Config>
 
 export interface PluginContractDescriptor<ContractFactory, Config = Record<string, unknown>> {
   /** Creates the unchanged shared-suite harness factory when the test verb runs. */
@@ -125,10 +128,7 @@ export function pluginApiCompatibility(declaredRange: string): PluginApiCompatib
   }
 }
 
-const nonblank = z.string().refine(
-  (value) => value.trim().length > 0,
-  'must be a nonblank string',
-)
+const nonblank = z.string().refine((value) => value.trim().length > 0, 'must be a nonblank string')
 
 const factorySchema = z.custom<PluginFactory<unknown>>(
   (value) => typeof value === 'function',
@@ -154,21 +154,19 @@ const registrationSchema = z.unknown().transform((value, ctx) => {
 })
 const registrationMapSchema = z.record(nonblank, registrationSchema)
 
-const requiredEnvSchema = z
-  .array(nonblank)
-  .superRefine((names, ctx) => {
-    const seen = new Set<string>()
-    names.forEach((name, index) => {
-      if (seen.has(name)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [index],
-          message: `environment variable "${name}" is declared more than once`,
-        })
-      }
-      seen.add(name)
-    })
+const requiredEnvSchema = z.array(nonblank).superRefine((names, ctx) => {
+  const seen = new Set<string>()
+  names.forEach((name, index) => {
+    if (seen.has(name)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [index],
+        message: `environment variable "${name}" is declared more than once`,
+      })
+    }
+    seen.add(name)
   })
+})
 
 const ticketSourceDescriptorSchema = z.strictObject({
   factory: factorySchema,
@@ -188,7 +186,7 @@ export const pluginManifestSchema = z.strictObject({
   ticketSources: ticketSourceMapSchema.optional(),
   agentRuntimes: registrationMapSchema.optional(),
   workspaceProviders: registrationMapSchema.optional(),
-  forges: registrationMapSchema.optional()
+  forges: registrationMapSchema.optional(),
 })
 
 /** Validate shape and API compatibility before any registration is committed. */

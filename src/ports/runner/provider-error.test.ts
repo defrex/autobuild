@@ -13,9 +13,7 @@ describe('classifyProviderError', () => {
   })
 
   test.each([401, 402, 403])('HTTP status %s is a positive permanent hint', (status) => {
-    expect(classifyProviderError('provider rejected the request', { status }).permanent).toBe(
-      true,
-    )
+    expect(classifyProviderError('provider rejected the request', { status }).permanent).toBe(true)
   })
 
   test.each([
@@ -26,9 +24,9 @@ describe('classifyProviderError', () => {
     'error_max_budget_usd',
     'oauth_org_not_allowed',
   ])('structured code %s is permanent', (code) => {
-    expect(classifyProviderError('provider rejected the request', { codes: [code] }).permanent).toBe(
-      true,
-    )
+    expect(
+      classifyProviderError('provider rejected the request', { codes: [code] }).permanent,
+    ).toBe(true)
   })
 
   test.each([
@@ -49,12 +47,7 @@ describe('classifyProviderError', () => {
     ['request timed out', null, 'timeout'],
     ['socket closed unexpectedly', null, 'transport_error'],
     ['unknown execution error', null, 'unknown'],
-  ] as const)(
-    'retry-policy error remains non-permanent: %s',
-    (message, status, code) => {
-      expect(
-        classifyProviderError(message, { status, codes: [code] }).permanent,
-      ).toBe(false)
-    },
-  )
+  ] as const)('retry-policy error remains non-permanent: %s', (message, status, code) => {
+    expect(classifyProviderError(message, { status, codes: [code] }).permanent).toBe(false)
+  })
 })

@@ -22,11 +22,7 @@ const REPO = '/repo'
 
 describe('createTicketSource — linear', () => {
   test('constructs a LinearTicketSource from config and env', async () => {
-    const source = await createTicketSource(
-      { ...LINEAR_CONFIG, claimedState: 'Doing' },
-      ENV,
-      REPO,
-    )
+    const source = await createTicketSource({ ...LINEAR_CONFIG, claimedState: 'Doing' }, ENV, REPO)
     expect(source).toBeInstanceOf(LinearTicketSource)
     expect(source.name).toBe('linear')
   })
@@ -35,9 +31,9 @@ describe('createTicketSource — linear', () => {
     await expect(createTicketSource(LINEAR_CONFIG, {}, REPO)).rejects.toThrow(
       /LINEAR_API_KEY is not set/,
     )
-    await expect(
-      createTicketSource(LINEAR_CONFIG, { LINEAR_API_KEY: '' }, REPO),
-    ).rejects.toThrow(/LINEAR_API_KEY is not set/)
+    await expect(createTicketSource(LINEAR_CONFIG, { LINEAR_API_KEY: '' }, REPO)).rejects.toThrow(
+      /LINEAR_API_KEY is not set/,
+    )
   })
 
   test('the error names the expected value and the config that requires it', async () => {
@@ -65,11 +61,7 @@ describe('createTicketSource — file', () => {
   })
 
   test('constructs a FileTicketSource, no LINEAR_API_KEY needed', async () => {
-    const source = await createTicketSource(
-      { ...FILE_CONFIG, dir: 'tickets' },
-      {},
-      repo,
-    )
+    const source = await createTicketSource({ ...FILE_CONFIG, dir: 'tickets' }, {}, repo)
     expect(source).toBeInstanceOf(FileTicketSource)
     expect(source.name).toBe('file')
   })
@@ -77,9 +69,7 @@ describe('createTicketSource — file', () => {
   test('no dir defaults beneath repo state and gitignores itself', async () => {
     const source = await createTicketSource(FILE_CONFIG, {}, repo)
     await source.create({ title: 'T', body: 'b' })
-    expect(await readdir(join(repo, '.autobuild', 'tickets', 'triage'))).toEqual([
-      'file-1.md',
-    ])
+    expect(await readdir(join(repo, '.autobuild', 'tickets', 'triage'))).toEqual(['file-1.md'])
     expect(await readdir(join(repo, '.autobuild', 'tickets'))).toContain('.gitignore')
   })
 
@@ -91,11 +81,7 @@ describe('createTicketSource — file', () => {
   })
 
   test('an explicit relative dir resolves against the repo and is not gitignored', async () => {
-    const source = await createTicketSource(
-      { ...FILE_CONFIG, dir: 'tickets' },
-      {},
-      repo,
-    )
+    const source = await createTicketSource({ ...FILE_CONFIG, dir: 'tickets' }, {}, repo)
     await source.create({ title: 'T', body: 'b' })
     expect(await readdir(join(repo, 'tickets', 'triage'))).toEqual(['file-1.md'])
     expect(await readdir(join(repo, 'tickets'))).not.toContain('.gitignore')
@@ -119,9 +105,7 @@ describe('createTicketSource — file', () => {
 })
 
 function pluginRegistry(
-  factory: (
-    context: PluginFactoryContext,
-  ) => FakeTicketSource | Promise<FakeTicketSource>,
+  factory: (context: PluginFactoryContext) => FakeTicketSource | Promise<FakeTicketSource>,
   requiredEnv?: string[],
 ): PluginRegistry {
   const registry = new PluginRegistry()
@@ -155,9 +139,7 @@ describe('createTicketSource — plugin', () => {
     const source = await createTicketSource(config, env, './repo', undefined, registry)
 
     expect(source).toBe(expected)
-    expect(contexts).toEqual([
-      { config, env, repoRoot: resolve('./repo') },
-    ])
+    expect(contexts).toEqual([{ config, env, repoRoot: resolve('./repo') }])
   })
 
   test('rejects every missing or empty declared credential before invocation', async () => {
@@ -182,13 +164,7 @@ describe('createTicketSource — plugin', () => {
   test('unknown names list builtins and loaded plugin sources', async () => {
     const registry = pluginRegistry(() => new FakeTicketSource())
     await expect(
-      createTicketSource(
-        { source: 'missing', readyState: 'Open' },
-        {},
-        REPO,
-        undefined,
-        registry,
-      ),
+      createTicketSource({ source: 'missing', readyState: 'Open' }, {}, REPO, undefined, registry),
     ).rejects.toThrow(/unknown ticket source "missing".*file, jira, linear/)
   })
 

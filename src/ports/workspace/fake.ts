@@ -13,11 +13,7 @@
 import { cp, mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
-import type {
-  WorkspaceHandle,
-  WorkspaceProvider,
-  WorkspaceProvisionResult,
-} from '../types'
+import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
 
 export interface ProvisionRecord {
   repo: string

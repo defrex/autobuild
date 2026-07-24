@@ -58,9 +58,7 @@ export async function converge<A>(opts: {
   initialFeedback?: Feedback | null
 }): Promise<ConvergeOutcome<A>> {
   const { produce, review, policy, dismissedIds } = opts
-  const roundFindings: Finding[][] = (opts.priorRounds ?? []).map((round) => [
-    ...round,
-  ])
+  const roundFindings: Finding[][] = (opts.priorRounds ?? []).map((round) => [...round])
   let feedback: Feedback | null = opts.initialFeedback ?? null
 
   for (let round = opts.startRound ?? 1; ; round += 1) {

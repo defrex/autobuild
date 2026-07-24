@@ -70,9 +70,7 @@ export const repoArtifacts = sqliteTable(
     kind: text('kind').notNull(),
     revision: integer('revision').notNull(),
     blobRef: text('blob_ref').notNull(),
-    metadata: text('metadata', { mode: 'json' })
-      .notNull()
-      .$type<Record<string, unknown>>(),
+    metadata: text('metadata', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
     createdAt: text('created_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repo, t.kind, t.revision] })],
@@ -87,9 +85,7 @@ export const artifacts = sqliteTable(
     revision: integer('revision').notNull(),
     /** sha256 content address into the BlobStore (§7.1). */
     blobRef: text('blob_ref').notNull(),
-    metadata: text('metadata', { mode: 'json' })
-      .notNull()
-      .$type<Record<string, unknown>>(),
+    metadata: text('metadata', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
     createdAt: text('created_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.build, t.kind, t.revision] })],

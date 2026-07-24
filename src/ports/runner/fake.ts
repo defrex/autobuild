@@ -30,9 +30,7 @@ export interface ScriptContext {
   history: string[]
 }
 
-export type Script = (
-  ctx: ScriptContext,
-) => Promise<AgentTurnResult> | AgentTurnResult
+export type Script = (ctx: ScriptContext) => Promise<AgentTurnResult> | AgentTurnResult
 
 /** Default completed turn (text '', usage 1/1/1) — keeps scripts terse. */
 export function defaultTurnResult(text = ''): AgentTurnResult {
@@ -45,11 +43,7 @@ export function defaultTurnResult(text = ''): AgentTurnResult {
 
 /** Script a provider/runner-declared failure while preserving the same endable
  * fake session and transcript behavior as a real adapter. */
-export function failedTurnResult(
-  message: string,
-  permanent: boolean,
-  text = '',
-): AgentTurnResult {
+export function failedTurnResult(message: string, permanent: boolean, text = ''): AgentTurnResult {
   return {
     kind: 'failed',
     text,
@@ -130,10 +124,7 @@ export class ScriptedAgentRunner implements AgentRunner {
     // refreshed ambient env merged over the start env, so the script's fake
     // CLI resolves exactly what a real agent's `ab` would. The journal keeps
     // the START opts — they are the session's identity.
-    const scoped =
-      opts?.env !== undefined
-        ? { ...journal.opts.env, ...opts.env }
-        : journal.opts.env
+    const scoped = opts?.env !== undefined ? { ...journal.opts.env, ...opts.env } : journal.opts.env
     const turnOpts = { ...journal.opts, env: sessionEnv(scoped) }
 
     const result = await this.script({
@@ -165,9 +156,7 @@ export class ScriptedAgentRunner implements AgentRunner {
           session: journal.session.id,
           skill: journal.opts.skill,
           invocation: agentInvocation(journal.opts),
-          ...(journal.opts.buildSlug !== undefined
-            ? { buildSlug: journal.opts.buildSlug }
-            : {}),
+          ...(journal.opts.buildSlug !== undefined ? { buildSlug: journal.opts.buildSlug } : {}),
           turns: journal.turns,
         },
         null,
@@ -175,18 +164,13 @@ export class ScriptedAgentRunner implements AgentRunner {
       ),
       metadata: {
         runner: this.name,
-        ...(journal.session.model !== undefined
-          ? { model: journal.session.model }
-          : {}),
+        ...(journal.session.model !== undefined ? { model: journal.session.model } : {}),
         usage,
       },
     }
   }
 
-  private liveJournal(
-    session: AgentSessionHandle,
-    op: 'continue' | 'end',
-  ): SessionJournal {
+  private liveJournal(session: AgentSessionHandle, op: 'continue' | 'end'): SessionJournal {
     const journal = this.sessions.get(session.id)
     if (!journal) {
       throw new Error(`${this.name}: ${op} on unknown session "${session.id}"`)

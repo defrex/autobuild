@@ -12,18 +12,14 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { BuildStatus } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore } from '../store/types'
-import {
-  withSessionlessStore,
-  type StoreOpener,
-} from './store-opening'
+import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'paused', 'blocked']
 
 /** Retry carries no phase guidance, but the event schema still requires a
  * nonempty audit answer. The reducer/materializer route on `resolution`, so
  * this text is never presented to the next phase as guidance. */
-export const BARE_RETRY_ANSWER =
-  'Operator requested a bare retry with no feedback'
+export const BARE_RETRY_ANSWER = 'Operator requested a bare retry with no feedback'
 
 export type BuildControlAction =
   | { kind: 'pause' }
@@ -41,12 +37,7 @@ export type BuildControlAction =
       escalationIds?: readonly string[]
     }
 
-export type BuildControlCommand =
-  | 'pause'
-  | 'resume'
-  | 'abort'
-  | 'auto-merge-on'
-  | 'auto-merge-off'
+export type BuildControlCommand = 'pause' | 'resume' | 'abort' | 'auto-merge-on' | 'auto-merge-off'
 
 export type BuildControlResult =
   | {
@@ -88,9 +79,7 @@ export class BuildControlError extends Error {
 }
 
 /** Preserve the dashboard's attribution rule for both operator surfaces. */
-export function buildControlUser(
-  env: Record<string, string | undefined>,
-): string {
+export function buildControlUser(env: Record<string, string | undefined>): string {
   for (const name of ['USER', 'USERNAME']) {
     const value = env[name]?.trim()
     if (value !== undefined && value !== '') return value
@@ -165,9 +154,7 @@ export interface ControlBuildOpts {
 }
 
 /** Apply one control against a freshly reduced build log. */
-export async function controlBuild(
-  opts: ControlBuildOpts,
-): Promise<BuildControlResult> {
+export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControlResult> {
   const record = await opts.store.getBuild(opts.slug)
   if (record === null) {
     throw new BuildControlError(
@@ -178,8 +165,7 @@ export async function controlBuild(
   if (record.repo !== opts.repo) {
     throw new BuildControlError(
       'wrong-repository',
-      `build "${opts.slug}" belongs to repository "${record.repo}", ` +
-        `not "${opts.repo}"`,
+      `build "${opts.slug}" belongs to repository "${record.repo}", ` + `not "${opts.repo}"`,
     )
   }
 
@@ -193,12 +179,7 @@ export async function controlBuild(
     case 'abort':
     case 'auto-merge-on':
     case 'auto-merge-off':
-      return appendCommand(
-        opts.store,
-        opts.slug,
-        user,
-        opts.action.kind,
-      )
+      return appendCommand(opts.store, opts.slug, user, opts.action.kind)
 
     case 'toggle-pause': {
       // A blocker takes precedence over pause state in the operator flow. The
@@ -228,9 +209,7 @@ export async function controlBuild(
 
     case 'answer': {
       const captured =
-        opts.action.escalationIds === undefined
-          ? undefined
-          : new Set(opts.action.escalationIds)
+        opts.action.escalationIds === undefined ? undefined : new Set(opts.action.escalationIds)
       const open =
         captured === undefined
           ? state.openEscalations
@@ -302,8 +281,8 @@ export function refuseOwnSessionControl(
   action: BuildControlAction,
   env: Record<string, string | undefined>,
 ): void {
-  const session = env['AB_SESSION']?.trim()
-  const build = env['AB_BUILD']?.trim()
+  const session = env.AB_SESSION?.trim()
+  const build = env.AB_BUILD?.trim()
   if (session === undefined || session === '' || build !== slug) return
   throw new BuildControlError(
     'own-session',
@@ -325,9 +304,7 @@ export interface AbBuildControlOpts {
 }
 
 /** Sessionless command shell: resolve repository/store, control, always close. */
-export async function abBuildControl(
-  opts: AbBuildControlOpts,
-): Promise<BuildControlResult> {
+export async function abBuildControl(opts: AbBuildControlOpts): Promise<BuildControlResult> {
   // Do this before opening a store: the conflict is ambient and no read is
   // needed to know that an own-phase control attempt is forbidden.
   refuseOwnSessionControl(opts.slug, opts.action, opts.env)

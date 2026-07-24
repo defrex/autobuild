@@ -146,7 +146,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Usage:',
       '  ab builds [--queued] [--all] [--json] [--store <ref>]',
       '',
-      'List this repository\'s builds (§15.5). By default this shows active builds:',
+      "List this repository's builds (§15.5). By default this shows active builds:",
       'running, paused, blocked. --queued also includes queued builds; --all',
       'shows every status and subsumes --queued. --json emits the projection as a',
       'bare JSON value, and --store overrides the BuildStore path or URL.',
@@ -244,7 +244,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Usage:',
       '  ab models [query] [--available]',
       '',
-      'List Pi\'s model catalog, optionally filtered by query, to find a',
+      "List Pi's model catalog, optionally filtered by query, to find a",
       'provider-qualified model id for autobuild.toml (§9). --available limits',
       'results to models whose provider credentials are currently available.',
       'This command runs outside sessions.',
@@ -262,7 +262,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '',
       'list shows builtin and configured adapters, resolution, API status, and',
       'contract availability. doctor diagnoses every configured plugin module and',
-      'exits nonzero if any fail. test runs the adapter\'s shared port contract suite;',
+      "exits nonzero if any fail. test runs the adapter's shared port contract suite;",
       'live fixtures require AB_RUN_LIVE_PORT_CONTRACTS=1.',
       '',
       'All plugin commands are sessionless.',
@@ -276,7 +276,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Usage:',
       '  ab context [--json]',
       '',
-      'Hydrate .ab/ with the current phase\'s inputs and print the context manifest.',
+      "Hydrate .ab/ with the current phase's inputs and print the context manifest.",
       '--json prints the manifest as JSON instead of the human summary. This command',
       'runs inside a build session and uses the runner-provided AB_* phase context.',
     ]),
@@ -400,19 +400,12 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
 
 const ENTRY_BY_NAME = new Map(HELP_CATALOG.map((entry) => [entry.name, entry]))
 
-export type HelpRequest =
-  | { kind: 'overview' }
-  | { kind: 'command'; command: string }
+export type HelpRequest = { kind: 'overview' } | { kind: 'command'; command: string }
 
 /** Recognize only complete help forms. Malformed forms stay on normal routing
  * so the command-specific parser can return usage feedback. */
-export function recognizeHelpRequest(
-  argv: readonly string[],
-): HelpRequest | undefined {
-  if (
-    argv.length === 1 &&
-    (argv[0] === 'help' || argv[0] === '--help' || argv[0] === '-h')
-  ) {
+export function recognizeHelpRequest(argv: readonly string[]): HelpRequest | undefined {
+  if (argv.length === 1 && (argv[0] === 'help' || argv[0] === '--help' || argv[0] === '-h')) {
     return { kind: 'overview' }
   }
   if (argv.length === 2 && argv[1] === '--help') {

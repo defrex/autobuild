@@ -9,11 +9,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { PassThrough } from 'node:stream'
-import {
-  processTerminal,
-  processTerminalInput,
-  type TerminalInputEvent,
-} from './terminal'
+import { processTerminal, processTerminalInput, type TerminalInputEvent } from './terminal'
 
 function stream(props: { isTTY?: boolean; columns?: number; rows?: number }): NodeJS.WriteStream {
   const writes: string[] = []
@@ -101,9 +97,10 @@ describe('processTerminal: write', () => {
 })
 
 function inputStream(opts: { tty?: boolean; raw?: boolean; flowing?: boolean } = {}) {
-  const stream = new PassThrough() as PassThrough & NodeJS.ReadStream & {
-    rawCalls: boolean[]
-  }
+  const stream = new PassThrough() as PassThrough &
+    NodeJS.ReadStream & {
+      rawCalls: boolean[]
+    }
   stream.isTTY = opts.tty ?? true
   stream.isRaw = opts.raw ?? false
   stream.rawCalls = []
@@ -198,9 +195,7 @@ describe('processTerminalInput', () => {
       }
       return original(raw)
     }
-    expect(() => processTerminalInput(stream).start(() => {})).toThrow(
-      'raw mode unavailable',
-    )
+    expect(() => processTerminalInput(stream).start(() => {})).toThrow('raw mode unavailable')
     expect(stream.rawCalls).toEqual([true, false])
     expect(stream.listenerCount('keypress')).toBe(0)
     expect(stream.readableFlowing).toBe(false)

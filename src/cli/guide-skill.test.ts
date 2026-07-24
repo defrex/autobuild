@@ -100,13 +100,14 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
     const missing = TOP_LEVEL_SCALARS.filter(
       (field) => !new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm').test(section ?? ''),
     )
-    expect(missing, `skills/guide/SKILL.md is missing root scalar rows for: ${missing.join(', ')}`).toEqual([])
+    expect(
+      missing,
+      `skills/guide/SKILL.md is missing root scalar rows for: ${missing.join(', ')}`,
+    ).toEqual([])
   })
 
   test('the scalar/table maps cover exactly the live root surface', () => {
-    expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual(
-      [...TOP_LEVEL_KEYS].sort(),
-    )
+    expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual([...TOP_LEVEL_KEYS].sort())
     // Adding a table to the schema without mapping it here would otherwise
     // skip it entirely — the guard must fail, not shrug.
     expect(Object.keys(TABLE_FIELDS).sort()).toEqual([...TOP_LEVEL_TABLES].sort())
@@ -114,10 +115,13 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
 
   test('every top-level table has a section heading', () => {
     const missing = TOP_LEVEL_TABLES.filter((table) => sectionFor(table) === undefined)
-    expect(missing, `skills/guide/SKILL.md is missing a \`### \`[<table>]\`\` heading for: ${missing.join(', ')}`).toEqual([])
+    expect(
+      missing,
+      `skills/guide/SKILL.md is missing a \`### \`[<table>]\`\` heading for: ${missing.join(', ')}`,
+    ).toEqual([])
   })
 
-  test('every field is a documented row in its own table\'s section', () => {
+  test("every field is a documented row in its own table's section", () => {
     const missing: string[] = []
     for (const [table, fields] of Object.entries(TABLE_FIELDS)) {
       const section = sectionFor(table)
@@ -136,9 +140,7 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
     const section = headingSection('### `[pr.imageHost]`')
     expect(section).toBeDefined()
     for (const field of Object.keys(imageHostSchema.shape)) {
-      expect(section).toMatch(
-        new RegExp('^\\| `' + escapeRegex(field) + '` \\|', 'm'),
-      )
+      expect(section).toMatch(new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm'))
     }
   })
 })
@@ -161,23 +163,14 @@ describe('ab-guide — finalize publication boundary', () => {
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
   test('canonical and pristine guide trees stay synchronized', async () => {
-    const canonical = (await readDistSkills(DIST_ROOT)).find(
-      (skill) => skill.name === 'guide',
-    )
+    const canonical = (await readDistSkills(DIST_ROOT)).find((skill) => skill.name === 'guide')
     expect(canonical).toBeDefined()
     expect(canonical!.files.map((file) => file.path)).toEqual(
       canonical!.files.map((file) => file.path).sort((a, b) => a.localeCompare(b)),
     )
     for (const file of canonical!.files) {
       const pristine = await readFile(
-        join(
-          DIST_ROOT,
-          '.agents',
-          'skills',
-          '.ab-pristine',
-          'ab-guide',
-          ...file.path.split('/'),
-        ),
+        join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-guide', ...file.path.split('/')),
         'utf8',
       )
       // The live installed tree is repository-editable by design; pristine is
@@ -194,7 +187,10 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
       // The closing backtick is what stops `ab-plan` from being satisfied by
       // an `ab-plan-review` row.
       .filter((name) => !new RegExp(`^\\| \`${escapeRegex(name)}\` \\|`, 'm').test(guide))
-    expect(missing, `skills/guide/SKILL.md is missing a rundown row for: ${missing.join(', ')}`).toEqual([])
+    expect(
+      missing,
+      `skills/guide/SKILL.md is missing a rundown row for: ${missing.join(', ')}`,
+    ).toEqual([])
   })
 })
 
@@ -220,10 +216,7 @@ describe('ab-guide — durable build-control coverage', () => {
     const forms: [string, RegExp][] = [
       ['pause', /`ab pause <slug> \[--store <ref>\]`/],
       ['resume', /`ab resume <slug> \[--store <ref>\]`/],
-      [
-        'auto-merge',
-        /`ab auto-merge <slug> on\\\|off \[--store <ref>\]`/,
-      ],
+      ['auto-merge', /`ab auto-merge <slug> on\\\|off \[--store <ref>\]`/],
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
       ['abort', /`ab abort <slug> \[--store <ref>\]`/],

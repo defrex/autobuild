@@ -10,14 +10,7 @@
 import { delimiter, resolve } from 'node:path'
 
 /** Private command directory shipped by this Autobuild distribution. */
-export const AGENT_BIN_DIR = resolve(
-  import.meta.dir,
-  '..',
-  '..',
-  '..',
-  'bin',
-  'agent',
-)
+export const AGENT_BIN_DIR = resolve(import.meta.dir, '..', '..', '..', 'bin', 'agent')
 
 export function sessionEnv(
   scoped: Readonly<Record<string, string>>,
@@ -29,14 +22,12 @@ export function sessionEnv(
   }
   Object.assign(env, scoped)
 
-  const inheritedPath = env['PATH']
+  const inheritedPath = env.PATH
   const inheritedEntries =
     inheritedPath === undefined || inheritedPath === ''
       ? []
-      : inheritedPath
-          .split(delimiter)
-          .filter((entry) => entry !== AGENT_BIN_DIR)
-  env['PATH'] = [AGENT_BIN_DIR, ...inheritedEntries].join(delimiter)
+      : inheritedPath.split(delimiter).filter((entry) => entry !== AGENT_BIN_DIR)
+  env.PATH = [AGENT_BIN_DIR, ...inheritedEntries].join(delimiter)
 
   return env
 }

@@ -37,10 +37,7 @@ import {
 } from '../processes/harvest'
 import type { BuildStore } from '../store/types'
 import type { HarvestCliEnv } from './env'
-import {
-  withSessionlessStore,
-  type StoreOpener,
-} from './store-opening'
+import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 export interface HarvestCliDeps {
   store: BuildStore
@@ -73,10 +70,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-function runForEnv(
-  events: RepositoryEvent[],
-  env: HarvestCliEnv,
-): HarvestRunState {
+function runForEnv(events: RepositoryEvent[], env: HarvestCliEnv): HarvestRunState {
   const run = reduceHarvest(events).runs.find((candidate) => candidate.run === env.run)
   if (!run) throw new Error(`unknown harvest run "${env.run}" in repo "${env.repo}"`)
   if (run.status !== 'running') {
@@ -87,10 +81,7 @@ function runForEnv(
   return run
 }
 
-function assertNoSessionTerminal(
-  events: RepositoryEvent[],
-  env: HarvestCliEnv,
-): void {
+function assertNoSessionTerminal(events: RepositoryEvent[], env: HarvestCliEnv): void {
   for (const event of events) {
     if (
       event.type === 'harvest.proposals.submitted' &&
@@ -112,10 +103,7 @@ function assertNoSessionTerminal(
         `second harvest terminal rejected: verdict for ${env.run} review@${env.round} already landed at repo seq ${event.seq}`,
       )
     }
-    if (
-      event.type === 'harvest.session.ended' &&
-      event.payload.session === env.session
-    ) {
+    if (event.type === 'harvest.session.ended' && event.payload.session === env.session) {
       throw new Error(
         `harvest terminal rejected: session "${env.session}" already ended at repo seq ${event.seq}`,
       )
@@ -134,9 +122,7 @@ async function readArtifactJson(
   return JSON.parse(new TextDecoder().decode(artifact.content))
 }
 
-export async function buildHarvestContext(
-  deps: HarvestCliDeps,
-): Promise<HarvestContextManifest> {
+export async function buildHarvestContext(deps: HarvestCliDeps): Promise<HarvestContextManifest> {
   const { store, env, workspacePath } = deps
   const events = await store.getRepoEvents(env.repo)
   const run = runForEnv(events, env)
@@ -166,31 +152,20 @@ export async function buildHarvestContext(
     .sort((a, b) => a.round - b.round)
   for (const review of priorReviews) {
     if (review.findings.length > 0) {
-      await materialize(
-        `history/findings-r${review.round}.json`,
-        review.findings,
-      )
+      await materialize(`history/findings-r${review.round}.json`, review.findings)
     }
   }
   if (env.phase === 'synthesize' && env.round > 1) {
     const previous = [...run.reviews]
       .reverse()
-      .find(
-        (review) =>
-          review.round === env.round - 1 && review.verdict === 'revise',
-      )
+      .find((review) => review.round === env.round - 1 && review.verdict === 'revise')
     if (previous !== undefined) {
       await materialize('findings.json', previous.findings)
       const previousProposal = proposalArtifactForRound(run, env.round - 1)
       if (previousProposal !== undefined && proposal === undefined) {
         await materialize(
           'proposals.json',
-          await readArtifactJson(
-            store,
-            env.repo,
-            previousProposal.kind,
-            previousProposal.rev,
-          ),
+          await readArtifactJson(store, env.repo, previousProposal.kind, previousProposal.rev),
         )
       }
     }
@@ -201,10 +176,7 @@ export async function buildHarvestContext(
     run: env.run,
     phase: env.phase,
     round: env.round,
-    required:
-      env.phase === 'synthesize'
-        ? [HARVEST_PROPOSALS_ARTIFACT]
-        : [HARVEST_REVIEW_ARTIFACT],
+    required: env.phase === 'synthesize' ? [HARVEST_PROPOSALS_ARTIFACT] : [HARVEST_REVIEW_ARTIFACT],
     allowedTerminal: env.phase === 'synthesize' ? 'submit' : 'verdict',
     materialized,
   }
@@ -224,13 +196,8 @@ async function readJsonFile(path: string): Promise<unknown> {
   }
 }
 
-function validateJoinTargets(
-  set: HarvestProposalSet,
-  packet: HarvestScanPacket,
-): void {
-  const allowed = new Set(
-    packet.ledger.map((entry) => `${entry.ticket.source}:${entry.ticket.id}`),
-  )
+function validateJoinTargets(set: HarvestProposalSet, packet: HarvestScanPacket): void {
+  const allowed = new Set(packet.ledger.map((entry) => `${entry.ticket.source}:${entry.ticket.id}`))
   for (const proposal of set.proposals) {
     if (proposal.action !== 'join') continue
     const key = `${proposal.ticket.source}:${proposal.ticket.id}`
@@ -258,9 +225,7 @@ export async function submitHarvestProposals(
 
   const parsed = harvestProposalSetSchema.safeParse(await readJsonFile(file))
   if (!parsed.success) {
-    throw new Error(
-      `${file} does not match the harvest proposal schema: ${parsed.error.message}`,
-    )
+    throw new Error(`${file} does not match the harvest proposal schema: ${parsed.error.message}`)
   }
   const coverage = validateProposalCoverage(parsed.data, run.observations)
   if (!coverage.ok) {
@@ -315,9 +280,7 @@ async function parseHarvestFindings(
   for (const finding of parsed.data) {
     for (const id of finding.persists) {
       if (!known.has(id)) {
-        throw new Error(
-          `persists id "${id}" is not a finding from an earlier harvest review round`,
-        )
+        throw new Error(`persists id "${id}" is not a finding from an earlier harvest review round`)
       }
     }
   }
@@ -471,9 +434,7 @@ export interface HarvestStatusView {
   events?: HarvestEvent[]
 }
 
-function projectRecovery(
-  run: HarvestRunState | undefined,
-): HarvestRecoveryStatus {
+function projectRecovery(run: HarvestRunState | undefined): HarvestRecoveryStatus {
   const exhaustion = run?.recoveryExhaustion
   const attempts = run?.recoveryRequests.length ?? 0
   const limit =
@@ -482,12 +443,9 @@ function projectRecovery(
     DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   const stopped = run?.failure
   return {
-    recoverable:
-      run?.status === 'failed' && exhaustion === undefined,
+    recoverable: run?.status === 'failed' && exhaustion === undefined,
     finished:
-      run?.status === 'completed' ||
-      run?.status === 'escalated' ||
-      exhaustion !== undefined,
+      run?.status === 'completed' || run?.status === 'escalated' || exhaustion !== undefined,
     automatic: {
       attempts,
       limit,
@@ -497,31 +455,22 @@ function projectRecovery(
       ? {
           stopped: {
             step: stopped.step,
-            ...(stopped.round !== undefined
-              ? { round: stopped.round }
-              : {}),
+            ...(stopped.round !== undefined ? { round: stopped.round } : {}),
           },
         }
       : {}),
     attention: {
-      required:
-        exhaustion !== undefined &&
-        exhaustion.attentionAcknowledgedSeq === undefined,
-      acknowledged:
-        exhaustion?.attentionAcknowledgedSeq !== undefined,
+      required: exhaustion !== undefined && exhaustion.attentionAcknowledgedSeq === undefined,
+      acknowledged: exhaustion?.attentionAcknowledgedSeq !== undefined,
     },
     pending: {
       // Before give-up the immutable claimed snapshot is the exact retained
       // work. Exhaustion classifies it atomically, after which only the
       // selectively released subset remains pending.
       observations: structuredClone(
-        exhaustion?.releasedObservations ??
-          (run?.status === 'failed' ? run.observations : []),
+        exhaustion?.releasedObservations ?? (run?.status === 'failed' ? run.observations : []),
       ),
-      proposalKeys:
-        exhaustion?.pendingProposals.map(
-          (proposal) => proposal.proposalKey,
-        ) ?? [],
+      proposalKeys: exhaustion?.pendingProposals.map((proposal) => proposal.proposalKey) ?? [],
     },
   }
 }
@@ -552,22 +501,13 @@ export function projectHarvestStatus(
 ): HarvestStatusView {
   const state = reduceHarvest(events)
   const history =
-    newestEvents === undefined
-      ? undefined
-      : events.filter(isHarvestEvent).slice(-newestEvents)
-  const unresolved = [
-    ...parkedHarvestRuns(state),
-    ...unresolvedHarvestAttentionRuns(state),
-  ]
+    newestEvents === undefined ? undefined : events.filter(isHarvestEvent).slice(-newestEvents)
+  const unresolved = [...parkedHarvestRuns(state), ...unresolvedHarvestAttentionRuns(state)]
   const open = openHarvestRuns(state)
   const included = new Set(
-    [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map(
-      (run) => run.run,
-    ),
+    [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map((run) => run.run),
   )
-  const runs = state.runs
-    .filter((run) => included.has(run.run))
-    .map(projectHarvestRunStatus)
+  const runs = state.runs.filter((run) => included.has(run.run)).map(projectHarvestRunStatus)
   const unresolvedIds = new Set(unresolved.map((run) => run.run))
   const primary =
     runs.find((run) => unresolvedIds.has(run.run)) ??
@@ -595,8 +535,7 @@ export function projectHarvestStatus(
     }
   }
 
-  const { status: runStatus, startedSeq: _startedSeq, startedAt: _startedAt, ...summary } =
-    primary
+  const { status: runStatus, startedSeq: _startedSeq, startedAt: _startedAt, ...summary } = primary
   return {
     repo,
     status: state.paused ? 'paused' : runStatus,
@@ -606,15 +545,10 @@ export function projectHarvestStatus(
   }
 }
 
-function renderHarvestRunStatus(
-  run: HarvestRunStatusView,
-  paused: boolean,
-): string[] {
+function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): string[] {
   const displayStatus = paused ? 'paused' : run.status
   const lines = [
-    `harvest ${run.run} — ${displayStatus}${
-      paused ? ` (run ${run.status})` : ''
-    }`,
+    `harvest ${run.run} — ${displayStatus}${paused ? ` (run ${run.status})` : ''}`,
     `observations: ${run.observations}`,
     `review rounds: ${run.rounds}`,
     'steps:',
@@ -628,9 +562,7 @@ function renderHarvestRunStatus(
   if (run.recovery.stopped !== undefined) {
     lines.push(
       `stopped at: ${run.recovery.stopped.step}${
-        run.recovery.stopped.round !== undefined
-          ? ` r${run.recovery.stopped.round}`
-          : ''
+        run.recovery.stopped.round !== undefined ? ` r${run.recovery.stopped.round}` : ''
       }`,
     )
   }
@@ -681,9 +613,7 @@ function renderHarvestRunStatus(
 export function renderHarvestStatus(view: HarvestStatusView): string[] {
   if (view.runs.length === 0) {
     const lines = [
-      `harvest ${view.repo}: ${
-        view.status === 'paused' ? 'paused' : 'idle'
-      } (no runs)`,
+      `harvest ${view.repo}: ${view.status === 'paused' ? 'paused' : 'idle'} (no runs)`,
     ]
     if (view.pendingCommands.length > 0) {
       lines.push(

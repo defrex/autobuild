@@ -1,17 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
-import type {
-  OneShotCompletion,
-  OneShotCompletionInput,
-} from '../ports/runner/one-shot'
+import type { OneShotCompletion, OneShotCompletionInput } from '../ports/runner/one-shot'
 import type { ProductionRuntimes } from '../ports/runner/production'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { createPluginRegistry } from '../plugins/registry'
-import {
-  createUpgradeAgentResolver,
-  UPGRADE_CONFLICT_DECLINE,
-} from './upgrade-agent'
+import { createUpgradeAgentResolver, UPGRADE_CONFLICT_DECLINE } from './upgrade-agent'
 
 const INPUT = {
   skill: 'ab-plan',
@@ -26,10 +20,7 @@ function runner(): ScriptedAgentRunner {
 }
 
 function config(roles: string) {
-  return parseConfig(
-    `[tickets]\nsource = "file"\nreadyState = "ready"\n\n${roles}`,
-    'fixture.toml',
-  )
+  return parseConfig(`[tickets]\nsource = "file"\nreadyState = "ready"\n\n${roles}`, 'fixture.toml')
 }
 
 function registration(
@@ -217,9 +208,9 @@ describe('createUpgradeAgentResolver', () => {
       })
     }
 
-    await expect(
-      pluginResolver(() => registration(undefined, ['custom/']))(INPUT),
-    ).rejects.toThrow(/runtime "custom".*does not provide tool-free one-shot/)
+    await expect(pluginResolver(() => registration(undefined, ['custom/']))(INPUT)).rejects.toThrow(
+      /runtime "custom".*does not provide tool-free one-shot/,
+    )
 
     await expect(
       pluginResolver(() => {
@@ -231,10 +222,7 @@ describe('createUpgradeAgentResolver', () => {
   })
 
   test('only the reserved decline token maps to null', async () => {
-    const outputs = [
-      `  ${UPGRADE_CONFLICT_DECLINE}\n`,
-      `${UPGRADE_CONFLICT_DECLINE} with prose`,
-    ]
+    const outputs = [`  ${UPGRADE_CONFLICT_DECLINE}\n`, `${UPGRADE_CONFLICT_DECLINE} with prose`]
     const resolve = createUpgradeAgentResolver({
       targetRepo: '/repo',
       env: {},

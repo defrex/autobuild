@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError } from './catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from './envelope'
-import {
-  isHarvestEvent,
-  validateRepositoryEventWrite,
-  type RepositoryEvent,
-} from './repository'
+import { isHarvestEvent, validateRepositoryEventWrite, type RepositoryEvent } from './repository'
 
 const request = {
   run: 'h_1',
@@ -87,19 +83,14 @@ describe('repository event catalog', () => {
         type: 'harvest.recovery-exhausted',
         payload: {
           ...exhausted,
-          pendingProposals: [
-            { proposalKey: '', action: 'create', observations: [] },
-          ],
+          pendingProposals: [{ proposalKey: '', action: 'create', observations: [] }],
         },
       }),
     ).toThrow(/invalid payload/)
   })
 
   test('dispatcher setting facts require strict booleans and human actors', () => {
-    for (const type of [
-      'dispatcher.intake-set',
-      'dispatcher.auto-merge-default-set',
-    ] as const) {
+    for (const type of ['dispatcher.intake-set', 'dispatcher.auto-merge-default-set'] as const) {
       expect(
         validateRepositoryEventWrite({
           actor: humanActor('operator'),

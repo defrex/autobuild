@@ -49,14 +49,7 @@ import {
   type Unsubscribe,
 } from '../types'
 import { DirBlobStore } from './blobs'
-import {
-  artifacts,
-  builds,
-  events,
-  repoArtifacts,
-  repoEvents,
-  repoStreams,
-} from './schema'
+import { artifacts, builds, events, repoArtifacts, repoEvents, repoStreams } from './schema'
 
 /**
  * Bootstrap DDL, applied idempotently at open. MUST match `schema.ts` —
@@ -187,11 +180,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   private repoRow(repo: string): RepoRow | undefined {
-    return this.db
-      .select()
-      .from(repoStreams)
-      .where(eq(repoStreams.repo, repo))
-      .get()
+    return this.db.select().from(repoStreams).where(eq(repoStreams.repo, repo)).get()
   }
 
   private requireRepo(repo: string): RepoRow {
@@ -294,10 +283,7 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  async append<T extends EventType>(
-    slug: string,
-    event: EventWrite<T>,
-  ): Promise<EventEnvelope<T>> {
+  async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const validated = validateEventWrite(event)
     return this.writeTx(() => this.appendInTx(slug, validated)) as EventEnvelope<T>
   }
@@ -336,11 +322,7 @@ export class SqliteBuildStore implements BuildStore {
         createdAt,
       })
       .run()
-    this.db
-      .update(builds)
-      .set({ updatedAt: createdAt })
-      .where(eq(builds.slug, slug))
-      .run()
+    this.db.update(builds).set({ updatedAt: createdAt }).where(eq(builds.slug, slug)).run()
     return {
       build: slug,
       kind: prepared.kind,
@@ -407,11 +389,7 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  async getArtifact(
-    slug: string,
-    kind: string,
-    rev?: number,
-  ): Promise<Artifact | null> {
+  async getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null> {
     this.requireBuild(slug)
     const scoped = and(eq(artifacts.build, slug), eq(artifacts.kind, kind))
     const row =
@@ -518,10 +496,7 @@ export class SqliteBuildStore implements BuildStore {
       const existing = this.repoRow(repo)
       if (existing) return this.toRepoRecord(existing)
       const ts = this.now()
-      this.db
-        .insert(repoStreams)
-        .values({ repo, createdAt: ts, updatedAt: ts })
-        .run()
+      this.db.insert(repoStreams).values({ repo, createdAt: ts, updatedAt: ts }).run()
       return this.toRepoRecord(this.requireRepo(repo))
     })
   }
@@ -531,10 +506,7 @@ export class SqliteBuildStore implements BuildStore {
     return row ? this.toRepoRecord(row) : null
   }
 
-  private appendRepoInTx(
-    repo: string,
-    validated: RepositoryEventWrite,
-  ): RepositoryEventEnvelope {
+  private appendRepoInTx(repo: string, validated: RepositoryEventWrite): RepositoryEventEnvelope {
     this.requireRepo(repo)
     const ts = this.now()
     const row = this.db
@@ -554,11 +526,7 @@ export class SqliteBuildStore implements BuildStore {
         payload: validated.payload,
       })
       .run()
-    this.db
-      .update(repoStreams)
-      .set({ updatedAt: ts })
-      .where(eq(repoStreams.repo, repo))
-      .run()
+    this.db.update(repoStreams).set({ updatedAt: ts }).where(eq(repoStreams.repo, repo)).run()
     return {
       repo,
       seq,
@@ -574,26 +542,16 @@ export class SqliteBuildStore implements BuildStore {
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>> {
     const validated = validateRepositoryEventWrite(event)
-    return this.writeTx(
-      () => this.appendRepoInTx(repo, validated),
-    ) as RepositoryEventEnvelope<T>
+    return this.writeTx(() => this.appendRepoInTx(repo, validated)) as RepositoryEventEnvelope<T>
   }
 
-  private depositRepoInTx(
-    repo: string,
-    prepared: PreparedArtifact,
-  ): RepositoryArtifactMeta {
+  private depositRepoInTx(repo: string, prepared: PreparedArtifact): RepositoryArtifactMeta {
     this.requireRepo(repo)
     const createdAt = this.now()
     const row = this.db
       .select({ max: sql<number | null>`max(${repoArtifacts.revision})` })
       .from(repoArtifacts)
-      .where(
-        and(
-          eq(repoArtifacts.repo, repo),
-          eq(repoArtifacts.kind, prepared.kind),
-        ),
-      )
+      .where(and(eq(repoArtifacts.repo, repo), eq(repoArtifacts.kind, prepared.kind)))
       .get()
     const revision = (row?.max ?? -1) + 1
     this.db
@@ -625,9 +583,7 @@ export class SqliteBuildStore implements BuildStore {
   async appendRepoWithArtifacts<T extends RepositoryEventType>(
     repo: string,
     artifactInputs: ArtifactInput[],
-    makeEvent: (
-      deposited: RepositoryArtifactMeta[],
-    ) => RepositoryEventWrite<T>,
+    makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
@@ -637,14 +593,9 @@ export class SqliteBuildStore implements BuildStore {
       prepared.push(await this.prepareArtifact(input))
     }
     return this.writeTx(() => {
-      const deposited = prepared.map((item) =>
-        this.depositRepoInTx(repo, item),
-      )
+      const deposited = prepared.map((item) => this.depositRepoInTx(repo, item))
       const validated = validateRepositoryEventWrite(makeEvent(deposited))
-      const event = this.appendRepoInTx(
-        repo,
-        validated,
-      ) as RepositoryEventEnvelope<T>
+      const event = this.appendRepoInTx(repo, validated) as RepositoryEventEnvelope<T>
       return { event, artifacts: deposited }
     })
   }
@@ -670,17 +621,12 @@ export class SqliteBuildStore implements BuildStore {
     )
   }
 
-  async putRepoArtifact(
-    repo: string,
-    artifact: ArtifactInput,
-  ): Promise<RepositoryArtifactMeta> {
+  async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
     const prepared = await this.prepareArtifact(artifact)
     return this.writeTx(() => this.depositRepoInTx(repo, prepared))
   }
 
-  private toRepoMeta(
-    row: typeof repoArtifacts.$inferSelect,
-  ): RepositoryArtifactMeta {
+  private toRepoMeta(row: typeof repoArtifacts.$inferSelect): RepositoryArtifactMeta {
     return {
       repo: row.repo,
       kind: row.kind,
@@ -697,10 +643,7 @@ export class SqliteBuildStore implements BuildStore {
     rev?: number,
   ): Promise<RepositoryArtifact | null> {
     this.requireRepo(repo)
-    const scoped = and(
-      eq(repoArtifacts.repo, repo),
-      eq(repoArtifacts.kind, kind),
-    )
+    const scoped = and(eq(repoArtifacts.repo, repo), eq(repoArtifacts.kind, kind))
     const row =
       rev === undefined
         ? this.db
@@ -720,10 +663,7 @@ export class SqliteBuildStore implements BuildStore {
     return content ? { meta: this.toRepoMeta(row), content } : null
   }
 
-  async listRepoArtifacts(
-    repo: string,
-    kind?: string,
-  ): Promise<RepositoryArtifactMeta[]> {
+  async listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]> {
     this.requireRepo(repo)
     const where = kind
       ? and(eq(repoArtifacts.repo, repo), eq(repoArtifacts.kind, kind))
@@ -737,11 +677,7 @@ export class SqliteBuildStore implements BuildStore {
       .map((row) => this.toRepoMeta(row))
   }
 
-  async claimRepoLease(
-    repo: string,
-    holder: string,
-    ttlMs: number,
-  ): Promise<boolean> {
+  async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.writeTx(() => {
       const row = this.requireRepo(repo)
       const now = this.clock().getTime()
@@ -805,11 +741,7 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
-  subscribe(
-    slug: string,
-    opts: SubscribeOptions,
-    onEvent: (event: AbEvent) => void,
-  ): Unsubscribe {
+  subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
   }
 
@@ -822,10 +754,7 @@ export class SqliteBuildStore implements BuildStore {
  * Open the local store (SPEC §7.2.1): `<root>/autobuild.sqlite` plus a
  * content-addressed blob directory at `<root>/blobs`.
  */
-export function openLocalStore(
-  rootDir: string,
-  opts: { clock?: Clock } = {},
-): SqliteBuildStore {
+export function openLocalStore(rootDir: string, opts: { clock?: Clock } = {}): SqliteBuildStore {
   mkdirSync(rootDir, { recursive: true })
   const database = new Database(join(rootDir, 'autobuild.sqlite'), { create: true })
   const blobs = new DirBlobStore(join(rootDir, 'blobs'))

@@ -8,12 +8,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
-import {
-  agentActor,
-  DISPATCHER,
-  KERNEL,
-  humanActor,
-} from '../../events/envelope'
+import { agentActor, DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
 import { manualClock } from '../../testing/fixed'
 import {
   buildCreatedWrite,
@@ -82,10 +77,9 @@ describe('scoped tokens (D8)', () => {
   })
 
   test('a well-signed scope missing the session dimension → null (D8: build AND session)', () => {
-    const payload = Buffer.from(
-      JSON.stringify({ build: 'build-a', exp: later }),
-      'utf8',
-    ).toString('base64url')
+    const payload = Buffer.from(JSON.stringify({ build: 'build-a', exp: later }), 'utf8').toString(
+      'base64url',
+    )
     const signature = createHmac('sha256', 'secret').update(payload).digest('base64url')
     expect(verifyToken('secret', `${payload}.${signature}`, now)).toBeNull()
   })
@@ -201,19 +195,15 @@ describe('D8 scope enforcement over the wire', () => {
 
       // Deposits carry an event → the same gate; nothing persists.
       const deposit = await client
-        .appendWithArtifacts(
-          'build-a',
-          [{ kind: 'plan', content: 'p' }],
-          (deposited) => ({
-            actor: agentActor('plan', 's_two'),
-            type: 'plan.completed',
-            payload: {
-              round: 1,
-              artifact: { kind: 'plan', rev: deposited[0]!.revision },
-              verifySteps: ['types', 'unit'],
-            },
-          }),
-        )
+        .appendWithArtifacts('build-a', [{ kind: 'plan', content: 'p' }], (deposited) => ({
+          actor: agentActor('plan', 's_two'),
+          type: 'plan.completed',
+          payload: {
+            round: 1,
+            artifact: { kind: 'plan', rev: deposited[0]!.revision },
+            verifySteps: ['types', 'unit'],
+          },
+        }))
         .catch((e: unknown) => e)
       expect(deposit).toBeInstanceOf(AuthError)
       expect(await backing.getEvents('build-a')).toHaveLength(1)
@@ -376,9 +366,7 @@ describe('validation over the wire (D6)', () => {
         })
         .catch((e: unknown) => e)
       expect(err).toBeInstanceOf(EventValidationError)
-      expect((err as Error).message).toContain(
-        'actor kind "agent" may not emit "pr.merged"',
-      )
+      expect((err as Error).message).toContain('actor kind "agent" may not emit "pr.merged"')
       expect((await store.getEvents('val-wire')).length).toBe(1)
     })
   })
@@ -392,9 +380,7 @@ describe('validation over the wire (D6)', () => {
         type: 'build.created',
         payload: { repo: 'acme/rate-limiter' },
       } as unknown as EventWrite
-      const err = await store
-        .append('val-payload', malformed)
-        .catch((e: unknown) => e)
+      const err = await store.append('val-payload', malformed).catch((e: unknown) => e)
       expect(err).toBeInstanceOf(EventValidationError)
       expect((err as Error).message).toContain('invalid payload for "build.created"')
       expect((await store.getEvents('val-payload')).length).toBe(1)
@@ -421,9 +407,7 @@ describe('atomic deposits over the wire (D6)', () => {
           },
         }),
       )
-      expect(artifacts.map((m) => [m.kind, m.revision])).toEqual([
-        ['implement-notes', 0],
-      ])
+      expect(artifacts.map((m) => [m.kind, m.revision])).toEqual([['implement-notes', 0]])
       expect(event.type).toBe('implement.completed')
       expect(event.payload.artifact).toEqual({ kind: 'implement-notes', rev: 0 })
 

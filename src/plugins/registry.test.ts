@@ -30,9 +30,7 @@ describe('PluginRegistry', () => {
       name: 'acme',
     })
     expect(registry.ticketSources.get('shared')?.factory).toBe(factory)
-    expect(registry.ticketSources.get('shared')?.requiredEnv).toEqual([
-      'SHARED_TOKEN',
-    ])
+    expect(registry.ticketSources.get('shared')?.requiredEnv).toEqual(['SHARED_TOKEN'])
     expect(registry.agentRuntimes.has('shared')).toBe(true)
     expect(registry.workspaceProviders.has('container')).toBe(true)
     expect(registry.forges.has('gitlab')).toBe(true)
@@ -59,9 +57,7 @@ describe('PluginRegistry', () => {
       },
     )
 
-    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual([
-      'JIRA_TOKEN',
-    ])
+    expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual(['JIRA_TOKEN'])
     expect(registry.ticketSources.get('jira')?.contract).toEqual({
       factory: contractFactory,
       live: true,
@@ -86,14 +82,14 @@ describe('PluginRegistry', () => {
 
   test('rejects builtin and prior-plugin collisions with ownership diagnostics', () => {
     const registry = new PluginRegistry()
-    expect(() =>
-      registry.register(plugin('bad', { ticketSources: { linear: factory } })),
-    ).toThrow(/ticket source.*linear.*bad.*builtin/)
+    expect(() => registry.register(plugin('bad', { ticketSources: { linear: factory } }))).toThrow(
+      /ticket source.*linear.*bad.*builtin/,
+    )
 
     registry.register(plugin('first', { forges: { gitlab: factory } }))
-    expect(() =>
-      registry.register(plugin('second', { forges: { gitlab: factory } })),
-    ).toThrow(/forge.*gitlab.*second.*first/)
+    expect(() => registry.register(plugin('second', { forges: { gitlab: factory } }))).toThrow(
+      /forge.*gitlab.*second.*first/,
+    )
   })
 
   test('a collision leaves every registration from the incoming plugin unapplied', () => {

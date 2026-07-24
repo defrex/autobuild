@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  classifyAutoMergeEnable,
-  mergeStateStatuses,
-  type MergeGatePresence,
-} from './auto-merge'
+import { classifyAutoMergeEnable, mergeStateStatuses, type MergeGatePresence } from './auto-merge'
 
 describe('classifyAutoMergeEnable', () => {
   const expected = {

@@ -6,15 +6,15 @@ import { renderDashboard } from '../src/cli/dashboard/render'
 
 const STATE_KEY = Symbol.for('autobuild.cli.dashboard-dev')
 const globals = globalThis as unknown as Record<symbol, DevCliState | undefined>
-const state = (globals[STATE_KEY] ??= {})
+const state = globals[STATE_KEY] ?? {}
+globals[STATE_KEY] = state
 
 // Do not top-level-await: Bun must be able to finish evaluating this module and
 // evaluate it again when presentation sources change.
 evaluateDevCli({
   state,
   renderer: renderDashboard,
-  launch: (resolveDashboardRenderer) =>
-    runBinary(process.argv.slice(2), resolveDashboardRenderer),
+  launch: (resolveDashboardRenderer) => runBinary(process.argv.slice(2), resolveDashboardRenderer),
   settle: (run) => {
     void run.then(
       (code) => process.exit(code),

@@ -64,10 +64,7 @@ export interface RenderOpts {
 /** A dashboard presentation implementation. Kept as a named dependency so the
  * repo-local dev entry can replace presentation without replacing the live
  * dispatch loop that owns runners, input, timers, and leases. */
-export type DashboardRenderer = (
-  model: DashboardModel,
-  opts: RenderOpts,
-) => string[]
+export type DashboardRenderer = (model: DashboardModel, opts: RenderOpts) => string[]
 
 /** Resolve at paint time rather than capturing one renderer at loop startup. */
 export type DashboardRendererResolver = () => DashboardRenderer
@@ -233,7 +230,8 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
   // shown (a fresh/restarted step should not carry a stale round).
   if (step.timing !== undefined) {
     const { accumulatedMs, runningSince } = step.timing
-    const elapsedMs = accumulatedMs + (runningSince !== undefined ? Math.max(0, now - runningSince) : 0)
+    const elapsedMs =
+      accumulatedMs + (runningSince !== undefined ? Math.max(0, now - runningSince) : 0)
     const count = step.count !== undefined && step.count > 1 ? `/${step.count}` : ''
     parts.push(`${formatDuration(elapsedMs)}${count}`)
   }
@@ -245,10 +243,7 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
 
 // ── Builds ───────────────────────────────────────────────────────────────────
 
-const STATUS_COLOR: Record<
-  DashboardBuild['status'] | DashboardHarvest['status'],
-  ColorName
-> = {
+const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status'], ColorName> = {
   running: 'green',
   paused: 'yellow',
   blocked: 'red',
@@ -265,12 +260,7 @@ function selectionMarker(selected: boolean, selecting: boolean, color: boolean):
 
 /** Pin a right cluster to the frame edge while keeping exactly one flexible,
  * truncatable segment on the left. */
-function rightPinnedLine(
-  prefix: string,
-  flexible: string,
-  right: string,
-  width: number,
-): string {
+function rightPinnedLine(prefix: string, flexible: string, right: string, width: number): string {
   const budget = width - visibleLength(prefix) - visibleLength(right) - 2
   const left = truncate(flexible, Math.max(0, budget))
   const used = visibleLength(prefix) + visibleLength(left)
@@ -308,11 +298,7 @@ function renderBuild(
   const rightTokens: string[] = []
   if (build.autoMerge !== 'off') {
     const autoColor: ColorName =
-      build.autoMerge === 'enabled'
-        ? 'green'
-        : build.autoMerge === 'requested'
-          ? 'cyan'
-          : 'yellow'
+      build.autoMerge === 'enabled' ? 'green' : build.autoMerge === 'requested' ? 'cyan' : 'yellow'
     rightTokens.push(paint('auto merge', autoColor, color))
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
@@ -327,24 +313,24 @@ function renderBuild(
   // The slug is the only element that truncates; ticket id and status never do.
   // Final truncation inside `rightPinnedLine` is only a safety net for widths
   // narrower than the fixed columns.
-  const lines = [
-    rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width),
-  ]
+  const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
 
   // The progress row wraps rather than truncating: the tail is `finalize` and
   // `merge waiting`, which the ACs require and the operator is waiting on.
-  lines.push(...packLines(build.steps.map((s) => renderStep(s, color, now)), width, '  '))
+  lines.push(
+    ...packLines(
+      build.steps.map((s) => renderStep(s, color, now)),
+      width,
+      '  ',
+    ),
+  )
   // Blockers wrap too — "every unresolved blocker message is displayed" is not
   // satisfied by its first 80 characters, and a policy escalation's question
   // is routinely longer than that. Escape external text before tokenization so
   // the visible code-point escapes participate in width accounting, then paint
   // each line so no ANSI escape is ever split across a wrap.
   for (const blocker of build.blockers) {
-    const [first, ...rest] = packLines(
-      displayText(blocker).split(/\s+/),
-      width - 4,
-      '',
-    )
+    const [first, ...rest] = packLines(displayText(blocker).split(/\s+/), width - 4, '')
     if (first === undefined) continue
     lines.push(truncate(paint(`  ! ${first}`, 'red', color), width))
     for (const line of rest) lines.push(truncate(paint(`    ${line}`, 'red', color), width))
@@ -364,16 +350,11 @@ function renderHarvest(
   // Harvest has no ticket id, so its title takes the ticket column itself —
   // aligned with the ids, not the slugs — and the observation count sits in
   // the flexible slug slot, keeping one row grammar across mixed frames.
-  const title =
-    widths.ticket > 0 ? HARVEST_TITLE.padEnd(widths.ticket) : HARVEST_TITLE
+  const title = widths.ticket > 0 ? HARVEST_TITLE.padEnd(widths.ticket) : HARVEST_TITLE
   const leftPrefix = `${marker}${paint(title, 'bold', color)}  `
   const identity = paint(`${harvest.observations} observations`, 'dim', color)
   const statusColor = STATUS_COLOR[harvest.status]
-  const status = paint(
-    harvest.status.toUpperCase().padStart(widths.status),
-    statusColor,
-    color,
-  )
+  const status = paint(harvest.status.toUpperCase().padStart(widths.status), statusColor, color)
   const lines = [rightPinnedLine(leftPrefix, identity, status, width)]
   lines.push(
     ...packLines(
@@ -383,17 +364,10 @@ function renderHarvest(
     ),
   )
   if (harvest.detail !== undefined) {
-    const wrapped = packLines(
-      displayText(harvest.detail).split(/\s+/),
-      width - 4,
-      '',
-    )
+    const wrapped = packLines(displayText(harvest.detail).split(/\s+/), width - 4, '')
     for (const [index, line] of wrapped.entries()) {
       lines.push(
-        truncate(
-          paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, color),
-          width,
-        ),
+        truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, color), width),
       )
     }
   }
@@ -412,10 +386,7 @@ const HARVEST_TITLE = 'Harvest'
  * frame has a ticket id — then there is no ticket column at all. The Harvest
  * title lives in the ticket column, so when that column exists it must also fit
  * the title; Harvest joins the status-width calculation even in a mixed frame. */
-function frameWidths(
-  builds: DashboardBuild[],
-  harvest: DashboardHarvest | undefined,
-): Widths {
+function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undefined): Widths {
   const ticketIds = builds.map((b) => (b.ticketId ?? '').length)
   const hasTicketColumn = ticketIds.some((length) => length > 0)
   return {
@@ -436,10 +407,8 @@ function frameWidths(
 
 export const DASHBOARD_GLOBAL_LEGEND =
   'Keys: Up/Down select  h harvest on/off  m auto-merge default  p intake on/off  Ctrl-C quit'
-export const DASHBOARD_HARVEST_LEGEND =
-  'Keys: Up/Down select  Ctrl-C quit'
-export const DASHBOARD_HARVEST_RESUME_LEGEND =
-  'Keys: Up/Down select  p resume  Ctrl-C quit'
+export const DASHBOARD_HARVEST_LEGEND = 'Keys: Up/Down select  Ctrl-C quit'
+export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  Ctrl-C quit'
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND =
@@ -452,10 +421,7 @@ function displayText(value: string): string {
   let displayed = ''
   for (const char of value) {
     const code = char.codePointAt(0)!
-    displayed +=
-      code >= 0x20 && code <= 0x7e
-        ? char
-        : `\\u{${code.toString(16)}}`
+    displayed += code >= 0x20 && code <= 0x7e ? char : `\\u{${code.toString(16)}}`
   }
   return displayed
 }
@@ -510,11 +476,7 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   const { color, width, height } = opts
   const selecting = model.selection !== undefined
   const globalSelection = { kind: 'global' } as const
-  const marker = selectionMarker(
-    sameSelection(globalSelection, model.selection),
-    selecting,
-    color,
-  )
+  const marker = selectionMarker(sameSelection(globalSelection, model.selection), selecting, color)
   const intake = model.drained
     ? paint('intake OFF', 'yellow', color)
     : paint('intake ON', 'green', color)
@@ -530,21 +492,14 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     `${marker}${[
       paint('Auto Build', 'bold', color),
       displayText(basename(model.repo)),
-      paint(
-        `queue ${model.queued} | active ${model.builds.length}`,
-        'dim',
-        color,
-      ),
+      paint(`queue ${model.queued} | active ${model.builds.length}`, 'dim', color),
     ].join('  ')}`,
     width,
   )
   // The global controls live on their own mandatory line. Its fixed blank
   // marker prefix aligns the first toggle with the title while keeping the
   // selection lane empty.
-  const toggles = truncate(
-    `  ${[intake, autoMergeDefault, harvestGate].join('  ')}`,
-    width,
-  )
+  const toggles = truncate(`  ${[intake, autoMergeDefault, harvestGate].join('  ')}`, width)
   // A warning is conditional chrome, not a reserved log slot. Escaping
   // controls prevents external text from adding rows or violating ASCII width.
   const warning =
@@ -578,40 +533,40 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
       // clamping because its header is always visible.
       if (selection.kind === 'global') return []
       if (selection.kind === 'harvest') {
-        return [{
+        return [
+          {
+            selection,
+            lines: renderHarvest(
+              model.harvest!,
+              opts,
+              widths,
+              sameSelection(selection, model.selection),
+              selecting,
+            ),
+          },
+        ]
+      }
+      const build = model.builds.find((candidate) => candidate.slug === selection.slug)!
+      return [
+        {
           selection,
-          lines: renderHarvest(
-            model.harvest!,
+          lines: renderBuild(
+            build,
             opts,
             widths,
             sameSelection(selection, model.selection),
             selecting,
           ),
-        }]
-      }
-      const build = model.builds.find((candidate) => candidate.slug === selection.slug)!
-      return [{
-        selection,
-        lines: renderBuild(
-          build,
-          opts,
-          widths,
-          sameSelection(selection, model.selection),
-          selecting,
-        ),
-      }]
+        },
+      ]
     },
   )
 
   const bodyBudget =
-    height === undefined
-      ? Number.POSITIVE_INFINITY
-      : Math.max(0, height - top.length - 3)
+    height === undefined ? Number.POSITIVE_INFINITY : Math.max(0, height - top.length - 3)
   let body: string[]
   if (rows.length === 0) {
-    body = bodyBudget >= 1
-      ? [truncate(paint('  no active builds', 'dim', color), width)]
-      : []
+    body = bodyBudget >= 1 ? [truncate(paint('  no active builds', 'dim', color), width)] : []
   } else {
     const allRows = flattenRows(rows)
     if (allRows.length <= bodyBudget) {

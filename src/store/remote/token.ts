@@ -52,9 +52,7 @@ export function tokenResource(scope: TokenScope): {
   id: string
 } {
   if ('build' in scope) {
-    return scope.build === '*'
-      ? { kind: 'admin', id: '*' }
-      : { kind: 'build', id: scope.build }
+    return scope.build === '*' ? { kind: 'admin', id: '*' } : { kind: 'build', id: scope.build }
   }
   return scope.resource
 }
@@ -73,11 +71,7 @@ export function mintToken(secret: string, scope: TokenScope): string {
  * verification never explains itself to the caller (the server maps null to
  * 401). The signature compare is timing-safe via `crypto.timingSafeEqual`.
  */
-export function verifyToken(
-  secret: string,
-  token: string,
-  now: Date,
-): TokenScope | null {
+export function verifyToken(secret: string, token: string, now: Date): TokenScope | null {
   const parts = token.split('.')
   if (parts.length !== 2) return null
   const [payload, signature] = parts as [string, string]

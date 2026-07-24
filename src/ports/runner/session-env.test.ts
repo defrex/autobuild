@@ -14,28 +14,23 @@ describe('sessionEnv', () => {
       },
     )
 
-    expect(env['AMBIENT_ONLY']).toBe('present')
-    expect(env['OVERRIDE']).toBe('scoped')
-    expect(env['SCOPED_ONLY']).toBe('present')
+    expect(env.AMBIENT_ONLY).toBe('present')
+    expect(env.OVERRIDE).toBe('scoped')
+    expect(env.SCOPED_ONLY).toBe('present')
     expect('OMIT_UNDEFINED' in env).toBe(false)
   })
 
   test('supplies the managed directory when PATH is absent or scoped empty', () => {
-    expect(sessionEnv({}, {})['PATH']).toBe(AGENT_BIN_DIR)
-    expect(sessionEnv({ PATH: '' }, { PATH: '/ambient/bin' })['PATH']).toBe(
-      AGENT_BIN_DIR,
-    )
+    expect(sessionEnv({}, {}).PATH).toBe(AGENT_BIN_DIR)
+    expect(sessionEnv({ PATH: '' }, { PATH: '/ambient/bin' }).PATH).toBe(AGENT_BIN_DIR)
   })
 
   test('prefixes PATH, preserves inherited search order, and removes duplicate managed entries', () => {
-    const inherited = [
-      '/host/conflict',
-      AGENT_BIN_DIR,
-      '/host/tools',
-      AGENT_BIN_DIR,
-    ].join(delimiter)
+    const inherited = ['/host/conflict', AGENT_BIN_DIR, '/host/tools', AGENT_BIN_DIR].join(
+      delimiter,
+    )
 
-    expect(sessionEnv({}, { PATH: inherited })['PATH']).toBe(
+    expect(sessionEnv({}, { PATH: inherited }).PATH).toBe(
       [AGENT_BIN_DIR, '/host/conflict', '/host/tools'].join(delimiter),
     )
   })
@@ -48,13 +43,13 @@ describe('sessionEnv', () => {
     }
     const scopedBefore = { ...scoped }
     const ambientBefore = { ...ambient }
-    const globalPathBefore = process.env['PATH']
+    const globalPathBefore = process.env.PATH
 
     const env = sessionEnv(scoped, ambient)
-    env['AB_SESSION'] = 'changed-result-only'
+    env.AB_SESSION = 'changed-result-only'
 
     expect(scoped).toEqual(scopedBefore)
     expect(ambient).toEqual(ambientBefore)
-    expect(process.env['PATH']).toBe(globalPathBefore)
+    expect(process.env.PATH).toBe(globalPathBefore)
   })
 })

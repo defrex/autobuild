@@ -35,7 +35,11 @@ function makeWorkspace(): string {
   return dir
 }
 
-function writeToml(workspacePath: string, port: number, opts: { readyTimeout?: number; start?: string } = {}): void {
+function writeToml(
+  workspacePath: string,
+  port: number,
+  opts: { readyTimeout?: number; start?: string } = {},
+): void {
   const start = opts.start ?? `PORT=${port} bun ${serverFixture}`
   writeFileSync(
     join(workspacePath, 'autobuild.toml'),
@@ -166,9 +170,7 @@ describe('ServerControl — pidfile lifecycle (cross-process semantics)', () => 
     const started = await makeControl(ws).start()
     expect(started.pid).toBeGreaterThan(0)
     expect(started.url).toBe(urlFor(port))
-    expect(readFileSync(join(ws, '.ab', 'server.pid'), 'utf8').trim()).toBe(
-      String(started.pid),
-    )
+    expect(readFileSync(join(ws, '.ab', 'server.pid'), 'utf8').trim()).toBe(String(started.pid))
     const response = await fetch(urlFor(port))
     expect(response.status).toBe(200)
 

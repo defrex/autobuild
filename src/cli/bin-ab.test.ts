@@ -31,10 +31,7 @@ beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), 'ab-bin-'))
   // Scoped binary composition reads the build worktree's config before
   // selecting its forge. Sessionless cases ignore this fixture.
-  await writeFile(
-    join(tmp, 'autobuild.toml'),
-    '[tickets]\nsource = "file"\nreadyState = "ready"\n',
-  )
+  await writeFile(join(tmp, 'autobuild.toml'), '[tickets]\nsource = "file"\nreadyState = "ready"\n')
 })
 
 afterEach(async () => {
@@ -54,8 +51,8 @@ async function collect(
 
 function bareEnv(): Record<string, string> {
   return {
-    PATH: process.env['PATH'] ?? '',
-    HOME: process.env['HOME'] ?? '',
+    PATH: process.env.PATH ?? '',
+    HOME: process.env.HOME ?? '',
   }
 }
 
@@ -72,33 +69,39 @@ async function runBin(
   args: string[],
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return collect(Bun.spawn(['bun', BIN, ...args], {
-    cwd: tmp,
-    env: { ...testEnv(), ...env },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  }))
+  return collect(
+    Bun.spawn(['bun', BIN, ...args], {
+      cwd: tmp,
+      env: { ...testEnv(), ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }),
+  )
 }
 
 async function runBinWithoutAb(
   args: string[],
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return collect(Bun.spawn(['bun', BIN, ...args], {
-    cwd: tmp,
-    env: { ...bareEnv(), ...env },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  }))
+  return collect(
+    Bun.spawn(['bun', BIN, ...args], {
+      cwd: tmp,
+      env: { ...bareEnv(), ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }),
+  )
 }
 
 async function runDev(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
-  return collect(Bun.spawn(['bun', 'run', 'dev', '--', ...args], {
-    cwd: ROOT,
-    env: testEnv(),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  }))
+  return collect(
+    Bun.spawn(['bun', 'run', 'dev', '--', ...args], {
+      cwd: ROOT,
+      env: testEnv(),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }),
+  )
 }
 
 async function runBinAt(
@@ -106,13 +109,15 @@ async function runBinAt(
   args: string[],
   home: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return collect(Bun.spawn(['bun', BIN, ...args], {
-    cwd,
-    // Deliberately omit every AB_* variable: this is the implicit-root path.
-    env: { PATH: process.env['PATH'] ?? '', HOME: home },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  }))
+  return collect(
+    Bun.spawn(['bun', BIN, ...args], {
+      cwd,
+      // Deliberately omit every AB_* variable: this is the implicit-root path.
+      env: { PATH: process.env.PATH ?? '', HOME: home },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }),
+  )
 }
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -177,9 +182,7 @@ test.each(BUILD_SESSION_COMMANDS)(
     const result = await runBinWithoutAb([...argv])
     expect(result.code).toBe(1)
     expect(result.stdout).toBe('')
-    expect(result.stderr).toContain(
-      `'ab ${argv[0]}' runs inside a build session`,
-    )
+    expect(result.stderr).toContain(`'ab ${argv[0]}' runs inside a build session`)
     for (const name of ['AB_STORE', 'AB_BUILD', 'AB_PHASE', 'AB_SESSION']) {
       expect(result.stderr).toContain(name)
       expect(result.stderr).not.toContain(`${name} is not set`)
@@ -190,10 +193,7 @@ test.each(BUILD_SESSION_COMMANDS)(
 const HARVEST_SESSION_COMMANDS = [
   ['context', ['harvest', 'context']],
   ['submit', ['harvest', 'submit', 'proposals.json']],
-  [
-    'verdict',
-    ['harvest', 'verdict', 'approve', '--notes', 'review.md'],
-  ],
+  ['verdict', ['harvest', 'verdict', 'approve', '--notes', 'review.md']],
 ] as const
 
 test.each(HARVEST_SESSION_COMMANDS)(
@@ -205,13 +205,7 @@ test.each(HARVEST_SESSION_COMMANDS)(
     expect(result.stderr).toContain(
       `'ab harvest ${subcommand}' runs inside a harvest agent session`,
     )
-    for (const name of [
-      'AB_STORE',
-      'AB_REPO',
-      'AB_HARVEST',
-      'AB_PHASE',
-      'AB_SESSION',
-    ]) {
+    for (const name of ['AB_STORE', 'AB_REPO', 'AB_HARVEST', 'AB_PHASE', 'AB_SESSION']) {
       expect(result.stderr).toContain(name)
       expect(result.stderr).not.toContain(`${name} is not set`)
     }
@@ -267,13 +261,9 @@ export default {
   expect(doctor.stdout).toContain('OK ./plugin.ts')
   expect(doctor.stderr).not.toContain('AB_BUILD')
 
-  const contract = await runBinWithoutAb([
-    'plugin', 'test', 'ticket-source', 'sample',
-  ])
+  const contract = await runBinWithoutAb(['plugin', 'test', 'ticket-source', 'sample'])
   expect(contract.code).toBe(0)
-  expect(contract.stdout + contract.stderr).toContain(
-    'create/get round-trips common fields',
-  )
+  expect(contract.stdout + contract.stderr).toContain('create/get round-trips common fields')
 })
 
 test('ab build status runs sessionless and exits 1 on an unknown slug', async () => {
@@ -328,9 +318,7 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   expect(result.code).toBe(0)
   expect(result.stderr).toBe('')
   expect(result.stdout).toContain('visual:mixed-wide@0')
-  expect(await Bun.file(join(tmp, 'downloads', 'frame.png')).bytes()).toEqual(
-    bytes,
-  )
+  expect(await Bun.file(join(tmp, 'downloads', 'frame.png')).bytes()).toEqual(bytes)
 })
 
 test('artifact put --attach uses the real binary grammar and records the assigned revision', async () => {
@@ -341,14 +329,11 @@ test('artifact put --attach uses the real binary grammar and records the assigne
   const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
   await writeFile(file, bytes)
 
-  const result = await runBin(
-    ['artifact', 'put', 'visual:evidence', file, '--attach'],
-    {
-      AB_BUILD: 'attached',
-      AB_PHASE: 'verify:visual@1',
-      AB_SESSION: 's_visual',
-    },
-  )
+  const result = await runBin(['artifact', 'put', 'visual:evidence', file, '--attach'], {
+    AB_BUILD: 'attached',
+    AB_PHASE: 'verify:visual@1',
+    AB_SESSION: 's_visual',
+  })
   expect(result).toEqual({ code: 0, stderr: '', stdout: '0\n' })
 
   const reopened = openLocalStore(join(tmp, 'store'))
@@ -500,15 +485,12 @@ test('a scoped implement terminal routes publication through the configured plug
   })
   await local.close()
 
-  const result = await runBin(
-    ['done', '--notes', '.ab/implement-notes.md'],
-    {
-      AB_BUILD: slug,
-      AB_PHASE: 'implement@1',
-      AB_SESSION: 's_plugin_forge',
-      FORGE_MARKER: marker,
-    },
-  )
+  const result = await runBin(['done', '--notes', '.ab/implement-notes.md'], {
+    AB_BUILD: slug,
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_plugin_forge',
+    FORGE_MARKER: marker,
+  })
   expect(result).toEqual({
     code: 0,
     stderr: '',
@@ -581,9 +563,7 @@ test('complete but malformed build and harvest phases keep precise resolver erro
     AB_SESSION: 's_bad_phase',
   })
   expect(build.code).toBe(1)
-  expect(build.stderr).toContain(
-    'AB_PHASE "implement@nope" has a malformed round "nope"',
-  )
+  expect(build.stderr).toContain('AB_PHASE "implement@nope" has a malformed round "nope"')
   expect(build.stderr).not.toContain('runs inside a build session')
 
   const harvest = await runBin(['harvest', 'context'], {
@@ -593,9 +573,7 @@ test('complete but malformed build and harvest phases keep precise resolver erro
     AB_SESSION: 'hs_bad_phase',
   })
   expect(harvest.code).toBe(1)
-  expect(harvest.stderr).toContain(
-    'AB_PHASE "review" is not a harvest session phase',
-  )
+  expect(harvest.stderr).toContain('AB_PHASE "review" is not a harvest session phase')
   expect(harvest.stderr).not.toContain('runs inside a harvest agent session')
 })
 

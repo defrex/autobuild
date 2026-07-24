@@ -28,6 +28,7 @@ capacity = 10             # concurrent builds for this repo
 # [verify.*] or [finalize.*] check steps.
 [commands]
 setup = "bun install"
+lint = "bun run check"
 typecheck = "bun tsc --noEmit"
 test = "bun run test"
 
@@ -41,9 +42,14 @@ test = "bun run test"
 
 [verify]
 # These are the configured universe/order. A plan may select any optional step
-# in opening `verifySteps` front matter; `always = true` on a step would make it
-# mandatory. Plans without metadata select all three.
-steps = ["types", "unit", "dashboard"]
+# in opening `verifySteps` front matter. Lint is unconditional and cannot be
+# deselected by a plan; plans without metadata select every step.
+steps = ["lint", "types", "unit", "dashboard"]
+
+[verify.lint]
+kind = "check"
+command = "lint"
+always = true
 
 [verify.types]
 kind = "check"        # deterministic: command + pass/fail, never an agent

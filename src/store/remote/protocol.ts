@@ -31,13 +31,7 @@ import type { ArtifactMeta, RepositoryArtifactMeta } from '../types'
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
-export const errorKindSchema = z.enum([
-  'validation',
-  'not-found',
-  'auth',
-  'conflict',
-  'internal',
-])
+export const errorKindSchema = z.enum(['validation', 'not-found', 'auth', 'conflict', 'internal'])
 export type ErrorKind = z.infer<typeof errorKindSchema>
 
 export const errorBodySchema = z.object({
@@ -62,9 +56,7 @@ export const buildRecordWireSchema = z.object({
   branch: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  lease: z
-    .object({ holder: z.string(), expiresAt: z.string() })
-    .optional(),
+  lease: z.object({ holder: z.string(), expiresAt: z.string() }).optional(),
   heartbeatAt: z.string().optional(),
 })
 export const buildRecordListSchema = z.array(buildRecordWireSchema)
@@ -112,9 +104,7 @@ export const repositoryEventEnvelopeWireSchema = z.object({
   type: z.string(),
   payload: z.unknown(),
 })
-export const repositoryEventListSchema = z.array(
-  repositoryEventEnvelopeWireSchema,
-)
+export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSchema)
 
 export const repositoryArtifactMetaWireSchema = z.object({
   repo: z.string(),
@@ -124,9 +114,7 @@ export const repositoryArtifactMetaWireSchema = z.object({
   metadata: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
 })
-export const repositoryArtifactMetaListSchema = z.array(
-  repositoryArtifactMetaWireSchema,
-)
+export const repositoryArtifactMetaListSchema = z.array(repositoryArtifactMetaWireSchema)
 export const repositoryArtifactGetResponseSchema = z.union([
   z.null(),
   z.object({
@@ -210,12 +198,7 @@ function isPlaceholderRef(value: unknown): value is { kind: string; rev: number 
   }
   if (Object.keys(value).length !== 2) return false
   const { kind, rev } = value as { kind?: unknown; rev?: unknown }
-  return (
-    typeof kind === 'string' &&
-    typeof rev === 'number' &&
-    Number.isInteger(rev) &&
-    rev < 0
-  )
+  return typeof kind === 'string' && typeof rev === 'number' && Number.isInteger(rev) && rev < 0
 }
 
 /**
@@ -238,10 +221,7 @@ export function substitutePlaceholderRefs(
   }
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        substitutePlaceholderRefs(item, deposited),
-      ]),
+      Object.entries(value).map(([key, item]) => [key, substitutePlaceholderRefs(item, deposited)]),
     )
   }
   return value

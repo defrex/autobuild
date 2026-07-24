@@ -12,9 +12,7 @@ export interface DispatchSettings {
   defaultAutoMerge: boolean
 }
 
-export function reduceDispatchSettings(
-  events: RepositoryEvent[],
-): DispatchSettings {
+export function reduceDispatchSettings(events: RepositoryEvent[]): DispatchSettings {
   let intake = DEFAULT_DISPATCH_INTAKE
   let defaultAutoMerge = DEFAULT_DISPATCH_AUTO_MERGE
   let intakeSeq = 0

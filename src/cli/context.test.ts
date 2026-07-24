@@ -71,11 +71,7 @@ async function seedPlanApproved(): Promise<void> {
   })
 }
 
-async function seedImplementRound(
-  round: number,
-  head: string,
-  feedback?: Feedback,
-): Promise<void> {
+async function seedImplementRound(round: number, head: string, feedback?: Feedback): Promise<void> {
   await store.append(BUILD, {
     actor: KERNEL,
     type: 'implement.started',
@@ -473,11 +469,7 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
       workspacePath: workspace,
     })
 
-    expect(await treeOf(join(workspace, '.ab'))).toEqual([
-      '.gitignore',
-      'context.json',
-      'spec.md',
-    ])
+    expect(await treeOf(join(workspace, '.ab'))).toEqual(['.gitignore', 'context.json', 'spec.md'])
     expect(manifest.step).toEqual({
       name: 'e2e',
       config: { kind: 'agent', skill: 'ab-verify-e2e', needsServer: true },
@@ -775,9 +767,7 @@ describe('buildContext — hygiene (§8.3)', () => {
       env: makeEnv({ phase: 'plan', round: 1 }),
       workspacePath: workspace,
     })
-    expect(JSON.parse(await abFile('context.json'))).toEqual(
-      JSON.parse(JSON.stringify(manifest)),
-    )
+    expect(JSON.parse(await abFile('context.json'))).toEqual(JSON.parse(JSON.stringify(manifest)))
   })
 })
 

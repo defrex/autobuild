@@ -55,7 +55,11 @@ const fakeExec: Exec = async () => ({
 /** A store seeded with one build per spec; each gets its own event log. */
 async function seedBuild(
   store: MemoryBuildStore,
-  opts: { slug: string; repo?: string; status?: 'queued' | 'running' | 'blocked' | 'paused' | 'done' },
+  opts: {
+    slug: string
+    repo?: string
+    status?: 'queued' | 'running' | 'blocked' | 'paused' | 'done'
+  },
 ): Promise<void> {
   await store.createBuild({
     slug: opts.slug,
@@ -222,11 +226,7 @@ describe('summarize', () => {
       payload: { attempt: 2, baseSha: 'sha-main-2' },
     })
 
-    const inFlight = summarize(
-      (await store.getBuild('b1'))!,
-      await store.getEvents('b1'),
-      NOW,
-    )
+    const inFlight = summarize((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
     expect(inFlight.phase).toBe('reconcile')
     expect(inFlight.attempt).toBe(2)
     expect(inFlight.round).toBeUndefined()
@@ -298,7 +298,9 @@ describe('summarize', () => {
   test('PR surfaces with its lifecycle state once finalize records it', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
-    expect(summarize((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW).pr).toBeUndefined()
+    expect(
+      summarize((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW).pr,
+    ).toBeUndefined()
 
     await store.append('b1', {
       actor: KERNEL,
@@ -466,7 +468,13 @@ describe('detail', () => {
     await store.append('b1', {
       actor: KERNEL,
       type: 'session.started',
-      payload: { session: 's_1', role: 'implement', runner: 'claude', phase: 'implement', round: 1 },
+      payload: {
+        session: 's_1',
+        role: 'implement',
+        runner: 'claude',
+        phase: 'implement',
+        round: 1,
+      },
     })
     const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
     expect(d.openEscalations).toHaveLength(1)
@@ -566,10 +574,7 @@ describe('renderers', () => {
     expect(text).toContain('expired')
     expect(text).not.toContain('\x1b')
 
-    const detailText = renderDetail(
-      detail(r, await store.getEvents('b1'), NOW),
-      NOW,
-    ).join('\n')
+    const detailText = renderDetail(detail(r, await store.getEvents('b1'), NOW), NOW).join('\n')
     expect(detailText).toContain('expired')
     expect(detailText).not.toContain('\x1b')
   })
@@ -725,7 +730,7 @@ describe('abBuilds', () => {
     return out
   }
 
-  test('lists only the current repo\'s builds', async () => {
+  test("lists only the current repo's builds", async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'mine', repo: REPO })
     await seedBuild(store, { slug: 'theirs', repo: OTHER_REPO })
@@ -853,9 +858,7 @@ describe('abBuildStatus', () => {
         now: () => NOW,
         slug: 'theirs',
       }),
-    ).rejects.toThrow(
-      `build "theirs" belongs to repository "${OTHER_REPO}", not "${REPO}"`,
-    )
+    ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${REPO}"`)
   })
 
   test('--json parses and matches the projection', async () => {

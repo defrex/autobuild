@@ -8,11 +8,7 @@ import { join } from 'node:path'
 import { isSessionlessInvocation, runCli } from './main'
 import { createUpgradeAgentResolver } from './upgrade-agent'
 import { loadDotEnv } from './dotenv'
-import {
-  MissingAmbientContextError,
-  resolveCliEnv,
-  resolveHarvestCliEnv,
-} from './env'
+import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
 import { openProductionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
 import { createProcessInitPrompter } from './init-prompt'
@@ -64,9 +60,7 @@ export async function runBinary(
           ? { initPrompter: createProcessInitPrompter(process.stdin, process.stdout) }
           : {}),
         upgradeResolverFactory: createUpgradeAgentResolver,
-        ...(resolveDashboardRenderer !== undefined
-          ? { resolveDashboardRenderer }
-          : {}),
+        ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
       })
     } finally {
       process.removeListener('SIGINT', onSigint)
@@ -74,7 +68,7 @@ export async function runBinary(
   }
 
   if (command === 'harvest') {
-    let harvestEnv
+    let harvestEnv: ReturnType<typeof resolveHarvestCliEnv>
     try {
       harvestEnv = resolveHarvestCliEnv(process.env)
     } catch (error) {
@@ -98,7 +92,7 @@ export async function runBinary(
     }
   }
 
-  let cliEnv
+  let cliEnv: ReturnType<typeof resolveCliEnv>
   try {
     cliEnv = resolveCliEnv(process.env)
   } catch (error) {
@@ -112,7 +106,7 @@ export async function runBinary(
   // A scoped phase process is composed from the build worktree's immutable
   // configuration just like dispatch. Load and select the forge before opening
   // the store so plugin failures cannot partially execute terminal plumbing.
-  let forge
+  let forge: Awaited<ReturnType<typeof createForge>>
   try {
     const repoRoot = process.cwd()
     const config = await loadConfig(join(repoRoot, 'autobuild.toml'))

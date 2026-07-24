@@ -46,8 +46,7 @@ describe('PR attachment event protocol', () => {
       baseBranch: 'main',
     }
     expect(
-      validateEventWrite({ actor: DISPATCHER, type: 'build.created', payload: base })
-        .payload,
+      validateEventWrite({ actor: DISPATCHER, type: 'build.created', payload: base }).payload,
     ).toEqual(base)
     expect(
       validateEventWrite({
@@ -182,9 +181,7 @@ describe('plan.completed verify selection compatibility', () => {
 
   test('rejects malformed and duplicate lists', () => {
     for (const verifySteps of ['types', [1], [''], ['   '], ['types', 'types']]) {
-      expect(() => plan({ ...base, verifySteps })).toThrow(
-        /invalid payload for "plan\.completed"/,
-      )
+      expect(() => plan({ ...base, verifySteps })).toThrow(/invalid payload for "plan\.completed"/)
     }
   })
 })
@@ -195,9 +192,9 @@ describe('finalize.step-completed publication checkpoint', () => {
       step: 'release-notes',
       ok: true,
     })
-    expect(
-      finalizeStep({ step: 'release-notes', ok: false, note: 'push failed' }).payload,
-    ).toEqual({ step: 'release-notes', ok: false, note: 'push failed' })
+    expect(finalizeStep({ step: 'release-notes', ok: false, note: 'push failed' }).payload).toEqual(
+      { step: 'release-notes', ok: false, note: 'push failed' },
+    )
   })
 
   test('accepts a non-blank pushed head only on success', () => {
@@ -210,9 +207,7 @@ describe('finalize.step-completed publication checkpoint', () => {
       { step: 'release-notes', ok: true, headSha: '   ' },
       { step: 'release-notes', ok: false, headSha: 'abc123' },
     ]) {
-      expect(() => finalizeStep(payload)).toThrow(
-        /invalid payload for "finalize\.step-completed"/,
-      )
+      expect(() => finalizeStep(payload)).toThrow(/invalid payload for "finalize\.step-completed"/)
     }
   })
 })
@@ -241,8 +236,7 @@ describe('verify.completed payload compatibility', () => {
 
   test('accepts skipped only with a trimmed, non-blank reason', () => {
     expect(
-      verify({ step: 'e2e', attempt: 1, outcome: 'skipped', reason: '  no UI changes  ' })
-        .payload,
+      verify({ step: 'e2e', attempt: 1, outcome: 'skipped', reason: '  no UI changes  ' }).payload,
     ).toEqual({
       step: 'e2e',
       attempt: 1,
@@ -251,9 +245,9 @@ describe('verify.completed payload compatibility', () => {
     })
 
     for (const reason of [undefined, '', '   ']) {
-      expect(() =>
-        verify({ step: 'e2e', attempt: 1, outcome: 'skipped', reason }),
-      ).toThrow(/invalid payload for "verify\.completed"/)
+      expect(() => verify({ step: 'e2e', attempt: 1, outcome: 'skipped', reason })).toThrow(
+        /invalid payload for "verify\.completed"/,
+      )
     }
   })
 

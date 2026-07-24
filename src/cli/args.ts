@@ -30,9 +30,7 @@ export function parseArgs(
     }
 
     const name = arg.slice(2)
-    const kind = Object.prototype.hasOwnProperty.call(allowedFlags, name)
-      ? allowedFlags[name]
-      : undefined
+    const kind = Object.hasOwn(allowedFlags, name) ? allowedFlags[name] : undefined
     if (kind === undefined) {
       throw new Error(`unknown flag --${name} — ${usage}`)
     }
@@ -57,10 +55,7 @@ export function parseArgs(
   return { positionals, flags }
 }
 
-export function stringFlag(
-  parsed: ParsedArgs,
-  name: string,
-): string | undefined {
+export function stringFlag(parsed: ParsedArgs, name: string): string | undefined {
   const value = parsed.flags.get(name)
   return typeof value === 'string' ? value : undefined
 }

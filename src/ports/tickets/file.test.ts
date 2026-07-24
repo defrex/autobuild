@@ -83,9 +83,9 @@ describe('FileTicketSource', () => {
     expect(got).toEqual(created)
 
     expect(
-      (
-        await tickets.listReady({ labels: ['autobuild'], state: 'Ready' })
-      ).tickets.map((t) => t.ref.id),
+      (await tickets.listReady({ labels: ['autobuild'], state: 'Ready' })).tickets.map(
+        (t) => t.ref.id,
+      ),
     ).toEqual(['file-1'])
 
     expect(await tickets.claim('file-1')).toBe(true)
@@ -153,9 +153,9 @@ describe('FileTicketSource', () => {
     await seedTicket('file-2', { state: 'triage' })
 
     // No label on either: `mv` into ready/ is sufficient — the headline claim.
-    expect(
-      (await source().listReady({ state: 'Ready' })).tickets.map((t) => t.ref.id),
-    ).toEqual(['file-1'])
+    expect((await source().listReady({ state: 'Ready' })).tickets.map((t) => t.ref.id)).toEqual([
+      'file-1',
+    ])
   })
 
   test('transition moves the file and leaves the bytes identical', async () => {
@@ -205,9 +205,9 @@ describe('FileTicketSource', () => {
     // `[tickets] readyState = "ready"` must mean the ready/ directory.
     await tickets.transition('file-1', 'ready')
     expect((await tickets.get('file-1'))?.state).toBe('Ready')
-    expect(
-      (await tickets.listReady({ state: 'READY' })).tickets.map((t) => t.ref.id),
-    ).toEqual(['file-1'])
+    expect((await tickets.listReady({ state: 'READY' })).tickets.map((t) => t.ref.id)).toEqual([
+      'file-1',
+    ])
   })
 
   test('an unknown state name is an error listing the four directories', async () => {
@@ -375,9 +375,7 @@ describe('FileTicketSource', () => {
     expect(listing.diagnostics).toEqual([
       `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
     ])
-    await expect(tickets.claim('broken')).rejects.toThrow(
-      /malformed ticket file — missing opening/,
-    )
+    await expect(tickets.claim('broken')).rejects.toThrow(/malformed ticket file — missing opening/)
     await expect(tickets.transition('broken', 'Ready')).rejects.toThrow(
       /malformed ticket file — missing opening/,
     )
@@ -482,9 +480,7 @@ describe('FileTicketSource', () => {
     await expect(source().get('no-fence')).rejects.toThrow(path('ready', 'no-fence'))
 
     await writeFile(path('ready', 'missing-field'), '+++\nid = "missing-field"\n+++\nbody\n')
-    await expect(source().get('missing-field')).rejects.toThrow(
-      path('ready', 'missing-field'),
-    )
+    await expect(source().get('missing-field')).rejects.toThrow(path('ready', 'missing-field'))
   })
 
   test('a frontmatter id that disagrees with the filename is a targeted error and listing diagnostic', async () => {
@@ -494,9 +490,7 @@ describe('FileTicketSource', () => {
     await expect(tickets.get('file-1')).rejects.toThrow(path('ready', 'file-1'))
     expect(await tickets.listReady({ state: 'Ready' })).toEqual({
       tickets: [],
-      diagnostics: [
-        `${path('ready', 'file-1')}: frontmatter id "file-9" does not match filename`,
-      ],
+      diagnostics: [`${path('ready', 'file-1')}: frontmatter id "file-9" does not match filename`],
     })
   })
 
@@ -587,7 +581,7 @@ describe('FileTicketSource', () => {
     const once = await readFile(path('ready', dependent.ref.id), 'utf8')
     await tickets.addBlocker(dependent.ref.id, blocker.ref.id)
     expect(await readFile(path('ready', dependent.ref.id), 'utf8')).toBe(once)
-    expect((once.match(new RegExp(blocker.ref.id, 'g')) ?? [])).toHaveLength(1)
+    expect(once.match(new RegExp(blocker.ref.id, 'g')) ?? []).toHaveLength(1)
 
     await tickets.removeBlocker(dependent.ref.id, blocker.ref.id)
     const removed = await readFile(path('ready', dependent.ref.id), 'utf8')
@@ -661,12 +655,7 @@ describe('FileTicketSource', () => {
     await seedTicket('file-4', { state: 'Triage' })
     const tickets = source()
 
-    const states = await tickets.dependencyStates([
-      'file-1',
-      'file-2',
-      'file-3',
-      'file-4',
-    ])
+    const states = await tickets.dependencyStates(['file-1', 'file-2', 'file-3', 'file-4'])
 
     expect(states.map((s) => s.resolved)).toEqual([true, false, false, false])
   })

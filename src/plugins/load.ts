@@ -7,11 +7,7 @@ import {
   PluginApiCompatibilityError,
   type PluginApiCompatibility,
 } from './manifest'
-import {
-  createPluginRegistry,
-  type PluginRegistry,
-  type PluginResolutionKind,
-} from './registry'
+import { createPluginRegistry, type PluginRegistry, type PluginResolutionKind } from './registry'
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -21,11 +17,7 @@ function importUrl(resolved: string): string {
   return resolved.startsWith('file:') ? resolved : pathToFileURL(resolved).href
 }
 
-export type PluginLoadStage =
-  | 'resolution'
-  | 'evaluation'
-  | 'manifest'
-  | 'registration'
+export type PluginLoadStage = 'resolution' | 'evaluation' | 'manifest' | 'registration'
 
 export interface PluginModuleReport {
   module: string
@@ -77,9 +69,9 @@ function manifestIdentity(value: unknown): {
   if (typeof value !== 'object' || value === null) return {}
   const record = value as Record<string, unknown>
   return {
-    ...(typeof record['name'] === 'string' ? { pluginName: record['name'] } : {}),
-    ...(typeof record['apiVersion'] === 'string'
-      ? { api: pluginApiCompatibility(record['apiVersion']) }
+    ...(typeof record.name === 'string' ? { pluginName: record.name } : {}),
+    ...(typeof record.apiVersion === 'string'
+      ? { api: pluginApiCompatibility(record.apiVersion) }
       : {}),
   }
 }
@@ -127,24 +119,21 @@ export async function attemptPlugin(
   }
 
   const identity = manifestIdentity(namespace.default)
-  let manifest
+  let manifest: ReturnType<typeof parsePluginManifest>
   try {
     manifest = parsePluginManifest(namespace.default)
   } catch (error) {
-    const detail = error instanceof ZodError
-      ? error.issues
-          .map((issue) => `${issue.path.join('.') || '(manifest)'}: ${issue.message}`)
-          .join('; ')
-      : reason(error)
-    const api = error instanceof PluginApiCompatibilityError
-      ? error.compatibility
-      : identity.api
+    const detail =
+      error instanceof ZodError
+        ? error.issues
+            .map((issue) => `${issue.path.join('.') || '(manifest)'}: ${issue.message}`)
+            .join('; ')
+        : reason(error)
+    const api = error instanceof PluginApiCompatibilityError ? error.compatibility : identity.api
     return failed(
       {
         ...located,
-        ...(identity.pluginName !== undefined
-          ? { pluginName: identity.pluginName }
-          : {}),
+        ...(identity.pluginName !== undefined ? { pluginName: identity.pluginName } : {}),
         ...(api !== undefined ? { api } : {}),
       },
       'manifest',

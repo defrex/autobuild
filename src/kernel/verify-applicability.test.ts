@@ -18,9 +18,7 @@ describe('evaluateVerifyApplicability', () => {
       ]),
     ).toEqual({ applies: true })
     expect(
-      evaluateVerifyApplicability(paths('src/cli/dispatch.ts'), [
-        'src/CLI/dispatch.ts',
-      ]),
+      evaluateVerifyApplicability(paths('src/cli/dispatch.ts'), ['src/CLI/dispatch.ts']),
     ).toEqual({
       applies: false,
       reason:
@@ -29,30 +27,26 @@ describe('evaluateVerifyApplicability', () => {
   })
 
   test('supports *, ?, and whole-segment ** with full-path matching', () => {
+    expect(evaluateVerifyApplicability(paths('src/*.ts'), ['src/nested/file.ts'])).toEqual(
+      expect.objectContaining({ applies: false }),
+    )
+    expect(evaluateVerifyApplicability(paths('src/file?.ts'), ['src/file1.ts'])).toEqual({
+      applies: true,
+    })
+    expect(evaluateVerifyApplicability(paths('src/**/dashboard.ts'), ['src/dashboard.ts'])).toEqual(
+      { applies: true },
+    )
     expect(
-      evaluateVerifyApplicability(paths('src/*.ts'), ['src/nested/file.ts']),
-    ).toEqual(expect.objectContaining({ applies: false }))
-    expect(
-      evaluateVerifyApplicability(paths('src/file?.ts'), ['src/file1.ts']),
-    ).toEqual({ applies: true })
-    expect(
-      evaluateVerifyApplicability(paths('src/**/dashboard.ts'), [
-        'src/dashboard.ts',
-      ]),
-    ).toEqual({ applies: true })
-    expect(
-      evaluateVerifyApplicability(paths('src/**/dashboard.ts'), [
-        'src/cli/nested/dashboard.ts',
-      ]),
+      evaluateVerifyApplicability(paths('src/**/dashboard.ts'), ['src/cli/nested/dashboard.ts']),
     ).toEqual({ applies: true })
   })
 
   test('uses OR semantics across selectors and changed paths', () => {
     expect(
-      evaluateVerifyApplicability(
-        paths('migrations/**', 'src/cli/dashboard/**'),
-        ['docs/guide.md', 'src/cli/dashboard/model.ts'],
-      ),
+      evaluateVerifyApplicability(paths('migrations/**', 'src/cli/dashboard/**'), [
+        'docs/guide.md',
+        'src/cli/dashboard/model.ts',
+      ]),
     ).toEqual({ applies: true })
   })
 
@@ -77,17 +71,14 @@ describe('evaluateVerifyApplicability', () => {
     expect(evaluateVerifyApplicability({ kind: 'always' }, [])).toEqual({
       applies: true,
     })
-    expect(
-      evaluateVerifyApplicability(
-        { kind: 'always' },
-        ['z-last', 'a-first'],
-      ),
-    ).toEqual({ applies: true })
+    expect(evaluateVerifyApplicability({ kind: 'always' }, ['z-last', 'a-first'])).toEqual({
+      applies: true,
+    })
   })
 
   test('direct callers fail closed before Bun.Glob sees unsupported syntax', () => {
-    expect(() =>
-      evaluateVerifyApplicability(paths('../secrets/**'), ['README.md']),
-    ).toThrow('invalid [verify.dashboard].paths selector')
+    expect(() => evaluateVerifyApplicability(paths('../secrets/**'), ['README.md'])).toThrow(
+      'invalid [verify.dashboard].paths selector',
+    )
   })
 })

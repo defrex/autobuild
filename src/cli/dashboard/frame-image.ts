@@ -128,9 +128,7 @@ function applySgr(style: Style, raw: string, line: number): void {
         style.foreground = 'foreground'
         break
       default:
-        throw new Error(
-          `dashboard frame line ${line}: unsupported SGR code ${code} in ESC[${raw}m`,
-        )
+        throw new Error(`dashboard frame line ${line}: unsupported SGR code ${code} in ESC[${raw}m`)
     }
   }
 }
@@ -181,9 +179,7 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
       if (family === ']') {
         const end = value.indexOf(BEL, index + 2)
         if (end === -1) {
-          throw new Error(
-            `dashboard frame line ${lineNumber}: unterminated OSC sequence`,
-          )
+          throw new Error(`dashboard frame line ${lineNumber}: unterminated OSC sequence`)
         }
         const payload = value.slice(index + 2, end)
         const match = /^8;;(.*)$/.exec(payload)
@@ -226,15 +222,9 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
   }
 
   if (style.href !== undefined) {
-    throw new Error(
-      `dashboard frame line ${lineNumber}: OSC 8 hyperlink was not closed`,
-    )
+    throw new Error(`dashboard frame line ${lineNumber}: OSC 8 hyperlink was not closed`)
   }
-  if (
-    style.foreground !== 'foreground' ||
-    style.bold ||
-    style.dim
-  ) {
+  if (style.foreground !== 'foreground' || style.bold || style.dim) {
     throw new Error(
       `dashboard frame line ${lineNumber}: SGR style was not reset before end of line`,
     )
@@ -251,7 +241,10 @@ function xml(value: string): string {
     .replaceAll("'", '&apos;')
 }
 
-function svgFor(parsed: ParsedLine[], columns: number): {
+function svgFor(
+  parsed: ParsedLine[],
+  columns: number,
+): {
   svg: string
   width: number
   height: number
@@ -270,9 +263,7 @@ function svgFor(parsed: ParsedLine[], columns: number): {
         `<text x="${x}" y="${y}" fill="${PALETTE[run.style.foreground]}"` +
         `${weight}${opacity}>${xml(run.text)}</text>`
       content.push(
-        run.style.href === undefined
-          ? node
-          : `<a href="${xml(run.style.href)}">${node}</a>`,
+        run.style.href === undefined ? node : `<a href="${xml(run.style.href)}">${node}</a>`,
       )
     }
   }
@@ -294,10 +285,7 @@ function svgFor(parsed: ParsedLine[], columns: number): {
 function fontFiles(): string[] {
   const require = createRequire(import.meta.url)
   const root = dirname(require.resolve('dejavu-fonts-ttf/package.json'))
-  return [
-    join(root, 'ttf', 'DejaVuSansMono.ttf'),
-    join(root, 'ttf', 'DejaVuSansMono-Bold.ttf'),
-  ]
+  return [join(root, 'ttf', 'DejaVuSansMono.ttf'), join(root, 'ttf', 'DejaVuSansMono-Bold.ttf')]
 }
 
 /** Parse once, then derive both evidence forms from the same exact cells. */

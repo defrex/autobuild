@@ -1,10 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { PassThrough } from 'node:stream'
-import {
-  createProcessInitPrompter,
-  INIT_PLUGIN_HELP,
-  type InitPromptQuestion,
-} from './init-prompt'
+import { createProcessInitPrompter, INIT_PLUGIN_HELP, type InitPromptQuestion } from './init-prompt'
 
 function streams(inputTty: boolean, outputTty: boolean) {
   const input = new PassThrough() as PassThrough & { isTTY?: boolean }

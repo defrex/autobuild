@@ -18,10 +18,12 @@ export function sameSelection(
   right: DashboardSelection | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right
-  return left.kind === right.kind &&
+  return (
+    left.kind === right.kind &&
     (left.kind === 'global' ||
       left.kind === 'harvest' ||
       (right.kind === 'build' && left.slug === right.slug))
+  )
 }
 
 export function initialSelection(
@@ -37,9 +39,7 @@ export function moveSelection(
   delta: number,
 ): DashboardSelection | undefined {
   if (rows.length === 0) return undefined
-  const current = selected === undefined
-    ? 0
-    : rows.findIndex((row) => sameSelection(row, selected))
+  const current = selected === undefined ? 0 : rows.findIndex((row) => sameSelection(row, selected))
   const index = current === -1 ? 0 : current
   const next = Math.max(0, Math.min(rows.length - 1, index + delta))
   return rows[next]

@@ -91,10 +91,7 @@ export class TicketFileValidationError extends Error {
   override readonly name = 'TicketFileValidationError'
 }
 
-function parseTicketFile(
-  path: string,
-  raw: string,
-): { front: Frontmatter; body: string } {
+function parseTicketFile(path: string, raw: string): { front: Frontmatter; body: string } {
   if (!raw.startsWith(OPEN_FENCE)) {
     throw new TicketFileValidationError(
       `${path}: malformed ticket file — missing opening "+++" fence`,
@@ -111,18 +108,14 @@ function parseTicketFile(
     parsed = parseToml(raw.slice(OPEN_FENCE.length, close))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new TicketFileValidationError(
-      `${path}: malformed TOML frontmatter — ${message}`,
-    )
+    throw new TicketFileValidationError(`${path}: malformed TOML frontmatter — ${message}`)
   }
   const result = frontmatterSchema.safeParse(parsed)
   if (!result.success) {
     const issues = result.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('; ')
-    throw new TicketFileValidationError(
-      `${path}: invalid frontmatter — ${issues}`,
-    )
+    throw new TicketFileValidationError(`${path}: invalid frontmatter — ${issues}`)
   }
   return { front: result.data, body: raw.slice(close + CLOSE_FENCE.length) }
 }
@@ -186,10 +179,7 @@ export class FileTicketSource implements TicketSource {
     this.selfIgnore = opts.selfIgnore ?? false
   }
 
-  async listReady(criteria: {
-    labels?: string[]
-    state?: string
-  }): Promise<TicketListing> {
+  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     const state = criteria.state === undefined ? undefined : stateDir(criteria.state)
     // Through listAll, not a single readdir: scan completes its layout and
@@ -279,10 +269,7 @@ export class FileTicketSource implements TicketSource {
 
   /** Writes `<createState>/file-<n>.md` with the next free n (gaps reused),
    * or adopts the ticket carrying the same idempotency key. */
-  async create(
-    draft: TicketDraft,
-    opts: TicketCreateOptions = {},
-  ): Promise<Ticket> {
+  async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     await this.ensureLayout()
     const located = await this.scan()
     if (opts.idempotencyKey !== undefined) {
@@ -313,16 +300,10 @@ export class FileTicketSource implements TicketSource {
       ...(draft.blockedBy !== undefined && draft.blockedBy.length > 0
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
-      ...(opts.idempotencyKey !== undefined
-        ? { idempotencyKey: opts.idempotencyKey }
-        : {}),
+      ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     }
-    const targetState =
-      opts.state === undefined ? this.createState : stateDir(opts.state)
-    await writeFile(
-      this.pathIn(targetState, front.id),
-      serializeTicketFile(front, draft.body),
-    )
+    const targetState = opts.state === undefined ? this.createState : stateDir(opts.state)
+    await writeFile(this.pathIn(targetState, front.id), serializeTicketFile(front, draft.body))
     return this.toTicket(front, draft.body, targetState)
   }
 
@@ -333,15 +314,9 @@ export class FileTicketSource implements TicketSource {
     const front: Frontmatter = {
       ...loaded.front,
       ...(validated.title !== undefined ? { title: validated.title } : {}),
-      ...(validated.labels !== undefined
-        ? { labels: [...validated.labels] }
-        : {}),
+      ...(validated.labels !== undefined ? { labels: [...validated.labels] } : {}),
     }
-    await this.rewriteAt(
-      loaded.found,
-      front,
-      validated.body ?? loaded.body,
-    )
+    await this.rewriteAt(loaded.found, front, validated.body ?? loaded.body)
   }
 
   async addBlocker(id: string, blockerId: string): Promise<void> {
@@ -373,9 +348,7 @@ export class FileTicketSource implements TicketSource {
   async removeBlocker(id: string, blockerId: string): Promise<void> {
     await this.ensureLayout()
     const loaded = await this.requireForWrite(id, 'removeBlocker')
-    const remaining = (loaded.front.blockedBy ?? []).filter(
-      (candidate) => candidate !== blockerId,
-    )
+    const remaining = (loaded.front.blockedBy ?? []).filter((candidate) => candidate !== blockerId)
     if (remaining.length === (loaded.front.blockedBy ?? []).length) return
 
     const front: Frontmatter = { ...loaded.front }
@@ -463,7 +436,11 @@ export class FileTicketSource implements TicketSource {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
-    if (hits.length > 1) throw duplicateError(id, hits.map((h) => h.path))
+    if (hits.length > 1)
+      throw duplicateError(
+        id,
+        hits.map((h) => h.path),
+      )
     return hits[0] ?? null
   }
 
@@ -479,7 +456,11 @@ export class FileTicketSource implements TicketSource {
       }
     }
     for (const [id, hits] of byId) {
-      if (hits.length > 1) throw duplicateError(id, hits.map((h) => h.path))
+      if (hits.length > 1)
+        throw duplicateError(
+          id,
+          hits.map((h) => h.path),
+        )
     }
     return [...byId.values()].flat().sort((a, b) => a.id.localeCompare(b.id))
   }
@@ -523,20 +504,14 @@ export class FileTicketSource implements TicketSource {
   ): Promise<{ found: Located; front: Frontmatter; body: string }> {
     const found = await this.locate(id)
     if (found === null) {
-      throw new Error(
-        `file ticket source: ${operation} on unknown ticket "${id}"`,
-      )
+      throw new Error(`file ticket source: ${operation} on unknown ticket "${id}"`)
     }
     return { found, ...(await this.loadAt(found)) }
   }
 
   /** Rewrite only the located file: editable writes can never move lifecycle
    * state because the existing state-directory path remains authoritative. */
-  private async rewriteAt(
-    found: Located,
-    front: Frontmatter,
-    body: string,
-  ): Promise<void> {
+  private async rewriteAt(found: Located, front: Frontmatter, body: string): Promise<void> {
     await writeFile(found.path, serializeTicketFile(front, body))
   }
 

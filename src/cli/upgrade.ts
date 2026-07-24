@@ -34,6 +34,7 @@
  * Like init, upgrade runs OUTSIDE build sessions — no AB_* environment.
  */
 import { randomUUID } from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -170,10 +171,7 @@ function linesWithEndings(text: string): string[] {
  * hunks; a resolver may replace the hunks, but it has no authority to rewrite
  * these regions.
  */
-function cleanMergeRegions(
-  marked: string,
-  labels: MergeConflictLabels,
-): string[] {
+function cleanMergeRegions(marked: string, labels: MergeConflictLabels): string[] {
   const regions: string[] = []
   const startMarker = `<<<<<<< ${labels.local}`
   const endMarker = `>>>>>>> ${labels.incoming}`
@@ -245,8 +243,7 @@ function locateCleanRegions(
       start = candidate.length - region.length
       if (start < cursor || !candidate.endsWith(region)) {
         return {
-          error:
-            'output changed or wrapped the already-clean merge region after the last conflict',
+          error: 'output changed or wrapped the already-clean merge region after the last conflict',
         }
       }
     } else {
@@ -262,10 +259,7 @@ function locateCleanRegions(
 }
 
 /** Text outside protected clean intervals is the agent-authored hunk content. */
-function resolutionGaps(
-  candidate: string,
-  intervals: ContentInterval[],
-): string[] {
+function resolutionGaps(candidate: string, intervals: ContentInterval[]): string[] {
   const gaps: string[] = []
   let cursor = 0
   for (const interval of intervals) {
@@ -281,9 +275,7 @@ function frontmatterName(candidate: string): { name?: string; error?: string } {
   if (lines[0]?.replace(/\r$/, '') !== '---') {
     return { error: "output must begin at byte 0 with YAML frontmatter ('---')" }
   }
-  const close = lines.findIndex(
-    (line, index) => index > 0 && line.replace(/\r$/, '') === '---',
-  )
+  const close = lines.findIndex((line, index) => index > 0 && line.replace(/\r$/, '') === '---')
   if (close === -1) return { error: 'output has unterminated YAML frontmatter' }
   if (close === 1) return { error: 'output has empty YAML frontmatter' }
 
@@ -304,7 +296,12 @@ function frontmatterName(candidate: string): { name?: string; error?: string } {
   if (names.length !== 1 || names[0] === '') {
     return { error: 'frontmatter must contain exactly one nonempty name field' }
   }
-  if (lines.slice(close + 1).join('\n').trim() === '') {
+  if (
+    lines
+      .slice(close + 1)
+      .join('\n')
+      .trim() === ''
+  ) {
     return { error: 'output must contain a complete nonempty skill body' }
   }
   return { name: names[0] }
@@ -343,9 +340,7 @@ export function validateConflictResolution(input: {
   // of standard marker lines; this rejects unresolved output without making a
   // skill that documents Git conflict syntax impossible to resolve.
   if (
-    resolutionGaps(input.candidate, located.intervals).some((gap) =>
-      CONFLICT_MARKER_LINE.test(gap),
-    )
+    resolutionGaps(input.candidate, located.intervals).some((gap) => CONFLICT_MARKER_LINE.test(gap))
   ) {
     return 'output contains a Git conflict-marker line in a resolved hunk'
   }
@@ -353,9 +348,10 @@ export function validateConflictResolution(input: {
 }
 
 function errorMessage(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error))
-    .replace(/\s+/g, ' ')
-    .trim() || 'unknown error'
+  return (
+    (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim() ||
+    'unknown error'
+  )
 }
 
 export async function abUpgrade(opts: {
@@ -394,7 +390,7 @@ export async function abUpgrade(opts: {
     const pristineRoot = pristineSkillFilePath(targetRepo, name, 'SKILL.md')
     const pristineFiles = new Set<string>()
     const collectPristine = async (dir: string, prefix = ''): Promise<void> => {
-      let entries
+      let entries: Dirent[]
       try {
         entries = await readdir(dir, { withFileTypes: true })
       } catch (error) {
@@ -438,9 +434,7 @@ export async function abUpgrade(opts: {
           await writePristineFile(targetRepo, name, path, incomingText)
           outcomes.push('adopted')
           if (path === 'SKILL.md' && local === incomingText) {
-            details.push(
-              'SKILL.md: no pristine record; local already matches the new default',
-            )
+            details.push('SKILL.md: no pristine record; local already matches the new default')
           }
         } else {
           const reason =
@@ -464,9 +458,7 @@ export async function abUpgrade(opts: {
         } else {
           await rm(pristinePath, { force: true })
           outcomes.push('merged')
-          details.push(
-            `${path}: upstream removed this file; kept the locally customized copy`,
-          )
+          details.push(`${path}: upstream removed this file; kept the locally customized copy`)
         }
         continue
       }
@@ -503,9 +495,7 @@ export async function abUpgrade(opts: {
 
       const keepConflict = (reason: string): void => {
         outcomes.push('conflicted')
-        details.push(
-          `${path}: ${reason}\n\nmarked merge diagnostic (not written):\n${merge.text}`,
-        )
+        details.push(`${path}: ${reason}\n\nmarked merge diagnostic (not written):\n${merge.text}`)
         conflictHints.push({ path, reason })
       }
       if (opts.resolveConflict === undefined) {

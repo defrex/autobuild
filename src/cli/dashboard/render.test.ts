@@ -5,12 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
 import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
-import type {
-  DashboardBuild,
-  DashboardHarvest,
-  DashboardModel,
-  PipelineStep,
-} from './model'
+import type { DashboardBuild, DashboardHarvest, DashboardModel, PipelineStep } from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
  * irrelevant to them; the ticking tests pass `now` explicitly. */
@@ -111,10 +106,9 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const clean = rd(model([build()]), WIDE).map(stripAnsi)
     expect(clean[2]).toBe('')
 
-    const warned = rd(
-      { ...model([build()]), warningLine: 'ticket source unavailable' },
-      WIDE,
-    ).map(stripAnsi)
+    const warned = rd({ ...model([build()]), warningLine: 'ticket source unavailable' }, WIDE).map(
+      stripAnsi,
+    )
     expect(warned[2]).toBe('  ticket source unavailable')
     expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Auto Build'))
     expect(warned[3]).toBe('')
@@ -151,13 +145,9 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(rd({ ...model([]), drained: true }, WIDE)[1]).toContain('intake OFF')
     expect(rd(model([]), WIDE)[1]).toContain('intake ON')
     expect(rd(model([]), WIDE)[1]).toContain('auto merge OFF')
-    expect(
-      rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1],
-    ).toContain('auto merge ON')
+    expect(rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1]).toContain('auto merge ON')
     expect(rd(model([]), WIDE)[1]).toContain('harvest ON')
-    expect(rd({ ...model([]), harvestPaused: true }, WIDE)[1]).toContain(
-      'harvest OFF',
-    )
+    expect(rd({ ...model([]), harvestPaused: true }, WIDE)[1]).toContain('harvest OFF')
     const defaults = rd(model([]), { color: true, width: 200 })[1]!
     expect(defaults).toContain('\x1b[32mintake ON\x1b[0m')
     expect(defaults).toContain('\x1b[33mauto merge OFF\x1b[0m')
@@ -178,10 +168,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   })
 
   test('the summary is the selected global row even with no harvest or builds', () => {
-    const lines = rd(
-      { ...model([]), selection: { kind: 'global' } },
-      WIDE,
-    ).map(stripAnsi)
+    const lines = rd({ ...model([]), selection: { kind: 'global' } }, WIDE).map(stripAnsi)
     expect(lines[0]!.startsWith('> Auto Build')).toBe(true)
     expect(lines[1]!.startsWith('  intake ON')).toBe(true)
     expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
@@ -189,10 +176,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   })
 
   test('the final legend exposes only controls meaningful for the selection', () => {
-    const globalLines = rd(
-      { ...model([build()]), selection: { kind: 'global' } },
-      WIDE,
-    )
+    const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
       'Keys: Up/Down select  h harvest on/off  m auto-merge default  p intake on/off  Ctrl-C quit',
     )
@@ -205,9 +189,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(runningHarvestLines.at(-1)).toBe(
-      'Keys: Up/Down select  Ctrl-C quit',
-    )
+    expect(runningHarvestLines.at(-1)).toBe('Keys: Up/Down select  Ctrl-C quit')
 
     const resumeHarvestLines = rd(
       {
@@ -217,9 +199,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(resumeHarvestLines.at(-1)).toBe(
-      'Keys: Up/Down select  p resume  Ctrl-C quit',
-    )
+    expect(resumeHarvestLines.at(-1)).toBe('Keys: Up/Down select  p resume  Ctrl-C quit')
 
     const acknowledgeHarvestLines = rd(
       {
@@ -229,9 +209,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(acknowledgeHarvestLines.at(-1)).toBe(
-      'Keys: Up/Down select  p acknowledge  Ctrl-C quit',
-    )
+    expect(acknowledgeHarvestLines.at(-1)).toBe('Keys: Up/Down select  p acknowledge  Ctrl-C quit')
 
     const buildLines = rd(
       {
@@ -322,7 +300,12 @@ describe('renderDashboard: plain mode (the --plain AC)', () => {
     const out = rd(
       model([
         build({ status: 'blocked', blockers: ['which algorithm?'] }),
-        build({ slug: 'other', status: 'paused', alsoPaused: false, pr: { url: 'https://x/1', state: 'open' } }),
+        build({
+          slug: 'other',
+          status: 'paused',
+          alsoPaused: false,
+          pr: { url: 'https://x/1', state: 'open' },
+        }),
       ]),
       WIDE,
     ).join('\n')
@@ -384,9 +367,7 @@ describe('renderDashboard: never color-only', () => {
     expect(plainPass).not.toContain('skipped')
     expect(plainSkip).toContain('[x] verify:e2e(skipped)')
 
-    const ansiSkip = stripAnsi(
-      rd(model([skipped]), { color: true, width: 200 }).join('\n'),
-    )
+    const ansiSkip = stripAnsi(rd(model([skipped]), { color: true, width: 200 }).join('\n'))
     expect(ansiSkip).toContain('[x] verify:e2e(skipped)')
   })
 
@@ -444,15 +425,9 @@ describe('renderDashboard: emphasis', () => {
   })
 
   test('auto merge uses cyan while requested, green when enabled, and yellow while cancelling', () => {
-    expect(colored(build({ autoMerge: 'requested' }))).toContain(
-      '\x1b[36mauto merge\x1b[0m',
-    )
-    expect(colored(build({ autoMerge: 'enabled' }))).toContain(
-      '\x1b[32mauto merge\x1b[0m',
-    )
-    expect(colored(build({ autoMerge: 'cancelling' }))).toContain(
-      '\x1b[33mauto merge\x1b[0m',
-    )
+    expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mauto merge\x1b[0m')
+    expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mauto merge\x1b[0m')
+    expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mauto merge\x1b[0m')
     const offRow = colored(build({ autoMerge: 'off' }))
       .split('\n')
       .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
@@ -607,8 +582,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
   test('agent-authored blocker and harvest failure text stays visible in an ASCII PNG frame', () => {
     const blockerQuestion = 'Should the “café” policy remain enabled?'
     const failureError = 'agent failed in naïve 💥 mode'
-    const failureDetail =
-      `stopped at synthesize r1 - automatic recovery 0/2; ${failureError}`
+    const failureDetail = `stopped at synthesize r1 - automatic recovery 0/2; ${failureError}`
     const dashboard = {
       ...model([
         build({
@@ -627,15 +601,11 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(plain.join('\n')).toContain(
       'Should the \\u{201c}caf\\u{e9}\\u{201d} policy remain enabled?',
     )
-    expect(plain.join('\n')).toContain(
-      'agent failed in na\\u{ef}ve \\u{1f4a5} mode',
-    )
+    expect(plain.join('\n')).toContain('agent failed in na\\u{ef}ve \\u{1f4a5} mode')
     expect(plain.every((line) => /^[\x20-\x7e]*$/.test(line))).toBe(true)
 
     const image = renderDashboardFrameImage(lines, { columns: 120 })
-    expect([...image.png.slice(0, 8)]).toEqual([
-      137, 80, 78, 71, 13, 10, 26, 10,
-    ])
+    expect([...image.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
   })
 })
 
@@ -656,13 +626,15 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
   })
 
   test('truncation never splits an escape sequence or leaks color', () => {
-    const lines = rd(
-      model([build({ status: 'blocked', blockers: ['x'.repeat(200)] })]),
-      { color: true, width: 30 },
-    )
+    const lines = rd(model([build({ status: 'blocked', blockers: ['x'.repeat(200)] })]), {
+      color: true,
+      width: 30,
+    })
     for (const line of lines) {
       // Every escape we emit is a complete, well-formed sequence…
-      const leftovers = line.replace(/\x1b\][^\x07]*\x07/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      const leftovers = line
+        .replace(/\x1b\][^\x07]*\x07/g, '')
+        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
       expect(leftovers).not.toContain('\x1b')
       // …and a cut line still closes its color, so it cannot bleed downward.
       if (line.includes('\x1b[')) expect(line.endsWith('\x1b[0m')).toBe(true)
@@ -681,7 +653,8 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     // slug is what this repo's own builds are named: the ordinary case.
     const real = build({
       slug: 'interactive-build-dashboard-for-ab-dispatch',
-      ticketId: 'AB-123',    })
+      ticketId: 'AB-123',
+    })
     // Sweep the widths so the cut lands in every part of the link — before it,
     // inside its text, and past it.
     for (let width = 10; width <= 120; width += 1) {
@@ -729,7 +702,8 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     build({
       slug: `interactive-build-dashboard-for-ab-${i}`,
       status: 'blocked',
-      ticketId: `AB-${i}`,      steps: [
+      ticketId: `AB-${i}`,
+      steps: [
         { label: 'plan', state: 'done' },
         { label: 'plan-review', state: 'done' },
         { label: 'implement', state: 'pending' },
@@ -846,7 +820,9 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       { ...base, selection: { kind: 'harvest' } },
       { color: false, width: 80, height: 8 },
     )
-    expect(harvestLines.some((line) => line.startsWith('> ') && line.includes('Harvest'))).toBe(true)
+    expect(harvestLines.some((line) => line.startsWith('> ') && line.includes('Harvest'))).toBe(
+      true,
+    )
 
     const buildLines = rd(
       {
@@ -910,7 +886,13 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
       .filter((l) => l.startsWith('  ['))
       .join('\n')
     // count rides the elapsed as `/n` (AC 7), superseding the old r2/a2 notes.
-    for (const label of ['plan', 'implement(7m12s/2)', 'verify:test(41s/2)', 'finalize', 'merge(waiting)']) {
+    for (const label of [
+      'plan',
+      'implement(7m12s/2)',
+      'verify:test(41s/2)',
+      'finalize',
+      'merge(waiting)',
+    ]) {
       expect(progress).toContain(label)
     }
     expect(progress).not.toContain('~') // no step was truncated away
@@ -932,10 +914,10 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
     const blocker =
       'maxVerifyAttempts (3) exhausted: verify:test is still failing after three ' +
       'attempts and the implementer keeps reintroducing the same regression'
-    const lines = rd(
-      model([build({ status: 'blocked', blockers: [blocker] })]),
-      { color: false, width: 50 },
-    )
+    const lines = rd(model([build({ status: 'blocked', blockers: [blocker] })]), {
+      color: false,
+      width: 50,
+    })
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(50)
     // Reassembled, the whole message is there.
     const text = lines
@@ -960,7 +942,9 @@ describe('renderDashboard: the ticket-first, status-right slug line', () => {
   })
 
   test('the status is right-aligned: the line ends with it, flush to the width (AC 1)', () => {
-    const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), { color: false, width: 60 })))
+    const line = stripAnsi(
+      slugLine(rd(model([build({ pr: undefined })]), { color: false, width: 60 })),
+    )
     expect(line.length).toBe(60)
     expect(line.endsWith('RUNNING')).toBe(true)
   })
@@ -1025,13 +1009,19 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
     build({ pr: undefined, steps: [{ state: 'current', ...over }] })
 
   test('a running step advances as now moves forward (AC 8)', () => {
-    const b = withStep({ label: 'implement', timing: { accumulatedMs: 2_000, runningSince: 1_000_000 } })
+    const b = withStep({
+      label: 'implement',
+      timing: { accumulatedMs: 2_000, runningSince: 1_000_000 },
+    })
     expect(progressOf(b, 1_000_000 + 3_000)).toContain('implement(5s)') // 2s + 3s
     expect(progressOf(b, 1_000_000 + 10_000)).toContain('implement(12s)') // 2s + 10s
   })
 
   test('a step with no open interval is frozen — now does not move it (AC 10)', () => {
-    const b = build({ pr: undefined, steps: [{ label: 'plan', state: 'done', timing: { accumulatedMs: 65_000 } }] })
+    const b = build({
+      pr: undefined,
+      steps: [{ label: 'plan', state: 'done', timing: { accumulatedMs: 65_000 } }],
+    })
     const early = progressOf(b, 1)
     const late = progressOf(b, 5_000_000)
     expect(early).toContain('plan(1m05s)')
@@ -1039,14 +1029,25 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
   })
 
   test('the count rides the elapsed as /n (AC 7)', () => {
-    const b = withStep({ label: 'implement', count: 3, timing: { accumulatedMs: 0, runningSince: 100 } })
+    const b = withStep({
+      label: 'implement',
+      count: 3,
+      timing: { accumulatedMs: 0, runningSince: 100 },
+    })
     expect(progressOf(b, 100 + 432_000)).toContain('implement(7m12s/3)')
   })
 
   test('merge waiting ticks from its runningSince (AC 9)', () => {
     const b = build({
       pr: { url: 'https://x/1', state: 'open' },
-      steps: [{ label: 'merge', state: 'current', qualifier: 'waiting', timing: { accumulatedMs: 0, runningSince: 500 } }],
+      steps: [
+        {
+          label: 'merge',
+          state: 'current',
+          qualifier: 'waiting',
+          timing: { accumulatedMs: 0, runningSince: 500 },
+        },
+      ],
     })
     expect(progressOf(b, 500 + 192_000)).toContain('merge(waiting, 3m12s)')
   })
@@ -1058,7 +1059,11 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
   })
 
   test('--plain keeps durations intact and emits no escapes (AC 13)', () => {
-    const b = withStep({ label: 'implement', count: 2, timing: { accumulatedMs: 0, runningSince: 0 } })
+    const b = withStep({
+      label: 'implement',
+      count: 2,
+      timing: { accumulatedMs: 0, runningSince: 0 },
+    })
     const out = rd(model([b]), { color: false, width: 200, now: 41_000 }).join('\n')
     expect(out).not.toContain('\x1b')
     expect(out).toContain('implement(41s/2)')

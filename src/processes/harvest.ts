@@ -23,11 +23,7 @@ import {
 } from '../kernel/harvest'
 import type { TicketSource } from '../ports/types'
 import { specConformance } from '../spec-standard'
-import {
-  contentHash,
-  toBytes,
-  type BuildStore,
-} from '../store/types'
+import { contentHash, toBytes, type BuildStore } from '../store/types'
 
 export const HARVEST_SCAN_ARTIFACT = 'harvest-scan'
 export const HARVEST_PROPOSALS_ARTIFACT = 'harvest-proposals'
@@ -65,24 +61,17 @@ export async function scanUnclaimedObservations(
         id: event.payload.id,
         kind: event.payload.kind,
         summary: event.payload.summary,
-        ...(event.payload.files !== undefined
-          ? { files: [...event.payload.files] }
-          : {}),
-        ...(event.payload.refs !== undefined
-          ? { refs: [...event.payload.refs] }
-          : {}),
+        ...(event.payload.files !== undefined ? { files: [...event.payload.files] } : {}),
+        ...(event.payload.refs !== undefined ? { refs: [...event.payload.refs] } : {}),
         ts: event.ts,
-        ...(record.ticket !== undefined
-          ? { ticket: structuredClone(record.ticket) }
-          : {}),
+        ...(record.ticket !== undefined ? { ticket: structuredClone(record.ticket) } : {}),
       })
     }
   }
 
   observations.sort(
     (a, b) =>
-      a.occurrence.build.localeCompare(b.occurrence.build) ||
-      a.occurrence.seq - b.occurrence.seq,
+      a.occurrence.build.localeCompare(b.occurrence.build) || a.occurrence.seq - b.occurrence.seq,
   )
   return { observations, state }
 }
@@ -121,9 +110,7 @@ export async function reconcileHarvestLedger(
       resolved: false,
       blockedBy: [],
     }
-    const current = dependency.exists
-      ? await tickets.get(entry.ticket.id)
-      : null
+    const current = dependency.exists ? await tickets.get(entry.ticket.id) : null
     out.push({
       proposalKey: entry.proposalKey,
       ticket: structuredClone(entry.ticket),
@@ -152,10 +139,7 @@ export async function makeHarvestScanPacket(opts: {
   })
 }
 
-export function artifactRef(meta: {
-  kind: string
-  revision: number
-}): ArtifactRef {
+export function artifactRef(meta: { kind: string; revision: number }): ArtifactRef {
   return { kind: meta.kind, rev: meta.revision }
 }
 
@@ -252,9 +236,7 @@ export async function partitionHarvestExhaustion(opts: {
     committedDispositions: [],
     pendingProposals: [],
   })
-  const approval = [...run.reviews]
-    .reverse()
-    .find((review) => review.verdict === 'approve')
+  const approval = [...run.reviews].reverse().find((review) => review.verdict === 'approve')
   if (approval === undefined) return releaseWholeSnapshot()
 
   const approved = proposalArtifactForRound(run, approval.round)
@@ -267,10 +249,7 @@ export async function partitionHarvestExhaustion(opts: {
 
   let set: HarvestProposalSet
   try {
-    set = parseApprovedProposalSet(
-      new TextDecoder().decode(artifact.content),
-      run.observations,
-    )
+    set = parseApprovedProposalSet(new TextDecoder().decode(artifact.content), run.observations)
   } catch {
     return releaseWholeSnapshot()
   }
@@ -279,11 +258,7 @@ export async function partitionHarvestExhaustion(opts: {
   // disposition. As above, transport/read errors propagate; missing,
   // malformed, or mismatched content simply makes joins pending. Creates with
   // durable filing facts and suppressions remain independently classifiable.
-  const scanArtifact = await store.getRepoArtifact(
-    repo,
-    run.scan.kind,
-    run.scan.rev,
-  )
+  const scanArtifact = await store.getRepoArtifact(repo, run.scan.kind, run.scan.rev)
   let packet: HarvestScanPacket | undefined
   if (scanArtifact !== null) {
     let raw: unknown
@@ -295,15 +270,11 @@ export async function partitionHarvestExhaustion(opts: {
     const parsed = harvestScanPacketSchema.safeParse(raw)
     if (parsed.success && parsed.data.run === run.run) {
       const packetOccurrences = new Set(
-        parsed.data.observations.map((item) =>
-          occurrenceKey(item.occurrence),
-        ),
+        parsed.data.observations.map((item) => occurrenceKey(item.occurrence)),
       )
       if (
         packetOccurrences.size === run.observations.length &&
-        run.observations.every((item) =>
-          packetOccurrences.has(occurrenceKey(item)),
-        )
+        run.observations.every((item) => packetOccurrences.has(occurrenceKey(item)))
       ) {
         packet = parsed.data
       }
@@ -311,14 +282,9 @@ export async function partitionHarvestExhaustion(opts: {
   }
 
   const knownLedger = new Map(
-    (packet?.ledger ?? []).map((entry) => [
-      `${entry.ticket.source}:${entry.ticket.id}`,
-      entry,
-    ]),
+    (packet?.ledger ?? []).map((entry) => [`${entry.ticket.source}:${entry.ticket.id}`, entry]),
   )
-  const filed = new Map(
-    run.filed.map((entry) => [entry.proposalKey, entry.ticket]),
-  )
+  const filed = new Map(run.filed.map((entry) => [entry.proposalKey, entry.ticket]))
   const proposalKeys = new Set<string>()
   for (const proposal of set.proposals) {
     const proposalKey = harvestProposalKey(proposal)
@@ -359,9 +325,7 @@ export async function partitionHarvestExhaustion(opts: {
     }
 
     if (proposal.action === 'join') {
-      const known = knownLedger.get(
-        `${proposal.ticket.source}:${proposal.ticket.id}`,
-      )
+      const known = knownLedger.get(`${proposal.ticket.source}:${proposal.ticket.id}`)
       if (known === undefined || !known.exists || known.resolved) {
         releaseProposal(proposal)
         continue
@@ -415,10 +379,7 @@ export function renderHarvestProposal(
   observations: HarvestObservation[],
 ): string {
   const byKey = new Map(
-    observations.map((observation) => [
-      occurrenceKey(observation.occurrence),
-      observation,
-    ]),
+    observations.map((observation) => [occurrenceKey(observation.occurrence), observation]),
   )
   const evidence = proposal.observations.map((key) => {
     const observation = byKey.get(occurrenceKey(key))
@@ -470,7 +431,5 @@ export async function loadScanPacket(
   if (!artifact) {
     throw new Error(`missing harvest scan artifact ${ref.kind}@${ref.rev}`)
   }
-  return harvestScanPacketSchema.parse(
-    JSON.parse(new TextDecoder().decode(artifact.content)),
-  )
+  return harvestScanPacketSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
 }

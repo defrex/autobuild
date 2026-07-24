@@ -59,9 +59,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * able to smuggle a partial adapter or inconsistent capability declaration
  * into the eager role resolver.
  */
-export function validateRuntimeRegistration(
-  value: unknown,
-): RuntimeRegistration {
+export function validateRuntimeRegistration(value: unknown): RuntimeRegistration {
   if (!isObject(value)) {
     throw new Error('must be an object')
   }
@@ -82,9 +80,7 @@ export function validateRuntimeRegistration(
   const servesModels = value.servesModels
   if (
     !Array.isArray(servesModels) ||
-    servesModels.some(
-      (family) => typeof family !== 'string' || family.trim().length === 0,
-    )
+    servesModels.some((family) => typeof family !== 'string' || family.trim().length === 0)
   ) {
     throw new Error('servesModels must be an array of nonblank strings')
   }
@@ -98,10 +94,7 @@ export function validateRuntimeRegistration(
   }
 
   const oneShot = value.oneShot
-  if (
-    oneShot !== undefined &&
-    (!isObject(oneShot) || typeof oneShot.complete !== 'function')
-  ) {
+  if (oneShot !== undefined && (!isObject(oneShot) || typeof oneShot.complete !== 'function')) {
     throw new Error('oneShot.complete must be a function when provided')
   }
 

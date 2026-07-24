@@ -30,17 +30,9 @@ import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
-import {
-  randomIds,
-  randomUuids,
-  type IdSource,
-  type UuidSource,
-} from '../ids'
+import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import {
-  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
-  reduceHarvest,
-} from '../kernel/harvest'
+import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
 import type { BuildState } from '../kernel/reducer'
 import {
   buildDashboardFromProjected,
@@ -49,15 +41,8 @@ import {
   type DashboardSelection,
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
-import {
-  renderDashboard,
-  type DashboardRendererResolver,
-} from './dashboard/render'
-import {
-  dashboardSelections,
-  moveSelection,
-  reconcileSelection,
-} from './dashboard/selection'
+import { renderDashboard, type DashboardRendererResolver } from './dashboard/render'
+import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
@@ -69,10 +54,7 @@ import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError } from '../processes/build-runner'
-import {
-  HarvestRunner,
-  type HarvestRunnerResult,
-} from '../processes/harvest-runner'
+import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
   Dispatcher,
   emptyTickReport,
@@ -314,8 +296,7 @@ async function defaultWire(
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
   private readonly host = hostname()
-  private readonly maxHarvestRecoveryAttempts =
-    DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+  private readonly maxHarvestRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
    * `--once` exit so every visible workflow reaches a durable boundary. */
   private readonly inFlight = new Set<Promise<void>>()
@@ -386,11 +367,7 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.region =
       this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
-    this.dashboardBuilds = new DashboardBuildPollCache(
-      wiring.store,
-      opts.targetRepo,
-      config,
-    )
+    this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, opts.targetRepo, config)
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -440,16 +417,12 @@ class DispatchLoop {
     return result
   }
 
-  private async readDispatchSettings(): Promise<
-    ReturnType<typeof reduceDispatchSettings>
-  > {
+  private async readDispatchSettings(): Promise<ReturnType<typeof reduceDispatchSettings>> {
     const events = await this.wiring.store.getRepoEvents(this.opts.targetRepo)
     return reduceDispatchSettings(events)
   }
 
-  private dispatcherTick(
-    resumeCurrent: boolean,
-  ): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
+  private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
     return this.serialize(async () => {
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
@@ -478,12 +451,8 @@ class DispatchLoop {
     } = this.model
     this.model = {
       ...base,
-      ...(this.warningLine !== undefined
-        ? { warningLine: this.warningLine }
-        : {}),
-      ...(this.selection !== undefined
-        ? { selection: this.selection }
-        : {}),
+      ...(this.warningLine !== undefined ? { warningLine: this.warningLine } : {}),
+      ...(this.selection !== undefined ? { selection: this.selection } : {}),
       ...(this.resumePrompt !== undefined
         ? {
             resumeInput: {
@@ -499,17 +468,14 @@ class DispatchLoop {
     // Input starts before the first asynchronous store projection. The global
     // row exists independently of that projection, so startup navigation must
     // clamp on it rather than letting the generic empty-list helper clear it.
-    const rows = this.model === undefined
-      ? [{ kind: 'global' } as const]
-      : dashboardSelections(this.model)
+    const rows =
+      this.model === undefined ? [{ kind: 'global' } as const] : dashboardSelections(this.model)
     this.selection = moveSelection(rows, this.selection, delta)
     this.syncModelControls()
     this.paint()
   }
 
-  private selectedBuildSlug(
-    action: 'auto-merge' | 'pause/resume',
-  ): string | undefined {
+  private selectedBuildSlug(action: 'auto-merge' | 'pause/resume'): string | undefined {
     const selection = this.selection
     if (selection === undefined) {
       this.warn('dashboard action ignored: no active row is selected')
@@ -527,10 +493,7 @@ class DispatchLoop {
     return selection.slug
   }
 
-  private async ignoreControlError(
-    surface: 'action' | 'resume',
-    error: unknown,
-  ): Promise<boolean> {
+  private async ignoreControlError(surface: 'action' | 'resume', error: unknown): Promise<boolean> {
     if (!(error instanceof BuildControlError)) return false
     this.warn(`dashboard ${surface} ignored: ${error.message}`)
     await this.renderOnce()
@@ -583,10 +546,7 @@ class DispatchLoop {
       this.paint()
       return
     }
-    if (
-      result.kind !== 'command' ||
-      (result.command !== 'pause' && result.command !== 'resume')
-    ) {
+    if (result.kind !== 'command' || (result.command !== 'pause' && result.command !== 'resume')) {
       throw new Error('build-control returned an invalid pause toggle result')
     }
     this.say(`build ${slug}: ${result.command} requested`)
@@ -598,8 +558,7 @@ class DispatchLoop {
    * remains acknowledged-only. */
   private async toggleHarvestGate(): Promise<void> {
     if (this.selection?.kind !== 'global') {
-      const subject =
-        this.selection?.kind === 'harvest' ? 'Harvest' : 'Build'
+      const subject = this.selection?.kind === 'harvest' ? 'Harvest' : 'Build'
       this.say(`${subject} harvest gate unavailable: select Dispatcher`)
       return
     }
@@ -609,14 +568,11 @@ class DispatchLoop {
     await store.ensureRepo(repo)
     const state = reduceHarvest(await store.getRepoEvents(repo))
     const pending = state.pendingCommands.at(-1)
-    const requestedPaused =
-      pending === undefined ? state.paused : pending.command === 'pause'
+    const requestedPaused = pending === undefined ? state.paused : pending.command === 'pause'
     const command = requestedPaused ? 'resume' : 'pause'
     await store.appendRepo(repo, {
       actor: humanActor(buildControlUser(this.opts.env)),
-      type: command === 'resume'
-        ? 'harvest.resume-requested'
-        : 'harvest.pause-requested',
+      type: command === 'resume' ? 'harvest.resume-requested' : 'harvest.pause-requested',
       payload: {},
     })
     this.say(`harvest gate: ${command} requested`)
@@ -626,35 +582,25 @@ class DispatchLoop {
   /** `p` on Harvest acts only on the concrete run captured at keypress time.
    * It never toggles the repository gate and never retargets a replacement run
    * that appeared while the action waited in the serialized queue. */
-  private async controlHarvestRun(
-    expectedRun: string | undefined,
-  ): Promise<void> {
+  private async controlHarvestRun(expectedRun: string | undefined): Promise<void> {
     const { store } = this.wiring
     const repo = this.opts.targetRepo
     await store.ensureRepo(repo)
     const events = await store.getRepoEvents(repo)
     const state = reduceHarvest(events)
     const projected = projectHarvest(events)
-    if (
-      expectedRun === undefined ||
-      projected === undefined ||
-      projected.run !== expectedRun
-    ) {
+    if (expectedRun === undefined || projected === undefined || projected.run !== expectedRun) {
       this.say('harvest run action ignored: selected run is no longer active')
       await this.renderOnce()
       return
     }
 
     if (state.paused) {
-      this.say(
-        'harvest run action unavailable while harvest is OFF; select Dispatcher and press h',
-      )
+      this.say('harvest run action unavailable while harvest is OFF; select Dispatcher and press h')
       await this.renderOnce()
       return
     }
-    if (
-      state.pendingCommands.some((command) => command.command === 'resume')
-    ) {
+    if (state.pendingCommands.some((command) => command.command === 'resume')) {
       this.say('harvest run: resume acknowledgement pending')
       await this.renderOnce()
       return
@@ -735,9 +681,7 @@ class DispatchLoop {
         type: 'dispatcher.auto-merge-default-set',
         payload: { enabled },
       })
-      this.say(
-        `dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`,
-      )
+      this.say(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
       await this.renderOnce()
       return
     }
@@ -759,8 +703,7 @@ class DispatchLoop {
     }
     if (
       result.kind !== 'command' ||
-      (result.command !== 'auto-merge-on' &&
-        result.command !== 'auto-merge-off')
+      (result.command !== 'auto-merge-on' && result.command !== 'auto-merge-off')
     ) {
       throw new Error('build-control returned an invalid auto-merge toggle result')
     }
@@ -908,17 +851,8 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
-    const {
-      store,
-      tickets,
-      runtimes,
-      defaultRuntime,
-      ids,
-      uuids,
-      clock,
-      storeRef,
-      token,
-    } = this.wiring
+    const { store, tickets, runtimes, defaultRuntime, ids, uuids, clock, storeRef, token } =
+      this.wiring
     const runner = new HarvestRunner({
       store,
       tickets,
@@ -1014,8 +948,7 @@ class DispatchLoop {
     this.activeBuildRuns.set(slug, reservation)
 
     try {
-      const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } =
-        this.wiring
+      const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
       const record = await store.getBuild(slug)
       const workspacePath = openWorkspacePath(await store.getEvents(slug))
       if (record === null || workspacePath === null) {
@@ -1131,10 +1064,7 @@ class DispatchLoop {
    * dashboard, so line-oriented behavior is unchanged while routine
    * interactive chatter disappears.
    */
-  private printReport(
-    report: Awaited<ReturnType<Dispatcher['tick']>>,
-    printIdle = true,
-  ): boolean {
+  private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>, printIdle = true): boolean {
     // `queued` is a standing depth, not a tick action — the header owns it;
     // repeating it in the notice would make every saturated tick look busy.
     const { ticketDiagnostics, dependencyDiagnostics, queued: _queued, ...counts } = report
@@ -1171,9 +1101,7 @@ class DispatchLoop {
     const buildSnapshot = await this.dashboardBuilds.refresh()
     const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
     const repositoryEvents =
-      repoRecord === null
-        ? []
-        : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
+      repoRecord === null ? [] : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
@@ -1186,12 +1114,8 @@ class DispatchLoop {
     if (this.resumePrompt !== undefined) {
       const prompt = this.resumePrompt
       const state = buildSnapshot.states.get(prompt.slug)
-      const active =
-        state !== undefined &&
-        ['running', 'paused', 'blocked'].includes(state.status)
-      const openIds = new Set(
-        state?.openEscalations.map((item) => item.id) ?? [],
-      )
+      const active = state !== undefined && ['running', 'paused', 'blocked'].includes(state.status)
+      const openIds = new Set(state?.openEscalations.map((item) => item.id) ?? [])
       const remaining = prompt.escalationIds.filter((id) => openIds.has(id))
       if (!active || remaining.length === 0) {
         this.resumePrompt = undefined
@@ -1200,9 +1124,7 @@ class DispatchLoop {
       }
     }
 
-    const previousRows = this.model === undefined
-      ? []
-      : dashboardSelections(this.model)
+    const previousRows = this.model === undefined ? [] : dashboardSelections(this.model)
     const projected = buildDashboardFromProjected(
       buildSnapshot.builds,
       {
@@ -1212,11 +1134,7 @@ class DispatchLoop {
       repositoryEvents,
     )
     const nextRows = dashboardSelections(projected)
-    this.selection = reconcileSelection(
-      previousRows,
-      nextRows,
-      this.selection,
-    )
+    this.selection = reconcileSelection(previousRows, nextRows, this.selection)
     this.model = projected
     this.syncModelControls()
     this.paint()
@@ -1355,9 +1273,7 @@ class DispatchLoop {
       try {
         this.startInput()
         this.startRendering()
-        const initial = this.consumeHarvestResults(
-          await this.dispatcherTick(true),
-        )
+        const initial = this.consumeHarvestResults(await this.dispatcherTick(true))
         const initialPrinted = this.printReport(initial, false)
         await this.drainInFlight()
         const settledPrinted = this.printReport(
@@ -1376,8 +1292,7 @@ class DispatchLoop {
     const intervalMs = this.opts.intervalMs ?? DEFAULT_INTERVAL_MS
     const sleep =
       this.opts.sleep ??
-      ((ms: number) =>
-        interruptibleSleep(ms, [this.opts.signal, this.inputStop.signal]))
+      ((ms: number) => interruptibleSleep(ms, [this.opts.signal, this.inputStop.signal]))
     if (!this.dashboard) {
       this.say(
         `ab dispatch — watching ${this.opts.targetRepo} (capacity ${capacity}, ` +
@@ -1390,9 +1305,7 @@ class DispatchLoop {
       let startup = true
       while (!this.stopped) {
         try {
-          const report = this.consumeHarvestResults(
-            await this.dispatcherTick(startup),
-          )
+          const report = this.consumeHarvestResults(await this.dispatcherTick(startup))
           this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
@@ -1404,10 +1317,7 @@ class DispatchLoop {
     } finally {
       // A result that settled after the final tick still gets one attributed
       // counter line; active work is deliberately not awaited in watch mode.
-      this.printReport(
-        this.consumeHarvestResults(emptyTickReport()),
-        false,
-      )
+      this.printReport(this.consumeHarvestResults(emptyTickReport()), false)
       // SIGINT lands here too: without it the region keeps the cursor hidden.
       await this.finishRendering()
     }
@@ -1428,7 +1338,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     targetRepo: opts.targetRepo,
     exec: opts.exec,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env['AB_STORE'] !== undefined ? { envStore: opts.env['AB_STORE'] } : {}),
+    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
   // Normalize once, then use these exact values for config/tickets/repository
   // identity, store wiring, worktrees, and every session's AB_STORE.
@@ -1473,11 +1383,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // runtime/model pair fails `ab dispatch` loudly here, before any build
   // launches, never as a silent per-build fallback. The per-build BuildRunner
   // re-resolves too (its own construction is the second guard).
-  const resolver = createRuntimeResolver(
-    wiring.runtimes,
-    config.roles,
-    wiring.defaultRuntime,
-  )
+  const resolver = createRuntimeResolver(wiring.runtimes, config.roles, wiring.defaultRuntime)
 
   // Launch flags are durable repository setters. Omission writes nothing, so
   // another dispatcher cannot clobber the latest operator choice with a value

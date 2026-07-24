@@ -166,9 +166,7 @@ describe('minimal config dispatch over the real file tracker', () => {
       ...emptyTickReport(),
       dispatched: 1,
       invalidTickets: 1,
-      ticketDiagnostics: [
-        `${malformedPath}: malformed ticket file — missing opening "+++" fence`,
-      ],
+      ticketDiagnostics: [`${malformedPath}: malformed ticket file — missing opening "+++" fence`],
     })
     expect(h.launches).toEqual(['add-rate-limiting'])
     expect(await ls('doing')).toEqual([`${valid.ref.id}.md`])

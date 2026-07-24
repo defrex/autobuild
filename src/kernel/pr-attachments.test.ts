@@ -7,11 +7,7 @@ import {
   pendingPrAttachmentReclaims,
 } from './pr-attachments'
 
-function event(
-  seq: number,
-  type: AbEvent['type'],
-  payload: unknown,
-): AbEvent {
+function event(seq: number, type: AbEvent['type'], payload: unknown): AbEvent {
   return {
     build: 'attachments',
     seq,
@@ -98,9 +94,7 @@ describe('attachment hosting correlations', () => {
       asset: { ...asset, assetId: 9 },
     })
 
-    expect(
-      hostedPrAttachments([backwards, unknown, valid, designated]).get(5)?.seq,
-    ).toBe(7)
+    expect(hostedPrAttachments([backwards, unknown, valid, designated]).get(5)?.seq).toBe(7)
   })
 
   test('reclamation remains pending through failures and only a later correlated success settles it', () => {
@@ -117,18 +111,12 @@ describe('attachment hosting correlations', () => {
     const unknownAck = event(9, 'pr-attachment.reclaimed', { hostedSeq: 99 })
 
     expect(
-      pendingPrAttachmentReclaims([
-        unknownAck,
-        hosted,
-        failure,
-        backwardsAck,
-      ]).map((item) => item.seq),
+      pendingPrAttachmentReclaims([unknownAck, hosted, failure, backwardsAck]).map(
+        (item) => item.seq,
+      ),
     ).toEqual([7])
     expect(
-      pendingPrAttachmentReclaims([
-        hosted,
-        event(10, 'pr-attachment.reclaimed', { hostedSeq: 7 }),
-      ]),
+      pendingPrAttachmentReclaims([hosted, event(10, 'pr-attachment.reclaimed', { hostedSeq: 7 })]),
     ).toEqual([])
   })
 })
