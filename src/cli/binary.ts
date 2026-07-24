@@ -15,6 +15,7 @@ import {
 } from './env'
 import { openProductionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
+import { createProcessInitPrompter } from './init-prompt'
 import type { DashboardRendererResolver } from './dashboard/render'
 import { loadConfig } from '../config/load'
 import { loadPlugins } from '../plugins/load'
@@ -59,6 +60,9 @@ export async function runBinary(
         // TTY, so a pipe or redirect silently gets plain output.
         terminal: processTerminal(process.stdout),
         input: processTerminalInput(process.stdin),
+        ...(command === 'init'
+          ? { initPrompter: createProcessInitPrompter(process.stdin, process.stdout) }
+          : {}),
         upgradeResolverFactory: createUpgradeAgentResolver,
         ...(resolveDashboardRenderer !== undefined
           ? { resolveDashboardRenderer }

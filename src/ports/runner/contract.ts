@@ -170,7 +170,7 @@ async function invokeManagedCli(env: Record<string, string>): Promise<void> {
   ])
   expect(exitCode).toBe(0)
   expect(stderr).toBe('')
-  expect(stdout).toContain('ab — the agent↔store channel')
+  expect(stdout).toContain('ab — agent-driven software delivery')
   expect(stdout).not.toContain('host-conflicting-ab')
 }
 

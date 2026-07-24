@@ -7,7 +7,7 @@ test('repository installs the path-scoped dashboard image verifier after determi
     join(import.meta.dir, '..', '..', 'autobuild.toml'),
   )
   expect(config.baseBranch).toBe('main')
-  expect(config.capacity).toBe(3)
+  expect(config.capacity).toBe(10)
   expect(config.policy.harvestThreshold).toBe(5)
   expect(config.pr).toBeUndefined()
   expect(config.verify.steps).toEqual(['types', 'unit', 'dashboard'])

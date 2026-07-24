@@ -1248,8 +1248,15 @@ non-phase surfaces (`spec`, `tickets`, `guide`, and the outer-loop skills).
 `ab init` installs into a repo:
 
 - **A baseline `autobuild.toml`**, rendered only when absent, seeded from the
-  target's own package scripts so generated commands match reality. Existing
-  config is never reconciled or overwritten, even with `--force`.
+  target's own package scripts so generated commands match reality. On an
+  interactive first creation, init may select among the shipped ticket,
+  workspace, and role-runtime/model arrangements; every offered choice has a
+  headless flag equivalent. Local adapters are the prompt defaults, and the
+  suggested role arrangement separates authoring and review models. With no
+  interactive terminal or with explicit interaction opt-out, unresolved
+  choices retain the historical template defaults. Existing config is never
+  prompted for, reconciled, validated against selection flags, or overwritten,
+  even with `--force`.
 - **Copies** of the default skills into the project skills directory,
   namespaced `ab-*`. Copies, not references — per-repo customization is the
   point: this repo's code-review standards and e2e driving instructions live
