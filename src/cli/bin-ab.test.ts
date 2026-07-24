@@ -120,6 +120,46 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
   if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout)
 }
 
+test('top-level help aliases are identical and need no AB_* environment', async () => {
+  const results = await Promise.all(
+    [['help'], ['--help'], ['-h']].map((argv) => runBinWithoutAb(argv)),
+  )
+  for (const result of results) {
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Primary human workflow:')
+    expect(result.stdout).toContain('Human-first commands:')
+    expect(result.stdout).toContain('AI-first commands:')
+  }
+  expect(new Set(results.map((result) => result.stdout)).size).toBe(1)
+})
+
+test('detailed AI-first help is identical outside and inside ambient sessions', async () => {
+  const canonical = await runBinWithoutAb(['help', 'context'])
+  const flag = await runBinWithoutAb(['context', '--help'])
+  const ambient = await runBinWithoutAb(['context', '--help'], {
+    AB_STORE: 'https://invalid.example.test/store',
+    AB_BUILD: 'ambient-build',
+    AB_PHASE: 'malformed-on-purpose',
+    AB_SESSION: 'ambient-session',
+  })
+
+  for (const result of [canonical, flag, ambient]) {
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('ab context [--json]')
+  }
+  expect(flag.stdout).toBe(canonical.stdout)
+  expect(ambient.stdout).toBe(canonical.stdout)
+})
+
+test('unknown detailed help exits nonzero and names the target', async () => {
+  const result = await runBinWithoutAb(['help', 'frobnicate'])
+  expect(result.code).toBe(1)
+  expect(result.stdout).toBe('')
+  expect(result.stderr).toContain('unknown help command "frobnicate"')
+})
+
 const BUILD_SESSION_COMMANDS = [
   ['context', ['context']],
   ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],

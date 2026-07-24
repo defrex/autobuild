@@ -573,7 +573,7 @@ describe('PiAgentRunner.continue', () => {
 
       const smoke = await invokeAbHelp(prompts[1]!.env)
       expect(smoke).toMatchObject({ code: 0, stderr: '' })
-      expect(smoke.stdout).toContain('ab — the agent↔store channel')
+      expect(smoke.stdout).toContain('ab — agent-driven software delivery')
       expect(smoke.stdout).not.toContain('host-conflicting-ab')
       await runner.end(session)
     } finally {

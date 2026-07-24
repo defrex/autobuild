@@ -30,6 +30,11 @@ import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import { abModels } from './models'
+import {
+  recognizeHelpRequest,
+  renderCommandHelp,
+  renderTopLevelHelp,
+} from './help'
 import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
@@ -85,6 +90,7 @@ export function isSessionlessInvocation(argv: readonly string[]): boolean {
   const command = argv[0]
   return (
     command === undefined ||
+    recognizeHelpRequest(argv) !== undefined ||
     SESSIONLESS_COMMANDS.has(command) ||
     (command === 'artifact' && argv[1] === 'download') ||
     (command === 'harvest' && argv[1] === 'status')
@@ -184,76 +190,6 @@ function requireSession(command: string, deps: SessionlessCliDeps): CliDeps {
   return { ...deps, store, env, forge, exec, ids, clock }
 }
 
-/** The §8.2 command surface, verbatim enough to be the agent's cheat sheet. */
-const HELP = [
-  'ab — the agent↔store channel (SPEC §8.2)',
-  '',
-  '  ab context [--json]                    hydrate .ab/ with the phase\'s inputs; print the manifest',
-  '  ab artifact put <kind> <file> [--attach] deposit a versioned artifact → prints the assigned rev; optionally designate it for the PR',
-  '  ab artifact get <kind>[@rev]           fetch an artifact within own build (latest when @rev omitted)',
-  '  ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]',
-  '                                         retrieve exact artifact bytes after a build (read-only, sessionless)',
-  '  ab observe --kind <followup|refactor|latent-bug> [--files a,b] [--refs x,y] <summary>',
-  '                                         structured observation — any phase, any time, not a terminal',
-  '  ab server <start|stop|restart|status|logs> [n]',
-  '                                         dev-server lifecycle, config-driven (§16.2); implement/verify only',
-  '  ab done [--notes <file>]               complete a producer phase (TERMINAL: validates, then runs plumbing)',
-  '  ab verdict <approve|revise|escalate|pass|fail|skip> [--findings <json>] [--notes <file>] [--reason <text>] [--report <file>]',
-  '                                         complete a review/verify phase (TERMINAL; vocabulary is phase-dependent)',
-  '  ab escalate <question> [--refs a,b]    park the build for human input (TERMINAL)',
-  '',
-  '  ab init [target] [--force]             create autobuild.toml only when absent; vendor the default ab-* skills (§16.3; runs outside sessions)',
-  '                                         on reruns, --force overwrites edited vendored skills only; it never overwrites an existing autobuild.toml',
-  '  ab upgrade [target]                    three-way merge vendored ab-* skills with the new defaults (§16.3; runs outside sessions)',
-  '  ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
-  '                                         file a ticket to the configured [tickets] source (§8.8; runs outside sessions).',
-  '  ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
-  '                                         partially update editable fields; omitted fields survive and --labels "" clears labels.',
-  '  ab ticket block <id> <blocker-id>      add a blocker to an existing ticket (idempotent).',
-  '  ab ticket unblock <id> <blocker-id>    remove a blocker from an existing ticket (idempotent).',
-  '  ab ticket list [--state <state>] [--labels a,b] [--json]',
-  '                                         list tickets; with no filters, use the same ready criteria as dispatch.',
-  '  ab ticket show <id> [--json]           show one ticket, including its body/spec.',
-  '  ab ticket move <id> <state> [--json]   move one ticket to a source-local state.',
-  '                                         Ticket reads/moves use human output by default; --json emits the complete Ticket value.',
-  '                                         Ticket ids are source-local (e.g. AUT-8 or file-1); for block/unblock, the first id is always the ticket being changed.',
-  '                                         State names and unknown-id errors come from the configured source; ticket update never changes state.',
-  '  ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',
-  '                                         run the outer loop for this repo — resume current builds, janitor, lease sweep, dispatch (§3.3, §12; runs outside sessions)',
-  '                                         intake/auto-merge flags durably set repository defaults; omission reuses stored state (fresh repo: intake on, auto-merge off);',
-  '                                         --auto-merge seeds durable intent on newly claimed builds only; opposite flag forms cannot be combined',
-  '                                         an interactive terminal gets a fixed global/harvest/build dashboard; TTY controls: Up/Down select, p durably toggles intake on the global row',
-  '                                         or pauses/resumes the selected Harvest/build; m toggles the claim-time default on global or durable intent on a build; Ctrl-C stops;',
-  '                                         blocked feedback: Enter submits (empty = retry), Esc cancels; the bottom controls list only keys active for the selection; --plain forces line-oriented output',
-  '                                         (also automatic when stdout is not a TTY)',
-  '  ab models [query] [--available]        list Pi\'s model catalog (filtered by query) to find a provider-qualified id for autobuild.toml (§9; runs outside sessions)',
-  '  ab plugin list                         list builtin and configured adapters, resolution, API status, and contract availability (sessionless)',
-  '  ab plugin doctor                       diagnose every configured plugin module; exits nonzero if any fail (sessionless)',
-  '  ab plugin test <ticket-source|agent-runtime|workspace-provider|forge> <adapter>',
-  '                                         run the adapter\'s shared port contract suite; live fixtures require AB_RUN_LIVE_PORT_CONTRACTS=1',
-  '  ab builds [--queued] [--all] [--json] [--store <ref>]',
-  '                                         list this repo\'s builds — default: running, paused, blocked; --queued adds queued;',
-  '                                         --all every status (§15.5; read-only, runs outside sessions)',
-  '  ab build status <slug> [--events <n>] [--json] [--store <ref>]',
-  '                                         detailed state for one build — escalations, sessions, verify, PR, lease;',
-  '                                         --events <n> appends the newest n events (read-only, runs outside sessions)',
-  '  ab pause <slug> [--store <ref>]        request that an active build pause (sessionless)',
-  '  ab resume <slug> [--store <ref>]       request that an active build resume (sessionless)',
-  '  ab auto-merge <slug> <on|off> [--store <ref>]',
-  '                                         request or cancel native squash auto-merge (sessionless)',
-  '  ab answer <slug> [<text>] [--store <ref>]',
-  '                                         answer every open escalation: guidance with text, bare retry without; resumes a paused build last (sessionless)',
-  '  ab abort <slug> [--store <ref>]        request that an active build abort (sessionless)',
-  '  ab harvest status [--events <n>] [--json] [--store <ref>]',
-  '                                         all unresolved repository harvest workflows and paper trail (read-only)',
-  '  ab harvest context [--json]            hydrate harvest session inputs',
-  '  ab harvest submit <proposals.json>     synthesize terminal: validate and deposit proposals',
-  '  ab harvest verdict <approve|revise|escalate> --notes <file> [--findings <json>] [--reason <text>]',
-  '                                         harvest-review terminal',
-  '',
-  'Every phase ends with exactly one terminal command (D5).',
-].join('\n')
-
 function buildControlConfirmation(result: BuildControlResult): string {
   switch (result.kind) {
     case 'command': {
@@ -351,21 +287,32 @@ export async function runCli(argv: string[], deps: SessionlessCliDeps): Promise<
 async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<number> {
   const [command, ...rest] = argv
   const { stdout, stderr } = deps
+  const helpRequest = recognizeHelpRequest(argv)
+
+  // Help is resolved before every command handler. This keeps both detailed
+  // forms byte-identical and prevents config, store, plugin, or session wiring
+  // from becoming a prerequisite for documentation.
+  if (helpRequest?.kind === 'overview') {
+    stdout(renderTopLevelHelp())
+    return 0
+  }
+  if (helpRequest?.kind === 'command') {
+    stdout(renderCommandHelp(helpRequest.command))
+    return 0
+  }
 
   switch (command) {
     case undefined: {
-      stderr(HELP)
+      stderr(renderTopLevelHelp())
       return 1
     }
 
     case 'help':
     case '--help':
     case '-h': {
-      const usage = 'usage: ab help'
-      const parsed = parseArgs(rest, {}, usage)
-      if (parsed.positionals.length > 0) throw new Error(usage)
-      stdout(HELP)
-      return 0
+      throw new Error(
+        'usage: ab help [command]\n       ab <command> --help',
+      )
     }
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
@@ -1039,7 +986,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     default: {
-      stderr(`unknown command "${command}"\n\n${HELP}`)
+      stderr(`unknown command "${command}"\n\n${renderTopLevelHelp()}`)
       return 1
     }
   }

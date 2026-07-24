@@ -51,22 +51,23 @@ describe('runCli — routing and exit codes', () => {
   test('no arguments prints help to stderr and exits 1', async () => {
     const d = deps()
     expect(await runCli([], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('ab — the agent↔store channel')
+    expect(d.err.join('\n')).toContain('ab — agent-driven software delivery')
     expect(d.out).toEqual([])
   })
 
-  test('help prints the §8.2 table to stdout and exits 0', async () => {
+  test('help prints the layered command overview to stdout and exits 0', async () => {
     const d = deps()
     expect(await runCli(['help'], d)).toBe(0)
     const help = d.out.join('\n')
-    for (const command of ['ab context', 'ab artifact put', 'ab artifact download', 'ab observe', 'ab server', 'ab done', 'ab verdict', 'ab escalate']) {
+    for (const command of ['ab context', 'ab artifact', 'ab observe', 'ab server', 'ab done', 'ab verdict', 'ab escalate']) {
       expect(help).toContain(command)
     }
+    expect(help).not.toContain('ab artifact put')
   })
 
-  test('help documents every source-agnostic ticket operation', async () => {
+  test('ticket help documents every source-agnostic ticket operation', async () => {
     const d = deps()
-    expect(await runCli(['help'], d)).toBe(0)
+    expect(await runCli(['help', 'ticket'], d)).toBe(0)
     const help = d.out.join('\n')
     for (const form of [
       'ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
@@ -84,9 +85,19 @@ describe('runCli — routing and exit codes', () => {
     expect(help).toContain('the first id is always the ticket being changed')
   })
 
-  test('help documents status and every sessionless build-control command', async () => {
+  test('detailed help documents status and every sessionless build-control command', async () => {
     const d = deps()
-    expect(await runCli(['help'], d)).toBe(0)
+    for (const command of [
+      'builds',
+      'build',
+      'pause',
+      'resume',
+      'auto-merge',
+      'answer',
+      'abort',
+    ]) {
+      expect(await runCli(['help', command], d)).toBe(0)
+    }
     const help = d.out.join('\n')
     expect(help).toContain('ab builds [--queued] [--all] [--json] [--store <ref>]')
     expect(help).toContain('ab build status <slug> [--events <n>] [--json] [--store <ref>]')
@@ -102,9 +113,9 @@ describe('runCli — routing and exit codes', () => {
     }
   })
 
-  test('help documents the sessionless plugin diagnostics and contract verb', async () => {
+  test('plugin help documents the sessionless diagnostics and contract verb', async () => {
     const d = deps()
-    expect(await runCli(['help'], d)).toBe(0)
+    expect(await runCli(['help', 'plugin'], d)).toBe(0)
     const help = d.out.join('\n')
     expect(help).toContain('ab plugin list')
     expect(help).toContain('ab plugin doctor')
@@ -370,7 +381,7 @@ describe('runCli — command-scoped flag contracts', () => {
 
   test('no-flag forms reject flags and undocumented extra positionals', async () => {
     const cases = [
-      { argv: ['help', 'extra'], usage: 'usage: ab help' },
+      { argv: ['help', 'extra', 'position'], usage: 'usage: ab help' },
       {
         argv: ['artifact', 'get', 'plan', 'extra'],
         usage: 'usage: ab artifact get',
@@ -1381,9 +1392,9 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     expect(err).toContain('[--auto-merge | --no-auto-merge]')
   })
 
-  test('the help advertises both durable repository settings and stored fallback', async () => {
+  test('dispatch help advertises both durable repository settings and stored fallback', async () => {
     const d = deps()
-    await runCli(['help'], d)
+    await runCli(['help', 'dispatch'], d)
     const help = d.out.join('\n')
     expect(help).toContain(
       'ab dispatch [--once] [--interval <s>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge]',

@@ -457,7 +457,7 @@ describe('ClaudeAgentRunner.continue', () => {
 
       const smoke = await invokeAbHelp(calls[1]!.options.env)
       expect(smoke).toMatchObject({ code: 0, stderr: '' })
-      expect(smoke.stdout).toContain('ab — the agent↔store channel')
+      expect(smoke.stdout).toContain('ab — agent-driven software delivery')
       expect(smoke.stdout).not.toContain('host-conflicting-ab')
       await runner.end(session)
     } finally {
