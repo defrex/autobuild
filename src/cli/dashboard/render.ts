@@ -406,13 +406,12 @@ function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undef
 // ── The frame ────────────────────────────────────────────────────────────────
 
 export const DASHBOARD_GLOBAL_LEGEND =
-  'Keys: Up/Down select  h harvest on/off  m auto-merge default  p intake on/off  Ctrl-C quit'
+  'Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit'
 export const DASHBOARD_HARVEST_LEGEND = 'Keys: Up/Down select  Ctrl-C quit'
 export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  Ctrl-C quit'
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
-export const DASHBOARD_BUILD_LEGEND =
-  'Keys: Up/Down select  m auto-merge  p pause/resume  Ctrl-C quit'
+export const DASHBOARD_BUILD_LEGEND = 'Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit'
 
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
  * exact process state. Non-ASCII and control characters (including newlines)
