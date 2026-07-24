@@ -774,7 +774,7 @@ poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `p` on the dashboard's global row | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 

@@ -178,7 +178,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('the final legend exposes only controls meaningful for the selection', () => {
     const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
-      'Keys: Up/Down select  h harvest on/off  m auto-merge default  p intake on/off  Ctrl-C quit',
+      'Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit',
     )
 
     const runningHarvestLines = rd(
@@ -218,9 +218,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(buildLines.at(-1)).toBe(
-      'Keys: Up/Down select  m auto-merge  p pause/resume  Ctrl-C quit',
-    )
+    expect(buildLines.at(-1)).toBe('Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit')
     for (const controls of [
       globalLines.at(-1),
       runningHarvestLines.at(-1),
@@ -230,6 +228,11 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     ]) {
       expect(controls).toContain('Up/Down select')
       expect(controls).toContain('Ctrl-C quit')
+    }
+    for (const changedControls of [globalLines.at(-1), buildLines.at(-1)]) {
+      expect(changedControls).not.toContain('on/off')
+      expect(changedControls).not.toContain('default')
+      expect(changedControls).not.toContain('pause/resume')
     }
     for (const runControls of [
       runningHarvestLines.at(-1),

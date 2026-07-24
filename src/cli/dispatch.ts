@@ -119,6 +119,7 @@ type DashboardAction =
   | 'up'
   | 'down'
   | 'auto-merge'
+  | 'intake'
   | 'pause'
   | 'harvest-gate'
   | { kind: 'harvest-run'; run: string | undefined }
@@ -500,25 +501,23 @@ class DispatchLoop {
     return true
   }
 
+  private async toggleIntake(): Promise<void> {
+    if (this.selection?.kind !== 'global') return
+
+    const { store } = this.wiring
+    const repo = this.opts.targetRepo
+    const current = await this.readDispatchSettings()
+    const enabled = !current.intake
+    await store.appendRepo(repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type: 'dispatcher.intake-set',
+      payload: { enabled },
+    })
+    this.say(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
+    await this.renderOnce()
+  }
+
   private async togglePause(): Promise<void> {
-    if (this.selection?.kind === 'global') {
-      const { store } = this.wiring
-      const repo = this.opts.targetRepo
-      const current = await this.readDispatchSettings()
-      const enabled = !current.intake
-      await store.appendRepo(repo, {
-        actor: humanActor(buildControlUser(this.opts.env)),
-        type: 'dispatcher.intake-set',
-        payload: { enabled },
-      })
-      this.say(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
-      await this.renderOnce()
-      return
-    }
-    if (this.selection?.kind === 'harvest') {
-      await this.controlHarvestRun(this.model?.harvest?.run)
-      return
-    }
     const slug = this.selectedBuildSlug('pause/resume')
     if (slug === undefined) return
 
@@ -727,6 +726,9 @@ class DispatchLoop {
       case 'down':
         this.moveSelection(1)
         return
+      case 'intake':
+        await this.toggleIntake()
+        return
       case 'pause':
         await this.togglePause()
         return
@@ -815,15 +817,18 @@ class DispatchLoop {
       case 'm':
         this.queueAction('auto-merge')
         return
+      case 'i':
+        if (this.selection?.kind === 'global') this.queueAction('intake')
+        return
       case 'p':
-        this.queueAction(
-          this.selection?.kind === 'harvest'
-            ? { kind: 'harvest-run', run: this.model?.harvest?.run }
-            : 'pause',
-        )
+        if (this.selection?.kind === 'harvest') {
+          this.queueAction({ kind: 'harvest-run', run: this.model?.harvest?.run })
+        } else if (this.selection?.kind === 'build') {
+          this.queueAction('pause')
+        }
         return
       case 'h':
-        this.queueAction('harvest-gate')
+        if (this.selection?.kind === 'global') this.queueAction('harvest-gate')
         return
       default:
         return

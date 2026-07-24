@@ -125,6 +125,10 @@ describe('layered CLI help catalog', () => {
         'fresh repo: intake on, auto-merge off',
         'TTY controls:',
         'Up/Down',
+        'h         Toggle harvesting when the global row is selected.',
+        'i         Toggle intake when the global row is selected.',
+        'm         Toggle the claim-time default on the global row',
+        'p         Pause/resume a build, or act on the selected Harvest run.',
         'Enter submits',
         '--plain',
       ],
@@ -181,6 +185,10 @@ describe('layered CLI help catalog', () => {
       const detail = renderCommandHelp(command)
       for (const fact of expected[command]) expect(detail).toContain(fact)
     }
+
+    const dispatch = renderCommandHelp('dispatch')
+    expect(dispatch).not.toContain('p         Toggle intake')
+    expect(dispatch).not.toContain('selected Harvest workflow or build')
   })
 
   test('unknown and malformed help requests fail with targeted feedback', async () => {

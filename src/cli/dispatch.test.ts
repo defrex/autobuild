@@ -1670,6 +1670,7 @@ type FakeInputKey =
   | 'up'
   | 'down'
   | 'auto-merge'
+  | 'intake'
   | 'pause'
   | 'harvest-gate'
   | 'letter-d'
@@ -1682,6 +1683,8 @@ function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
   switch (key) {
     case 'auto-merge':
       return { type: 'text', text: 'm' }
+    case 'intake':
+      return { type: 'text', text: 'i' }
     case 'pause':
       return { type: 'text', text: 'p' }
     case 'harvest-gate':
@@ -2200,10 +2203,10 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('the global row accepts an early p before the first projection, even with no body rows', async () => {
+  test('the global row accepts an early i before the first projection, even with no body rows', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
-    const input = fakeInput(['pause'])
+    const input = fakeInput(['intake'])
     const out: string[] = []
     try {
       await abDispatch({
@@ -2234,10 +2237,10 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('startup Up/Down clamp on global, so a following p still toggles intake', async () => {
+  test('startup Up/Down clamp on global, so a following i still toggles intake', async () => {
     const fx = await makeFixture([], happyHandlers())
     const term = fakeTerminal()
-    const input = fakeInput(['up', 'down', 'pause'])
+    const input = fakeInput(['up', 'down', 'intake'])
     try {
       await abDispatch({
         targetRepo: fx.origin,
@@ -2630,7 +2633,7 @@ describe('abDispatch interactive keyboard controls', () => {
           latestDashboardFrame(termB).includes('auto merge OFF'),
       )
 
-      inputA.press('pause')
+      inputA.press('intake')
       await waitFor(async () =>
         (await fx.store.getRepoEvents(fx.origin)).some(
           (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
@@ -2647,7 +2650,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       // B started from intake ON / auto-merge OFF. It must invert A's newer
       // values, not those stale startup views.
-      inputB.press('pause')
+      inputB.press('intake')
       await waitFor(
         async () => reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
       )
@@ -2662,7 +2665,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // Turn intake off once more, add work only after both processes have
       // observed it, and allow several ticks in each process. Neither may
       // claim from a value cached at startup or from its prior tick.
-      inputA.press('pause')
+      inputA.press('intake')
       await waitFor(
         async () => !reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
       )
@@ -2766,6 +2769,9 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => stripAnsi(term.all()).includes('> Auto Build'))
 
+      // Global p is intentionally unbound. The following m is the serialized
+      // synchronization point and the only action that may append a fact.
+      input.press('pause')
       input.press('auto-merge')
       await waitFor(
         async () =>
@@ -2825,9 +2831,11 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^> .*Harvest/m.test(stripAnsi(term.all())))
       const beforeRunningAction = (await fx.store.getRepoEvents(fx.origin)).length
       input.press('auto-merge')
+      input.press('intake')
+      input.press('harvest-gate')
       input.press('pause')
       // A later serialized selection move is the synchronization point for
-      // both routine no-op actions; neither gets a transient message row.
+      // every routine no-op action; none gets a transient message row.
       input.press('down')
       await waitFor(() => /^> .*alpha-work/m.test(stripAnsi(term.all())))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(beforeRunningAction)
@@ -2855,6 +2863,9 @@ describe('abDispatch interactive keyboard controls', () => {
       }
       expect(out).toEqual([])
 
+      const repoBeforeBuildKeys = (await fx.store.getRepoEvents(fx.origin)).length
+      input.press('intake')
+      input.press('harvest-gate')
       input.press('auto-merge')
       input.press('pause')
       await waitFor(async () => {
@@ -2864,6 +2875,7 @@ describe('abDispatch interactive keyboard controls', () => {
           events.some((event) => event.type === 'build.pause-requested')
         )
       })
+      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(repoBeforeBuildKeys)
       input.press('interrupt')
       await run
 
@@ -4056,6 +4068,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
 
       const input = fakeInput()
+      const term = fakeTerminal()
       const run = abDispatch({
         targetRepo: fx.origin,
         env: {}, // stable nonempty fallback actor
@@ -4064,7 +4077,7 @@ describe('abDispatch interactive keyboard controls', () => {
         stderr: (line) => fx.err.push(line),
         intervalMs: 60_000,
         wire: fx.wire,
-        terminal: fakeTerminal(),
+        terminal: term,
         input,
       })
       await waitFor(() => input.starts === 1)
@@ -4072,6 +4085,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // to the build row before applying its contextual p action.
       await new Promise((resolve) => setTimeout(resolve, 20))
       input.press('down')
+      await waitFor(() => /^> .*paused-work/m.test(latestDashboardFrame(term)))
       input.press('pause')
       await waitFor(async () =>
         (await fx.store.getEvents('paused-work')).some(
@@ -4090,7 +4104,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('explicit intake and global p persist, a no-flag restart reuses them, and removed d stays inert', async () => {
+  test('explicit intake and global i persist, a no-flag restart reuses them, and removed d stays inert', async () => {
     const fx = await makeFixture(readyTicket('T-intake-off', { body: 'not a conforming spec' }), {})
     try {
       const input = fakeInput()
@@ -4112,7 +4126,7 @@ describe('abDispatch interactive keyboard controls', () => {
             input.press('letter-d')
             await new Promise((resolve) => setTimeout(resolve, 0))
             expect(stripAnsi(term.all())).toContain('intake OFF')
-            input.press('pause')
+            input.press('intake')
             await waitFor(
               async () => reduceDispatchSettings(await fx.store.getRepoEvents(fx.origin)).intake,
             )
