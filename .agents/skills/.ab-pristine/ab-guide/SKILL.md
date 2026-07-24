@@ -523,16 +523,37 @@ environment variable instead and say why.
 
 ## Setup and upgrades
 
-**`ab init <target> [--force]`** runs *outside* build sessions — it takes a
-repo path, needs no `AB_*` environment, and is safe to re-run. It:
+**`ab init <target> [--force] [--ticket-source file|linear]
+[--workspace-provider git-worktree] [--role-profile split|claude|pi]
+[--no-interactive]`** runs *outside* build sessions — it takes a repo path,
+needs no `AB_*` environment, and is safe to re-run. It:
 
-- If `autobuild.toml` is absent, renders the valid setup-only template using
-  the target's root `package.json`: exact `lint`, `type-check`, and `test`
-  scripts add the command/check fragments described above. Missing package
-  metadata means no package-backed commands or checks; malformed JSON or an
-  invalid recognized declaration fails with the manifest path. It **never
-  inspects package scripts or overwrites config once the file exists**, even
-  with `--force`; the repo's config is the repo's from the first re-run onward.
+- If `autobuild.toml` is absent and both stdin and stdout are TTYs, prompts for
+  unresolved ticket, workspace, and role choices. The first ticket/workspace
+  options are the no-account local file tracker and shipped git-worktree
+  provider. The suggested `split` role profile uses Pi with
+  `openai-codex/gpt-5.6-sol` for plan/implement and `kimi-coding/k3` for both
+  review roles. `claude` keeps the historical Claude-wide default; `pi` uses
+  Pi's default model for every role. Each prompt notes that custom adapters can
+  be built with an agent and points to
+  `.agents/skills/ab-guide/references/plugin-authoring.md`.
+- Each selection flag suppresses its corresponding prompt; all three make init
+  prompt-free. `--no-interactive` skips unresolved prompts and preserves the
+  historical defaults. A non-TTY run with no flags is byte-identical to the
+  historical file/git-worktree/Claude baseline — the split is only an explicit
+  or interactive choice.
+- The config uses the target's root `package.json`: exact `lint`, `type-check`,
+  and `test` scripts add the command/check fragments described above. Missing
+  package metadata means no package-backed commands or checks; malformed JSON
+  or an invalid recognized declaration fails with the manifest path.
+- Linear selection writes placeholders for required non-secret `teamKey` and
+  `readyState`, then prints those fields and the required `LINEAR_API_KEY`
+  environment variable. It never asks for or writes a secret. Pi selections
+  say to run `pi` and use `/login`, or set the provider API key in the
+  environment.
+- It **never prompts, validates selection flags, inspects package scripts, or
+  overwrites config once the file exists**, even with `--force`; the repo's
+  config is the repo's from the first re-run onward.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
   preserving every existing byte/rule and handling a missing trailing newline.
 - **Copies each complete canonical skill directory** to

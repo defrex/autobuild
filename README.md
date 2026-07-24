@@ -83,10 +83,18 @@ Then, from the repository you want built:
 ab init
 ```
 
-This writes `autobuild.toml` — with verify steps pre-filled from your
-`package.json` scripts — and vendors the `ab-*` agent skills. The default
-ticket source is a local file tracker in `.autobuild/tickets/`. See the
-[configuration reference](docs/configuration.md) for the complete surface.
+On a TTY, first-time init asks which shipped ticket source, workspace provider,
+and role profile to use. The local file tracker and git-worktree provider are
+the no-account defaults; the suggested role profile uses separate authoring and
+review models for independent review. It then writes `autobuild.toml` — with
+verify steps pre-filled from your `package.json` scripts — and vendors the
+`ab-*` agent skills.
+
+For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
+`--role-profile`; a fully specified run never prompts. `--no-interactive` (or
+redirected input/output with no selection flags) preserves the historical
+Claude/file/git-worktree baseline. See the
+[configuration reference](docs/configuration.md) for every option.
 
 Write a ticket that says what and why, with acceptance criteria and an
 out-of-scope list (the `/ab-spec` skill will interview you into one), then

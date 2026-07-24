@@ -697,15 +697,51 @@ example.
 ## What `ab init` generates
 
 On the first `ab init [target]`, when `autobuild.toml` is absent, Autobuild
-renders a valid setup-oriented baseline with:
+renders a valid setup-oriented baseline. When both stdin and stdout are TTYs,
+it first offers these shipped choices:
+
+| Surface | Flag | Prompt options (first is the prompt default) |
+|---|---|---|
+| Tickets | `--ticket-source` | `file`, `linear` |
+| Workspace | `--workspace-provider` | `git-worktree` |
+| Roles | `--role-profile` | `split`, `claude`, `pi` |
+
+The local `file` tracker and shipped `git-worktree` provider need no account,
+secret, or external infrastructure. Every prompt also explains that a custom
+implementation can be supplied by a plugin and points to the plugin authoring
+guide installed with `ab-guide`.
+
+The role profiles are:
+
+- `split` (the interactive suggestion): Pi runs `plan` and `implement` with
+  `openai-codex/gpt-5.6-sol`, while `plan-review` and `code-review` use
+  `kimi-coding/k3`;
+- `claude`: `[roles.default]` uses the Claude runtime and its own default model,
+  matching the historical template; and
+- `pi`: `[roles.default]` uses the Pi runtime and its own default model.
+
+A flag suppresses only its corresponding prompt. Supplying all three flags is
+prompt-free on or off a TTY. `--no-interactive` skips all unresolved choices
+and retains the historical defaults; on a fresh config it cannot be combined
+with selection flags. If either stream is not a TTY, unresolved choices are
+also silent historical defaults. Thus a non-TTY run with no flags remains
+byte-identical to earlier init output: file tickets, omitted `[workspace]`
+(selecting git-worktree), and a Claude default role. The interactive role split
+is never silently applied.
+
+Choosing Linear writes valid conspicuous placeholders for the required
+`[tickets].teamKey` and `[tickets].readyState` fields. Init prints those
+follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment;
+it never prompts for or writes a secret. Choosing either Pi profile similarly
+prints the real provider-authentication flow: run `pi` and use `/login`, or set
+the provider API key in the environment.
+
+Regardless of onboarding choices, the generated baseline has:
 
 - `baseBranch = "main"` and `capacity = 1`;
-- the omitted `[workspace]` default, selecting `git-worktree` with empty config;
 - `setup = "bun install"` in `[commands]`;
-- no verify or finalize steps unless recognized package scripts add checks;
-- the default policy values above;
-- a file ticket source with `readyState = "ready"`; and
-- a `claude` default role with no configured model.
+- no verify or finalize steps unless recognized package scripts add checks; and
+- the default policy values above.
 
 Only exact own keys in the root `package.json` `scripts` object are recognized:
 
@@ -721,12 +757,12 @@ string fails with the manifest path instead of silently generating an
 untruthful command.
 
 The config rule is intentionally one-way: once `autobuild.toml` exists,
-`ab init` does not inspect package scripts, reconcile generated fragments, or
-overwrite the file. This remains true with `--force`; that flag can overwrite
-locally edited vendored skills, never configuration. Later package-script
-changes are manual configuration edits. Re-running init still maintains the
-`.autobuild/` ignore rule and skill installation, while `ab upgrade` merges
-vendored skills only.
+`ab init` does not prompt, inspect package scripts, validate or apply selection
+flags, reconcile generated fragments, or overwrite the file. This remains true
+with `--force`; that flag can overwrite locally edited vendored skills, never
+configuration. Later package-script changes are manual configuration edits.
+Re-running init still maintains the `.autobuild/` ignore rule and skill
+installation, while `ab upgrade` merges vendored skills only.
 
 ## Durable settings outside TOML
 
