@@ -717,15 +717,15 @@ distinct from a pass without color.
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
-contextual: every row offers navigation and quit; global offers `h harvest
-on/off`, `m auto-merge default`, and `p intake on/off`; `Harvest` offers
-`p resume` for ordinary failure or `p acknowledge` for exhaustion/escalation
-only when that action is available; builds offer `m auto-merge` and `p
-pause/resume`. `m` on `Harvest` is an explanatory build-only no-op.
+contextual: every row offers navigation and quit; global offers `h harvest`,
+`m auto-merge`, and `i intake`; `Harvest` offers `p resume` for ordinary
+failure or `p acknowledge` for exhaustion/escalation only when that action is
+available; builds offer `m auto-merge` and `p pause`. `m` on `Harvest` is an
+explanatory build-only no-op.
 
 `--intake` and `--no-intake` are mutually exclusive durable repository setters.
 Omitting both reuses stored state, falling back to ON only when no intake fact
-exists. Global-row `p` re-reads current state and appends the opposite value.
+exists. Global-row `i` re-reads current state and appends the opposite value.
 Intake off skips only new ticket claims while janitor, stale-runner, harvest,
 and in-flight work continue. Every dispatcher samples the current value on each
 tick, so a change in one process gates all dispatchers for that repository.
@@ -744,7 +744,7 @@ the global default stays on). Both repository settings are independently
 last-write-wins by event sequence. They are stored in the BuildStore, not in
 `autobuild.toml`; propagation uses polling, not a push channel.
 
-Header `h` re-reads the repository journal and appends the existing human
+Global-row `h` re-reads the repository journal and appends the existing human
 pause/resume request. The newest pending command determines the next target, so
 rapid presses issue opposing requests; the token changes only after the kernel's
 `harvest.paused`/`harvest.resumed` acknowledgement.
@@ -820,9 +820,11 @@ escalation set and never invents guidance.
 Two asymmetries are intentional and explicit. Durable repository intake and the
 claim-time auto-merge default have launch-flag setters and global-row toggles,
 but no standalone sessionless control commands. Conversely, abort has a CLI
-command but gains no TUI key in this release. Global-row `h` owns the durable harvest
-gate. On the optional repository-scoped `Harvest` run row, `p` only resumes or
-acknowledges the represented run; `m` remains an explanatory build-only no-op.
+command but gains no TUI key in this release. Global-row `h` owns the durable
+harvest gate, and global-row `p` is a no-op. On the optional repository-scoped
+`Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
+and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
+rows, `i` and `h` are also no-ops.
 
 ## Checking build status
 

@@ -197,7 +197,7 @@ day-to-day:
 - **`m`** toggles durable auto-merge consent for the selected build. Gated
   branches use GitHub-native auto-merge, so your required checks still decide
   when it lands.
-- On the header row, **`p`** gates ticket intake, **`m`** sets the auto-merge
+- On the header row, **`i`** gates ticket intake, **`m`** sets the auto-merge
   default for newly claimed builds, and **`h`** gates harvesting — all
   repository-wide, all durable across restarts.
 
