@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -1874,6 +1875,48 @@ describe('Dispatcher janitor', () => {
     // forge at all (not merely another idempotent mutation).
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.forge.autoMergeCalls).toHaveLength(1)
+  })
+
+  test('a finalize diagnostic landing during the forge probe prevents a stale-snapshot duplicate', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { pr: PR })
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setGateProbeError(1, 'ruleset probe forbidden')
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+
+    const realSet = h.forge.setAutoMerge.bind(h.forge)
+    h.forge.setAutoMerge = async (...args) => {
+      const result = await realSet(...args)
+      if (result.kind !== 'deferred' || result.reason === undefined) {
+        throw new Error('expected a reason-bearing deferral')
+      }
+      // Models finalize's best-effort append after this janitor tick already
+      // captured its initial event snapshot but before the probe returns.
+      await h.store.append(
+        slug,
+        autoMergeDeferralObservation(result.reason, 1, command.seq, 'obs_finalize'),
+      )
+      return result
+    }
+
+    await h.dispatcher.tick()
+
+    const observations = (await h.store.getEvents(slug)).filter(
+      (event) =>
+        event.type === 'observation.recorded' &&
+        event.payload.refs?.includes(`auto-merge-gate:pr:1:command:${command.seq}`),
+    )
+    expect(observations).toHaveLength(1)
+    const observation = observations[0]
+    if (observation?.type !== 'observation.recorded') {
+      throw new Error('expected the correlated observation')
+    }
+    expect(observation.payload.id).toBe('obs_finalize')
   })
 
   test('a cancellation supersedes enable, including a stale enable acknowledgement', async () => {

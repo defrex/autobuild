@@ -620,7 +620,11 @@ export class Dispatcher {
           payload: { commandSeq: autoMerge.commandSeq },
         })
       } else if (result.kind === 'deferred' && result.reason !== undefined) {
-        if (!hasAutoMergeDeferralObservation(events, pr.number, autoMerge.commandSeq)) {
+        // Finalize can append the same diagnostic after this tick's initial
+        // event snapshot but while the forge probe is in flight. Re-read at
+        // the append seam so the shared PR/command marker remains one-shot.
+        const latestEvents = await store.getEvents(record.slug)
+        if (!hasAutoMergeDeferralObservation(latestEvents, pr.number, autoMerge.commandSeq)) {
           await store.append(
             record.slug,
             autoMergeDeferralObservation(
