@@ -45,6 +45,8 @@ import type {
 import { INIT_PLUGIN_HELP } from './init-prompt'
 import { runCli, type SessionlessCliDeps } from './main'
 import { parseConfig } from '../config/load'
+import { createProductionRuntimes } from '../ports/runner/production'
+import { createRuntimeResolver } from '../ports/runner/routing'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 
@@ -439,6 +441,44 @@ describe('abInit — interactive adapter onboarding', () => {
       model: INIT_SPLIT_REVIEWER_MODEL,
     })
     expect(INIT_SPLIT_AUTHOR_MODEL).not.toBe(INIT_SPLIT_REVIEWER_MODEL)
+  })
+
+  test('shipped runtime resolution accepts the split and Pi profiles', async () => {
+    const roles = ['plan', 'implement', 'plan-review', 'code-review'] as const
+    const production = createProductionRuntimes()
+
+    for (const roleProfile of ['split', 'pi'] as const) {
+      const repo = join(target, roleProfile)
+      await abInit({
+        targetRepo: repo,
+        selections: {
+          ticketSource: 'file',
+          workspaceProvider: 'git-worktree',
+          roleProfile,
+        },
+      })
+      const config = parseConfig(await generated(repo))
+      const resolver = createRuntimeResolver(
+        production.runtimes,
+        config.roles,
+        production.defaultRuntime,
+      )
+      const resolved = Object.fromEntries(
+        roles.map((role) => [role, resolver.resolve(role)]),
+      )
+      for (const role of roles) expect(resolved[role]?.runtime).toBe('pi')
+
+      if (roleProfile === 'split') {
+        expect(resolved.plan?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
+        expect(resolved.implement?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
+        expect(resolved['plan-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
+        expect(resolved['code-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
+        expect(resolved.plan?.model).not.toBe(resolved['plan-review']?.model)
+      } else {
+        const piDefault = production.runtimes.pi?.defaultModel
+        for (const role of roles) expect(resolved[role]?.model).toBe(piDefault)
+      }
+    }
   })
 
   test('partial flags suppress only their prompts; fully specified flags never select', async () => {
