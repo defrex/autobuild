@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#103](https://github.com/defrex/autobuild/pull/103) — Label harvest proposals and reconcile Linear labels
 - [#99](https://github.com/defrex/autobuild/pull/99) — Reject duplicate plugin declarations with actionable diagnostics
 - [#98](https://github.com/defrex/autobuild/pull/98) — Correct Pi authentication guidance
 - [#97](https://github.com/defrex/autobuild/pull/97) — Handle unavailable auto-merge without stranding builds
