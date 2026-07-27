@@ -19,6 +19,7 @@ import { createForge } from '../ports/forge/create'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { randomIds } from '../ids'
 import { systemClock } from '../store/types'
+import { resolveMainRepo } from './repo-state'
 
 export async function runBinary(
   argv: string[],
@@ -109,8 +110,9 @@ export async function runBinary(
   let forge: Awaited<ReturnType<typeof createForge>>
   try {
     const repoRoot = process.cwd()
+    const packageRoot = await resolveMainRepo(repoRoot, spawnExec)
     const config = await loadConfig(join(repoRoot, 'autobuild.toml'))
-    const plugins = await loadPlugins(config.plugins, repoRoot)
+    const plugins = await loadPlugins(config.plugins, repoRoot, { packageRoot })
     forge = await createForge({
       name: config.forge,
       registry: plugins,

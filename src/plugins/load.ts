@@ -37,6 +37,11 @@ export interface PluginDiagnosis {
   healthy: boolean
 }
 
+export interface PluginLoadOptions {
+  /** Root whose installed dependencies satisfy bare package specifiers. */
+  packageRoot?: string
+}
+
 export function pluginResolutionKind(moduleSpecifier: string): PluginResolutionKind {
   return moduleSpecifier.startsWith('./') ||
     moduleSpecifier.startsWith('../') ||
@@ -82,17 +87,20 @@ export async function attemptPlugin(
   moduleSpecifier: string,
   repoRoot: string,
   registry: PluginRegistry,
+  options: PluginLoadOptions = {},
 ): Promise<PluginModuleReport> {
   const resolutionKind = pluginResolutionKind(moduleSpecifier)
+  const resolutionRoot = resolutionKind === 'package' ? (options.packageRoot ?? repoRoot) : repoRoot
   const initial = { module: moduleSpecifier, resolutionKind }
   let resolved: string
   try {
-    resolved = Bun.resolveSync(moduleSpecifier, repoRoot)
+    resolved = Bun.resolveSync(moduleSpecifier, resolutionRoot)
   } catch (error) {
+    const rootKind = resolutionKind === 'package' ? 'package root' : 'repository'
     return failed(
       initial,
       'resolution',
-      `plugin module "${moduleSpecifier}" could not be resolved from repository "${repoRoot}": ${reason(error)}`,
+      `plugin module "${moduleSpecifier}" could not be resolved from ${rootKind} "${resolutionRoot}": ${reason(error)}`,
       error,
     )
   }
@@ -175,11 +183,12 @@ export async function attemptPlugin(
 export async function diagnosePlugins(
   modules: readonly string[],
   repoRoot: string,
+  options: PluginLoadOptions = {},
   registry: PluginRegistry = createPluginRegistry(),
 ): Promise<PluginDiagnosis> {
   const reports: PluginModuleReport[] = []
   for (const moduleSpecifier of modules) {
-    reports.push(await attemptPlugin(moduleSpecifier, repoRoot, registry))
+    reports.push(await attemptPlugin(moduleSpecifier, repoRoot, registry, options))
   }
   return {
     registry,
@@ -192,10 +201,11 @@ export async function diagnosePlugins(
 export async function loadPlugins(
   modules: readonly string[],
   repoRoot: string,
+  options: PluginLoadOptions = {},
   registry: PluginRegistry = createPluginRegistry(),
 ): Promise<PluginRegistry> {
   for (const moduleSpecifier of modules) {
-    const report = await attemptPlugin(moduleSpecifier, repoRoot, registry)
+    const report = await attemptPlugin(moduleSpecifier, repoRoot, registry, options)
     if (report.status === 'failed') {
       throw new Error(report.error, { cause: report.cause })
     }

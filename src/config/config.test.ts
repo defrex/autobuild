@@ -233,6 +233,31 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  test('rejects every later occurrence of an exact duplicate plugin specifier', () => {
+    const pathError = parseError(
+      `plugins = ["./plugins/local.ts", "@acme/autobuild-plugin", "./plugins/local.ts"]\n${READY}`,
+    )
+    expect(pathError.message).toContain(
+      'plugins[2]: duplicate plugin module specifier "./plugins/local.ts"',
+    )
+    expect(pathError.message).toContain(
+      'first declared at plugins[0]; remove or deduplicate this entry',
+    )
+
+    const packageError = parseError(
+      `plugins = ["@acme/autobuild-plugin", "./plugins/local.ts", "@acme/autobuild-plugin", "@acme/autobuild-plugin"]\n${READY}`,
+    )
+    expect(packageError.message).toContain(
+      'plugins[2]: duplicate plugin module specifier "@acme/autobuild-plugin"',
+    )
+    expect(packageError.message).toContain(
+      'plugins[3]: duplicate plugin module specifier "@acme/autobuild-plugin"',
+    )
+    expect(packageError.message).toContain(
+      'first declared at plugins[0]; remove or deduplicate this entry',
+    )
+  })
+
   test('top-level scalars and positive numeric knobs accept overrides', () => {
     const config = parseConfig(`baseBranch = "trunk"
 capacity = 4

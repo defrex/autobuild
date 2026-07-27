@@ -44,7 +44,30 @@ describe('loadPlugins', () => {
     expect(registry.ticketSources.get('jira')?.requiredEnv).toEqual(['JIRA_TOKEN'])
   })
 
-  test('resolves a package export from the consuming repository, not an outer decoy', async () => {
+  test('uses separate roots for repository paths and package exports', async () => {
+    const worktree = await fixture()
+    const packageRoot = join(worktree, '..', 'consumer')
+    await write(
+      join(worktree, 'repo-local.ts'),
+      `export default { name: 'local', apiVersion: '^1.0.0', forges: { local: () => ({}) } }\n`,
+    )
+    await write(
+      join(packageRoot, 'node_modules', 'fixture-package', 'package.json'),
+      JSON.stringify({ name: 'fixture-package', type: 'module', exports: './plugin.ts' }),
+    )
+    await write(
+      join(packageRoot, 'node_modules', 'fixture-package', 'plugin.ts'),
+      `export default { name: 'package', apiVersion: '^1.0.0', forges: { package: () => ({}) } }\n`,
+    )
+
+    const registry = await loadPlugins(['./repo-local.ts', 'fixture-package'], worktree, {
+      packageRoot,
+    })
+    expect(registry.forges.get('local')?.owner).toEqual({ kind: 'plugin', name: 'local' })
+    expect(registry.forges.get('package')?.owner).toEqual({ kind: 'plugin', name: 'package' })
+  })
+
+  test('resolves a package export from the consuming repository by default', async () => {
     const repo = await fixture()
     const root = join(repo, '..')
     for (const [base, pluginName] of [
@@ -93,7 +116,14 @@ describe('loadPlugins', () => {
 
   test('names unresolved modules, evaluation failures, invalid defaults, and collisions', async () => {
     const repo = await fixture()
-    await expect(loadPlugins(['missing-plugin'], repo)).rejects.toThrow(
+    const packageRoot = join(repo, '..', 'package-root')
+    const diagnosis = await diagnosePlugins(['missing-plugin'], repo, { packageRoot })
+    expect(diagnosis.reports[0]).toMatchObject({
+      module: 'missing-plugin',
+      stage: 'resolution',
+      error: expect.stringContaining(`package root "${packageRoot}"`),
+    })
+    await expect(loadPlugins(['missing-plugin'], repo, { packageRoot })).rejects.toThrow(
       /missing-plugin.*could not be resolved/,
     )
 

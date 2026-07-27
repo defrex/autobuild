@@ -23,9 +23,8 @@ import { agentActor, KERNEL } from '../events/envelope'
 import type { IdSource } from '../ids'
 import {
   autoMergeApplicationType,
-  autoMergeDeferralObservation,
-  hasAutoMergeDeferralObservation,
   pendingAutoMerge,
+  recordAutoMergeDeferralObservation,
 } from '../kernel/auto-merge'
 import { phaseSpecFor } from '../kernel/phases'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
@@ -489,18 +488,14 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
               payload: { commandSeq: autoMerge.commandSeq },
             })
           } else if (autoMergeResult?.kind === 'deferred' && autoMergeResult.reason !== undefined) {
-            const current = await store.getEvents(env.build)
-            if (!hasAutoMergeDeferralObservation(current, pr.number, autoMerge.commandSeq)) {
-              await store.append(
-                env.build,
-                autoMergeDeferralObservation(
-                  autoMergeResult.reason,
-                  pr.number,
-                  autoMerge.commandSeq,
-                  deps.ids('obs'),
-                ),
-              )
-            }
+            await recordAutoMergeDeferralObservation(
+              store,
+              env.build,
+              autoMergeResult.reason,
+              pr.number,
+              autoMerge.commandSeq,
+              deps.ids('obs'),
+            )
           }
         } catch {
           // Both application facts and diagnostics are recoverable by

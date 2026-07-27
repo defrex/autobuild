@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
-import { autoMergeDeferralObservation } from '../kernel/auto-merge'
+import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -1877,7 +1877,7 @@ describe('Dispatcher janitor', () => {
     expect(h.forge.autoMergeCalls).toHaveLength(1)
   })
 
-  test('a finalize diagnostic landing during the forge probe prevents a stale-snapshot duplicate', async () => {
+  test('finalize and janitor racing at conditional append record one deferral observation', async () => {
     const h = harness()
     const slug = await seedBuild(h, { pr: PR })
     const command = await h.store.append(slug, {
@@ -1889,22 +1889,41 @@ describe('Dispatcher janitor', () => {
     h.forge.setGateProbeError(1, 'ruleset probe forbidden')
     await h.store.claimLease(slug, 'runner-live', 60_000)
 
+    // Hold both processors at the compare-and-append seam so they make the
+    // same absent-marker decision before either can win.
+    const appendIfCurrent = h.store.appendIfCurrent.bind(h.store)
+    let arrivals = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.store.appendIfCurrent = async (build, expectedSeq, event) => {
+      arrivals += 1
+      if (arrivals === 2) release()
+      await gate
+      return appendIfCurrent(build, expectedSeq, event)
+    }
+
     const realSet = h.forge.setAutoMerge.bind(h.forge)
+    let finalizeWrite: Promise<unknown> | undefined
     h.forge.setAutoMerge = async (...args) => {
       const result = await realSet(...args)
       if (result.kind !== 'deferred' || result.reason === undefined) {
         throw new Error('expected a reason-bearing deferral')
       }
-      // Models finalize's best-effort append after this janitor tick already
-      // captured its initial event snapshot but before the probe returns.
-      await h.store.append(
+      finalizeWrite = recordAutoMergeDeferralObservation(
+        h.store,
         slug,
-        autoMergeDeferralObservation(result.reason, 1, command.seq, 'obs_finalize'),
+        result.reason,
+        1,
+        command.seq,
+        'obs_finalize',
       )
       return result
     }
 
     await h.dispatcher.tick()
+    await finalizeWrite
 
     const observations = (await h.store.getEvents(slug)).filter(
       (event) =>

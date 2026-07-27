@@ -85,6 +85,12 @@ export const eventEnvelopeWireSchema = z.object({
 })
 export const eventListSchema = z.array(eventEnvelopeWireSchema)
 
+export const conditionalEventBodySchema = z.object({
+  expectedSeq: z.number().int().nonnegative(),
+  event: eventWriteWireSchema,
+})
+export const conditionalEventResponseSchema = eventEnvelopeWireSchema.nullable()
+
 // ── Repository journals ─────────────────────────────────────────────────────
 
 export const ensureRepoBodySchema = z.object({ repo: z.string().min(1) })

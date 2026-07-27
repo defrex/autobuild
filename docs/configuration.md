@@ -49,7 +49,7 @@ any table header.
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
 | `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
+| `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
 
 ### Plugin modules
 
@@ -58,13 +58,23 @@ any table header.
 plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 ```
 
-Relative paths and bare npm package specifiers are resolved as though imported
-from the repository root. Package specifiers therefore use that repository's
-installed dependencies, not Autobuild's own installation tree. Each module
-must default-export a strict manifest with a plugin name, a semver range in
-`apiVersion`, and optional `ticketSources`, `agentRuntimes`,
-`workspaceProviders`, and `forges` factory maps. One manifest may contribute
-to several ports.
+Repository-path specifiers (relative, absolute, and `file:`) resolve from the
+root whose config is being read. In a scoped phase process that root is the
+immutable build worktree. Bare npm package specifiers resolve from the consuming
+repository's main checkout and therefore use its installed dependencies, not
+Autobuild's own installation tree. This package lookup remains stable when a
+relocated local store places a linked worktree outside the checkout. Dispatch
+and sessionless commands use the main checkout for both roots. Missing packages
+fail loading; Autobuild does not install them.
+
+Every configured specifier string must be unique. An exact repeat fails schema
+validation before any plugin resolves or evaluates; the diagnostic identifies
+the repeated value and both list positions and tells the operator to remove or
+deduplicate the entry. Distinct specifier strings remain separate declarations.
+Each module must default-export a strict manifest with a plugin name, a semver
+range in `apiVersion`, and optional `ticketSources`, `agentRuntimes`,
+`workspaceProviders`, and `forges` factory maps. One manifest may contribute to
+several ports.
 
 Plugin modules execute in-process during `ab dispatch`, sessionless `ab ticket`
 commands, and configured scoped phase CLI composition. They have the same trust
@@ -73,7 +83,8 @@ there is no sandbox. A missing module, module
 that throws, malformed manifest, incompatible API range, or adapter-name
 collision fails startup before a ticket claim. Builtin names and names from
 earlier configured plugins are reserved, and declaration order never permits
-shadowing.
+shadowing. A collision between distinct plugin declarations continues to name
+the conflicting adapter and both owners.
 
 Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency

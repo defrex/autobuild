@@ -121,6 +121,19 @@ export interface BuildStore {
   append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>>
 
   /**
+   * Atomically append one validated event only when the build stream's
+   * current sequence equals `expectedSeq` (0 for an empty stream). Returns
+   * null when the stream has advanced. A comparison miss must not mutate the
+   * stream or build timestamps. Invalid events and unknown builds reject just
+   * as they do for `append`.
+   */
+  appendIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    event: EventWrite<T>,
+  ): Promise<EventEnvelope<T> | null>
+
+  /**
    * Atomic deposit (D6): store artifacts, then append the event that
    * references them — one operation, no state where an artifact exists
    * without its event or vice versa. `makeEvent` receives the deposited
@@ -184,6 +197,13 @@ export interface BuildStore {
   releaseRepoLease(repo: string, holder: string): Promise<void>
 
   close(): Promise<void>
+}
+
+/** Shared runtime guard for in-process conditional append callers. */
+export function validateExpectedSeq(expectedSeq: number): void {
+  if (!Number.isInteger(expectedSeq) || expectedSeq < 0) {
+    throw new Error(`expectedSeq must be a nonnegative integer, got ${expectedSeq}`)
+  }
 }
 
 /** sha256 hex — the content address for blobs (SPEC §7.1). */
