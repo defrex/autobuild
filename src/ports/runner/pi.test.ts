@@ -20,13 +20,55 @@ import {
   type AgentRunnerContractFactory,
 } from './contract'
 import {
+  isPiRuntimeUsable,
   PiAgentRunner,
   PiTurnCapture,
+  type PiAuthRuntimeFactory,
   type PiCreateSessionFn,
   type PiModelRef,
   type PiTurn,
 } from './pi'
 import { AGENT_BIN_DIR } from './session-env'
+
+describe('Pi init usability', () => {
+  const input = {
+    cwd: '/repo',
+    env: { OPENAI_API_KEY: 'secret' },
+    models: ['openai/gpt-test', 'kimi-coding/k3'],
+  }
+
+  test('requires every configured model to exist and resolve auth with the operator env', async () => {
+    const authCalls: Array<{ model: unknown; env: Record<string, string> }> = []
+    const factory: PiAuthRuntimeFactory = async () => ({
+      getModel: (provider, id) => ({ provider, id }),
+      getAuth: async (model, overrides) => {
+        authCalls.push({ model, env: overrides.env })
+        return { type: 'api-key', key: 'configured' }
+      },
+    })
+    expect(await isPiRuntimeUsable(input, factory)).toBe(true)
+    expect(authCalls).toHaveLength(2)
+    expect(authCalls[0]?.env.OPENAI_API_KEY).toBe('secret')
+  })
+
+  test('rejects missing models, missing auth, and an empty prospective model set', async () => {
+    expect(
+      await isPiRuntimeUsable(input, async () => ({
+        getModel: () => undefined,
+        getAuth: async () => ({ key: 'unused' }),
+      })),
+    ).toBe(false)
+    expect(
+      await isPiRuntimeUsable(input, async () => ({
+        getModel: (_provider, id) => ({ id }),
+        getAuth: async (model) => ((model as { id: string }).id === 'k3' ? undefined : {}),
+      })),
+    ).toBe(false)
+    expect(await isPiRuntimeUsable({ ...input, models: [] }, async () => Promise.reject())).toBe(
+      false,
+    )
+  })
+})
 
 const piContractFactory: AgentRunnerContractFactory = (scenario) => {
   const creates: RecordedCreate[] = []

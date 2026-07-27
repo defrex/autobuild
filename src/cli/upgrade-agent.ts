@@ -107,11 +107,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
         repoRoot: opts.targetRepo,
         env: opts.env,
       })
-      const selected = createRuntimeResolver(
-        runtimes,
-        config.roles,
-        production.defaultRuntime,
-      ).resolve('upgrade')
+      const selected = createRuntimeResolver(runtimes, config.roles).resolve('upgrade')
       const oneShot = runtimes[selected.runtime]?.oneShot
       if (oneShot === undefined) {
         throw new Error(

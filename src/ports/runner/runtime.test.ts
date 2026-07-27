@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { ScriptedAgentRunner, defaultTurnResult } from './fake'
-import { serves, type RuntimeRegistration } from './runtime'
+import { serves, type RuntimeRegistration, validateRuntimeRegistration } from './runtime'
 
 function reg(servesModels: string[]): RuntimeRegistration {
   return {
@@ -8,6 +8,20 @@ function reg(servesModels: string[]): RuntimeRegistration {
     servesModels,
   }
 }
+
+describe('runtime registration validation', () => {
+  test('preserves an optional init usability probe', async () => {
+    const initUsable = async () => true
+    const registration = validateRuntimeRegistration({ ...reg([]), initUsable })
+    expect(registration.initUsable).toBe(initUsable)
+  })
+
+  test('rejects a malformed init usability probe', () => {
+    expect(() => validateRuntimeRegistration({ ...reg([]), initUsable: true })).toThrow(
+      'initUsable must be a function when provided',
+    )
+  })
+})
 
 describe('serves — prefix-family matching', () => {
   test('matches a model whose id starts with a declared family', () => {

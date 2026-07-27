@@ -444,9 +444,11 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
 
   const server = options.noServer === true ? undefined : new FakeServer(ops)
   const forge = options.forge ?? new FakeForge()
+  const selectedConfig = options.configToml !== undefined ? parseConfig(options.configToml) : config
+  selectedConfig.roles.default ??= { runtime: 'scripted' }
   const br = new BuildRunner({
     store,
-    config: options.configToml !== undefined ? parseConfig(options.configToml) : config,
+    config: selectedConfig,
     runtimes: {
       // `scripted` (the default runtime) serves the `m-` family so the routed
       // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
@@ -455,7 +457,6 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       claude: { runner, servesModels: ['claude-'] },
       pi: { runner, servesModels: ['kimi-'] },
     },
-    defaultRuntime: 'scripted',
     workspacePath: handle.path,
     branch: BRANCH,
     slug: SLUG,

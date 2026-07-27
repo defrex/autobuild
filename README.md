@@ -42,9 +42,9 @@ third-party ticket, runtime, workspace, and forge adapters against the versioned
 ## Quickstart
 
 You need [Bun](https://bun.sh), `git`, an authenticated
-[`gh` CLI](https://cli.github.com) (`gh auth login`), and a logged-in
-[`claude` CLI](https://code.claude.com/docs/en/setup) — the default agent
-runtime.
+[`gh` CLI](https://cli.github.com) (`gh auth login`), and the local
+prerequisites for the agent runtime you select. Init suggests only runtimes
+whose executable and/or provider authentication is usable on your machine.
 
 <!-- release-install:start -->
 
@@ -60,9 +60,9 @@ Then, from the repository you want built:
 ab init
 ```
 
-Runs a short setup survey, writes `autobuild.toml`, and vendors the `ab-*`
-agent skills — see the [configuration reference](docs/configuration.md) for
-every option.
+Runs a short setup survey, writes an explicit runtime default to
+`autobuild.toml`, and vendors the `ab-*` agent skills — see the
+[configuration reference](docs/configuration.md) for every option.
 
 ```sh
 ab dispatch
@@ -70,15 +70,15 @@ ab dispatch
 
 Starts the dispatcher, with the live dashboard on a TTY.
 
-```sh
-claude "/ab-spec I want to build a feature!"
+In your selected coding agent, invoke the ticket-grooming skill:
+
+```text
+/ab-spec I want to build a feature!
 ```
 
-The `/ab-spec` skill is how you make quality tickets. 
-
-The agent will walk you through and ask any questions about creating a high 
-quality ticket and then add the ticket directly to your ticketing system.
-Using the skills to create tickets then largely becomes your input workflow.
+The agent asks the questions needed to produce a quality ticket and adds it
+directly to your ticketing system. Using the skill to create tickets then
+largely becomes your input workflow.
 
 ## How it works
 

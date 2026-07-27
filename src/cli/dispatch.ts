@@ -147,9 +147,8 @@ export interface DispatchWiring {
   forge: Forge
   workspaces: WorkspaceProvider
   /** Runtime registry (§9): name → adapter + compatibility data. The resolver
-   * applies `[roles]`; `defaultRuntime` is the wiring fallback. */
+   * applies `[roles]`, whose `default` entry is required. */
   runtimes: RuntimeRegistry
-  defaultRuntime: string
   /** The store reference sessions resolve as `AB_STORE` (D8) — MUST name the
    * same store as `store`, so an agent's `ab` commands write where the
    * dispatcher reads. */
@@ -271,7 +270,7 @@ async function defaultWire(
     opened.localStateRoot,
     plugins,
   )
-  const { runtimes, defaultRuntime } = createProductionRuntimes()
+  const { runtimes } = createProductionRuntimes()
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
   // their explicit config plus repository/environment context.
@@ -290,7 +289,6 @@ async function defaultWire(
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
     runtimes,
-    defaultRuntime,
     storeRef: opened.storeRef,
     ...(opened.token !== undefined ? { token: opened.token } : {}),
     ids: randomIds(),
@@ -1034,14 +1032,12 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
-    const { store, tickets, runtimes, defaultRuntime, ids, uuids, clock, storeRef, token } =
-      this.wiring
+    const { store, tickets, runtimes, ids, uuids, clock, storeRef, token } = this.wiring
     const runner = new HarvestRunner({
       store,
       tickets,
       config: this.config,
       runtimes,
-      defaultRuntime,
       repo: this.opts.targetRepo,
       workspacePath: this.opts.targetRepo,
       ids,
@@ -1131,7 +1127,7 @@ class DispatchLoop {
     this.activeBuildRuns.set(slug, reservation)
 
     try {
-      const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
+      const { store, runtimes, ids, clock, storeRef, token } = this.wiring
       const record = await store.getBuild(slug)
       const workspacePath = openWorkspacePath(await store.getEvents(slug))
       if (record === null || workspacePath === null) {
@@ -1145,7 +1141,6 @@ class DispatchLoop {
         store,
         config: this.config,
         runtimes,
-        defaultRuntime,
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
         slug,
@@ -1609,7 +1604,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // runtime/model pair fails `ab dispatch` loudly here, before any build
   // launches, never as a silent per-build fallback. The per-build BuildRunner
   // re-resolves too (its own construction is the second guard).
-  const resolver = createRuntimeResolver(wiring.runtimes, config.roles, wiring.defaultRuntime)
+  const resolver = createRuntimeResolver(wiring.runtimes, config.roles)
 
   // Launch flags are durable repository setters. Omission writes nothing, so
   // another dispatcher cannot clobber the latest operator choice with a value

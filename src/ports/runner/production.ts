@@ -3,14 +3,12 @@
  * needs agent judgment. Keeping the shipped adapters and their model families
  * here prevents dispatch and other non-phase one-shots from drifting apart.
  */
-import { ClaudeAgentRunner } from './claude'
-import { PiAgentRunner } from './pi'
+import { ClaudeAgentRunner, isClaudeRuntimeUsable } from './claude'
+import { isPiRuntimeUsable, PiAgentRunner } from './pi'
 import type { RuntimeRegistry } from './runtime'
 
 export interface ProductionRuntimes {
   runtimes: RuntimeRegistry
-  /** Wiring fallback when neither a role nor [roles.default] names a runtime. */
-  defaultRuntime: string
 }
 
 export function createProductionRuntimes(): ProductionRuntimes {
@@ -24,11 +22,13 @@ export function createProductionRuntimes(): ProductionRuntimes {
       claude: {
         runner: claude,
         oneShot: claude,
+        initUsable: isClaudeRuntimeUsable,
         servesModels: ['claude-'],
       },
       pi: {
         runner: pi,
         oneShot: pi,
+        initUsable: isPiRuntimeUsable,
         servesModels: [
           // OAuth coding providers, for credentials stored in auth.json by
           // `/login` inside an interactive Pi session.
@@ -44,6 +44,5 @@ export function createProductionRuntimes(): ProductionRuntimes {
         defaultModel: 'kimi-coding/k3',
       },
     },
-    defaultRuntime: 'claude',
   }
 }

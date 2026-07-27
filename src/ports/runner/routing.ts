@@ -75,12 +75,20 @@ function servedModels(registry: RuntimeRegistry, runtime: string): string {
 function resolveSpec(
   spec: RuntimeSpec,
   base: RuntimeSpec,
-  fallbackRuntime: string,
   registry: RuntimeRegistry,
   label: string,
   problems: string[],
 ): ResolvedRuntime | undefined {
-  const runtime = spec.runtime ?? base.runtime ?? fallbackRuntime
+  const runtime = spec.runtime ?? base.runtime
+  if (runtime === undefined || runtime.trim().length === 0) {
+    problems.push(
+      `${label} is missing required runtime. Add:\n\n` +
+        `[roles.default]\n` +
+        `runtime = "<runtime>"\n\n` +
+        `Available runtimes: ${runtimeNames(registry)}`,
+    )
+    return undefined
+  }
   const reg = registry[runtime]
   if (reg === undefined) {
     problems.push(
@@ -115,39 +123,23 @@ function resolveSpec(
  * reserved default or any declared role — throws one aggregated
  * `RuntimeConfigError`, so bad config fails before a session launches.
  *
- * @param registry         name → adapter + compatibility data.
- * @param roles            `[roles]`, including optional reserved `default`.
- * @param fallbackRuntime  wiring fallback when no role/default names runtime.
+ * @param registry name → adapter + compatibility data.
+ * @param roles    `[roles]`, including the required reserved `default`.
  */
 export function createRuntimeResolver(
   registry: RuntimeRegistry,
   roles: Record<string, RuntimeSpec>,
-  fallbackRuntime: string,
 ): RuntimeResolver {
   const problems: string[] = []
   const defaultSpec = roles.default ?? {}
 
-  const resolvedDefault = resolveSpec(
-    defaultSpec,
-    {},
-    fallbackRuntime,
-    registry,
-    '[roles.default]',
-    problems,
-  )
+  const resolvedDefault = resolveSpec(defaultSpec, {}, registry, '[roles.default]', problems)
 
   const resolvedRoles: Record<string, ResolvedRuntime> = {}
   for (const [role, spec] of Object.entries(roles)) {
     // Reserved inheritance base, never a dispatched phase-role cache entry.
     if (role === 'default') continue
-    const resolved = resolveSpec(
-      spec,
-      defaultSpec,
-      fallbackRuntime,
-      registry,
-      `[roles.${role}]`,
-      problems,
-    )
+    const resolved = resolveSpec(spec, defaultSpec, registry, `[roles.${role}]`, problems)
     if (resolved !== undefined) resolvedRoles[role] = resolved
   }
 

@@ -64,6 +64,9 @@ command = "test"
 [policy]
 stallRounds = 3
 
+[roles.default]
+runtime = "claude"
+
 [tickets]
 source = "file"
 dir = "tickets"
@@ -165,8 +168,10 @@ async function makeFixture(
     tickets,
     forge,
     workspaces,
-    runtimes: { scripted: { runner: agents, servesModels: [] } },
-    defaultRuntime: 'scripted',
+    runtimes: {
+      claude: { runner: agents, servesModels: [] },
+      scripted: { runner: agents, servesModels: [] },
+    },
     storeRef: 'memory', // unused: the scripted CLI writes the shared store by ref
     ids,
     uuids: randomUuids(),
@@ -278,8 +283,7 @@ describe('abDispatch guards', () => {
   test('loads, materializes, resolves, and runs a configured plugin runtime', async () => {
     const toml =
       'plugins = ["./runtime-plugin.ts"]\n' +
-      DISPATCH_CONFIG_TOML +
-      '\n[roles.default]\nruntime = "custom-runtime"\n'
+      DISPATCH_CONFIG_TOML.replace('runtime = "claude"', 'runtime = "custom-runtime"')
     const fx = await makeFixture(
       readyTicket('PLUG-1', { title: 'Use plugin runtime' }),
       happyHandlers(),
@@ -360,7 +364,7 @@ describe('abDispatch guards', () => {
     try {
       await initOrigin(
         origin,
-        'plugins = ["./tickets-plugin.ts"]\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
+        'plugins = ["./tickets-plugin.ts"]\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
       )
       await writeFile(
         join(origin, 'tickets-plugin.ts'),
@@ -444,7 +448,7 @@ describe('abDispatch guards', () => {
       )
       await writeFile(
         join(tmp, 'autobuild.toml'),
-        'forge = "custom"\nplugins = ["./forge-plugin.ts"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+        'forge = "custom"\nplugins = ["./forge-plugin.ts"]\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
       )
       await abDispatch({
         targetRepo: tmp,
@@ -520,7 +524,6 @@ describe('abDispatch guards', () => {
                 servesModels: ['claude-'],
               },
             },
-            defaultRuntime: 'claude',
             storeRef: join(tmp, 'store'),
             ids: sequentialIds(),
             uuids: randomUuids(),
@@ -589,6 +592,8 @@ steps = ["unit"]
 [verify.unit]
 kind = "check"
 command = "test"
+[roles.default]
+runtime = "claude"
 [tickets]
 source = "journal"
 readyState = "Ready"
@@ -854,10 +859,7 @@ triageState = "Triage"
   }, 30_000)
 
   test('routes the slug role to a one-shot capability with the full spec and configured model', async () => {
-    const toml = `${DISPATCH_CONFIG_TOML}
-[roles.default]
-runtime = "scripted"
-
+    const toml = `${DISPATCH_CONFIG_TOML.replace('runtime = "claude"', 'runtime = "scripted"')}
 [roles.slug]
 runtime = "namer"
 model = "gpt-slug-name"
@@ -1624,6 +1626,7 @@ describe('abDispatch watch harvest coordination', () => {
         wire: () => ({
           ...fx.wire(),
           runtimes: {
+            claude: { runner: blockingAgents, servesModels: [] },
             scripted: { runner: blockingAgents, servesModels: [] },
           },
         }),
