@@ -135,10 +135,20 @@ export interface ResumeInputView {
   value: string
 }
 
+export interface DashboardCounter {
+  current: number
+  limit: number
+}
+
 export interface DashboardModel {
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
+  /** Every nonterminal build consumes one configured dispatch capacity slot,
+   * including queued builds that deliberately have no visible row. */
+  active: DashboardCounter
+  /** Recorded observation occurrences not claimed by a Harvest snapshot. */
+  observations: DashboardCounter
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
   /** Durable repository claim-time default for newly claimed builds. */
@@ -845,12 +855,20 @@ export function projectHarvest(events: RepositoryEvent[]): DashboardHarvest | un
   return projectRepositoryHarvest(events).harvest
 }
 
-export interface DashboardHeader {
+interface DashboardFrameHeader {
   repo: string
   queued: number
+  observationCount: number
   selection?: DashboardSelection
   warningLine?: string
   resumeInput?: ResumeInputView
+}
+
+/** Exact dynamic and configured facts needed by the preprojected live path. */
+export interface DashboardHeader extends DashboardFrameHeader {
+  activeCount: number
+  capacity: number
+  harvestThreshold: number
 }
 
 /**
@@ -869,6 +887,8 @@ export function buildDashboardFromProjected(
   return {
     repo: header.repo,
     queued: header.queued,
+    active: { current: header.activeCount, limit: header.capacity },
+    observations: { current: header.observationCount, limit: header.harvestThreshold },
     drained: !settings.intake,
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
@@ -884,11 +904,23 @@ export function buildDashboardFromProjected(
 export function buildDashboard(
   entries: { record: BuildRecord; state: BuildState; events: AbEvent[] }[],
   config: Config,
-  header: DashboardHeader,
+  header: DashboardFrameHeader,
   repositoryEvents: RepositoryEvent[] = [],
 ): DashboardModel {
   const builds = entries
     .map(({ record, state, events }) => projectBuild(record, state, config, events))
     .filter((build): build is DashboardBuild => build !== null)
-  return buildDashboardFromProjected(builds, header, repositoryEvents)
+  const activeCount = entries.filter(
+    ({ state }) => state.status !== 'done' && state.status !== 'aborted',
+  ).length
+  return buildDashboardFromProjected(
+    builds,
+    {
+      ...header,
+      activeCount,
+      capacity: config.capacity,
+      harvestThreshold: config.policy.harvestThreshold,
+    },
+    repositoryEvents,
+  )
 }

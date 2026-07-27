@@ -74,6 +74,8 @@ function model(builds: DashboardBuild[]): DashboardModel {
   return {
     repo: '/repos/app',
     queued: 2,
+    active: { current: builds.length, limit: 5 },
+    observations: { current: 5, limit: 7 },
     drained: false,
     defaultAutoMerge: false,
     harvestPaused: false,
@@ -91,7 +93,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).toContain('Auto Build')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
-    expect(summary).toContain('queue 2 | active 1')
+    expect(summary).toContain('queue 2 | active 1/5 | obs 5/7')
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
     expect(toggles).toContain('intake ON')
@@ -135,10 +137,27 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines.join('\n')).toContain('no active builds')
   })
 
-  test('the summary contains no loop-mode word', () => {
-    const [summary] = rd(model([]), WIDE)
-    expect(summary).toContain('queue 2 | active 0')
-    expect(summary).not.toMatch(/\b(?:watch|once)\b/)
+  test('the summary keeps queue bare and renders pressure boundaries as current/limit', () => {
+    const [empty] = rd(
+      {
+        ...model([]),
+        active: { current: 0, limit: 5 },
+        observations: { current: 0, limit: 7 },
+      },
+      WIDE,
+    )
+    expect(empty).toContain('queue 2 | active 0/5 | obs 0/7')
+
+    const [saturated] = rd(
+      {
+        ...model([]),
+        active: { current: 5, limit: 5 },
+        observations: { current: 7, limit: 7 },
+      },
+      WIDE,
+    )
+    expect(saturated).toContain('queue 2 | active 5/5 | obs 7/7')
+    expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
   })
 
   test('process defaults and the acknowledged durable gate render explicit ON/OFF state', () => {
@@ -778,7 +797,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       expect(header).toContain('queue 2')
       // The count is on the header, so it still reports every build even when
       // most rows are clamped away.
-      expect(header).toContain('active 8')
+      expect(header).toContain('active 8/5')
     }
   })
 

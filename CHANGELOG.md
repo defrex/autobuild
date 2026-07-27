@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#102](https://github.com/defrex/autobuild/pull/102) — Show dispatch capacity and observation pressure
 - [#101](https://github.com/defrex/autobuild/pull/101) — Resolve package plugins from the consuming repository
 - [#100](https://github.com/defrex/autobuild/pull/100) — Prevent duplicate auto-merge deferral observations
 - [#99](https://github.com/defrex/autobuild/pull/99) — Reject duplicate plugin declarations with actionable diagnostics

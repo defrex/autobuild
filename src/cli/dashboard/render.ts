@@ -491,7 +491,12 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
     `${marker}${[
       paint('Auto Build', 'bold', color),
       displayText(basename(model.repo)),
-      paint(`queue ${model.queued} | active ${model.builds.length}`, 'dim', color),
+      paint(
+        `queue ${model.queued} | active ${model.active.current}/${model.active.limit} | ` +
+          `obs ${model.observations.current}/${model.observations.limit}`,
+        'dim',
+        color,
+      ),
     ].join('  ')}`,
     width,
   )

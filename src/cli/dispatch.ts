@@ -55,6 +55,7 @@ import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError } from '../processes/build-runner'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
+import { scanUnclaimedObservations } from '../processes/harvest'
 import {
   Dispatcher,
   emptyTickReport,
@@ -348,6 +349,9 @@ class DispatchLoop {
   private warningLine: string | undefined
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
+  /** Last successfully measured unclaimed observation count. Sampling failures
+   * retain this factual value rather than inventing a zero. */
+  private observationCount = 0
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -425,6 +429,22 @@ class DispatchLoop {
 
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
     return this.serialize(async () => {
+      // Observation pressure is display-only and sampled once per interactive
+      // dispatcher tick. A failed scan must neither fail dispatch nor replace
+      // the last complete measurement with a fabricated zero.
+      if (this.dashboard) {
+        try {
+          const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
+          this.observationCount = scan.observations.length
+        } catch (error) {
+          this.warn(
+            `dashboard observation pressure failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        }
+      }
+
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
       const settings = await this.readDispatchSettings()
@@ -1135,6 +1155,10 @@ class DispatchLoop {
       {
         repo: this.opts.targetRepo,
         queued: this.queuedCount,
+        activeCount: buildSnapshot.states.size,
+        capacity: this.config.capacity,
+        observationCount: this.observationCount,
+        harvestThreshold: this.config.policy.harvestThreshold,
       },
       repositoryEvents,
     )
