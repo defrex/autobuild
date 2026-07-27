@@ -824,8 +824,9 @@ Forge and agent credentials remain adapter-owned:
   sure the Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
-- Pi sessions use Pi's provider authentication (for example `pi login` or the
-  provider credentials Pi supports).
+- Pi sessions use Pi's provider authentication: start `pi` and run `/login`
+  inside the interactive session, or, for non-interactive use, supply the
+  provider credentials Pi supports (such as provider API keys in the environment).
 
 No provider API key, GitHub token, or remote-store bearer token belongs in
 `autobuild.toml`.
