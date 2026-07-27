@@ -247,6 +247,9 @@ From there, `ab dispatch` on a TTY is the whole cockpit. Every build in flight i
 pipeline position, elapsed time, PR state — and a handful of keys cover the
 day-to-day:
 
+- **Enter** drills into the selected build's status, pipeline, blockers, and
+  agent sessions. Select a session and press **Enter** again to read its
+  deposited transcript; **Escape** steps back from the transcript or build.
 - **`p`** pauses or resumes the selected build. On a blocked build it opens a
   feedback field instead: answer the escalation — or just press Enter to
   retry — and the build picks the phase back up with your guidance.
