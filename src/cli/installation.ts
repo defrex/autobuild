@@ -223,26 +223,27 @@ export async function inspectInstallation(options: {
         reason: `${ownerLock} does not agree with the direct dependency in ${ownerManifest}`,
       }
     }
-    const record = lockPackageRecord(lock, identity.packageName)
+    const expectedTagPrefix = `${repository.owner}-${repository.repository}-`
     if (
-      record === undefined ||
-      record[0] !== `${identity.packageName}@${dependency}` ||
-      typeof record[2] !== 'string' ||
       identity.bunTag === undefined ||
-      record[2] !== identity.bunTag
+      !identity.bunTag.startsWith(expectedTagPrefix) ||
+      identity.commit === undefined
     ) {
       return {
         kind: 'unknown',
         identity,
-        reason: `${ownerLock} does not contain matching Bun forge provenance`,
+        reason: 'the installed .bun-tag is malformed or contradicts the owning dependency',
       }
     }
-    const expectedTagPrefix = `${repository.owner}-${repository.repository}-`
-    if (!identity.bunTag.startsWith(expectedTagPrefix) || identity.commit === undefined) {
+    const record = lockPackageRecord(lock, identity.packageName)
+    const resolvedPackage =
+      `${identity.packageName}@github:${repository.owner}/${repository.repository}` +
+      `#${identity.commit}`
+    if (record === undefined || record[0] !== resolvedPackage || record[2] !== identity.bunTag) {
       return {
         kind: 'unknown',
         identity,
-        reason: 'the installed .bun-tag is malformed or contradicts the owning dependency',
+        reason: `${ownerLock} does not contain matching Bun forge provenance`,
       }
     }
 

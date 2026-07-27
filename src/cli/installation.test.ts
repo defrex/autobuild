@@ -41,7 +41,7 @@ async function fixture(options: { git?: 'file' | 'directory'; tag?: string } = {
     join(owner, 'bun.lock'),
     `{
       "workspaces": { "": { "dependencies": { "autobuild": "github:fork-owner/repo-name#main", }, }, },
-      "packages": { "autobuild": ["autobuild@github:fork-owner/repo-name#main", {}, "fork-owner-repo-name-a1b2c3d"], },
+      "packages": { "autobuild": ["autobuild@github:fork-owner/repo-name#a1b2c3d", {}, "fork-owner-repo-name-a1b2c3d"], },
     }`,
   )
   if (options.git === 'file') await writeFile(join(dist, '.git'), 'gitdir: elsewhere')
@@ -78,7 +78,7 @@ describe('installed distribution identity and Bun provenance', () => {
     }
   })
 
-  test('derives hyphenated fork provenance from owner records, not .bun-tag splitting', async () => {
+  test('accepts Bun-resolved lock commits while deriving the fork from the direct dependency', async () => {
     const { owner, dist, globalBin } = await fixture()
     const result = await inspectInstallation({ distRoot: dist, globalBin })
     expect(result.kind).toBe('bun-forge')
@@ -104,7 +104,7 @@ describe('installed distribution identity and Bun provenance', () => {
     const bad = await fixture({ tag: 'someone-else-repository-a1b2c3d' })
     const badResult = await inspectInstallation({ distRoot: bad.dist, globalBin: bad.globalBin })
     expect(badResult.kind).toBe('unknown')
-    if (badResult.kind === 'unknown') expect(badResult.reason).toContain('provenance')
+    if (badResult.kind === 'unknown') expect(badResult.reason).toContain('.bun-tag')
   })
 
   test('rejects malformed package versions and extra --version arguments', async () => {

@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { defaultDistRoot } from './init'
@@ -234,9 +233,6 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
   if (install.scope === 'global') {
     options.stdout(`Installed Autobuild v${resolved} in Bun's global package-manager scope.`)
   } else {
-    // Re-read to make the post-update disclosure truthful even if Bun replaced
-    // either owner file atomically.
-    await Promise.all([readFile(install.ownerManifest), readFile(install.ownerLock)])
     options.stdout(
       `Installed Autobuild v${resolved}; Bun updated ${install.ownerManifest} and ${install.ownerLock}.`,
     )

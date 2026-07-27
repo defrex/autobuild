@@ -38,7 +38,7 @@ async function installFixture(scope: 'local' | 'global' = 'local'): Promise<{
     join(owner, 'bun.lock'),
     `{
       "workspaces": { "": { "dependencies": { "autobuild": "github:a-fork/autobuild#v2.0.0", }, }, },
-      "packages": { "autobuild": ["autobuild@github:a-fork/autobuild#v2.0.0", {}, "a-fork-autobuild-a1b2c3d"], },
+      "packages": { "autobuild": ["autobuild@github:a-fork/autobuild#a1b2c3d", {}, "a-fork-autobuild-a1b2c3d"], },
     }`,
   )
   if (scope === 'global') await symlink(join(dist, 'bin', 'ab.ts'), join(globalBin, 'ab'))
@@ -92,6 +92,34 @@ describe('distribution self-update orchestration', () => {
     expect(out.join('\n')).toContain('package.json')
     expect(out.join('\n')).toContain('bun.lock')
     expect(out).toContain('ab-plan: adopted')
+  })
+
+  test('a successful install still hands off if owner metadata becomes unreadable afterward', async () => {
+    const fixture = await installFixture()
+    const calls: string[][] = []
+    const update = await selfUpdate({
+      targetRepo: '/repo',
+      distRoot: fixture.dist,
+      command: async (command) => {
+        calls.push(command)
+        if (calls.length === 1) return result(`${fixture.globalBin}\n`)
+        if (calls.length === 2) return result('{"tag_name":"v2.1.0"}')
+        if (calls.length === 3) {
+          await Promise.all([
+            rm(join(fixture.owner, 'package.json')),
+            rm(join(fixture.owner, 'bun.lock')),
+          ])
+          return result('installed')
+        }
+        return result('ab-plan: adopted\n')
+      },
+      stdout: () => {},
+      stderr: () => {},
+    })
+
+    expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
+    expect(calls).toHaveLength(4)
+    expect(calls[3]).toEqual(['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/repo'])
   })
 
   test('uses global Bun operation and permits an explicit downgrade', async () => {
