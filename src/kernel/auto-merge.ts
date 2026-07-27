@@ -1,6 +1,7 @@
-import type { AbEvent, EventWrite } from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import type { AutoMergeDeferralReason } from '../ports/types'
+import type { BuildStore } from '../store/types'
 import type { BuildState } from './reducer'
 
 /** The complete GitHub `mergeStateStatus` enum. Keeping this list closed is a
@@ -140,5 +141,33 @@ export function autoMergeDeferralObservation(
         `${DEFERRAL_SUMMARIES[reason.code]} — ${reason.detail}`,
       refs: [autoMergeDeferralRef(prNumber, commandSeq)],
     },
+  }
+}
+
+/**
+ * Record the one durable diagnostic allowed for a PR/auto-merge command.
+ * Every comparison is against the authoritative stream tail. A concurrent
+ * unrelated append merely causes a retry; a concurrent matching append makes
+ * the next read return without writing a duplicate.
+ */
+export async function recordAutoMergeDeferralObservation(
+  store: BuildStore,
+  slug: string,
+  reason: AutoMergeDeferralReason,
+  prNumber: number,
+  commandSeq: number,
+  id: string,
+): Promise<EventEnvelope<'observation.recorded'> | null> {
+  while (true) {
+    const events = await store.getEvents(slug)
+    if (hasAutoMergeDeferralObservation(events, prNumber, commandSeq)) return null
+
+    const expectedSeq = events.at(-1)?.seq ?? 0
+    const appended = await store.appendIfCurrent(
+      slug,
+      expectedSeq,
+      autoMergeDeferralObservation(reason, prNumber, commandSeq, id),
+    )
+    if (appended !== null) return appended
   }
 }

@@ -120,6 +120,21 @@ async function runBinAt(
   )
 }
 
+async function runBinIn(
+  cwd: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return collect(
+    Bun.spawn(['bun', BIN, ...args], {
+      cwd,
+      env: { ...bareEnv(), ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }),
+  )
+}
+
 async function git(cwd: string, ...args: string[]): Promise<void> {
   const result = await spawnExec(['git', ...args], { cwd })
   if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout)
@@ -411,6 +426,88 @@ test('a complete build tuple resolves its store and runs context', async () => {
     build: slug,
     phase: 'plan',
     round: 1,
+    materialized: { 'spec.md': { kind: 'spec', rev: 0 } },
+  })
+})
+
+test('dispatch and an external scoped worktree share the main checkout package root', async () => {
+  const main = join(tmp, 'repo')
+  const external = join(tmp, 'external-state')
+  const store = join(external, 'store')
+  const slug = 'external-plugin-context'
+  const linked = join(external, 'worktrees', slug)
+  await mkdir(main)
+  await writeFile(
+    join(main, 'autobuild.toml'),
+    'plugins = ["./repo-plugin.ts", "fixture-repo-package"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+  )
+  await writeFile(
+    join(main, 'repo-plugin.ts'),
+    `export default { name: 'repo-plugin', apiVersion: '^1.0.0' }\n`,
+  )
+  const packageDir = join(main, 'node_modules', 'fixture-repo-package')
+  await mkdir(packageDir, { recursive: true })
+  await writeFile(
+    join(packageDir, 'package.json'),
+    JSON.stringify({ name: 'fixture-repo-package', type: 'module', exports: './plugin.ts' }),
+  )
+  await writeFile(
+    join(packageDir, 'plugin.ts'),
+    `export default { name: 'package-plugin', apiVersion: '^1.0.0' }\n`,
+  )
+
+  await git(main, 'init', '-q', '-b', 'main')
+  await git(main, 'config', 'user.email', 'ab-bin@example.invalid')
+  await git(main, 'config', 'user.name', 'ab-bin')
+  await git(main, 'add', 'autobuild.toml', 'repo-plugin.ts')
+  await git(main, 'commit', '-q', '-m', 'plugin fixtures')
+  await mkdir(join(external, 'worktrees'), { recursive: true })
+  await git(main, 'worktree', 'add', '-q', '-b', `ab/${slug}`, linked)
+
+  const dispatch = await runBinIn(main, ['dispatch', '--once', '--plain', '--store', store])
+  expect(dispatch.code).toBe(0)
+  expect(dispatch.stderr).toBe('')
+
+  // The scoped process must keep repository paths on the immutable worktree,
+  // even though package lookup intentionally returns to this main checkout.
+  await writeFile(join(main, 'repo-plugin.ts'), `throw new Error('main checkout decoy')\n`)
+
+  const repo = await realpath(main)
+  const local = openLocalStore(store)
+  await local.createBuild({ slug, repo, branch: `ab/${slug}` })
+  await local.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: { source: 'file', id: 'T-external', title: 'External plugin context' },
+      repo,
+      baseBranch: 'main',
+    },
+  })
+  const spec = await local.putArtifact(slug, {
+    kind: 'spec',
+    content: '# External plugin context\n',
+  })
+  await local.append(slug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: {
+      artifact: { kind: spec.kind, rev: spec.revision },
+      ticket: { source: 'file', id: 'T-external' },
+    },
+  })
+  await local.close()
+
+  const context = await runBinIn(linked, ['context', '--json'], {
+    AB_STORE: store,
+    AB_BUILD: slug,
+    AB_PHASE: 'plan@1',
+    AB_SESSION: 's_external_plugin_context',
+  })
+  expect(context.code).toBe(0)
+  expect(context.stderr).toBe('')
+  expect(JSON.parse(context.stdout)).toMatchObject({
+    build: slug,
     materialized: { 'spec.md': { kind: 'spec', rev: 0 } },
   })
 })

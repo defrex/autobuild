@@ -166,15 +166,18 @@ under the preceding table.
 | `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
-Relative paths and npm package specifiers resolve from the consuming repository.
-Specifier strings must be unique: an exact repeat fails config validation before
-resolution or evaluation, identifies the repeated value and both positions, and
-tells the operator to remove or deduplicate it. Distinct specifiers remain
-separate declarations; if they register the same adapter name, the collision
-error still identifies that adapter and both plugin owners. Modules are trusted,
-in-process Bun code and cannot shadow builtin or previously registered names.
-All four registration maps have production
-selectors: `[tickets].source`, the root `forge` scalar, `[workspace].provider`,
+Repository-path specifiers resolve from the config-bearing root, which is the
+immutable build worktree in scoped phases. npm package specifiers resolve from
+the consuming main checkout's installed dependencies, independent of local
+store/worktree placement; missing packages fail and are never installed
+automatically. Specifier strings must be unique: an exact repeat fails config
+validation before resolution or evaluation, identifies the repeated value and
+both positions, and tells the operator to remove or deduplicate it. Distinct
+specifiers remain separate declarations; if they register the same adapter
+name, the collision error still identifies that adapter and both plugin owners.
+Modules are trusted, in-process Bun code and cannot shadow builtin or previously
+registered names. All four registration maps have production selectors:
+`[tickets].source`, the root `forge` scalar, `[workspace].provider`,
 and `[roles.*].runtime`. BuildStore uses the remote HTTP protocol, not this
 manifest, and TelemetrySource has no registration map.
 

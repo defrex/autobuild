@@ -179,6 +179,13 @@ for (let i = 0; i < count; i++) {
         type: 'observation.recorded',
         payload: { id: 'o_' + name + '_' + i, kind: 'followup', summary: name + ' ' + i },
       })
+    } else if (mode === 'conditional') {
+      const appended = await store.appendIfCurrent('conditional', 0, {
+        actor: { kind: 'agent', role: 'implement', session: 's_' + name },
+        type: 'observation.recorded',
+        payload: { id: 'o_' + name, kind: 'followup', summary: name },
+      })
+      if (appended !== null) wins++
     } else {
       const claimed = await store.claimLease('contested', name, 60_000)
       if (claimed) {
@@ -250,6 +257,34 @@ describe('SqliteBuildStore cross-process contention', () => {
             log.filter((e) => e.actor.kind === 'agent' && e.actor.session === session).length,
           ).toBe(COUNT)
         }
+      } finally {
+        await check.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test('cross-process conditional append has exactly one winner for one expected tail', async () => {
+    const root = await freshRoot()
+    try {
+      const setup = openLocalStore(root)
+      await setup.createBuild(sampleBuildInput('conditional'))
+      await setup.close()
+      const script = join(root, 'worker.ts')
+      await Bun.write(script, WORKER_SOURCE)
+
+      const [a, b] = await Promise.all([
+        runWorker(script, [root, 'a', 'conditional', '1']),
+        runWorker(script, [root, 'b', 'conditional', '1']),
+      ])
+      expect(a.errors).toEqual([])
+      expect(b.errors).toEqual([])
+      expect(a.wins + b.wins).toBe(1)
+
+      const check = openLocalStore(root)
+      try {
+        expect((await check.getEvents('conditional')).map((event) => event.seq)).toEqual([1])
       } finally {
         await check.close()
       }

@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { agentActor, humanActor, KERNEL } from '../events/envelope'
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { FakeForge } from '../ports/forge/fake'
 import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
@@ -1250,6 +1251,49 @@ describe('ab done — finalize', () => {
     expect(observations[0]?.payload.summary).toContain('repository-level auto-merge is disabled')
     expect(observations[0]?.payload.summary).not.toContain('PR creation')
     expect(observations[0]?.payload.refs).toEqual([`auto-merge-gate:pr:1:command:${command.seq}`])
+  })
+
+  test('finalize honors a pre-existing matching auto-merge deferral marker', async () => {
+    class DisabledAutoMergeForge extends FakeForge {
+      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
+        const pr = await super.openPr(opts)
+        this.setRepositoryAutoMergeDisabled(pr.number, 'allow_auto_merge is false')
+        return pr
+      }
+    }
+    const command = await store.append(BUILD, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await store.append(
+      BUILD,
+      autoMergeDeferralObservation(
+        { code: 'repository-auto-merge-disabled', detail: 'already recorded' },
+        1,
+        command.seq,
+        'obs_existing',
+      ),
+    )
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+
+    await done(
+      makeDeps({
+        store,
+        env: makeEnv({ phase: 'finalize' }),
+        workspacePath: workspace,
+        forge: new DisabledAutoMergeForge(),
+      }),
+    )
+
+    const observations = (await store.getEvents(BUILD)).filter(
+      (event) => event.type === 'observation.recorded',
+    )
+    expect(observations).toHaveLength(1)
+    expect(observations[0]?.payload).toMatchObject({ id: 'obs_existing' })
   })
 
   test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {

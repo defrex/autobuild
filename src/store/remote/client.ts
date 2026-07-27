@@ -47,6 +47,7 @@ import {
   artifactMetaWireSchema,
   buildRecordListSchema,
   buildRecordWireSchema,
+  conditionalEventResponseSchema,
   decodeBase64,
   depositsResponseSchema,
   encodeBase64,
@@ -163,6 +164,23 @@ export class RemoteBuildStore implements BuildStore {
       { actor: event.actor, type: event.type, payload: event.payload },
     )
     return envelope as unknown as EventEnvelope<T>
+  }
+
+  async appendIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    event: EventWrite<T>,
+  ): Promise<EventEnvelope<T> | null> {
+    const envelope = await this.requestJson(
+      'POST',
+      `${this.buildPath(slug)}/events/conditional`,
+      conditionalEventResponseSchema,
+      {
+        expectedSeq,
+        event: { actor: event.actor, type: event.type, payload: event.payload },
+      },
+    )
+    return envelope as EventEnvelope<T> | null
   }
 
   /**
