@@ -125,7 +125,16 @@ describe('layered CLI help catalog', () => {
         'never overwrites an',
         'autobuild.toml',
       ],
-      upgrade: ['ab upgrade [target]', 'Three-way merge', 'outside sessions'],
+      upgrade: [
+        'ab upgrade [target]',
+        '--no-self-update',
+        '--version <semver>',
+        'latest GitHub Release',
+        'package.json',
+        'bun.lock',
+        'Three-way merge',
+        'outside sessions',
+      ],
       dispatch: [
         '--intake | --no-intake',
         '--auto-merge | --no-auto-merge',

@@ -64,15 +64,23 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
   {
     name: 'upgrade',
     audience: 'human',
-    summary: 'Merge updated default skills into a repository.',
+    summary: 'Update Autobuild and merge updated default skills.',
     detail: page([
       'Usage:',
-      '  ab upgrade [target]',
+      '  ab upgrade [target] [--no-self-update | --version <semver>]',
       '',
-      'Three-way merge vendored ab-* skills with the new defaults (§16.3). The',
-      'target defaults to the current directory. Local customizations are the',
-      'merge base preference, and unresolved conflicts are left byte-untouched for',
-      'manual resolution. This command runs outside sessions.',
+      'By default, update the running Bun forge installation to its repository’s',
+      'latest GitHub Release, then use the replacement binary and defaults to',
+      'Three-way merge vendored ab-* skills (§16.3). The target defaults to the',
+      'current directory. --version selects an exact release, including an older',
+      'one. --no-self-update skips distribution update and merges against what is',
+      'installed. Source checkouts and unknown install mechanisms are never mutated.',
+      '',
+      'Latest-release lookup/install failures warn and continue with installed',
+      'defaults; an explicitly selected release failure stops. A local Bun install',
+      'updates its owning package.json and bun.lock; a global install updates Bun’s',
+      'global package-manager state. Local customizations remain preferred, and',
+      'unresolved conflicts remain byte-untouched. This command runs outside sessions.',
     ]),
   },
   {
@@ -433,6 +441,7 @@ export function renderTopLevelHelp(): string {
     '  Dispatch drives planning, implementation, review, verification, and merge.',
     '',
     'For details, run `ab help <command>` or `ab <command> --help`.',
+    'Run `ab --version` to report the installed version and plugin API offline.',
     '',
   ]
 

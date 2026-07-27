@@ -1,0 +1,233 @@
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { ExecResult } from '../ports/workspace/git-worktree'
+import { runCli } from './main'
+import { selfUpdate, type SelfUpdateCommand } from './self-update'
+
+let root: string | undefined
+afterEach(async () => {
+  if (root !== undefined) await rm(root, { recursive: true, force: true })
+  root = undefined
+})
+
+async function installFixture(scope: 'local' | 'global' = 'local'): Promise<{
+  owner: string
+  dist: string
+  globalBin: string
+}> {
+  root = await mkdtemp(join(tmpdir(), 'ab-self-update-'))
+  const owner = join(root, 'owner')
+  const dist = join(owner, 'node_modules', 'autobuild')
+  const globalBin = join(root, 'global-bin')
+  await mkdir(join(dist, 'bin'), { recursive: true })
+  await mkdir(join(dist, 'skills'))
+  await mkdir(globalBin)
+  await writeFile(
+    join(dist, 'package.json'),
+    JSON.stringify({ name: 'autobuild', version: '2.0.0', bin: { ab: 'bin/ab.ts' } }),
+  )
+  await writeFile(join(dist, 'bin', 'ab.ts'), '')
+  await writeFile(join(dist, '.bun-tag'), 'a-fork-autobuild-a1b2c3d')
+  await writeFile(
+    join(owner, 'package.json'),
+    JSON.stringify({ dependencies: { autobuild: 'github:a-fork/autobuild#v2.0.0' } }),
+  )
+  await writeFile(
+    join(owner, 'bun.lock'),
+    `{
+      "workspaces": { "": { "dependencies": { "autobuild": "github:a-fork/autobuild#v2.0.0", }, }, },
+      "packages": { "autobuild": ["autobuild@github:a-fork/autobuild#v2.0.0", {}, "a-fork-autobuild-a1b2c3d"], },
+    }`,
+  )
+  if (scope === 'global') await symlink(join(dist, 'bin', 'ab.ts'), join(globalBin, 'ab'))
+  return { owner, dist, globalBin }
+}
+
+function result(stdout = '', stderr = '', exitCode = 0): ExecResult {
+  return { stdout, stderr, exitCode }
+}
+
+function scripted(
+  replies: ExecResult[],
+  calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }>,
+): SelfUpdateCommand {
+  return async (command, options) => {
+    calls.push({ command, options })
+    return replies.shift() ?? result('', 'unexpected command', 99)
+  }
+}
+
+describe('distribution self-update orchestration', () => {
+  test('latest local update resolves the fork, mutates through Bun, then only hands off', async () => {
+    const fixture = await installFixture()
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const out: string[] = []
+    const update = await selfUpdate({
+      targetRepo: '/target/repo',
+      distRoot: fixture.dist,
+      env: { PATH: '/bin' },
+      command: scripted(
+        [
+          result(`${fixture.globalBin}\n`),
+          result('{"tag_name":"v2.1.0"}'),
+          result('installed'),
+          result('ab-plan: adopted\n'),
+        ],
+        calls,
+      ),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+
+    expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
+    expect(calls.map((call) => call.command)).toEqual([
+      ['bun', 'pm', 'bin', '-g'],
+      ['gh', 'api', 'repos/a-fork/autobuild/releases/latest'],
+      ['bun', 'add', '--cwd', fixture.owner, 'github:a-fork/autobuild#v2.1.0'],
+      ['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/target/repo'],
+    ])
+    expect(calls[3]?.options.env).toMatchObject({ PATH: '/bin', AB_SELF_UPDATE_HANDOFF: '1' })
+    expect(out.join('\n')).toContain('package.json')
+    expect(out.join('\n')).toContain('bun.lock')
+    expect(out).toContain('ab-plan: adopted')
+  })
+
+  test('uses global Bun operation and permits an explicit downgrade', async () => {
+    const fixture = await installFixture('global')
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const update = await selfUpdate({
+      targetRepo: '/repo',
+      version: '1.9.0',
+      distRoot: fixture.dist,
+      command: scripted(
+        [result(`${fixture.globalBin}\n`), result('{"tag_name":"v1.9.0"}'), result(), result()],
+        calls,
+      ),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(update.kind).toBe('handoff')
+    expect(calls[1]?.command).toEqual(['gh', 'api', 'repos/a-fork/autobuild/releases/tags/v1.9.0'])
+    expect(calls[2]?.command).toEqual(['bun', 'add', '--global', 'github:a-fork/autobuild#v1.9.0'])
+  })
+
+  test('does not reinstall the current latest release', async () => {
+    const fixture = await installFixture()
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const update = await selfUpdate({
+      targetRepo: '/repo',
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`), result('{"tag_name":"v2.0.0"}')], calls),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(update).toEqual({ kind: 'continue' })
+    expect(calls).toHaveLength(2)
+  })
+
+  test('latest failures warn and continue, while explicit install failures stop before merge', async () => {
+    const fixture = await installFixture()
+    const latestCalls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const warnings: string[] = []
+    expect(
+      await selfUpdate({
+        targetRepo: '/repo',
+        distRoot: fixture.dist,
+        command: scripted(
+          [result(`${fixture.globalBin}\n`), result('', 'offline', 1)],
+          latestCalls,
+        ),
+        stdout: () => {},
+        stderr: (line) => warnings.push(line),
+      }),
+    ).toEqual({ kind: 'continue' })
+    expect(warnings.join('\n')).toContain('offline')
+
+    const explicitCalls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
+    expect(
+      await selfUpdate({
+        targetRepo: '/repo',
+        version: '2.1.0',
+        distRoot: fixture.dist,
+        command: scripted(
+          [
+            result(`${fixture.globalBin}\n`),
+            result('{"tag_name":"v2.1.0"}'),
+            result('', 'permission denied', 1),
+          ],
+          explicitCalls,
+        ),
+        stdout: () => {},
+        stderr: (line) => warnings.push(line),
+      }),
+    ).toEqual({ kind: 'failed' })
+    expect(explicitCalls).toHaveLength(3)
+    expect(warnings.join('\n')).toContain('permission denied')
+  })
+
+  test('CLI flags gate orchestration and a handoff status ends the parent route', async () => {
+    const fixture = await installFixture()
+    const target = join(root!, 'target')
+    await mkdir(target)
+    let updates = 0
+    let resolverFactories = 0
+    const errors: string[] = []
+    const deps = {
+      workspacePath: '/repo',
+      stdout: () => {},
+      stderr: (line: string) => errors.push(line),
+      selfUpdate: async (): Promise<import('./self-update').SelfUpdateResult> => {
+        updates += 1
+        return { kind: 'handoff', exitCode: 7 }
+      },
+      upgradeResolverFactory: () => {
+        resolverFactories += 1
+        return async () => null
+      },
+    }
+    expect(await runCli(['upgrade'], deps)).toBe(7)
+    expect(updates).toBe(1)
+    expect(resolverFactories).toBe(0)
+
+    expect(await runCli(['upgrade', '--no-self-update', '--version', '2.0.0'], deps)).toBe(1)
+    expect(errors.at(-1)).toContain('cannot be combined')
+    expect(updates).toBe(1)
+
+    expect(
+      await runCli(['upgrade', target, '--no-self-update'], {
+        ...deps,
+        distributionRoot: fixture.dist,
+      }),
+    ).toBe(0)
+    expect(updates).toBe(1)
+
+    expect(await runCli(['help'], deps)).toBe(0)
+    expect(updates).toBe(1)
+  })
+
+  test('source checkout refusal performs no command and still permits skill merge', async () => {
+    const fixture = await installFixture()
+    await mkdir(join(fixture.dist, '.git'))
+    let commands = 0
+    const warnings: string[] = []
+    expect(
+      await selfUpdate({
+        targetRepo: '/repo',
+        distRoot: fixture.dist,
+        command: async () => {
+          commands += 1
+          return result()
+        },
+        stdout: () => {},
+        stderr: (line) => warnings.push(line),
+      }),
+    ).toEqual({ kind: 'continue' })
+    expect(commands).toBe(0)
+    expect(warnings.join('\n')).toContain('source checkout')
+  })
+})
