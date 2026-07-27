@@ -1781,6 +1781,10 @@ function latestDashboardFrame(term: { frames: string[] }): string {
   )
 }
 
+function latestPaintedFrame(term: { frames: string[] }): string {
+  return stripAnsi([...term.frames].reverse().find((frame) => frame.includes('\n')) ?? '')
+}
+
 /** The longest run of consecutive painted lines the region wrote — i.e. the
  * tallest frame the terminal had to display. */
 function tallestFrame(term: { frames: string[] }): number {
@@ -3801,6 +3805,72 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(input.cleanups).toBe(1)
       expect(term.all()).toContain('\x1b[?25h')
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Enter drills into a build and pinned transcript without appending facts, then Escape restores the row', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-drill', { title: 'Drilldown work' }),
+      happyHandlers(),
+    )
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'reader' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('drilldown-work'))
+      input.press('down')
+      await waitFor(() => /^> .*drilldown-work/m.test(latestDashboardFrame(term)))
+      const before = await fx.store.getEvents('drilldown-work')
+      const repoBefore = await fx.store.getRepoEvents(fx.origin)
+
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
+      const detail = latestPaintedFrame(term)
+      expect(detail).toContain('Pipeline')
+      expect(detail).toContain('Sessions')
+      expect(detail).toContain('runtime')
+      expect(detail).not.toContain('Auto Build')
+
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Transcript  drilldown-work'))
+      expect(latestPaintedFrame(term)).toContain('Producer boundary record')
+
+      input.press('escape')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
+      input.press('escape')
+      await waitFor(() => /^> .*drilldown-work/m.test(latestDashboardFrame(term)))
+
+      expect(await fx.store.getEvents('drilldown-work')).toEqual(before)
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
