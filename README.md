@@ -138,47 +138,6 @@ remove it; it is distinct from any configured or historical `autobuild` ready
 label. You groom and ready proposals like any ticket you wrote yourself. Agents
 propose; humans dispatch.
 
-## Operating it
-
-The loop starts before the dispatcher: every build is only as good as its
-ticket. The vendored `/ab-spec` skill is the grooming surface — it interviews
-you from an idea to a conforming spec, or takes a ticket someone else filed
-and tightens it until it meets
-[the standard](docs/spec-standard.md) the build process expects. Groom the
-ticket, mark it ready, and it's dispatchable.
-
-From there, `ab dispatch` on a TTY is the whole cockpit. Every build in flight is a row —
-pipeline position, elapsed time, PR state — and a handful of keys cover the
-day-to-day:
-
-- **Enter** drills into the selected build's status, pipeline, blockers, and
-  agent sessions. Select a session and press **Enter** again to read its
-  deposited transcript; **Escape** steps back from the transcript or build.
-- **`p`** pauses or resumes the selected build. On a blocked build it opens a
-  feedback field instead: answer the escalation — or just press Enter to
-  retry — and the build picks the phase back up with your guidance.
-- **`m`** toggles durable auto-merge consent for the selected build. Gated
-  branches use GitHub-native auto-merge, so your required checks still decide
-  when it lands.
-- On the header row, **`i`** gates ticket intake, **`m`** sets the auto-merge
-  default for newly claimed builds, and **`h`** gates harvesting — all
-  repository-wide, all durable across restarts.
-
-![Answering a blocked build's escalation from the
-dashboard](docs/assets/headline-interactive.png)
-
-Nothing about the dashboard is load-bearing — `ab builds`,
-`ab build status <slug>`, and
-`ab harvest status` project the same durable state as text or `--json`, so a
-pipe or a script sees exactly what you do.
-
-`ab --version` reports the installed package, commit, and plugin API versions
-from any directory. `ab upgrade` moves a Bun installation to the latest GitHub
-Release and merges the new distribution's skill defaults into the current
-repository, preferring your local customizations; `ab help upgrade` covers
-exact-version selection, merge-only operation, and how local and global
-installs differ.
-
 ## Learn more
 
 - [`docs/spec-standard.md`](docs/spec-standard.md) — what makes a ticket
