@@ -130,7 +130,7 @@ extensions = ["web-access"]
 stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
-maxReviewRounds = 4
+maxReviewRounds = 6
 # Structured observations are harvested on back-pressure by `ab dispatch`.
 # The workflow is repository-scoped and independent of build capacity; its two
 # optional runtime/model overrides are `[roles.harvest]` and
@@ -149,6 +149,6 @@ readyLabels = []                 # labels that additionally narrow readiness ([]
 # in before claim() moves them to "In Progress". Matched case-sensitively.
 readyState = "Todo"
 claimedState = "In Progress"    # workflow state claim() moves an issue to
-createState = "Backlog"         # state new tickets are filed into (absent = provider default)
+createState = "Todo"         # state new tickets are filed into (absent = provider default)
 triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
 # — or file-based: source = "file" with readyState = "ready" and optional dir = "tickets"
