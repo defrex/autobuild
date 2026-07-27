@@ -134,6 +134,7 @@ export class PluginRegistry {
   ])
   readonly agentRuntimes = reserved<AgentRuntimePluginFactory, AgentRunnerContractFactory>([
     'claude',
+    'codex',
     'pi',
     // Init's independent author/reviewer arrangement is addressed by this
     // profile value, so a runtime with the same name could never be selected.

@@ -466,7 +466,7 @@ runtime names.
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
 | `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
-| `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Pi ids are provider-qualified. |
+| `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
 | `extensions` | inherited; otherwise `[]` (hermetic) | optional array of nonempty strings; `[]` allowed | Pi package/extension allowlist. A supplied list replaces, rather than unions with, the inherited list. |
 
 <!-- config-fragment:roles -->
@@ -491,17 +491,24 @@ to serve a configured model and never substitutes a different model to repair
 an invalid pair. The only implicit fill is when neither the role nor `default`
 names a model, in which case the selected runtime uses its own default.
 
-Two runtimes ship: `claude` and `pi`; trusted plugins may register additional
+Three runtimes ship: `claude`, `codex`, and `pi`; `ab plugin list` projects all
+three as builtin agent runtimes, and trusted plugins may register additional
 names. Builtin and plugin runtimes use the same exact-pair validation and event
 attribution. With no configured model, the selected runtime uses its declared
-default when present (Claude otherwise uses the local Claude Code CLI's
-selected default; Pi declares `kimi-coding/k3`). Use `ab models [query]` to
-find provider-qualified Pi model ids. Extension entries match installed Pi
-package sources case-insensitively;
-runtimes without an extension mechanism ignore this axis. A plugin may declare
+default when present: Claude and Codex delegate to their local CLI's selected
+default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
+ids. Pi ids remain provider-qualified—including the independent
+`openai-codex/*` route—and `ab models [query]` looks them up. Extension entries
+match installed Pi package sources case-insensitively; runtimes without an
+extension mechanism ignore this axis. A plugin may declare
 optional tool-free one-shot completion for `slug` and `upgrade`; absence keeps
 each caller's existing fail-safe behavior. One-shot judgments disable
 extensions even if their role grants them.
+
+The injected Codex protocol/contract suite is deterministic and credential-free:
+`bun test src/ports/runner/codex.test.ts`. An authenticated local smoke run is
+opt-in:
+`AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test src/ports/runner/codex.live.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
 `code-review`, `finalize`, and `reconcile`). Agent verify sessions route by
@@ -735,15 +742,18 @@ The role profiles are:
   `openai-codex/gpt-5.6-sol`, while `plan-review` and `code-review` use
   `kimi-coding/k3`;
 - `claude`: `[roles.default]` uses the Claude runtime and its own default model,
-  matching the historical template; and
+  matching the historical template;
+- `codex`: `[roles.default]` uses the locally authenticated Codex CLI and its
+  own default model; and
 - `pi`: `[roles.default]` uses the Pi runtime and its own default model.
 
 A flag suppresses only its corresponding prompt. Supplying all three flags is
 prompt-free on or off a TTY. Explicit role profiles are operator overrides.
 For an unresolved role choice, init probes every registered runtime through its
-optional onboarding capability and offers only usable choices. Claude requires
-a present, logged-in CLI; Pi requires catalog resolution and authentication for
-every model the profile writes. A registration without a probe is not guessed
+optional onboarding capability and offers only usable choices. Claude and Codex
+require their respective local CLI to be present and logged in; Pi requires
+catalog resolution and authentication for every model the profile writes. A
+registration without a probe is not guessed
 usable. Non-interactive init selects a detected usable choice and writes it
 explicitly; if none exists, it exits nonzero before mutation and names
 `--role-profile` as the remedy.
@@ -754,7 +764,8 @@ follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment,
 in a distinct next-steps block; it never prompts for or writes a secret.
 Choosing either Pi profile puts the real provider-authentication flow in the
 same block: run `pi` and use `/login`, or set the provider API key in the
-environment.
+environment. Choosing `codex` instead names both the required `codex`
+executable and `codex login`; it emits no Pi setup guidance.
 
 After installation, init reports `autobuild.toml: written|skipped` and counts
 all skill outcomes (`installed`, `unchanged`, `kept`, and `overwritten`). It
@@ -857,6 +868,9 @@ Forge and agent credentials remain adapter-owned:
   sure the Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
+- Codex sessions invoke the local `codex` CLI and use its configured login;
+  install Codex, run `codex login`, and complete authentication before
+  dispatching;
 - Pi sessions use Pi's provider authentication: start `pi` and run `/login`
   inside the interactive session, or, for non-interactive use, supply the
   provider credentials Pi supports (such as provider API keys in the environment).
@@ -931,9 +945,11 @@ new unclaimed observations exist. Harvest does not consume build capacity.
   repository, an existing published mutable release, the numeric release id,
   and Contents write permission.
 - **Agent runtime/provider:** authenticate the runtime selected by the merged
-  role. A 401/402/403, permission, quota, or billing rejection is treated as a
-  permanent provider failure rather than retried indefinitely. For Pi, confirm
-  the provider-qualified model and provider login.
+  role. A missing Codex adapter diagnostic names both `codex runtime` and the
+  `codex` executable; install it and run `codex login`. A 401/402/403,
+  permission, quota, or billing rejection is treated as a permanent provider
+  failure rather than retried indefinitely. For Pi, confirm the
+  provider-qualified model and provider login.
 - **Remote BuildStore:** confirm the effective `AB_STORE` URL and `AB_TOKEN`.
   A protected store reports 401 for a missing, invalid, or expired token and
   403 when the token is valid but scoped to another build/session.

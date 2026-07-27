@@ -53,7 +53,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Ctrl+C cancels before autobuild.toml or vendored skills are written.',
       'Each selection flag suppresses its corresponding prompt; specifying all three is prompt-free.',
       '--no-interactive auto-selects a detected usable runtime; it fails safely when none is usable.',
-      'The final summary counts skill outcomes; Linear/Pi follow-ups appear under Next steps.',
+      'The final summary counts skill outcomes; adapter setup follow-ups appear under Next steps.',
       'Non-TTY output is plain and includes the autobuild.toml outcome.',
       '',
       '--force overwrites edited vendored skills only; it never overwrites an existing autobuild.toml.',

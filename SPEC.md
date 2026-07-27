@@ -77,7 +77,7 @@ Interfaces to the world, each with swappable adapters:
 | Port | Duty | Initial adapters |
 |---|---|---|
 | `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; third-party in-process registrations; later GitHub Issues |
-| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); pi (SDK mode); third-party in-process registrations |
+| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); pi (SDK mode); third-party in-process registrations |
 | `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
@@ -507,8 +507,9 @@ It buys three properties at once:
    `observations.md` after the fact.
 
 The kernel's job then reduces to: read the event log, decide the next phase
-per the transition table, invoke the AgentRunner with `/{skill} {build}`,
-wait for the terminal event, repeat.
+per the transition table, ask the AgentRunner to invoke the named skill with
+its runtime-native syntax (`/{skill} {build}` for Claude/Pi, `$<skill> {build}`
+for Codex), wait for the terminal event, repeat.
 
 ### 8.1 Invocation model and ambient auth [D8]
 
@@ -714,11 +715,14 @@ non-resumable), used for slug naming (§6.3) and vendored-skill conflict
 resolution (§16.3). A runtime without it is valid; each caller owns its
 deterministic fail-safe.
 
-- **Adapters:** the locally installed Claude Code CLI in headless mode for
-  Claude models; pi in SDK mode for other model families. The Claude adapter
-  uses the CLI's authenticated login and native session resume. Both are
-  registered runtimes behind the interface. Plugins
-  may register additional adapters, each under a *distinct runtime name*, never
+- **Adapters:** three builtins sit behind the interface: the locally installed
+  Claude Code CLI in headless mode for Claude models; the locally installed
+  Codex CLI for unqualified `gpt-*` models; and pi in SDK mode for
+  provider-qualified model families, including its independent
+  `openai-codex/*` route. The Claude and Codex adapters use their CLI's local
+  authenticated login and native session resume. All three provide tool-free
+  one-shot completion. Plugins may register additional adapters, each under a
+  *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and

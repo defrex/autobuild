@@ -83,6 +83,11 @@ export const INIT_ROLE_PROFILE_CHOICES = [
     help: "Uses the Claude runtime's own default model for every role (the historical template default).",
   },
   {
+    value: 'codex',
+    label: 'Codex default',
+    help: 'Uses the locally authenticated Codex CLI and its own default model for every role.',
+  },
+  {
     value: 'pi',
     label: 'Pi default',
     help: "Uses the Pi runtime's own default model for every role.",
@@ -981,6 +986,11 @@ export async function abInit(opts: {
   ) {
     nextSteps.push(
       'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
+    )
+  }
+  if (config === 'written' && resolvedSelections?.roleProfile === 'codex') {
+    nextSteps.push(
+      'Codex setup required: install the `codex` executable and run `codex login` to authenticate it.',
     )
   }
 

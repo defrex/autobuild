@@ -72,6 +72,8 @@ describe('ab plugin', () => {
     expect(await abPlugin(['list'], io.opts)).toBe(0)
     const text = io.stdout.join('\n')
     expect(text).toContain('ticket-source:')
+    expect(text).toContain('agent-runtime:')
+    expect(text).toContain('codex owner=builtin')
     expect(text).toContain('file owner=builtin')
     expect(text).toContain('jira owner=plugin:acme module=./plugin.ts')
     expect(text).toContain('resolution=repo-path')

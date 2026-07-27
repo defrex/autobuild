@@ -141,7 +141,8 @@ third, deliberately separate boundary and also fails closed.
 
 **Agent runtimes.** `src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
-`production.ts` (shipped Claude/Pi registrations), `one-shot.ts` (optional
+`production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct
+Codex `exec --json` subprocess protocol with native thread resume), `one-shot.ts` (optional
 tool-free non-phase completions — slug naming via `src/cli/dispatch.ts`,
 skill-conflict proposals via `src/cli/upgrade-agent.ts`), `provider-error.ts`
 (positive-only permanent-failure classifier), and `session-env.ts` (per-turn
@@ -263,8 +264,8 @@ behavioral assertions against every implementation:
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and
-local-git adapters, the injected Claude CLI subprocess contract, and the
-injected Pi SDK contract.
+local-git adapters, the injected Claude and Codex CLI subprocess contracts,
+and the injected Pi SDK contract.
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
 through readiness, dependency, harvest, and completion paths. The Linear,
@@ -309,8 +310,8 @@ protection permissions. The fixture creates and deletes temporary branches,
 PRs, comments, and a required-check protection rule; it never pushes to or
 merges into the default branch. Use a dedicated scratch repository only.
 
-The deterministic Claude and Pi adapter contracts run offline in every normal
-test run. Their live registrations add real transport/authentication smoke
+The deterministic Claude, Codex, and Pi adapter contracts run offline in every
+normal test run. Their live registrations add real transport/authentication smoke
 coverage for successful start, continue, end, environment refresh, managed CLI
 execution, and one-shot completion:
 
@@ -318,6 +319,10 @@ execution, and one-shot completion:
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_CLAUDE_CONTRACT_MODEL=claude-sonnet-4-… \
 bun test src/ports/runner/claude.live.test.ts
+
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+AB_CODEX_CONTRACT_MODEL=gpt-… \
+bun test src/ports/runner/codex.live.test.ts
 
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_PI_CONTRACT_MODEL=openai/gpt-… \
@@ -328,7 +333,10 @@ Claude uses the locally installed Claude Code CLI and its configured login; the
 live command therefore requires an installed `claude` executable whose browser
 login has already completed. Its offline suite injects a subprocess executor
 and covers direct argv, native resume, stream-json parsing, usage, transcripts,
-and failure classification without launching the CLI. Pi uses the credentials
+and failure classification without launching the CLI. Codex similarly uses the
+locally installed `codex` executable after `codex login`; its offline suite
+pins direct argv, `$skill` invocation, JSONL parsing, native thread resume,
+startup diagnostics, and tool-free one-shot rejection. Pi uses the credentials
 required by the provider named in `AB_PI_CONTRACT_MODEL`. The live fixtures
 create isolated temporary project skills and probe files and remove them after
 each run; provider failures remain in the deterministic injected adapter

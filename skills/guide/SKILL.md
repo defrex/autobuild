@@ -404,10 +404,12 @@ An **open map** of role name → `{ runtime?, model?, extensions? }` on the thre
 agent configuration axes. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
-with a copyable fix and all registered runtime names. Two runtimes ship:
-**`claude`** (Claude models) and **`pi`** (SDK
-mode; provider-qualified ids such as `openai-codex/gpt-5.6-sol` — `ab models
-[query]` looks them up). Trusted plugins may register additional runtime names;
+with a copyable fix and all registered runtime names. Three runtimes ship:
+**`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
+`gpt-*` ids), and **`pi`** (SDK mode; provider-qualified ids such as the
+independent `openai-codex/gpt-5.6-sol` route — `ab models [query]` looks them
+up). Claude and Codex delegate an omitted model to their CLI default; Pi
+declares `kimi-coding/k3`. Trusted plugins may register additional runtime names;
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 
@@ -531,7 +533,7 @@ environment variable instead and say why.
 ## Setup and upgrades
 
 **`ab init <target> [--force] [--ticket-source file|linear]
-[--workspace-provider git-worktree] [--role-profile split|claude|pi]
+[--workspace-provider git-worktree] [--role-profile split|<registered-runtime>]
 [--no-interactive]`** runs *outside* build sessions — it takes a repo path,
 needs no `AB_*` environment, and is safe to re-run. It:
 
@@ -542,8 +544,9 @@ needs no `AB_*` environment, and is safe to re-run. It:
   executable/authentication probe succeeds. The `split` role profile is offered
   only when Pi can authenticate both of its models; it uses Pi with
   `openai-codex/gpt-5.6-sol` for plan/implement and `kimi-coding/k3` for both
-  review roles. `claude` keeps the historical Claude-wide default; `pi` uses
-  Pi's default model for every role. Move with Up/Down and confirm with Enter;
+  review roles. The shipped runtime choices are `claude`, `codex`, and `pi`;
+  each writes that runtime as the explicit default, with Codex driving the
+  locally authenticated Codex CLI. Move with Up/Down and confirm with Enter;
   each option's explanation is inline, and each submitted prompt remains on
   screen collapsed to its chosen label. Every prompt also notes that custom
   adapters can be built with an agent and points to
@@ -567,7 +570,8 @@ needs no `AB_*` environment, and is safe to re-run. It:
   `readyState`, then prints those fields and the required `LINEAR_API_KEY`
   environment variable. It never asks for or writes a secret. Pi selections
   say to run `pi` and use `/login`, or set the provider API key in the
-  environment.
+  environment. Codex selection says to install the `codex` executable and run
+  `codex login`; Autobuild has no login facility of its own.
 - It **never prompts, validates selection flags, inspects package scripts, or
   overwrites config once the file exists**, even with `--force`; the repo's
   config is the repo's from the first re-run onward.
@@ -577,8 +581,8 @@ needs no `AB_*` environment, and is safe to re-run. It:
   `.agents/skills/ab-<name>/` — `SKILL.md` plus references/supporting files,
   not links. Every file is **editable**: per-repo customization is the point.
   Unknown repository-local support files are left alone.
-- Links `.claude/skills/ab-<name>` → the `.agents` directory, so Claude and Pi
-  discover **one** editable tree rather than two diverging copies.
+- Links `.claude/skills/ab-<name>` → the `.agents` directory, so Claude, Codex,
+  and Pi discover **one** editable tree rather than diverging copies.
 - Records the **pristine** installed tree at
   `.agents/skills/.ab-pristine/ab-<name>/` — repo-versioned, and the per-file
   base for `ab upgrade`'s three-way merges.
@@ -592,7 +596,7 @@ skill counts. Per-skill outcomes are `installed` (new), `unchanged`
 an edit**), or `overwritten` (only under `--force`, the explicit human
 override). Only `kept` and `overwritten` skills are named individually. The
 next-steps block always says that the operator can ask their coding agent to
-change `autobuild.toml`; Linear and Pi follow-ups join it when selected. Non-TTY
+change `autobuild.toml`; Linear and runtime-auth follow-ups join it when selected. Non-TTY
 output is plain text with no ANSI escapes or box drawing.
 
 **`ab --version`** reports the installed package version, Bun-recorded commit

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#111](https://github.com/defrex/autobuild/pull/111) — Add a builtin Codex CLI agent runtime
 - [#109](https://github.com/defrex/autobuild/pull/109) — Add build drill-down to the dispatch dashboard
 
 ## v0.2.0 — 2026-07-27
