@@ -4,7 +4,14 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
-import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
+import {
+  formatDuration,
+  moveTranscriptScroll,
+  renderDashboard,
+  stripAnsi,
+  transcriptScrollLimit,
+  type RenderOpts,
+} from './render'
 import type { DashboardBuild, DashboardHarvest, DashboardModel, PipelineStep } from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
@@ -1199,6 +1206,22 @@ describe('renderDashboard: build detail and transcript views', () => {
       { color: false, width: 100 },
     ).join('\n')
     expect(boundary).toContain('Producer boundary record')
+  })
+
+  test('scroll limits track wrapped content and viewport size', () => {
+    const presentation = {
+      kind: 'raw' as const,
+      text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
+    }
+    const roomy = transcriptScrollLimit(presentation, 80, 12)
+    const narrow = transcriptScrollLimit(presentation, 12, 12)
+    expect(roomy).toBeGreaterThan(0)
+    expect(narrow).toBeGreaterThan(roomy)
+    expect(transcriptScrollLimit(presentation, 80, 40)).toBe(0)
+    // An overshot legacy/resize value is clamped before movement, so Up moves
+    // off the bottom immediately rather than silently unwinding hidden offset.
+    expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)
+    expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1)).toBe(roomy)
   })
 
   test('raw fallback, scrolling, and tiny terminals obey width and height caps', () => {

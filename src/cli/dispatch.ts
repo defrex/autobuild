@@ -42,7 +42,11 @@ import {
   type DashboardView,
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
-import { renderDashboard, type DashboardRendererResolver } from './dashboard/render'
+import {
+  moveTranscriptScroll,
+  renderDashboard,
+  type DashboardRendererResolver,
+} from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
@@ -494,7 +498,20 @@ class DispatchLoop {
 
   private moveSelection(delta: number): void {
     if (this.view?.kind === 'transcript') {
-      this.view = { ...this.view, scroll: Math.max(0, this.view.scroll + delta) }
+      const terminal = this.opts.terminal
+      this.view = {
+        ...this.view,
+        scroll:
+          terminal === undefined
+            ? 0
+            : moveTranscriptScroll(
+                this.view.transcript,
+                terminal.columns,
+                paintableRows(terminal.rows),
+                this.view.scroll,
+                delta,
+              ),
+      }
       this.syncModelControls()
       this.paint()
       return
@@ -794,6 +811,7 @@ class DispatchLoop {
       this.view = {
         ...captured,
         message: 'Transcript unavailable while this session is still open.',
+        messageWhileSessionOpen: session.id,
       }
       this.syncModelControls()
       this.paint()
@@ -1312,13 +1330,33 @@ class DispatchLoop {
         // row and returns the operator to the list rather than showing stale data.
         this.view = undefined
       } else if (this.view.kind === 'detail') {
+        const detail = this.view
         const sessions = build.sessions ?? []
-        const selected = sessions.some((session) => session.id === this.view!.sessionId)
-          ? this.view.sessionId
+        const selected = sessions.some((session) => session.id === detail.sessionId)
+          ? detail.sessionId
           : sessions[0]?.id
+        const messageStillValid =
+          detail.messageWhileSessionOpen === undefined ||
+          sessions.some(
+            (session) => session.id === detail.messageWhileSessionOpen && session.status === 'open',
+          )
+        const {
+          message: priorMessage,
+          messageWhileSessionOpen: priorMessageFence,
+          sessionId: _priorSession,
+          ...stableDetail
+        } = detail
         this.view = {
-          ...this.view,
+          ...stableDetail,
           ...(selected !== undefined ? { sessionId: selected } : {}),
+          ...(messageStillValid && priorMessage !== undefined
+            ? {
+                message: priorMessage,
+                ...(priorMessageFence !== undefined
+                  ? { messageWhileSessionOpen: priorMessageFence }
+                  : {}),
+              }
+            : {}),
         }
       }
     }

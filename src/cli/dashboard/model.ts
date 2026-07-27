@@ -138,6 +138,8 @@ export type DashboardView =
       slug: string
       sessionId?: string
       message?: string
+      /** Message validity fence for facts that can change on the next poll. */
+      messageWhileSessionOpen?: string
     }
   | {
       kind: 'transcript'

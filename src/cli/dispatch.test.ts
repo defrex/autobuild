@@ -3875,6 +3875,94 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
+  test('an open-session transcript message clears when polling observes session.ended', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-session-close', { title: 'Session close' }),
+      happyHandlers(),
+    )
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('session-close', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_late_open',
+          role: 'code-review',
+          runner: 'scripted',
+          phase: 'code-review',
+          round: 2,
+        },
+      })
+
+      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('session-close'))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  session-close'))
+      for (let index = 0; index < 20; index += 1) input.press('down')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes('code-review phase code-review round 2'),
+      )
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('still open'))
+
+      await fx.store.appendWithArtifacts(
+        'session-close',
+        [
+          {
+            kind: 'transcript',
+            content: JSON.stringify({
+              turns: [
+                { prompt: 'review', text: 'finished', usage: { inputTokens: 1, outputTokens: 1 } },
+              ],
+            }),
+          },
+        ],
+        ([transcript]) => ({
+          actor: KERNEL,
+          type: 'session.ended' as const,
+          payload: {
+            session: 's_late_open',
+            transcript: { kind: transcript!.kind, rev: transcript!.revision },
+            usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+          },
+        }),
+      )
+      await waitFor(() => !latestPaintedFrame(term).includes('still open'))
+      expect(latestPaintedFrame(term)).toContain('tokens 1 in/1 out, 1 turns')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('p on a blocked build opens input without writing; typed guidance answers it as the configured human', async () => {
     const fx = await makeFixture(
       readyTicket('T-guidance', { title: 'Guidance work' }),

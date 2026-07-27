@@ -579,6 +579,31 @@ function transcriptContent(presentation: TranscriptPresentation, width: number):
   return lines
 }
 
+/** Maximum process-local transcript offset for the current wrapped viewport. */
+export function transcriptScrollLimit(
+  presentation: TranscriptPresentation,
+  width: number,
+  height: number,
+): number {
+  const contentLines = transcriptContent(presentation, width).length
+  // Transcript chrome is two header rows plus the two separators and controls.
+  const capacity = Math.max(0, height - 5)
+  return Math.max(0, contentLines - capacity)
+}
+
+export function moveTranscriptScroll(
+  presentation: TranscriptPresentation,
+  width: number,
+  height: number,
+  current: number,
+  delta: number,
+): number {
+  const limit = transcriptScrollLimit(presentation, width, height)
+  // Clamp current first because a resize, or state from an older controller,
+  // may leave it beyond the freshly wrapped viewport's end.
+  return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
+}
+
 function turnContent(turn: TranscriptTurn, width: number): string[] {
   const lines = [
     ...wrappedText(`Prompt: ${turn.prompt}`, width, '  '),
