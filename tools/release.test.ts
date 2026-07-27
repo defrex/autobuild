@@ -108,6 +108,7 @@ function harness(
     stdout: 'This release adds a new capability and delivers an important repair.\n',
     stderr: '',
   },
+  github: CommandResult = { exitCode: 0, stdout: '', stderr: '' },
 ): Harness {
   const requests: CommandRequest[] = []
   const logs: string[] = []
@@ -119,7 +120,7 @@ function harness(
     run: async (request) => {
       requests.push(request)
       if (request.command === 'claude') return claude
-      if (request.command === 'gh') return { exitCode: 0, stdout: '', stderr: '' }
+      if (request.command === 'gh') return github
       return spawnCommand(request)
     },
     output: {
@@ -286,6 +287,47 @@ describe('release orchestration', () => {
       '"version": "2.0.1"',
     )
     expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain('#v2.0.1')
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+  })
+
+  test('a post-push GitHub failure prints the exact notes in a verbatim retry command', async () => {
+    const fixture = await createFixture()
+    const testHarness = harness(undefined, {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'temporary GitHub failure',
+    })
+    let error: unknown
+
+    try {
+      await runRelease(['--patch'], fixture.root, {
+        run: testHarness.run,
+        output: testHarness.output,
+        today: () => '2026-07-27',
+      })
+    } catch (caught) {
+      error = caught
+    }
+
+    const message = thrownMessage(error)
+    const exactNotes =
+      '## v2.0.1 — 2026-07-27\n\nThis release adds a new capability and delivers an important repair.\n\n' +
+      '- [#2](https://example.test/2) — New capability\n' +
+      '- [#1](https://example.test/1) — Important repair\n'
+    expect(message).toContain('main and v2.0.1 were pushed')
+    expect(message).toContain('Do not rewrite or delete the public refs')
+    expect(message).toContain(
+      "gh release create v2.0.1 --verify-tag --title v2.0.1 --notes-file - <<'AUTOBUILD_RELEASE_NOTES'",
+    )
+    expect(message).toContain(`${exactNotes}AUTOBUILD_RELEASE_NOTES`)
+
+    const head = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()
+    expect(
+      (await command(fixture.root, 'git', ['ls-remote', 'origin', 'refs/heads/main'])).stdout,
+    ).toStartWith(head)
+    expect(
+      (await command(fixture.root, 'git', ['ls-remote', 'origin', 'refs/tags/v2.0.1^{}'])).stdout,
+    ).toStartWith(head)
     expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
   })
 

@@ -408,6 +408,14 @@ function printCandidate(output: ReleaseOutput, path: string, content: string): v
   )
 }
 
+function githubReleaseRecoveryCommand(tag: string, notes: string): string {
+  const noteLines = new Set(notes.split(/\r?\n/))
+  let delimiter = 'AUTOBUILD_RELEASE_NOTES'
+  while (noteLines.has(delimiter)) delimiter += '_END'
+  const terminatedNotes = notes.endsWith('\n') ? notes : `${notes}\n`
+  return `gh release create ${tag} --verify-tag --title ${tag} --notes-file - <<'${delimiter}'\n${terminatedNotes}${delimiter}`
+}
+
 export async function runRelease(
   args: readonly string[],
   cwd = process.cwd(),
@@ -617,9 +625,10 @@ export async function runRelease(
   if (release.exitCode !== 0) {
     const detail =
       release.stderr.trim() || release.stdout.trim() || `exit status ${release.exitCode}`
+    const recoveryCommand = githubReleaseRecoveryCommand(tag, changelog.cutSection)
     throw new Error(
-      `${config.baseBranch} and ${tag} were pushed, but GitHub Release publication failed: ${detail}. ` +
-        `Do not rewrite or delete the public refs; retry with gh release create ${tag} --verify-tag --title ${tag} --notes-file <notes-file>.`,
+      `${config.baseBranch} and ${tag} were pushed, but GitHub Release publication failed: ${detail}.\n` +
+        `Do not rewrite or delete the public refs. Run this verbatim retry command; it includes the exact cut-section notes:\n\n${recoveryCommand}`,
     )
   }
 
