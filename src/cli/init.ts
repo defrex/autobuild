@@ -976,6 +976,7 @@ export async function abInit(opts: {
   }
   if (
     config === 'written' &&
+    opts.selections?.roleProfile !== undefined &&
     (resolvedSelections?.roleProfile === 'split' || resolvedSelections?.roleProfile === 'pi')
   ) {
     nextSteps.push(

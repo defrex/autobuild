@@ -494,7 +494,7 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(INIT_SPLIT_AUTHOR_MODEL).not.toBe(INIT_SPLIT_REVIEWER_MODEL)
   })
 
-  test('the presenter receives aggregate outcomes and combined Linear/Pi next steps', async () => {
+  test('the presenter does not request Pi setup after successful auto-detection', async () => {
     const prompter = new ScriptedInitPrompter(['linear', 'git-worktree', 'split'])
     const report = await abInit({ targetRepo: target, prompter })
 
@@ -510,7 +510,6 @@ describe('abInit — interactive adapter onboarding', () => {
       nextSteps: [
         'Ask your coding agent to change autobuild.toml.',
         expect.stringContaining('Linear setup required:'),
-        expect.stringContaining('Pi setup required:'),
       ],
     })
   })
@@ -936,7 +935,6 @@ describe('abInit — idempotence and safety', () => {
       '',
       'Next steps:',
       '  - Ask your coding agent to change autobuild.toml.',
-      '  - Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
     ])
 
     await writeFile(installedSkillPath(target, 'ab-plan'), 'local plan\n')
