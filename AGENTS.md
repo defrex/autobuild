@@ -6,7 +6,8 @@
 
 - `SPEC.md` is the source of truth for the design and terminology. Sections are decided unless marked `[OPEN]`.
 - `docs/architecture.md` maps the specification to the codebase.
-- `README.md` is the user-facing guide: install, configure, operate.
+- `README.md` sells the project to engineers evaluating it — see
+  "What the README is for" before adding anything to it.
 - `autobuild.toml` is this repository's declarative pipeline configuration.
 
 ## Product versus this repository's configuration
@@ -23,12 +24,41 @@ Sorting out which is a top-level concern for any ticket, spec, or request:
   and the repo-local tooling they invoke. Our own e2e evidence capture
   belongs here, not in the product.
 
+The `ab-*` skill namespace is reserved for skills the product ships and
+`ab init` vendors. A skill that exists only to operate this repository and
+will never reach a user gets a plain unprefixed name — `release`, not
+`ab-release`.
+
 Decide which hat the work wears before planning it, and write specs that name
 the hat explicitly. If it is still ambiguous when work starts, escalate —
 `ab escalate` in a build, a question to the user in a session — rather than
 guessing. The cost asymmetry is known from experience: a repo-specific
 concern hardcoded into the product took a dedicated ticket to unwind
 (AUT-78), while a clarifying question costs minutes.
+
+## What the README is for
+
+`README.md` is marketing material for engineers: enough to understand what
+Autobuild does, see it working, and decide whether to start using it. Keep it
+short and scannable. It is not the manual, and it is not where a feature gets
+documented because the feature was just built.
+
+Everything else has a different home:
+
+- **Reference and operational detail** → `docs/`. The complete config surface,
+  protocols, architecture — anything a user needs *after* deciding to adopt.
+- **Anything primarily for agents** → the `ab-guide` skill, which is where
+  agents look first.
+- **Maintainer procedures for this repository** → a repo-local skill in
+  `.agents/skills/`, unprefixed, with a matching `.claude/skills/` symlink.
+  Cutting a release lives in the `release` skill, not in the README.
+
+Do not expand the README with per-flag behavior, failure modes, CLI surface
+that `ab help <command>` already covers, or maintainer-only procedures. When a
+change produces new detail, decide which of those three homes it belongs in;
+the README is the right answer only when a first-time reader needs it to
+evaluate the project. Prefer a one-sentence description plus a link over a
+paragraph.
 
 ## Core design rules
 

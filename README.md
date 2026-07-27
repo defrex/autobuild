@@ -74,31 +74,6 @@ Now ask your coding agent for `/ab-spec`. The vendored skill interviews you
 into a conforming ticket and files it; the dispatcher claims it, and the build
 plans, implements, reviews, verifies, and opens a PR for you to merge.
 
-## Cutting a release
-
-Releases are maintainer-triggered repository operations. Start from a clean
-checkout of the configured base branch with `git`, authenticated `gh`, and the
-`claude` CLI available, then run one command:
-
-```sh
-bun run release --patch                 # or --minor / --major
-bun run release --version 2.1.0         # choose an exact semver
-bun run release --patch --dry-run       # inspect every candidate first
-```
-
-The command refuses a dirty or wrong-branch checkout, a branch behind its
-remote, an existing target tag, or an empty Unreleased section. It runs the
-repository lint, typecheck, and test gates before changing files. Claude is
-asked non-interactively for a short release summary; if that optional summary
-fails, the command warns and continues without it while preserving every
-changelog bullet.
-
-A real run updates the manifest, the pinned Quickstart command, and the
-changelog in one commit; creates an annotated tag; atomically pushes the commit
-and tag; and publishes a GitHub Release from the exact cut changelog section.
-It requires no hand edits or follow-up publication commands. Dry-run performs
-the preflight, gates, and summary generation but writes and publishes nothing.
-
 ## How it works
 
 Every build moves through the same fixed pipeline:
