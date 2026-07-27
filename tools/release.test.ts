@@ -200,6 +200,7 @@ describe('release transforms', () => {
     expect(rendered.content.match(/^## Unreleased$/gm)).toHaveLength(1)
     expect(rendered.content).toContain('## Unreleased\n\n## v2.0.1 — 2026-07-27')
     expect(rendered.content).toContain(rendered.entries)
+    expect(rendered.content).toContain(`${rendered.entries}\n\n${oldRelease}`)
     expect(rendered.content.endsWith(oldRelease)).toBe(true)
     expect(rendered.cutSection).toBe(
       `## v2.0.1 — 2026-07-27\n\nRelease prose.\n\n${rendered.entries}\n`,

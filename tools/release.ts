@@ -134,10 +134,9 @@ export function resolveReleaseVersion(
   return version
 }
 
-function headingMatches(content: string, heading: string): number[] {
+function unreleasedHeadingMatches(content: string): number[] {
   const matches: number[] = []
-  const pattern = new RegExp(`^${heading.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}[\\t ]*$`, 'gm')
-  for (const match of content.matchAll(pattern)) {
+  for (const match of content.matchAll(/^## Unreleased[\t ]*$/gm)) {
     if (match.index !== undefined) matches.push(match.index)
   }
   return matches
@@ -149,7 +148,7 @@ function endOfLine(content: string, start: number): number {
 }
 
 export function unreleasedEntries(changelog: string): string {
-  const headings = headingMatches(changelog, '## Unreleased')
+  const headings = unreleasedHeadingMatches(changelog)
   if (headings.length !== 1) {
     throw new Error(
       `CHANGELOG.md must contain exactly one "## Unreleased" heading (found ${headings.length})`,
@@ -177,7 +176,7 @@ export function renderReleasedChangelog(
   date: string,
   summary?: string,
 ): ChangelogRelease {
-  const headings = headingMatches(changelog, '## Unreleased')
+  const headings = unreleasedHeadingMatches(changelog)
   if (headings.length !== 1) {
     throw new Error(
       `CHANGELOG.md must contain exactly one "## Unreleased" heading (found ${headings.length})`,
@@ -198,9 +197,10 @@ export function renderReleasedChangelog(
   const prefix = changelog.slice(0, bodyStart)
   const suffix = changelog.slice(bodyEnd)
   const cutSection = `## ${tag} — ${date}\n\n${summary === undefined ? '' : `${summary}\n\n`}${entries}\n`
-  const content = `${prefix}\n${cutSection}${suffix}`
+  const suffixSeparator = suffix.length === 0 ? '' : '\n'
+  const content = `${prefix}\n${cutSection}${suffixSeparator}${suffix}`
 
-  const resultHeadings = headingMatches(content, '## Unreleased')
+  const resultHeadings = unreleasedHeadingMatches(content)
   if (resultHeadings.length !== 1)
     throw new Error('rendered changelog lost its single Unreleased heading')
   const resultBodyStart = endOfLine(content, resultHeadings[0] ?? 0)
