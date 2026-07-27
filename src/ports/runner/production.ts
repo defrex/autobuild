@@ -30,7 +30,8 @@ export function createProductionRuntimes(): ProductionRuntimes {
         runner: pi,
         oneShot: pi,
         servesModels: [
-          // OAuth coding providers (what `pi login` writes to auth.json).
+          // OAuth coding providers, for credentials stored in auth.json by
+          // `/login` inside an interactive Pi session.
           'openai-codex/',
           'kimi-coding/',
           // API-key providers, for keys supplied via env/auth.json.
