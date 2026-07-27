@@ -110,7 +110,11 @@ module.
 Plugin specifiers are resolved as though imported from the consuming
 repository root. Thus both repository-relative modules and package export maps
 work, and bare packages come from that repository's installed dependencies,
-not Autobuild's installation. Modules load in declaration order during
+not Autobuild's installation. Configured specifier strings must be unique: an
+exact repeated value fails config validation before module resolution or
+evaluation, identifies the duplicate and its first declaration, and directs
+the operator to remove or deduplicate it. Distinct specifier strings remain
+separate declarations. Modules load in declaration order during
 `ab dispatch`, the sessionless `ab ticket` commands, and scoped build CLI
 composition. Dispatch loads them after strict config parsing and before stores,
 production adapters, ticket claims, or build launch; ticket commands load them
@@ -119,8 +123,9 @@ opening their store or executing terminal plumbing. Resolution/evaluation errors
 malformed or missing default manifests, and plugin-API incompatibility fail
 startup with both the configured module and available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
-reserved per port; collisions fail atomically and nothing is shadowed. The same
-name may exist on different ports. `[workspace].provider` selects from the
+reserved per port; collisions fail atomically, identify the conflicting adapter
+and owners, and shadow nothing. The same name may exist on different ports.
+`[workspace].provider` selects from the
 workspace catalog; omission selects `git-worktree`. The selected factory is
 invoked lazily with `[workspace.config]`, environment, and repository root.
 
@@ -1208,8 +1213,11 @@ readyState = "ready"            # required: the one state a ticket must sit in t
 
 The root scalars must appear before the first table header (TOML otherwise
 nests them in that table). `forge` defaults to `"github"` and `plugins` defaults
-to `[]`, preserving repositories with no plugin configuration. `[workspace]`
-defaults to `provider = "git-worktree"` and empty config; the strict selector
+to `[]`, preserving repositories with no plugin configuration. Every nonblank
+`plugins` specifier must be unique by exact string; a repeated entry fails
+config validation with the duplicate position, first position, and
+remove/deduplicate guidance. `[workspace]` defaults to
+`provider = "git-worktree"` and empty config; the strict selector
 envelope permits open plugin-owned values only under `[workspace.config]`.
 Unknown providers fail with the complete available-name list. Providers still
 yield a locally reachable working-copy path; remote execution remains a later
