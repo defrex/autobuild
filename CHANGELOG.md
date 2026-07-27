@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.0 — 2026-07-27
+
+This release opens Autobuild up to third-party extension, adding a plugin adapter SDK with diagnostics and contract certification alongside plugin-registered forge, ticket source, workspace provider, and agent runtime adapters, backed by a reusable AgentRunner contract suite and documentation for the remote BuildStore protocol and plugin authoring. Getting started is considerably smoother: `ab init` now walks through a guided interactive survey with adapter onboarding and emits a lean, explicit configuration, while CLI help is layered by audience and command. Day-to-day operation gains a maintainer release command, version reporting with self-update during upgrades, and a dispatch dashboard that shows capacity and observation pressure with clearer key bindings and better spacing. Reliability work rounds things out, covering auto-merge failures and deferral duplicates, detached workspace recovery from published branch heads, and tighter quality gates via Biome and the Claude Code CLI.
+
 - [#108](https://github.com/defrex/autobuild/pull/108) — Inset the dispatch dashboard from terminal edges
 - [#107](https://github.com/defrex/autobuild/pull/107) — Generate lean explicit init configuration
 - [#106](https://github.com/defrex/autobuild/pull/106) — Report versions and self-update Autobuild during upgrades

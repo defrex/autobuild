@@ -77,7 +77,7 @@ the operator. Add `LINEAR_API_KEY` only if you use Linear tickets.
 <!-- release-install:start -->
 
 ```sh
-bun add github:defrex/autobuild#main
+bun add github:defrex/autobuild#v0.2.0
 ```
 
 <!-- release-install:end -->
