@@ -177,6 +177,20 @@ describe('D8 scope enforcement over the wire', () => {
       })
       expect(mine.seq).toBe(1)
 
+      const conditional = await client.appendIfCurrent('build-a', 1, {
+        ...sampleEventWrite('conditional mine'),
+        actor: agentActor('implement', 's_one'),
+      })
+      expect(conditional?.seq).toBe(2)
+
+      const conditionalForged = await client
+        .appendIfCurrent('build-a', 2, {
+          ...sampleEventWrite('conditional forged'),
+          actor: agentActor('implement', 's_two'),
+        })
+        .catch((error: unknown) => error)
+      expect(conditionalForged).toBeInstanceOf(AuthError)
+
       // Another agent session → 403 AuthError, log unchanged.
       const forged = await client
         .append('build-a', {
@@ -206,18 +220,18 @@ describe('D8 scope enforcement over the wire', () => {
         }))
         .catch((e: unknown) => e)
       expect(deposit).toBeInstanceOf(AuthError)
-      expect(await backing.getEvents('build-a')).toHaveLength(1)
+      expect(await backing.getEvents('build-a')).toHaveLength(2)
       expect(await backing.listArtifacts('build-a')).toEqual([])
 
       // Reads stay gated by build scope alone.
-      expect((await client.getEvents('build-a')).length).toBe(1)
+      expect((await client.getEvents('build-a')).length).toBe(2)
 
       // The '*'-session admin token writes on behalf of any session.
       const anySession = await admin.append('build-a', {
         ...sampleEventWrite('admin write'),
         actor: agentActor('implement', 's_two'),
       })
-      expect(anySession.seq).toBe(2)
+      expect(anySession.seq).toBe(3)
     })
   })
 

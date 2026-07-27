@@ -117,6 +117,10 @@ store places linked worktrees outside the checkout's package ancestry. Dispatch
 and sessionless commands naturally use the main checkout for both roots.
 Autobuild does not install a missing package.
 
+Configured specifier strings must be unique: an exact repeated value fails
+config validation before module resolution or evaluation, identifies the
+duplicate and its first declaration, and directs the operator to remove or
+deduplicate it. Distinct specifier strings remain separate declarations.
 Modules load in declaration order during `ab dispatch`, the sessionless
 `ab ticket` commands, and scoped build CLI composition. Dispatch loads them after
 strict config parsing and before stores, production adapters, ticket claims, or
@@ -127,8 +131,9 @@ Resolution/evaluation errors, malformed or missing default manifests, and
 plugin-API incompatibility fail startup with both the configured module and
 available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
-reserved per port; collisions fail atomically and nothing is shadowed. The same
-name may exist on different ports. `[workspace].provider` selects from the
+reserved per port; collisions fail atomically, identify the conflicting adapter
+and owners, and shadow nothing. The same name may exist on different ports.
+`[workspace].provider` selects from the
 workspace catalog; omission selects `git-worktree`. The selected factory is
 invoked lazily with `[workspace.config]`, environment, and repository root.
 
@@ -386,6 +391,13 @@ query rather than a project.
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,
 `getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`, `subscribe`.
+A build stream also exposes `appendIfCurrent(expectedSeq, event)`: one atomic
+compare-and-append that returns no event when the stream has advanced. It is a
+narrow coordination primitive for deterministic event-log deduplication under
+concurrent processors; the event stream remains authoritative, with no
+snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
+ordinary event validation, unknown builds reject, and a comparison miss leaves
+the log and build timestamps untouched.
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
 and read methods, plus a repository lease. Two implementations of one
 contract (`src/store/contract.ts` is the shared conformance suite):
@@ -1209,8 +1221,11 @@ readyState = "ready"            # required: the one state a ticket must sit in t
 
 The root scalars must appear before the first table header (TOML otherwise
 nests them in that table). `forge` defaults to `"github"` and `plugins` defaults
-to `[]`, preserving repositories with no plugin configuration. `[workspace]`
-defaults to `provider = "git-worktree"` and empty config; the strict selector
+to `[]`, preserving repositories with no plugin configuration. Every nonblank
+`plugins` specifier must be unique by exact string; a repeated entry fails
+config validation with the duplicate position, first position, and
+remove/deduplicate guidance. `[workspace]` defaults to
+`provider = "git-worktree"` and empty config; the strict selector
 envelope permits open plugin-owned values only under `[workspace.config]`.
 Unknown providers fail with the complete available-name list. Providers still
 yield a locally reachable working-copy path; remote execution remains a later

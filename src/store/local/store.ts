@@ -34,6 +34,7 @@ import {
   contentHash,
   systemClock,
   toBytes,
+  validateExpectedSeq,
   type Artifact,
   type ArtifactInput,
   type ArtifactMeta,
@@ -247,20 +248,25 @@ export class SqliteBuildStore implements BuildStore {
     return rows.map((row) => this.toRecord(row))
   }
 
+  /** Current build-stream tail inside an open transaction. */
+  private currentSeqInTx(slug: string): number {
+    this.requireBuild(slug)
+    const row = this.db
+      .select({ max: sql<number | null>`max(${events.seq})` })
+      .from(events)
+      .where(eq(events.build, slug))
+      .get()
+    return row?.max ?? 0
+  }
+
   /**
    * Runs inside an open transaction. bun:sqlite is a single synchronous
    * connection, so statements issued through `this.db` inside a
    * `db.transaction` callback join that transaction.
    */
   private appendInTx(slug: string, validated: EventWrite): EventEnvelope {
-    this.requireBuild(slug)
+    const seq = this.currentSeqInTx(slug) + 1
     const ts = this.now()
-    const row = this.db
-      .select({ max: sql<number | null>`max(${events.seq})` })
-      .from(events)
-      .where(eq(events.build, slug))
-      .get()
-    const seq = (row?.max ?? 0) + 1
     this.db
       .insert(events)
       .values({
@@ -286,6 +292,21 @@ export class SqliteBuildStore implements BuildStore {
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const validated = validateEventWrite(event)
     return this.writeTx(() => this.appendInTx(slug, validated)) as EventEnvelope<T>
+  }
+
+  async appendIfCurrent<T extends EventType>(
+    slug: string,
+    expectedSeq: number,
+    event: EventWrite<T>,
+  ): Promise<EventEnvelope<T> | null> {
+    validateExpectedSeq(expectedSeq)
+    const validated = validateEventWrite(event)
+    return this.writeTx(() => {
+      // BEGIN IMMEDIATE serializes this comparison and append across every
+      // SQLite connection/process using the same store file.
+      if (this.currentSeqInTx(slug) !== expectedSeq) return null
+      return this.appendInTx(slug, validated) as EventEnvelope<T>
+    })
   }
 
   /** Hash + blob write happen before any transaction (D6). */
