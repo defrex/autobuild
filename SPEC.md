@@ -723,11 +723,13 @@ deterministic fail-safe.
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and
   extension allowlist live in one open `[roles]` map whose reserved `default`
-  entry is the inheritance base. Every concrete role merges over it
-  independently per field; the merged runtime/model pair must be compatible —
+  entry is the inheritance base and must explicitly name a runtime. There is no
+  wiring fallback. Every concrete role merges over it independently per field;
+  the merged runtime/model pair must be compatible —
   the resolver never silently substitutes a runtime or model. All roles
   resolve **eagerly, before any session launches**, with problems aggregated
-  into one error. Builtin and plugin registrations use the same model-family,
+  into one error. A missing default diagnostic includes a copyable table and
+  every materialized runtime name. Builtin and plugin registrations use the same model-family,
   default-model, session, and optional one-shot capability path; adding a
   runtime touches only the adapter registry, never the kernel. Mixing models
   across roles is intentional — a different reviewer catches more. The
@@ -1290,9 +1292,12 @@ non-phase surfaces (`spec`, `tickets`, `guide`, and the outer-loop skills).
   interactive first creation, init may select among the shipped ticket,
   workspace, and role-runtime/model arrangements; every offered choice has a
   headless flag equivalent. Local adapters are the prompt defaults, and the
-  suggested role arrangement separates authoring and review models. With no
-  interactive terminal or with explicit interaction opt-out, unresolved
-  choices retain the historical template defaults. Existing config is never
+  suggested role arrangement separates authoring and review models. Init probes
+  every registered runtime through an optional runtime-local usability check;
+  only runtimes with usable executable/authentication prerequisites are
+  suggested. Non-interactive unresolved selection chooses a detected runtime
+  and writes `[roles.default].runtime` explicitly, or fails before mutation and
+  names the profile flag when none is usable. Existing config is never
   prompted for, reconciled, validated against selection flags, or overwritten,
   even with `--force`.
 - **Copies** of the default skills into the project skills directory,

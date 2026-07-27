@@ -43,11 +43,11 @@ third-party ticket, runtime, workspace, and forge adapters against the versioned
 
 You need [Bun](https://bun.sh), `git`, the
 [`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and the
-local [`claude` CLI](https://code.claude.com/docs/en/setup). Launch `claude`
-once and complete its browser login before running Autobuild. The default
-`claude` runtime invokes that local authenticated executable in headless mode,
-so it uses the subscription or other Claude Code authentication configured by
-the operator.
+prerequisites for the agent runtime you select. For Claude, install the local
+[`claude` CLI](https://code.claude.com/docs/en/setup) and complete login. For
+Pi, authenticate the providers used by your selected models via `pi` `/login`
+or provider API keys. Init offers only runtimes whose executable and/or provider
+authentication is usable on the current machine.
 
 <!-- release-install:start -->
 
@@ -80,11 +80,11 @@ change the config. Conditional Linear/Pi setup work appears in the same
 next-steps block.
 
 For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
-`--role-profile`; a fully specified run never prompts. `--no-interactive` (or
-redirected input/output with no selection flags) preserves the historical
-Claude/file/git-worktree baseline. Non-TTY output is plain, with no ANSI or box
-drawing. See the [configuration reference](docs/configuration.md) for every
-option.
+`--role-profile`; a fully specified run never prompts. Without an explicit role
+profile, non-interactive init selects a detected usable runtime and writes it in
+`[roles.default]`; if none is usable, init fails and names `--role-profile`.
+Non-TTY output is plain, with no ANSI or box drawing. See the
+[configuration reference](docs/configuration.md) for every option.
 
 Check the running installation offline from any directory with `ab --version`;
 it reports the package version, Bun-recorded commit when available, and plugin
