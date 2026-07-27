@@ -1323,6 +1323,9 @@ describe('f_8cd6c173: reconcile is conditional, and stays done behind the verify
       ]),
     )
     expect(stateOf(running, 'reconcile')).toBe('current')
+    // Detail renders every round/attempt, including the first. The compact
+    // renderer remains responsible for suppressing its historical `/1`.
+    expect(stepFor(running, 'reconcile')?.count).toBe(1)
   })
 
   test('stays done while the post-reconcile verify re-runs', () => {

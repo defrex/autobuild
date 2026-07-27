@@ -619,7 +619,7 @@ export function projectBuild(
         state.reconcileAttempts > 0 && state.prState !== 'conflicted',
         at('reconcile'),
         {
-          count: state.reconcileAttempts > 1 ? state.reconcileAttempts : undefined,
+          count: state.reconcileAttempts > 0 ? state.reconcileAttempts : undefined,
           // Full-log scope (sinceSeq 0), matching reconcile's full-log
           // done/current predicate: the epilogue is restart-orthogonal.
           timing: timingFor(intervals, 'reconcile', 0, frozenNow),
