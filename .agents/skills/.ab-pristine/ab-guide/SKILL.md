@@ -245,7 +245,7 @@ both are durable evidence and historical logs fall back from missing `path` to
 ### `[commands]`
 
 An **open map** of name → shell string. Both the key and the value must be
-nonempty strings. Keys are user-chosen: `setup`, `lint`, `typecheck`, and
+nonempty strings. Keys are user-chosen: `setup`, `lint`, `type-check`, and
 `test` are *conventions*, not required keys, and a repo may define any verb it
 likes.
 
@@ -258,13 +258,12 @@ sandbox rehydrate. Values are never evaluated as config — they are handed to a
 shell as written.
 
 For first config creation, `ab init` starts with `setup = "bun install"` and
-recognizes only exact own keys in the root `package.json` scripts map: `lint`
-adds `lint = "bun run lint"`; `type-check` adds
-`typecheck = "bun run type-check"` and the `types` verify check; `test` adds
-`test = "bun run test"` and the `unit` check. Lint remains command-only.
-Missing scripts add nothing (`typecheck` is not an alias for `type-check`), so
-every generated package command names a script that exists and every generated
-check has a backing command. This detection does not restrict later manual
+recognizes only exact own keys in the root `package.json` scripts map. Each of
+`lint`, `type-check`, and `test` adds an identically named `bun run <script>`
+command plus an identically named verify check with `always = true`. Missing
+scripts add nothing (`typecheck` is not an alias for `type-check`), so every
+generated package command names a script that exists and every generated check
+has a backing command. This detection does not restrict later manual
 configuration: commands remain an open map.
 
 ### `[server]`
@@ -550,9 +549,13 @@ needs no `AB_*` environment, and is safe to re-run. It:
   a plain message before config, ignore rules, migration, or skills are written.
 - Each selection flag suppresses its corresponding prompt; all three make init
   prompt-free. `--no-interactive` skips unresolved prompts and preserves the
-  historical defaults. A non-TTY run with no flags is byte-identical to the
-  historical file/git-worktree/Claude baseline — the split is only an explicit
-  or interactive choice.
+  file/git-worktree/Claude selections — the split is only an explicit or
+  interactive choice.
+- The generated config is a lean active-only skeleton: its short header says it
+  is declarative and unevaluated and directs changes to the coding agent. It
+  keeps `capacity`, all policy defaults, and verify/finalize `steps` explicit;
+  configuration alternatives live in this complete reference rather than as
+  commented-out TOML.
 - The config uses the target's root `package.json`: exact `lint`, `type-check`,
   and `test` scripts add the command/check fragments described above. Missing
   package metadata means no package-backed commands or checks; malformed JSON
@@ -584,9 +587,10 @@ The final report states `autobuild.toml: written|skipped` and aggregates all
 skill counts. Per-skill outcomes are `installed` (new), `unchanged`
 (byte-identical to the default), `kept` (locally edited — **init never clobbers
 an edit**), or `overwritten` (only under `--force`, the explicit human
-override). Only `kept` and `overwritten` skills are named individually. Linear
-and Pi follow-ups share a visually distinct next-steps block. Non-TTY output is
-plain text with no ANSI escapes or box drawing.
+override). Only `kept` and `overwritten` skills are named individually. The
+next-steps block always says that the operator can ask their coding agent to
+change `autobuild.toml`; Linear and Pi follow-ups join it when selected. Non-TTY
+output is plain text with no ANSI escapes or box drawing.
 
 **`ab --version`** reports the installed package version, Bun-recorded commit
 when available, and plugin API version using local distribution metadata only.

@@ -149,13 +149,18 @@ describe('init prompt adapter', () => {
       config: 'written',
       skillCounts: { installed: 10, unchanged: 0, kept: 1, overwritten: 1 },
       attention: ['ab-plan: kept', 'ab-guide: overwritten'],
-      nextSteps: ['Linear: replace placeholders.', 'Pi: authenticate providers.'],
+      nextSteps: [
+        'Ask your coding agent to change autobuild.toml.',
+        'Linear: replace placeholders.',
+        'Pi: authenticate providers.',
+      ],
     })
     const rendered = io.rendered()
     expect(rendered).toContain('autobuild.toml: written')
     expect(rendered).toContain('10 installed')
     expect(rendered).toContain('ab-plan: kept')
     expect(rendered).toContain('Next steps')
+    expect(rendered).toContain('Ask your coding agent to change autobuild.toml.')
     expect(rendered).toContain('Linear: replace placeholders.')
     expect(rendered).toContain('Autobuild is ready.')
     io.input.end()

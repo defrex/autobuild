@@ -178,17 +178,16 @@ export async function readIfExists(path: string): Promise<string | undefined> {
 const PACKAGE_COMMANDS_ANCHOR = '# @ab-init/package-script-commands'
 const PACKAGE_VERIFY_STEPS_ANCHOR = '# @ab-init/package-script-verify-steps'
 const PACKAGE_VERIFY_TABLES_ANCHOR = '# @ab-init/package-script-verify-tables'
+const ROLES_START_ANCHOR = '# @ab-init/roles-start'
+const ROLES_END_ANCHOR = '# @ab-init/roles-end'
+const TICKETS_START_ANCHOR = '# @ab-init/tickets-start'
+const TICKETS_END_ANCHOR = '# @ab-init/tickets-end'
 
 /** Exact root-package script names that may contribute fresh config. */
 const PACKAGE_SCRIPT_CONFIG = [
-  { script: 'lint', command: 'lint', shell: 'bun run lint' },
-  {
-    script: 'type-check',
-    command: 'typecheck',
-    shell: 'bun run type-check',
-    verify: 'types',
-  },
-  { script: 'test', command: 'test', shell: 'bun run test', verify: 'unit' },
+  { script: 'lint', shell: 'bun run lint' },
+  { script: 'type-check', shell: 'bun run type-check' },
+  { script: 'test', shell: 'bun run test' },
 ] as const
 
 function errorMessage(error: unknown): string {
@@ -262,13 +261,17 @@ export function renderAutobuildTemplate(
   detectedScripts: ReadonlySet<string>,
 ): string {
   const enabled = PACKAGE_SCRIPT_CONFIG.filter(({ script }) => detectedScripts.has(script))
-  const commands = enabled.map(({ command, shell }) => `${command} = "${shell}"`).join('\n')
-  const checks = enabled.flatMap((descriptor) =>
-    'verify' in descriptor ? [{ step: descriptor.verify, command: descriptor.command }] : [],
-  )
-  const verifySteps = checks.map(({ step }) => `  "${step}",`).join('\n')
-  const verifyTables = checks
-    .map(({ step, command }) => `[verify.${step}]\nkind = "check"\ncommand = "${command}"`)
+  const commands = enabled.map(({ script, shell }) => `${script} = "${shell}"`).join('\n')
+  const verifySteps = `steps = [${enabled.map(({ script }) => `"${script}"`).join(', ')}]`
+  const verifyTables = enabled
+    .map(
+      ({ script }) =>
+        `# ${script} verification gate.\n` +
+        `[verify.${script}]\n` +
+        `kind = "check"\n` +
+        `command = "${script}"\n` +
+        'always = true',
+    )
     .join('\n\n')
 
   let rendered = replaceTemplateAnchor(template, PACKAGE_COMMANDS_ANCHOR, commands)
@@ -358,55 +361,58 @@ async function resolveInitSelections(
   return { ticketSource, workspaceProvider, roleProfile }
 }
 
-function replaceSelectionFragment(rendered: string, current: string, replacement: string): string {
-  const occurrences = rendered.split(current).length - 1
-  if (occurrences !== 1) {
+function replaceSelectionRegion(
+  rendered: string,
+  startAnchor: string,
+  endAnchor: string,
+  replacement: string,
+): string {
+  const startOccurrences = rendered.split(startAnchor).length - 1
+  const endOccurrences = rendered.split(endAnchor).length - 1
+  if (startOccurrences !== 1 || endOccurrences !== 1) {
     throw new Error(
-      `autobuild.toml selection fragment must occur exactly once; found ${occurrences}: ${JSON.stringify(current)}`,
+      `autobuild.toml selection anchors "${startAnchor}" and "${endAnchor}" must each occur exactly once; found ${startOccurrences} and ${endOccurrences}`,
     )
   }
-  return rendered.replace(current, replacement)
+  const start = rendered.indexOf(`${startAnchor}\n`)
+  const end = rendered.indexOf(`${endAnchor}\n`)
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('autobuild.toml selection anchors must occupy ordered lines')
+  }
+  return `${rendered.slice(0, start)}${replacement}\n${rendered.slice(end + endAnchor.length + 1)}`
 }
 
-/** Apply only explicitly different adapter/profile selections to the baseline. */
+/** Render complete active ticket and role fragments for the survey selections. */
 export function renderInitSelections(baseline: string, selections: ResolvedInitSelections): string {
-  let rendered = baseline
-  if (selections.ticketSource === 'linear') {
-    rendered = replaceSelectionFragment(rendered, 'source = "file"', 'source = "linear"')
-    rendered = replaceSelectionFragment(
-      rendered,
-      'readyState = "ready"',
-      'readyState = "REPLACE_WITH_LINEAR_READY_STATE"',
-    )
-    rendered = replaceSelectionFragment(
-      rendered,
-      '# To use Linear, change source above and add the following. The API key is a\n' +
-        '# secret: set LINEAR_API_KEY in the environment (a local .env works), never here.\n' +
-        '#teamKey = "ENG"                 # Linear team key (required)',
-      '# Linear selected by ab init. Replace this required non-secret placeholder.\n' +
-        '# Keep the API key in LINEAR_API_KEY (a local .env works), never in this file.\n' +
-        'teamKey = "REPLACE_WITH_LINEAR_TEAM_KEY"',
-    )
+  const tickets =
+    selections.ticketSource === 'linear'
+      ? '# Linear ticket source and dispatch gate.\n' +
+        '[tickets]\n' +
+        'source = "linear"\n' +
+        'teamKey = "REPLACE_WITH_LINEAR_TEAM_KEY"\n' +
+        'readyState = "REPLACE_WITH_LINEAR_READY_STATE"'
+      : '# Ticket source and dispatch gate.\n' +
+        '[tickets]\n' +
+        'source = "file"\n' +
+        'readyState = "ready"'
+
+  let roles: string
+  if (selections.roleProfile === 'split') {
+    roles =
+      '# Plan agent.\n' +
+      `[roles.plan]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
+      '# Implementation agent.\n' +
+      `[roles.implement]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
+      '# Plan review agent.\n' +
+      `[roles.plan-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"\n\n` +
+      '# Code review agent.\n' +
+      `[roles.code-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"`
+  } else {
+    roles = `# Default agent runtime.\n[roles.default]\nruntime = "${selections.roleProfile}"`
   }
 
-  const claudeRole =
-    '[roles.default]\nruntime = "claude"   # no configured model ⇒ this runtime\'s own default'
-  if (selections.roleProfile === 'pi') {
-    rendered = replaceSelectionFragment(
-      rendered,
-      claudeRole,
-      '[roles.default]\nruntime = "pi"       # no configured model ⇒ this runtime\'s own default',
-    )
-  } else if (selections.roleProfile === 'split') {
-    rendered = replaceSelectionFragment(
-      rendered,
-      claudeRole,
-      `[roles.plan]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
-        `[roles.implement]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
-        `[roles.plan-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"\n\n` +
-        `[roles.code-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"`,
-    )
-  }
+  let rendered = replaceSelectionRegion(baseline, TICKETS_START_ANCHOR, TICKETS_END_ANCHOR, tickets)
+  rendered = replaceSelectionRegion(rendered, ROLES_START_ANCHOR, ROLES_END_ANCHOR, roles)
   return rendered
 }
 
@@ -873,7 +879,7 @@ export async function abInit(opts: {
   }
   for (const skill of skills) skillCounts[skill.action] += 1
 
-  const nextSteps: string[] = []
+  const nextSteps: string[] = ['Ask your coding agent to change autobuild.toml.']
   if (config === 'written' && resolvedSelections?.ticketSource === 'linear') {
     nextSteps.push(
       'Linear setup required: replace [tickets].teamKey and [tickets].readyState, then set LINEAR_API_KEY in the environment (never in autobuild.toml).',
