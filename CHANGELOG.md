@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#108](https://github.com/defrex/autobuild/pull/108) — Inset the dispatch dashboard from terminal edges
 - [#107](https://github.com/defrex/autobuild/pull/107) — Generate lean explicit init configuration
 - [#106](https://github.com/defrex/autobuild/pull/106) — Report versions and self-update Autobuild during upgrades
 - [#105](https://github.com/defrex/autobuild/pull/105) — Add a maintainer release command
