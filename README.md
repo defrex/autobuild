@@ -33,7 +33,7 @@ alone. A harvester distills them into proposed tickets and files them for
 triage; approve one and it runs the same loop.
 
 Every seam is an adapter: ticket sources (Linear, local files, or a configured
-plugin), agent runtimes (Claude, Pi, or a configured plugin), the forge (GitHub
+plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge (GitHub
 via `gh` or a configured plugin), workspaces, and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
@@ -42,12 +42,19 @@ third-party ticket, runtime, workspace, and forge adapters against the versioned
 ## Quickstart
 
 You need [Bun](https://bun.sh), `git`, the
-[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and the
-local [`claude` CLI](https://code.claude.com/docs/en/setup). Launch `claude`
-once and complete its browser login before running Autobuild. The default
-`claude` runtime invokes that local authenticated executable in headless mode,
-so it uses the subscription or other Claude Code authentication configured by
-the operator.
+[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and one
+agent-runtime credential path:
+
+- `claude` invokes the local [Claude Code CLI](https://code.claude.com/docs/en/setup);
+  launch `claude` once and complete its browser login;
+- `codex` invokes the local [Codex CLI](https://developers.openai.com/codex/cli)
+  directly; install it and run `codex login`; or
+- `pi` uses Pi's provider authentication through `/login` or a supported
+  provider API key.
+
+The historical non-interactive default remains `claude`. Choose another
+runtime during `ab init` or edit `[roles]` in `autobuild.toml`; Autobuild does
+not copy or broker agent credentials.
 
 <!-- release-install:start -->
 
@@ -76,8 +83,8 @@ brief labels and mandatory verify gates pre-filled from recognized
 `package.json` scripts, and vendors the `ab-*` agent skills. Its final summary
 reports the config result and skill outcome counts, names only locally kept or
 explicitly overwritten skills, and reminds you that your coding agent can
-change the config. Conditional Linear/Pi setup work appears in the same
-next-steps block.
+change the config. Conditional Linear and agent-runtime setup work appears in
+the same next-steps block.
 
 For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
 `--role-profile`; a fully specified run never prompts. `--no-interactive` (or

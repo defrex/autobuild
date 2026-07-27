@@ -327,7 +327,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'init': {
       const usage =
         'usage: ab init [target] [--force] [--ticket-source file|linear] ' +
-        '[--workspace-provider git-worktree] [--role-profile split|claude|pi] ' +
+        '[--workspace-provider git-worktree] [--role-profile split|claude|codex|pi] ' +
         '[--no-interactive] (§16.3)'
       const parsed = parseArgs(
         rest,

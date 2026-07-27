@@ -43,7 +43,7 @@ export { SKILL_NAMESPACE }
 
 export type InitTicketSource = 'file' | 'linear'
 export type InitWorkspaceProvider = 'git-worktree'
-export type InitRoleProfile = 'split' | 'claude' | 'pi'
+export type InitRoleProfile = 'split' | 'claude' | 'codex' | 'pi'
 
 export const INIT_SPLIT_AUTHOR_MODEL = 'openai-codex/gpt-5.6-sol'
 export const INIT_SPLIT_REVIEWER_MODEL = 'kimi-coding/k3'
@@ -79,6 +79,11 @@ export const INIT_ROLE_PROFILE_CHOICES = [
     value: 'claude',
     label: 'Claude default',
     help: "Uses the Claude runtime's own default model for every role (the historical template default).",
+  },
+  {
+    value: 'codex',
+    label: 'Codex default',
+    help: 'Uses the locally authenticated Codex CLI and its own default model for every role.',
   },
   {
     value: 'pi',
@@ -891,6 +896,11 @@ export async function abInit(opts: {
   ) {
     nextSteps.push(
       'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
+    )
+  }
+  if (config === 'written' && resolvedSelections?.roleProfile === 'codex') {
+    nextSteps.push(
+      'Codex setup required: install the `codex` executable and run `codex login` to authenticate it.',
     )
   }
 

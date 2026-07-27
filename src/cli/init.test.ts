@@ -473,11 +473,11 @@ describe('abInit — interactive adapter onboarding', () => {
     })
   })
 
-  test('shipped runtime resolution accepts the split and Pi profiles', async () => {
+  test('shipped runtime resolution accepts every init role profile', async () => {
     const roles = ['plan', 'implement', 'plan-review', 'code-review'] as const
     const production = createProductionRuntimes()
 
-    for (const roleProfile of ['split', 'pi'] as const) {
+    for (const roleProfile of ['split', 'claude', 'codex', 'pi'] as const) {
       const repo = join(target, roleProfile)
       const output: string[] = []
       await abInit({
@@ -489,10 +489,22 @@ describe('abInit — interactive adapter onboarding', () => {
         },
         stdout: (line) => output.push(line),
       })
-      const setupNotice = output.find((line) => line.includes('Pi setup required:'))
-      expect(setupNotice).toContain('run `pi` and use `/login`')
-      expect(setupNotice).toContain('provider API key in the environment')
-      expect(setupNotice).not.toContain('pi login')
+      const notices = output.join('\n')
+      if (roleProfile === 'split' || roleProfile === 'pi') {
+        expect(notices).toContain('Pi setup required:')
+        expect(notices).toContain('run `pi` and use `/login`')
+        expect(notices).toContain('provider API key in the environment')
+        expect(notices).not.toContain('pi login')
+      } else {
+        expect(notices).not.toContain('Pi setup required:')
+      }
+      if (roleProfile === 'codex') {
+        expect(notices).toContain('Codex setup required:')
+        expect(notices).toContain('`codex` executable')
+        expect(notices).toContain('`codex login`')
+      } else {
+        expect(notices).not.toContain('Codex setup required:')
+      }
 
       const config = parseConfig(await generated(repo))
       const resolver = createRuntimeResolver(
@@ -501,7 +513,8 @@ describe('abInit — interactive adapter onboarding', () => {
         production.defaultRuntime,
       )
       const resolved = Object.fromEntries(roles.map((role) => [role, resolver.resolve(role)]))
-      for (const role of roles) expect(resolved[role]?.runtime).toBe('pi')
+      const expectedRuntime = roleProfile === 'split' ? 'pi' : roleProfile
+      for (const role of roles) expect(resolved[role]?.runtime).toBe(expectedRuntime)
 
       if (roleProfile === 'split') {
         expect(resolved.plan?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
@@ -509,9 +522,11 @@ describe('abInit — interactive adapter onboarding', () => {
         expect(resolved['plan-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
         expect(resolved['code-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
         expect(resolved.plan?.model).not.toBe(resolved['plan-review']?.model)
-      } else {
+      } else if (roleProfile === 'pi') {
         const piDefault = production.runtimes.pi?.defaultModel
         for (const role of roles) expect(resolved[role]?.model).toBe(piDefault)
+      } else {
+        for (const role of roles) expect(resolved[role]?.model).toBeUndefined()
       }
     }
   })
