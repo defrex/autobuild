@@ -1,155 +1,42 @@
-# autobuild.toml — per-repo declarative configuration (SPEC §16.1, D9).
-# Read from the build's branch at workspace provision: every build sees one
-# consistent config, and changes to this file flow through the pipeline
-# itself. Declarative only — commands are plain shell strings, nothing here
-# is evaluated.
+# Autobuild pipeline configuration.
+# Declarative only; nothing in this file is evaluated.
+# Ask your coding agent to change it.
 
-# Root scalars must appear before the first TOML table.
 baseBranch = "main"
-capacity = 1             # concurrent builds for this repo
-# Forge adapter: builtin GitHub by default, or a name registered below.
-#forge = "github"
-# Trusted Bun modules loaded from this repository before dispatch starts.
-# Relative paths and installed package specifiers are both supported.
-#plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
+capacity = 1
 
-# Workspace provider. Omission uses the shipped git-worktree adapter exactly as
-# before. Select a plugin-registered name here; only the nested config table is
-# plugin-owned. Factories receive it with the environment and absolute repo root.
-#[workspace]
-#provider = "company-container"
-#[workspace.config]
-#image = "ghcr.io/acme/build:bun"
-
-# Optional review-window hosting for explicitly attached images. Exact text
-# download commands work without it. The release must already exist, be
-# published and mutable, and live in a public repository; private source repos
-# may name a separate public asset repo. The gh identity needs Contents write
-# permission there. Hosted copies are deleted after build completion.
-#[pr.imageHost]
-#provider = "github-release"
-#repository = "owner/public-review-assets"
-#releaseId = 123456
-
-# Deterministic verbs the kernel may run. `setup` runs after provision and
-# after a sandbox rehydrate (§15.6-C). On first init, exact `lint`,
-# `type-check`, and `test` scripts from the root package.json add truthful
-# `bun run` commands below; absent scripts add nothing.
+# Commands the kernel may run.
 [commands]
 setup = "bun install"
 # @ab-init/package-script-commands
 
-# Dev-server lifecycle (§16.2, D10): config declares, the kernel owns.
-# Agents control it only through `ab server start|stop|restart|status|logs`.
-# Uncomment when the repo has a server to drive.
-#[server]
-#start = "bun dev"
-#url = "http://localhost:3000"   # readiness probe target
-#readyTimeout = 60               # seconds
-
+# Verification gates.
 [verify]
-# An exact `type-check` script adds `types`; `test` adds `unit`, in this order.
-# `lint` remains an available command rather than an automatic verifier.
-steps = [
 # @ab-init/package-script-verify-steps
-]
 
-# Check tables are rendered only when their backing command was detected.
 # @ab-init/package-script-verify-tables
 
-# Agent-verify example — a skill run with a pass|fail|skip verdict (§5).
-# `paths` is optional on either verifier kind: any changed path matching any
-# positive repo-relative glob makes the step apply. Omit it for unconditional.
-# `always = true` overrides paths and makes the step mandatory: every explicit
-# plan `verifySteps` selection must include it; without plan metadata all steps
-# remain selected.
-#[verify.e2e]
-#kind = "agent"
-#skill = "ab-verify-e2e"
-#needsServer = true
-#paths = ["web/**", "src/routes/**"]
-#always = true
-
-# Optional ordered post-steps. Checks run deterministic command refs without
-# an agent session; agents run the exact configured skill. Either kind is
-# failure-tolerant: a failure files an observation and never kills a green
-# build (§5). Content-producing steps select and commit files locally, finish
-# with a clean worktree, and let the runner regular-push the descendant HEAD.
-# A no-op creates and pushes no commit; agents never push.
+# Post-verification steps.
 [finalize]
 steps = []
 
-# Check post-step example:
-#[finalize.publish]
-#kind = "check"
-#command = "publish"             # ref into [commands]
-
-# Agent post-step example:
-#[finalize.release-notes]
-#kind = "agent"
-#skill = "ab-release-notes"      # exact installed skill name
-
-# Runtime/model/extensions configuration (§9) is one open map of roles. The
-# reserved optional `default` role is the raw inheritance base for every other
-# role; it is never dispatched as a phase. Removing it uses the wiring-fallback
-# runtime and that runtime's own default model.
+# @ab-init/roles-start
+# Default agent runtime.
 [roles.default]
-runtime = "claude"   # no configured model ⇒ this runtime's own default
-# extensions unset ⇒ hermetic (no internet / sub-agents / MCP).
+runtime = "claude"
+# @ab-init/roles-end
 
-# Each role field independently overrides or inherits `default`; an extensions
-# list replaces the default list wholesale. The exact merged runtime/model pair
-# must be compatible — a model-only override stays on its inherited runtime and
-# never silently reroutes. Registered runtimes: `claude` (Claude models) and
-# `pi` (provider-qualified ids like `openai/gpt-5.6-sol`; `ab models [query]`
-# looks them up). Mixing models across roles is intentional. Uncomment and edit:
-#[roles.code-review]
-#runtime = "pi"
-#model = "moonshotai/kimi-k3"
-#extensions = ["web-access"]
-#
-#[roles.plan]
-#runtime = "pi"
-#model = "openai/gpt-5.6-sol"
-#extensions = ["subagents", "web-access"]
-
+# Pipeline limits.
 [policy]
-stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
+stallRounds = 3
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
-# Observation harvest is back-pressure driven by `ab dispatch`: no agent runs
-# while fewer than this many new structured observations are waiting. Once the
-# threshold is reached, scan -> synthesize <-> review -> file is journaled and
-# approved proposals are created in Triage only. Optional role overrides are
-# `[roles.harvest]` and `[roles.harvest-review]`.
 harvestThreshold = 5
 
-# Ticket source, ready gate, and lifecycle states (§3.2, §3.3, §13).
-# `source` may also name a registration from `plugins` above. Plugin
-# credentials belong in environment variables declared by its `requiredEnv`,
-# never in this file; dispatch and every `ab ticket` command load that source.
-# This default is the local file tracker at `.autobuild/tickets/`: four state
-# directories (triage/ ready/ doing/ done/) of markdown tickets. No secret;
-# the default directory gitignores itself, `ls` is the UI, and moving a ticket
-# into ready/ dispatches it. `/ab-tickets` teaches an agent to drive it.
+# @ab-init/tickets-start
+# Ticket source and dispatch gate.
 [tickets]
 source = "file"
-# Required: the single workflow state a ticket must sit in to be dispatched.
-# The file tracker maps this to a state directory (`ready` → `ready/`); Linear
-# users must name their own ready workflow state exactly (case-sensitive).
 readyState = "ready"
-# Absent readyLabels uses the source's label default: none for file/plugins, or
-# ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
-# readyState: every configured label must be present. With
-# ["autobuild", "ready"], a ticket carrying only one label does not satisfy the
-# label gate. [] explicitly disables the label gate.
-#readyLabels = ["autobuild", "ready"]
-#dir = "tickets"                 # file only; optional, default ".autobuild/tickets"
-#createState = "Triage"          # optional; absent = provider default
-#triageState = "Triage"          # optional; absent = provider default
-#
-# To use Linear, change source above and add the following. The API key is a
-# secret: set LINEAR_API_KEY in the environment (a local .env works), never here.
-#teamKey = "ENG"                 # Linear team key (required)
-#claimedState = "In Progress"    # Linear workflow state claim() moves into
+# @ab-init/tickets-end

@@ -96,11 +96,13 @@ written. The local file tracker and git-worktree provider are the no-account
 defaults; the suggested role profile uses separate authoring and review models
 for independent review.
 
-Init then writes `autobuild.toml` — with verify steps pre-filled from your
-`package.json` scripts — and vendors the `ab-*` agent skills. Its final summary
-reports the config result and skill outcome counts, naming only locally kept or
-explicitly overwritten skills. Conditional Linear/Pi setup work appears in a
-separate next-steps block.
+Init then writes a lean `autobuild.toml` containing only active settings, with
+brief labels and mandatory verify gates pre-filled from recognized
+`package.json` scripts, and vendors the `ab-*` agent skills. Its final summary
+reports the config result and skill outcome counts, names only locally kept or
+explicitly overwritten skills, and reminds you that your coding agent can
+change the config. Conditional Linear/Pi setup work appears in the same
+next-steps block.
 
 For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
 `--role-profile`; a fully specified run never prompts. `--no-interactive` (or

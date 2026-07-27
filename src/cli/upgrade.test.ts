@@ -23,6 +23,7 @@ import {
   readDistSkills,
   rewriteSkillSource,
 } from './init'
+import { parseConfig } from '../config/load'
 import { runCli } from './main'
 import { abUpgrade } from './upgrade'
 
@@ -78,10 +79,17 @@ async function writeDist(
       '[commands]',
       '# @ab-init/package-script-commands',
       '[verify]',
-      'steps = [',
       '# @ab-init/package-script-verify-steps',
-      ']',
       '# @ab-init/package-script-verify-tables',
+      '# @ab-init/roles-start',
+      '[roles.default]',
+      'runtime = "claude"',
+      '# @ab-init/roles-end',
+      '# @ab-init/tickets-start',
+      '[tickets]',
+      'source = "file"',
+      'readyState = "ready"',
+      '# @ab-init/tickets-end',
       '',
     ].join('\n'),
   )
@@ -144,6 +152,22 @@ async function seedRealPlanConflict(repo: string): Promise<{
   await writeFile(pristinePath, base)
   return { base, local, incoming, resolved }
 }
+
+describe('upgrade distribution fixture', () => {
+  test('uses the complete verify-steps assignment anchor contract', async () => {
+    await writeFile(join(target, 'package.json'), JSON.stringify({ scripts: { test: 'bun test' } }))
+
+    await install()
+
+    const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.verify.steps).toEqual(['test'])
+    expect(config.verify.stepConfigs.test).toEqual({
+      kind: 'check',
+      command: 'test',
+      always: true,
+    })
+  })
+})
 
 describe('abUpgrade — legacy project path migration', () => {
   test('moves the complete .agent tree before upgrading and repairs Claude links', async () => {

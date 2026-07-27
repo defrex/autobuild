@@ -250,7 +250,7 @@ architecture and is not enabled by this selector.
 ## `[commands]`
 
 An optional open map of repository-defined names to shell strings. Its default
-is `{}`. `setup`, `lint`, `typecheck`, and `test` are conventions, not fixed
+is `{}`. `setup`, `lint`, `type-check`, and `test` are conventions, not fixed
 schema fields.
 
 | Field | Default | Constraints | Purpose |
@@ -740,10 +740,9 @@ A flag suppresses only its corresponding prompt. Supplying all three flags is
 prompt-free on or off a TTY. `--no-interactive` skips all unresolved choices
 and retains the historical defaults; on a fresh config it cannot be combined
 with selection flags. If either stream is not a TTY, unresolved choices are
-also silent historical defaults. Thus a non-TTY run with no flags remains
-byte-identical to earlier init output: file tickets, omitted `[workspace]`
-(selecting git-worktree), and a Claude default role. The interactive role split
-is never silently applied.
+also silent historical defaults. Thus a non-TTY run with no flags keeps the
+file-ticket, omitted `[workspace]` (selecting git-worktree), and Claude-default
+role selections. The interactive role split is never silently applied.
 
 Choosing Linear writes valid conspicuous placeholders for the required
 `[tickets].teamKey` and `[tickets].readyState` fields. Init places those
@@ -756,28 +755,36 @@ environment.
 After installation, init reports `autobuild.toml: written|skipped` and counts
 all skill outcomes (`installed`, `unchanged`, `kept`, and `overwritten`). It
 names individual skills only for the attention-worthy `kept` and `overwritten`
-outcomes, including on an existing-config rerun. Redirected/non-TTY output uses
-the same information as plain text with no ANSI escapes or box drawing.
+outcomes, including on an existing-config rerun. The next-steps block always
+says that the operator can ask their coding agent to change `autobuild.toml`.
+Redirected/non-TTY output uses the same information as plain text with no ANSI
+escapes or box drawing.
 
-Regardless of onboarding choices, the generated baseline has:
+The generated file is an active-only skeleton rather than a commented option
+catalog. A short header identifies it as declarative, unevaluated config and
+points changes to the coding agent. Each active table has one brief purpose
+label; configuration alternatives remain in this reference and `ab-guide`.
+Regardless of onboarding choices, the baseline writes:
 
 - `baseBranch = "main"` and `capacity = 1`;
 - `setup = "bun install"` in `[commands]`;
-- no verify or finalize steps unless recognized package scripts add checks; and
-- the default policy values above.
+- explicit verify and finalize `steps` arrays, empty unless recognized package
+  scripts add checks; and
+- all five default policy values.
 
 Only exact own keys in the root `package.json` `scripts` object are recognized:
 
 | Package script | Generated command | Generated verify step |
 |---|---|---|
-| `lint` | `lint = "bun run lint"` | none; lint remains command-only |
-| `type-check` | `typecheck = "bun run type-check"` | `types`, a check using `typecheck` |
-| `test` | `test = "bun run test"` | `unit`, a check using `test` |
+| `lint` | `lint = "bun run lint"` | `lint`, a mandatory check using `lint` |
+| `type-check` | `type-check = "bun run type-check"` | `type-check`, a mandatory check using `type-check` |
+| `test` | `test = "bun run test"` | `test`, a mandatory check using `test` |
 
 A missing package manifest or missing scripts adds nothing. Malformed JSON, an
 unreadable manifest, or a recognized script whose value is not a nonempty
 string fails with the manifest path instead of silently generating an
-untruthful command.
+untruthful command. Generated checks carry `always = true`, so a plan cannot
+deselect any recognized package-script gate.
 
 The config rule is intentionally one-way: once `autobuild.toml` exists,
 `ab init` does not prompt, inspect package scripts, validate or apply selection
