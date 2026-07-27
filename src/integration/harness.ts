@@ -36,6 +36,7 @@ import { sequentialIds, sequentialUuids, type IdSource } from '../ids'
 import type { BuildState } from '../kernel/reducer'
 import { createPluginRegistry, type PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createForge } from '../ports/forge/create'
 import { FakeForge } from '../ports/forge/fake'
 import {
@@ -280,6 +281,10 @@ export async function makeHarness(opts: {
   configToml?: string
   /** Forge gate existence is independent from current PR mergeability. */
   gatePresence?: 'present' | 'absent'
+  /** Optional adapter-level runtime composition for focused integration tests.
+   * The scripted agent remains available as the fake provider behind it. */
+  createRuntimeRegistry?: (agents: ScriptedAgentRunner) => RuntimeRegistry
+  defaultRuntime?: string
   /** Optional production-like workspace composition seam. The default remains
    * the real git-worktree adapter used by existing scenarios. */
   createWorkspaceProvider?: (context: {
@@ -403,15 +408,16 @@ export async function makeHarness(opts: {
       }),
     },
   })
-  const runtimes = await materializePluginRuntimes(
-    {
-      scripted: { runner: agents, servesModels: [] },
-      claude: { runner: agents, servesModels: ['claude-'] },
-      pi: { runner: agents, servesModels: ['kimi-'] },
-    },
-    pluginRegistry,
-    { repoRoot: origin, env: {} },
-  )
+  const baseRuntimes = opts.createRuntimeRegistry?.(agents) ?? {
+    scripted: { runner: agents, servesModels: [] },
+    claude: { runner: agents, servesModels: ['claude-'] },
+    pi: { runner: agents, servesModels: ['kimi-'] },
+  }
+  const runtimes = await materializePluginRuntimes(baseRuntimes, pluginRegistry, {
+    repoRoot: origin,
+    env: {},
+  })
+  const defaultRuntime = opts.defaultRuntime ?? 'scripted'
 
   // launchRunner (§3.3, §15.6-C, §15.7): construct a REAL BuildRunner over
   // the SAME store and the provisioned workspace path; the dispatcher never
@@ -435,7 +441,7 @@ export async function makeHarness(opts: {
         // is the fallback and runs only with its un-named built-in model; `pi`
         // serves the Kimi family for exact configured-pair validation.
         runtimes,
-        defaultRuntime: 'scripted',
+        defaultRuntime,
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
         slug,
@@ -471,7 +477,7 @@ export async function makeHarness(opts: {
     forge: selectedForge,
     workspaces,
     runtimes,
-    defaultRuntime: 'scripted',
+    defaultRuntime,
     // Scripted agents resolve this ambient value, then invoke runCli against
     // the injected shared store. It is an identity label, never opened.
     storeRef: 'memory://e2e',

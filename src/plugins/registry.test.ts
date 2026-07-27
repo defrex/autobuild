@@ -80,6 +80,18 @@ describe('PluginRegistry', () => {
     ])
   })
 
+  test('reserves every builtin runtime including Codex', () => {
+    const registry = new PluginRegistry()
+    expect(registry.adapters('agent-runtime').map((adapter) => adapter.name)).toEqual([
+      'claude',
+      'codex',
+      'pi',
+    ])
+    expect(() => registry.register(plugin('bad', { agentRuntimes: { codex: factory } }))).toThrow(
+      /agent runtime.*codex.*bad.*builtin/,
+    )
+  })
+
   test('rejects builtin and prior-plugin collisions with ownership diagnostics', () => {
     const registry = new PluginRegistry()
     expect(() => registry.register(plugin('bad', { ticketSources: { linear: factory } }))).toThrow(

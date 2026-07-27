@@ -134,6 +134,7 @@ export class PluginRegistry {
   ])
   readonly agentRuntimes = reserved<AgentRuntimePluginFactory, AgentRunnerContractFactory>([
     'claude',
+    'codex',
     'pi',
   ])
   readonly workspaceProviders = reserved<
