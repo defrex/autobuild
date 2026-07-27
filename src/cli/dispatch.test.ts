@@ -1836,6 +1836,94 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
+  test('shows configured capacity and unclaimed observation pressure even for queued/non-row work and a paused gate', async () => {
+    const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
+      'stallRounds = 3',
+      'stallRounds = 3\nharvestThreshold = 7',
+    )
+    const fx = await makeFixture([], happyHandlers(), config)
+    const source = 'pressure-source'
+    const firstTerminal = fakeTerminal()
+    try {
+      await fx.store.createBuild({ slug: source, repo: fx.origin })
+      for (let index = 1; index <= 5; index += 1) {
+        await fx.store.append(source, {
+          actor: agentActor('implement', `s_pressure_${index}`),
+          type: 'observation.recorded',
+          payload: {
+            id: `obs-pressure-${index}`,
+            kind: 'followup',
+            summary: `pending observation ${index}`,
+          },
+        })
+      }
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.paused',
+        payload: {},
+      })
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: firstTerminal,
+      })
+
+      const firstFrame = latestDashboardFrame(firstTerminal)
+      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7')
+      expect(firstFrame).toContain('harvest OFF')
+      expect(firstFrame).toContain('no active builds')
+
+      const run = 'h_pressure_claimed'
+      const scan = await scanUnclaimedObservations(fx.store, fx.origin)
+      const packet = await makeHarvestScanPacket({
+        store: fx.store,
+        tickets: fx.tickets,
+        repo: fx.origin,
+        run,
+        observations: scan.observations,
+        state: scan.state,
+      })
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run,
+            observations: scan.observations.map((item) => item.occurrence),
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+
+      const claimedTerminal = fakeTerminal()
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: claimedTerminal,
+      })
+      const claimedFrame = latestDashboardFrame(claimedTerminal)
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7')
+      expect(claimedFrame).toContain('harvest OFF')
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('dashboard startup stays in-frame while routine notices are suppressed', async () => {
     const fx = await makeFixture(readyTicket('T-frame'), happyHandlers())
     const term = fakeTerminal()
@@ -2347,6 +2435,68 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(warningLines[2]).toBe(`  ${invalid}`)
       expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Auto Build'))
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('watch retains the last observation measurement when a later tick cannot scan pressure', async () => {
+    const config = DISPATCH_CONFIG_TOML.replace(
+      'stallRounds = 3',
+      'stallRounds = 3\nharvestThreshold = 7',
+    )
+    const fx = await makeFixture([], happyHandlers(), config)
+    const term = fakeTerminal()
+    const stop = new AbortController()
+    const source = 'pressure-carry-over'
+    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
+    let failReads = false
+    let sleeps = 0
+    fx.store.listBuilds = async () => {
+      if (failReads) throw new Error('pressure scan unavailable')
+      return originalListBuilds()
+    }
+    try {
+      await fx.store.createBuild({ slug: source, repo: fx.origin })
+      for (let index = 1; index <= 2; index += 1) {
+        await fx.store.append(source, {
+          actor: agentActor('implement', `s_carry_${index}`),
+          type: 'observation.recorded',
+          payload: {
+            id: `obs-carry-${index}`,
+            kind: 'followup',
+            summary: `carry observation ${index}`,
+          },
+        })
+      }
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        signal: stop.signal,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await waitFor(() => latestDashboardFrame(term).includes('obs 2/7'))
+            failReads = true
+            return
+          }
+          stop.abort()
+        },
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      const frame = latestDashboardFrame(term)
+      expect(frame).toContain('obs 2/7')
+      expect(frame).not.toContain('obs 0/7')
+      expect(frame).toContain('pressure scan unavailable')
+      expect(fx.err).toEqual([])
+    } finally {
+      stop.abort()
       await fx.cleanup()
     }
   }, 30_000)

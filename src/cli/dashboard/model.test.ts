@@ -395,22 +395,27 @@ describe('projectBuild: the active-build filter', () => {
 
   test('buildDashboard drops nulls and sorts by slug for a stable frame', () => {
     const activeLog = toLog(prelude())
+    const queuedLog = toLog(prelude().slice(0, 3))
     const goneLog = toLog([...prelude(), ev('build.completed', { outcome: 'merged' })])
     const active = reduceBuild(activeLog)
+    const queued = reduceBuild(queuedLog)
     const gone = reduceBuild(goneLog)
     const model = buildDashboard(
       [
         { record: { ...RECORD, slug: 'zebra' }, state: active, events: activeLog },
+        { record: { ...RECORD, slug: 'queued' }, state: queued, events: queuedLog },
         { record: { ...RECORD, slug: 'gone' }, state: gone, events: goneLog },
         { record: { ...RECORD, slug: 'alpha' }, state: active, events: activeLog },
       ],
       CONFIG,
-      { repo: '/repos/app', queued: 2 },
+      { repo: '/repos/app', queued: 2, observationCount: 4 },
     )
     expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'zebra'])
     expect(model).toMatchObject({
       repo: '/repos/app',
       queued: 2,
+      active: { current: 3, limit: 1 },
+      observations: { current: 4, limit: 5 },
       drained: false,
       defaultAutoMerge: false,
       harvestPaused: false,
@@ -424,29 +429,38 @@ describe('projectBuild: the active-build filter', () => {
     const preprojected = buildDashboardFromProjected([zebra, alpha], {
       repo: '/repos/app',
       queued: 2,
+      activeCount: 3,
+      capacity: 1,
+      observationCount: 4,
+      harvestThreshold: 5,
     })
     expect(preprojected).toEqual(model)
     expect(preprojected.builds[0]).toBe(alpha)
     expect(preprojected.builds[1]).toBe(zebra)
 
-    const settings = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 2 }, [
-      {
-        repo: '/repos/app',
-        seq: 1,
-        ts: '2026-07-20T00:00:00.000Z',
-        actor: humanActor('operator'),
-        type: 'dispatcher.intake-set',
-        payload: { enabled: false },
-      },
-      {
-        repo: '/repos/app',
-        seq: 2,
-        ts: '2026-07-20T00:00:01.000Z',
-        actor: humanActor('operator'),
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true },
-      },
-    ])
+    const settings = buildDashboard(
+      [],
+      CONFIG,
+      { repo: '/repos/app', queued: 2, observationCount: 0 },
+      [
+        {
+          repo: '/repos/app',
+          seq: 1,
+          ts: '2026-07-20T00:00:00.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: false },
+        },
+        {
+          repo: '/repos/app',
+          seq: 2,
+          ts: '2026-07-20T00:00:01.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.auto-merge-default-set',
+          payload: { enabled: true },
+        },
+      ],
+    )
     expect(settings.drained).toBe(true)
     expect(settings.defaultAutoMerge).toBe(true)
   })
@@ -455,10 +469,12 @@ describe('projectBuild: the active-build filter', () => {
     const clean = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
+      observationCount: 0,
     })
     const warned = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
+      observationCount: 0,
       warningLine: 'store unavailable',
     })
     expect(clean.warningLine).toBeUndefined()
@@ -476,7 +492,7 @@ describe('projectBuild: the active-build filter', () => {
     let model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2 },
+      { repo: '/repos/app', queued: 2, observationCount: 0 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)
@@ -490,7 +506,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2 },
+      { repo: '/repos/app', queued: 2, observationCount: 0 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -504,7 +520,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2 },
+      { repo: '/repos/app', queued: 2, observationCount: 0 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -517,7 +533,7 @@ describe('projectBuild: the active-build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2 },
+      { repo: '/repos/app', queued: 2, observationCount: 0 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)

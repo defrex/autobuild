@@ -81,6 +81,8 @@ describe('dashboard harvest row', () => {
         {
           repo: '/repo',
           queued: 1,
+          active: { current: 0, limit: 1 },
+          observations: { current: 0, limit: 5 },
           drained: false,
           defaultAutoMerge: false,
           harvestPaused: false,
@@ -216,6 +218,8 @@ describe('dashboard harvest row', () => {
         {
           repo: '/repo',
           queued: 1,
+          active: { current: 0, limit: 1 },
+          observations: { current: 0, limit: 5 },
           drained: false,
           defaultAutoMerge: false,
           harvestPaused: false,
@@ -287,6 +291,8 @@ describe('dashboard harvest row', () => {
         {
           repo: '/repo',
           queued: 1,
+          active: { current: 0, limit: 1 },
+          observations: { current: 0, limit: 5 },
           drained: false,
           defaultAutoMerge: false,
           harvestPaused: true,
@@ -360,6 +366,8 @@ describe('dashboard harvest row', () => {
       {
         repo: '/repo',
         queued: 2,
+        active: { current: 0, limit: 1 },
+        observations: { current: 0, limit: 5 },
         drained: false,
         defaultAutoMerge: false,
         harvestPaused: false,
