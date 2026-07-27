@@ -378,6 +378,13 @@ query rather than a project.
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,
 `getArtifact`, `getEvents(since)`; operator UIs add `listBuilds`, `subscribe`.
+A build stream also exposes `appendIfCurrent(expectedSeq, event)`: one atomic
+compare-and-append that returns no event when the stream has advanced. It is a
+narrow coordination primitive for deterministic event-log deduplication under
+concurrent processors; the event stream remains authoritative, with no
+snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
+ordinary event validation, unknown builds reject, and a comparison miss leaves
+the log and build timestamps untouched.
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
 and read methods, plus a repository lease. Two implementations of one
 contract (`src/store/contract.ts` is the shared conformance suite):

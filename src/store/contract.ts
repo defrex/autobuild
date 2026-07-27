@@ -390,6 +390,90 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('appendIfCurrent (atomic stream compare-and-append)', () => {
+      test('expected sequence 0 appends to an empty stream and returns the envelope', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('conditional-empty'))
+          const event = await store.appendIfCurrent(
+            'conditional-empty',
+            0,
+            sampleEventWrite('first'),
+          )
+          expect(event?.seq).toBe(1)
+          expect((await store.getEvents('conditional-empty')).map((entry) => entry.seq)).toEqual([
+            1,
+          ])
+        })
+      })
+
+      test('a stale expected sequence appends nothing and leaves updatedAt untouched', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('conditional-stale'))
+          clock.advance(1000)
+          await store.appendIfCurrent('conditional-stale', 0, sampleEventWrite('winner'))
+          const before = await store.getBuild('conditional-stale')
+
+          clock.advance(1000)
+          expect(
+            await store.appendIfCurrent('conditional-stale', 0, sampleEventWrite('stale')),
+          ).toBeNull()
+          expect(await store.getBuild('conditional-stale')).toEqual(before)
+          expect((await store.getEvents('conditional-stale')).map((entry) => entry.seq)).toEqual([
+            1,
+          ])
+        })
+      })
+
+      test('two contenders for one sequence produce one winner and preserve gapless appends', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('conditional-race'))
+          const results = await Promise.all([
+            store.appendIfCurrent('conditional-race', 0, sampleEventWrite('a')),
+            store.appendIfCurrent('conditional-race', 0, sampleEventWrite('b')),
+          ])
+          expect(results.filter((result) => result !== null)).toHaveLength(1)
+          expect(results.filter((result) => result === null)).toHaveLength(1)
+
+          const next = await store.appendIfCurrent('conditional-race', 1, sampleEventWrite('next'))
+          expect(next?.seq).toBe(2)
+          expect((await store.getEvents('conditional-race')).map((entry) => entry.seq)).toEqual([
+            1, 2,
+          ])
+        })
+      })
+
+      test('invalid candidates, invalid expected sequences, and unknown builds reject without writes', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('conditional-invalid'))
+          await store.append('conditional-invalid', sampleEventWrite('existing'))
+          const invalid = {
+            actor: KERNEL,
+            type: 'no.such-type',
+            payload: {},
+          } as unknown as EventWrite
+
+          const invalidEvent = await store
+            .appendIfCurrent('conditional-invalid', 0, invalid)
+            .catch((error: unknown) => error)
+          expect(invalidEvent).toBeInstanceOf(EventValidationError)
+
+          const invalidSeq = await store
+            .appendIfCurrent('conditional-invalid', -1, sampleEventWrite())
+            .catch((error: unknown) => error)
+          expect(invalidSeq).toBeInstanceOf(Error)
+
+          const unknown = await store
+            .appendIfCurrent('ghost', 0, sampleEventWrite())
+            .catch((error: unknown) => error)
+          expect(unknown).toBeInstanceOf(Error)
+          expect((await store.getEvents('conditional-invalid')).map((entry) => entry.seq)).toEqual([
+            1,
+          ])
+        })
+      })
+    })
+
     describe('append validation (the enforced ontology, §8)', () => {
       test('unknown event type throws EventValidationError and appends nothing', async () => {
         await withStore(factory, undefined, async (store) => {

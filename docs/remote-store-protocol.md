@@ -128,6 +128,19 @@ A repository event envelope has the same shape with `"repo"` in place of
 `"build"`. Event-list responses are JSON arrays of the corresponding
 envelopes.
 
+A conditional build-stream append request wraps the same event write with the
+currently observed sequence (`0` means an empty stream):
+
+```jsonc
+{
+  "expectedSeq": 17,              // nonnegative integer
+  "event": { /* event write */ }
+}
+```
+
+Its response is either the appended build event envelope or JSON `null` when
+the stream no longer has that sequence.
+
 The wire accepts the generic event-write shape so that the backing server can
 return the precise catalog validation error. A conforming server **must**
 validate the complete actor, type, payload, and actor-per-type rule before
@@ -246,6 +259,7 @@ it to exist. An unknown build returns `404 not-found`.
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`; list order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
+| `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
 | `getEvents` | `GET /builds/{slug}/events?since={n}` | optional `since` query value, parsed below; absence defaults to `0` | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
@@ -259,6 +273,14 @@ The event stream is append-only. The server assigns each build's sequences
 independently, starting at 1, and assigns the envelope timestamp. Successful
 appends preserve append order. Event and artifact writes update the record's
 server-owned timestamps according to the backing `BuildStore` contract.
+
+A conditional append validates the candidate exactly like an ordinary append,
+including actor rules, even when its expected sequence is stale. The backing
+store must compare the stream tail and append as one atomic operation. At most
+one caller can succeed for a given current sequence. A comparison miss returns
+`null` and must not append, consume a sequence, or update the build record's
+timestamps. An unknown build remains `404 not-found`; malformed or negative
+`expectedSeq` is `400 validation`.
 
 For a present `since` or `rev`, the shipped server applies JavaScript
 `Number(rawValue)` and accepts the result only when `Number.isInteger` is true.
@@ -379,7 +401,7 @@ A valid token used for the wrong resource receives `403 auth`. Resource scope
 gates all operations, including reads, artifact operations, and leases.
 
 The token's session dimension adds a second gate only to event-bearing writes:
-`POST .../events` and `POST .../deposits`.
+`POST .../events`, `POST .../events/conditional`, and `POST .../deposits`.
 
 - `session: "*"` may submit any actor that the event catalog itself allows.
 - Any other session may submit only an actor with `kind: "agent"` and a
@@ -495,6 +517,8 @@ Beyond leases, the backing store must maintain:
 
 - per-build and per-repository monotonically assigned event sequences starting
   at 1, preserving append order and continuity across server restarts;
+- atomic build-stream conditional append, including a mutation-free stale
+  comparison result;
 - server-assigned event, record, artifact, lease, and heartbeat times;
 - 0-based revisions independently per resource and artifact kind, including
   distinct concurrent assignments;
