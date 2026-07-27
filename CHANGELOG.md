@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#100](https://github.com/defrex/autobuild/pull/100) — Prevent duplicate auto-merge deferral observations
 - [#97](https://github.com/defrex/autobuild/pull/97) — Handle unavailable auto-merge without stranding builds
 - [#96](https://github.com/defrex/autobuild/pull/96) — Clarify dashboard key bindings
 - [#95](https://github.com/defrex/autobuild/pull/95) — Adopt Biome quality gates
