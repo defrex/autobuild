@@ -58,13 +58,19 @@ any table header.
 plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 ```
 
-Relative paths and bare npm package specifiers are resolved as though imported
-from the repository root. Package specifiers therefore use that repository's
-installed dependencies, not Autobuild's own installation tree. Each module
-must default-export a strict manifest with a plugin name, a semver range in
-`apiVersion`, and optional `ticketSources`, `agentRuntimes`,
-`workspaceProviders`, and `forges` factory maps. One manifest may contribute
-to several ports.
+Repository-path specifiers (relative, absolute, and `file:`) resolve from the
+root whose config is being read. In a scoped phase process that root is the
+immutable build worktree. Bare npm package specifiers resolve from the consuming
+repository's main checkout and therefore use its installed dependencies, not
+Autobuild's own installation tree. This package lookup remains stable when a
+relocated local store places a linked worktree outside the checkout. Dispatch
+and sessionless commands use the main checkout for both roots. Missing packages
+fail loading; Autobuild does not install them.
+
+Each module must default-export a strict manifest with a plugin name, a semver
+range in `apiVersion`, and optional `ticketSources`, `agentRuntimes`,
+`workspaceProviders`, and `forges` factory maps. One manifest may contribute to
+several ports.
 
 Plugin modules execute in-process during `ab dispatch`, sessionless `ab ticket`
 commands, and configured scoped phase CLI composition. They have the same trust

@@ -107,17 +107,25 @@ production code can use erased type-only imports, with Autobuild present only
 as a development or peer dependency; a consuming repository needs no bridge
 module.
 
-Plugin specifiers are resolved as though imported from the consuming
-repository root. Thus both repository-relative modules and package export maps
-work, and bare packages come from that repository's installed dependencies,
-not Autobuild's installation. Modules load in declaration order during
-`ab dispatch`, the sessionless `ab ticket` commands, and scoped build CLI
-composition. Dispatch loads them after strict config parsing and before stores,
-production adapters, ticket claims, or build launch; ticket commands load them
-before ticket access; scoped processes load from the build worktree before
-opening their store or executing terminal plumbing. Resolution/evaluation errors,
-malformed or missing default manifests, and plugin-API incompatibility fail
-startup with both the configured module and available compatibility details.
+Plugin resolution has two repository-owned roots. Relative, absolute, and
+`file:` specifiers resolve from the repository root whose config is being read;
+in a scoped build CLI process, that is the immutable build worktree. Bare
+package specifiers and package export maps resolve from the consuming
+repository's main checkout, so they use that repository's installed
+dependencies—not Autobuild's installation—and remain available when a local
+store places linked worktrees outside the checkout's package ancestry. Dispatch
+and sessionless commands naturally use the main checkout for both roots.
+Autobuild does not install a missing package.
+
+Modules load in declaration order during `ab dispatch`, the sessionless
+`ab ticket` commands, and scoped build CLI composition. Dispatch loads them after
+strict config parsing and before stores, production adapters, ticket claims, or
+build launch; ticket commands load them before ticket access; scoped processes
+load worktree config and repository-path modules, but use the main checkout only
+for package lookup, before opening their store or executing terminal plumbing.
+Resolution/evaluation errors, malformed or missing default manifests, and
+plugin-API incompatibility fail startup with both the configured module and
+available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
 reserved per port; collisions fail atomically and nothing is shadowed. The same
 name may exist on different ports. `[workspace].provider` selects from the

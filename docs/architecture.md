@@ -46,7 +46,7 @@ K unclaimed observation.recorded events
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating, server lifecycle | §5, §7.5, §10, §12, §15.4–15.5, §16.2 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
-| `src/plugins/` | Strict versioned plugin manifests, repository-rooted Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
+| `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
@@ -150,12 +150,13 @@ error extraction; processes own durable failure policy — the transcript is
 always deposited, and a turn's typed terminal always beats a late failure
 signal.
 
-**Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves every
-configured relative or package module from the consuming repository, validates
-its default manifest/API range, and atomically registers normalized factories,
-provenance, ticket credential metadata, and optional contract descriptors before
-production wiring or the first dispatch tick. Its structured single-module
-attempt feeds two policies: `loadPlugins` remains fail-fast for dispatch, while
+**Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves
+repository-path modules from the config-bearing root and bare packages from an
+explicit package root (defaulting to that same root), validates each default
+manifest/API range, and atomically registers normalized factories, provenance,
+ticket credential metadata, and optional contract descriptors before production
+wiring or the first dispatch tick. Its structured single-module attempt feeds
+two policies: `loadPlugins` remains fail-fast for dispatch, while
 `diagnosePlugins` collects ordered failures and retains later healthy
 registrations for `ab plugin doctor`. `src/cli/plugin.ts` owns the sessionless
 list/doctor/test grammar and live gate; `src/plugins/contract-entry.ts` reloads
@@ -167,8 +168,12 @@ GitHub or lazily invokes the registered plugin factory, and preserves the
 returned adapter's optional attachment capability. Dispatch constructs one
 selected adapter before opening the store and threads it through runners,
 epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
-load the build worktree's immutable config/plugins and resolve the same name for
-phase terminal plumbing. `src/ports/workspace/create.ts` similarly resolves
+load immutable config and repository-path plugins from the build worktree, use
+`resolveMainRepo` to locate the consuming checkout only for bare-package lookup,
+and resolve the same adapter name for phase terminal plumbing. This keeps
+package availability independent of local-store/worktree placement without
+redirecting branch-owned plugin source or factory `repoRoot` away from the
+worktree. `src/ports/workspace/create.ts` similarly resolves
 `[workspace].provider`, retaining host-owned git-worktree construction while
 passing plugin config, environment, and repository root to registered
 factories. Ticket-source selection is registry-backed in
