@@ -3,15 +3,13 @@
  * needs agent judgment. Keeping the shipped adapters and their model families
  * here prevents dispatch and other non-phase one-shots from drifting apart.
  */
-import { ClaudeAgentRunner } from './claude'
-import { CodexAgentRunner } from './codex'
-import { PiAgentRunner } from './pi'
+import { ClaudeAgentRunner, isClaudeRuntimeUsable } from './claude'
+import { CodexAgentRunner, isCodexRuntimeUsable } from './codex'
+import { isPiRuntimeUsable, PiAgentRunner } from './pi'
 import type { RuntimeRegistry } from './runtime'
 
 export interface ProductionRuntimes {
   runtimes: RuntimeRegistry
-  /** Wiring fallback when neither a role nor [roles.default] names a runtime. */
-  defaultRuntime: string
 }
 
 export function createProductionRuntimes(): ProductionRuntimes {
@@ -26,11 +24,13 @@ export function createProductionRuntimes(): ProductionRuntimes {
       claude: {
         runner: claude,
         oneShot: claude,
+        initUsable: isClaudeRuntimeUsable,
         servesModels: ['claude-'],
       },
       codex: {
         runner: codex,
         oneShot: codex,
+        initUsable: isCodexRuntimeUsable,
         // Codex CLI model ids are unqualified; an omitted model delegates to
         // the operator's configured Codex default.
         servesModels: ['gpt-'],
@@ -38,6 +38,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
       pi: {
         runner: pi,
         oneShot: pi,
+        initUsable: isPiRuntimeUsable,
         servesModels: [
           // OAuth coding providers, for credentials stored in auth.json by
           // `/login` inside an interactive Pi session.
@@ -53,6 +54,5 @@ export function createProductionRuntimes(): ProductionRuntimes {
         defaultModel: 'kimi-coding/k3',
       },
     },
-    defaultRuntime: 'claude',
   }
 }

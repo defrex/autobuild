@@ -4,7 +4,14 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
-import { formatDuration, renderDashboard, stripAnsi, type RenderOpts } from './render'
+import {
+  formatDuration,
+  moveTranscriptScroll,
+  renderDashboard,
+  stripAnsi,
+  transcriptScrollLimit,
+  type RenderOpts,
+} from './render'
 import type { DashboardBuild, DashboardHarvest, DashboardModel, PipelineStep } from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
@@ -1189,5 +1196,172 @@ describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () =>
     const out = rd(model([b]), { color: false, width: 200, now: 41_000 }).join('\n')
     expect(out).not.toContain('\x1b')
     expect(out).toContain('implement(41s/2)')
+  })
+})
+
+describe('renderDashboard: build detail and transcript views', () => {
+  const detailedBuild = build({
+    alsoPaused: true,
+    status: 'blocked',
+    autoMerge: 'enabled',
+    blockers: ['The complete blocker question must remain readable even when it is fairly long.'],
+    steps: [
+      { label: 'plan', state: 'done', count: 1, timing: { accumulatedMs: 2_000 } },
+      { label: 'verify:unit', state: 'current', count: 2, timing: { accumulatedMs: 3_000 } },
+    ],
+    sessions: [
+      {
+        id: 's_plan',
+        role: 'plan',
+        phase: 'plan',
+        round: 1,
+        runtime: 'pi',
+        model: 'openai/gpt',
+        startedSeq: 5,
+        status: 'ended',
+        transcript: { kind: 'transcript', rev: 2 },
+        usage: { inputTokens: 90, outputTokens: 30, turns: 2 },
+      },
+      {
+        id: 's_review',
+        role: 'plan-review',
+        phase: 'plan-review',
+        round: 1,
+        runtime: 'claude',
+        startedSeq: 9,
+        status: 'open',
+      },
+    ],
+  })
+
+  test('detail exposes status, pipeline counts, blockers, PR, and selectable session metadata', () => {
+    const out = rd(
+      {
+        ...model([detailedBuild]),
+        selection: { kind: 'build', slug: detailedBuild.slug },
+        view: { kind: 'detail', slug: detailedBuild.slug, sessionId: 's_plan' },
+      },
+      { color: false, width: 200 },
+    ).join('\n')
+    expect(out).toContain('status BLOCKED (also paused)')
+    expect(out).toContain('auto merge enabled')
+    expect(out).toContain('PR open')
+    expect(out).toContain('plan (round 1, 2s)')
+    expect(out).toContain('verify:unit (attempt 2, 3s)')
+    expect(out).toContain('complete blocker question')
+    expect(out).toContain('>   plan phase plan round 1 runtime pi model openai/gpt ended')
+    expect(out).toContain('tokens 90 in/30 out, 2 turns')
+    expect(out).toContain('plan-review phase plan-review round 1 runtime claude open')
+    expect(out).not.toContain('Auto Build')
+  })
+
+  test('structured and producer-boundary transcripts render prompts, text, failures, usage, and notice', () => {
+    const base = {
+      ...model([detailedBuild]),
+      selection: { kind: 'build', slug: detailedBuild.slug },
+    } as DashboardModel
+    const structured = rd(
+      {
+        ...base,
+        view: {
+          kind: 'transcript',
+          slug: detailedBuild.slug,
+          sessionId: 's_plan',
+          scroll: 0,
+          transcript: {
+            kind: 'turns',
+            turns: [
+              {
+                prompt: '/ab-plan auth',
+                text: 'agent response',
+                usage: { inputTokens: 4, outputTokens: 2 },
+                failure: 'provider failed',
+              },
+            ],
+          },
+        },
+      },
+      { color: false, width: 100 },
+    ).join('\n')
+    expect(structured).toContain('Prompt: /ab-plan auth')
+    expect(structured).toContain('Agent: agent response')
+    expect(structured).toContain('Usage: 4 input, 2 output')
+    expect(structured).toContain('Failure: provider failed')
+
+    const boundary = rd(
+      {
+        ...base,
+        view: {
+          kind: 'transcript',
+          slug: detailedBuild.slug,
+          sessionId: 's_plan',
+          scroll: 0,
+          transcript: {
+            kind: 'producer-boundary',
+            notice: 'Producer boundary record: only this round was deposited.',
+            turns: [{ prompt: 'round', text: 'done' }],
+          },
+        },
+      },
+      { color: false, width: 100 },
+    ).join('\n')
+    expect(boundary).toContain('Producer boundary record')
+  })
+
+  test('scroll limits track wrapped content and viewport size', () => {
+    const presentation = {
+      kind: 'raw' as const,
+      text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
+    }
+    const roomy = transcriptScrollLimit(presentation, 80, 12)
+    const narrow = transcriptScrollLimit(presentation, 12, 12)
+    expect(roomy).toBeGreaterThan(0)
+    expect(narrow).toBeGreaterThan(roomy)
+    expect(transcriptScrollLimit(presentation, 80, 40)).toBe(0)
+    // An overshot legacy/resize value is clamped before movement, so Up moves
+    // off the bottom immediately rather than silently unwinding hidden offset.
+    expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)
+    expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1)).toBe(roomy)
+  })
+
+  test('raw fallback, scrolling, and tiny terminals obey width and height caps', () => {
+    const presentation = {
+      kind: 'raw' as const,
+      text: Array.from({ length: 20 }, (_, index) => `raw line ${index} café`).join('\n'),
+    }
+    for (const width of [12, 30, 80]) {
+      for (const height of [0, 1, 5, 12]) {
+        const lines = rd(
+          {
+            ...model([detailedBuild]),
+            view: {
+              kind: 'transcript',
+              slug: detailedBuild.slug,
+              sessionId: 's_plan',
+              scroll: 7,
+              transcript: presentation,
+            },
+          },
+          { color: true, width, height },
+        )
+        expect(lines.length).toBeLessThanOrEqual(height)
+        expect(lines.every((line) => stripAnsi(line).length <= width)).toBe(true)
+      }
+    }
+    const scrolled = rd(
+      {
+        ...model([detailedBuild]),
+        view: {
+          kind: 'transcript',
+          slug: detailedBuild.slug,
+          sessionId: 's_plan',
+          scroll: 7,
+          transcript: presentation,
+        },
+      },
+      { color: false, width: 80, height: 12 },
+    ).join('\n')
+    expect(scrolled).toContain('raw line 5')
+    expect(scrolled).not.toContain('raw line 0')
   })
 })

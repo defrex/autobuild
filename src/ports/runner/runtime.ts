@@ -18,6 +18,16 @@
 import type { AgentRunner } from '../types'
 import type { OneShotCompletion } from './one-shot'
 
+export interface RuntimeUsabilityInput {
+  cwd: string
+  env: Readonly<Record<string, string | undefined>>
+  /** Exact configured models the prospective init profile will write. */
+  models: readonly string[]
+}
+
+/** Optional onboarding probe. Absence means init must not suggest the runtime. */
+export type RuntimeUsabilityProbe = (input: RuntimeUsabilityInput) => Promise<boolean>
+
 export interface RuntimeRegistration {
   /** The adapter behind this runtime (§9). */
   runner: AgentRunner
@@ -27,6 +37,8 @@ export interface RuntimeRegistration {
    * deterministic callers decide their own fail-safe fallback.
    */
   oneShot?: OneShotCompletion
+  /** Runtime-local prerequisite/auth check used only by `ab init`. */
+  initUsable?: RuntimeUsabilityProbe
   /**
    * Model-id PREFIXES this runtime can serve, e.g. `['openai/',
    * 'kimi-coding/']`. Prefix families — not an exhaustive id list — because the
@@ -96,6 +108,10 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
   const oneShot = value.oneShot
   if (oneShot !== undefined && (!isObject(oneShot) || typeof oneShot.complete !== 'function')) {
     throw new Error('oneShot.complete must be a function when provided')
+  }
+
+  if (value.initUsable !== undefined && typeof value.initUsable !== 'function') {
+    throw new Error('initUsable must be a function when provided')
   }
 
   const registration = value as unknown as RuntimeRegistration

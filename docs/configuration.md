@@ -457,13 +457,15 @@ failures become failure-tolerant follow-up observations.
 
 ## `[roles]`
 
-An optional open map from a nonempty role name to three independently inherited
-agent axes. The table defaults to `{}`. The reserved `default` entry is the raw
-base for every other role and is never dispatched itself.
+An open map from a nonempty role name to three independently inherited agent
+axes. The reserved `default` entry is required to name a runtime, is the raw
+base for every other role, and is never dispatched itself. Missing it fails
+eagerly before any session starts, with a copyable table and all registered
+runtime names.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
-| `runtime` | inherited; otherwise wiring fallback (`claude`) | optional nonempty registered runtime name | Select an agent adapter. |
+| `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
 | `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
 | `extensions` | inherited; otherwise `[]` (hermetic) | optional array of nonempty strings; `[]` allowed | Pi package/extension allowlist. A supplied list replaces, rather than unions with, the inherited list. |
 
@@ -725,7 +727,7 @@ and submitted prompts collapse to the chosen label while remaining visible:
 |---|---|---|
 | Tickets | `--ticket-source` | `file`, `linear` |
 | Workspace | `--workspace-provider` | `git-worktree` |
-| Roles | `--role-profile` | `split`, `claude`, `codex`, `pi` |
+| Roles | `--role-profile` | detected usable registered runtimes, plus `split` when both of its Pi models are authenticated |
 
 The local `file` tracker and shipped `git-worktree` provider need no account,
 secret, or external infrastructure. Every prompt also explains that a custom
@@ -736,7 +738,7 @@ so a cancelled first run leaves no partial initialization.
 
 The role profiles are:
 
-- `split` (the interactive suggestion): Pi runs `plan` and `implement` with
+- `split` (offered only when usable): Pi is the explicit default, and runs `plan` and `implement` with
   `openai-codex/gpt-5.6-sol`, while `plan-review` and `code-review` use
   `kimi-coding/k3`;
 - `claude`: `[roles.default]` uses the Claude runtime and its own default model,
@@ -746,12 +748,15 @@ The role profiles are:
 - `pi`: `[roles.default]` uses the Pi runtime and its own default model.
 
 A flag suppresses only its corresponding prompt. Supplying all three flags is
-prompt-free on or off a TTY. `--no-interactive` skips all unresolved choices
-and retains the historical defaults; on a fresh config it cannot be combined
-with selection flags. If either stream is not a TTY, unresolved choices are
-also silent historical defaults. Thus a non-TTY run with no flags keeps the
-file-ticket, omitted `[workspace]` (selecting git-worktree), and Claude-default
-role selections. The interactive role split is never silently applied.
+prompt-free on or off a TTY. Explicit role profiles are operator overrides.
+For an unresolved role choice, init probes every registered runtime through its
+optional onboarding capability and offers only usable choices. Claude and Codex
+require their respective local CLI to be present and logged in; Pi requires
+catalog resolution and authentication for every model the profile writes. A
+registration without a probe is not guessed
+usable. Non-interactive init selects a detected usable choice and writes it
+explicitly; if none exists, it exits nonzero before mutation and names
+`--role-profile` as the remedy.
 
 Choosing Linear writes valid conspicuous placeholders for the required
 `[tickets].teamKey` and `[tickets].readyState` fields. Init places those

@@ -15,6 +15,7 @@ import {
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError } from './provider-error'
+import type { RuntimeUsabilityInput } from './runtime'
 import { sessionEnv } from './session-env'
 
 export interface CodexCliInvocation {
@@ -49,6 +50,22 @@ const runCodexCli: CodexCliRunFn = async (invocation) => {
     proc.exited,
   ])
   return { stdout, stderr, exitCode }
+}
+
+/** Verify both the local executable and Codex login for init suggestions. */
+export async function isCodexRuntimeUsable(
+  input: RuntimeUsabilityInput,
+  runCli: CodexCliRunFn = runCodexCli,
+): Promise<boolean> {
+  const env = Object.fromEntries(
+    Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  try {
+    const result = await runCli({ args: ['login', 'status'], cwd: input.cwd, env })
+    return result.exitCode === 0
+  } catch {
+    return false
+  }
 }
 
 interface JsonRecord {

@@ -401,16 +401,15 @@ step as failed and file an observation while the green build continues.
 ### `[roles]`
 
 An **open map** of role name → `{ runtime?, model?, extensions? }` on the three
-agent configuration axes. The reserved optional `default` role is the raw
-inheritance base for every other role and is **never dispatched as a phase**.
-With no `[roles.default]`, the base is empty: sessions use the wiring-fallback
-runtime (`claude`) and that runtime's built-in default model, with no
-extensions. Three runtimes ship: **`claude`** (local Claude Code CLI),
-**`codex`** (local Codex CLI; unqualified `gpt-*` ids), and **`pi`** (SDK mode;
-provider-qualified ids such as the independent `openai-codex/gpt-5.6-sol`
-route — `ab models [query]` looks them up). Claude and Codex delegate an omitted
-model to their CLI default; Pi declares `kimi-coding/k3`. Trusted plugins may
-register additional runtime names;
+agent configuration axes. The reserved `default` role must explicitly name a
+runtime, is the raw inheritance base for every other role, and is **never
+dispatched as a phase**. Its absence fails eager resolution before a session,
+with a copyable fix and all registered runtime names. Three runtimes ship:
+**`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
+`gpt-*` ids), and **`pi`** (SDK mode; provider-qualified ids such as the
+independent `openai-codex/gpt-5.6-sol` route — `ab models [query]` looks them
+up). Claude and Codex delegate an omitted model to their CLI default; Pi
+declares `kimi-coding/k3`. Trusted plugins may register additional runtime names;
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 
@@ -425,7 +424,7 @@ conflict for manual resolution.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `runtime` | — | optional, nonempty string | Runtime for this role. A role that omits it inherits `[roles.default].runtime`; absent there too ⇒ the wiring fallback. Must name a registered runtime. |
+| `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
 
@@ -534,27 +533,30 @@ environment variable instead and say why.
 ## Setup and upgrades
 
 **`ab init <target> [--force] [--ticket-source file|linear]
-[--workspace-provider git-worktree] [--role-profile split|claude|codex|pi]
+[--workspace-provider git-worktree] [--role-profile split|<registered-runtime>]
 [--no-interactive]`** runs *outside* build sessions — it takes a repo path,
 needs no `AB_*` environment, and is safe to re-run. It:
 
 - If `autobuild.toml` is absent and both stdin and stdout are TTYs, prompts for
   unresolved ticket, workspace, and role choices. The first ticket/workspace
   options are the no-account local file tracker and shipped git-worktree
-  provider. The suggested `split` role profile uses Pi with
+  provider. Runtime choices are limited to registered runtimes whose local
+  executable/authentication probe succeeds. The `split` role profile is offered
+  only when Pi can authenticate both of its models; it uses Pi with
   `openai-codex/gpt-5.6-sol` for plan/implement and `kimi-coding/k3` for both
-  review roles. `claude` keeps the historical Claude-wide default; `codex`
-  drives the locally authenticated Codex CLI with its own default model; `pi`
-  uses Pi's default model for every role. Move with Up/Down and confirm with Enter;
+  review roles. The shipped runtime choices are `claude`, `codex`, and `pi`;
+  each writes that runtime as the explicit default, with Codex driving the
+  locally authenticated Codex CLI. Move with Up/Down and confirm with Enter;
   each option's explanation is inline, and each submitted prompt remains on
   screen collapsed to its chosen label. Every prompt also notes that custom
   adapters can be built with an agent and points to
   `.agents/skills/ab-guide/references/plugin-authoring.md`. Ctrl+C cancels with
   a plain message before config, ignore rules, migration, or skills are written.
 - Each selection flag suppresses its corresponding prompt; all three make init
-  prompt-free. `--no-interactive` skips unresolved prompts and preserves the
-  file/git-worktree/Claude selections — the split is only an explicit or
-  interactive choice.
+  prompt-free. Explicit role profiles are operator overrides. An unresolved
+  non-interactive role choice selects a detected usable runtime and writes it
+  explicitly; when none is usable, init fails before mutation and names
+  `--role-profile`.
 - The generated config is a lean active-only skeleton: its short header says it
   is declarative and unevaluated and directs changes to the coding agent. It
   keeps `capacity`, all policy defaults, and verify/finalize `steps` explicit;

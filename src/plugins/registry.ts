@@ -136,6 +136,9 @@ export class PluginRegistry {
     'claude',
     'codex',
     'pi',
+    // Init's independent author/reviewer arrangement is addressed by this
+    // profile value, so a runtime with the same name could never be selected.
+    'split',
   ])
   readonly workspaceProviders = reserved<
     WorkspaceProviderPluginFactory,

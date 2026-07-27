@@ -16,27 +16,18 @@ const registry: RuntimeRegistry = {
   gemini: { runner: gemini, servesModels: ['gpt-'] },
 }
 
-function resolver(roles: Record<string, RuntimeSpec> = {}, fallback = 'claude') {
-  return createRuntimeResolver(registry, roles, fallback)
+function resolver(roles: Record<string, RuntimeSpec> = {}) {
+  const configured = Object.hasOwn(roles, 'default')
+    ? roles
+    : { default: { runtime: 'claude' }, ...roles }
+  return createRuntimeResolver(registry, configured)
 }
 
 describe('createRuntimeResolver — raw per-field inheritance', () => {
-  test('an absent default uses the wiring fallback and its built-in model', () => {
-    const claudeFallback = resolver()
-    expect(claudeFallback.resolve('plan')).toMatchObject({
-      runner: claude,
-      runtime: 'claude',
-      extensions: [],
-    })
-    expect(claudeFallback.resolve('plan').model).toBeUndefined()
-
-    const piFallback = resolver({}, 'pi')
-    expect(piFallback.resolve('plan')).toMatchObject({
-      runner: pi,
-      runtime: 'pi',
-      model: 'kimi-k3',
-      extensions: [],
-    })
+  test('an absent default is rejected with a copyable fix and available runtimes', () => {
+    expect(() => createRuntimeResolver(registry, {})).toThrow(
+      /\[roles\.default\].*missing required runtime.*\[roles\.default\].*runtime = "<runtime>".*Available runtimes: claude, pi, gemini/s,
+    )
   })
 
   test('an absent phase role inherits the explicit default pair', () => {

@@ -86,6 +86,7 @@ describe('PluginRegistry', () => {
       'claude',
       'codex',
       'pi',
+      'split',
     ])
     expect(() => registry.register(plugin('bad', { agentRuntimes: { codex: factory } }))).toThrow(
       /agent runtime.*codex.*bad.*builtin/,
@@ -97,6 +98,9 @@ describe('PluginRegistry', () => {
     expect(() => registry.register(plugin('bad', { ticketSources: { linear: factory } }))).toThrow(
       /ticket source.*linear.*bad.*builtin/,
     )
+    expect(() =>
+      registry.register(plugin('bad-runtime', { agentRuntimes: { split: factory } })),
+    ).toThrow(/agent runtime.*split.*bad-runtime.*builtin/)
 
     registry.register(plugin('first', { forges: { gitlab: factory } }))
     expect(() => registry.register(plugin('second', { forges: { gitlab: factory } }))).toThrow(

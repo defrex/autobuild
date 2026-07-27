@@ -88,36 +88,33 @@ describe('materializePluginRuntimes', () => {
       env: {},
     })
 
-    const selected = createRuntimeResolver(
-      merged,
-      { default: { runtime: 'custom' } },
-      'builtin',
-    ).resolve('plan')
+    const selected = createRuntimeResolver(merged, {
+      default: { runtime: 'custom' },
+    }).resolve('plan')
     expect(selected.runtime).toBe('custom')
     expect(selected.model).toBe('custom-family/default')
     expect(selected.runner.name).toBe('different-adapter-name')
 
     expect(() =>
-      createRuntimeResolver(
-        merged,
-        { default: { runtime: 'custom', model: 'other/model' } },
-        'builtin',
-      ),
+      createRuntimeResolver(merged, {
+        default: { runtime: 'custom', model: 'other/model' },
+      }),
     ).toThrow(/runtime "custom".*model "other\/model".*custom-family\//s)
 
-    expect(() =>
-      createRuntimeResolver(merged, { default: { runtime: 'missing' } }, 'builtin'),
-    ).toThrow(/registered runtimes: builtin, custom/)
+    expect(() => createRuntimeResolver(merged, { default: { runtime: 'missing' } })).toThrow(
+      /registered runtimes: builtin, custom/,
+    )
   })
 
-  test('preserves an optional callable one-shot capability', async () => {
+  test('preserves optional one-shot and init usability capabilities', async () => {
     const plugins = createPluginRegistry()
     const complete = async () => ({ text: 'plugin result' })
+    const initUsable = async () => true
     plugins.register({
       name: 'runtime-pack',
       apiVersion: '^1.0.0',
       agentRuntimes: {
-        custom: () => registration('custom', { oneShot: { complete } }),
+        custom: () => registration('custom', { oneShot: { complete }, initUsable }),
         sessionOnly: () => registration('session-only'),
       },
     })
@@ -127,6 +124,7 @@ describe('materializePluginRuntimes', () => {
       env: {},
     })
     expect(merged.custom!.oneShot?.complete).toBe(complete)
+    expect(merged.custom!.initUsable).toBe(initUsable)
     expect(merged.sessionOnly!.oneShot).toBeUndefined()
   })
 

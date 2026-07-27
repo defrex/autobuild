@@ -39,9 +39,15 @@ import {
   projectHarvest,
   type DashboardModel,
   type DashboardSelection,
+  type DashboardView,
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
-import { renderDashboard, type DashboardRendererResolver } from './dashboard/render'
+import {
+  moveTranscriptScroll,
+  renderDashboard,
+  type DashboardRendererResolver,
+} from './dashboard/render'
+import { parseTranscript } from './dashboard/transcript'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
@@ -119,6 +125,7 @@ const DASHBOARD_TICK_MS = 250
 type DashboardAction =
   | 'up'
   | 'down'
+  | 'enter'
   | 'auto-merge'
   | 'intake'
   | 'pause'
@@ -140,9 +147,8 @@ export interface DispatchWiring {
   forge: Forge
   workspaces: WorkspaceProvider
   /** Runtime registry (§9): name → adapter + compatibility data. The resolver
-   * applies `[roles]`; `defaultRuntime` is the wiring fallback. */
+   * applies `[roles]`, whose `default` entry is required. */
   runtimes: RuntimeRegistry
-  defaultRuntime: string
   /** The store reference sessions resolve as `AB_STORE` (D8) — MUST name the
    * same store as `store`, so an agent's `ab` commands write where the
    * dispatcher reads. */
@@ -264,7 +270,7 @@ async function defaultWire(
     opened.localStateRoot,
     plugins,
   )
-  const { runtimes, defaultRuntime } = createProductionRuntimes()
+  const { runtimes } = createProductionRuntimes()
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
   // their explicit config plus repository/environment context.
@@ -283,7 +289,6 @@ async function defaultWire(
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
     runtimes,
-    defaultRuntime,
     storeRef: opened.storeRef,
     ...(opened.token !== undefined ? { token: opened.token } : {}),
     ids: randomIds(),
@@ -346,6 +351,8 @@ class DispatchLoop {
   /** Ephemeral per-process presentation controls. Dispatcher settings are
    * projected from the repository journal and never cached here. */
   private selection: DashboardSelection | undefined = { kind: 'global' }
+  /** Read-only nested UI state. Omission is the top-level list. */
+  private view: DashboardView | undefined
   private warningLine: string | undefined
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
@@ -468,6 +475,7 @@ class DispatchLoop {
       selection: _oldSelection,
       warningLine: _oldWarningLine,
       resumeInput: _oldResumeInput,
+      view: _oldView,
       ...base
     } = this.model
     this.model = {
@@ -482,10 +490,46 @@ class DispatchLoop {
             },
           }
         : {}),
+      ...(this.view !== undefined ? { view: this.view } : {}),
     }
   }
 
   private moveSelection(delta: number): void {
+    if (this.view?.kind === 'transcript') {
+      const terminal = this.opts.terminal
+      this.view = {
+        ...this.view,
+        scroll:
+          terminal === undefined
+            ? 0
+            : moveTranscriptScroll(
+                this.view.transcript,
+                terminal.columns,
+                paintableRows(terminal.rows),
+                this.view.scroll,
+                delta,
+              ),
+      }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+    if (this.view?.kind === 'detail') {
+      const build = this.model?.builds.find((candidate) => candidate.slug === this.view!.slug)
+      const sessions = build?.sessions ?? []
+      if (sessions.length > 0) {
+        const current = sessions.findIndex((session) => session.id === this.view!.sessionId)
+        const index = Math.max(
+          0,
+          Math.min(sessions.length - 1, (current < 0 ? 0 : current) + delta),
+        )
+        this.view = { kind: 'detail', slug: this.view.slug, sessionId: sessions[index]!.id }
+      }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+
     // Input starts before the first asynchronous store projection. The global
     // row exists independently of that projection, so startup navigation must
     // clamp on it rather than letting the generic empty-list helper clear it.
@@ -497,6 +541,7 @@ class DispatchLoop {
   }
 
   private selectedBuildSlug(action: 'auto-merge' | 'pause/resume'): string | undefined {
+    if (this.view !== undefined) return this.view.slug
     const selection = this.selection
     if (selection === undefined) {
       this.warn('dashboard action ignored: no active row is selected')
@@ -690,7 +735,7 @@ class DispatchLoop {
   }
 
   private async toggleAutoMerge(): Promise<void> {
-    if (this.selection?.kind === 'global') {
+    if (this.view === undefined && this.selection?.kind === 'global') {
       const { store } = this.wiring
       const repo = this.opts.targetRepo
       const current = await this.readDispatchSettings()
@@ -734,6 +779,103 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
+  private async openSelected(): Promise<void> {
+    if (this.view === undefined) {
+      if (this.selection?.kind !== 'build') return
+      const selectedSlug = this.selection.slug
+      const build = this.model?.builds.find((candidate) => candidate.slug === selectedSlug)
+      if (build === undefined) return
+      this.view = {
+        kind: 'detail',
+        slug: build.slug,
+        ...(build.sessions?.[0] !== undefined ? { sessionId: build.sessions[0].id } : {}),
+      }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+    if (this.view.kind === 'transcript') return
+
+    const captured = this.view
+    const build = this.model?.builds.find((candidate) => candidate.slug === captured.slug)
+    const session = build?.sessions?.find((candidate) => candidate.id === captured.sessionId)
+    if (session === undefined) {
+      this.view = { ...captured, message: 'No session is selected.' }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+    if (session.status === 'open') {
+      this.view = {
+        ...captured,
+        message: 'Transcript unavailable while this session is still open.',
+        messageWhileSessionOpen: session.id,
+      }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+    if (session.transcript === undefined) {
+      this.view = { ...captured, message: 'This session ended without a transcript deposit.' }
+      this.syncModelControls()
+      this.paint()
+      return
+    }
+
+    const ref = session.transcript
+    try {
+      const artifact = await this.wiring.store.getArtifact(captured.slug, ref.kind, ref.rev)
+      // Reads race polling, terminalization, and Escape. Apply only to the exact
+      // detail/session that initiated the pinned read.
+      if (
+        this.view?.kind !== 'detail' ||
+        this.view.slug !== captured.slug ||
+        this.view.sessionId !== session.id
+      ) {
+        return
+      }
+      if (artifact === null) {
+        this.view = {
+          ...captured,
+          message: `Transcript ${ref.kind}@${ref.rev} is not retrievable.`,
+        }
+      } else {
+        this.view = {
+          kind: 'transcript',
+          slug: captured.slug,
+          sessionId: session.id,
+          transcript: parseTranscript(new TextDecoder().decode(artifact.content)),
+          scroll: 0,
+        }
+      }
+    } catch (error) {
+      if (
+        this.view?.kind === 'detail' &&
+        this.view.slug === captured.slug &&
+        this.view.sessionId === session.id
+      ) {
+        this.view = {
+          ...captured,
+          message: `Transcript read failed: ${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    }
+    this.syncModelControls()
+    this.paint()
+  }
+
+  private leaveView(): void {
+    if (this.view?.kind === 'transcript') {
+      this.view = { kind: 'detail', slug: this.view.slug, sessionId: this.view.sessionId }
+    } else if (this.view?.kind === 'detail') {
+      this.view = undefined
+    } else {
+      return
+    }
+    this.syncModelControls()
+    this.paint()
+  }
+
   private async handleAction(action: DashboardAction): Promise<void> {
     if (typeof action !== 'string') {
       await this.controlHarvestRun(action.run)
@@ -745,6 +887,9 @@ class DispatchLoop {
         return
       case 'down':
         this.moveSelection(1)
+        return
+      case 'enter':
+        await this.openSelected()
         return
       case 'intake':
         await this.toggleIntake()
@@ -832,23 +977,34 @@ class DispatchLoop {
       this.queueAction(input.type)
       return
     }
+    if (input.type === 'enter') {
+      this.queueAction('enter')
+      return
+    }
+    if (input.type === 'escape') {
+      this.leaveView()
+      return
+    }
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':
-        this.queueAction('auto-merge')
+        if (this.view?.kind !== 'transcript') this.queueAction('auto-merge')
         return
       case 'i':
-        if (this.selection?.kind === 'global') this.queueAction('intake')
+        if (this.view === undefined && this.selection?.kind === 'global') this.queueAction('intake')
         return
       case 'p':
-        if (this.selection?.kind === 'harvest') {
+        if (this.view?.kind === 'detail') {
+          this.queueAction('pause')
+        } else if (this.view === undefined && this.selection?.kind === 'harvest') {
           this.queueAction({ kind: 'harvest-run', run: this.model?.harvest?.run })
-        } else if (this.selection?.kind === 'build') {
+        } else if (this.view === undefined && this.selection?.kind === 'build') {
           this.queueAction('pause')
         }
         return
       case 'h':
-        if (this.selection?.kind === 'global') this.queueAction('harvest-gate')
+        if (this.view === undefined && this.selection?.kind === 'global')
+          this.queueAction('harvest-gate')
         return
       default:
         return
@@ -876,14 +1032,12 @@ class DispatchLoop {
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
 
-    const { store, tickets, runtimes, defaultRuntime, ids, uuids, clock, storeRef, token } =
-      this.wiring
+    const { store, tickets, runtimes, ids, uuids, clock, storeRef, token } = this.wiring
     const runner = new HarvestRunner({
       store,
       tickets,
       config: this.config,
       runtimes,
-      defaultRuntime,
       repo: this.opts.targetRepo,
       workspacePath: this.opts.targetRepo,
       ids,
@@ -973,7 +1127,7 @@ class DispatchLoop {
     this.activeBuildRuns.set(slug, reservation)
 
     try {
-      const { store, runtimes, defaultRuntime, ids, clock, storeRef, token } = this.wiring
+      const { store, runtimes, ids, clock, storeRef, token } = this.wiring
       const record = await store.getBuild(slug)
       const workspacePath = openWorkspacePath(await store.getEvents(slug))
       if (record === null || workspacePath === null) {
@@ -987,7 +1141,6 @@ class DispatchLoop {
         store,
         config: this.config,
         runtimes,
-        defaultRuntime,
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
         slug,
@@ -1164,6 +1317,45 @@ class DispatchLoop {
     )
     const nextRows = dashboardSelections(projected)
     this.selection = reconcileSelection(previousRows, nextRows, this.selection)
+
+    if (this.view !== undefined) {
+      const build = projected.builds.find((candidate) => candidate.slug === this.view!.slug)
+      if (build === undefined) {
+        // Detail is intentionally active-only. Terminal compaction removes the
+        // row and returns the operator to the list rather than showing stale data.
+        this.view = undefined
+      } else if (this.view.kind === 'detail') {
+        const detail = this.view
+        const sessions = build.sessions ?? []
+        const selected = sessions.some((session) => session.id === detail.sessionId)
+          ? detail.sessionId
+          : sessions[0]?.id
+        const messageStillValid =
+          detail.messageWhileSessionOpen === undefined ||
+          sessions.some(
+            (session) => session.id === detail.messageWhileSessionOpen && session.status === 'open',
+          )
+        const {
+          message: priorMessage,
+          messageWhileSessionOpen: priorMessageFence,
+          sessionId: _priorSession,
+          ...stableDetail
+        } = detail
+        this.view = {
+          ...stableDetail,
+          ...(selected !== undefined ? { sessionId: selected } : {}),
+          ...(messageStillValid && priorMessage !== undefined
+            ? {
+                message: priorMessage,
+                ...(priorMessageFence !== undefined
+                  ? { messageWhileSessionOpen: priorMessageFence }
+                  : {}),
+              }
+            : {}),
+        }
+      }
+    }
+
     this.model = projected
     this.syncModelControls()
     this.paint()
@@ -1412,7 +1604,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // runtime/model pair fails `ab dispatch` loudly here, before any build
   // launches, never as a silent per-build fallback. The per-build BuildRunner
   // re-resolves too (its own construction is the second guard).
-  const resolver = createRuntimeResolver(wiring.runtimes, config.roles, wiring.defaultRuntime)
+  const resolver = createRuntimeResolver(wiring.runtimes, config.roles)
 
   // Launch flags are durable repository setters. Omission writes nothing, so
   // another dispatcher cannot clobber the latest operator choice with a value

@@ -1702,9 +1702,6 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
 // the other scenarios rely on is unchanged.
 
 const TWO_AXIS_TOML = `${CONFIG_TOML}
-[roles.default]
-runtime = "scripted"
-
 [roles.code-review]
 runtime = "pi"
 model = "kimi-k3"
@@ -1751,10 +1748,10 @@ test('g. two-axis routing: one phase on pi×kimi-k3, the rest on the default run
   expect(planTranscript.metadata.model).toBeUndefined()
 }, 30_000)
 
-const PLUGIN_RUNTIME_TOML = `${CONFIG_TOML}
-[roles.default]
-runtime = "plugin-scripted"
-`
+const PLUGIN_RUNTIME_TOML = CONFIG_TOML.replace(
+  'runtime = "scripted"',
+  'runtime = "plugin-scripted"',
+)
 
 test('g2. a plugin-registered runtime and its default model drive a full build', async () => {
   const h = await track(
@@ -1790,9 +1787,6 @@ test('g2. a plugin-registered runtime and its default model drive a full build',
 }, 30_000)
 
 const PLUGIN_PHASE_OVERRIDE_TOML = `${CONFIG_TOML}
-[roles.default]
-runtime = "scripted"
-
 [roles.plan]
 runtime = "plugin-scripted"
 `
@@ -1934,7 +1928,6 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
       tickets: h.tickets,
       config: h.config,
       runtimes: { scripted: { runner: harvestAgents, servesModels: [] } },
-      defaultRuntime: 'scripted',
       repo: h.origin,
       workspacePath: h.origin,
       ids: h.ids,

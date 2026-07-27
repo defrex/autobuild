@@ -81,6 +81,9 @@ command = "test"
 [policy]
 stallRounds = 3
 
+[roles.default]
+runtime = "scripted"
+
 [tickets]
 source = "file"
 readyLabels = ["autobuild"]
@@ -284,7 +287,6 @@ export async function makeHarness(opts: {
   /** Optional adapter-level runtime composition for focused integration tests.
    * The scripted agent remains available as the fake provider behind it. */
   createRuntimeRegistry?: (agents: ScriptedAgentRunner) => RuntimeRegistry
-  defaultRuntime?: string
   /** Optional production-like workspace composition seam. The default remains
    * the real git-worktree adapter used by existing scenarios. */
   createWorkspaceProvider?: (context: {
@@ -312,6 +314,9 @@ export async function makeHarness(opts: {
   const uuids = sequentialUuids()
   const store = new MemoryBuildStore({ clock })
   const config = parseConfig(configToml, 'e2e autobuild.toml')
+  // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
+  // at the harness boundary rather than relying on production wiring.
+  config.roles.default ??= { runtime: 'scripted' }
   const forge = new FakeForge({
     gatePresence: opts.gatePresence ?? 'present',
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
@@ -417,8 +422,6 @@ export async function makeHarness(opts: {
     repoRoot: origin,
     env: {},
   })
-  const defaultRuntime = opts.defaultRuntime ?? 'scripted'
-
   // launchRunner (§3.3, §15.6-C, §15.7): construct a REAL BuildRunner over
   // the SAME store and the provisioned workspace path; the dispatcher never
   // runs agents itself.
@@ -438,10 +441,9 @@ export async function makeHarness(opts: {
         // Two-axis registry (§9): every runtime is backed by the SAME scripted
         // runner instance, so the `s_1…s_N` session numbering scenarios rely on
         // is preserved regardless of which runtime a role selects. `scripted`
-        // is the fallback and runs only with its un-named built-in model; `pi`
+        // is the configured default and runs only with its un-named built-in model; `pi`
         // serves the Kimi family for exact configured-pair validation.
         runtimes,
-        defaultRuntime,
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
         slug,
@@ -477,7 +479,6 @@ export async function makeHarness(opts: {
     forge: selectedForge,
     workspaces,
     runtimes,
-    defaultRuntime,
     // Scripted agents resolve this ambient value, then invoke runCli against
     // the injected shared store. It is an identity label, never opened.
     storeRef: 'memory://e2e',

@@ -15,10 +15,7 @@ import {
   CONFIG_TOML,
 } from './harness'
 
-const CODEX_CONFIG = `${CONFIG_TOML}
-[roles.default]
-runtime = "codex"
-`
+const CODEX_CONFIG = CONFIG_TOML.replace('runtime = "scripted"', 'runtime = "codex"')
 
 function jsonl(events: Record<string, unknown>[]): CodexCliResult {
   return {
@@ -122,7 +119,6 @@ test('a Codex-only runtime drives a full build and native producer continuation'
     handlers,
     tickets: [readyTicket('T-CODEX')],
     configToml: CODEX_CONFIG,
-    defaultRuntime: 'codex',
     createRuntimeRegistry: (agents) => {
       transport = codexTransport(agents)
       const codex = new CodexAgentRunner({ runCli: transport.runCli })

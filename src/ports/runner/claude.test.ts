@@ -12,11 +12,48 @@ import {
 } from './contract'
 import {
   ClaudeAgentRunner,
+  isClaudeRuntimeUsable,
   type ClaudeCliInvocation,
   type ClaudeCliResult,
   type ClaudeCliRunFn,
 } from './claude'
 import { AGENT_BIN_DIR } from './session-env'
+
+describe('Claude init usability', () => {
+  const input = { cwd: '/repo', env: { PATH: '/bin' }, models: [] }
+
+  test('requires a successful logged-in auth status', async () => {
+    expect(
+      await isClaudeRuntimeUsable(input, async () => ({
+        stdout: '{"loggedIn":true}',
+        stderr: '',
+        exitCode: 0,
+      })),
+    ).toBe(true)
+    expect(
+      await isClaudeRuntimeUsable(input, async () => ({
+        stdout: '{"loggedIn":false}',
+        stderr: '',
+        exitCode: 0,
+      })),
+    ).toBe(false)
+  })
+
+  test('treats missing executables and malformed output as unusable', async () => {
+    expect(
+      await isClaudeRuntimeUsable(input, async () => {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      }),
+    ).toBe(false)
+    expect(
+      await isClaudeRuntimeUsable(input, async () => ({
+        stdout: 'not-json',
+        stderr: '',
+        exitCode: 0,
+      })),
+    ).toBe(false)
+  })
+})
 
 function event(value: Record<string, unknown>): string {
   return JSON.stringify(value)

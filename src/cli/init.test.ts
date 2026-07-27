@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import {
-  abInit,
+  abInit as productionAbInit,
   claudeSkillPath,
   defaultDistRoot,
   INIT_ROLE_PROFILE_CHOICES,
@@ -36,6 +36,17 @@ import { runCli, type SessionlessCliDeps } from './main'
 import { parseConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
+
+const TEST_INIT_RUNTIMES: RuntimeRegistry = Object.fromEntries(
+  Object.entries(createProductionRuntimes().runtimes).map(([name, registration]) => [
+    name,
+    { ...registration, initUsable: async () => true },
+  ]),
+)
+
+const abInit: typeof productionAbInit = (opts) =>
+  productionAbInit({ ...opts, runtimes: opts.runtimes ?? TEST_INIT_RUNTIMES, env: opts.env ?? {} })
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 
@@ -213,10 +224,41 @@ describe('abInit — fresh install', () => {
     expect(config.capacity).toBe(1)
     expect(config.policy.harvestThreshold).toBe(5)
     expect(config.tickets.readyState).toBe('ready')
-    expect(config.roles.default).toEqual({ runtime: 'claude' })
+    expect(config.roles.default).toEqual({ runtime: 'pi' })
+    expect(config.roles.plan?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
     expect(config.commands).toEqual({ setup: 'bun install' })
     expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
     expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
+  })
+
+  test('non-interactive selection discovers future registered runtimes generically', async () => {
+    const runner = TEST_INIT_RUNTIMES.claude!.runner
+    await productionAbInit({
+      targetRepo: target,
+      env: {},
+      runtimes: {
+        future: { runner, servesModels: [], initUsable: async () => true },
+      },
+    })
+    expect(
+      parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8')).roles.default,
+    ).toEqual({ runtime: 'future' })
+  })
+
+  test('no usable runtime fails before mutating the repository and names the override flag', async () => {
+    const runner = TEST_INIT_RUNTIMES.claude!.runner
+    await expect(
+      productionAbInit({
+        targetRepo: target,
+        env: {},
+        runtimes: {
+          unavailable: { runner, servesModels: [], initUsable: async () => false },
+        },
+      }),
+    ).rejects.toThrow('--role-profile')
+    expect(existsSync(join(target, 'autobuild.toml'))).toBe(false)
+    expect(existsSync(join(target, '.gitignore'))).toBe(false)
+    expect(existsSync(join(target, '.agents'))).toBe(false)
   })
 
   test('distRoot defaults relative to the module — identical to an explicit distRoot', async () => {
@@ -382,7 +424,7 @@ describe('abInit — interactive adapter onboarding', () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     const expected = renderInitSelections(
       renderAutobuildTemplate(template, new Set(['lint', 'type-check', 'test'])),
-      { ticketSource: 'file', workspaceProvider: 'git-worktree', roleProfile: 'claude' },
+      { ticketSource: 'file', workspaceProvider: 'git-worktree', roleProfile: 'split' },
     )
 
     await abInit({ targetRepo: target })
@@ -452,7 +494,7 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(INIT_SPLIT_AUTHOR_MODEL).not.toBe(INIT_SPLIT_REVIEWER_MODEL)
   })
 
-  test('the presenter receives aggregate outcomes and combined Linear/Pi next steps', async () => {
+  test('the presenter does not request Pi setup after successful auto-detection', async () => {
     const prompter = new ScriptedInitPrompter(['linear', 'git-worktree', 'split'])
     const report = await abInit({ targetRepo: target, prompter })
 
@@ -468,7 +510,6 @@ describe('abInit — interactive adapter onboarding', () => {
       nextSteps: [
         'Ask your coding agent to change autobuild.toml.',
         expect.stringContaining('Linear setup required:'),
-        expect.stringContaining('Pi setup required:'),
       ],
     })
   })
@@ -507,11 +548,7 @@ describe('abInit — interactive adapter onboarding', () => {
       }
 
       const config = parseConfig(await generated(repo))
-      const resolver = createRuntimeResolver(
-        production.runtimes,
-        config.roles,
-        production.defaultRuntime,
-      )
+      const resolver = createRuntimeResolver(production.runtimes, config.roles)
       const resolved = Object.fromEntries(roles.map((role) => [role, resolver.resolve(role)]))
       const expectedRuntime = roleProfile === 'split' ? 'pi' : roleProfile
       for (const role of roles) expect(resolved[role]?.runtime).toBe(expectedRuntime)
@@ -956,6 +993,8 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
       workspacePath: target,
       stdout: (line) => out.push(line),
       stderr: (line) => err.push(line),
+      initRuntimes: TEST_INIT_RUNTIMES,
+      processEnv: {},
       out,
       err,
     }

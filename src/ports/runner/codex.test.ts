@@ -12,6 +12,7 @@ import {
 } from './contract'
 import {
   CodexAgentRunner,
+  isCodexRuntimeUsable,
   type CodexCliInvocation,
   type CodexCliResult,
   type CodexCliRunFn,
@@ -135,6 +136,26 @@ describeAgentRunnerContract('CodexAgentRunner (injected Codex CLI)', codexContra
 
 afterEach(() => {
   delete process.env.AB_TEST_AMBIENT
+})
+
+describe('Codex runtime usability', () => {
+  const input = { cwd: '/workspace', env: { PATH: '/bin', UNSET: undefined }, models: [] }
+
+  test('requires a successful local login status', async () => {
+    const usable = fakeCli([output([])])
+    expect(await isCodexRuntimeUsable(input, usable.runCli)).toBe(true)
+    expect(usable.calls).toEqual([
+      { args: ['login', 'status'], cwd: '/workspace', env: { PATH: '/bin' } },
+    ])
+
+    const loggedOut = fakeCli([output([], { exitCode: 1 })])
+    expect(await isCodexRuntimeUsable(input, loggedOut.runCli)).toBe(false)
+  })
+
+  test('treats a missing executable as unusable', async () => {
+    const missing = fakeCli([Object.assign(new Error('missing'), { code: 'ENOENT' })])
+    expect(await isCodexRuntimeUsable(input, missing.runCli)).toBe(false)
+  })
 })
 
 describe('CodexAgentRunner start and continue', () => {
