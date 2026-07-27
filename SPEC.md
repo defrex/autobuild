@@ -1307,16 +1307,40 @@ non-phase surfaces (`spec`, `tickets`, `guide`, and the outer-loop skills).
   (`ab-spec`, `ab-tickets`, `ab-guide`) are exactly the skills that **drive
   no phase**; membership is decided by that criterion, not taste.
 
-**Upgrades** are the classic vendoring problem: `ab init` records the
-pristine version of each installed skill; `ab upgrade` three-way merges
-(pristine base × local edits × new default). A conflict may be resolved by
-the optional tool-free `upgrade` one-shot with a standing bias: **prefer the
-local customization**. The agent output is only an untrusted proposal —
-deterministic validation verifies skill identity and the exact preservation
-of every already-clean merge region before anything is written. Failed or
-unavailable judgment leaves both live and pristine byte-untouched and names
-the manual merge path. Local customization survives upgrades; divergence is
-visible instead of silent.
+**Installation identity** is local to the running distribution. `ab --version`
+reads its package version, Bun-recorded forge commit when present, and the
+independent plugin API version; it needs no repository, config, store, or
+network. A source checkout is identified by its `.git` marker. A movable Bun
+forge install is identified only when the distribution's `.bun-tag`, its owning
+direct `github:owner/repository` dependency, and `bun.lock` record agree. The
+owner/repository is derived from those package-manager records, never hardcoded,
+so a fork install follows its fork. Unknown or contradictory provenance is a
+named refusal, never a guessed install command.
+
+**Upgrades** run only on explicit `ab upgrade`. By default the command resolves
+the latest full GitHub Release from that installation repository. If newer, it
+uses the matching Bun local or global operation to install the release, then
+hands off to a fresh process from the replaced distribution before touching
+skills. Thus both defaults and merge logic come from the new version. A local
+install updates the owning project's `package.json` dependency and `bun.lock`;
+a global install updates Bun's global package-manager state. An already-current
+(or locally newer) install proceeds directly to skill merge. A source checkout
+or indeterminate mechanism is never mutated and still merges installed skills.
+Latest lookup/install failures warn and do the same; failure to resolve or
+install an operator-selected `--version <semver>` is fatal and does not merge
+against the wrong defaults. `--no-self-update` always selects merge-only
+behavior. An exact version may be older than the installed version.
+
+Skill handling remains the classic vendoring problem: `ab init` records the
+pristine version of each installed skill; upgrade three-way merges (pristine
+base × local edits × new default). A conflict may be resolved by the optional
+tool-free `upgrade` one-shot with a standing bias: **prefer the local
+customization**. The agent output is only an untrusted proposal — deterministic
+validation verifies skill identity and exact preservation of every already-clean
+merge region before anything is written. Failed or unavailable judgment leaves
+both live and pristine byte-untouched and names the manual merge path. Local
+customization survives upgrades; divergence is visible instead of silent. No
+other command checks for or installs releases in the foreground or background.
 
 ## 17. Out of scope for v2.0 (explicitly)
 

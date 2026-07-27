@@ -109,6 +109,21 @@ Claude/file/git-worktree baseline. Non-TTY output is plain, with no ANSI or box
 drawing. See the [configuration reference](docs/configuration.md) for every
 option.
 
+Check the running installation offline from any directory with `ab --version`;
+it reports the package version, Bun-recorded commit when available, and plugin
+API version. `ab upgrade` updates a Bun forge installation to its repository's
+latest GitHub Release and then merges that new distribution's skill defaults
+into the current repository. Use `--version <semver>` to select an exact release
+(including a downgrade), or `--no-self-update` for the historical merge-only
+operation. A linked/source checkout is never updated. Latest lookup/install
+failures warn and retain installed defaults; an explicit-version failure stops.
+
+For local Bun installs, self-update runs Bun in the owning project and changes
+its Autobuild dependency in `package.json` plus its `bun.lock` resolution, which
+may leave that project dirty. Existing global installs instead update Bun's
+global package-manager state. No other command performs release checks or
+updates.
+
 Write a ticket that says what and why, with acceptance criteria and an
 out-of-scope list (the `/ab-spec` skill will interview you into one), then
 mark it ready:

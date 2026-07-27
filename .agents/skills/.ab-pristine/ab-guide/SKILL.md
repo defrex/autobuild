@@ -588,12 +588,34 @@ override). Only `kept` and `overwritten` skills are named individually. Linear
 and Pi follow-ups share a visually distinct next-steps block. Non-TTY output is
 plain text with no ANSI escapes or box drawing.
 
-**`ab upgrade <target>`** three-way merges every distributed skill file as
-*pristine base × local edits × new default*, with a standing bias toward **the
-local customization** — upstream is adopted only where it doesn't collide with
-what the repo deliberately changed. New upstream files are delivered; an
-upstream-removed unedited file is removed, while a customized copy becomes a
-preserved repository-local support file.
+**`ab --version`** reports the installed package version, Bun-recorded commit
+when available, and plugin API version using local distribution metadata only.
+It works outside a repository, needs no config or `AB_*` session, and performs
+no network request.
+
+**`ab upgrade <target> [--no-self-update | --version <semver>]`** updates only
+when explicitly invoked. By default it resolves the latest full GitHub Release
+from the repository recorded by the running Bun forge install (including a
+fork), installs it with the matching local/global Bun mechanism, then hands off
+to that replacement binary. The fresh process therefore supplies both skill
+defaults and merge logic. `--version` selects an exact release, including an
+older one; `--no-self-update` merges against the installed distribution. Source
+checkouts and unknown/contradictory provenance are never mutated and continue
+to merge. Latest lookup/install failures warn and continue; an explicit release
+failure stops before merging against the wrong defaults. No other command
+checks for or installs a release.
+
+A local Bun update changes the dependency in its owning project's
+`package.json` and the matching `bun.lock` resolution, potentially leaving that
+project dirty. An existing global install changes Bun's global package-manager
+state instead.
+
+After that distribution decision, upgrade three-way merges every distributed
+skill file as *pristine base × local edits × new default*, with a standing bias
+toward **the local customization** — upstream is adopted only where it doesn't
+collide with what the repo deliberately changed. New upstream files are
+delivered; an upstream-removed unedited file is removed, while a customized
+copy becomes a preserved repository-local support file.
 Outcomes:
 
 | Outcome | Meaning for the repo's files |

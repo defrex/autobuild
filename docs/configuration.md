@@ -785,7 +785,12 @@ flags, reconcile generated fragments, or overwrite the file. This remains true
 with `--force`; that flag can overwrite locally edited vendored skills, never
 configuration. Later package-script changes are manual configuration edits.
 Re-running init still maintains the `.autobuild/` ignore rule and skill
-installation, while `ab upgrade` merges vendored skills only.
+installation. `ab upgrade` does not migrate or rewrite `autobuild.toml`; by
+default it first updates a recognized Bun forge distribution and then merges
+vendored skills from that distribution. For a local install, Bun may update the
+*owning* project's Autobuild dependency in `package.json` and `bun.lock`; this
+package-manager side effect is separate from target-repository configuration.
+Use `ab upgrade --no-self-update` for merge-only behavior.
 
 ## Durable settings outside TOML
 
