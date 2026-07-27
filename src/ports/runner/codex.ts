@@ -113,8 +113,6 @@ const SHELL_ENV_INHERIT = 'shell_environment_policy.inherit=all'
 const ONE_SHOT_DISABLED_FEATURES = [
   'shell_tool',
   'unified_exec',
-  'web_search_request',
-  'web_search_cached',
   'standalone_web_search',
   'apps',
   'plugins',
@@ -153,6 +151,11 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       '--ignore-rules',
       '--sandbox',
       'read-only',
+      // The legacy web_search feature gates emit deprecation warning items in
+      // current Codex releases. This supported config value disables search
+      // without making a healthy one-shot look like tool activity.
+      '-c',
+      'web_search="disabled"',
     ]
     for (const feature of ONE_SHOT_DISABLED_FEATURES) args.push('--disable', feature)
     if (input.model !== undefined) args.push('--model', input.model)
@@ -405,7 +408,16 @@ function parseCodexOutput(stdout: string): ParsedCodexOutput {
         const text = itemText(item)
         if (text !== undefined) parsed.assistantText.push(text)
       }
-      if (itemType !== undefined && itemType !== 'agent_message' && itemType !== 'reasoning') {
+      // Codex represents non-fatal warnings/deprecation notices as `error`
+      // thread items. They are transcript evidence, not executed tools. Every
+      // other unknown item remains fail-closed so newly added capabilities
+      // cannot silently weaken one-shot isolation.
+      if (
+        itemType !== undefined &&
+        itemType !== 'agent_message' &&
+        itemType !== 'reasoning' &&
+        itemType !== 'error'
+      ) {
         parsed.toolItems.push(itemType)
       }
     }

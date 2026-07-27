@@ -308,8 +308,18 @@ describe('CodexAgentRunner protocol and failures', () => {
 })
 
 describe('CodexAgentRunner complete', () => {
-  test('is ephemeral/read-only, ignores user tools, forwards cancellation, and preserves auth env', async () => {
-    const cli = fakeCli([output([thread('ephemeral'), message('slug-name'), completed(2, 1)])])
+  test('is ephemeral/read-only, tolerates warning items, forwards cancellation, and pins tool-free argv', async () => {
+    const cli = fakeCli([
+      output([
+        thread('ephemeral'),
+        {
+          type: 'item.completed',
+          item: { type: 'error', message: 'Model metadata not found; using fallback metadata.' },
+        },
+        message('slug-name'),
+        completed(2, 1),
+      ]),
+    ])
     const runner = new CodexAgentRunner({ runCli: cli.runCli })
     const controller = new AbortController()
     const result = await runner.complete({
@@ -322,12 +332,48 @@ describe('CodexAgentRunner complete', () => {
     expect(result).toEqual({ text: 'slug-name' })
     expect(cli.calls[0]).toMatchObject({ cwd: '/repo', signal: controller.signal })
     expect(cli.calls[0]?.env.CODEX_HOME).toBe('/auth/codex')
-    expect(cli.calls[0]?.args).toContain('--ephemeral')
-    expect(cli.calls[0]?.args).toContain('--ignore-user-config')
-    expect(cli.calls[0]?.args).toContain('--ignore-rules')
-    expect(cli.calls[0]?.args).toContain('read-only')
+    expect(cli.calls[0]?.args).toEqual([
+      'exec',
+      '--json',
+      '--ephemeral',
+      '--ignore-user-config',
+      '--ignore-rules',
+      '--sandbox',
+      'read-only',
+      '-c',
+      'web_search="disabled"',
+      '--disable',
+      'shell_tool',
+      '--disable',
+      'unified_exec',
+      '--disable',
+      'standalone_web_search',
+      '--disable',
+      'apps',
+      '--disable',
+      'plugins',
+      '--disable',
+      'multi_agent',
+      '--disable',
+      'multi_agent_v2',
+      '--disable',
+      'image_generation',
+      '--disable',
+      'computer_use',
+      '--disable',
+      'browser_use',
+      '--disable',
+      'browser_use_external',
+      '--disable',
+      'browser_use_full_cdp_access',
+      '--model',
+      'gpt-5.4-mini',
+      '--',
+      'name this spec',
+    ])
+    expect(cli.calls[0]?.args).not.toContain('web_search_request')
+    expect(cli.calls[0]?.args).not.toContain('web_search_cached')
     expect(promptOf(cli.calls[0]!)).toBe('name this spec')
-    expect(cli.calls[0]?.args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
   })
 
   test('fails closed when Codex emits tool activity', async () => {
