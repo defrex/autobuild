@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#105](https://github.com/defrex/autobuild/pull/105) — Add a maintainer release command
 - [#104](https://github.com/defrex/autobuild/pull/104) — Give ab init a guided interactive survey
 - [#103](https://github.com/defrex/autobuild/pull/103) — Label harvest proposals and reconcile Linear labels
 - [#102](https://github.com/defrex/autobuild/pull/102) — Show dispatch capacity and observation pressure
