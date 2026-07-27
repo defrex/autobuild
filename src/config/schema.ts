@@ -338,7 +338,8 @@ const configRootSchema = z.strictObject({
     .refine((value) => value.trim().length > 0, 'forge adapter name must be nonblank')
     .default('github'),
   /** Trusted in-process plugin modules, loaded in declaration order from the
-   * consuming repository before production adapters are constructed. */
+   * consuming repository before production adapters are constructed. Exact
+   * specifier strings must be unique (cross-validated below). */
   plugins: z
     .array(
       z
@@ -380,6 +381,22 @@ export const TOP_LEVEL_KEYS = Object.keys(configRootSchema.shape)
  * discipline applied to config).
  */
 export const configSchema = configRootSchema.superRefine((config, ctx) => {
+  const firstPluginIndex = new Map<string, number>()
+  config.plugins.forEach((specifier, index) => {
+    const firstIndex = firstPluginIndex.get(specifier)
+    if (firstIndex === undefined) {
+      firstPluginIndex.set(specifier, index)
+      return
+    }
+    ctx.addIssue({
+      code: 'custom',
+      path: ['plugins', index],
+      message:
+        `duplicate plugin module specifier ${JSON.stringify(specifier)} — first declared at ` +
+        `plugins[${firstIndex}]; remove or deduplicate this entry`,
+    })
+  })
+
   if (
     config.workspace.provider === 'git-worktree' &&
     Object.keys(config.workspace.config).length > 0

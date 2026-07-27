@@ -49,7 +49,7 @@ any table header.
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
 | `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
-| `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
+| `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
 
 ### Plugin modules
 
@@ -60,7 +60,11 @@ plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
 Relative paths and bare npm package specifiers are resolved as though imported
 from the repository root. Package specifiers therefore use that repository's
-installed dependencies, not Autobuild's own installation tree. Each module
+installed dependencies, not Autobuild's own installation tree. Every configured
+specifier string must be unique. An exact repeat fails schema validation before
+any plugin resolves or evaluates; the diagnostic identifies the repeated value
+and both list positions and tells the operator to remove or deduplicate the
+entry. Distinct specifier strings remain separate declarations. Each module
 must default-export a strict manifest with a plugin name, a semver range in
 `apiVersion`, and optional `ticketSources`, `agentRuntimes`,
 `workspaceProviders`, and `forges` factory maps. One manifest may contribute
@@ -73,7 +77,8 @@ there is no sandbox. A missing module, module
 that throws, malformed manifest, incompatible API range, or adapter-name
 collision fails startup before a ticket claim. Builtin names and names from
 earlier configured plugins are reserved, and declaration order never permits
-shadowing.
+shadowing. A collision between distinct plugin declarations continues to name
+the conflicting adapter and both owners.
 
 Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
