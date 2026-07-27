@@ -70,9 +70,15 @@ ab dispatch
 
 Starts the dispatcher, with the live dashboard on a TTY.
 
-Now ask your coding agent for `/ab-spec`. The vendored skill interviews you
-into a conforming ticket and files it; the dispatcher claims it, and the build
-plans, implements, reviews, verifies, and opens a PR for you to merge.
+```sh
+claude "/ab-spec I want to build a feature!"
+```
+
+The `/ab-spec` skill is how you make quality tickets. 
+
+The agent will walk you through and ask any questions about creating a high 
+quality ticket and then add the ticket directly to your ticketing system.
+Using the skills to create tickets then largely becomes your input workflow.
 
 ## How it works
 
