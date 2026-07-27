@@ -25,6 +25,7 @@ import { EventValidationError, type EventWrite } from '../../events/catalog'
 import type { RepositoryEventWrite } from '../../events/repository'
 import { systemClock, type BuildStore, type Clock } from '../types'
 import {
+  conditionalEventBodySchema,
   decodeBase64,
   depositsBodySchema,
   encodeBase64,
@@ -294,6 +295,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const body = await readBody(req, eventWriteWireSchema)
         authorizeSession(scope, body.actor)
         return json(201, await store.append(slug, body as EventWrite))
+      }
+      case 'POST events/conditional': {
+        const body = await readBody(req, conditionalEventBodySchema)
+        authorizeSession(scope, body.event.actor)
+        const event = await store.appendIfCurrent(slug, body.expectedSeq, body.event as EventWrite)
+        return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
         return json(200, await store.getEvents(slug, intParam(url, 'since') ?? 0))
