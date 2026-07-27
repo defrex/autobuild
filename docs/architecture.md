@@ -54,7 +54,7 @@ K unclaimed observation.recorded events
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `src/config/` | `autobuild.toml` parsing and strict validation; user reference in `docs/configuration.md` | §16.1 |
 | `src/integration/` | End-to-end harness and product scenarios | — |
-| `tools/` | This repository's local verification tooling, including its dashboard-capture scene; not shipped product behavior | — |
+| `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
 | `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and the full config surface. Update it when config changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
 | `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |

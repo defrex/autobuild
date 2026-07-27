@@ -45,21 +45,27 @@ Before editing tracked files:
 
 - Require exactly one level-two heading whose whole line is `## Unreleased`
   (trailing horizontal whitespace is harmless). Missing or multiple matching
-  headings are a semantic failure.
+  headings are a semantic failure. The Unreleased section is bounded by that
+  heading and the next level-two heading, or by EOF when no later level-two
+  heading exists; every later heading and released section is immutable.
 - Let the stable marker be the literal `[#<number>](` for this PR and count it
   across `CHANGELOG.md`. Exactly one occurrence is a successful replay no-op:
   make no commit and end normally. More than one is a semantic failure. Never
   append another entry in either case.
 - With zero markers, require all PR/title inputs above. Normalize the title to
   one line, construct exactly the format shown, and insert it as the first
-  nonblank content beneath `## Unreleased`, before every existing entry. Keep
-  one blank separator below the heading (introduce it when the empty scaffold
-  has none), and do not reorder or rewrite existing lines.
+  nonblank content within the bounded Unreleased section, before every existing
+  entry. Keep one blank separator below the heading (introduce it when the
+  empty scaffold has none), and do not reorder or rewrite existing lines. When
+  the bounded section has no nonblank content and its next nonblank line is a
+  release heading, insert the entry after the heading's blank separator and
+  before that release heading — never beneath or inside the released section.
 
 After insertion, prove before committing that:
 
 - this PR marker occurs exactly once;
-- the new entry is the first nonblank content in the Unreleased section;
+- the new entry is the first nonblank content in the bounded Unreleased
+  section, including when it began as a freshly released empty scaffold;
 - `git diff --check -- CHANGELOG.md` passes; and
 - the unstaged diff has exactly one added entry line, with no removed or
   modified existing lines and no changed path besides `CHANGELOG.md`. The only
