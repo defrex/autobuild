@@ -542,9 +542,12 @@ needs no `AB_*` environment, and is safe to re-run. It:
   provider. The suggested `split` role profile uses Pi with
   `openai-codex/gpt-5.6-sol` for plan/implement and `kimi-coding/k3` for both
   review roles. `claude` keeps the historical Claude-wide default; `pi` uses
-  Pi's default model for every role. Each prompt notes that custom adapters can
-  be built with an agent and points to
-  `.agents/skills/ab-guide/references/plugin-authoring.md`.
+  Pi's default model for every role. Move with Up/Down and confirm with Enter;
+  each option's explanation is inline, and each submitted prompt remains on
+  screen collapsed to its chosen label. Every prompt also notes that custom
+  adapters can be built with an agent and points to
+  `.agents/skills/ab-guide/references/plugin-authoring.md`. Ctrl+C cancels with
+  a plain message before config, ignore rules, migration, or skills are written.
 - Each selection flag suppresses its corresponding prompt; all three make init
   prompt-free. `--no-interactive` skips unresolved prompts and preserves the
   historical defaults. A non-TTY run with no flags is byte-identical to the
@@ -577,9 +580,13 @@ needs no `AB_*` environment, and is safe to re-run. It:
   `disable-model-invocation: true` on every skill outside the model-invocable
   set (`ab-spec`, `ab-tickets`, `ab-guide`).
 
-Per-skill outcomes: `installed` (new), `unchanged` (byte-identical to the
-default), `kept` (locally edited — **init never clobbers an edit**), or
-`overwritten` (only under `--force`, the explicit human override).
+The final report states `autobuild.toml: written|skipped` and aggregates all
+skill counts. Per-skill outcomes are `installed` (new), `unchanged`
+(byte-identical to the default), `kept` (locally edited — **init never clobbers
+an edit**), or `overwritten` (only under `--force`, the explicit human
+override). Only `kept` and `overwritten` skills are named individually. Linear
+and Pi follow-ups share a visually distinct next-steps block. Non-TTY output is
+plain text with no ANSI escapes or box drawing.
 
 **`ab upgrade <target>`** three-way merges every distributed skill file as
 *pristine base × local edits × new default*, with a standing bias toward **the

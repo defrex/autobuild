@@ -29,8 +29,8 @@ import {
   renderAutobuildTemplate,
   rewriteSkillSource,
 } from './init'
-import type { InitPrompter, InitPromptQuestion } from './init-prompt'
-import { INIT_PLUGIN_HELP } from './init-prompt'
+import type { InitPresentation, InitPrompter, InitPromptQuestion } from './init-prompt'
+import { INIT_PLUGIN_HELP, InitCancelledError } from './init-prompt'
 import { runCli, type SessionlessCliDeps } from './main'
 import { parseConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -325,6 +325,7 @@ describe('abInit — package-script-aware config rendering', () => {
 
 class ScriptedInitPrompter implements InitPrompter {
   readonly questions: InitPromptQuestion[] = []
+  presentation: InitPresentation | undefined
   closed = false
 
   constructor(private readonly answers: string[] = []) {}
@@ -335,6 +336,10 @@ class ScriptedInitPrompter implements InitPrompter {
     const choice = question.choices.find((candidate) => candidate.value === answer)
     if (choice === undefined) throw new Error(`test answer ${answer} is not a choice`)
     return choice.value
+  }
+
+  present(presentation: InitPresentation): void {
+    this.presentation = presentation
   }
 
   close(): void {
@@ -422,6 +427,26 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(INIT_SPLIT_AUTHOR_MODEL).not.toBe(INIT_SPLIT_REVIEWER_MODEL)
   })
 
+  test('the presenter receives aggregate outcomes and combined Linear/Pi next steps', async () => {
+    const prompter = new ScriptedInitPrompter(['linear', 'git-worktree', 'split'])
+    const report = await abInit({ targetRepo: target, prompter })
+
+    expect(prompter.presentation).toEqual({
+      config: 'written',
+      skillCounts: {
+        installed: report.skills.length,
+        unchanged: 0,
+        kept: 0,
+        overwritten: 0,
+      },
+      attention: [],
+      nextSteps: [
+        expect.stringContaining('Linear setup required:'),
+        expect.stringContaining('Pi setup required:'),
+      ],
+    })
+  })
+
   test('shipped runtime resolution accepts the split and Pi profiles', async () => {
     const roles = ['plan', 'implement', 'plan-review', 'code-review'] as const
     const production = createProductionRuntimes()
@@ -438,7 +463,7 @@ describe('abInit — interactive adapter onboarding', () => {
         },
         stdout: (line) => output.push(line),
       })
-      const setupNotice = output.find((line) => line.startsWith('Pi setup required:'))
+      const setupNotice = output.find((line) => line.includes('Pi setup required:'))
       expect(setupNotice).toContain('run `pi` and use `/login`')
       expect(setupNotice).toContain('provider API key in the environment')
       expect(setupNotice).not.toContain('pi login')
@@ -556,6 +581,32 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(lines.join('\n')).toContain('[tickets].teamKey')
     expect(lines.join('\n')).toContain('[tickets].readyState')
     expect(source).not.toMatch(/LINEAR_API_KEY\s*=/)
+  })
+
+  test('cancellation at every question leaves the repository untouched', async () => {
+    for (const cancelAt of [1, 2, 3]) {
+      const repo = join(target, `cancel-${cancelAt}`)
+      await mkdir(repo)
+      let selected = 0
+      let closed = false
+      const prompter: InitPrompter = {
+        async select<T extends string>(question: InitPromptQuestion<T>): Promise<T> {
+          selected += 1
+          if (selected === cancelAt) throw new InitCancelledError()
+          return question.defaultValue
+        },
+        close() {
+          closed = true
+        },
+      }
+
+      await expect(abInit({ targetRepo: repo, prompter })).rejects.toThrow('Init cancelled.')
+      expect(closed).toBe(true)
+      expect(existsSync(join(repo, 'autobuild.toml'))).toBe(false)
+      expect(existsSync(join(repo, '.gitignore'))).toBe(false)
+      expect(existsSync(join(repo, '.agents'))).toBe(false)
+      expect(existsSync(join(repo, '.claude'))).toBe(false)
+    }
   })
 
   test('fresh invalid and contradictory selections fail, while an existing config ignores them', async () => {
@@ -809,12 +860,28 @@ describe('abInit — idempotence and safety', () => {
     expect(await readFile(pristineSkillPath(target, 'ab-plan'), 'utf8')).toBe(original)
   })
 
-  test('prints a human-readable line for the config and each skill', async () => {
+  test('prints an aggregate plain summary and names only attention outcomes', async () => {
     const lines: string[] = []
     await abInit({ targetRepo: target, stdout: (line) => lines.push(line) })
-    expect(lines[0]).toBe('autobuild.toml: written')
-    expect(lines).toContain('ab-plan: installed')
-    expect(lines).toHaveLength(1 + SKILL_NAMES.length)
+    expect(lines).toEqual([
+      'autobuild.toml: written',
+      `Skills: ${SKILL_NAMES.length} installed, 0 unchanged, 0 kept, 0 overwritten`,
+    ])
+
+    await writeFile(installedSkillPath(target, 'ab-plan'), 'local plan\n')
+    lines.length = 0
+    await abInit({ targetRepo: target, stdout: (line) => lines.push(line) })
+    expect(lines[0]).toBe('autobuild.toml: skipped')
+    expect(lines[1]).toBe(
+      `Skills: 0 installed, ${SKILL_NAMES.length - 1} unchanged, 1 kept, 0 overwritten`,
+    )
+    expect(lines).toContain('ab-plan: kept')
+    expect(lines.join('\n')).not.toContain('ab-implement: unchanged')
+
+    lines.length = 0
+    await abInit({ targetRepo: target, force: true, stdout: (line) => lines.push(line) })
+    expect(lines).toContain('ab-plan: overwritten')
+    expect(lines.join('\n')).not.toContain('ab-implement: unchanged')
   })
 })
 
@@ -852,7 +919,9 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(await runCli(['init'], d)).toBe(0)
     expect(existsSync(join(target, 'autobuild.toml'))).toBe(true)
     expect(existsSync(installedSkillPath(target, 'ab-plan'))).toBe(true)
-    expect(d.out).toContain('ab-plan: installed')
+    expect(d.out).toContain(
+      `Skills: ${SKILL_NAMES.length} installed, 0 unchanged, 0 kept, 0 overwritten`,
+    )
   })
 
   test('ab init takes an explicit target and --force only overwrites edited skills', async () => {
@@ -904,6 +973,21 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(config.roles['plan-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)
   })
 
+  test('ab init cancellation exits 1 with a plain message and no partial install', async () => {
+    const d = sessionless()
+    d.initPrompter = {
+      async select(): Promise<never> {
+        throw new InitCancelledError()
+      },
+    }
+
+    expect(await runCli(['init'], d)).toBe(1)
+    expect(d.out).toEqual([])
+    expect(d.err).toEqual(['Init cancelled.'])
+    expect(existsSync(join(target, 'autobuild.toml'))).toBe(false)
+    expect(existsSync(join(target, '.agents'))).toBe(false)
+  })
+
   test('ab init rejects unknown flags with usage feedback', async () => {
     const d = sessionless()
     expect(await runCli(['init', '--frobnicate'], d)).toBe(1)
@@ -952,6 +1036,10 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
     expect(stdout).toContain('autobuild.toml: written')
+    expect(stdout).toContain(`Skills: ${SKILL_NAMES.length} installed`)
+    expect(stdout).not.toContain('ab-spec: installed')
+    expect(stdout).not.toMatch(/\u001b\[/)
+    expect(stdout).not.toMatch(/[┌┐└┘─│◆◇●○]/)
     expect(existsSync(installedSkillPath(target, 'ab-spec'))).toBe(true)
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.commands.test).toBe('bun run test')

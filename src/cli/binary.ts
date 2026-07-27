@@ -58,7 +58,13 @@ export async function runBinary(
         terminal: processTerminal(process.stdout),
         input: processTerminalInput(process.stdin),
         ...(command === 'init'
-          ? { initPrompter: createProcessInitPrompter(process.stdin, process.stdout) }
+          ? {
+              initPrompter: createProcessInitPrompter(
+                process.stdin,
+                process.stdout,
+                controller.signal,
+              ),
+            }
           : {}),
         upgradeResolverFactory: createUpgradeAgentResolver,
         ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),

@@ -3,9 +3,18 @@ import { PassThrough } from 'node:stream'
 import { createProcessInitPrompter, INIT_PLUGIN_HELP, type InitPromptQuestion } from './init-prompt'
 
 function streams(inputTty: boolean, outputTty: boolean) {
-  const input = new PassThrough() as PassThrough & { isTTY?: boolean }
+  const input = new PassThrough() as PassThrough & {
+    isTTY?: boolean
+    isRaw?: boolean
+    setRawMode?: (raw: boolean) => PassThrough
+  }
   const output = new PassThrough() as PassThrough & { isTTY?: boolean }
   input.isTTY = inputTty
+  input.isRaw = false
+  input.setRawMode = (raw) => {
+    input.isRaw = raw
+    return input
+  }
   output.isTTY = outputTty
   let rendered = ''
   output.on('data', (chunk) => {
@@ -24,6 +33,19 @@ const question: InitPromptQuestion<'file' | 'linear'> = {
   ],
 }
 
+async function startSelect(
+  io: ReturnType<typeof streams>,
+  controller?: AbortController,
+): Promise<{
+  prompter: NonNullable<ReturnType<typeof createProcessInitPrompter>>
+  selected: Promise<'file' | 'linear'>
+}> {
+  const prompter = createProcessInitPrompter(io.input, io.output, controller?.signal)!
+  const selected = prompter.select(question)
+  await Bun.sleep(2)
+  return { prompter, selected }
+}
+
 describe('init prompt adapter', () => {
   test.each([
     [false, false],
@@ -34,44 +56,108 @@ describe('init prompt adapter', () => {
     expect(createProcessInitPrompter(io.input, io.output)).toBeUndefined()
   })
 
-  test('Enter accepts the displayed first/default option and renders plugin help', async () => {
+  test('Enter accepts the highlighted default and renders option help inline', async () => {
     const io = streams(true, true)
-    const prompter = createProcessInitPrompter(io.input, io.output)!
-    const selected = prompter.select(question)
-    io.input.write('\n')
+    const { prompter, selected } = await startSelect(io)
+    io.input.write('\x1b[B')
+    await Bun.sleep(2)
+    io.input.write('\x1b[A\r')
 
     await expect(selected).resolves.toBe('file')
-    expect(io.rendered()).toContain('1) Local file tracker [file] (default)')
-    expect(io.rendered()).toContain(INIT_PLUGIN_HELP)
-    expect(io.rendered()).toContain('Select [1]:')
+    const rendered = io.rendered()
+    expect(rendered).toContain('Set up Autobuild')
+    expect(rendered).toContain(INIT_PLUGIN_HELP)
+    expect(rendered).toMatch(/Local file tracker[^\n]*No account needed\./)
+    expect(rendered).toMatch(/Linear[^\n]*Uses LINEAR_API_KEY\./)
+    expect(rendered).not.toContain('1)')
+    expect(io.input.isRaw).toBe(false)
     prompter.close?.()
     io.input.end()
   })
 
-  test('accepts a number or value and retries invalid input with feedback', async () => {
+  test('arrow keys select options while numeric typing is ignored', async () => {
+    const io = streams(true, true)
+    const { prompter, selected } = await startSelect(io)
+    let settled = false
+    void selected.finally(() => {
+      settled = true
+    })
+
+    io.input.write('2')
+    await Bun.sleep(5)
+    expect(settled).toBe(false)
+    io.input.write('\x1b[B')
+    io.input.write('\r')
+
+    await expect(selected).resolves.toBe('linear')
+    expect(io.rendered()).not.toContain('Invalid selection')
+    prompter.close?.()
+    io.input.end()
+  })
+
+  test('submitted questions stay collapsed while the next question is active', async () => {
     const io = streams(true, true)
     const prompter = createProcessInitPrompter(io.input, io.output)!
-    try {
-      const selected = prompter.select(question)
-      io.input.write('wat\n')
-      await Bun.sleep(5)
-      io.input.write('2\n')
+    const first = prompter.select(question)
+    await Bun.sleep(2)
+    io.input.write('\x1b[B\r')
+    await expect(first).resolves.toBe('linear')
 
-      await expect(selected).resolves.toBe('linear')
-      expect(io.rendered()).toContain('Invalid selection "wat"')
-    } finally {
+    const second = prompter.select({
+      message: 'Choose a workspace provider',
+      help: INIT_PLUGIN_HELP,
+      choices: [
+        {
+          value: 'git-worktree',
+          label: 'Git worktree',
+          help: 'No infrastructure required.',
+        },
+      ],
+      defaultValue: 'git-worktree',
+    })
+    await Bun.sleep(2)
+    const renderedWhileActive = io.rendered()
+    expect(renderedWhileActive).toContain('Choose a ticket source')
+    expect(renderedWhileActive).toContain('Linear')
+    expect(renderedWhileActive).toContain('Choose a workspace provider')
+    io.input.write('\r')
+    await expect(second).resolves.toBe('git-worktree')
+    prompter.close?.()
+    io.input.end()
+  })
+
+  test('Ctrl+C and an AbortSignal reject with one stable cancellation error', async () => {
+    for (const kind of ['keypress', 'signal'] as const) {
+      const io = streams(true, true)
+      const controller = new AbortController()
+      const { prompter, selected } = await startSelect(io, controller)
+      if (kind === 'keypress') io.input.write('\x03')
+      else controller.abort()
+
+      await expect(selected).rejects.toThrow('Init cancelled.')
+      expect(io.input.isRaw).toBe(false)
+      expect(io.rendered()).not.toContain('Error:')
       prompter.close?.()
       io.input.end()
     }
   })
 
-  test('fails clearly when input closes before an answer', async () => {
+  test('the completed TTY report uses a summary and a distinct next-steps note', () => {
     const io = streams(true, true)
     const prompter = createProcessInitPrompter(io.input, io.output)!
-    const selected = prompter.select(question)
+    prompter.present?.({
+      config: 'written',
+      skillCounts: { installed: 10, unchanged: 0, kept: 1, overwritten: 1 },
+      attention: ['ab-plan: kept', 'ab-guide: overwritten'],
+      nextSteps: ['Linear: replace placeholders.', 'Pi: authenticate providers.'],
+    })
+    const rendered = io.rendered()
+    expect(rendered).toContain('autobuild.toml: written')
+    expect(rendered).toContain('10 installed')
+    expect(rendered).toContain('ab-plan: kept')
+    expect(rendered).toContain('Next steps')
+    expect(rendered).toContain('Linear: replace placeholders.')
+    expect(rendered).toContain('Autobuild is ready.')
     io.input.end()
-
-    await expect(selected).rejects.toThrow(/closed before .* was answered/)
-    prompter.close?.()
   })
 })

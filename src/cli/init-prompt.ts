@@ -1,4 +1,4 @@
-import { createInterface, type Interface } from 'node:readline/promises'
+import { intro, isCancel, log, note, outro, select } from '@clack/prompts'
 import type { Readable, Writable } from 'node:stream'
 
 export const INIT_PLUGIN_HELP =
@@ -17,108 +17,113 @@ export interface InitPromptQuestion<T extends string = string> {
   defaultValue: T
 }
 
-/** Narrow prompt seam: init owns choices; production owns terminal I/O. */
+export type InitSkillSummaryAction = 'installed' | 'kept' | 'unchanged' | 'overwritten'
+
+export interface InitPresentation {
+  config: 'written' | 'skipped'
+  skillCounts: Record<InitSkillSummaryAction, number>
+  attention: string[]
+  nextSteps: string[]
+}
+
+/** Narrow prompt seam: init owns choices and report content; production owns terminal I/O. */
 export interface InitPrompter {
   select<T extends string>(question: InitPromptQuestion<T>): Promise<T>
+  present?(presentation: InitPresentation): void
   close?(): void
 }
 
-class ReadlineInitPrompter implements InitPrompter {
-  private readline: Interface | undefined
-  private readonly inputEnded: Promise<void>
+export class InitCancelledError extends Error {
+  constructor() {
+    super('Init cancelled.')
+    this.name = 'InitCancelledError'
+  }
+}
+
+class ClackInitPrompter implements InitPrompter {
+  private started = false
+  private readonly renderedHelp = new Set<string>()
 
   constructor(
     private readonly input: Readable,
     private readonly output: Writable,
-  ) {
-    this.inputEnded = new Promise((resolve) => {
-      if (input.readableEnded || input.destroyed) resolve()
-      else {
-        input.once('end', resolve)
-        input.once('close', resolve)
-      }
-    })
-  }
+    private readonly signal?: AbortSignal,
+  ) {}
 
-  private interface(): Interface {
-    this.readline ??= createInterface({
-      input: this.input,
-      output: this.output,
-      terminal: false,
-    })
-    return this.readline
+  private start(): void {
+    if (this.started) return
+    intro('Set up Autobuild', { input: this.input, output: this.output })
+    this.started = true
   }
 
   async select<T extends string>(question: InitPromptQuestion<T>): Promise<T> {
-    const defaultIndex = question.choices.findIndex(
-      (choice) => choice.value === question.defaultValue,
-    )
-    if (question.choices.length === 0 || defaultIndex === -1) {
+    const defaultChoice = question.choices.find((choice) => choice.value === question.defaultValue)
+    if (question.choices.length === 0 || defaultChoice === undefined) {
       throw new Error(`init prompt "${question.message}" has an invalid default`)
     }
+    if (this.signal?.aborted === true) throw new InitCancelledError()
 
-    this.output.write(`\n${question.message}\n`)
-    question.choices.forEach((choice, index) => {
-      const marker = index === defaultIndex ? ' (default)' : ''
-      this.output.write(`  ${index + 1}) ${choice.label} [${choice.value}]${marker}\n`)
-      this.output.write(`     ${choice.help}\n`)
-    })
-    this.output.write(`  ${question.help}\n`)
-
-    while (true) {
-      let answer: string
-      try {
-        const result = await Promise.race([
-          this.interface()
-            .question(`Select [${defaultIndex + 1}]: `)
-            .then((value) => ({ kind: 'answer' as const, value })),
-          this.inputEnded.then(() => ({ kind: 'closed' as const })),
-        ])
-        if (result.kind === 'closed') {
-          throw new Error('input reached EOF')
-        }
-        answer = result.value
-      } catch (error) {
-        throw new Error(
-          `init prompt closed before "${question.message}" was answered: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        )
-      }
-      const normalized = answer.trim()
-      if (normalized === '') return question.defaultValue
-
-      const numeric = Number(normalized)
-      if (Number.isInteger(numeric) && numeric >= 1 && numeric <= question.choices.length) {
-        return question.choices[numeric - 1]!.value
-      }
-      const byValue = question.choices.find(
-        (choice) => choice.value.toLowerCase() === normalized.toLowerCase(),
-      )
-      if (byValue !== undefined) return byValue.value
-
-      this.output.write(
-        `Invalid selection "${normalized}". Enter 1-${question.choices.length} or one of: ${question.choices
-          .map((choice) => choice.value)
-          .join(', ')}.\n`,
-      )
+    this.start()
+    if (question.help !== '' && !this.renderedHelp.has(question.help)) {
+      log.info(question.help, { input: this.input, output: this.output })
+      this.renderedHelp.add(question.help)
     }
+
+    const answer = await select<string>({
+      message: question.message,
+      options: question.choices.map((choice) => ({
+        value: String(choice.value),
+        label: choice.label,
+        hint: choice.help,
+      })),
+      initialValue: question.defaultValue,
+      input: this.input,
+      output: this.output,
+      ...(this.signal !== undefined ? { signal: this.signal } : {}),
+    })
+    if (isCancel(answer)) throw new InitCancelledError()
+    // Every selectable value came directly from the typed choices above.
+    return answer as T
+  }
+
+  present(presentation: InitPresentation): void {
+    this.start()
+    log.success(`autobuild.toml: ${presentation.config}`, {
+      input: this.input,
+      output: this.output,
+    })
+    const { installed, unchanged, kept, overwritten } = presentation.skillCounts
+    log.info(
+      `Skills: ${installed} installed, ${unchanged} unchanged, ${kept} kept, ${overwritten} overwritten`,
+      { input: this.input, output: this.output },
+    )
+    for (const line of presentation.attention) {
+      log.warn(line, { input: this.input, output: this.output })
+    }
+    if (presentation.nextSteps.length > 0) {
+      note(presentation.nextSteps.join('\n'), 'Next steps', {
+        input: this.input,
+        output: this.output,
+      })
+    }
+    outro('Autobuild is ready.', { input: this.input, output: this.output })
   }
 
   close(): void {
-    this.readline?.close()
-    this.readline = undefined
+    // Clack restores terminal input state as each prompt settles. The seam is
+    // retained so injected adapters and future presenter resources can close.
   }
 }
 
 /**
  * Production TTY gate. Both streams must be interactive; redirects and pipes
- * retain the historical silent init behavior.
+ * use the deterministic plain renderer and never invoke Clack.
  */
 export function createProcessInitPrompter(
   input: Readable & { isTTY?: boolean } = process.stdin,
   output: Writable & { isTTY?: boolean } = process.stdout,
+  signal?: AbortSignal,
 ): InitPrompter | undefined {
   if (input.isTTY !== true || output.isTTY !== true) return undefined
-  return new ReadlineInitPrompter(input, output)
+  return new ClackInitPrompter(input, output, signal)
 }
