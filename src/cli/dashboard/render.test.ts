@@ -99,7 +99,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggles).toContain('intake ON')
     expect(toggles).toContain('auto merge OFF')
     expect(toggles).toContain('harvest ON')
-    expect(summary.indexOf('Auto Build')).toBe(2)
+    expect(summary.indexOf('Auto Build')).toBe(3)
     expect(toggles.search(/\S/)).toBe(summary.indexOf('Auto Build'))
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
@@ -111,7 +111,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const warned = rd({ ...model([build()]), warningLine: 'ticket source unavailable' }, WIDE).map(
       stripAnsi,
     )
-    expect(warned[2]).toBe('  ticket source unavailable')
+    expect(warned[2]).toBe('   ticket source unavailable')
     expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Auto Build'))
     expect(warned[3]).toBe('')
     expect(warned).toHaveLength(clean.length + 1)
@@ -188,16 +188,16 @@ describe('renderDashboard: two-line header and conditional warning', () => {
 
   test('the summary is the selected global row even with no harvest or builds', () => {
     const lines = rd({ ...model([]), selection: { kind: 'global' } }, WIDE).map(stripAnsi)
-    expect(lines[0]!.startsWith('> Auto Build')).toBe(true)
-    expect(lines[1]!.startsWith('  intake ON')).toBe(true)
-    expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
+    expect(lines[0]!.startsWith(' > Auto Build')).toBe(true)
+    expect(lines[1]!.startsWith('   intake ON')).toBe(true)
+    expect(lines.filter((line) => line.startsWith(' > '))).toHaveLength(1)
     expect(lines.join('\n')).toContain('no active builds')
   })
 
   test('the final legend exposes only controls meaningful for the selection', () => {
     const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
-      'Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit',
+      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit',
     )
 
     const runningHarvestLines = rd(
@@ -208,7 +208,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(runningHarvestLines.at(-1)).toBe('Keys: Up/Down select  Ctrl-C quit')
+    expect(runningHarvestLines.at(-1)).toBe(' Keys: Up/Down select  Ctrl-C quit')
 
     const resumeHarvestLines = rd(
       {
@@ -218,7 +218,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(resumeHarvestLines.at(-1)).toBe('Keys: Up/Down select  p resume  Ctrl-C quit')
+    expect(resumeHarvestLines.at(-1)).toBe(' Keys: Up/Down select  p resume  Ctrl-C quit')
 
     const acknowledgeHarvestLines = rd(
       {
@@ -228,7 +228,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(acknowledgeHarvestLines.at(-1)).toBe('Keys: Up/Down select  p acknowledge  Ctrl-C quit')
+    expect(acknowledgeHarvestLines.at(-1)).toBe(' Keys: Up/Down select  p acknowledge  Ctrl-C quit')
 
     const buildLines = rd(
       {
@@ -237,7 +237,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(buildLines.at(-1)).toBe('Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit')
+    expect(buildLines.at(-1)).toBe(' Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit')
     for (const controls of [
       globalLines.at(-1),
       runningHarvestLines.at(-1),
@@ -504,13 +504,14 @@ describe('renderDashboard: layout', () => {
       },
       WIDE,
     ).map(stripAnsi)
-    const legend = lines.findIndex((line) => line.startsWith('Keys:'))
+    const legend = lines.findIndex((line) => line.startsWith(' Keys:'))
     expect(legend).toBeGreaterThan(0)
     for (const line of lines.slice(0, legend)) {
       if (line === '') continue
-      expect(['  ', '> ']).toContain(line.slice(0, 2))
+      expect(line[0]).toBe(' ')
+      expect(['  ', '> ']).toContain(line.slice(1, 3))
     }
-    expect(lines.slice(0, legend).filter((line) => line.startsWith('> '))).toHaveLength(1)
+    expect(lines.slice(0, legend).filter((line) => line.startsWith(' > '))).toHaveLength(1)
   })
 
   test('PR and status columns remain aligned when the auto-merge token is absent', () => {
@@ -536,8 +537,107 @@ describe('renderDashboard: layout', () => {
       selection: { kind: 'build' as const, slug: 'b' },
     }
     const lines = rd(selected, WIDE).map(stripAnsi)
-    expect(lines.filter((line) => line.startsWith('> '))).toHaveLength(1)
-    expect(lines.find((line) => line.startsWith('> '))).toContain('b')
+    expect(lines.filter((line) => line.startsWith(' > '))).toHaveLength(1)
+    expect(lines.find((line) => line.startsWith(' > '))).toContain('b')
+  })
+})
+
+describe('renderDashboard: one-column horizontal frame gutters', () => {
+  function expectInsideGutters(lines: string[], width: number): void {
+    for (const line of lines) {
+      const plain = stripAnsi(line)
+      expect(plain.length).toBeLessThanOrEqual(Math.max(0, width - 1))
+      const first = plain.search(/\S/)
+      if (first < 0) continue
+      expect(first).toBeGreaterThanOrEqual(1)
+      expect(first).toBeLessThanOrEqual(width - 2)
+      expect(plain.search(/\s*$/) - 1).toBeLessThanOrEqual(width - 2)
+    }
+  }
+
+  test('every line family is inset without changing the internal marker lane', () => {
+    const dashboard = {
+      ...model([
+        build({
+          status: 'blocked' as const,
+          pr: undefined,
+          blockers: [
+            'a blocker message long enough to wrap across the reduced dashboard content width',
+          ],
+        }),
+      ]),
+      warningLine: 'ticket source unavailable',
+      harvest: harvest({ status: 'failed', detail: 'stopped at review after automatic recovery' }),
+      selection: { kind: 'build' as const, slug: 'auth-rate-limit' },
+    }
+    const lines = rd(dashboard, { color: false, width: 52 })
+    expectInsideGutters(lines, 52)
+
+    const summary = lines.find((line) => line.includes('Auto Build'))!
+    const toggles = lines.find((line) => line.includes('intake ON'))!
+    const warning = lines.find((line) => line.includes('ticket source unavailable'))!
+    const selected = lines.find((line) => line.includes('auth-rate-limit'))!
+    const progress = lines.find((line) => line.includes('[x] plan'))!
+    const blocker = lines.find((line) => line.includes('! a blocker'))!
+    const controls = lines.find((line) => line.includes('Keys:'))!
+
+    expect(summary.indexOf('Auto Build')).toBe(3)
+    expect(toggles.search(/\S/)).toBe(3)
+    expect(warning.search(/\S/)).toBe(3)
+    expect(selected.startsWith(' > ')).toBe(true)
+    expect(progress.indexOf('[')).toBe(3)
+    expect(blocker.indexOf('!')).toBe(3)
+    expect(controls.startsWith(' Keys:')).toBe(true)
+  })
+
+  test('right-pinned build and Harvest statuses end at terminal column N-1', () => {
+    for (const color of [false, true]) {
+      const width = 80
+      const lines = rd(
+        {
+          ...model([build({ slug: 'build-row', pr: undefined })]),
+          harvest: harvest(),
+        },
+        { color, width },
+      )
+      const buildLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('build-row'))!)
+      const harvestLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('Harvest'))!)
+      for (const line of [buildLine, harvestLine]) {
+        expect(line.length).toBe(width - 1)
+        expect(line.endsWith('RUNNING')).toBe(true)
+      }
+    }
+  })
+
+  test('normal and narrow frames never paint either terminal edge or exceed their width', () => {
+    const complex = {
+      ...model([
+        build({
+          status: 'blocked' as const,
+          blockers: ['wrapped blocker detail '.repeat(8)],
+        }),
+        ...Array.from({ length: 5 }, (_, index) =>
+          build({ slug: `overflow-${index}`, ticketId: `AUT-${index}`, pr: undefined }),
+        ),
+      ]),
+      warningLine: 'warning row',
+      harvest: harvest({ status: 'failed', detail: 'harvest detail '.repeat(6) }),
+      selection: { kind: 'build' as const, slug: 'overflow-4' },
+    }
+
+    for (const color of [false, true]) {
+      for (const width of [0, 1, 2, 3, 8, 24, 60, 100]) {
+        expectInsideGutters(rd(complex, { color, width, height: 16 }), width)
+        expectInsideGutters(rd(model([]), { color, width }), width)
+      }
+    }
+
+    const overflow = rd(complex, { color: false, width: 60, height: 16 })
+    expect(overflow.some((line) => line.includes('more'))).toBe(true)
+    expectInsideGutters(overflow, 60)
+    const empty = rd(model([]), { color: false, width: 60 })
+    expect(empty.some((line) => line.includes('no active builds'))).toBe(true)
+    expectInsideGutters(empty, 60)
   })
 })
 
@@ -552,11 +652,11 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
       WIDE,
     ).map(stripAnsi)
     const line = lines.find((candidate) => candidate.includes('Harvest'))!
-    expect(line.startsWith('> ')).toBe(true)
+    expect(line.startsWith(' > ')).toBe(true)
     expect(line).toContain('Harvest')
     expect(line).toContain('36 observations')
     expect(lines.join('\n')).not.toContain('harvest_internal_123')
-    expect(lines.filter((candidate) => candidate.startsWith('> '))).toHaveLength(1)
+    expect(lines.filter((candidate) => candidate.startsWith(' > '))).toHaveLength(1)
   })
 
   test('harvest and build statuses end in the same column and RUNNING uses the same green', () => {
@@ -583,7 +683,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
       pausedPlain.indexOf('PAUSED') + 'PAUSED'.length,
     )
     expect(harvestPlain.length).toBe(buildPlain.length)
-    expect(harvestPlain.length).toBe(100)
+    expect(harvestPlain.length).toBe(99)
     expect(harvestLine).toContain('\x1b[32mRUNNING\x1b[0m')
     expect(buildLine).toContain('\x1b[32mRUNNING\x1b[0m')
   })
@@ -783,7 +883,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
           expect(lines[1]).toContain('harvest ON')
         }
         if (warningLine !== undefined && height >= 3) {
-          expect(lines[2]).toBe(`  ${warningLine}`)
+          expect(lines[2]).toBe(`   ${warningLine}`)
         }
         for (const line of lines) expect(line.length).toBeLessThanOrEqual(80)
       }
@@ -831,7 +931,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
         },
       }
       const lines = rd(m, { color: false, width: 80, height: 12 })
-      expect(lines.some((line) => line.startsWith(`> AB-${selected}`))).toBe(true)
+      expect(lines.some((line) => line.startsWith(` > AB-${selected}`))).toBe(true)
       expect(lines.at(-1)).toContain('Up/Down')
     }
   })
@@ -842,7 +942,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       { ...base, selection: { kind: 'harvest' } },
       { color: false, width: 80, height: 8 },
     )
-    expect(harvestLines.some((line) => line.startsWith('> ') && line.includes('Harvest'))).toBe(
+    expect(harvestLines.some((line) => line.startsWith(' > ') && line.includes('Harvest'))).toBe(
       true,
     )
 
@@ -856,7 +956,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       },
       { color: false, width: 80, height: 8 },
     )
-    expect(buildLines.some((line) => line.startsWith('> AB-7'))).toBe(true)
+    expect(buildLines.some((line) => line.startsWith(' > AB-7'))).toBe(true)
   })
 
   test('a frame that fits is not clamped and gets no notice', () => {
@@ -905,7 +1005,7 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
 
   test('every step survives at a width the row cannot fit on one line', () => {
     const progress = rd(model([full]), { color: false, width: 60 })
-      .filter((l) => l.startsWith('  ['))
+      .filter((l) => l.startsWith('   ['))
       .join('\n')
     // count rides the elapsed as `/n` (AC 7), superseding the old r2/a2 notes.
     for (const label of [
@@ -943,7 +1043,7 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(50)
     // Reassembled, the whole message is there.
     const text = lines
-      .filter((l) => l.trimStart().startsWith('!') || /^\s{4}\S/.test(l))
+      .filter((l) => l.trimStart().startsWith('!') || /^\s{5}\S/.test(l))
       .join(' ')
       .replace(/\s+/g, ' ')
       .replace('! ', '')
@@ -959,7 +1059,7 @@ describe('renderDashboard: the ticket-first, status-right slug line', () => {
 
   test('the ticket id is the first token, the slug follows it (AC 1)', () => {
     const line = stripAnsi(slugLine(rd(model([build({ pr: undefined })]), WIDE)))
-    expect(line.startsWith('  ENG-42')).toBe(true)
+    expect(line.startsWith('   ENG-42')).toBe(true)
     expect(line.indexOf('auth-rate-limit')).toBeGreaterThan(line.indexOf('ENG-42'))
   })
 
@@ -967,7 +1067,7 @@ describe('renderDashboard: the ticket-first, status-right slug line', () => {
     const line = stripAnsi(
       slugLine(rd(model([build({ pr: undefined })]), { color: false, width: 60 })),
     )
-    expect(line.length).toBe(60)
+    expect(line.length).toBe(59)
     expect(line.endsWith('RUNNING')).toBe(true)
   })
 
@@ -1004,7 +1104,7 @@ describe('renderDashboard: the ticket-first, status-right slug line', () => {
     const line = stripAnsi(
       slugLine(rd(model([build({ slug: 'solo', ticketId: undefined, pr: undefined })]), WIDE)),
     )
-    expect(line.startsWith('  solo')).toBe(true) // marker lane, no ticket column
+    expect(line.startsWith('   solo')).toBe(true) // gutter + marker lane, no ticket column
   })
 })
 
@@ -1025,7 +1125,7 @@ describe('formatDuration', () => {
 
 describe('renderDashboard: elapsed ticks with `now` (AC 7, 8, 9, 10, 13)', () => {
   const progressOf = (b: DashboardBuild, now: number, color = false): string =>
-    rd(model([b]), { color, width: 120, now }).find((l) => l.startsWith('  ['))!
+    rd(model([b]), { color, width: 120, now }).find((l) => l.startsWith('   ['))!
 
   const withStep = (over: Partial<PipelineStep> & { label: string }): DashboardBuild =>
     build({ pr: undefined, steps: [{ state: 'current', ...over }] })
