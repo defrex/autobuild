@@ -471,7 +471,7 @@ function flattenRows(rows: readonly RenderedDashboardRow[]): string[] {
   return lines
 }
 
-export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
+function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string[] {
   const { color, width, height } = opts
   const selecting = model.selection !== undefined
   const globalSelection = { kind: 'global' } as const
@@ -657,4 +657,19 @@ export function renderDashboard(model: DashboardModel, opts: RenderOpts): string
   // the first separates the global top section from harvest/build content and
   // the second separates that content from the contextual controls.
   return [...top, '', ...body, '', controls]
+}
+
+/** Render the dashboard inside a fixed one-column horizontal gutter.
+ *
+ * All composition happens against the inset content width so wrapping,
+ * truncation, and right-pinning share one geometry. Prefixing only after the
+ * frame is composed preserves its logical line count (including truly blank
+ * separators) and therefore leaves vertical budgeting unchanged. */
+export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
+  const terminalWidth = Math.max(0, opts.width)
+  const contentWidth = Math.max(0, terminalWidth - 2)
+  const lines = renderDashboardContent(model, { ...opts, width: contentWidth })
+  const leftGutter = terminalWidth > 0 ? ' ' : ''
+
+  return lines.map((line) => (line === '' ? '' : `${leftGutter}${line}`))
 }

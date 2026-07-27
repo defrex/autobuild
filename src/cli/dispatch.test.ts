@@ -2432,7 +2432,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(warningLines[0]).toContain('queue 0 | active 0')
       expect(warningLines[0]).not.toMatch(/\bwatch\b/)
       expect(warningLines[1]).toContain('intake ON')
-      expect(warningLines[2]).toBe(`  ${invalid}`)
+      expect(warningLines[2]).toBe(`   ${invalid}`)
       expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Auto Build'))
     } finally {
       await fx.cleanup()
@@ -2978,7 +2978,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
 
       input.press('down')
-      await waitFor(() => /^> .*Harvest/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*Harvest/m.test(stripAnsi(term.all())))
       const beforeRunningAction = (await fx.store.getRepoEvents(fx.origin)).length
       input.press('auto-merge')
       input.press('intake')
@@ -2987,7 +2987,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // A later serialized selection move is the synchronization point for
       // every routine no-op action; none gets a transient message row.
       input.press('down')
-      await waitFor(() => /^> .*alpha-work/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*alpha-work/m.test(stripAnsi(term.all())))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(beforeRunningAction)
       expect(stripAnsi(term.all())).toContain('intake ON')
       expect(stripAnsi(term.all())).not.toContain('Harvest auto-merge unavailable')
@@ -3077,7 +3077,7 @@ describe('abDispatch interactive keyboard controls', () => {
         input,
       })
       await waitFor(() => latestDashboardFrame(term).includes('harvest OFF'))
-      expect(latestDashboardFrame(term)).not.toMatch(/^ {2}Harvest/m)
+      expect(latestDashboardFrame(term)).not.toMatch(/^ {3}Harvest/m)
 
       input.press('harvest-gate')
       await waitFor(async () =>
@@ -3160,14 +3160,14 @@ describe('abDispatch interactive keyboard controls', () => {
                 (event) => event.type === 'build.auto-merge-requested',
               ),
             )
-            await waitFor(() => /^ {2}.*seeded-work.*RUNNING/m.test(stripAnsi(term.all())))
+            await waitFor(() => /^ {3}.*seeded-work.*RUNNING/m.test(stripAnsi(term.all())))
 
             // Global → existing-work → seeded-work. Cancelling this seeded
             // build is authoritative even while the global default stays on.
             input.press('down')
-            await waitFor(() => /^> .*existing-work/m.test(stripAnsi(term.all())))
+            await waitFor(() => /^ > .*existing-work/m.test(stripAnsi(term.all())))
             input.press('down')
-            await waitFor(() => /^> .*seeded-work/m.test(stripAnsi(term.all())))
+            await waitFor(() => /^ > .*seeded-work/m.test(stripAnsi(term.all())))
             input.press('auto-merge')
             await waitFor(async () =>
               (await fx.store.getEvents('seeded-work')).some(
@@ -3305,7 +3305,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => /Harvest.*FAILED/.test(latestDashboardFrame(term)))
       input.press('down')
-      await waitFor(() => /^> .*Harvest.*FAILED/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > .*Harvest.*FAILED/m.test(latestDashboardFrame(term)))
       input.press('pause')
       await waitFor(async () =>
         (await fx.store.getRepoEvents(fx.origin))
@@ -3438,7 +3438,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => /Harvest.*FAILED/.test(stripAnsi(term.all())))
       input.press('down')
-      await waitFor(() => /^> .*Harvest.*FAILED/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*Harvest.*FAILED/m.test(stripAnsi(term.all())))
 
       input.press('pause')
       await waitFor(async () =>
@@ -3455,7 +3455,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // its serialization fence; neither action needs a transient notice.
       input.press('pause')
       input.press('up')
-      await waitFor(() => /^> Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 1)
       expect(stripAnsi(term.all())).not.toContain('harvest run: resume acknowledgement pending')
 
@@ -3471,7 +3471,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           latest !== undefined &&
           !/Harvest.*FAILED/.test(stripAnsi(latest)) &&
-          /^> Auto Build/m.test(stripAnsi(latest))
+          /^ > Auto Build/m.test(stripAnsi(latest))
         )
       })
 
@@ -3498,7 +3498,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => /Harvest.*ESCALATED/.test(stripAnsi(term.all())))
       input.press('down')
-      await waitFor(() => /^> .*Harvest.*ESCALATED/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*Harvest.*ESCALATED/m.test(stripAnsi(term.all())))
       const beforeEscalatedAction = (await fx.store.getRepoEvents(fx.origin)).length
       input.press('pause')
       await waitFor(async () =>
@@ -3524,7 +3524,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           latest !== undefined &&
           !/Harvest.*ESCALATED/.test(stripAnsi(latest)) &&
-          /^> Auto Build/m.test(stripAnsi(latest))
+          /^ > Auto Build/m.test(stripAnsi(latest))
         )
       })
 
@@ -3593,11 +3593,11 @@ describe('abDispatch interactive keyboard controls', () => {
         return frame.includes('harvest OFF') && /Harvest.*ESCALATED/.test(frame)
       })
       input.press('down')
-      await waitFor(() => /^> .*Harvest.*ESCALATED/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > .*Harvest.*ESCALATED/m.test(latestDashboardFrame(term)))
       input.press('pause')
       input.press('up')
       // The selection move is serialized after the no-op run action.
-      await waitFor(() => /^> Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before)
       expect(stripAnsi(term.all())).not.toContain(
         'harvest run action unavailable while harvest is OFF',
@@ -3623,7 +3623,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           frame.includes('harvest ON') &&
           !/Harvest.*ESCALATED/.test(frame) &&
-          /^> Auto Build/m.test(frame)
+          /^ > Auto Build/m.test(frame)
         )
       })
 
@@ -3669,7 +3669,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => /Harvest.*RUNNING/.test(latestDashboardFrame(term)))
       input.press('down')
-      await waitFor(() => /^> .*Harvest/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > .*Harvest/m.test(latestDashboardFrame(term)))
 
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -3689,9 +3689,9 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => {
         const frame = latestDashboardFrame(term)
         return (
-          !/^> .*Harvest/m.test(frame) &&
-          !/^ {2}Harvest/m.test(frame) &&
-          /^> Auto Build/m.test(frame)
+          !/^ > .*Harvest/m.test(frame) &&
+          !/^ {3}Harvest/m.test(frame) &&
+          /^ > Auto Build/m.test(frame)
         )
       })
 
@@ -3747,7 +3747,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('down')
       input.press('down')
-      await waitFor(() => /^> .*beta-work/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*beta-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       input.press('auto-merge')
       input.press('auto-merge')
@@ -3854,7 +3854,7 @@ describe('abDispatch interactive keyboard controls', () => {
         stripAnsi(term.all()).includes('Should finalize use the manual merge path?'),
       )
       input.press('down')
-      await waitFor(() => /^> .*guidance-work/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*guidance-work/m.test(stripAnsi(term.all())))
 
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
@@ -3954,7 +3954,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => input.starts === 1)
       await new Promise((resolve) => setTimeout(resolve, 20))
       input.press('down')
-      await waitFor(() => /^> .*retry-work/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*retry-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('   ')
@@ -4053,7 +4053,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => stripAnsi(term.all()).includes('finalize-retry'))
       input.press('down')
-      await waitFor(() => /^> .*finalize-retry/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*finalize-retry/m.test(stripAnsi(term.all())))
 
       // Hold plan long enough to record durable pre-PR auto-merge intent.
       input.press('auto-merge')
@@ -4179,7 +4179,7 @@ describe('abDispatch interactive keyboard controls', () => {
         stripAnsi(term.all()).includes('Cancellation must leave this blocker untouched'),
       )
       input.press('down')
-      await waitFor(() => /^> .*cancel-work/m.test(stripAnsi(term.all())))
+      await waitFor(() => /^ > .*cancel-work/m.test(stripAnsi(term.all())))
       input.press('pause')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('do not submit this')
@@ -4235,7 +4235,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // to the build row before applying its contextual p action.
       await new Promise((resolve) => setTimeout(resolve, 20))
       input.press('down')
-      await waitFor(() => /^> .*paused-work/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > .*paused-work/m.test(latestDashboardFrame(term)))
       input.press('pause')
       await waitFor(async () =>
         (await fx.store.getEvents('paused-work')).some(
