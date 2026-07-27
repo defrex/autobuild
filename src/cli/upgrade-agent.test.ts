@@ -64,7 +64,6 @@ describe('createUpgradeAgentResolver', () => {
         runtimes: {
           alpha: registration(oneShot, ['alpha-']),
         },
-        defaultRuntime: 'alpha',
       }
     }
 
@@ -120,7 +119,6 @@ describe('createUpgradeAgentResolver', () => {
           alpha: registration(makeOneShot('alpha'), ['alpha-'], 'alpha-default'),
           beta: registration(makeOneShot('beta'), ['beta-'], 'beta-default'),
         },
-        defaultRuntime: 'alpha',
       }),
     })
 
@@ -167,7 +165,6 @@ describe('createUpgradeAgentResolver', () => {
         runtimeConstructions += 1
         return {
           runtimes: { alpha: registration(undefined, ['alpha-']) },
-          defaultRuntime: 'alpha',
         }
       },
     })
@@ -203,7 +200,6 @@ describe('createUpgradeAgentResolver', () => {
         pluginLoader: async () => plugins,
         runtimeFactory: () => ({
           runtimes: { alpha: registration(undefined, ['alpha-']) },
-          defaultRuntime: 'alpha',
         }),
       })
     }
@@ -236,7 +232,6 @@ describe('createUpgradeAgentResolver', () => {
             ['alpha-'],
           ),
         },
-        defaultRuntime: 'alpha',
       }),
     })
 
@@ -263,7 +258,6 @@ describe('createUpgradeAgentResolver', () => {
             ['alpha-'],
           ),
         },
-        defaultRuntime: 'alpha',
       }),
     })
 
@@ -283,7 +277,6 @@ describe('createUpgradeAgentResolver', () => {
         runtimes: {
           alpha: registration(undefined, ['alpha-']),
         },
-        defaultRuntime: 'alpha',
       }),
     })
     await expect(withoutCapability(INPUT)).rejects.toThrow(
@@ -305,7 +298,6 @@ describe('createUpgradeAgentResolver', () => {
             ['alpha-'],
           ),
         },
-        defaultRuntime: 'alpha',
       }),
     })
     await expect(failedCompletion(INPUT)).rejects.toThrow('provider auth failed')

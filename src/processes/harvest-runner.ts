@@ -59,7 +59,6 @@ export interface HarvestRunnerDeps {
   tickets: TicketSource
   config: Config
   runtimes: RuntimeRegistry
-  defaultRuntime: string
   repo: string
   workspacePath: string
   ids: IdSource
@@ -149,7 +148,7 @@ export class HarvestRunner {
     if (!Number.isInteger(this.maxRecoveryAttempts) || this.maxRecoveryAttempts <= 0) {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles, deps.defaultRuntime)
+    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
   }
 
   async run(): Promise<HarvestRunnerResult> {

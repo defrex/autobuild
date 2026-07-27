@@ -105,9 +105,6 @@ export interface BuildRunnerDeps {
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
-  /** Wiring fallback runtime (e.g. `claude`) when neither a phase role nor
-   * `[roles.default]` names one (§9). */
-  defaultRuntime: string
   workspacePath: string
   branch: string
   slug: string
@@ -304,7 +301,7 @@ export class BuildRunner {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles, deps.defaultRuntime)
+    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
   }
 
   /**

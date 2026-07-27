@@ -32,6 +32,8 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
+import { createProductionRuntimes } from '../ports/runner/production'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import {
   INIT_PLUGIN_HELP,
   type InitPresentation,
@@ -43,7 +45,7 @@ export { SKILL_NAMESPACE }
 
 export type InitTicketSource = 'file' | 'linear'
 export type InitWorkspaceProvider = 'git-worktree'
-export type InitRoleProfile = 'split' | 'claude' | 'pi'
+export type InitRoleProfile = string
 
 export const INIT_SPLIT_AUTHOR_MODEL = 'openai-codex/gpt-5.6-sol'
 export const INIT_SPLIT_REVIEWER_MODEL = 'kimi-coding/k3'
@@ -86,6 +88,63 @@ export const INIT_ROLE_PROFILE_CHOICES = [
     help: "Uses the Pi runtime's own default model for every role.",
   },
 ] as const satisfies readonly InitPromptChoice<InitRoleProfile>[]
+
+function runtimeProfileChoice(runtime: string): InitPromptChoice<InitRoleProfile> {
+  const shipped = INIT_ROLE_PROFILE_CHOICES.find((choice) => choice.value === runtime)
+  return (
+    shipped ?? {
+      value: runtime,
+      label: `${runtime} default`,
+      help: `Uses the ${runtime} runtime's own default model for every role.`,
+    }
+  )
+}
+
+async function probeRuntime(
+  registration: RuntimeRegistry[string],
+  input: { cwd: string; env: Readonly<Record<string, string | undefined>>; models: string[] },
+): Promise<boolean> {
+  if (registration.initUsable === undefined) return false
+  try {
+    return await registration.initUsable(input)
+  } catch {
+    // Detection is advisory. A broken/unmet runtime is simply not offered.
+    return false
+  }
+}
+
+/** Probe every registered runtime; registrations without a probe are not guessed usable. */
+export async function detectUsableRoleProfiles(
+  runtimes: RuntimeRegistry,
+  cwd: string,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<InitPromptChoice<InitRoleProfile>[]> {
+  const usable = new Set<string>()
+  await Promise.all(
+    Object.entries(runtimes).map(async ([name, registration]) => {
+      const models = registration.defaultModel === undefined ? [] : [registration.defaultModel]
+      if (await probeRuntime(registration, { cwd, env, models })) usable.add(name)
+    }),
+  )
+
+  const choices: InitPromptChoice<InitRoleProfile>[] = []
+  const pi = runtimes.pi
+  if (
+    usable.has('pi') &&
+    pi !== undefined &&
+    (await probeRuntime(pi, {
+      cwd,
+      env,
+      models: [INIT_SPLIT_AUTHOR_MODEL, INIT_SPLIT_REVIEWER_MODEL],
+    }))
+  ) {
+    choices.push(INIT_ROLE_PROFILE_CHOICES[0])
+  }
+  for (const name of Object.keys(runtimes)) {
+    if (usable.has(name)) choices.push(runtimeProfileChoice(name))
+  }
+  return choices
+}
 
 /** Agent Skills standard project directory for vendored skills. */
 export const AGENTS_SKILLS_DIR = join('.agents', 'skills')
@@ -308,7 +367,10 @@ function selectionValue<T extends string>(
 
 async function resolveInitSelections(
   input: InitSelectionInput,
-  prompter?: InitPrompter,
+  prompter: InitPrompter | undefined,
+  runtimes: RuntimeRegistry,
+  targetRepo: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedInitSelections> {
   const supplied =
     input.ticketSource !== undefined ||
@@ -321,6 +383,10 @@ async function resolveInitSelections(
   }
 
   const canPrompt = input.noInteractive !== true && prompter !== undefined
+  const availableRoleChoices =
+    input.roleProfile === undefined
+      ? await detectUsableRoleProfiles(runtimes, targetRepo, env)
+      : undefined
   const ticketSource =
     input.ticketSource !== undefined
       ? selectionValue('ticket-source', input.ticketSource, INIT_TICKET_SOURCE_CHOICES)
@@ -347,17 +413,30 @@ async function resolveInitSelections(
             defaultValue: 'git-worktree',
           })
         : 'git-worktree'
-  const roleProfile =
-    input.roleProfile !== undefined
-      ? selectionValue('role-profile', input.roleProfile, INIT_ROLE_PROFILE_CHOICES)
-      : canPrompt
-        ? await prompter.select({
-            message: 'Choose a role runtime/model arrangement',
-            help: INIT_PLUGIN_HELP,
-            choices: INIT_ROLE_PROFILE_CHOICES,
-            defaultValue: 'split',
-          })
-        : 'claude'
+  let roleProfile: InitRoleProfile
+  if (input.roleProfile !== undefined) {
+    const explicitChoices = [
+      ...(Object.hasOwn(runtimes, 'pi') ? [INIT_ROLE_PROFILE_CHOICES[0]] : []),
+      ...Object.keys(runtimes).map(runtimeProfileChoice),
+    ]
+    roleProfile = selectionValue('role-profile', input.roleProfile, explicitChoices)
+  } else {
+    const choices = availableRoleChoices!
+    if (choices.length === 0) {
+      throw new Error(
+        'no usable agent runtime was detected; install and authenticate a registered runtime, ' +
+          'or select one explicitly with --role-profile',
+      )
+    }
+    roleProfile = canPrompt
+      ? await prompter.select({
+          message: 'Choose a role runtime/model arrangement',
+          help: INIT_PLUGIN_HELP,
+          choices,
+          defaultValue: choices[0]!.value,
+        })
+      : choices[0]!.value
+  }
   return { ticketSource, workspaceProvider, roleProfile }
 }
 
@@ -399,6 +478,8 @@ export function renderInitSelections(baseline: string, selections: ResolvedInitS
   let roles: string
   if (selections.roleProfile === 'split') {
     roles =
+      '# Default agent runtime.\n' +
+      '[roles.default]\nruntime = "pi"\n\n' +
       '# Plan agent.\n' +
       `[roles.plan]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
       '# Implementation agent.\n' +
@@ -780,6 +861,8 @@ export async function abInit(opts: {
   force?: boolean
   selections?: InitSelectionInput
   prompter?: InitPrompter
+  runtimes?: RuntimeRegistry
+  env?: Readonly<Record<string, string | undefined>>
 }): Promise<InitReport> {
   const distRoot = opts.distRoot ?? defaultDistRoot()
   const stdout = opts.stdout ?? (() => {})
@@ -793,7 +876,13 @@ export async function abInit(opts: {
   let resolvedSelections: ResolvedInitSelections | undefined
   try {
     if (!configExists) {
-      resolvedSelections = await resolveInitSelections(opts.selections ?? {}, opts.prompter)
+      resolvedSelections = await resolveInitSelections(
+        opts.selections ?? {},
+        opts.prompter,
+        opts.runtimes ?? createProductionRuntimes().runtimes,
+        opts.targetRepo,
+        opts.env ?? process.env,
+      )
     }
   } finally {
     opts.prompter?.close?.()

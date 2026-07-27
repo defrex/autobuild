@@ -233,7 +233,8 @@ export const finalizeSectionSchema = z
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
 // Open map: role → fields on the runtime, model, and extensions axes (SPEC §9,
-// §16.1). The reserved optional `default` entry is the raw inheritance base;
+// §16.1). The reserved `default` entry is the raw inheritance base and must
+// name a runtime; registry-aware enforcement lives in the eager resolver;
 // every other role overrides it independently per field. Registry-dependent
 // compatibility validation happens in the eager runtime resolver, because the
 // config loader does not know the injected runtime registry.
@@ -353,9 +354,9 @@ const configRootSchema = z.strictObject({
   server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
   finalize: finalizeSectionSchema.prefault({}),
-  // `default` is a reserved optional entry inside this open map (§9). An
-  // absent [roles.default] is an empty base; the resolver then uses its wiring
-  // fallback runtime and that runtime's own default model.
+  // `default` is reserved inside this open map (§9). The schema preserves the
+  // raw map; the registry-aware eager resolver requires default.runtime and can
+  // therefore include the complete materialized runtime list in its diagnostic.
   roles: z.record(z.string().min(1), roleSchema).prefault({}),
   policy: policySchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory

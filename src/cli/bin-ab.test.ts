@@ -439,7 +439,7 @@ test('dispatch and an external scoped worktree share the main checkout package r
   await mkdir(main)
   await writeFile(
     join(main, 'autobuild.toml'),
-    'plugins = ["./repo-plugin.ts", "fixture-repo-package"]\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    'plugins = ["./repo-plugin.ts", "fixture-repo-package"]\n[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
   )
   await writeFile(
     join(main, 'repo-plugin.ts'),

@@ -21,6 +21,7 @@ import {
 import { classifyProviderError } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
+import type { RuntimeUsabilityInput } from './runtime'
 
 export interface ClaudeCliInvocation {
   /** Arguments after the `claude` executable. */
@@ -57,6 +58,24 @@ const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
     proc.exited,
   ])
   return { stdout, stderr, exitCode }
+}
+
+/** Verify both the local executable and Claude Code login for init suggestions. */
+export async function isClaudeRuntimeUsable(
+  input: RuntimeUsabilityInput,
+  runCli: ClaudeCliRunFn = runClaudeCli,
+): Promise<boolean> {
+  const env = Object.fromEntries(
+    Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  try {
+    const result = await runCli({ args: ['auth', 'status', '--json'], cwd: input.cwd, env })
+    if (result.exitCode !== 0) return false
+    const status: unknown = JSON.parse(result.stdout)
+    return isRecord(status) && status.loggedIn === true
+  } catch {
+    return false
+  }
 }
 
 interface JsonRecord {

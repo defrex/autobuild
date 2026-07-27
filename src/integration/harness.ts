@@ -80,6 +80,9 @@ command = "test"
 [policy]
 stallRounds = 3
 
+[roles.default]
+runtime = "scripted"
+
 [tickets]
 source = "file"
 readyLabels = ["autobuild"]
@@ -307,6 +310,9 @@ export async function makeHarness(opts: {
   const uuids = sequentialUuids()
   const store = new MemoryBuildStore({ clock })
   const config = parseConfig(configToml, 'e2e autobuild.toml')
+  // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
+  // at the harness boundary rather than relying on production wiring.
+  config.roles.default ??= { runtime: 'scripted' }
   const forge = new FakeForge({
     gatePresence: opts.gatePresence ?? 'present',
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
@@ -432,10 +438,9 @@ export async function makeHarness(opts: {
         // Two-axis registry (§9): every runtime is backed by the SAME scripted
         // runner instance, so the `s_1…s_N` session numbering scenarios rely on
         // is preserved regardless of which runtime a role selects. `scripted`
-        // is the fallback and runs only with its un-named built-in model; `pi`
+        // is the configured default and runs only with its un-named built-in model; `pi`
         // serves the Kimi family for exact configured-pair validation.
         runtimes,
-        defaultRuntime: 'scripted',
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
         slug,
@@ -471,7 +476,6 @@ export async function makeHarness(opts: {
     forge: selectedForge,
     workspaces,
     runtimes,
-    defaultRuntime: 'scripted',
     // Scripted agents resolve this ambient value, then invoke runCli against
     // the injected shared store. It is an identity label, never opened.
     storeRef: 'memory://e2e',

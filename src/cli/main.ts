@@ -25,6 +25,7 @@ import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { InitPrompter } from './init-prompt'
 import { abModels } from './models'
 import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
@@ -141,6 +142,8 @@ export interface SessionlessCliDeps {
   /** First-config onboarding seam. Production supplies it only when stdin and
    * stdout are both TTYs; absence preserves historical non-interactive init. */
   initPrompter?: InitPrompter
+  /** Injectable init detection registry; production uses shipped registrations. */
+  initRuntimes?: RuntimeRegistry
   /** Optional per-paint presentation lookup used only by the repo-local dev
    * entry. The published binary never supplies it. */
   resolveDashboardRenderer?: DashboardRendererResolver
@@ -327,7 +330,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'init': {
       const usage =
         'usage: ab init [target] [--force] [--ticket-source file|linear] ' +
-        '[--workspace-provider git-worktree] [--role-profile split|claude|pi] ' +
+        '[--workspace-provider git-worktree] [--role-profile split|<registered-runtime>] ' +
         '[--no-interactive] (§16.3)'
       const parsed = parseArgs(
         rest,
@@ -352,6 +355,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           noInteractive: parsed.flags.has('no-interactive'),
         },
         ...(deps.initPrompter !== undefined ? { prompter: deps.initPrompter } : {}),
+        ...(deps.initRuntimes !== undefined ? { runtimes: deps.initRuntimes } : {}),
+        env: deps.processEnv ?? process.env,
       })
       return 0
     }

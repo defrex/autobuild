@@ -1142,7 +1142,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
   async function writeDispatchConfig(): Promise<void> {
     await writeFile(
       join(tmp, 'autobuild.toml'),
-      '[tickets]\nsource = "file"\nreadyState = "ready"\ndir = "tickets"\n',
+      '[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\nreadyState = "ready"\ndir = "tickets"\n',
     )
   }
 

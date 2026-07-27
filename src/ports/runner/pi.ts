@@ -55,6 +55,7 @@ import {
 import { classifyProviderError } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
+import type { RuntimeUsabilityInput } from './runtime'
 
 /** Built-in tool set enabled for a build session. `bash` is mandatory — the
  * agent invokes the `ab` CLI through it — and is the one we override with an
@@ -85,6 +86,40 @@ export function parsePiModel(model: string): PiModelRef {
     )
   }
   return { provider: model.slice(0, slash), id: model.slice(slash + 1) }
+}
+
+export interface PiAuthRuntime {
+  getModel(provider: string, id: string): unknown
+  getAuth(model: unknown, overrides: { env: Record<string, string> }): Promise<unknown>
+}
+
+export type PiAuthRuntimeFactory = () => Promise<PiAuthRuntime>
+
+const createPiAuthRuntime: PiAuthRuntimeFactory = async () => {
+  const { ModelRuntime } = await import('@earendil-works/pi-coding-agent')
+  return ModelRuntime.create({ allowModelNetwork: false })
+}
+
+/** Resolve every prospective profile model and prove provider authentication. */
+export async function isPiRuntimeUsable(
+  input: RuntimeUsabilityInput,
+  createRuntime: PiAuthRuntimeFactory = createPiAuthRuntime,
+): Promise<boolean> {
+  if (input.models.length === 0) return false
+  const env = Object.fromEntries(
+    Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  try {
+    const runtime = await createRuntime()
+    for (const configured of new Set(input.models)) {
+      const ref = parsePiModel(configured)
+      const model = runtime.getModel(ref.provider, ref.id)
+      if (model === undefined || (await runtime.getAuth(model, { env })) === undefined) return false
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** One prompt's captured output: accumulated assistant text, per-turn token
