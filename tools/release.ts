@@ -236,7 +236,7 @@ export function replaceReadmeInstall(readme: string, tag: string): string {
   const start = readme.indexOf(README_INSTALL_START)
   const end = readme.indexOf(README_INSTALL_END)
   if (end <= start) throw new Error('README.md release-install markers are out of order')
-  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add github:defrex/autobuild#${tag}\n\`\`\`\n\n`
+  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add -g github:defrex/autobuild#${tag}\n\`\`\`\n\n`
   return `${readme.slice(0, start)}${replacement}${readme.slice(end)}`
 }
 

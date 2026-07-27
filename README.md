@@ -37,32 +37,7 @@ plugin), agent runtimes (Claude, Pi, or a configured plugin), the forge (GitHub
 via `gh` or a configured plugin), workspaces, and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
-`autobuild/plugin-sdk` surface. Third-party ticket sources are selectable for
-dispatch, harvest, completion, and every `ab ticket` operation. The root `forge`
-setting and `[workspace].provider` likewise select registered adapters (`github`
-and `git-worktree` by default). Plugin runtime names are selectable in any role
-with the same eager model-family/default validation and session attribution as
-builtins; optional one-shot support also serves slug and upgrade judgments.
-Plugin authors should run the exported contract suite for each adapter.
-BuildStore is deliberately excluded from in-process plugins: its extension
-surface is the documented [remote HTTP protocol](docs/remote-store-protocol.md), so an independent server
-can use any language or storage.
-
-Inspect and certify configured integrations from the repository root:
-
-```sh
-ab plugin list
-ab plugin doctor
-ab plugin test ticket-source jira
-# Only for a manifest descriptor explicitly marked live:
-AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test forge gitlab
-```
-
-`list` shows builtin and plugin registrations, module resolution, API
-compatibility, and contract availability. `doctor` reports every configured
-module rather than stopping at the first failure. `test` runs the port's shared
-Bun contract suite and returns its exact status; live fixtures never run without
-the explicit environment opt-in.
+`autobuild/plugin-sdk` surface.
 
 ## Quickstart
 
@@ -72,12 +47,12 @@ local [`claude` CLI](https://code.claude.com/docs/en/setup). Launch `claude`
 once and complete its browser login before running Autobuild. The default
 `claude` runtime invokes that local authenticated executable in headless mode,
 so it uses the subscription or other Claude Code authentication configured by
-the operator. Add `LINEAR_API_KEY` only if you use Linear tickets.
+the operator.
 
 <!-- release-install:start -->
 
 ```sh
-bun add github:defrex/autobuild#main
+bun add -g github:defrex/autobuild#v0.2.0
 ```
 
 <!-- release-install:end -->
@@ -96,11 +71,13 @@ written. The local file tracker and git-worktree provider are the no-account
 defaults; the suggested role profile uses separate authoring and review models
 for independent review.
 
-Init then writes `autobuild.toml` — with verify steps pre-filled from your
-`package.json` scripts — and vendors the `ab-*` agent skills. Its final summary
-reports the config result and skill outcome counts, naming only locally kept or
-explicitly overwritten skills. Conditional Linear/Pi setup work appears in a
-separate next-steps block.
+Init then writes a lean `autobuild.toml` containing only active settings, with
+brief labels and mandatory verify gates pre-filled from recognized
+`package.json` scripts, and vendors the `ab-*` agent skills. Its final summary
+reports the config result and skill outcome counts, names only locally kept or
+explicitly overwritten skills, and reminds you that your coding agent can
+change the config. Conditional Linear/Pi setup work appears in the same
+next-steps block.
 
 For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
 `--role-profile`; a fully specified run never prompts. `--no-interactive` (or

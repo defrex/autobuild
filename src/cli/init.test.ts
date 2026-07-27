@@ -27,6 +27,7 @@ import {
   pristineSkillFilePath,
   pristineSkillPath,
   renderAutobuildTemplate,
+  renderInitSelections,
   rewriteSkillSource,
 } from './init'
 import type { InitPresentation, InitPrompter, InitPromptQuestion } from './init-prompt'
@@ -71,6 +72,36 @@ function splitFrontmatter(content: string): { front: string[]; body: string } {
   const close = lines.indexOf('---', 1)
   expect(close).toBeGreaterThan(0)
   return { front: lines.slice(1, close), body: lines.slice(close + 1).join('\n') }
+}
+
+function expectLeanGeneratedConfig(source: string): void {
+  const lines = source.split('\n')
+  expect(lines.slice(0, 3)).toEqual([
+    '# Autobuild pipeline configuration.',
+    '# Declarative only; nothing in this file is evaluated.',
+    '# Ask your coding agent to change it.',
+  ])
+  expect(source).not.toMatch(/^\s*#\s*\[[^\]]+\]/m)
+  expect(source).not.toMatch(/^\s*#\s*[A-Za-z0-9_.-]+\s*=/m)
+  expect(source).not.toMatch(/(?:§\s*\d|\bD\d+\b)/)
+  expect(source).not.toContain('@ab-init/')
+  expect(source).toContain('capacity = 1')
+  for (const setting of [
+    'stallRounds = 3',
+    'maxVerifyAttempts = 3',
+    'maxReconcileAttempts = 3',
+    'maxReviewRounds = 4',
+    'harvestThreshold = 5',
+    'steps = []',
+  ]) {
+    expect(source).toContain(setting)
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\[[^\]]+\]$/.test(lines[index]!)) continue
+    expect(lines[index - 1]).toMatch(/^# \S.{0,78}$/)
+    expect(lines[index - 2] ?? '').not.toMatch(/^# /)
+  }
 }
 
 describe('abInit — fresh install', () => {
@@ -146,42 +177,24 @@ describe('abInit — fresh install', () => {
     }
   })
 
-  test('the template and a no-package render are setup-only, zero-verify configs', async () => {
-    const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
-    const baseline = parseConfig(template)
-    expect(baseline.baseBranch).toBe('main')
-    expect(baseline.capacity).toBe(1)
-    expect(baseline.policy.harvestThreshold).toBe(5)
-    expect(baseline.commands).toEqual({ setup: 'bun install' })
-    expect(baseline.verify).toEqual({ steps: [], stepConfigs: {} })
-    expect(baseline.finalize).toEqual({ steps: [], stepConfigs: {} })
-
+  test('a no-package render is a lean setup-only, zero-verify config', async () => {
     await abInit({ targetRepo: target })
     const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
-    expect(generated).not.toContain('@ab-init/')
+    expectLeanGeneratedConfig(generated)
     const generatedConfig = parseConfig(generated)
     expect(generatedConfig.baseBranch).toBe('main')
     expect(generatedConfig.capacity).toBe(1)
+    expect(generatedConfig.policy).toEqual({
+      stallRounds: 3,
+      maxVerifyAttempts: 3,
+      maxReconcileAttempts: 3,
+      maxReviewRounds: 4,
+      harvestThreshold: 5,
+    })
     expect(generatedConfig.commands).toEqual({ setup: 'bun install' })
     expect(generatedConfig.verify).toEqual({ steps: [], stepConfigs: {} })
     expect(generatedConfig.finalize).toEqual({ steps: [], stepConfigs: {} })
-  })
-
-  test('generated ticket guidance documents the conjunctive readyLabels gate without enabling it', async () => {
-    const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
-    await abInit({ targetRepo: target })
-    const generated = await readFile(join(target, 'autobuild.toml'), 'utf8')
-    const guidance = `# Absent readyLabels uses the source's label default: none for file/plugins, or
-# ["autobuild"] for Linear. A nonempty list is an all-of gate on top of
-# readyState: every configured label must be present. With
-# ["autobuild", "ready"], a ticket carrying only one label does not satisfy the
-# label gate. [] explicitly disables the label gate.
-#readyLabels = ["autobuild", "ready"]`
-
-    for (const content of [template, generated]) {
-      expect(content).toContain(guidance)
-      expect(parseConfig(content).tickets.readyLabels).toBeUndefined()
-    }
+    expect(generatedConfig.tickets.readyLabels).toBeUndefined()
   })
 
   test('creates a .gitignore containing the repository-local state rule', async () => {
@@ -248,23 +261,20 @@ describe('abInit — package-script-aware config rendering', () => {
       expect(config.commands).toEqual({
         setup: 'bun install',
         ...(has('lint') ? { lint: 'bun run lint' } : {}),
-        ...(has('type-check') ? { typecheck: 'bun run type-check' } : {}),
+        ...(has('type-check') ? { 'type-check': 'bun run type-check' } : {}),
         ...(has('test') ? { test: 'bun run test' } : {}),
       })
-      expect(config.verify.steps).toEqual([
-        ...(has('type-check') ? ['types'] : []),
-        ...(has('test') ? ['unit'] : []),
-      ])
-      expect(config.verify.stepConfigs).toEqual({
-        ...(has('type-check') ? { types: { kind: 'check', command: 'typecheck' } } : {}),
-        ...(has('test') ? { unit: { kind: 'check', command: 'test' } } : {}),
-      })
-      for (const step of Object.values(config.verify.stepConfigs)) {
-        if (step.kind === 'check') {
-          expect(Object.hasOwn(config.commands, step.command)).toBe(true)
-        }
+      expect(config.verify.steps).toEqual(scripts)
+      expect(config.verify.stepConfigs).toEqual(
+        Object.fromEntries(
+          scripts.map((script) => [script, { kind: 'check', command: script, always: true }]),
+        ),
+      )
+      for (const [name, step] of Object.entries(config.verify.stepConfigs)) {
+        expect(step).toEqual({ kind: 'check', command: name, always: true })
+        expect(Object.hasOwn(config.commands, name)).toBe(true)
       }
-      expect(generated).not.toContain('@ab-init/')
+      expectLeanGeneratedConfig(generated)
     })
   }
 
@@ -309,7 +319,7 @@ describe('abInit — package-script-aware config rendering', () => {
     }
   })
 
-  test('template rendering rejects a missing or duplicated insertion anchor', async () => {
+  test('template rendering rejects missing or duplicated package and selection anchors', async () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     expect(() =>
       renderAutobuildTemplate(
@@ -319,6 +329,18 @@ describe('abInit — package-script-aware config rendering', () => {
     ).toThrow(/must occur exactly once; found 0/)
     expect(() => renderAutobuildTemplate(`${template}\n${template}`, new Set())).toThrow(
       /must occur exactly once; found 2/,
+    )
+    const baseline = renderAutobuildTemplate(template, new Set())
+    const selections = {
+      ticketSource: 'file',
+      workspaceProvider: 'git-worktree',
+      roleProfile: 'claude',
+    } as const
+    expect(() =>
+      renderInitSelections(baseline.replace('# @ab-init/roles-start', ''), selections),
+    ).toThrow(/must each occur exactly once/)
+    expect(() => renderInitSelections(`${baseline}\n${baseline}`, selections)).toThrow(
+      /must each occur exactly once/,
     )
   })
 })
@@ -352,13 +374,16 @@ describe('abInit — interactive adapter onboarding', () => {
     return readFile(join(repo, 'autobuild.toml'), 'utf8')
   }
 
-  test('headless and explicit skip preserve the exact historical package-rendered bytes', async () => {
+  test('headless and explicit skip preserve the default package-rendered bytes', async () => {
     await writeFile(
       join(target, 'package.json'),
       JSON.stringify({ scripts: { lint: 'eslint', 'type-check': 'tsc', test: 'vitest' } }),
     )
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
-    const expected = renderAutobuildTemplate(template, new Set(['lint', 'type-check', 'test']))
+    const expected = renderInitSelections(
+      renderAutobuildTemplate(template, new Set(['lint', 'type-check', 'test'])),
+      { ticketSource: 'file', workspaceProvider: 'git-worktree', roleProfile: 'claude' },
+    )
 
     await abInit({ targetRepo: target })
     expect(await generated(target)).toBe(expected)
@@ -407,10 +432,10 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(config.workspace).toEqual({ provider: 'git-worktree', config: {} })
     expect(config.commands).toMatchObject({
       setup: 'bun install',
-      typecheck: 'bun run type-check',
+      'type-check': 'bun run type-check',
       test: 'bun run test',
     })
-    expect(config.verify.steps).toEqual(['types', 'unit'])
+    expect(config.verify.steps).toEqual(['type-check', 'test'])
     expect(config.roles.plan).toEqual({ runtime: 'pi', model: INIT_SPLIT_AUTHOR_MODEL })
     expect(config.roles.implement).toEqual({
       runtime: 'pi',
@@ -441,6 +466,7 @@ describe('abInit — interactive adapter onboarding', () => {
       },
       attention: [],
       nextSteps: [
+        'Ask your coding agent to change autobuild.toml.',
         expect.stringContaining('Linear setup required:'),
         expect.stringContaining('Pi setup required:'),
       ],
@@ -535,6 +561,7 @@ describe('abInit — interactive adapter onboarding', () => {
       expect(await generated(interactive)).toBe(await generated(flagged))
       const flaggedSource = await generated(flagged)
       expect(() => parseConfig(flaggedSource)).not.toThrow()
+      expectLeanGeneratedConfig(flaggedSource)
     })
   }
 
@@ -555,7 +582,9 @@ describe('abInit — interactive adapter onboarding', () => {
         },
       })
       expect(await generated(interactive)).toBe(await generated(flagged))
-      expect(parseConfig(await generated(flagged)).tickets.source).toBe(ticketSource)
+      const flaggedSource = await generated(flagged)
+      expect(parseConfig(flaggedSource).tickets.source).toBe(ticketSource)
+      expectLeanGeneratedConfig(flaggedSource)
     })
   }
 
@@ -866,6 +895,9 @@ describe('abInit — idempotence and safety', () => {
     expect(lines).toEqual([
       'autobuild.toml: written',
       `Skills: ${SKILL_NAMES.length} installed, 0 unchanged, 0 kept, 0 overwritten`,
+      '',
+      'Next steps:',
+      '  - Ask your coding agent to change autobuild.toml.',
     ])
 
     await writeFile(installedSkillPath(target, 'ab-plan'), 'local plan\n')
@@ -1043,6 +1075,11 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     expect(existsSync(installedSkillPath(target, 'ab-spec'))).toBe(true)
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.commands.test).toBe('bun run test')
-    expect(config.verify.steps).toEqual(['unit'])
+    expect(config.verify.steps).toEqual(['test'])
+    expect(config.verify.stepConfigs.test).toEqual({
+      kind: 'check',
+      command: 'test',
+      always: true,
+    })
   })
 })

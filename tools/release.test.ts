@@ -213,7 +213,7 @@ describe('release transforms', () => {
 
   test('strictly replaces only the fenced README command and manifest version', () => {
     const replaced = replaceReadmeInstall(fixtureReadme, 'v2.1.0')
-    expect(replaced).toContain('bun add github:defrex/autobuild#v2.1.0')
+    expect(replaced).toContain('bun add -g github:defrex/autobuild#v2.1.0')
     expect(replaced.match(/release-install:start/g)).toHaveLength(1)
     expect(() => replaceReadmeInstall('# no markers\n', 'v2.1.0')).toThrow('exactly one')
     expect(() =>
@@ -369,7 +369,7 @@ describe('release orchestration', () => {
     expect(testHarness.requests.some((request) => request.command === 'claude')).toBe(true)
     expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
     expect(testHarness.logs.join('\n')).toContain('This release adds a new capability')
-    expect(testHarness.logs.join('\n')).toContain('bun add github:defrex/autobuild#v2.1.0')
+    expect(testHarness.logs.join('\n')).toContain('bun add -g github:defrex/autobuild#v2.1.0')
   })
 
   test('names dirty, wrong-branch, empty-section, local-tag, and remote-tag refusals', async () => {

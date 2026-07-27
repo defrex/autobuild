@@ -252,6 +252,26 @@ describe('docs/configuration.md — executable examples', () => {
   })
 })
 
+describe('docs/configuration.md — init behavior', () => {
+  test('documents the lean file and symmetrical mandatory package gates', () => {
+    const section = headingSection(doc, 2, 'What `ab init` generates')
+    expect(section).toBeDefined()
+    for (const row of [
+      '| `lint` | `lint = "bun run lint"` | `lint`, a mandatory check using `lint` |',
+      '| `type-check` | `type-check = "bun run type-check"` | `type-check`, a mandatory check using `type-check` |',
+      '| `test` | `test = "bun run test"` | `test`, a mandatory check using `test` |',
+    ]) {
+      expect(section).toContain(row)
+    }
+    expect(section).toContain('active-only skeleton')
+    expect(section).toContain('always = true')
+    expect(section).toContain('ask their coding agent to change `autobuild.toml`')
+    expect(section).not.toContain('lint remains command-only')
+    expect(section).not.toContain('`types`, a check')
+    expect(section).not.toContain('`unit`, a check')
+  })
+})
+
 describe('README configuration entry points', () => {
   test('links the reference from Quickstart and Learn more', () => {
     const link = /\[[^\]\n]+\]\(docs\/configuration\.md\)/
@@ -262,5 +282,7 @@ describe('README configuration entry points', () => {
     expect(quickstart!.indexOf('ab init')).toBeLessThan(quickstart!.search(link))
     expect(learnMore).toBeDefined()
     expect(learnMore).toMatch(link)
+    expect(quickstart).toContain('lean `autobuild.toml` containing only active settings')
+    expect(quickstart).toContain('coding agent can\nchange the config')
   })
 })

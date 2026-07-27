@@ -145,6 +145,20 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
   })
 })
 
+describe('ab-guide — init behavior', () => {
+  test('teaches the lean config and same-name mandatory package gates', () => {
+    const commands = sectionFor('commands')
+    const setup = headingSection('## Setup and upgrades')
+    expect(commands).toContain('`lint`, `type-check`, and `test` adds an identically named')
+    expect(commands).toContain('with `always = true`')
+    expect(commands).not.toContain('Lint remains command-only')
+    expect(commands).not.toContain('the `types` verify check')
+    expect(commands).not.toContain('the `unit` check')
+    expect(setup).toContain('lean active-only skeleton')
+    expect(setup).toContain('ask their coding agent to\nchange `autobuild.toml`')
+  })
+})
+
 describe('ab-guide — finalize publication boundary', () => {
   test('keeps local commits, clean-worktree validation, and regular push kernel-owned', () => {
     const finalize = sectionFor('finalize')
