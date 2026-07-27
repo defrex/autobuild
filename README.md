@@ -41,13 +41,10 @@ third-party ticket, runtime, workspace, and forge adapters against the versioned
 
 ## Quickstart
 
-You need [Bun](https://bun.sh), `git`, the
-[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and the
-local [`claude` CLI](https://code.claude.com/docs/en/setup). Launch `claude`
-once and complete its browser login before running Autobuild. The default
-`claude` runtime invokes that local authenticated executable in headless mode,
-so it uses the subscription or other Claude Code authentication configured by
-the operator.
+You need [Bun](https://bun.sh), `git`, an authenticated
+[`gh` CLI](https://cli.github.com) (`gh auth login`), and a logged-in
+[`claude` CLI](https://code.claude.com/docs/en/setup) — the default agent
+runtime.
 
 <!-- release-install:start -->
 
@@ -63,64 +60,19 @@ Then, from the repository you want built:
 ab init
 ```
 
-On a TTY, first-time init presents one arrow-key survey for the shipped ticket
-source, workspace provider, and role profile; move with Up/Down and confirm with
-Enter. Each option explains itself inline, and completed answers stay visible
-while the next question is active. Ctrl+C cancels before config or skills are
-written. The local file tracker and git-worktree provider are the no-account
-defaults; the suggested role profile uses separate authoring and review models
-for independent review.
-
-Init then writes a lean `autobuild.toml` containing only active settings, with
-brief labels and mandatory verify gates pre-filled from recognized
-`package.json` scripts, and vendors the `ab-*` agent skills. Its final summary
-reports the config result and skill outcome counts, names only locally kept or
-explicitly overwritten skills, and reminds you that your coding agent can
-change the config. Conditional Linear/Pi setup work appears in the same
-next-steps block.
-
-For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
-`--role-profile`; a fully specified run never prompts. `--no-interactive` (or
-redirected input/output with no selection flags) preserves the historical
-Claude/file/git-worktree baseline. Non-TTY output is plain, with no ANSI or box
-drawing. See the [configuration reference](docs/configuration.md) for every
-option.
-
-Check the running installation offline from any directory with `ab --version`;
-it reports the package version, Bun-recorded commit when available, and plugin
-API version. `ab upgrade` updates a Bun forge installation to its repository's
-latest GitHub Release and then merges that new distribution's skill defaults
-into the current repository. Use `--version <semver>` to select an exact release
-(including a downgrade), or `--no-self-update` for the historical merge-only
-operation. A linked/source checkout is never updated and still merges installed
-skills. For the default latest operation, unknown mechanisms and lookup/install
-failures warn and retain installed defaults. An explicit-version mechanism,
-resolution, or install failure stops before skill merge.
-
-For local Bun installs, self-update runs Bun in the owning project and changes
-its Autobuild dependency in `package.json` plus its `bun.lock` resolution, which
-may leave that project dirty. Existing global installs instead update Bun's
-global package-manager state. No other command performs release checks or
-updates.
-
-Write a ticket that says what and why, with acceptance criteria and an
-out-of-scope list (the `/ab-spec` skill will interview you into one), then
-mark it ready:
-
-```sh
-ab ticket create "Throttle repeated failed logins" --body spec.md
-ab ticket move file-1 Ready
-```
-
-Start the dispatcher:
+Runs a short setup survey, writes `autobuild.toml`, and vendors the `ab-*`
+agent skills — see the [configuration reference](docs/configuration.md) for
+every option.
 
 ```sh
 ab dispatch
 ```
 
-On a TTY you get the dashboard above. The build plans, implements, reviews
-its own code, verifies, and opens a PR. Review and merge it yourself — or
-press `m` on the build row and let it land when your checks pass.
+Starts the dispatcher, with the live dashboard on a TTY.
+
+Now ask your coding agent for `/ab-spec`. The vendored skill interviews you
+into a conforming ticket and files it; the dispatcher claims it, and the build
+plans, implements, reviews, verifies, and opens a PR for you to merge.
 
 ## Cutting a release
 
@@ -244,6 +196,13 @@ Nothing about the dashboard is load-bearing — `ab builds`,
 `ab build status <slug>`, and
 `ab harvest status` project the same durable state as text or `--json`, so a
 pipe or a script sees exactly what you do.
+
+`ab --version` reports the installed package, commit, and plugin API versions
+from any directory. `ab upgrade` moves a Bun installation to the latest GitHub
+Release and merges the new distribution's skill defaults into the current
+repository, preferring your local customizations; `ab help upgrade` covers
+exact-version selection, merge-only operation, and how local and global
+installs differ.
 
 ## Learn more
 
