@@ -1,5 +1,9 @@
 import { describe } from 'bun:test'
-import { describeTicketSourceContract, type TicketSourceContractHarness } from './contract'
+import {
+  contractLabelName,
+  describeTicketSourceContract,
+  type TicketSourceContractHarness,
+} from './contract'
 import { LINEAR_API_URL, LinearTicketSource } from './linear'
 
 interface LinearErrorShape {
@@ -14,6 +18,7 @@ interface WorkflowState {
 
 interface ScratchLinearConfig {
   apiKey: string
+  teamId: string
   teamKey: string
   projectId: string
   readyState: string
@@ -140,6 +145,7 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
 
     return {
       apiKey,
+      teamId: team.id,
       teamKey,
       projectId,
       readyState: findState('claimable', ['unstarted', 'backlog']).name,
@@ -154,6 +160,7 @@ function loadScratchConfig(): Promise<ScratchLinearConfig> {
 async function linearHarness(): Promise<TicketSourceContractHarness> {
   const config = await loadScratchConfig()
   const reservedIds = new Set<string>()
+  const freshLabels = new Set<string>()
 
   return {
     source: new LinearTicketSource({
@@ -167,6 +174,11 @@ async function linearHarness(): Promise<TicketSourceContractHarness> {
       completed: config.completedState,
     },
     editableLabel: config.editableLabel,
+    freshLabel: (purpose) => {
+      const label = contractLabelName(purpose)
+      freshLabels.add(label)
+      return label
+    },
     beforeCreate: (idempotencyKey) => {
       reservedIds.add(idempotencyKey)
     },
@@ -213,6 +225,48 @@ async function linearHarness(): Promise<TicketSourceContractHarness> {
           ) {
             failures.push(error)
           }
+        }
+      }
+      // The shared suite deliberately creates previously unknown labels. The
+      // scratch token therefore needs issue-label create/delete permission as
+      // well as issue mutation permission; remove registry fixtures after the
+      // issues that referenced them have been archived.
+      for (const name of freshLabels) {
+        try {
+          const found = await linearRequest<{
+            team: { labels: { nodes: Array<{ id: string; name: string }> } } | null
+          }>(
+            config.apiKey,
+            `query FindPortContractLabel($teamId: String!, $name: String!) {
+              team(id: $teamId) {
+                labels(filter: { name: { eq: $name } }) { nodes { id name } }
+              }
+            }`,
+            { teamId: config.teamId, name },
+          )
+          for (const label of found.team?.labels.nodes ?? []) {
+            if (label.name !== name) continue
+            const deleted = await linearRequest<{
+              issueLabelDelete: { success: boolean }
+            }>(
+              config.apiKey,
+              `mutation DeletePortContractLabel($id: String!) {
+                issueLabelDelete(id: $id) { success }
+              }`,
+              { id: label.id },
+            )
+            if (!deleted.issueLabelDelete.success) {
+              failures.push(new Error(`Linear cleanup did not delete issue label ${name}`))
+            }
+          }
+        } catch (error) {
+          failures.push(
+            new Error(
+              `Linear contract label cleanup failed for ${JSON.stringify(name)}; ` +
+                'the scratch token needs issue-label create/delete permission',
+              { cause: error },
+            ),
+          )
         }
       }
       if (failures.length > 0) {

@@ -282,11 +282,13 @@ bun test src/ports/tickets/linear.live.test.ts
 ```
 
 The token must be able to create, update, relate, and archive issues in the
-configured project. The team needs a claimable `unstarted` or `backlog`
-state, a `started` state, a `completed` or `canceled` state, and at least one
-issue label the contract can replace/clear. Every issue gets a reserved UUID,
-is attached to that project, and is archived during best-effort cleanup. Use
-a project with no real work in it.
+configured project, and to create and delete issue labels in the configured
+team. The team needs a claimable `unstarted` or `backlog` state, a `started`
+state, a `completed` or `canceled` state, and at least one issue label the
+contract can replace/clear. Every issue gets a reserved UUID and is attached to
+that project. Cleanup archives those issues and deletes the fresh team labels
+created by the unknown-label contract cases; failures are reported so leaked
+fixtures can be removed manually. Use a project with no real work in it.
 
 To run the GitHub contract manually:
 

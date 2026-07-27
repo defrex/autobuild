@@ -23,6 +23,9 @@ export interface TicketSourceContractHarness {
   states: TicketSourceContractStates
   /** A fixture label known to be writable in this source/team. */
   editableLabel: string
+  /** Allocate a label name that does not yet exist in the source. Live
+   * providers may use this seam to track provider-side labels for cleanup. */
+  freshLabel?: (purpose: string) => Promise<string> | string
   /** Called before a reserved external id is used, so live cleanup remains
    * possible even if creation commits and the adapter call then fails. */
   beforeCreate?: (idempotencyKey: string) => Promise<void> | void
@@ -45,6 +48,19 @@ export function contractTicketTitle(purpose: string): string {
 
 export function contractIdempotencyKey(): string {
   return crypto.randomUUID()
+}
+
+export function contractLabelName(purpose: string): string {
+  const slug = purpose
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 16)
+  return `ab-contract-${slug}-${suffix}`
+}
+
+async function freshLabel(harness: TicketSourceContractHarness, purpose: string): Promise<string> {
+  return (await harness.freshLabel?.(purpose)) ?? contractLabelName(purpose)
 }
 
 async function withTicketSource(
@@ -117,6 +133,72 @@ export function describeTicketSourceContract(
           labels: [],
         })
         expect(await harness.source.get(created.ref.id)).toEqual(created)
+      })
+    })
+
+    test('create accepts a previously unknown label and round-trips it through get', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const label = await freshLabel(harness, 'create')
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('fresh create label'),
+            body: CONTRACT_TICKET_BODY,
+            labels: [label],
+          },
+          { state: harness.states.ready },
+        )
+
+        expect(created.labels).toEqual([label])
+        expect((await harness.source.get(created.ref.id))?.labels).toEqual([label])
+      })
+    })
+
+    test('update accepts a previously unknown label and round-trips it through get', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('fresh update label'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const label = await freshLabel(harness, 'update')
+
+        await harness.source.update(created.ref.id, { labels: [label] })
+
+        expect((await harness.source.get(created.ref.id))?.labels).toEqual([label])
+      })
+    })
+
+    test('concurrent writes safely share one previously unknown label', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const first = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('concurrent label first'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const second = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('concurrent label second'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        const label = await freshLabel(harness, 'concurrent')
+
+        await Promise.all([
+          harness.source.update(first.ref.id, { labels: [label] }),
+          harness.source.update(second.ref.id, { labels: [label] }),
+        ])
+
+        expect((await harness.source.get(first.ref.id))?.labels).toEqual([label])
+        expect((await harness.source.get(second.ref.id))?.labels).toEqual([label])
       })
     })
 

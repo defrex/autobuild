@@ -13,7 +13,7 @@ import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../por
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
-import { HarvestRunner } from './harvest-runner'
+import { HARVEST_PROPOSAL_LABEL, HarvestRunner } from './harvest-runner'
 
 const roots: string[] = []
 const KIMI_QUOTA =
@@ -178,6 +178,7 @@ async function seedOpenRun(opts: {
         '',
         '- Unrelated cleanup.',
       ].join('\n'),
+      labels: [HARVEST_PROPOSAL_LABEL],
     },
     { state: 'Triage', idempotencyKey: key },
   )
@@ -347,7 +348,15 @@ describe('HarvestRunner', () => {
     const state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.latest?.status).toBe('completed')
     expect(state.ledger).toHaveLength(2)
-    expect((await tickets.get('fake-1'))?.state).toBe('Triage')
+    expect(await tickets.get('fake-1')).toMatchObject({
+      state: 'Triage',
+      labels: [HARVEST_PROPOSAL_LABEL],
+    })
+    expect(tickets.claims).toEqual([])
+    expect(await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })).toEqual({
+      tickets: [],
+      diagnostics: [],
+    })
     expect(await makeRunner().run()).toEqual({ outcome: 'idle' })
 
     await seedObservation(store, 'three', 'third')
@@ -1771,7 +1780,9 @@ describe('HarvestRunner', () => {
       outcome: 'completed',
       launch: 'resumed',
     })
-    expect(await tickets.get('fake-1')).not.toBeNull()
+    expect(await tickets.get('fake-1')).toMatchObject({
+      labels: [HARVEST_PROPOSAL_LABEL],
+    })
     expect(await tickets.get('fake-2')).toBeNull()
     expect(producerCalls).toBe(1)
     expect(reviewerCalls).toBe(1)

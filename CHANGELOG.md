@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#103](https://github.com/defrex/autobuild/pull/103) — Label harvest proposals and reconcile Linear labels
 - [#102](https://github.com/defrex/autobuild/pull/102) — Show dispatch capacity and observation pressure
 - [#101](https://github.com/defrex/autobuild/pull/101) — Resolve package plugins from the consuming repository
 - [#100](https://github.com/defrex/autobuild/pull/100) — Prevent duplicate auto-merge deferral observations

@@ -63,6 +63,7 @@ export {
   describeTicketSourceContract,
   CONTRACT_TICKET_BODY,
   contractIdempotencyKey,
+  contractLabelName,
   contractTicketTitle,
 } from '../ports/tickets/contract'
 export type {

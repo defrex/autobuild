@@ -39,6 +39,8 @@ export interface TicketListing {
 export interface TicketDraft {
   title: string
   body: string
+  /** Labels applied at creation. Names need not already exist in the source;
+   * adapters own any provider-side label-registry reconciliation. */
   labels?: string[]
   /** Source-local blocker ids, recorded natively at creation (§13). An
    * adapter must record every one or throw — never discard silently. */
@@ -78,7 +80,9 @@ export interface TicketUpdate {
   title?: string
   /** Required when named: pre-build, this is the spec (§6.3). */
   body?: string
-  /** A complete label replacement. An explicit empty array clears labels. */
+  /** A complete label replacement. An explicit empty array clears labels.
+   * Names need not already exist in the source; adapters own any
+   * provider-side label-registry reconciliation. */
   labels?: string[]
 }
 
