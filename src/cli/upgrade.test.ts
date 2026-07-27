@@ -773,7 +773,9 @@ describe('runCli routing — ab upgrade outside a session', () => {
     })
 
     expect(code).toBe(0)
-    expect(err).toEqual([])
+    expect(err).toEqual([
+      'self-update skipped: running from a source checkout (.git is present); merging skills with the installed distribution',
+    ])
     expect(factoryCalls).toBe(1)
     expect(out).toContain('ab-plan: resolved')
     expect(await readFile(installedSkillPath(repo, 'ab-plan'), 'utf8')).toBe(fixture.resolved)
@@ -869,7 +871,9 @@ describe('runCli routing — ab upgrade outside a session', () => {
     // The default distRoot is the REAL distribution: its skills are not
     // installed in this fixture repo, so they install fresh — proving the
     // command routes and runs without any session deps.
-    expect(err).toEqual([])
+    expect(err).toEqual([
+      'self-update skipped: running from a source checkout (.git is present); merging skills with the installed distribution',
+    ])
     expect(code).toBe(0)
     expect(out).toContain('ab-plan: installed')
     // The fixture's own skill is not in the real distribution → unknown.

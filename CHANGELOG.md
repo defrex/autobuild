@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#106](https://github.com/defrex/autobuild/pull/106) — Report versions and self-update Autobuild during upgrades
 - [#105](https://github.com/defrex/autobuild/pull/105) — Add a maintainer release command
 - [#104](https://github.com/defrex/autobuild/pull/104) — Give ab init a guided interactive survey
 - [#103](https://github.com/defrex/autobuild/pull/103) — Label harvest proposals and reconcile Linear labels

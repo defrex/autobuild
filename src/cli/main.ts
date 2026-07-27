@@ -37,6 +37,14 @@ import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
 import { abTicket } from './ticket'
 import { abUpgrade, type ResolveConflict } from './upgrade'
+import { formatInstalledVersion, readDistributionIdentity } from './installation'
+import {
+  selfUpdate,
+  SELF_UPDATE_HANDOFF_ENV,
+  type SelfUpdateCommand,
+  type SelfUpdateOptions,
+  type SelfUpdateResult,
+} from './self-update'
 import {
   abHarvestStatus,
   buildHarvestContext,
@@ -75,6 +83,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'help',
   '--help',
   '-h',
+  '--version',
 ])
 
 /** Nested namespaces can mix operator and phase forms. In particular only
@@ -135,6 +144,12 @@ export interface SessionlessCliDeps {
   /** Optional per-paint presentation lookup used only by the repo-local dev
    * entry. The published binary never supplies it. */
   resolveDashboardRenderer?: DashboardRendererResolver
+  /** Distribution root overrides are test-only; production resolves relative
+   * to the running module, independent of the current repository. */
+  distributionRoot?: string
+  /** Self-update seams keep release/package-manager orchestration testable. */
+  selfUpdateCommand?: SelfUpdateCommand
+  selfUpdate?: (options: SelfUpdateOptions) => Promise<SelfUpdateResult>
   /** Production supplies the tool-free upgrade agent; tests inject a fake.
    * Construction is deferred until a skill actually conflicts. */
   upgradeResolverFactory?: (opts: {
@@ -301,6 +316,12 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       throw new Error('usage: ab help [command]\n       ab <command> --help')
     }
 
+    case '--version': {
+      if (rest.length > 0) throw new Error('usage: ab --version')
+      stdout(formatInstalledVersion(await readDistributionIdentity(deps.distributionRoot)))
+      return 0
+    }
+
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
     case 'init': {
@@ -336,10 +357,29 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'upgrade': {
-      const usage = 'usage: ab upgrade [target] (§16.3)'
-      const parsed = parseArgs(rest, {}, usage)
+      const usage = 'usage: ab upgrade [target] [--no-self-update | --version <semver>] (§16.3)'
+      const parsed = parseArgs(rest, { 'no-self-update': 'boolean', version: 'value' }, usage)
       if (parsed.positionals.length > 1) throw new Error(usage)
+      if (parsed.flags.has('no-self-update') && parsed.flags.has('version')) {
+        throw new Error(`--no-self-update and --version cannot be combined — ${usage}`)
+      }
       const targetRepo = parsed.positionals[0] ?? deps.workspacePath
+      const handoff = deps.processEnv?.[SELF_UPDATE_HANDOFF_ENV] === '1'
+      if (!parsed.flags.has('no-self-update') && !handoff) {
+        const update = await (deps.selfUpdate ?? selfUpdate)({
+          targetRepo,
+          stdout,
+          stderr,
+          env: deps.processEnv ?? {},
+          ...(deps.distributionRoot === undefined ? {} : { distRoot: deps.distributionRoot }),
+          ...(deps.selfUpdateCommand === undefined ? {} : { command: deps.selfUpdateCommand }),
+          ...(stringFlag(parsed, 'version') === undefined
+            ? {}
+            : { version: stringFlag(parsed, 'version') }),
+        })
+        if (update.kind === 'handoff') return update.exitCode
+        if (update.kind === 'failed') return 1
+      }
       const resolverFactory = deps.upgradeResolverFactory
       let resolver: ResolveConflict | undefined
       const resolveConflict: ResolveConflict | undefined =
@@ -358,6 +398,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       await abUpgrade({
         targetRepo,
         stdout,
+        ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
         ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
         ...(resolveConflict !== undefined ? { resolveConflict } : {}),
       })

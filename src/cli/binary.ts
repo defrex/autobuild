@@ -25,11 +25,15 @@ export async function runBinary(
   argv: string[],
   resolveDashboardRenderer?: DashboardRendererResolver,
 ): Promise<number> {
-  // Local .env supplies developer-set secrets (e.g. LINEAR_API_KEY); real
-  // environment variables always win over .env values.
-  loadDotEnv(join(process.cwd(), '.env'), process.env)
-
   const command = argv[0]
+  // Version identity is installation-local and offline; do not inspect even a
+  // repository-local .env before routing it.
+  if (command !== '--version') {
+    // Local .env supplies developer-set secrets (e.g. LINEAR_API_KEY); real
+    // environment variables always win over .env values.
+    loadDotEnv(join(process.cwd(), '.env'), process.env)
+  }
+
   const unscopedDeps = {
     workspacePath: process.cwd(),
     processEnv: process.env,

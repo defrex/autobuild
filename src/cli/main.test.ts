@@ -399,7 +399,16 @@ describe('SESSIONLESS_COMMANDS', () => {
   })
 
   test('every literal formerly hardcoded in bin/ab.ts survives the lift', () => {
-    for (const command of ['init', 'upgrade', 'ticket', 'dispatch', 'help', '--help', '-h']) {
+    for (const command of [
+      'init',
+      'upgrade',
+      'ticket',
+      'dispatch',
+      'help',
+      '--help',
+      '-h',
+      '--version',
+    ]) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(true)
     }
   })
