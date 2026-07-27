@@ -600,10 +600,11 @@ fork), installs it with the matching local/global Bun mechanism, then hands off
 to that replacement binary. The fresh process therefore supplies both skill
 defaults and merge logic. `--version` selects an exact release, including an
 older one; `--no-self-update` merges against the installed distribution. Source
-checkouts and unknown/contradictory provenance are never mutated and continue
-to merge. Latest lookup/install failures warn and continue; an explicit release
-failure stops before merging against the wrong defaults. No other command
-checks for or installs a release.
+checkouts are never mutated and still merge installed skills, even with an
+exact selector. For latest, unknown/contradictory provenance and lookup/install
+failures warn and continue. For an exact release, mechanism, resolution, or
+install failure stops before skill merge. No other command checks for or
+installs a release.
 
 A local Bun update changes the dependency in its owning project's
 `package.json` and the matching `bun.lock` resolution, potentially leaving that

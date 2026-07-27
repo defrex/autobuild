@@ -1325,10 +1325,12 @@ skills. Thus both defaults and merge logic come from the new version. A local
 install updates the owning project's `package.json` dependency and `bun.lock`;
 a global install updates Bun's global package-manager state. An already-current
 (or locally newer) install proceeds directly to skill merge. A source checkout
-or indeterminate mechanism is never mutated and still merges installed skills.
-Latest lookup/install failures warn and do the same; failure to resolve or
-install an operator-selected `--version <semver>` is fatal and does not merge
-against the wrong defaults. `--no-self-update` always selects merge-only
+is never mutated and still merges installed skills, including when an exact
+release was named. For the default latest operation, an indeterminate mechanism
+or lookup/install failure warns and also merges installed skills. For an
+operator-selected `--version <semver>`, indeterminate mechanism, resolution, or
+install failure is fatal and does not merge against the wrong defaults.
+`--no-self-update` always selects merge-only
 behavior. An exact version may be older than the installed version.
 
 Skill handling remains the classic vendoring problem: `ab init` records the

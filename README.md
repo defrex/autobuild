@@ -115,8 +115,10 @@ API version. `ab upgrade` updates a Bun forge installation to its repository's
 latest GitHub Release and then merges that new distribution's skill defaults
 into the current repository. Use `--version <semver>` to select an exact release
 (including a downgrade), or `--no-self-update` for the historical merge-only
-operation. A linked/source checkout is never updated. Latest lookup/install
-failures warn and retain installed defaults; an explicit-version failure stops.
+operation. A linked/source checkout is never updated and still merges installed
+skills. For the default latest operation, unknown mechanisms and lookup/install
+failures warn and retain installed defaults. An explicit-version mechanism,
+resolution, or install failure stops before skill merge.
 
 For local Bun installs, self-update runs Bun in the owning project and changes
 its Autobuild dependency in `package.json` plus its `bun.lock` resolution, which

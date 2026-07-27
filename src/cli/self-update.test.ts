@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -196,6 +197,49 @@ describe('distribution self-update orchestration', () => {
     ).toEqual({ kind: 'failed' })
     expect(explicitCalls).toHaveLength(3)
     expect(warnings.join('\n')).toContain('permission denied')
+  })
+
+  test('explicit mechanism failures exit nonzero without merging installed skills', async () => {
+    const fixture = await installFixture()
+    const errors: string[] = []
+    const noGlobalTarget = join(root!, 'no-global-target')
+    await mkdir(noGlobalTarget)
+    expect(
+      await runCli(['upgrade', noGlobalTarget, '--version', '2.1.0'], {
+        workspacePath: '/repo',
+        distributionRoot: fixture.dist,
+        selfUpdateCommand: async () => result('', 'global bin unavailable', 1),
+        stdout: () => {},
+        stderr: (line) => errors.push(line),
+      }),
+    ).toBe(1)
+    expect(errors.at(-1)).toContain('self-update failed:')
+    expect(errors.at(-1)).toContain('global bin unavailable')
+    expect(existsSync(join(noGlobalTarget, '.agents'))).toBe(false)
+
+    await writeFile(
+      join(fixture.owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: 'file:../autobuild' } }),
+    )
+    const unknownTarget = join(root!, 'unknown-target')
+    await mkdir(unknownTarget)
+    let commands = 0
+    expect(
+      await runCli(['upgrade', unknownTarget, '--version', '2.1.0'], {
+        workspacePath: '/repo',
+        distributionRoot: fixture.dist,
+        selfUpdateCommand: async () => {
+          commands += 1
+          return result(`${fixture.globalBin}\n`)
+        },
+        stdout: () => {},
+        stderr: (line) => errors.push(line),
+      }),
+    ).toBe(1)
+    expect(commands).toBe(1)
+    expect(errors.at(-1)).toContain('self-update failed:')
+    expect(errors.at(-1)).toContain('direct github: dependency')
+    expect(existsSync(join(unknownTarget, '.agents'))).toBe(false)
   })
 
   test('CLI flags gate orchestration and a handoff status ends the parent route', async () => {

@@ -91,6 +91,11 @@ function warn(options: SelfUpdateOptions, reason: string): SelfUpdateResult {
   return { kind: 'continue' }
 }
 
+function fail(options: SelfUpdateOptions, reason: string): SelfUpdateResult {
+  options.stderr(`self-update failed: ${reason}`)
+  return { kind: 'failed' }
+}
+
 function forward(output: string, sink: (line: string) => void): void {
   const text = output.replace(/\n$/, '')
   if (text !== '') sink(text)
@@ -139,14 +144,17 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
 
   const globalBinResult = await invoke(['bun', 'pm', 'bin', '-g'], {})
   if (globalBinResult.exitCode !== 0 || globalBinResult.stdout.trim() === '') {
-    return warn(options, commandFailure('determining Bun global installation', globalBinResult))
+    const reason = commandFailure('determining Bun global installation', globalBinResult)
+    return explicit ? fail(options, reason) : warn(options, reason)
   }
 
   const inspection = await inspectInstallation({
     distRoot,
     globalBin: globalBinResult.stdout.trim(),
   })
-  if (inspection.kind !== 'bun-forge') return warn(options, inspection.reason)
+  if (inspection.kind !== 'bun-forge') {
+    return explicit ? fail(options, inspection.reason) : warn(options, inspection.reason)
+  }
   const install = inspection.installation
 
   const apiPath =
