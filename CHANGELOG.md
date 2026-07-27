@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#98](https://github.com/defrex/autobuild/pull/98) — Correct Pi authentication guidance
 - [#97](https://github.com/defrex/autobuild/pull/97) — Handle unavailable auto-merge without stranding builds
 - [#96](https://github.com/defrex/autobuild/pull/96) — Clarify dashboard key bindings
 - [#95](https://github.com/defrex/autobuild/pull/95) — Adopt Biome quality gates
