@@ -86,18 +86,26 @@ Then, from the repository you want built:
 ab init
 ```
 
-On a TTY, first-time init asks which shipped ticket source, workspace provider,
-and role profile to use. The local file tracker and git-worktree provider are
-the no-account defaults; the suggested role profile uses separate authoring and
-review models for independent review. It then writes `autobuild.toml` — with
-verify steps pre-filled from your `package.json` scripts — and vendors the
-`ab-*` agent skills.
+On a TTY, first-time init presents one arrow-key survey for the shipped ticket
+source, workspace provider, and role profile; move with Up/Down and confirm with
+Enter. Each option explains itself inline, and completed answers stay visible
+while the next question is active. Ctrl+C cancels before config or skills are
+written. The local file tracker and git-worktree provider are the no-account
+defaults; the suggested role profile uses separate authoring and review models
+for independent review.
+
+Init then writes `autobuild.toml` — with verify steps pre-filled from your
+`package.json` scripts — and vendors the `ab-*` agent skills. Its final summary
+reports the config result and skill outcome counts, naming only locally kept or
+explicitly overwritten skills. Conditional Linear/Pi setup work appears in a
+separate next-steps block.
 
 For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
 `--role-profile`; a fully specified run never prompts. `--no-interactive` (or
 redirected input/output with no selection flags) preserves the historical
-Claude/file/git-worktree baseline. See the
-[configuration reference](docs/configuration.md) for every option.
+Claude/file/git-worktree baseline. Non-TTY output is plain, with no ANSI or box
+drawing. See the [configuration reference](docs/configuration.md) for every
+option.
 
 Write a ticket that says what and why, with acceptance criteria and an
 out-of-scope list (the `/ab-spec` skill will interview you into one), then

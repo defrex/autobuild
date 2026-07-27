@@ -710,7 +710,9 @@ example.
 
 On the first `ab init [target]`, when `autobuild.toml` is absent, Autobuild
 renders a valid setup-oriented baseline. When both stdin and stdout are TTYs,
-it first offers these shipped choices:
+it first offers these shipped choices in one survey. Use Up/Down to move the
+highlight and Enter to confirm; each active option's explanation is inline,
+and submitted prompts collapse to the chosen label while remaining visible:
 
 | Surface | Flag | Prompt options (first is the prompt default) |
 |---|---|---|
@@ -721,7 +723,9 @@ it first offers these shipped choices:
 The local `file` tracker and shipped `git-worktree` provider need no account,
 secret, or external infrastructure. Every prompt also explains that a custom
 implementation can be supplied by a plugin and points to the plugin authoring
-guide installed with `ab-guide`.
+guide installed with `ab-guide`. Ctrl+C at any question cancels with a plain
+message before config migration, `.gitignore` maintenance, or skill vendoring,
+so a cancelled first run leaves no partial initialization.
 
 The role profiles are:
 
@@ -742,11 +746,18 @@ byte-identical to earlier init output: file tickets, omitted `[workspace]`
 is never silently applied.
 
 Choosing Linear writes valid conspicuous placeholders for the required
-`[tickets].teamKey` and `[tickets].readyState` fields. Init prints those
-follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment;
-it never prompts for or writes a secret. Choosing either Pi profile similarly
-prints the real provider-authentication flow: run `pi` and use `/login`, or set
-the provider API key in the environment.
+`[tickets].teamKey` and `[tickets].readyState` fields. Init places those
+follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment,
+in a distinct next-steps block; it never prompts for or writes a secret.
+Choosing either Pi profile puts the real provider-authentication flow in the
+same block: run `pi` and use `/login`, or set the provider API key in the
+environment.
+
+After installation, init reports `autobuild.toml: written|skipped` and counts
+all skill outcomes (`installed`, `unchanged`, `kept`, and `overwritten`). It
+names individual skills only for the attention-worthy `kept` and `overwritten`
+outcomes, including on an existing-config rerun. Redirected/non-TTY output uses
+the same information as plain text with no ANSI escapes or box drawing.
 
 Regardless of onboarding choices, the generated baseline has:
 

@@ -116,7 +116,15 @@ describe('layered CLI help catalog', () => {
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
       help: ['ab help <command>', 'requires no', 'AB_*'],
-      init: ['ab init [target] [--force]', 'never overwrites an', 'autobuild.toml'],
+      init: [
+        'ab init [target] [--force]',
+        'Up/Down',
+        'Enter',
+        'Ctrl+C',
+        'Next steps',
+        'never overwrites an',
+        'autobuild.toml',
+      ],
       upgrade: ['ab upgrade [target]', 'Three-way merge', 'outside sessions'],
       dispatch: [
         '--intake | --no-intake',

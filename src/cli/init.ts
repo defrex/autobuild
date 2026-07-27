@@ -32,7 +32,12 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
-import { INIT_PLUGIN_HELP, type InitPromptChoice, type InitPrompter } from './init-prompt'
+import {
+  INIT_PLUGIN_HELP,
+  type InitPresentation,
+  type InitPromptChoice,
+  type InitPrompter,
+} from './init-prompt'
 
 export { SKILL_NAMESPACE }
 
@@ -773,55 +778,51 @@ export async function abInit(opts: {
   const distRoot = opts.distRoot ?? defaultDistRoot()
   const stdout = opts.stdout ?? (() => {})
   const force = opts.force ?? false
+  const configPath = join(opts.targetRepo, 'autobuild.toml')
+  const configExists = (await readIfExists(configPath)) !== undefined
+
+  // Complete the first-run survey before any migration or write. Cancellation
+  // is therefore a true no-mutation boundary, regardless of which question is
+  // active. Existing-config reruns deliberately skip every question.
+  let resolvedSelections: ResolvedInitSelections | undefined
+  try {
+    if (!configExists) {
+      resolvedSelections = await resolveInitSelections(opts.selections ?? {}, opts.prompter)
+    }
+  } finally {
+    opts.prompter?.close?.()
+  }
 
   // Older releases used `.agent/skills`, which Pi does not discover. Move the
-  // complete tree before inspecting or writing any skills.
+  // complete tree only after a fresh survey has successfully finished.
   await migrateLegacyAgentSkills(opts.targetRepo)
 
   // Render autobuild.toml only when it is absent (§16.3). Package inspection
   // deliberately stays inside this branch: the repo's config is the repo's
   // from the very first re-run, even if package scripts later change.
-  const configPath = join(opts.targetRepo, 'autobuild.toml')
   let config: InitConfigAction
-  let resolvedSelections: ResolvedInitSelections | undefined
-  if ((await readIfExists(configPath)) === undefined) {
-    try {
-      resolvedSelections = await resolveInitSelections(opts.selections ?? {}, opts.prompter)
-    } finally {
-      opts.prompter?.close?.()
-    }
+  if (!configExists) {
     const template = await readFile(join(distRoot, 'templates', 'autobuild.toml'), 'utf8')
     const detectedScripts = await detectInitPackageScripts(opts.targetRepo)
     const baseline = renderAutobuildTemplate(template, detectedScripts)
-    const rendered = renderInitSelections(baseline, resolvedSelections)
+    const rendered = renderInitSelections(baseline, resolvedSelections!)
     await mkdir(opts.targetRepo, { recursive: true })
     await writeFile(configPath, rendered)
     config = 'written'
   } else {
     config = 'skipped'
   }
-  stdout(`autobuild.toml: ${config}`)
-  if (config === 'written' && resolvedSelections?.ticketSource === 'linear') {
-    stdout(
-      'Linear setup required: replace [tickets].teamKey and [tickets].readyState, then set LINEAR_API_KEY in the environment (never in autobuild.toml).',
-    )
-  }
-  if (
-    config === 'written' &&
-    (resolvedSelections?.roleProfile === 'split' || resolvedSelections?.roleProfile === 'pi')
-  ) {
-    stdout(
-      'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
-    )
-  }
 
   // State is repository-local by default and must never appear as source.
   // This append-only/idempotent update preserves every user-authored rule.
   await ensureLocalStateIgnored(opts.targetRepo)
 
+  const attention: string[] = []
   const skills: InitReport['skills'] = []
   for (const skill of await readDistSkills(distRoot)) {
-    const migrated = await migrateLegacySkill(opts.targetRepo, skill.installName, stdout)
+    const migrated = await migrateLegacySkill(opts.targetRepo, skill.installName, (line) => {
+      attention.push(line)
+    })
     const rootLocal =
       migrated ?? (await readIfExists(installedSkillPath(opts.targetRepo, skill.installName)))
     let divergent = false
@@ -852,8 +853,10 @@ export async function abInit(opts: {
         ? 'installed'
         : 'unchanged'
     await ensureClaudeSkillLink(opts.targetRepo, skill.installName)
-    stdout(`${skill.installName}: ${action}`)
     skills.push({ skill: skill.installName, action })
+    if (action === 'kept' || action === 'overwritten') {
+      attention.push(`${skill.installName}: ${action}`)
+    }
   }
 
   // Migration considers the complete old tree, including local additions
@@ -861,5 +864,46 @@ export async function abInit(opts: {
   for (const name of await listInstalledSkills(opts.targetRepo)) {
     await ensureClaudeSkillLink(opts.targetRepo, name)
   }
+
+  const skillCounts: InitPresentation['skillCounts'] = {
+    installed: 0,
+    unchanged: 0,
+    kept: 0,
+    overwritten: 0,
+  }
+  for (const skill of skills) skillCounts[skill.action] += 1
+
+  const nextSteps: string[] = []
+  if (config === 'written' && resolvedSelections?.ticketSource === 'linear') {
+    nextSteps.push(
+      'Linear setup required: replace [tickets].teamKey and [tickets].readyState, then set LINEAR_API_KEY in the environment (never in autobuild.toml).',
+    )
+  }
+  if (
+    config === 'written' &&
+    (resolvedSelections?.roleProfile === 'split' || resolvedSelections?.roleProfile === 'pi')
+  ) {
+    nextSteps.push(
+      'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
+    )
+  }
+
+  const presentation: InitPresentation = { config, skillCounts, attention, nextSteps }
+  if (opts.prompter?.present !== undefined) {
+    opts.prompter.present(presentation)
+  } else {
+    stdout(`autobuild.toml: ${config}`)
+    stdout(
+      `Skills: ${skillCounts.installed} installed, ${skillCounts.unchanged} unchanged, ` +
+        `${skillCounts.kept} kept, ${skillCounts.overwritten} overwritten`,
+    )
+    for (const line of attention) stdout(line)
+    if (nextSteps.length > 0) {
+      stdout('')
+      stdout('Next steps:')
+      for (const step of nextSteps) stdout(`  - ${step}`)
+    }
+  }
+
   return { config, skills }
 }
