@@ -387,7 +387,7 @@ async function generateSummary(
 ): Promise<string | undefined> {
   const result = await run({
     command: 'claude',
-    args: ['-p', '--tools', '', summaryPrompt(entries)],
+    args: ['-p', '--tools', '', '--', summaryPrompt(entries)],
     cwd: root,
   })
   const summary = result.exitCode === 0 ? normalizeClaudeSummary(result.stdout) : undefined

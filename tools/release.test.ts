@@ -237,6 +237,13 @@ describe('release orchestration', () => {
       today: () => '2026-07-27',
     })
 
+    const claude = testHarness.requests.find((request) => request.command === 'claude')
+    expect(claude?.args.slice(0, 4)).toEqual(['-p', '--tools', '', '--'])
+    expect(claude?.args).toHaveLength(5)
+    expect(claude?.args.at(-1)).toContain(
+      '- [#2](https://example.test/2) — New capability\n- [#1](https://example.test/1) — Important repair',
+    )
+
     const head = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()
     expect(head).not.toBe(before)
     expect((await command(fixture.root, 'git', ['rev-parse', 'HEAD^'])).stdout.trim()).toBe(before)
