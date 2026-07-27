@@ -42,6 +42,9 @@ import {
 } from './harvest'
 import type { BuildStore, Clock } from '../store/types'
 
+/** Reserved provenance marker for deterministic harvest-created proposals. */
+export const HARVEST_PROPOSAL_LABEL = 'autobuild:proposal'
+
 export interface HarvestRunnerOpts {
   leaseTtlMs?: number
   heartbeatMs?: number
@@ -742,7 +745,7 @@ export class HarvestRunner {
           const body = renderHarvestProposal(proposal, observations)
           ticket = (
             await tickets.create(
-              { title: proposal.title, body },
+              { title: proposal.title, body, labels: [HARVEST_PROPOSAL_LABEL] },
               {
                 state: defaultTriageState(config),
                 idempotencyKey: reservedId,

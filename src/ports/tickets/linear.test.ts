@@ -452,13 +452,135 @@ describe('LinearTicketSource', () => {
     expect(calls).toHaveLength(1) // resolved team info, mutated nothing
   })
 
-  test('create with an unknown label name throws before mutating', async () => {
-    const { fetchFn, calls } = fakeLinear([TEAM_INFO_RESPONSE])
+  test('create creates an unknown label and uses its returned id', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: {
+            issueLabelCreate: {
+              success: true,
+              issueLabel: { id: 'lb-urgent', name: 'urgent' },
+            },
+          },
+        },
+      },
+      {
+        body: {
+          data: {
+            issueCreate: {
+              success: true,
+              issue: gqlIssue({ labels: { nodes: [{ name: 'urgent' }] } }),
+            },
+          },
+        },
+      },
+    ])
+
+    const created = await makeSource(fetchFn).create({
+      title: 'X',
+      body: 'y',
+      labels: ['urgent'],
+    })
+
+    expect(calls).toHaveLength(3)
+    expect(calls[1]?.query).toContain('$input: IssueLabelCreateInput!')
+    expect(calls[1]?.variables).toEqual({
+      input: { name: 'urgent', teamId: 'team-uuid' },
+    })
+    expect(calls[2]?.variables).toEqual({
+      input: {
+        teamId: 'team-uuid',
+        title: 'X',
+        description: 'y',
+        labelIds: ['lb-urgent'],
+      },
+    })
+    expect(created.labels).toEqual(['urgent'])
+  })
+
+  test('a failed label create adopts an exact-name winner from a concurrent writer', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [{ message: 'Label name must be unique', extensions: { code: 'INPUT_ERROR' } }],
+        },
+      },
+      {
+        body: {
+          data: {
+            team: {
+              labels: {
+                nodes: [
+                  { id: 'lb-near', name: 'Urgent' },
+                  { id: 'lb-winner', name: 'urgent' },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        body: {
+          data: { issueCreate: { success: true, issue: gqlIssue() } },
+        },
+      },
+    ])
+
+    await makeSource(fetchFn).create({ title: 'X', body: 'y', labels: ['urgent'] })
+
+    expect(calls[2]?.query).toContain('labels(filter: { name: { eq: $name } })')
+    expect(calls[2]?.variables).toEqual({ teamId: 'team-uuid', name: 'urgent' })
+    expect(calls[3]?.variables).toMatchObject({ input: { labelIds: ['lb-winner'] } })
+  })
+
+  test('an unsuccessful label payload also adopts an exact-name winner', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: { issueLabelCreate: { success: false, issueLabel: null } },
+        },
+      },
+      {
+        body: {
+          data: {
+            team: { labels: { nodes: [{ id: 'lb-winner', name: 'urgent' }] } },
+          },
+        },
+      },
+      {
+        body: {
+          data: { issueCreate: { success: true, issue: gqlIssue() } },
+        },
+      },
+    ])
+
+    await makeSource(fetchFn).create({ title: 'X', body: 'y', labels: ['urgent'] })
+
+    expect(calls[3]?.variables).toMatchObject({ input: { labelIds: ['lb-winner'] } })
+  })
+
+  test('a failed label create preserves the provider error when exact lookup finds no winner', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [{ message: 'label registry unavailable', extensions: { code: 'INTERNAL' } }],
+        },
+      },
+      {
+        body: {
+          data: { team: { labels: { nodes: [] } } },
+        },
+      },
+    ])
 
     await expect(
       makeSource(fetchFn).create({ title: 'X', body: 'y', labels: ['urgent'] }),
-    ).rejects.toThrow('no label "urgent"')
-    expect(calls).toHaveLength(1)
+    ).rejects.toThrow('label registry unavailable')
+    expect(calls.some((call) => call.query.includes('$input: IssueCreateInput!'))).toBe(false)
   })
 
   test('an HTTP error throws with status and operation context', async () => {
@@ -1004,17 +1126,80 @@ describe('LinearTicketSource', () => {
     })
   })
 
-  test('update validates label names before the mutation', async () => {
+  test('update creates an unknown label and uses its returned id', async () => {
     const { fetchFn, calls } = fakeLinear([
       { body: { data: { issue: { id: 'uuid-42' } } } },
       TEAM_INFO_RESPONSE,
+      {
+        body: {
+          data: {
+            issueLabelCreate: {
+              success: true,
+              issueLabel: { id: 'lb-urgent', name: 'urgent' },
+            },
+          },
+        },
+      },
+      { body: { data: { issueUpdate: { success: true } } } },
     ])
 
-    await expect(makeSource(fetchFn).update('ENG-42', { labels: ['urgent'] })).rejects.toThrow(
-      'no label "urgent"',
-    )
-    expect(calls).toHaveLength(2)
-    expect(calls.some((call) => call.query.includes('mutation UpdateIssue'))).toBe(false)
+    await makeSource(fetchFn).update('ENG-42', { labels: ['urgent'] })
+
+    expect(calls).toHaveLength(4)
+    expect(calls[2]?.variables).toEqual({
+      input: { name: 'urgent', teamId: 'team-uuid' },
+    })
+    expect(calls[3]?.variables).toEqual({
+      id: 'uuid-42',
+      input: { labelIds: ['lb-urgent'] },
+    })
+  })
+
+  test('concurrent unknown-label updates share one same-instance label create', async () => {
+    const calls: RecordedCall[] = []
+    let labelCreates = 0
+    const fetchFn: LinearFetch = async (url, init) => {
+      const parsed = JSON.parse(init.body) as {
+        query: string
+        variables: Record<string, unknown>
+      }
+      calls.push({ url, headers: init.headers, ...parsed })
+      let data: unknown
+      if (parsed.query.includes('query ResolveIssue')) {
+        const id = String(parsed.variables.id)
+        data = { issue: { id: `uuid-${id}` } }
+      } else if (parsed.query.includes('query TeamInfo')) {
+        data = TEAM_INFO_RESPONSE.body.data
+      } else if (parsed.query.includes('mutation CreateIssueLabel')) {
+        labelCreates += 1
+        await Promise.resolve()
+        data = {
+          issueLabelCreate: {
+            success: true,
+            issueLabel: { id: 'lb-shared', name: 'shared-fresh' },
+          },
+        }
+      } else if (parsed.query.includes('mutation UpdateIssue')) {
+        data = { issueUpdate: { success: true } }
+      } else {
+        throw new Error(`unexpected Linear operation: ${parsed.query}`)
+      }
+      return { ok: true, status: 200, json: async () => ({ data }) }
+    }
+    const source = makeSource(fetchFn)
+
+    await Promise.all([
+      source.update('ENG-41', { labels: ['shared-fresh'] }),
+      source.update('ENG-42', { labels: ['shared-fresh'] }),
+    ])
+
+    expect(labelCreates).toBe(1)
+    const updates = calls.filter((call) => call.query.includes('mutation UpdateIssue'))
+    expect(updates).toHaveLength(2)
+    expect(updates.map((call) => call.variables)).toEqual([
+      { id: 'uuid-ENG-41', input: { labelIds: ['lb-shared'] } },
+      { id: 'uuid-ENG-42', input: { labelIds: ['lb-shared'] } },
+    ])
   })
 
   test('addBlocker creates a native blocks relation in the correct direction', async () => {

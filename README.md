@@ -174,9 +174,13 @@ scope creep stays out of the PR.
 Observations accumulate per repository, and once enough pile up the
 dispatcher runs a separate outer workflow — scan → synthesize ⇄ review →
 file — that distills them into proposed tickets, deduplicated against work
-already filed. Proposals land in triage and never dispatch themselves: you
-groom and ready them like any ticket you wrote yourself. Agents propose;
-humans dispatch.
+already filed. Proposals land in triage with the reserved
+`autobuild:proposal` label and never dispatch themselves: the label means
+observation harvest created the ticket for human triage, not that Autobuild has
+groomed or claimed it. Autobuild does not use this label as a readiness gate or
+remove it; it is distinct from any configured or historical `autobuild` ready
+label. You groom and ready proposals like any ticket you wrote yourself. Agents
+propose; humans dispatch.
 
 ## Operating it
 

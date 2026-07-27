@@ -150,14 +150,25 @@ function blockerRecordingError(
   )
 }
 
+interface GqlIssueLabel {
+  id: string
+  name: string
+}
+
 interface GqlTeamInfo {
   teams: {
     nodes: Array<{
       id: string
       states: { nodes: Array<{ id: string; name: string }> }
-      labels: { nodes: Array<{ id: string; name: string }> }
+      labels: { nodes: GqlIssueLabel[] }
     }>
   }
+}
+
+interface LinearTeamInfo {
+  teamId: string
+  stateIds: Map<string, string>
+  labelIds: Map<string, string>
 }
 
 /** Autobuild blocker sets are intentionally small, but Linear's implicit
@@ -174,6 +185,8 @@ const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name } } }`
 const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key: { eq: $teamKey } }) { nodes { id states { nodes { id name } } labels { nodes { id name } } } } }`
+const EXACT_TEAM_LABEL_QUERY = `query ExactTeamLabel($teamId: String!, $name: String!) { team(id: $teamId) { labels(filter: { name: { eq: $name } }) { nodes { id name } } } }`
+const CREATE_LABEL_MUTATION = `mutation CreateIssueLabel($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }`
 const UPDATE_STATE_MUTATION = `mutation UpdateState($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`
 const CREATE_COMMENT_MUTATION = `mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`
 const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { ${ISSUE_FIELDS} } } }`
@@ -194,11 +207,10 @@ export class LinearTicketSource implements TicketSource {
   /** identifier → Linear UUID, cached per instance. */
   private readonly issueIds = new Map<string, string>()
   /** One team query serves state ids, label ids, and the team id. */
-  private teamInfo?: {
-    teamId: string
-    stateIds: Map<string, string>
-    labelIds: Map<string, string>
-  }
+  private teamInfo?: LinearTeamInfo
+  private teamInfoLoad?: Promise<LinearTeamInfo>
+  /** Exact label name → the one same-instance registry write in progress. */
+  private readonly pendingLabelCreates = new Map<string, Promise<string>>()
 
   constructor(opts: {
     apiKey: string
@@ -294,16 +306,9 @@ export class LinearTicketSource implements TicketSource {
       throw new Error('linear create: idempotency key must be a UUID v4')
     }
     const team = await this.getTeamInfo('create')
-    const labelIds = (draft.labels ?? []).map((label) => {
-      const labelId = team.labelIds.get(label)
-      if (!labelId) {
-        throw new Error(
-          `linear create: no label "${label}" in team ${this.teamKey} ` +
-            `(known: ${[...team.labelIds.keys()].join(', ') || 'none'})`,
-        )
-      }
-      return labelId
-    })
+    const labelIds = await Promise.all(
+      (draft.labels ?? []).map((label) => this.ensureLabelId('create', label, team)),
+    )
     const input: Record<string, unknown> = {
       teamId: team.teamId,
       title: draft.title,
@@ -395,16 +400,9 @@ export class LinearTicketSource implements TicketSource {
         input.labelIds = []
       } else {
         const team = await this.getTeamInfo('update')
-        input.labelIds = validated.labels.map((label) => {
-          const labelId = team.labelIds.get(label)
-          if (!labelId) {
-            throw new Error(
-              `linear update: no label "${label}" in team ${this.teamKey} ` +
-                `(known: ${[...team.labelIds.keys()].join(', ') || 'none'})`,
-            )
-          }
-          return labelId
-        })
+        input.labelIds = await Promise.all(
+          validated.labels.map((label) => this.ensureLabelId('update', label, team)),
+        )
       }
     }
 
@@ -625,26 +623,105 @@ export class LinearTicketSource implements TicketSource {
     return data.issue.id
   }
 
+  /**
+   * Resolve a provider label registry entry at the write boundary. Known ids
+   * stay on the team cache's fast path; simultaneous requests on one adapter
+   * share a mutation, while cross-instance races reconcile by exact name.
+   */
+  private async ensureLabelId(
+    operation: string,
+    label: string,
+    team: LinearTeamInfo,
+  ): Promise<string> {
+    const known = team.labelIds.get(label)
+    if (known !== undefined) return known
+
+    const pending = this.pendingLabelCreates.get(label)
+    if (pending !== undefined) return pending
+
+    const creating = this.createLabel(operation, label, team)
+    this.pendingLabelCreates.set(label, creating)
+    try {
+      return await creating
+    } finally {
+      if (this.pendingLabelCreates.get(label) === creating) {
+        this.pendingLabelCreates.delete(label)
+      }
+    }
+  }
+
+  private async createLabel(
+    operation: string,
+    label: string,
+    team: LinearTeamInfo,
+  ): Promise<string> {
+    try {
+      const data = await this.gql<{
+        issueLabelCreate: { success: boolean; issueLabel: GqlIssueLabel | null }
+      }>(`${operation}-label`, CREATE_LABEL_MUTATION, {
+        input: { name: label, teamId: team.teamId },
+      })
+      const created = data.issueLabelCreate.issueLabel
+      if (!data.issueLabelCreate.success || created === null || created.name !== label) {
+        throw new Error(`linear ${operation}: issueLabelCreate failed for "${label}"`)
+      }
+      team.labelIds.set(label, created.id)
+      return created.id
+    } catch (error) {
+      // Another process may have won after our cached team-label snapshot.
+      // Only an exact provider lookup can convert the failed mutation into a
+      // success; otherwise retain the original mutation failure verbatim.
+      const winner = await this.findExactTeamLabel(operation, label, team.teamId)
+      if (winner !== null) {
+        team.labelIds.set(label, winner.id)
+        return winner.id
+      }
+      throw error
+    }
+  }
+
+  private async findExactTeamLabel(
+    operation: string,
+    label: string,
+    teamId: string,
+  ): Promise<GqlIssueLabel | null> {
+    try {
+      const data = await this.gql<{
+        team: { labels: { nodes: GqlIssueLabel[] } } | null
+      }>(`${operation}-label-race`, EXACT_TEAM_LABEL_QUERY, { teamId, name: label })
+      return data.team?.labels.nodes.find((candidate) => candidate.name === label) ?? null
+    } catch {
+      return null
+    }
+  }
+
   /** State/label ids by name and the team id — fetched once, cached. */
-  private async getTeamInfo(operation: string): Promise<{
-    teamId: string
-    stateIds: Map<string, string>
-    labelIds: Map<string, string>
-  }> {
+  private async getTeamInfo(operation: string): Promise<LinearTeamInfo> {
     if (this.teamInfo) return this.teamInfo
-    const data = await this.gql<GqlTeamInfo>(operation, TEAM_INFO_QUERY, {
-      teamKey: this.teamKey,
-    })
-    const team = data.teams.nodes[0]
-    if (!team) {
-      throw new Error(`linear ${operation}: no team with key "${this.teamKey}"`)
+    if (this.teamInfoLoad === undefined) {
+      this.teamInfoLoad = (async () => {
+        const data = await this.gql<GqlTeamInfo>(operation, TEAM_INFO_QUERY, {
+          teamKey: this.teamKey,
+        })
+        const team = data.teams.nodes[0]
+        if (!team) {
+          throw new Error(`linear ${operation}: no team with key "${this.teamKey}"`)
+        }
+        return {
+          teamId: team.id,
+          stateIds: new Map(team.states.nodes.map((state) => [state.name, state.id])),
+          labelIds: new Map(team.labels.nodes.map((label) => [label.name, label.id])),
+        }
+      })()
     }
-    this.teamInfo = {
-      teamId: team.id,
-      stateIds: new Map(team.states.nodes.map((s) => [s.name, s.id])),
-      labelIds: new Map(team.labels.nodes.map((l) => [l.name, l.id])),
+
+    const loading = this.teamInfoLoad
+    try {
+      this.teamInfo = await loading
+      return this.teamInfo
+    } finally {
+      if (this.teamInfoLoad === loading) this.teamInfoLoad = undefined
     }
-    return this.teamInfo
   }
 
   private async updateState(operation: string, issueId: string, stateName: string): Promise<void> {

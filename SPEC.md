@@ -803,10 +803,12 @@ The fixed workflow is:
    create/join/suppress proposals; a fresh reviewer checks coverage, semantic
    dedup, spec quality, and evidence. Only approval advances.
 3. **file (deterministic)** — render creates to the spec standard and file
-   them into Triage. Filing is crash-safe by construction: an idempotency
-   ID is durably reserved *before* each external create, so a restart adopts
-   the already-created ticket instead of duplicating it, and a partially
-   filed approved set creates only its missing tickets.
+   them into Triage with the reserved `autobuild:proposal` provenance label.
+   Filing is crash-safe by construction: an idempotency ID is durably reserved
+   *before* each external create, so a restart adopts the already-created
+   ticket instead of duplicating it, and a partially filed approved set creates
+   only its missing tickets. The label is informational: Autobuild never reads
+   it as readiness policy and does not remove it during grooming.
 
 Beyond the workflow, harvest is governed by a small set of invariants (their
 event-level mechanics live in the repository catalog and reducer tests):
@@ -849,7 +851,10 @@ stateless records) remain fatal: continuing could permit double dispatch.
 
 **Pre-build edits.** Update is partial and strict: it replaces only the named
 editable fields, and state is never an update field — transitions are a
-separate operation with their own validation.
+separate operation with their own validation. Labels are values at the port
+boundary: a label name need not already exist for either create or update.
+Adapters own reconciliation with provider-side label registries, including
+concurrent attempts to create the same name; callers never pre-register labels.
 
 **Ticket dependencies.** A ticket may declare blockers within its source, at
 creation or later. The source owns representation (how a blocker is stored)
