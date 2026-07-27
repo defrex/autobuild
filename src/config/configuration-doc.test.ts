@@ -282,7 +282,5 @@ describe('README configuration entry points', () => {
     expect(quickstart!.indexOf('ab init')).toBeLessThan(quickstart!.search(link))
     expect(learnMore).toBeDefined()
     expect(learnMore).toMatch(link)
-    expect(quickstart).toContain('lean `autobuild.toml` containing only active settings')
-    expect(quickstart).toContain('coding agent can\nchange the config')
   })
 })

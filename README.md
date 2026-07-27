@@ -41,13 +41,10 @@ third-party ticket, runtime, workspace, and forge adapters against the versioned
 
 ## Quickstart
 
-You need [Bun](https://bun.sh), `git`, the
-[`gh` CLI](https://cli.github.com) authenticated (`gh auth login`), and the
-prerequisites for the agent runtime you select. For Claude, install the local
-[`claude` CLI](https://code.claude.com/docs/en/setup) and complete login. For
-Pi, authenticate the providers used by your selected models via `pi` `/login`
-or provider API keys. Init offers only runtimes whose executable and/or provider
-authentication is usable on the current machine.
+You need [Bun](https://bun.sh), `git`, an authenticated
+[`gh` CLI](https://cli.github.com) (`gh auth login`), and the local
+prerequisites for the agent runtime you select. Init suggests only runtimes
+whose executable and/or provider authentication is usable on your machine.
 
 <!-- release-install:start -->
 
@@ -63,89 +60,25 @@ Then, from the repository you want built:
 ab init
 ```
 
-On a TTY, first-time init presents one arrow-key survey for the shipped ticket
-source, workspace provider, and role profile; move with Up/Down and confirm with
-Enter. Each option explains itself inline, and completed answers stay visible
-while the next question is active. Ctrl+C cancels before config or skills are
-written. The local file tracker and git-worktree provider are the no-account
-defaults; the suggested role profile uses separate authoring and review models
-for independent review.
-
-Init then writes a lean `autobuild.toml` containing only active settings, with
-brief labels and mandatory verify gates pre-filled from recognized
-`package.json` scripts, and vendors the `ab-*` agent skills. Its final summary
-reports the config result and skill outcome counts, names only locally kept or
-explicitly overwritten skills, and reminds you that your coding agent can
-change the config. Conditional Linear/Pi setup work appears in the same
-next-steps block.
-
-For scripts or CI, pass `--ticket-source`, `--workspace-provider`, and
-`--role-profile`; a fully specified run never prompts. Without an explicit role
-profile, non-interactive init selects a detected usable runtime and writes it in
-`[roles.default]`; if none is usable, init fails and names `--role-profile`.
-Non-TTY output is plain, with no ANSI or box drawing. See the
+Runs a short setup survey, writes an explicit runtime default to
+`autobuild.toml`, and vendors the `ab-*` agent skills — see the
 [configuration reference](docs/configuration.md) for every option.
-
-Check the running installation offline from any directory with `ab --version`;
-it reports the package version, Bun-recorded commit when available, and plugin
-API version. `ab upgrade` updates a Bun forge installation to its repository's
-latest GitHub Release and then merges that new distribution's skill defaults
-into the current repository. Use `--version <semver>` to select an exact release
-(including a downgrade), or `--no-self-update` for the historical merge-only
-operation. A linked/source checkout is never updated and still merges installed
-skills. For the default latest operation, unknown mechanisms and lookup/install
-failures warn and retain installed defaults. An explicit-version mechanism,
-resolution, or install failure stops before skill merge.
-
-For local Bun installs, self-update runs Bun in the owning project and changes
-its Autobuild dependency in `package.json` plus its `bun.lock` resolution, which
-may leave that project dirty. Existing global installs instead update Bun's
-global package-manager state. No other command performs release checks or
-updates.
-
-Write a ticket that says what and why, with acceptance criteria and an
-out-of-scope list (the `/ab-spec` skill will interview you into one), then
-mark it ready:
-
-```sh
-ab ticket create "Throttle repeated failed logins" --body spec.md
-ab ticket move file-1 Ready
-```
-
-Start the dispatcher:
 
 ```sh
 ab dispatch
 ```
 
-On a TTY you get the dashboard above. The build plans, implements, reviews
-its own code, verifies, and opens a PR. Review and merge it yourself — or
-press `m` on the build row and let it land when your checks pass.
+Starts the dispatcher, with the live dashboard on a TTY.
 
-## Cutting a release
+In your selected coding agent, invoke the ticket-grooming skill:
 
-Releases are maintainer-triggered repository operations. Start from a clean
-checkout of the configured base branch with `git`, authenticated `gh`, and the
-`claude` CLI available, then run one command:
-
-```sh
-bun run release --patch                 # or --minor / --major
-bun run release --version 2.1.0         # choose an exact semver
-bun run release --patch --dry-run       # inspect every candidate first
+```text
+/ab-spec I want to build a feature!
 ```
 
-The command refuses a dirty or wrong-branch checkout, a branch behind its
-remote, an existing target tag, or an empty Unreleased section. It runs the
-repository lint, typecheck, and test gates before changing files. Claude is
-asked non-interactively for a short release summary; if that optional summary
-fails, the command warns and continues without it while preserving every
-changelog bullet.
-
-A real run updates the manifest, the pinned Quickstart command, and the
-changelog in one commit; creates an annotated tag; atomically pushes the commit
-and tag; and publishes a GitHub Release from the exact cut changelog section.
-It requires no hand edits or follow-up publication commands. Dry-run performs
-the preflight, gates, and summary generation but writes and publishes nothing.
+The agent asks the questions needed to produce a quality ticket and adds it
+directly to your ticketing system. Using the skill to create tickets then
+largely becomes your input workflow.
 
 ## How it works
 
@@ -210,37 +143,6 @@ groomed or claimed it. Autobuild does not use this label as a readiness gate or
 remove it; it is distinct from any configured or historical `autobuild` ready
 label. You groom and ready proposals like any ticket you wrote yourself. Agents
 propose; humans dispatch.
-
-## Operating it
-
-The loop starts before the dispatcher: every build is only as good as its
-ticket. The vendored `/ab-spec` skill is the grooming surface — it interviews
-you from an idea to a conforming spec, or takes a ticket someone else filed
-and tightens it until it meets
-[the standard](docs/spec-standard.md) the build process expects. Groom the
-ticket, mark it ready, and it's dispatchable.
-
-From there, `ab dispatch` on a TTY is the whole cockpit. Every build in flight is a row —
-pipeline position, elapsed time, PR state — and a handful of keys cover the
-day-to-day:
-
-- **`p`** pauses or resumes the selected build. On a blocked build it opens a
-  feedback field instead: answer the escalation — or just press Enter to
-  retry — and the build picks the phase back up with your guidance.
-- **`m`** toggles durable auto-merge consent for the selected build. Gated
-  branches use GitHub-native auto-merge, so your required checks still decide
-  when it lands.
-- On the header row, **`i`** gates ticket intake, **`m`** sets the auto-merge
-  default for newly claimed builds, and **`h`** gates harvesting — all
-  repository-wide, all durable across restarts.
-
-![Answering a blocked build's escalation from the
-dashboard](docs/assets/headline-interactive.png)
-
-Nothing about the dashboard is load-bearing — `ab builds`,
-`ab build status <slug>`, and
-`ab harvest status` project the same durable state as text or `--json`, so a
-pipe or a script sees exactly what you do.
 
 ## Learn more
 

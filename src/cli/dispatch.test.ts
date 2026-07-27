@@ -1784,6 +1784,10 @@ function latestDashboardFrame(term: { frames: string[] }): string {
   )
 }
 
+function latestPaintedFrame(term: { frames: string[] }): string {
+  return stripAnsi([...term.frames].reverse().find((frame) => frame.includes('\n')) ?? '')
+}
+
 /** The longest run of consecutive painted lines the region wrote — i.e. the
  * tallest frame the terminal had to display. */
 function tallestFrame(term: { frames: string[] }): number {
@@ -3804,6 +3808,367 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(input.cleanups).toBe(1)
       expect(term.all()).toContain('\x1b[?25h')
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Enter is a read-only no-op on the Dispatcher and Harvest rows', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'harvest_enter_noop',
+          observations: [{ build: 'observed-build', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.escalated',
+        payload: {
+          run: 'harvest_enter_noop',
+          source: 'agent',
+          reason: 'operator attention',
+          observations: [{ build: 'observed-build', seq: 1 }],
+        },
+      })
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      const before = await fx.store.getRepoEvents(fx.origin)
+
+      // Down/Up are serialization fences. If either preceding Enter opened a
+      // nested view, these keys would move nested selection instead.
+      input.press('enter')
+      input.press('down')
+      await waitFor(() => /^ > .*Harvest/m.test(latestDashboardFrame(term)))
+      expect(latestPaintedFrame(term)).not.toContain('Transcript  ')
+
+      input.press('enter')
+      input.press('up')
+      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(before)
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('terminalizing a drilled-in build returns to the active-build list', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-terminal-detail', { title: 'Terminal detail' }),
+      happyHandlers(),
+    )
+    const term = fakeTerminal(true, { columns: 160, rows: 60 })
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('terminal-detail'))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  terminal-detail'))
+
+      await fx.store.append('terminal-detail', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      await waitFor(
+        () =>
+          /^ > Auto Build/m.test(latestPaintedFrame(term)) &&
+          !latestPaintedFrame(term).includes('Build  terminal-detail'),
+      )
+      expect(latestPaintedFrame(term)).toContain('no active builds')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('detail view routes m and blocked p to its build and Escape cancels only the modal', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-detail-actions', { title: 'Detail actions' }),
+      happyHandlers(),
+    )
+    const term = fakeTerminal(true, { columns: 160, rows: 60 })
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('detail-actions', {
+        actor: KERNEL,
+        type: 'finalize.started',
+        payload: {},
+      })
+      await fx.store.append('detail-actions', {
+        actor: agentActor('finalize', 's_detail_blocked'),
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_detail_actions',
+          phase: 'finalize',
+          source: 'agent',
+          question: 'Which detail action should resume this build?',
+        },
+      })
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'detail-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('detail-actions'))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  detail-actions'))
+
+      input.press('auto-merge')
+      await waitFor(async () =>
+        (await fx.store.getEvents('detail-actions')).some(
+          (event) =>
+            event.type === 'build.auto-merge-requested' &&
+            event.actor.kind === 'human' &&
+            event.actor.user === 'detail-op',
+        ),
+      )
+      const afterAutoMerge = await fx.store.getEvents('detail-actions')
+
+      input.press('pause')
+      await waitFor(() => latestPaintedFrame(term).includes('Resume feedback'))
+      expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
+      expect(latestPaintedFrame(term)).toContain('Which detail action should resume this build?')
+
+      input.press('escape')
+      await waitFor(
+        () =>
+          latestPaintedFrame(term).includes('Build  detail-actions') &&
+          !latestPaintedFrame(term).includes('Resume feedback'),
+      )
+      expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
+      expect(latestPaintedFrame(term)).not.toContain('Auto Build')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Enter drills into a build and pinned transcript without appending facts, then Escape restores the row', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-drill', { title: 'Drilldown work' }),
+      happyHandlers(),
+    )
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'reader' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('drilldown-work'))
+      input.press('down')
+      await waitFor(() => /^ > .*drilldown-work/m.test(latestDashboardFrame(term)))
+      const before = await fx.store.getEvents('drilldown-work')
+      const repoBefore = await fx.store.getRepoEvents(fx.origin)
+
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
+      const detail = latestPaintedFrame(term)
+      expect(detail).toContain('Pipeline')
+      expect(detail).toContain('Sessions')
+      expect(detail).toContain('runtime')
+      expect(detail).not.toContain('Auto Build')
+
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Transcript  drilldown-work'))
+      expect(latestPaintedFrame(term)).toContain('Producer boundary record')
+
+      input.press('escape')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
+      input.press('escape')
+      await waitFor(() => /^ > .*drilldown-work/m.test(latestDashboardFrame(term)))
+
+      expect(await fx.store.getEvents('drilldown-work')).toEqual(before)
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('an open-session transcript message clears when polling observes session.ended', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-session-close', { title: 'Session close' }),
+      happyHandlers(),
+    )
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      await fx.store.append('session-close', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_late_open',
+          role: 'code-review',
+          runner: 'scripted',
+          phase: 'code-review',
+          round: 2,
+        },
+      })
+
+      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('session-close'))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  session-close'))
+      for (let index = 0; index < 20; index += 1) input.press('down')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes('code-review phase code-review round 2'),
+      )
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('still open'))
+
+      await fx.store.appendWithArtifacts(
+        'session-close',
+        [
+          {
+            kind: 'transcript',
+            content: JSON.stringify({
+              turns: [
+                { prompt: 'review', text: 'finished', usage: { inputTokens: 1, outputTokens: 1 } },
+              ],
+            }),
+          },
+        ],
+        ([transcript]) => ({
+          actor: KERNEL,
+          type: 'session.ended' as const,
+          payload: {
+            session: 's_late_open',
+            transcript: { kind: transcript!.kind, rev: transcript!.revision },
+            usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+          },
+        }),
+      )
+      await waitFor(() => !latestPaintedFrame(term).includes('still open'))
+      expect(latestPaintedFrame(term)).toContain('tokens 1 in/1 out, 1 turns')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)

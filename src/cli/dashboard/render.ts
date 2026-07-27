@@ -29,6 +29,8 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
+import type { DashboardSession } from './detail'
+import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { dashboardSelections, sameSelection } from './selection'
 
 export interface RenderOpts {
@@ -425,6 +427,222 @@ function displayText(value: string): string {
   return displayed
 }
 
+function wrappedText(value: string, width: number, indent = ''): string[] {
+  if (width <= 0) return []
+  const paragraphs = value.split(/\r?\n/)
+  const lines: string[] = []
+  for (const paragraph of paragraphs) {
+    const safe = displayText(paragraph)
+    if (safe.length === 0) {
+      lines.push(indent)
+      continue
+    }
+    const wrapped = packLines(safe.split(/\s+/), width, indent)
+    lines.push(...(wrapped.length > 0 ? wrapped : [indent]))
+  }
+  return lines
+}
+
+function detailStep(step: PipelineStep, opts: RenderOpts): string {
+  const { color, now } = opts
+  const notes: string[] = []
+  if (step.qualifier !== undefined) notes.push(step.qualifier)
+  if (step.count !== undefined) {
+    const kind =
+      step.label.startsWith('verify:') || step.label === 'reconcile' ? 'attempt' : 'round'
+    notes.push(`${kind} ${step.count}`)
+  }
+  if (step.timing !== undefined) {
+    const elapsed =
+      step.timing.accumulatedMs +
+      (step.timing.runningSince !== undefined ? Math.max(0, now - step.timing.runningSince) : 0)
+    notes.push(formatDuration(elapsed))
+  }
+  const note = notes.length > 0 ? ` (${notes.join(', ')})` : ''
+  return paint(`${GLYPH[step.state]} ${step.label}${note}`, STEP_COLOR[step.state], color)
+}
+
+function sessionLines(session: DashboardSession, selected: boolean, opts: RenderOpts): string[] {
+  const usage = session.usage
+  const tokens = [
+    session.role,
+    `phase ${session.phase}`,
+    ...(session.round !== undefined ? [`round ${session.round}`] : []),
+    `runtime ${session.runtime}`,
+    ...(session.model !== undefined ? [`model ${session.model}`] : []),
+    session.status,
+    ...(usage !== undefined
+      ? [`tokens ${usage.inputTokens} in/${usage.outputTokens} out, ${usage.turns} turns`]
+      : []),
+  ]
+  const wrapped = packLines(tokens.map(displayText), Math.max(1, opts.width - 4), '')
+  return wrapped.map((line, index) =>
+    truncate(
+      `${index === 0 ? selectionMarker(selected, true, opts.color) : '  '}  ${line}`,
+      opts.width,
+    ),
+  )
+}
+
+function viewport(lines: string[], capacity: number, focus: number, scroll = 0): string[] {
+  if (capacity <= 0) return []
+  const maxStart = Math.max(0, lines.length - capacity)
+  const wanted = scroll > 0 ? scroll : Math.max(0, focus - Math.floor(capacity / 2))
+  const start = Math.min(maxStart, wanted)
+  return lines.slice(start, start + capacity)
+}
+
+function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
+  const view = model.view
+  if (view?.kind !== 'detail') return []
+  const build = model.builds.find((candidate) => candidate.slug === view.slug)
+  if (build === undefined) return []
+  const { color, width, height } = opts
+  const paused = build.alsoPaused ? ' (also paused)' : ''
+  const top = [
+    truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
+    truncate(
+      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
+      width,
+    ),
+  ]
+  const body: string[] = []
+  if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
+  body.push(`  auto merge ${build.autoMerge}`)
+  if (build.pr !== undefined) {
+    body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
+  }
+  body.push('', paint('Pipeline', 'bold', color))
+  body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
+  if (build.blockers.length > 0) {
+    body.push('', paint('Unresolved blockers', 'bold', color))
+    for (const blocker of build.blockers) {
+      body.push(
+        ...wrappedText(`! ${blocker}`, width, '  ').map((line) => paint(line, 'red', color)),
+      )
+    }
+  }
+  body.push('', paint('Sessions', 'bold', color))
+  const sessions = build.sessions ?? []
+  let focus = body.length
+  if (sessions.length === 0) body.push('  no agent sessions recorded')
+  for (const session of sessions) {
+    if (session.id === view.sessionId) focus = body.length
+    body.push(...sessionLines(session, session.id === view.sessionId, opts))
+  }
+  if (view.message !== undefined) {
+    focus = body.length
+    body.push(
+      '',
+      ...wrappedText(view.message, width, '  ').map((line) => paint(line, 'yellow', color)),
+    )
+  }
+  const controls =
+    model.resumeInput !== undefined
+      ? dashboardControls(model, color, width)
+      : truncate(
+          paint(
+            'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  Esc back  Ctrl-C quit',
+            'dim',
+            color,
+          ),
+          width,
+        )
+  if (height !== undefined && height <= 0) return []
+  if (height !== undefined && height <= top.length) return top.slice(0, height)
+  const capacity = height === undefined ? body.length : Math.max(0, height - top.length - 3)
+  return [
+    ...top,
+    '',
+    ...viewport(body, capacity, focus).map((line) => truncate(line, width)),
+    '',
+    controls,
+  ].slice(0, height === undefined ? Number.POSITIVE_INFINITY : height)
+}
+
+function transcriptContent(presentation: TranscriptPresentation, width: number): string[] {
+  if (presentation.kind === 'raw') {
+    return [
+      'Unrecognized transcript format - raw content:',
+      '',
+      ...presentation.text.split(/\r?\n/).flatMap((line) => wrappedText(line, width, '  ')),
+    ]
+  }
+  const lines: string[] = []
+  if (presentation.kind === 'producer-boundary') {
+    lines.push(...wrappedText(presentation.notice, width, ''), '')
+  }
+  for (const [index, turn] of presentation.turns.entries()) {
+    lines.push(`Turn ${index + 1}`)
+    lines.push(...turnContent(turn, width), '')
+  }
+  return lines
+}
+
+/** Maximum process-local transcript offset for the current wrapped viewport. */
+export function transcriptScrollLimit(
+  presentation: TranscriptPresentation,
+  width: number,
+  height: number,
+): number {
+  const contentLines = transcriptContent(presentation, width).length
+  // Transcript chrome is two header rows plus the two separators and controls.
+  const capacity = Math.max(0, height - 5)
+  return Math.max(0, contentLines - capacity)
+}
+
+export function moveTranscriptScroll(
+  presentation: TranscriptPresentation,
+  width: number,
+  height: number,
+  current: number,
+  delta: number,
+): number {
+  const limit = transcriptScrollLimit(presentation, width, height)
+  // Clamp current first because a resize, or state from an older controller,
+  // may leave it beyond the freshly wrapped viewport's end.
+  return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
+}
+
+function turnContent(turn: TranscriptTurn, width: number): string[] {
+  const lines = [
+    ...wrappedText(`Prompt: ${turn.prompt}`, width, '  '),
+    ...wrappedText(`Agent: ${turn.text}`, width, '  '),
+  ]
+  if (turn.usage !== undefined) {
+    lines.push(
+      `  Usage: ${turn.usage.inputTokens} input, ${turn.usage.outputTokens} output${
+        turn.usage.turns !== undefined ? `, ${turn.usage.turns} turns` : ''
+      }`,
+    )
+  }
+  if (turn.failure !== undefined)
+    lines.push(...wrappedText(`Failure: ${turn.failure}`, width, '  '))
+  return lines
+}
+
+function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
+  const view = model.view
+  if (view?.kind !== 'transcript') return []
+  const { color, width, height } = opts
+  const top = [
+    truncate(`${paint('Transcript', 'bold', color)}  ${displayText(view.slug)}`, width),
+    truncate(`  session ${displayText(view.sessionId)}`, width),
+  ]
+  const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
+  const controls = truncate(
+    paint('Keys: Up/Down scroll  Esc back  Ctrl-C quit', 'dim', color),
+    width,
+  )
+  if (height !== undefined && height <= 0) return []
+  if (height !== undefined && height <= top.length) return top.slice(0, height)
+  const capacity = height === undefined ? content.length : Math.max(0, height - top.length - 3)
+  return [...top, '', ...viewport(content, capacity, 0, view.scroll), '', controls].slice(
+    0,
+    height === undefined ? Number.POSITIVE_INFINITY : height,
+  )
+}
+
 function dashboardControls(model: DashboardModel, color: boolean, width: number): string {
   if (model.resumeInput === undefined) {
     const legend =
@@ -472,6 +690,9 @@ function flattenRows(rows: readonly RenderedDashboardRow[]): string[] {
 }
 
 function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string[] {
+  if (model.view?.kind === 'detail') return renderDetail(model, opts)
+  if (model.view?.kind === 'transcript') return renderTranscript(model, opts)
+
   const { color, width, height } = opts
   const selecting = model.selection !== undefined
   const globalSelection = { kind: 'global' } as const

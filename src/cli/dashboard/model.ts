@@ -42,6 +42,8 @@ import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer
 import { verifyPhase } from '../../ontology'
 import type { BuildRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
+import { projectSessions, type DashboardSession } from './detail'
+import type { TranscriptPresentation } from './transcript'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   openHarvestRun,
@@ -126,7 +128,26 @@ export interface DashboardBuild {
   /** Native auto-merge desired/applied state. */
   autoMerge: AutoMergeDisplay
   pr?: { url: string; state: PrLifecycle }
+  /** Chronological session history projected from the retained raw log. */
+  sessions?: DashboardSession[]
 }
+
+export type DashboardView =
+  | {
+      kind: 'detail'
+      slug: string
+      sessionId?: string
+      message?: string
+      /** Message validity fence for facts that can change on the next poll. */
+      messageWhileSessionOpen?: string
+    }
+  | {
+      kind: 'transcript'
+      slug: string
+      sessionId: string
+      transcript: TranscriptPresentation
+      scroll: number
+    }
 
 export interface ResumeInputView {
   /** The prompt stays bound to this build even while polling re-sorts rows. */
@@ -163,6 +184,8 @@ export interface DashboardModel {
   warningLine?: string
   /** Ephemeral blocked-resume field; never derived from or stored in events. */
   resumeInput?: ResumeInputView
+  /** Nested read-only dashboard mode. Omission is the byte-stable list view. */
+  view?: DashboardView
   builds: DashboardBuild[]
   /** Present only for an open run or unresolved run-level attention. It is
    * selectable display state, never a synthetic build. */
@@ -507,8 +530,10 @@ export function projectBuild(
   )
 
   const at = (phase: string): boolean => activePhase?.phase === phase
-  const planCount = state.plan.round > 1 ? state.plan.round : undefined
-  const codeCount = state.implement.round > 1 ? state.implement.round : undefined
+  // Retain first-round counts for detail rendering. The compact renderer still
+  // suppresses `/1`, preserving its existing density and output.
+  const planCount = state.plan.round > 0 ? state.plan.round : undefined
+  const codeCount = state.implement.round > 0 ? state.implement.round : undefined
 
   const steps: PipelineStep[] = [
     step('plan', planDone, at('plan'), {
@@ -549,7 +574,7 @@ export function projectBuild(
         : stepResults.length > 0
           ? Math.max(...stepResults.map((r) => r.attempt))
           : undefined
-    const count = maxAttempt !== undefined && maxAttempt > 1 ? maxAttempt : undefined
+    const count = maxAttempt
     // `!cycleFailed &&`: §15.6-A re-runs the cycle FROM THE FIRST STEP, so
     // once any step in the cycle has failed, an earlier step's pass in that
     // same cycle is not durably done either. The failing step keeps a `failed`
@@ -594,7 +619,7 @@ export function projectBuild(
         state.reconcileAttempts > 0 && state.prState !== 'conflicted',
         at('reconcile'),
         {
-          count: state.reconcileAttempts > 1 ? state.reconcileAttempts : undefined,
+          count: state.reconcileAttempts > 0 ? state.reconcileAttempts : undefined,
           // Full-log scope (sinceSeq 0), matching reconcile's full-log
           // done/current predicate: the epilogue is restart-orthogonal.
           timing: timingFor(intervals, 'reconcile', 0, frozenNow),
@@ -638,6 +663,7 @@ export function projectBuild(
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
+    sessions: projectSessions(events),
   }
 }
 

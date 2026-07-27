@@ -204,15 +204,17 @@ text projection for finalize and late designations. The GitHub release transport
 lives in `src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
 and retry facts remain dispatcher janitor duty.
 
-**Dashboard.** `src/cli/dashboard/model.ts` is the only build-row projection;
-`render.ts` composes the ASCII frame; `live.ts` owns the alternate-screen
-region and teardown; `poll.ts` is a display-only incremental cache (the logs
-remain authoritative — cache loss just rehydrates); `frame-image.ts` renders a
-deterministic PNG with pinned fonts. The dashboard is an operator command
-producer: every keypress that
-does anything appends a human event to the applicable log, and the header
-shows acknowledged durable state, never optimistic intent. Forge mutation
-stays in dispatcher plumbing.
+**Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
+`detail.ts` projects chronological session history from the same retained log,
+and `transcript.ts` heuristically presents opaque transcript artifacts with a
+raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
+frames; `live.ts` owns the alternate-screen region and teardown; `poll.ts` is a
+display-only incremental cache (the logs remain authoritative — cache loss just
+rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
+Nested navigation, session selection, and pinned artifact retrieval are
+read-only process-local UI concerns. Build actions still use the shared control
+service and append human facts; the header shows acknowledged durable state,
+never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
 **Init and upgrade.** `src/cli/init.ts` renders first config as a pure
 template render seeded from the target's package scripts and never
