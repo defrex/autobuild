@@ -4,6 +4,7 @@ import type { PluginFactoryContext } from '../../plugins/manifest'
 import { createPluginRegistry } from '../../plugins/registry'
 import { FakeForge } from './fake'
 import { GitHubForge } from './github'
+import { LocalGitForge } from './local-git'
 import { createForge, resolveForgeRegistration } from './create'
 
 describe('createForge', () => {
@@ -16,6 +17,18 @@ describe('createForge', () => {
     })
     expect(forge).toBeInstanceOf(GitHubForge)
     expect(forge.name).toBe('github')
+  })
+
+  test('constructs the reserved local-git builtin', async () => {
+    const forge = await createForge({
+      name: 'local-git',
+      registry: createPluginRegistry(),
+      env: {},
+      repoRoot: '.',
+    })
+    expect(forge).toBeInstanceOf(LocalGitForge)
+    expect(forge.name).toBe('local-git')
+    expect(forge.prAttachments).toBeUndefined()
   })
 
   test('lazily awaits a plugin factory with exact context and preserves identity', async () => {
@@ -71,7 +84,7 @@ describe('createForge', () => {
       forges: { zeta: () => new FakeForge(), alpha: () => new FakeForge() },
     })
     expect(() => resolveForgeRegistration('missing', registry)).toThrow(
-      'unknown forge adapter "missing"; available forges: alpha, github, zeta',
+      'unknown forge adapter "missing"; available forges: alpha, github, local-git, zeta',
     )
   })
 

@@ -3,6 +3,7 @@ import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { AdapterRegistration, PluginRegistry } from '../../plugins/registry'
 import type { Forge } from '../types'
 import { GitHubForge } from './github'
+import { LocalGitForge } from './local-git'
 
 const EMPTY_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
 
@@ -36,9 +37,8 @@ export async function createForge(opts: {
 }): Promise<Forge> {
   const registration = resolveForgeRegistration(opts.name, opts.registry)
   if (registration.owner.kind === 'builtin') {
-    // The registry reserves every builtin name. GitHub is the only shipped
-    // forge in this release, so reaching another builtin would be host drift.
     if (opts.name === 'github') return new GitHubForge()
+    if (opts.name === 'local-git') return new LocalGitForge()
     throw new Error(`builtin forge adapter ${JSON.stringify(opts.name)} has no constructor`)
   }
 

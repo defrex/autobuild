@@ -76,6 +76,7 @@ async function writeDist(
     [
       'baseBranch = "main"',
       'capacity = 1',
+      '# @ab-init/forge',
       '[commands]',
       '# @ab-init/package-script-commands',
       '[verify]',

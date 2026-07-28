@@ -264,19 +264,31 @@ async function implementationReviewBoundary(
     )
 
     const targetRef = `refs/autobuild/review/${branch}/base`
-    await git(deps, [
-      'fetch',
-      '--no-tags',
-      '--no-write-fetch-head',
-      '--refmap=',
-      'origin',
-      `+refs/heads/${baseBranch}:${targetRef}`,
-    ])
-    const targetCommand = `git rev-parse --verify ${targetRef}^{commit}`
-    const target = singleGitObjectId(
-      await git(deps, ['rev-parse', '--verify', `${targetRef}^{commit}`]),
-      targetCommand,
-    )
+    const target =
+      deps.forge.snapshotBase !== undefined
+        ? singleGitObjectId(
+            `${await deps.forge.snapshotBase({
+              workspacePath: deps.workspacePath,
+              base: baseBranch,
+              destinationRef: targetRef,
+            })}\n`,
+            `${deps.forge.name} base snapshot`,
+          )
+        : await (async () => {
+            await git(deps, [
+              'fetch',
+              '--no-tags',
+              '--no-write-fetch-head',
+              '--refmap=',
+              'origin',
+              `+refs/heads/${baseBranch}:${targetRef}`,
+            ])
+            const targetCommand = `git rev-parse --verify ${targetRef}^{commit}`
+            return singleGitObjectId(
+              await git(deps, ['rev-parse', '--verify', `${targetRef}^{commit}`]),
+              targetCommand,
+            )
+          })()
 
     const mergeBaseArgs = ['merge-base', '--all', target, head]
     const mergeBaseCommand = `git ${mergeBaseArgs.join(' ')}`
@@ -450,6 +462,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         base: baseBranch,
         title: firstLine,
         body,
+        mergeMessage: text,
       })
 
       // The PR URL is part of each deterministic hosted-asset identity, so PR

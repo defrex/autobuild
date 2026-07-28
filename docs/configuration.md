@@ -48,7 +48,7 @@ any table header.
 |---|---:|---|---|
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
-| `forge` | `"github"` | nonblank string | Forge adapter name. Builtin `github` preserves existing behavior; configured plugins may register other names. |
+| `forge` | `"github"` | nonblank string | Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
 
 ### Plugin modules
@@ -725,12 +725,13 @@ and submitted prompts collapse to the chosen label while remaining visible:
 
 | Surface | Flag | Prompt options (first is the prompt default) |
 |---|---|---|
+| Forge | `--forge` | `github`, `local-git` |
 | Tickets | `--ticket-source` | `file`, `linear` |
 | Workspace | `--workspace-provider` | `git-worktree` |
 | Roles | `--role-profile` | detected usable registered runtimes, plus `split` when both of its Pi models are authenticated |
 
-The local `file` tracker and shipped `git-worktree` provider need no account,
-secret, or external infrastructure. Every prompt also explains that a custom
+The `local-git` forge, local `file` tracker, and shipped `git-worktree` provider
+need no account, secret, remote, or external infrastructure. Every prompt also explains that a custom
 implementation can be supplied by a plugin and points to the plugin authoring
 guide installed with `ab-guide`. Ctrl+C at any question cancels with a plain
 message before config migration, `.gitignore` maintenance, or skill vendoring,
@@ -747,8 +748,9 @@ The role profiles are:
   own default model; and
 - `pi`: `[roles.default]` uses the Pi runtime and its own default model.
 
-A flag suppresses only its corresponding prompt. Supplying all three flags is
-prompt-free on or off a TTY. Explicit role profiles are operator overrides.
+A flag suppresses only its corresponding prompt. Supplying all four flags is
+prompt-free on or off a TTY. Redirected or `--no-interactive` initialization
+uses `github` when no forge flag is supplied. Explicit role profiles are operator overrides.
 For an unresolved role choice, init probes every registered runtime through its
 optional onboarding capability and offers only usable choices. Claude and Codex
 require their respective local CLI to be present and logged in; Pi requires
@@ -781,7 +783,7 @@ points changes to the coding agent. Each active table has one brief purpose
 label; configuration alternatives remain in this reference and `ab-guide`.
 Regardless of onboarding choices, the baseline writes:
 
-- `baseBranch = "main"` and `capacity = 1`;
+- `baseBranch = "main"`, `capacity = 1`, and the selected `forge` (`github` by default);
 - `setup = "bun install"` in `[commands]`;
 - explicit verify and finalize `steps` arrays, empty unless recognized package
   scripts add checks; and
@@ -862,9 +864,14 @@ Variables such as `AB_BUILD`, `AB_PHASE`, `AB_SESSION`, and the harvest-session
 identity tuple are runner-owned ambient authorization. Operators should not
 set or copy them into `.env`; the runner stamps them for each session.
 
-Forge and agent credentials remain adapter-owned:
+Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
+credentials or network access: it keeps durable PR records under private Git
+refs, leaves each build at `refs/heads/ab/<slug>`, and squash-merges locally only
+after auto-merge consent. Inspect an open local change with `git diff main...ab/<slug>`.
+It has no review web UI and no image-hosting capability; attached artifacts use
+the existing text-download projection.
 
-- authenticate GitHub CLI operations with `gh auth login`, and separately make
+- for `forge = "github"`, authenticate GitHub CLI operations with `gh auth login`, and separately make
   sure the Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;

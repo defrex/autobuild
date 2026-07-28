@@ -22,6 +22,9 @@ export interface ForgeContractControls {
 
 export interface ForgeContractHarness {
   forge: Forge
+  /** Whether this provider exposes a native gated auto-merge setting. Local
+   * forges may support only the universal ungated guarded-squash path. */
+  nativeAutoMerge?: boolean
   workspacePath: string
   head: string
   base: string
@@ -74,6 +77,7 @@ async function pushAndOpen(harness: ForgeContractHarness): Promise<{
     base: harness.base,
     title: harness.title,
     body: harness.body,
+    mergeMessage: `${harness.title}\n\n${harness.body}`,
   })
   await harness.controls.trackPr(pr.number)
   return { pr, remoteHead }
@@ -90,7 +94,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       await withForge(factory, undefined, async (harness) => {
         const { pr, remoteHead } = await pushAndOpen(harness)
         expect(pr.number).toBeGreaterThan(0)
-        expect(pr.url).toMatch(/^https?:\/\//)
+        expect(pr.url.trim()).not.toBe('')
         expect(pr.headSha).toBe(remoteHead)
 
         const retry = await harness.forge.openPr({
@@ -99,6 +103,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
           base: harness.base,
           title: `${harness.title} retry must adopt`,
           body: 'retry body must not create another PR',
+          mergeMessage: 'retry merge message must not replace the original',
         })
         expect(retry).toEqual(pr)
       })
@@ -153,6 +158,7 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
 
     test('setAutoMerge acknowledges native state and is idempotent', async () => {
       await withForge(factory, { gated: true }, async (harness) => {
+        if (harness.nativeAutoMerge === false) return
         const { pr } = await pushAndOpen(harness)
         await harness.controls.prepareMergeable(pr.number)
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(false)

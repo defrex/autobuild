@@ -519,6 +519,7 @@ export class GitHubForge implements Forge {
     base: string
     title: string
     body: string
+    mergeMessage?: string
   }): Promise<PrRef> {
     // Idempotent by head branch (SPEC §8.7 crash paths): finalize's `ab done`
     // opens the PR BEFORE appending finalize.completed, so a crash or store

@@ -453,6 +453,12 @@ describe('renderDashboard: emphasis', () => {
     expect(out).toContain('\x1b]8;;https://x/7\x07PR open\x1b]8;;\x07')
   })
 
+  test('a local PR locator is visible literally and never emitted as an OSC link', () => {
+    const out = colored(build({ pr: { url: 'refs/heads/ab/local-change', state: 'open' } }))
+    expect(out).toContain('PR open refs/heads/ab/local-change')
+    expect(out).not.toContain('\x1b]8;;refs/heads/')
+  })
+
   test('auto merge uses cyan while requested, green when enabled, and yellow while cancelling', () => {
     expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mauto merge\x1b[0m')
     expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mauto merge\x1b[0m')

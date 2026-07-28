@@ -39,6 +39,7 @@ import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createForge } from '../ports/forge/create'
 import { FakeForge } from '../ports/forge/fake'
+import { LocalGitForge } from '../ports/forge/local-git'
 import {
   defaultTurnResult,
   ScriptedAgentRunner,
@@ -154,23 +155,25 @@ export async function writeFileIn(dir: string, rel: string, content: string): Pr
   return path
 }
 
-async function initOrigin(dir: string, configToml: string): Promise<string> {
+async function initOrigin(dir: string, configToml: string, noRemote = false): Promise<string> {
   // Reconcile fetches the current base from the conventional `origin` remote
   // at phase startup. Keep that seam real in every integration scenario: the
   // dispatcher works from `dir`, while a separate bare repo is its remote.
   const remote = join(dirname(dir), 'remote.git')
-  await mkdir(remote, { recursive: true })
-  await git(['init', '--bare', '-q', '-b', 'main'], remote)
+  if (!noRemote) {
+    await mkdir(remote, { recursive: true })
+    await git(['init', '--bare', '-q', '-b', 'main'], remote)
+  }
 
   await mkdir(dir, { recursive: true })
   await git(['init', '-q', '-b', 'main'], dir)
-  await git(['remote', 'add', 'origin', remote], dir)
+  if (!noRemote) await git(['remote', 'add', 'origin', remote], dir)
   // No `.ab/` ignore here — see commitAll: the product establishes it.
   await writeFile(join(dir, 'autobuild.toml'), configToml)
   await writeFile(join(dir, 'README.md'), 'e2e origin\n')
   await git(['add', '-A'], dir)
   await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir)
-  await git(['push', '-q', '-u', 'origin', 'main'], dir)
+  if (!noRemote) await git(['push', '-q', '-u', 'origin', 'main'], dir)
   return remote
 }
 
@@ -248,6 +251,8 @@ export interface E2eHarness {
   clock: ReturnType<typeof steppingClock>
   ids: IdSource
   forge: FakeForge
+  /** Forge actually threaded through CLI, runner, and dispatcher. */
+  forgeAdapter: Forge
   tickets: FakeTicketSource
   workspaces: WorkspaceProvider
   agents: ScriptedAgentRunner
@@ -298,16 +303,18 @@ export async function makeHarness(opts: {
    * injecting FakeForge directly. The selected adapter still shares this one
    * fake journal across CLI terminals, runner, dispatcher, and janitor. */
   pluginForge?: { prAttachments?: boolean }
+  /** Exercise the shipped offline forge against a repository with no remote. */
+  localGitForge?: boolean
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   const originPath = join(tmp, 'origin')
   const configToml = opts.configToml ?? CONFIG_TOML
-  const remote = await initOrigin(originPath, configToml)
+  const remote = await initOrigin(originPath, configToml, opts.localGitForge === true)
   // Git canonicalizes temporary paths on macOS (`/var` → `/private/var`).
   // Records and every dispatch caller must use that same repository identity.
   const origin = await realpath(originPath)
   const remoteUpdater = join(tmp, 'remote-updater')
-  await git(['clone', '-q', remote, remoteUpdater], tmp)
+  if (opts.localGitForge !== true) await git(['clone', '-q', remote, remoteUpdater], tmp)
 
   const clock = steppingClock()
   const ids = sequentialIds()
@@ -321,7 +328,7 @@ export async function makeHarness(opts: {
     gatePresence: opts.gatePresence ?? 'present',
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
   })
-  let selectedForge: Forge = forge
+  let selectedForge: Forge = opts.localGitForge === true ? new LocalGitForge() : forge
   let plugins: PluginRegistry | undefined
   if (opts.pluginForge !== undefined) {
     plugins = createPluginRegistry()
@@ -496,6 +503,7 @@ export async function makeHarness(opts: {
     clock,
     ids,
     forge,
+    forgeAdapter: selectedForge,
     tickets,
     workspaces,
     agents,
@@ -505,6 +513,9 @@ export async function makeHarness(opts: {
     launched,
     cliErrors,
     async advanceRemote(changes: Record<string, string>, message: string): Promise<string> {
+      if (opts.localGitForge === true) {
+        throw new Error('advanceRemote is unavailable for a no-remote local-git harness')
+      }
       for (const [path, content] of Object.entries(changes)) {
         await writeFileIn(remoteUpdater, path, content)
       }

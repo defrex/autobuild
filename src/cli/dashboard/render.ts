@@ -97,6 +97,7 @@ function paint(text: string, color: ColorName, on: boolean): string {
  * mode we emit the bare URL, which those same terminals linkify on sight —
  * so "PR URLs are recognized as a link" holds on both paths. */
 function link(url: string, text: string, on: boolean): string {
+  if (!/^https?:\/\//.test(url)) return text === url ? url : `${text} ${url}`
   return on ? `\x1b]8;;${url}\x07${text}${LINK_OFF}` : url
 }
 

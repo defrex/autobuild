@@ -425,7 +425,7 @@ describe('abDispatch guards', () => {
             throw new Error('wire must not run for an unknown forge')
           },
         }),
-      ).rejects.toThrow('unknown forge adapter "missing"; available forges: github')
+      ).rejects.toThrow('unknown forge adapter "missing"; available forges: github, local-git')
       expect(wired).toBe(false)
     } finally {
       await rm(tmp, { recursive: true, force: true })

@@ -563,6 +563,20 @@ export class BuildRunner {
 
     const sourceRef = `refs/heads/${created.payload.baseBranch}`
     const targetRef = `refs/autobuild/reconcile/${this.deps.slug}/base`
+    if (this.deps.forge.snapshotBase !== undefined) {
+      const sha = await this.deps.forge.snapshotBase({
+        workspacePath: this.deps.workspacePath,
+        base: created.payload.baseBranch,
+        destinationRef: targetRef,
+      })
+      if (!GIT_OBJECT_ID.test(sha)) {
+        throw new Error(
+          `${this.deps.forge.name} base snapshot did not return a commit SHA: ${JSON.stringify(sha)}`,
+        )
+      }
+      return sha
+    }
+
     const fetchArgs = [
       'git',
       'fetch',

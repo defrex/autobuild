@@ -43,12 +43,26 @@ import {
 
 export { SKILL_NAMESPACE }
 
+export type InitForge = 'github' | 'local-git'
 export type InitTicketSource = 'file' | 'linear'
 export type InitWorkspaceProvider = 'git-worktree'
 export type InitRoleProfile = string
 
 export const INIT_SPLIT_AUTHOR_MODEL = 'openai-codex/gpt-5.6-sol'
 export const INIT_SPLIT_REVIEWER_MODEL = 'kimi-coding/k3'
+
+export const INIT_FORGE_CHOICES = [
+  {
+    value: 'github',
+    label: 'GitHub',
+    help: 'Publishes branches and pull requests through git and the authenticated gh CLI.',
+  },
+  {
+    value: 'local-git',
+    label: 'Local Git',
+    help: 'Keeps review records and branches in this repository; no remote, account, or network required.',
+  },
+] as const satisfies readonly InitPromptChoice<InitForge>[]
 
 export const INIT_TICKET_SOURCE_CHOICES = [
   {
@@ -239,6 +253,7 @@ export async function readIfExists(path: string): Promise<string | undefined> {
   }
 }
 
+const FORGE_ANCHOR = '# @ab-init/forge'
 const PACKAGE_COMMANDS_ANCHOR = '# @ab-init/package-script-commands'
 const PACKAGE_VERIFY_STEPS_ANCHOR = '# @ab-init/package-script-verify-steps'
 const PACKAGE_VERIFY_TABLES_ANCHOR = '# @ab-init/package-script-verify-tables'
@@ -344,6 +359,7 @@ export function renderAutobuildTemplate(
 }
 
 export interface InitSelectionInput {
+  forge?: string
   ticketSource?: string
   workspaceProvider?: string
   roleProfile?: string
@@ -351,6 +367,7 @@ export interface InitSelectionInput {
 }
 
 export interface ResolvedInitSelections {
+  forge: InitForge
   ticketSource: InitTicketSource
   workspaceProvider: InitWorkspaceProvider
   roleProfile: InitRoleProfile
@@ -378,12 +395,13 @@ async function resolveInitSelections(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedInitSelections> {
   const supplied =
+    input.forge !== undefined ||
     input.ticketSource !== undefined ||
     input.workspaceProvider !== undefined ||
     input.roleProfile !== undefined
   if (input.noInteractive === true && supplied) {
     throw new Error(
-      '--no-interactive cannot be combined with --ticket-source, --workspace-provider, or --role-profile',
+      '--no-interactive cannot be combined with --forge, --ticket-source, --workspace-provider, or --role-profile',
     )
   }
 
@@ -442,7 +460,18 @@ async function resolveInitSelections(
         })
       : choices[0]!.value
   }
-  return { ticketSource, workspaceProvider, roleProfile }
+  const forge =
+    input.forge !== undefined
+      ? selectionValue('forge', input.forge, INIT_FORGE_CHOICES)
+      : canPrompt
+        ? await prompter.select({
+            message: 'Choose a forge',
+            help: INIT_PLUGIN_HELP,
+            choices: INIT_FORGE_CHOICES,
+            defaultValue: 'github',
+          })
+        : 'github'
+  return { forge, ticketSource, workspaceProvider, roleProfile }
 }
 
 function replaceSelectionRegion(
@@ -497,7 +526,8 @@ export function renderInitSelections(baseline: string, selections: ResolvedInitS
     roles = `# Default agent runtime.\n[roles.default]\nruntime = "${selections.roleProfile}"`
   }
 
-  let rendered = replaceSelectionRegion(baseline, TICKETS_START_ANCHOR, TICKETS_END_ANCHOR, tickets)
+  let rendered = replaceTemplateAnchor(baseline, FORGE_ANCHOR, `forge = "${selections.forge}"`)
+  rendered = replaceSelectionRegion(rendered, TICKETS_START_ANCHOR, TICKETS_END_ANCHOR, tickets)
   rendered = replaceSelectionRegion(rendered, ROLES_START_ANCHOR, ROLES_END_ANCHOR, roles)
   return rendered
 }

@@ -33,17 +33,19 @@ alone. A harvester distills them into proposed tickets and files them for
 triage; approve one and it runs the same loop.
 
 Every seam is an adapter: ticket sources (Linear, local files, or a configured
-plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge (GitHub
-via `gh` or a configured plugin), workspaces, and the build store all sit behind
+plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge
+(GitHub via `gh`, credential-free local Git, or a configured plugin), workspaces,
+and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
 `autobuild/plugin-sdk` surface.
 
 ## Quickstart
 
-You need [Bun](https://bun.sh), `git`, an authenticated
-[`gh` CLI](https://cli.github.com) (`gh auth login`), and the local
-prerequisites for the agent runtime you select: Claude Code, Codex CLI, or Pi.
+You need [Bun](https://bun.sh), `git`, and the local prerequisites for the
+agent runtime you select: Claude Code, Codex CLI, or Pi. Choosing the GitHub
+forge also requires an authenticated [`gh` CLI](https://cli.github.com)
+(`gh auth login`); the local-git forge needs no account or remote.
 Init suggests only runtimes whose executable and/or provider authentication is
 usable on your machine.
 

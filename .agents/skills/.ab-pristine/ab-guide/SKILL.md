@@ -135,9 +135,14 @@ The distinctions that change an administrator's answer:
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
-  locally and never push, never touch the remote, never open the PR. A push
+  locally and never push, never touch a remote, never open the PR. A push
   happens at the implement terminal boundary or after the runner validates a
   successful content-producing finalize post-step; neither path force-pushes.
+  `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
+  operation: durable PR records live under private Git refs, the review locator
+  is `refs/heads/ab/<slug>`, and consent lands a local guarded squash whose
+  message is the deposited PR description. Without consent it remains open for
+  ordinary `git diff` inspection; it has no review UI or image host.
 
 ## `autobuild.toml` reference
 
@@ -163,7 +168,7 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
-| `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
+| `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
 Repository-path specifiers resolve from the config-bearing root, which is the
@@ -532,14 +537,16 @@ environment variable instead and say why.
 
 ## Setup and upgrades
 
-**`ab init <target> [--force] [--ticket-source file|linear]
-[--workspace-provider git-worktree] [--role-profile split|<registered-runtime>]
+**`ab init <target> [--force] [--forge github|local-git]
+[--ticket-source file|linear] [--workspace-provider git-worktree]
+[--role-profile split|<registered-runtime>]
 [--no-interactive]`** runs *outside* build sessions — it takes a repo path,
 needs no `AB_*` environment, and is safe to re-run. It:
 
 - If `autobuild.toml` is absent and both stdin and stdout are TTYs, prompts for
-  unresolved ticket, workspace, and role choices. The first ticket/workspace
-  options are the no-account local file tracker and shipped git-worktree
+  unresolved ticket, workspace, role, and forge choices. GitHub is preselected;
+  local-git needs no account, credentials, remote, or network. The first
+  ticket/workspace options are the no-account local file tracker and shipped git-worktree
   provider. Runtime choices are limited to registered runtimes whose local
   executable/authentication probe succeeds. The `split` role profile is offered
   only when Pi can authenticate both of its models; it uses Pi with
@@ -552,8 +559,8 @@ needs no `AB_*` environment, and is safe to re-run. It:
   adapters can be built with an agent and points to
   `.agents/skills/ab-guide/references/plugin-authoring.md`. Ctrl+C cancels with
   a plain message before config, ignore rules, migration, or skills are written.
-- Each selection flag suppresses its corresponding prompt; all three make init
-  prompt-free. Explicit role profiles are operator overrides. An unresolved
+- Each selection flag suppresses its corresponding prompt; all four make init
+  prompt-free. Noninteractive init defaults the forge to GitHub. Explicit role profiles are operator overrides. An unresolved
   non-interactive role choice selects a detected usable runtime and writes it
   explicitly; when none is usable, init fails before mutation and names
   `--role-profile`.

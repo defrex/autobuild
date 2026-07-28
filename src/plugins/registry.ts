@@ -144,7 +144,7 @@ export class PluginRegistry {
     WorkspaceProviderPluginFactory,
     WorkspaceProviderContractFactory
   >(['git-worktree'])
-  readonly forges = reserved<ForgePluginFactory, ForgeContractFactory>(['github'])
+  readonly forges = reserved<ForgePluginFactory, ForgeContractFactory>(['github', 'local-git'])
 
   register(
     plugin: AutobuildPluginManifest,

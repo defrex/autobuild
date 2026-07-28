@@ -809,6 +809,49 @@ describe('step', () => {
     })
   })
 
+  test('reconcile delegates authoritative base snapshots to a capable forge without fetching origin', async () => {
+    class SnapshotForge extends FakeForge {
+      readonly snapshots: Array<{
+        workspacePath: string
+        base: string
+        destinationRef: string
+      }> = []
+
+      async snapshotBase(opts: {
+        workspacePath: string
+        base: string
+        destinationRef: string
+      }): Promise<string> {
+        this.snapshots.push(opts)
+        return CURRENT_BASE
+      }
+    }
+
+    const forge = new SnapshotForge()
+    const h = await makeHarness({ forge })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: DETECTED_BASE },
+    })
+
+    await h.br.step()
+
+    expect(forge.snapshots).toEqual([
+      {
+        workspacePath: h.workspacePath,
+        base: 'main',
+        destinationRef: `refs/autobuild/reconcile/${SLUG}/base`,
+      },
+    ])
+    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
+    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.started')[0]!.payload).toEqual({
+      attempt: 1,
+      baseSha: CURRENT_BASE,
+    })
+  })
+
   test('reconcile preserves unchanged-base behavior when refresh resolves the detected SHA', async () => {
     const h = await makeHarness({ reconcileRefreshes: [{ sha: DETECTED_BASE }] })
     await seedFinalized(h.store)

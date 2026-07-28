@@ -150,6 +150,8 @@ export interface WorkspaceProvider {
 
 export interface PrRef {
   number: number
+  /** Provider locator. HTTP(S) when the forge has a web UI; otherwise a
+   * meaningful provider-native identifier such as a local Git ref. */
   url: string
   headSha: string
 }
@@ -215,7 +217,18 @@ export interface Forge {
     base: string
     title: string
     body: string
+    /** Untouched deposited pr-description. Providers may use it as the
+     * landing message; title/body remain the portable review projection. */
+    mergeMessage?: string
   }): Promise<PrRef>
+  /** Optional authoritative base resolver. Capability-less adapters retain
+   * the legacy origin fetch performed by the caller. The destination is a
+   * build-private ref in the workspace's shared Git database. */
+  snapshotBase?(opts: {
+    workspacePath: string
+    base: string
+    destinationRef: string
+  }): Promise<string>
   /** Janitor poll (§15.7): merged/closed/mergeability for one PR. */
   getPrState(workspacePath: string, number: number): Promise<PrState>
   /**
