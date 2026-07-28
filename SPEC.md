@@ -871,7 +871,8 @@ event-level mechanics live in the repository catalog and reducer tests):
 
 The TicketSource **initiates and receives projections; it is never consulted
 mid-build and never used as artifact storage.** Dispatch reads the ticket
-(including the spec) at claim time as part of initiation; after import, the
+(including the spec) as part of initiation — at claim time, or on a later tick
+while an interrupted dispatch still lacks its imported spec. After import, the
 build never reads the tracker again. Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to

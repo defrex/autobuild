@@ -1605,8 +1605,9 @@ test('d. nonconforming ticket bounces back to Triage citing the standard (§6.3)
   expect(comment.body).toContain('docs/spec-standard.md')
   expect(comment.body).toContain("an '## Acceptance criteria' heading")
   expect(comment.body).toContain("an '## Out of scope' heading")
-  // Claim-before-launch happened even for the bounce (§12).
-  expect(await h.tickets.claim('T-9')).toBe(false)
+  // The transition out of the claimed state restores provider claimability;
+  // the configured Ready gate, not hidden adapter state, prevents re-dispatch.
+  expect(await h.tickets.claim('T-9')).toBe(true)
 }, 30_000)
 
 // ── d2. Ticket dependencies through the REAL file source (§13) ───────────────

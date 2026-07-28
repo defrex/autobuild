@@ -1983,8 +1983,11 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     expect(h.tickets.transitions).not.toContainEqual({ id: 'T-recover', state: 'Ready' })
   })
 
-  test('discard works without a runner, lease, or workspace and returns the ticket to Ready', async () => {
-    const h = harness({ tickets: [readyTicket('T-recover')] })
+  test('discard works without a runner, lease, or workspace and returns the ticket to a custom Ready state', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-recover', { state: 'Selected' })],
+      toml: '[tickets]\nsource = "file"\nreadyState = "Selected"',
+    })
     await seedInterrupted(h, 'discard-me')
     await h.store.append('discard-me', {
       actor: humanActor('operator'),
@@ -1998,8 +2001,8 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     })
     const state = reduceBuild(await h.store.getEvents('discard-me'))
     expect(state).toMatchObject({ status: 'done', outcome: 'discarded' })
-    expect(h.tickets.transitions).toContainEqual({ id: 'T-recover', state: 'Ready' })
-    expect(h.tickets.comments.at(-1)?.body).toContain('returned to Ready')
+    expect(h.tickets.transitions).toContainEqual({ id: 'T-recover', state: 'Selected' })
+    expect(h.tickets.comments.at(-1)?.body).toContain('returned to Selected')
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
     const builds = await h.store.listBuilds()
