@@ -132,7 +132,9 @@ fallback. `src/ports/workspace/git-worktree.ts` selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
 resumes at the branch tip and never re-cuts, so the first provisioning fact
 remains immutable provenance. Separately, each successful implementation terminal in
-`src/cli/terminals.ts` privately refreshes the frozen target branch and records
+`src/cli/terminals.ts` asks the Forge to snapshot its authoritative base when
+that optional capability exists; otherwise it privately refreshes the frozen
+target branch from `origin` and records
 the unique merge-base of that snapshot and `HEAD` in `implement.completed`.
 It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
 errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
@@ -164,9 +166,16 @@ list/doctor/test grammar and live gate; `src/plugins/contract-entry.ts` reloads
 one selected registration inside a real `bun test` process and registers exactly
 one unchanged port suite.
 
-`src/ports/forge/create.ts` resolves the root `forge` selector, constructs
-GitHub or lazily invokes the registered plugin factory, and preserves the
-returned adapter's optional attachment capability. Dispatch constructs one
+`src/ports/forge/create.ts` resolves the root `forge` selector, constructs the
+shipped GitHub or local-git adapter, or lazily invokes a registered plugin
+factory, and preserves the returned adapter's optional capabilities. The
+local-git adapter in `src/ports/forge/local-git.ts` stores versioned JSON PR
+records as blobs behind private `refs/autobuild/local-git/` refs in the shared
+Git database. It computes mergeability with `git merge-tree`, leaves the build
+branch reachable, and lands a guarded single-parent squash locally; a later
+poll independently observes the landing. Forge-native base snapshotting lets
+it pin the current local base without `origin`, while capability-less adapters
+retain the legacy private-ref fetch path. Dispatch constructs one
 selected adapter before opening the store and threads it through runners,
 epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
 load immutable config and repository-path plugins from the build worktree, use

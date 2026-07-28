@@ -79,7 +79,7 @@ Interfaces to the world, each with swappable adapters:
 | `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; third-party in-process registrations; later GitHub Issues |
 | `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); pi (SDK mode); third-party in-process registrations |
 | `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
-| `Forge` | git + PR plumbing | GitHub; third-party in-process registrations |
+| `Forge` | git + PR plumbing | GitHub; local Git; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
 
@@ -161,12 +161,16 @@ and janitor completion; the same registration backs every source-agnostic
 lifecycle fields unchanged and own any further validation; credentials remain
 environment-only.
 
-Forge selection is open through the root `forge` scalar (`github` by default):
-the selected plugin factory receives an empty adapter config, process
+Forge selection is open through the root `forge` scalar (`github` by default).
+Two adapters ship: `github` publishes through GitHub/`gh`; `local-git` uses only
+the repository's shared local Git database and requires no remote, network, or
+forge credentials. A selected plugin factory receives an empty adapter config, process
 environment, and absolute repository root, and is invoked before store opening.
 Unknown names list the complete available forge catalog. Dispatch and scoped
 build CLI processes resolve the same configured name independently, and all
-forge plumbing receives the selected adapter unchanged. Workspace selection is
+forge plumbing receives the selected adapter unchanged. `PrRef.url` is the
+provider's nonblank locator: an HTTP(S) URL when a web UI exists, or a literal
+provider-native identifier such as `refs/heads/ab/<slug>` for local Git. Workspace selection is
 open through `[workspace].provider` as described above.
 
 Agent runtime selection is open through every `[roles.*].runtime`: dispatch
@@ -450,8 +454,10 @@ Four base-selection invariants make this safe with Git:
   The first `workspace.provisioned` base remains immutable branch-cut
   provenance; later `existing` facts are resume evidence, not new cuts.
 - **Each implementation completion records the branch's effective target
-  divergence.** `ab done` fetches the frozen target branch's current remote
-  tip into a build-scoped private ref and requires exactly one merge-base with
+  divergence.** `ab done` asks the selected Forge to snapshot its authoritative
+  base when that capability exists; otherwise it fetches the frozen target
+  branch's current remote tip into a build-scoped private ref. It requires
+  exactly one merge-base with
   the implementation `HEAD`. That merge-base and head become the durable
   `implement.completed {commits}` range, so target history already absorbed by
   the build is excluded while every branch-unique commit remains reviewable.
@@ -1127,14 +1133,21 @@ creation failure: finalize still records the open PR and completes, consent
 stays pending for later janitor polls, and the first non-transient refusal for
 that PR and consent command records one kernel-authored follow-up. A repository
 with native auto-merge disabled is left open for a human; Autobuild never
-changes the setting. No merge is ever assumed: a build reaches `merged` only
-when a later poll observes that the PR actually landed.
+changes the setting. The local-git forge has no external gate or native
+setting: consent produces the same inspected-head guarded squash candidate,
+mergeability is recomputed against the current local base, and the exact
+`pr-description` becomes the single-parent squash commit message. Its durable
+record is written before moving the base ref so a crash can be repaired. No
+merge is ever assumed: a build reaches `merged` only when a later poll observes
+that the PR actually landed. Without consent, the local branch and PR record
+remain open for inspection with ordinary Git.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's
 mergeability check fails it emits `pr.conflicted` and re-attaches a
 build-runner (the dispatcher itself never runs agents). Immediately before
-each attempt, the runner fetches the build's frozen base branch fresh and
-records the resolved SHA on `reconcile.started` — known-stale input is never
+each attempt, the runner asks the Forge for its current authoritative base
+snapshot when supported, otherwise fetching the build's frozen base branch
+fresh from `origin`, and records the resolved SHA on `reconcile.started` — known-stale input is never
 used (§15.3). The agent merges that base into the branch guided by the spec,
 plan, and implement-notes, with the explicit charge to regress against
 neither; the resolution lands as a merge commit, and because reconciliation
@@ -1165,7 +1178,7 @@ itself: the system can retune its own configuration via a ticket and a PR.
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
-forge = "github"                # builtin default or a plugin-registered name
+forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 #[workspace]                     # optional; default provider = "git-worktree"
