@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#114](https://github.com/defrex/autobuild/pull/114) — Remove managed dev-server support
 - [#112](https://github.com/defrex/autobuild/pull/112) — Add an offline local-git forge
 - [#111](https://github.com/defrex/autobuild/pull/111) — Add a builtin Codex CLI agent runtime
 - [#109](https://github.com/defrex/autobuild/pull/109) — Add build drill-down to the dispatch dashboard
