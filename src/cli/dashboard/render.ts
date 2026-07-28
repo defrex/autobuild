@@ -247,6 +247,7 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
 // ── Builds ───────────────────────────────────────────────────────────────────
 
 const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status'], ColorName> = {
+  queued: 'cyan',
   running: 'green',
   paused: 'yellow',
   blocked: 'red',
@@ -318,15 +319,21 @@ function renderBuild(
   // narrower than the fixed columns.
   const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
 
-  // The progress row wraps rather than truncating: the tail is `finalize` and
-  // `merge waiting`, which the ACs require and the operator is waiting on.
-  lines.push(
-    ...packLines(
-      build.steps.map((s) => renderStep(s, color, now)),
-      width,
-      '  ',
-    ),
-  )
+  if (build.dispatch !== undefined) {
+    for (const line of wrappedText(build.dispatch, width - 4, '')) {
+      lines.push(truncate(paint(`  ! ${line}`, STATUS_COLOR[build.status], color), width))
+    }
+  } else {
+    // The progress row wraps rather than truncating: the tail is `finalize` and
+    // `merge waiting`, which the ACs require and the operator is waiting on.
+    lines.push(
+      ...packLines(
+        build.steps.map((s) => renderStep(s, color, now)),
+        width,
+        '  ',
+      ),
+    )
+  }
   // Blockers wrap too — "every unresolved blocker message is displayed" is not
   // satisfied by its first 80 characters, and a policy escalation's question
   // is routinely longer than that. Escape external text before tokenization so
@@ -415,6 +422,7 @@ export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND = 'Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit'
+export const DASHBOARD_QUEUED_BUILD_LEGEND = 'Keys: Up/Down select  d discard  Ctrl-C quit'
 
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
  * exact process state. Non-ASCII and control characters (including newlines)
@@ -513,8 +521,13 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   if (build.pr !== undefined) {
     body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
   }
-  body.push('', paint('Pipeline', 'bold', color))
-  body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
+  if (build.dispatch !== undefined) {
+    body.push('', paint('Dispatch', 'bold', color))
+    body.push(...wrappedText(build.dispatch, width, '  '))
+  } else {
+    body.push('', paint('Pipeline', 'bold', color))
+    body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
+  }
   if (build.blockers.length > 0) {
     body.push('', paint('Unresolved blockers', 'bold', color))
     for (const blocker of build.blockers) {
@@ -543,7 +556,9 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
       ? dashboardControls(model, color, width)
       : truncate(
           paint(
-            'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  Esc back  Ctrl-C quit',
+            build.status === 'queued'
+              ? 'Keys: d discard  Esc back  Ctrl-C quit'
+              : 'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  Esc back  Ctrl-C quit',
             'dim',
             color,
           ),
@@ -648,7 +663,12 @@ function dashboardControls(model: DashboardModel, color: boolean, width: number)
   if (model.resumeInput === undefined) {
     const legend =
       model.selection?.kind === 'build'
-        ? DASHBOARD_BUILD_LEGEND
+        ? model.builds.find(
+            (build) =>
+              build.slug === (model.selection?.kind === 'build' ? model.selection.slug : ''),
+          )?.status === 'queued'
+          ? DASHBOARD_QUEUED_BUILD_LEGEND
+          : DASHBOARD_BUILD_LEGEND
         : model.selection?.kind === 'harvest'
           ? model.harvest?.action === 'resume'
             ? DASHBOARD_HARVEST_RESUME_LEGEND

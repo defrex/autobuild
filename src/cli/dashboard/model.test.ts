@@ -375,10 +375,14 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('projectBuild: the active-build filter', () => {
-  test('queued, done and aborted are excluded; running/paused/blocked are listed', () => {
+describe('projectBuild: the nonterminal-build filter', () => {
+  test('queued, running, paused, and blocked are listed; terminal builds are excluded', () => {
     const queued = toLog(prelude().slice(0, 3)) // no runner.attached
-    expect(projectBuild(RECORD, reduceBuild(queued), CONFIG, queued)).toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(queued), CONFIG, queued)).toMatchObject({
+      status: 'queued',
+      dispatch: 'runner attachment pending',
+      steps: [],
+    })
 
     const running = toLog(prelude())
     expect(projectBuild(RECORD, reduceBuild(running), CONFIG, running)).not.toBeNull()
@@ -393,7 +397,29 @@ describe('projectBuild: the active-build filter', () => {
     expect(projectBuild(RECORD, reduceBuild(paused), CONFIG, paused)?.status).toBe('paused')
   })
 
-  test('buildDashboard drops nulls and sorts by slug for a stable frame', () => {
+  test('queued rows name pending boundaries, durable failures, and discard intent', () => {
+    const failed = toLog([
+      ev('build.created', {
+        ticket: { source: 'linear', id: 'ENG-42' },
+        repo: '/repos/app',
+        baseBranch: 'main',
+      }),
+      ev('dispatch.failed', { stage: 'workspace', attempt: 3, error: 'missing credentials' }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(failed), CONFIG, failed)?.dispatch).toBe(
+      'dispatch workspace failed (attempt 3): missing credentials',
+    )
+
+    const discarding = toLog([
+      ...failed.map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('build.discard-requested', {}),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(discarding), CONFIG, discarding)?.dispatch).toContain(
+      'discard requested',
+    )
+  })
+
+  test('buildDashboard drops only terminals and sorts by slug for a stable frame', () => {
     const activeLog = toLog(prelude())
     const queuedLog = toLog(prelude().slice(0, 3))
     const goneLog = toLog([...prelude(), ev('build.completed', { outcome: 'merged' })])
@@ -410,7 +436,7 @@ describe('projectBuild: the active-build filter', () => {
       CONFIG,
       { repo: '/repos/app', queued: 2, observationCount: 4 },
     )
-    expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'zebra'])
+    expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'queued', 'zebra'])
     expect(model).toMatchObject({
       repo: '/repos/app',
       queued: 2,
@@ -424,9 +450,12 @@ describe('projectBuild: the active-build filter', () => {
     expect('mode' in model).toBe(false)
 
     const alpha = projectBuild({ ...RECORD, slug: 'alpha' }, active, CONFIG, activeLog)
+    const queuedRow = projectBuild({ ...RECORD, slug: 'queued' }, queued, CONFIG, queuedLog)
     const zebra = projectBuild({ ...RECORD, slug: 'zebra' }, active, CONFIG, activeLog)
-    if (alpha === null || zebra === null) throw new Error('expected active rows')
-    const preprojected = buildDashboardFromProjected([zebra, alpha], {
+    if (alpha === null || queuedRow === null || zebra === null) {
+      throw new Error('expected nonterminal rows')
+    }
+    const preprojected = buildDashboardFromProjected([zebra, queuedRow, alpha], {
       repo: '/repos/app',
       queued: 2,
       activeCount: 3,
@@ -436,7 +465,8 @@ describe('projectBuild: the active-build filter', () => {
     })
     expect(preprojected).toEqual(model)
     expect(preprojected.builds[0]).toBe(alpha)
-    expect(preprojected.builds[1]).toBe(zebra)
+    expect(preprojected.builds[1]).toBe(queuedRow)
+    expect(preprojected.builds[2]).toBe(zebra)
 
     const settings = buildDashboard(
       [],

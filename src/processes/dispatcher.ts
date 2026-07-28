@@ -10,11 +10,12 @@
  * Order within a tick (deliberate):
  *   a. JANITOR   — settles finished work first, releasing capacity that the
  *                  dispatch step below can immediately reuse.
- *   b. STARTUP RESUME (first CLI tick only) — attempts every actionable
+ *   b. DISPATCH RECOVERY — completes interrupted pre-run build setup.
+ *   c. STARTUP RESUME (first CLI tick only) — attempts every actionable
  *                  current build, including policy-exhausted infra failures.
- *   c. LEASE SWEEP — re-attaches runners to builds whose runner died.
- *   d. DISPATCH  — fills remaining capacity from Ready tickets.
- *   e. HARVEST   — observation back-pressure, independent of build capacity.
+ *   d. LEASE SWEEP — re-attaches runners to builds whose runner died.
+ *   e. DISPATCH  — fills remaining capacity from Ready tickets.
+ *   f. HARVEST   — observation back-pressure, independent of build capacity.
  * A build launched in an earlier step is never launched again by a later
  * one (per-tick launch dedupe); a build dispatched in step (d) is not swept
  * in the same tick because the sweep already ran.
@@ -29,6 +30,7 @@
 import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
+import type { EventPayload } from '../events/payloads'
 import type { IdSource } from '../ids'
 import {
   autoMergeApplicationType,
@@ -241,6 +243,12 @@ export interface TickReport {
   conflicted: number
   /** Janitor: aborted builds cleaned up and completed as abandoned. */
   abandoned: number
+  /** Janitor: queued builds explicitly discarded and returned to Ready. */
+  discarded: number
+  /** Ordinary-tick recovery completed an interrupted post-creation dispatch. */
+  recovered: number
+  /** Post-creation dispatch attempts that durably recorded a failure. */
+  dispatchFailed: number
   /** Dispatch-command startup: current builds for which a runner was launched. */
   resumed: number
   /** Lease sweep (§15.6-C): runners re-attached to stale builds. */
@@ -284,6 +292,9 @@ export function emptyTickReport(): TickReport {
     closed: 0,
     conflicted: 0,
     abandoned: 0,
+    discarded: 0,
+    recovered: 0,
+    dispatchFailed: 0,
     resumed: 0,
     swept: 0,
     dispatched: 0,
@@ -446,8 +457,9 @@ export class Dispatcher {
   }
 
   /**
-   * One cron-friendly pass (§3.3): janitor → optional startup resume → lease
-   * sweep → dispatch. Startup resume is opt-in because the CLI invokes it
+   * One cron-friendly pass (§3.3): janitor → interrupted dispatch recovery →
+   * optional startup resume → lease sweep → dispatch. Startup resume is opt-in
+   * because the CLI invokes it
    * once per command, while ordinary watch ticks must preserve policy parks.
    */
   async tick(opts: TickOpts = {}): Promise<TickReport> {
@@ -463,6 +475,7 @@ export class Dispatcher {
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
     const launched = new Set<string>()
     await this.janitor(report, launched)
+    await this.recoverDispatches(report, launched)
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
     await this.leaseSweep(report, launched)
     if (opts.acceptNewWork !== false) {
@@ -514,6 +527,10 @@ export class Dispatcher {
         await this.reclaimPrAttachments(record.slug, events)
         continue
       }
+      if (state.discardRequest !== undefined) {
+        await this.cleanupDiscarded(record, events, report)
+        continue
+      }
       if (state.status === 'aborted') {
         await this.cleanupAborted(record, events, report)
         continue
@@ -550,6 +567,34 @@ export class Dispatcher {
     } satisfies EventWrite<'build.completed'>)
     await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
+  }
+
+  /** A discard is recovery from dispatcher plumbing, not judgment about the
+   * ticket. Return it to the configured Ready state and terminalize last so
+   * every partial cleanup is retried after a crash. */
+  private async cleanupDiscarded(
+    record: BuildRecord,
+    events: AbEvent[],
+    report: TickReport,
+  ): Promise<void> {
+    const { store, tickets } = this.deps
+    await this.releaseWorkspace(record.slug, events)
+    if (record.lease !== undefined) {
+      await store.releaseLease(record.slug, record.lease.holder)
+    }
+    if (record.ticket !== undefined) {
+      await tickets.transition(record.ticket.id, this.deps.config.tickets.readyState)
+      await tickets.comment(
+        record.ticket.id,
+        `build ${record.slug} was discarded during dispatch — returned to ${this.deps.config.tickets.readyState}`,
+      )
+    }
+    await store.append(record.slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'discarded' },
+    } satisfies EventWrite<'build.completed'>)
+    report.discarded += 1
   }
 
   /** Post-PR epilogue (§15.7): poll the forge, emit `pr.*` facts (deduped
@@ -786,7 +831,194 @@ export class Dispatcher {
     return sha
   }
 
-  // ── b. Dispatch-command startup resume (SPEC §2.2, §15.6-C) ────────────────
+  // ── b. Interrupted dispatch recovery ───────────────────────────────────────
+
+  /** Every boundary before runner attachment is derived from durable facts.
+   * Missing facts are the todo list; successful provider calls are followed
+   * immediately by their facts, so an ordinary later tick can continue. */
+  private async attemptDispatchCompletion(
+    record: BuildRecord,
+    launched: Set<string>,
+    report: TickReport,
+    seed?: {
+      ticket: Ticket
+      body: string
+      authoredSession?: string
+      autoMergeUser?: string
+    },
+  ): Promise<boolean> {
+    const { store, config } = this.deps
+    let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
+    let authored = false
+    try {
+      let events = await store.getEvents(record.slug)
+      if (!events.some((event) => event.type === 'build.created')) {
+        if (events.length !== 0 || record.ticket === undefined) {
+          throw new Error(
+            'build record lacks the immutable ticket facts needed to reconstruct build.created',
+          )
+        }
+        await store.appendIfCurrent(record.slug, 0, {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            ticket: record.ticket,
+            repo: record.repo,
+            baseBranch: config.baseBranch,
+            ...(config.pr !== undefined ? { pr: config.pr } : {}),
+          },
+        })
+        events = await store.getEvents(record.slug)
+        if (!events.some((event) => event.type === 'build.created')) {
+          throw new Error('build.created reconstruction lost its conditional append race')
+        }
+      }
+
+      if (
+        seed?.autoMergeUser !== undefined &&
+        !events.some((event) => event.type === 'build.auto-merge-requested')
+      ) {
+        await store.append(record.slug, {
+          actor: humanActor(seed.autoMergeUser),
+          type: 'build.auto-merge-requested',
+          payload: {},
+        })
+        events = await store.getEvents(record.slug)
+      }
+
+      stage = 'workspace'
+      if (openWorkspace(events) === null) {
+        const handle = await this.deps.workspaces.provision({
+          repo: this.deps.repo,
+          baseBranch: baseBranchOf(events, config),
+          branch: record.branch ?? `ab/${record.slug}`,
+        })
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'workspace.provisioned',
+          payload: {
+            provider: handle.provider,
+            ref: handle.ref,
+            path: handle.path,
+            branch: handle.branch,
+            base: handle.base,
+          },
+        } satisfies EventWrite<'workspace.provisioned'>)
+        events = await store.getEvents(record.slug)
+      }
+
+      stage = 'spec'
+      if (
+        !events.some((event) => event.type === 'spec.imported' || event.type === 'spec.authored')
+      ) {
+        let ticket: Ticket
+        if (seed?.ticket !== undefined) {
+          ticket = seed.ticket
+        } else {
+          const ticketId = record.ticket?.id
+          if (ticketId === undefined) {
+            throw new Error('build record has no ticket to recover its spec from')
+          }
+          const recoveredTicket = await this.deps.tickets.get(ticketId)
+          if (recoveredTicket === null) {
+            throw new Error(`claimed ticket ${ticketId} is no longer readable`)
+          }
+          ticket = recoveredTicket
+        }
+
+        let body = seed?.body ?? ticket.body
+        let conformance = specConformance(body)
+        let authoredSession = seed?.authoredSession
+        if (!conformance.conforms && this.deps.authorSpec !== undefined) {
+          const candidate = await this.deps.authorSpec(ticket)
+          if (candidate !== null) {
+            conformance = specConformance(candidate)
+            if (conformance.conforms) {
+              body = candidate
+              authoredSession = this.deps.ids('s')
+            }
+          }
+        }
+        if (!conformance.conforms) {
+          throw new Error(
+            `claimed ticket no longer conforms to the spec standard: ${conformance.missing.join('; ')}`,
+          )
+        }
+
+        const spec = {
+          kind: 'spec',
+          content: body,
+          metadata: { ticket: ticket.ref.id, source: ticket.ref.source },
+        }
+        if (authoredSession !== undefined) {
+          const session = authoredSession
+          await store.appendWithArtifacts(record.slug, [spec], (deposited) => ({
+            actor: agentActor('spec', session),
+            type: 'spec.authored' as const,
+            payload: { artifact: artifactRefOf(deposited), session },
+          }))
+          authored = true
+        } else {
+          await store.appendWithArtifacts(record.slug, [spec], (deposited) => ({
+            actor: DISPATCHER,
+            type: 'spec.imported' as const,
+            payload: { artifact: artifactRefOf(deposited), ticket: ticket!.ref },
+          }))
+        }
+      }
+
+      stage = 'comment'
+      if (record.ticket !== undefined) {
+        await this.deps.tickets.comment(record.ticket.id, `build ${record.slug} dispatched`)
+      }
+
+      stage = 'launch'
+      await this.launch(record.slug, launched)
+      if (authored) report.authored += 1
+      return true
+    } catch (error) {
+      const events = await store.getEvents(record.slug)
+      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const message = (error instanceof Error ? error.message : String(error)).trim()
+      await store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'dispatch.failed',
+        payload: {
+          stage,
+          attempt,
+          error: message || 'dispatch failed without an error message',
+        },
+      })
+      report.dispatchFailed += 1
+      return false
+    }
+  }
+
+  private async recoverDispatches(report: TickReport, launched: Set<string>): Promise<void> {
+    for (const record of await this.deps.store.listBuilds()) {
+      if (
+        record.repo !== this.deps.repo ||
+        record.ticket === undefined ||
+        launched.has(record.slug)
+      ) {
+        continue
+      }
+      const events = await this.deps.store.getEvents(record.slug)
+      const state = reduceBuild(events)
+      if (state.status !== 'queued' || state.discardRequest !== undefined) continue
+      const latestFailure = state.dispatchFailures.at(-1)
+      const incomplete =
+        !events.some((event) => event.type === 'build.created') ||
+        openWorkspace(events) === null ||
+        state.specRev === undefined ||
+        latestFailure?.stage === 'comment' ||
+        latestFailure?.stage === 'launch'
+      if (!incomplete) continue
+      if (await this.attemptDispatchCompletion(record, launched, report)) report.recovered += 1
+    }
+  }
+
+  // ── c. Dispatch-command startup resume (SPEC §2.2, §15.6-C) ────────────────
 
   /**
    * A fresh `ab dispatch` invocation attempts every current build for this
@@ -840,7 +1072,7 @@ export class Dispatcher {
     }
   }
 
-  // ── c. Lease sweep (SPEC §15.6-C) ──────────────────────────────────────────
+  // ── d. Lease sweep (SPEC §15.6-C) ──────────────────────────────────────────
 
   /**
    * Predicate: lease expired or absent + the engine has runner work →
@@ -882,7 +1114,7 @@ export class Dispatcher {
     }
   }
 
-  // ── d. Dispatch (SPEC §12, §6.3) ───────────────────────────────────────────
+  // ── e. Dispatch (SPEC §12, §6.3) ───────────────────────────────────────────
 
   private async dispatch(
     report: TickReport,
@@ -987,76 +1219,21 @@ export class Dispatcher {
       const baseSlug = await this.chooseSlugBase(ticket.title, body)
       const slug = await this.uniqueSlug(baseSlug)
       const branch = `ab/${slug}`
-      const baseBranch = config.baseBranch
-      await store.createBuild({
+      const record = await store.createBuild({
         slug,
         repo: this.deps.repo,
         ticket: ticket.ref,
         branch,
       })
-      await store.append(slug, {
-        actor: DISPATCHER,
-        type: 'build.created',
-        payload: {
-          ticket: ticket.ref,
-          repo: this.deps.repo,
-          baseBranch,
-          ...(config.pr !== undefined ? { pr: config.pr } : {}),
-        },
-      } satisfies EventWrite<'build.created'>)
-      if (autoMergeUser !== undefined) {
-        await store.append(slug, {
-          actor: humanActor(autoMergeUser),
-          type: 'build.auto-merge-requested',
-          payload: {},
-        } satisfies EventWrite<'build.auto-merge-requested'>)
-      }
-
-      const handle = await this.deps.workspaces.provision({
-        repo: this.deps.repo,
-        baseBranch,
-        branch,
-      })
-      await store.append(slug, {
-        actor: DISPATCHER,
-        type: 'workspace.provisioned',
-        payload: {
-          provider: handle.provider,
-          ref: handle.ref,
-          path: handle.path,
-          branch: handle.branch,
-          base: handle.base,
-        },
-      } satisfies EventWrite<'workspace.provisioned'>)
-
-      // The contract artifact (§6.3): kind `spec`, revision 0 — deposited
-      // atomically with its event (D6, via appendWithArtifacts).
-      const spec = {
-        kind: 'spec',
-        content: body,
-        metadata: { ticket: ticket.ref.id, source: ticket.ref.source },
-      }
-      if (authoredSession !== undefined) {
-        const session = authoredSession
-        await store.appendWithArtifacts(slug, [spec], (deposited) => ({
-          actor: agentActor('spec', session),
-          type: 'spec.authored' as const,
-          payload: { artifact: artifactRefOf(deposited), session },
-        }))
-        report.authored += 1
-      } else {
-        await store.appendWithArtifacts(slug, [spec], (deposited) => ({
-          actor: DISPATCHER,
-          type: 'spec.imported' as const,
-          payload: { artifact: artifactRefOf(deposited), ticket: ticket.ref },
-        }))
-      }
-
-      await tickets.comment(ticket.ref.id, `build ${slug} dispatched`)
-      await this.launch(slug, launched)
-      report.dispatched += 1
       report.queued -= 1
       capacity -= 1
+      const completed = await this.attemptDispatchCompletion(record, launched, report, {
+        ticket,
+        body,
+        ...(authoredSession !== undefined ? { authoredSession } : {}),
+        ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
+      })
+      if (completed) report.dispatched += 1
     }
   }
 

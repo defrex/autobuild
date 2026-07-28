@@ -129,6 +129,7 @@ type DashboardAction =
   | 'auto-merge'
   | 'intake'
   | 'pause'
+  | 'discard'
   | 'harvest-gate'
   | { kind: 'harvest-run'; run: string | undefined }
 
@@ -540,7 +541,7 @@ class DispatchLoop {
     this.paint()
   }
 
-  private selectedBuildSlug(action: 'auto-merge' | 'pause/resume'): string | undefined {
+  private selectedBuildSlug(action: 'auto-merge' | 'pause/resume' | 'discard'): string | undefined {
     if (this.view !== undefined) return this.view.slug
     const selection = this.selection
     if (selection === undefined) {
@@ -552,7 +553,9 @@ class DispatchLoop {
       this.say(
         action === 'auto-merge'
           ? `${subject} auto-merge unavailable: select a build`
-          : `${subject} pause/resume unavailable: select a build`,
+          : action === 'discard'
+            ? `${subject} discard unavailable: select a queued build`
+            : `${subject} pause/resume unavailable: select a build`,
       )
       return undefined
     }
@@ -615,6 +618,28 @@ class DispatchLoop {
     }
     this.say(`build ${slug}: ${result.command} requested`)
     await this.renderOnce()
+  }
+
+  private async discardSelected(): Promise<void> {
+    const slug = this.selectedBuildSlug('discard')
+    if (slug === undefined) return
+    try {
+      const result = await controlBuild({
+        store: this.wiring.store,
+        repo: this.opts.targetRepo,
+        slug,
+        env: this.opts.env,
+        action: { kind: 'discard' },
+      })
+      if (result.kind !== 'command' || result.command !== 'discard') {
+        throw new Error('build-control returned an invalid discard result')
+      }
+      this.say(`build ${slug}: discard requested`)
+      await this.renderOnce()
+    } catch (error) {
+      if (await this.ignoreControlError('action', error)) return
+      throw error
+    }
   }
 
   /** Toggle the durable repository gate from the always-present header. The
@@ -900,6 +925,9 @@ class DispatchLoop {
       case 'auto-merge':
         await this.toggleAutoMerge()
         return
+      case 'discard':
+        await this.discardSelected()
+        return
       case 'harvest-gate':
         await this.toggleHarvestGate()
         return
@@ -1002,6 +1030,13 @@ class DispatchLoop {
           this.queueAction('pause')
         }
         return
+      case 'd': {
+        const slug =
+          this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
+        const build = this.model?.builds.find((candidate) => candidate.slug === slug)
+        if (build?.status === 'queued') this.queueAction('discard')
+        return
+      }
       case 'h':
         if (this.view === undefined && this.selection?.kind === 'global')
           this.queueAction('harvest-gate')

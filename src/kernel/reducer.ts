@@ -243,7 +243,11 @@ export interface BuildState {
   reconcileAttempts: number
   /** `observation.recorded` payloads in order — harvest input (§12). */
   observations: ObservationRecord[]
-  /** Unacknowledged operator commands in request order (D2). */
+  /** Pre-run dispatch attempts, retained as durable operator diagnostics. */
+  dispatchFailures: Array<EventPayload<'dispatch.failed'> & { seq: number }>
+  /** Outstanding human discard intent. It is settled only by terminal completion. */
+  discardRequest?: { seq: number; actor: Actor }
+  /** Unacknowledged runner-owned operator commands in request order (D2). */
   pendingCommands: PendingCommand[]
   sessions: { open: OpenSession[] }
   /** `phase.failed` tally per phase (verify steps key as `verify:<step>`) —
@@ -277,6 +281,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   const verify: BuildState['verify'] = { maxAttemptSeen: 0, results: [], cycleSince: 0 }
   let reconcileAttempts = 0
   const observations: ObservationRecord[] = []
+  const dispatchFailures: BuildState['dispatchFailures'] = []
+  let discardRequest: BuildState['discardRequest']
   const pending: Record<PendingCommand['command'], PendingCommand[]> = {
     pause: [],
     resume: [],
@@ -325,6 +331,9 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'runner.attached':
         attached = true
         break
+      case 'dispatch.failed':
+        dispatchFailures.push({ ...event.payload, seq: event.seq })
+        break
 
       // Operator commands (D2): requests queue until the kernel's fact event
       // acknowledges them; one ack clears every earlier request of its kind.
@@ -358,6 +367,9 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           reason: event.payload.reason,
           actor: event.actor,
         })
+        break
+      case 'build.discard-requested':
+        discardRequest = { seq: event.seq, actor: event.actor }
         break
       case 'build.auto-merge-requested':
         autoMerge.requested = true
@@ -620,6 +632,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     verify,
     reconcileAttempts,
     observations,
+    dispatchFailures,
+    ...(terminal === undefined && discardRequest !== undefined ? { discardRequest } : {}),
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(
       (a, b) => a.seq - b.seq,
     ),

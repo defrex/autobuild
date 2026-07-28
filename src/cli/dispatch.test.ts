@@ -1533,13 +1533,11 @@ describe('abDispatch watch build-runner coordination', () => {
 
       expect(failedPreflight).toBe(true)
       expect(sleeps).toBe(2)
-      expect(err).toEqual(['tick failed: scripted launch preflight failure'])
+      expect(err).toEqual([])
       const [record] = await fx.store.listBuilds()
-      expect(
-        (await fx.store.getEvents(record!.slug)).filter(
-          (event) => event.type === 'runner.attached',
-        ),
-      ).toHaveLength(1)
+      const events = await fx.store.getEvents(record!.slug)
+      expect(events.filter((event) => event.type === 'dispatch.failed')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'runner.attached')).toHaveLength(1)
       expect(fx.cliErrors).toEqual([])
     } finally {
       stop.abort()
@@ -1885,7 +1883,9 @@ describe('abDispatch --once with an interactive terminal', () => {
       const firstFrame = latestDashboardFrame(firstTerminal)
       expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7')
       expect(firstFrame).toContain('harvest OFF')
-      expect(firstFrame).toContain('no active builds')
+      expect(firstFrame).toContain('pressure-source')
+      expect(firstFrame).toContain('QUEUED')
+      expect(firstFrame).toContain('dispatch initialization pending')
 
       const run = 'h_pressure_claimed'
       const scan = await scanUnclaimedObservations(fx.store, fx.origin)
@@ -4622,7 +4622,66 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('explicit intake and global i persist, a no-flag restart reuses them, and removed d stays inert', async () => {
+  test('d discards the selected queued row with dashboard attribution', async () => {
+    const ticket = readyTicket('T-discard-key', { title: 'Discard key' })
+    const fx = await makeFixture(ticket, {})
+    const input = fakeInput()
+    const term = fakeTerminal(true, { columns: 160, rows: 40 })
+    let run: Promise<void> | undefined
+    try {
+      await fx.tickets.claim(ticket.ref.id)
+      await fx.store.createBuild({
+        slug: 'discard-key',
+        repo: fx.origin,
+        ticket: ticket.ref,
+        branch: 'ab/discard-key',
+      })
+      await fx.store.append('discard-key', {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: ticket.ref, repo: fx.origin, baseBranch: 'main' },
+      })
+      const wiring = fx.wire()
+      wiring.workspaces.provision = async () => {
+        throw new Error('permanent workspace failure')
+      }
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'discard-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intake: false,
+        intervalMs: 60_000,
+        wire: () => wiring,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('discard-key'))
+      input.press('down')
+      await waitFor(() => /^ > .*discard-key/m.test(latestDashboardFrame(term)))
+      input.press('letter-d')
+      await waitFor(async () =>
+        (await fx.store.getEvents('discard-key')).some(
+          (event) => event.type === 'build.discard-requested',
+        ),
+      )
+      const request = (await fx.store.getEvents('discard-key')).find(
+        (event) => event.type === 'build.discard-requested',
+      )
+      expect(request?.actor).toEqual({ kind: 'human', user: 'discard-op' })
+      input.press('interrupt')
+      await run
+      run = undefined
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('explicit intake and global i persist, a no-flag restart reuses them, and d stays inert on global', async () => {
     const fx = await makeFixture(readyTicket('T-intake-off', { body: 'not a conforming spec' }), {})
     try {
       const input = fakeInput()

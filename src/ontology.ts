@@ -217,7 +217,7 @@ export type HostedPrAttachmentAsset = z.infer<typeof hostedPrAttachmentAssetSche
 
 // ── Builds ───────────────────────────────────────────────────────────────────
 
-export const buildOutcomeSchema = z.enum(['merged', 'closed-unmerged', 'abandoned'])
+export const buildOutcomeSchema = z.enum(['merged', 'closed-unmerged', 'abandoned', 'discarded'])
 export type BuildOutcome = z.infer<typeof buildOutcomeSchema>
 
 /** Derived status — a reduction of events, never stored (SPEC §15.5). */
