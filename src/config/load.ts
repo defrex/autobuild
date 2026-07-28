@@ -56,10 +56,10 @@ function describeIssue(issue: z.core.$ZodIssue): string {
   }
   const removedNeedsServer =
     (issue.code === 'unrecognized_keys' && issue.keys.includes('needsServer')) ||
-    message.includes('Unrecognized key: "needsServer"')
+    message.includes('"needsServer"')
   if (removedNeedsServer) {
     message +=
-      " — needsServer was removed; arrange any application lifecycle inside this verify step's command or skill"
+      " — needsServer was removed; arrange any application lifecycle inside this step's command or skill"
   }
   const path =
     removedNeedsServer && issue.path.at(-1) !== 'needsServer'

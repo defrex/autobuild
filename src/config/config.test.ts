@@ -431,6 +431,13 @@ describe('parseConfig — verify cross-validation', () => {
       expect(needsServer.message).toContain('verify.e2e')
       expect(needsServer.message).toContain('needsServer was removed')
     }
+
+    const mixed = parseError(
+      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\nbogus = 1\n`,
+    )
+    expect(mixed.message).toContain('verify.e2e.needsServer')
+    expect(mixed.message).toContain('needsServer was removed')
+    expect(mixed.message).toContain('"bogus"')
   })
 })
 
@@ -473,6 +480,20 @@ skill = "custom-release-notes"
     )
     expect(command.message).toContain('finalize.publish.command')
     expect(command.message).toContain('does not name a key in [commands]')
+  })
+
+  test('removed needsServer guidance does not mislabel a finalize step', () => {
+    const error = parseError(`${READY}
+[finalize]
+steps = ["notes"]
+[finalize.notes]
+kind = "agent"
+skill = "ab-notes"
+needsServer = true
+`)
+    expect(error.message).toContain('finalize.notes.needsServer')
+    expect(error.message).toContain("inside this step's command or skill")
+    expect(error.message).not.toContain("this verify step's")
   })
 
   test('rejects empty entries, malformed kinds, unknown fields, and verify-only fields', () => {
