@@ -30,11 +30,6 @@ typecheck = "bun tsc --noEmit"
 test = "bun test"
 publish = "bun run publish"
 
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
-readyTimeout = 60
-
 [verify]
 steps = ["types", "unit", "e2e"]
 
@@ -49,7 +44,6 @@ command = "test"
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**", "src/routes/**"]
 
 [finalize]
@@ -118,7 +112,6 @@ describe('parseConfig — complete flattened surface', () => {
         test: 'bun test',
         publish: 'bun run publish',
       },
-      server: { start: 'bun dev', url: 'http://localhost:3000', readyTimeout: 60 },
       verify: {
         steps: ['types', 'unit', 'e2e'],
         stepConfigs: {
@@ -127,7 +120,6 @@ describe('parseConfig — complete flattened surface', () => {
           e2e: {
             kind: 'agent',
             skill: 'ab-verify-e2e',
-            needsServer: true,
             paths: ['web/**', 'src/routes/**'],
           },
         },
@@ -284,23 +276,17 @@ harvestThreshold = 2
     }
   })
 
-  test('server and verify-agent defaults remain intact', () => {
+  test('agent verification needs only its skill', () => {
     const config = parseConfig(`${READY}
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
-
 [verify]
 steps = ["e2e"]
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
 `)
-    expect(config.server?.readyTimeout).toBe(60)
     expect(config.verify.stepConfigs.e2e).toEqual({
       kind: 'agent',
       skill: 'ab-verify-e2e',
-      needsServer: false,
     })
   })
 
@@ -380,7 +366,6 @@ always = true
     expect(parsed.verify.stepConfigs.dashboard).toEqual({
       kind: 'agent',
       skill: 'ab-verify-dashboard',
-      needsServer: false,
       paths: ['src/cli/dashboard/**'],
       always: true,
     })
@@ -435,12 +420,24 @@ describe('parseConfig — verify cross-validation', () => {
     expect(command.message).toContain('[commands] has no entries')
   })
 
-  test('needsServer = true requires [server]', () => {
-    const error = parseError(
-      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\n`,
+  test('removed server configuration fails with focused guidance', () => {
+    const server = parseError(`${READY}[server]\nstart = "bun dev"\nurl = "http://localhost"\n`)
+    expect(server.message).toContain('[server] was removed')
+
+    for (const value of ['true', 'false']) {
+      const needsServer = parseError(
+        `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = ${value}\n`,
+      )
+      expect(needsServer.message).toContain('verify.e2e')
+      expect(needsServer.message).toContain('needsServer was removed')
+    }
+
+    const mixed = parseError(
+      `${READY}[verify]\nsteps = ["e2e"]\n[verify.e2e]\nkind = "agent"\nskill = "ab-verify-e2e"\nneedsServer = true\nbogus = 1\n`,
     )
-    expect(error.message).toContain('verify.e2e.needsServer')
-    expect(error.message).toContain('requires a [server] table')
+    expect(mixed.message).toContain('verify.e2e.needsServer')
+    expect(mixed.message).toContain('needsServer was removed')
+    expect(mixed.message).toContain('"bogus"')
   })
 })
 
@@ -483,6 +480,20 @@ skill = "custom-release-notes"
     )
     expect(command.message).toContain('finalize.publish.command')
     expect(command.message).toContain('does not name a key in [commands]')
+  })
+
+  test('removed needsServer guidance does not mislabel a finalize step', () => {
+    const error = parseError(`${READY}
+[finalize]
+steps = ["notes"]
+[finalize.notes]
+kind = "agent"
+skill = "ab-notes"
+needsServer = true
+`)
+    expect(error.message).toContain('finalize.notes.needsServer')
+    expect(error.message).toContain("inside this step's command or skill")
+    expect(error.message).not.toContain("this verify step's")
   })
 
   test('rejects empty entries, malformed kinds, unknown fields, and verify-only fields', () => {

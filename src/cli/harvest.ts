@@ -1,7 +1,7 @@
 /** Typed agent/operator surface for repository-scoped harvest workflows. Agent
  * stdout is never interpreted: proposal sets and review verdicts land through
  * this module as validated repository events and versioned artifacts. */
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -57,11 +57,8 @@ export interface HarvestContextManifest {
 }
 
 async function wipeAbDir(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true })
   await mkdir(dir, { recursive: true })
-  for (const entry of await readdir(dir)) {
-    if (entry === 'server.pid' || entry === 'server.log') continue
-    await rm(join(dir, entry), { recursive: true, force: true })
-  }
   await writeFile(join(dir, '.gitignore'), '*\n')
 }
 

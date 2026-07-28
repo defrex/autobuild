@@ -96,7 +96,7 @@ function expectLeanGeneratedConfig(source: string): void {
   expect(source).not.toMatch(/^\s*#\s*[A-Za-z0-9_.-]+\s*=/m)
   expect(source).not.toMatch(/(?:§\s*\d|\bD\d+\b)/)
   expect(source).not.toContain('@ab-init/')
-  expect(source).toContain('capacity = 1')
+  expect(source).toContain('capacity = 4')
   for (const setting of [
     'stallRounds = 3',
     'maxVerifyAttempts = 3',
@@ -194,7 +194,7 @@ describe('abInit — fresh install', () => {
     expectLeanGeneratedConfig(generated)
     const generatedConfig = parseConfig(generated)
     expect(generatedConfig.baseBranch).toBe('main')
-    expect(generatedConfig.capacity).toBe(1)
+    expect(generatedConfig.capacity).toBe(4)
     expect(generatedConfig.policy).toEqual({
       stallRounds: 3,
       maxVerifyAttempts: 3,
@@ -221,7 +221,7 @@ describe('abInit — fresh install', () => {
     await abInit({ targetRepo: target })
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.baseBranch).toBe('main')
-    expect(config.capacity).toBe(1)
+    expect(config.capacity).toBe(4)
     expect(config.policy.harvestThreshold).toBe(5)
     expect(config.tickets.readyState).toBe('ready')
     expect(config.roles.default).toEqual({ runtime: 'pi' })

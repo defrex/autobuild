@@ -329,23 +329,6 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     ]),
   },
   {
-    name: 'server',
-    audience: 'ai',
-    summary: 'Control the phase-managed development server.',
-    detail: page([
-      'Usage:',
-      '  ab server start',
-      '  ab server stop',
-      '  ab server restart',
-      '  ab server status',
-      '  ab server logs [n]',
-      '',
-      'Control the config-driven development-server lifecycle (§16.2). logs prints',
-      'the latest n positive lines when n is supplied. Server control is available',
-      'only inside implement and verify build sessions; the kernel owns teardown.',
-    ]),
-  },
-  {
     name: 'done',
     audience: 'ai',
     summary: 'Complete the current producer phase.',

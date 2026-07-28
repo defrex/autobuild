@@ -63,17 +63,6 @@ import type { BuildStore, Clock } from '../store/types'
 
 // ── Seams ────────────────────────────────────────────────────────────────────
 
-/**
- * Dev-server lifecycle seam (§16.2, D10): config declares, the kernel owns.
- * The runner depends only on this narrow interface — bin wiring adapts the
- * real server control (src/kernel/server.ts / src/cli/server-control.ts) to
- * it; tests inject a journaling fake.
- */
-export interface ServerLifecycle {
-  ensureStarted(): Promise<void>
-  stop(): Promise<void>
-}
-
 /** Another sandbox owns the build (§7.4): its lease is live, so this runner
  * must not execute. The dispatcher retries once the lease expires. */
 export class LeaseHeldError extends Error {
@@ -112,7 +101,6 @@ export interface BuildRunnerDeps {
   exec: Exec
   /** Remote publication stays behind the kernel-owned Forge port (D7). */
   forge: Forge
-  server?: ServerLifecycle
   ids: IdSource
   clock: Clock
   /** Lease holder identity (§7.4) and `runner.attached` payload (§15.3). */
@@ -419,8 +407,7 @@ export class BuildRunner {
    * (`wait/*` — §11), return the final reduced state. Releases nothing on
    * exit (leases expire; the dispatcher re-attaches) but stops the heartbeat,
    * closes any live producer sessions (their per-round transcripts are
-   * already deposited — see module doc), and stops the dev server
-   * best-effort.
+   * already deposited — see module doc).
    */
   async run(): Promise<BuildState> {
     if (!this.attached) await this.attach()
@@ -434,13 +421,6 @@ export class BuildRunner {
     } finally {
       this.stopHeartbeat()
       await this.closeProducerSessions()
-      if (this.deps.server !== undefined) {
-        try {
-          await this.deps.server.stop()
-        } catch {
-          // Best-effort teardown; D10's per-phase finally already ran.
-        }
-      }
     }
   }
 
@@ -607,8 +587,8 @@ export class BuildRunner {
 
   /**
    * Resolve a conditional verifier against the live branch diff. Exclusion is
-   * a canonical kernel-authored skip and launches no command, session, or
-   * server. Inclusion delegates to the existing verifier path unchanged.
+   * a canonical kernel-authored skip and launches no command or session.
+   * Inclusion delegates to the existing verifier path unchanged.
    */
   private async evaluateVerify(decision: EvaluateVerifyDecision, events: AbEvent[]): Promise<void> {
     const { exec, workspacePath } = this.deps
@@ -715,11 +695,10 @@ export class BuildRunner {
     )
   }
 
-  /** Agent-verify step (§5): a session with a pass/fail/skip verdict; the kernel
-   * owns the dev server around it (D10). */
+  /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
   private async runAgentVerify(decision: RunAgentVerifyDecision, events: AbEvent[]): Promise<void> {
-    const { store, slug, server } = this.deps
-    const { step, skill, needsServer, attempt } = decision
+    const { store, slug } = this.deps
+    const { step, skill, attempt } = decision
     const phase = verifyPhase(step)
 
     // D5 guard, extended to agent-verify (see module doc): keyed by
@@ -733,19 +712,6 @@ export class BuildRunner {
       await this.raisePolicyNonRetryable(phase, attempt, failures)
       return
     }
-    if (needsServer && server === undefined) {
-      // D10: needsServer without a configured server dep is an infra failure
-      // with a clear error, not a mystery hang.
-      await this.failPhase(
-        phase,
-        attempt,
-        failures.count,
-        `verify:${step} has needsServer = true but no server lifecycle is ` +
-          'configured — wire a ServerLifecycle into the build-runner or set ' +
-          'needsServer = false (SPEC §16.2, D10)',
-      )
-      return
-    }
 
     await store.append(slug, {
       actor: KERNEL,
@@ -753,43 +719,18 @@ export class BuildRunner {
       payload: { step, attempt },
     } satisfies EventWrite<'verify.started'>)
 
-    try {
-      if (needsServer && server !== undefined) {
-        try {
-          await server.ensureStarted()
-        } catch (error) {
-          await this.failPhase(
-            phase,
-            attempt,
-            failures.count,
-            `dev server failed to start: ${errorMessage(error)}`,
-          )
-          return
-        }
-      }
-      await this.executeSession({
-        phase,
-        round: attempt,
-        role: skill, // role name = the verify step's skill (§9 routing)
-        skill,
-        abPhase: `verify:${step}@${attempt}`,
-        priorFailures: failures.count,
-        isTerminal: (event) =>
-          event.type === 'verify.completed' &&
-          event.payload.step === step &&
-          event.payload.attempt === attempt,
-      })
-    } finally {
-      // D10: the kernel guarantees teardown at phase end, even when the
-      // session threw — a dead session can never orphan a server.
-      if (needsServer && server !== undefined) {
-        try {
-          await server.stop()
-        } catch {
-          // Best-effort.
-        }
-      }
-    }
+    await this.executeSession({
+      phase,
+      round: attempt,
+      role: skill, // role name = the verify step's skill (§9 routing)
+      skill,
+      abPhase: `verify:${step}@${attempt}`,
+      priorFailures: failures.count,
+      isTerminal: (event) =>
+        event.type === 'verify.completed' &&
+        event.payload.step === step &&
+        event.payload.attempt === attempt,
+    })
   }
 
   /**

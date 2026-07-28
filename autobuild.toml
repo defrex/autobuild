@@ -32,14 +32,6 @@ lint = "bun run check"
 typecheck = "bun tsc --noEmit"
 test = "bun run test"
 
-# Dev-server lifecycle (§16.2, D10): config declares, the kernel owns.
-# Agents control it only through `ab server start|stop|restart|status|logs`.
-# Uncomment when the repo has a server to drive.
-#[server]
-#start = "bun dev"
-#url = "http://localhost:3000"   # readiness probe target
-#readyTimeout = 60               # seconds
-
 [verify]
 # These are the configured universe/order. A plan may select any optional step
 # in opening `verifySteps` front matter. Lint is unconditional and cannot be
@@ -70,7 +62,6 @@ paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts", "tools/dashboard-capture
 #[verify.e2e]
 #kind = "agent"
 #skill = "ab-verify-e2e"
-#needsServer = true
 
 # Optional ordered post-steps. Checks run deterministic command refs without
 # an agent session; agents run the exact configured skill. Either kind is

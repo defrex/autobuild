@@ -49,19 +49,6 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 export const commandsSchema = z.record(z.string().min(1), z.string().min(1))
 export type Commands = z.infer<typeof commandsSchema>
 
-// ── [server] ─────────────────────────────────────────────────────────────────
-//
-// Optional table. Config declares; the kernel owns the lifecycle (§16.2).
-
-export const serverSchema = z.strictObject({
-  start: z.string().min(1),
-  /** Readiness probe target: hit until success or `readyTimeout` (§16.2). */
-  url: z.string().min(1),
-  /** Seconds (§16.1). */
-  readyTimeout: z.number().int().positive().default(60),
-})
-export type ServerConfig = z.infer<typeof serverSchema>
-
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
 
 /**
@@ -130,8 +117,6 @@ export const verifyAgentStepSchema = z.strictObject({
   /** Agent-verify: skill + verdict schema (§16.1). */
   kind: z.literal('agent'),
   skill: z.string().min(1),
-  /** true ⇒ the kernel starts the [server] before the session (§16.2). */
-  needsServer: z.boolean().default(false),
   ...verifyApplicabilityShape,
 })
 
@@ -178,7 +163,7 @@ export const verifySectionSchema = z
 
 // ── [finalize.<step>] ────────────────────────────────────────────────────────
 
-/** Finalize steps deliberately omit verify-only applicability/server fields. */
+/** Finalize steps deliberately omit verify-only applicability fields. */
 export const finalizeCheckStepSchema = z.strictObject({
   kind: z.literal('check'),
   /** Ref into [commands] — cross-validated below. */
@@ -351,7 +336,6 @@ const configRootSchema = z.strictObject({
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
   commands: commandsSchema.prefault({}),
-  server: serverSchema.optional(),
   verify: verifySectionSchema.prefault({}),
   finalize: finalizeSectionSchema.prefault({}),
   // `default` is reserved inside this open map (§9). The schema preserves the
@@ -448,15 +432,6 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
           code: 'custom',
           path: ['verify', step, 'command'],
           message: `[verify.${step}].command = "${stepConfig.command}" does not name a key in [commands] — ${knownCommands}`,
-        })
-      }
-      if (stepConfig.kind === 'agent' && stepConfig.needsServer && config.server === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['verify', step, 'needsServer'],
-          message:
-            `[verify.${step}].needsServer = true requires a [server] table (start, url) — ` +
-            `add [server] or set needsServer = false`,
         })
       }
     }

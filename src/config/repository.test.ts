@@ -18,7 +18,6 @@ test('repository installs mandatory lint and the path-scoped dashboard verifier'
   expect(config.verify.stepConfigs.dashboard).toEqual({
     kind: 'agent',
     skill: 'ab-verify-dashboard',
-    needsServer: false,
     paths: [
       'src/cli/dashboard/**',
       'src/cli/dispatch.ts',

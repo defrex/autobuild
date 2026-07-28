@@ -173,11 +173,20 @@ test('detailed AI-first help is identical outside and inside ambient sessions', 
   expect(ambient.stdout).toBe(canonical.stdout)
 })
 
-test('unknown detailed help exits nonzero and names the target', async () => {
-  const result = await runBinWithoutAb(['help', 'frobnicate'])
+test('unknown and removed detailed help exits nonzero and names the target', async () => {
+  for (const command of ['frobnicate', 'server']) {
+    const result = await runBinWithoutAb(['help', command])
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain(`unknown help command "${command}"`)
+  }
+})
+
+test('removed server command exits nonzero as unknown', async () => {
+  const result = await runBinWithoutAb(['server', 'status'])
   expect(result.code).toBe(1)
   expect(result.stdout).toBe('')
-  expect(result.stderr).toContain('unknown help command "frobnicate"')
+  expect(result.stderr).toContain('unknown command "server"')
 })
 
 const BUILD_SESSION_COMMANDS = [
@@ -185,7 +194,6 @@ const BUILD_SESSION_COMMANDS = [
   ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],
   ['artifact get', ['artifact', 'get', 'notes']],
   ['observe', ['observe', '--kind', 'followup', 'record this']],
-  ['server', ['server', 'status']],
   ['done', ['done']],
   ['verdict', ['verdict', 'approve']],
   ['escalate', ['escalate', 'Which behavior is intended?']],

@@ -46,11 +46,26 @@ function describeIssue(issue: z.core.$ZodIssue): string {
         ' — [agent] was removed; move those fields to [roles.default] ' +
         '(the default entry in [roles])'
     }
+    if (issue.keys.includes('server')) {
+      message +=
+        ' — [server] was removed; arrange any application lifecycle inside the verify command or skill'
+    }
     message +=
       ` — known top-level keys: ${TOP_LEVEL_SCALARS.join(', ')}; ` +
       `known tables: ${TOP_LEVEL_TABLES.join(', ')}`
   }
-  return `  ${formatPath(issue.path)}: ${message}`
+  const removedNeedsServer =
+    (issue.code === 'unrecognized_keys' && issue.keys.includes('needsServer')) ||
+    message.includes('"needsServer"')
+  if (removedNeedsServer) {
+    message +=
+      " — needsServer was removed; arrange any application lifecycle inside this step's command or skill"
+  }
+  const path =
+    removedNeedsServer && issue.path.at(-1) !== 'needsServer'
+      ? [...issue.path, 'needsServer']
+      : issue.path
+  return `  ${formatPath(path)}: ${message}`
 }
 
 export function parseConfig(tomlText: string, source = 'autobuild.toml'): Config {

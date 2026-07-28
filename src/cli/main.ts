@@ -33,7 +33,6 @@ import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
-import { ServerControl } from './server-control'
 import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
 import { abTicket } from './ticket'
@@ -871,54 +870,6 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       })
       stdout(`observation recorded: ${event.payload.id}`)
       return 0
-    }
-
-    case 'server': {
-      const session = requireSession(command, deps)
-      const usage = 'usage: ab server <start|stop|restart|status|logs> [n] (§8.2)'
-      const parsed = parseArgs(rest, {}, usage)
-      const [sub, count, ...extra] = parsed.positionals
-      const control = new ServerControl({
-        workspacePath: session.workspacePath,
-        phase: session.env.phase,
-      })
-      switch (sub) {
-        case 'start': {
-          if (count !== undefined) throw new Error(usage)
-          const started = await control.start()
-          stdout(`server ready at ${started.url} (pid ${started.pid})`)
-          return 0
-        }
-        case 'restart': {
-          if (count !== undefined) throw new Error(usage)
-          const started = await control.restart()
-          stdout(`server ready at ${started.url} (pid ${started.pid})`)
-          return 0
-        }
-        case 'stop': {
-          if (count !== undefined) throw new Error(usage)
-          await control.stop()
-          stdout('server stopped')
-          return 0
-        }
-        case 'status': {
-          if (count !== undefined) throw new Error(usage)
-          const status = control.status()
-          stdout(status.running ? `running (pid ${status.pid})` : 'not running')
-          return 0
-        }
-        case 'logs': {
-          if (extra.length > 0) throw new Error(usage)
-          const lines = count === undefined ? undefined : Number(count)
-          if (lines !== undefined && (!Number.isInteger(lines) || lines <= 0)) {
-            throw new Error(`'ab server logs [n]' — n must be a positive integer, got "${count}"`)
-          }
-          for (const line of control.logs(lines)) stdout(line)
-          return 0
-        }
-        default:
-          throw new Error(usage)
-      }
     }
 
     case 'done': {

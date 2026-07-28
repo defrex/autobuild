@@ -49,7 +49,6 @@ export type VerifyAction =
       kind: 'run-agent-verify'
       step: string
       skill: string
-      needsServer: boolean
       attempt: number
     }
 
@@ -456,7 +455,6 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
             kind: 'run-agent-verify',
             step,
             skill: stepConfig.skill,
-            needsServer: stepConfig.needsServer,
             attempt,
           }
 

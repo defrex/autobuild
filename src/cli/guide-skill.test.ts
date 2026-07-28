@@ -29,7 +29,6 @@ import {
   finalizeCheckStepSchema,
   policySchema,
   roleSchema,
-  serverSchema,
   ticketsSchema,
   TOP_LEVEL_KEYS,
   TOP_LEVEL_SCALARS,
@@ -64,7 +63,6 @@ const TABLE_FIELDS: Record<string, string[]> = {
   workspace: Object.keys(workspaceSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.
   commands: [],
-  server: Object.keys(serverSchema.shape),
   verify: [
     'steps',
     ...Object.keys(verifyCheckStepSchema.shape),
@@ -119,6 +117,12 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
       missing,
       `skills/guide/SKILL.md is missing a \`### \`[<table>]\`\` heading for: ${missing.join(', ')}`,
     ).toEqual([])
+  })
+
+  test('does not teach removed dev-server configuration', () => {
+    expect(guide).not.toContain('`[server]`')
+    expect(guide).not.toContain('`needsServer`')
+    expect(guide).not.toContain('`ab server')
   })
 
   test("every field is a documented row in its own table's section", () => {

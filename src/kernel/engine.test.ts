@@ -34,10 +34,6 @@ readyState = "ready"
 typecheck = "bun tsc --noEmit"
 test = "bun test"
 
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
-
 [verify]
 steps = ["types", "unit", "e2e"]
 
@@ -52,7 +48,6 @@ command = "test"
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 
 [finalize]
 steps = ["release-notes"]
@@ -346,7 +341,6 @@ describe('decideNext: §15.6 happy path — prefix walk', () => {
     kind: 'run-agent-verify',
     step: 'e2e',
     skill: 'ab-verify-e2e',
-    needsServer: true,
     attempt: 1,
   }
 
@@ -1230,7 +1224,6 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       kind: 'run-agent-verify',
       step: 'e2e',
       skill: 'ab-verify-e2e',
-      needsServer: true,
       attempt: 1,
     })
     expect(
@@ -1485,7 +1478,6 @@ paths = ["web/**"]
         kind: 'run-agent-verify',
         step: 'browser',
         skill: 'ab-verify-browser',
-        needsServer: false,
         attempt: 1,
       },
     })

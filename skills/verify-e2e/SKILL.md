@@ -12,16 +12,16 @@ read the diff for style; you exercise behavior.
 ## Session shape
 
 1. Run `ab context`. You get `.ab/spec.md` (the acceptance criteria are your
-   checklist), the step config, and the commit range. If this step is
-   configured with `needsServer`, the dev server is already running — check
-   `ab server status`, and use `ab server logs` when behavior looks wrong.
+   checklist), the step config, and the commit range. If verification needs a
+   running application, arrange it through the repository's verify command or
+   the instructions vendored into this skill.
 2. For each acceptance criterion, drive the real flow that proves or
    disproves it — real requests, real UI paths, real data. Prefer the
    narrowest honest check that would catch a regression.
 3. When the step applies, write `.ab/verify-report.md` as you go: criterion →
    what you did → what you observed → pass/fail. On failure, include the
    reproduction exactly (commands, inputs, observed vs expected, relevant
-   `ab server logs` excerpts) — this report is routed to the implementer as
+   repository-native logs) — this report is routed to the implementer as
    feedback, and its quality determines whether the fix round succeeds.
 4. For reviewable evidence that should appear on the PR, explicitly deposit
    each exact file before the terminal:
@@ -56,5 +56,5 @@ read the diff for style; you exercise behavior.
   your report; your phase owns observation only.
 - Out-of-scope discoveries (a bug that predates this build, a missing test):
   `ab observe --kind latent-bug …` and move on.
-- Restarting the app is fine (`ab server restart`); hunting processes or
-  editing config is not.
+- Follow the repository's own application lifecycle and logging instructions;
+  do not edit its configuration.
