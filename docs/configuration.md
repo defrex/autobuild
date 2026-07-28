@@ -690,96 +690,46 @@ example.
 ## What `ab init` generates
 
 On the first `ab init [target]`, when `autobuild.toml` is absent, Autobuild
-renders a valid setup-oriented baseline. When both stdin and stdout are TTYs,
-it first offers these shipped choices in one survey. Use Up/Down to move the
-highlight and Enter to confirm; each active option's explanation is inline,
-and submitted prompts collapse to the chosen label while remaining visible:
+writes a valid stack-neutral skeleton. Deterministic init code does not inspect
+package manifests, infer commands, or ask a fixed adapter survey. It vendors the
+editable skills, records their pristine bases, updates `.gitignore`, and probes
+every registered runtime for executable/authentication usability.
 
-| Surface | Flag | Prompt options (first is the prompt default) |
-|---|---|---|
-| Forge | `--forge` | `github`, `local-git` |
-| Tickets | `--ticket-source` | `file`, `linear` |
-| Workspace | `--workspace-provider` | `git-worktree` |
-| Roles | `--role-profile` | detected usable registered runtimes, plus `split` when both of its Pi models are authenticated |
+Init reports every probe result and chooses a setup launcher from the fixed
+product preference `claude`, then `codex`, then `pi`. That choice only starts
+setup; the temporary `[roles.default].runtime` skeleton value does not constrain
+the role runtimes or models the setup agent ultimately configures. With both
+stdin and stdout attached to a TTY, init starts the selected coding-agent CLI in
+the target repository with the installed `ab-setup` prompt. The user can answer
+its repository- and team-specific questions directly. The child exit status is
+init's exit status, and the direct handoff creates no build or BuildStore data.
 
-The `local-git` forge, local `file` tracker, and shipped `git-worktree` provider
-need no account, secret, remote, or external infrastructure. Every prompt also explains that a custom
-implementation can be supplied by a plugin and points to the plugin authoring
-guide installed with `ab-guide`. Ctrl+C at any question cancels with a plain
-message before config migration, `.gitignore` maintenance, or skill vendoring,
-so a cancelled first run leaves no partial initialization.
+If no shipped runtime is usable or either terminal stream is non-interactive,
+init still completes deterministic installation and exits successfully. It
+prints the same setup prompt verbatim with instructions to run it in a coding
+agent; unusable runtime reports include their reasons. The setup agent derives
+commands and verification from the actual repository, chooses pipeline roles,
+configures ticket workflow and environment-only credentials, arranges suitable
+end-to-end verification, and leaves one groomed dispatchable ticket.
 
-The role profiles are:
+After installation, init reports `autobuild.toml: written|skipped`, counts all
+skill outcomes, names attention-worthy local edits, and prints runtime probe
+results. Redirected/non-TTY output is plain text.
 
-- `split` (offered only when usable): Pi is the explicit default, and runs `plan` and `implement` with
-  `openai-codex/gpt-5.6-sol`, while `plan-review` and `code-review` use
-  `kimi-coding/k3`;
-- `claude`: `[roles.default]` uses the Claude runtime and its own default model,
-  matching the historical template;
-- `codex`: `[roles.default]` uses the locally authenticated Codex CLI and its
-  own default model; and
-- `pi`: `[roles.default]` uses the Pi runtime and its own default model.
-
-A flag suppresses only its corresponding prompt. Supplying all four flags is
-prompt-free on or off a TTY. Redirected or `--no-interactive` initialization
-uses `github` when no forge flag is supplied. Explicit role profiles are operator overrides.
-For an unresolved role choice, init probes every registered runtime through its
-optional onboarding capability and offers only usable choices. Claude and Codex
-require their respective local CLI to be present and logged in; Pi requires
-catalog resolution and authentication for every model the profile writes. A
-registration without a probe is not guessed
-usable. Non-interactive init selects a detected usable choice and writes it
-explicitly; if none exists, it exits nonzero before mutation and names
-`--role-profile` as the remedy.
-
-Choosing Linear writes valid conspicuous placeholders for the required
-`[tickets].teamKey` and `[tickets].readyState` fields. Init places those
-follow-ups and `LINEAR_API_KEY`, which must be supplied through the environment,
-in a distinct next-steps block; it never prompts for or writes a secret.
-Choosing either Pi profile puts the real provider-authentication flow in the
-same block: run `pi` and use `/login`, or set the provider API key in the
-environment. Choosing `codex` instead names both the required `codex`
-executable and `codex login`; it emits no Pi setup guidance.
-
-After installation, init reports `autobuild.toml: written|skipped` and counts
-all skill outcomes (`installed`, `unchanged`, `kept`, and `overwritten`). It
-names individual skills only for the attention-worthy `kept` and `overwritten`
-outcomes, including on an existing-config rerun. The next-steps block always
-says that the operator can ask their coding agent to change `autobuild.toml`.
-Redirected/non-TTY output uses the same information as plain text with no ANSI
-escapes or box drawing.
-
-The generated file is an active-only skeleton rather than a commented option
-catalog. A short header identifies it as declarative, unevaluated config and
-points changes to the coding agent. Each active table has one brief purpose
-label; configuration alternatives remain in this reference and `ab-guide`.
-Regardless of onboarding choices, the baseline writes:
-
-- `baseBranch = "main"`, `capacity = 1`, and the selected `forge` (`github` by default);
-- `setup = "bun install"` in `[commands]`;
-- explicit verify and finalize `steps` arrays, empty unless recognized package
-  scripts add checks; and
-- all five default policy values.
-
-Only exact own keys in the root `package.json` `scripts` object are recognized:
-
-| Package script | Generated command | Generated verify step |
-|---|---|---|
-| `lint` | `lint = "bun run lint"` | `lint`, a mandatory check using `lint` |
-| `type-check` | `type-check = "bun run type-check"` | `type-check`, a mandatory check using `type-check` |
-| `test` | `test = "bun run test"` | `test`, a mandatory check using `test` |
-
-A missing package manifest or missing scripts adds nothing. Malformed JSON, an
-unreadable manifest, or a recognized script whose value is not a nonempty
-string fails with the manifest path instead of silently generating an
-untruthful command. Generated checks carry `always = true`, so a plan cannot
-deselect any recognized package-script gate.
+The generated file is an active-only, schema-valid skeleton. It writes
+`baseBranch = "main"`, `capacity = 4`, empty `[commands]`, empty verify and
+finalize step arrays, all five default policy values, a valid local file-ticket
+gate, and the selected setup runtime as a temporary explicit role default. It
+contains no setup command, package-manager command, language assumption, or
+repository-derived value. Therefore repositories containing only `package.json`
+or only `Cargo.toml` receive byte-identical config on the same machine.
 
 The config rule is intentionally one-way: once `autobuild.toml` exists,
-`ab init` does not prompt, inspect package scripts, validate or apply selection
-flags, reconcile generated fragments, or overwrite the file. This remains true
-with `--force`; that flag can overwrite locally edited vendored skills, never
-configuration. Later package-script changes are manual configuration edits.
+`ab init` does not reconcile or overwrite the file. This remains true with
+`--force`; that flag can overwrite locally edited vendored skills, never
+configuration. The setup prompt instead asks the agent to review and improve
+the existing config.
+
 Re-running init still maintains the `.autobuild/` ignore rule and skill
 installation. `ab upgrade` does not migrate or rewrite `autobuild.toml`; by
 default it first updates a recognized Bun forge distribution and then merges

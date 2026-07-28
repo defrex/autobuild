@@ -117,12 +117,11 @@ describe('layered CLI help catalog', () => {
       help: ['ab help <command>', 'requires no', 'AB_*'],
       init: [
         'ab init [target] [--force]',
-        'Up/Down',
-        'Enter',
-        'Ctrl+C',
-        'Next steps',
-        'never overwrites an',
-        'autobuild.toml',
+        'stack-neutral',
+        'fixed product',
+        'setup agent',
+        'exit status',
+        'never overwrites autobuild.toml',
       ],
       upgrade: [
         'ab upgrade [target]',

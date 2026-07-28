@@ -143,18 +143,27 @@ describe('Codex runtime usability', () => {
 
   test('requires a successful local login status', async () => {
     const usable = fakeCli([output([])])
-    expect(await isCodexRuntimeUsable(input, usable.runCli)).toBe(true)
+    expect(await isCodexRuntimeUsable(input, usable.runCli)).toEqual({
+      usable: true,
+      reason: 'Codex CLI is installed and logged in',
+    })
     expect(usable.calls).toEqual([
       { args: ['login', 'status'], cwd: '/workspace', env: { PATH: '/bin' } },
     ])
 
     const loggedOut = fakeCli([output([], { exitCode: 1 })])
-    expect(await isCodexRuntimeUsable(input, loggedOut.runCli)).toBe(false)
+    expect(await isCodexRuntimeUsable(input, loggedOut.runCli)).toEqual({
+      usable: false,
+      reason: 'Codex is not logged in',
+    })
   })
 
   test('treats a missing executable as unusable', async () => {
     const missing = fakeCli([Object.assign(new Error('missing'), { code: 'ENOENT' })])
-    expect(await isCodexRuntimeUsable(input, missing.runCli)).toBe(false)
+    expect(await isCodexRuntimeUsable(input, missing.runCli)).toEqual({
+      usable: false,
+      reason: 'missing',
+    })
   })
 })
 

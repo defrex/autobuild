@@ -226,12 +226,14 @@ read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,
 never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
-**Init and upgrade.** `src/cli/init.ts` renders first config as a pure
-template render seeded from the target's package scripts and never
-reconciles existing config, even with `--force`. `src/cli/upgrade.ts` owns
-the pristine × local × incoming skill merge and all writes: agent output is
-an untrusted proposal validated before anything touches disk, and every
-failure path leaves live and pristine byte-untouched.
+**Init and upgrade.** `src/cli/init.ts` owns deterministic skill vendoring,
+ignore maintenance, runtime probes, and the stack-neutral first config. It then
+launches the installed non-phase `ab-setup` judgment surface directly in an
+interactive agent CLI, or prints the identical prompt; this bypasses all build
+and BuildStore session plumbing. Existing config is never reconciled, even with
+`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge
+and all writes: agent output is an untrusted proposal validated before anything
+touches disk, and every failure path leaves live and pristine byte-untouched.
 
 ## Development
 

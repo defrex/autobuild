@@ -253,22 +253,16 @@ describe('docs/configuration.md — executable examples', () => {
 })
 
 describe('docs/configuration.md — init behavior', () => {
-  test('documents the lean file and symmetrical mandatory package gates', () => {
+  test('documents the stack-neutral skeleton and agent handoff', () => {
     const section = headingSection(doc, 2, 'What `ab init` generates')
     expect(section).toBeDefined()
-    for (const row of [
-      '| `lint` | `lint = "bun run lint"` | `lint`, a mandatory check using `lint` |',
-      '| `type-check` | `type-check = "bun run type-check"` | `type-check`, a mandatory check using `type-check` |',
-      '| `test` | `test = "bun run test"` | `test`, a mandatory check using `test` |',
-    ]) {
-      expect(section).toContain(row)
-    }
-    expect(section).toContain('active-only skeleton')
-    expect(section).toContain('always = true')
-    expect(section).toContain('ask their coding agent to change `autobuild.toml`')
-    expect(section).not.toContain('lint remains command-only')
-    expect(section).not.toContain('`types`, a check')
-    expect(section).not.toContain('`unit`, a check')
+    expect(section).toContain('stack-neutral skeleton')
+    expect(section).toContain('product preference `claude`, then `codex`, then `pi`')
+    expect(section).toContain('empty `[commands]`')
+    expect(section).toContain('same setup prompt verbatim')
+    expect(section).toContain('does not reconcile or overwrite')
+    expect(section).not.toContain('bun run lint')
+    expect(section).not.toContain('--role-profile')
   })
 })
 

@@ -29,14 +29,14 @@ describe('Claude init usability', () => {
         stderr: '',
         exitCode: 0,
       })),
-    ).toBe(true)
+    ).toEqual({ usable: true, reason: 'Claude Code is installed and logged in' })
     expect(
       await isClaudeRuntimeUsable(input, async () => ({
         stdout: '{"loggedIn":false}',
         stderr: '',
         exitCode: 0,
       })),
-    ).toBe(false)
+    ).toEqual({ usable: false, reason: 'Claude Code is not logged in' })
   })
 
   test('treats missing executables and malformed output as unusable', async () => {
@@ -44,14 +44,14 @@ describe('Claude init usability', () => {
       await isClaudeRuntimeUsable(input, async () => {
         throw Object.assign(new Error('missing'), { code: 'ENOENT' })
       }),
-    ).toBe(false)
+    ).toEqual({ usable: false, reason: 'missing' })
     expect(
       await isClaudeRuntimeUsable(input, async () => ({
         stdout: 'not-json',
         stderr: '',
         exitCode: 0,
       })),
-    ).toBe(false)
+    ).toEqual({ usable: false, reason: 'Claude auth status returned malformed JSON' })
   })
 })
 

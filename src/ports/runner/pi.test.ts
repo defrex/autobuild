@@ -46,7 +46,10 @@ describe('Pi init usability', () => {
         return { type: 'api-key', key: 'configured' }
       },
     })
-    expect(await isPiRuntimeUsable(input, factory)).toBe(true)
+    expect(await isPiRuntimeUsable(input, factory)).toEqual({
+      usable: true,
+      reason: 'Pi model and authentication are available',
+    })
     expect(authCalls).toHaveLength(2)
     expect(authCalls[0]?.env.OPENAI_API_KEY).toBe('secret')
   })
@@ -57,15 +60,18 @@ describe('Pi init usability', () => {
         getModel: () => undefined,
         getAuth: async () => ({ key: 'unused' }),
       })),
-    ).toBe(false)
+    ).toEqual({ usable: false, reason: 'Pi model "openai/gpt-test" is unavailable' })
     expect(
       await isPiRuntimeUsable(input, async () => ({
         getModel: (_provider, id) => ({ id }),
         getAuth: async (model) => ((model as { id: string }).id === 'k3' ? undefined : {}),
       })),
-    ).toBe(false)
-    expect(await isPiRuntimeUsable({ ...input, models: [] }, async () => Promise.reject())).toBe(
-      false,
+    ).toEqual({ usable: false, reason: 'Pi has no authentication for model "kimi-coding/k3"' })
+    expect(await isPiRuntimeUsable({ ...input, models: [] }, async () => Promise.reject())).toEqual(
+      {
+        usable: false,
+        reason: 'Pi has no default model configured to probe',
+      },
     )
   })
 })

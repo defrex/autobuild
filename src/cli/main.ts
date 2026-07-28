@@ -26,7 +26,7 @@ import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type { InitPrompter } from './init-prompt'
+import type { SetupAgentLauncher } from './init-agent'
 import { abModels } from './models'
 import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
 import { observe } from './observe'
@@ -138,9 +138,10 @@ export interface SessionlessCliDeps {
   terminal?: TerminalOut
   /** Raw keyboard seam for the interactive dispatch dashboard. */
   input?: TerminalInput
-  /** First-config onboarding seam. Production supplies it only when stdin and
-   * stdout are both TTYs; absence preserves historical non-interactive init. */
-  initPrompter?: InitPrompter
+  /** True only when both stdin and stdout are interactive terminals. */
+  initInteractive?: boolean
+  /** Injectable direct interactive child-process seam for init tests. */
+  initLauncher?: SetupAgentLauncher
   /** Injectable init detection registry; production uses shipped registrations. */
   initRuntimes?: RuntimeRegistry
   /** Optional per-paint presentation lookup used only by the repo-local dev
@@ -328,40 +329,32 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
     case 'init': {
-      const usage =
-        'usage: ab init [target] [--force] [--forge github|local-git] ' +
-        '[--ticket-source file|linear] [--workspace-provider git-worktree] ' +
-        '[--role-profile split|<registered-runtime>] ' +
-        '[--no-interactive] (§16.3)'
-      const parsed = parseArgs(
-        rest,
-        {
-          force: 'boolean',
-          forge: 'value',
-          'ticket-source': 'value',
-          'workspace-provider': 'value',
-          'role-profile': 'value',
-          'no-interactive': 'boolean',
-        },
-        usage,
-      )
+      const usage = 'usage: ab init [target] [--force] (§16.3)'
+      const removed = [
+        '--forge',
+        '--ticket-source',
+        '--workspace-provider',
+        '--role-profile',
+        '--no-interactive',
+      ].find((flag) => rest.some((arg) => arg === flag || arg.startsWith(`${flag}=`)))
+      if (removed !== undefined) {
+        throw new Error(
+          `${removed} was removed — ab init now installs a neutral skeleton and hands setup to a coding agent. ${usage}`,
+        )
+      }
+      const parsed = parseArgs(rest, { force: 'boolean' }, usage)
       if (parsed.positionals.length > 1) throw new Error(usage)
-      await abInit({
+      const report = await abInit({
         targetRepo: parsed.positionals[0] ?? deps.workspacePath,
         force: parsed.flags.has('force'),
         stdout,
-        selections: {
-          forge: stringFlag(parsed, 'forge'),
-          ticketSource: stringFlag(parsed, 'ticket-source'),
-          workspaceProvider: stringFlag(parsed, 'workspace-provider'),
-          roleProfile: stringFlag(parsed, 'role-profile'),
-          noInteractive: parsed.flags.has('no-interactive'),
-        },
-        ...(deps.initPrompter !== undefined ? { prompter: deps.initPrompter } : {}),
+        interactive: deps.initInteractive === true,
+        ...(deps.initLauncher === undefined ? {} : { launcher: deps.initLauncher }),
         ...(deps.initRuntimes !== undefined ? { runtimes: deps.initRuntimes } : {}),
         env: deps.processEnv ?? process.env,
+        ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       })
-      return 0
+      return report.exitCode
     }
 
     case 'upgrade': {

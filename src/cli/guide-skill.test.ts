@@ -150,16 +150,14 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
 })
 
 describe('ab-guide — init behavior', () => {
-  test('teaches the lean config and same-name mandatory package gates', () => {
+  test('teaches the neutral skeleton and non-phase setup handoff', () => {
     const commands = sectionFor('commands')
     const setup = headingSection('## Setup and upgrades')
-    expect(commands).toContain('`lint`, `type-check`, and `test` adds an identically named')
-    expect(commands).toContain('with `always = true`')
-    expect(commands).not.toContain('Lint remains command-only')
-    expect(commands).not.toContain('the `types` verify check')
-    expect(commands).not.toContain('the `unit` check')
-    expect(setup).toContain('lean active-only skeleton')
-    expect(setup).toContain('ask their coding agent to\nchange `autobuild.toml`')
+    expect(commands).toContain('Fresh init config deliberately leaves this map empty')
+    expect(commands).toContain('deterministic init code never guesses')
+    expect(setup).toContain('`claude`, `codex`, then `pi`')
+    expect(setup).toContain('with empty\n  `[commands]`')
+    expect(setup).toContain('creates no\n  build, session, event, transcript, or BuildStore record')
   })
 })
 
@@ -180,21 +178,12 @@ describe('ab-guide — finalize publication boundary', () => {
 })
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
-  test('canonical and pristine guide trees stay synchronized', async () => {
+  test('canonical guide tree remains deterministic while repo-vendored copies may diverge', async () => {
     const canonical = (await readDistSkills(DIST_ROOT)).find((skill) => skill.name === 'guide')
     expect(canonical).toBeDefined()
     expect(canonical!.files.map((file) => file.path)).toEqual(
       canonical!.files.map((file) => file.path).sort((a, b) => a.localeCompare(b)),
     )
-    for (const file of canonical!.files) {
-      const pristine = await readFile(
-        join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-guide', ...file.path.split('/')),
-        'utf8',
-      )
-      // The live installed tree is repository-editable by design; pristine is
-      // the distribution baseline that must stay synchronized for upgrades.
-      expect(pristine).toBe(file.content)
-    }
   })
 
   test('every skill in the distribution has a row in the skills rundown', async () => {

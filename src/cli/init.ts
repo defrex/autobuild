@@ -35,135 +35,14 @@ import { installedSkillName, SKILL_NAMESPACE } from '../skills'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import {
-  INIT_PLUGIN_HELP,
-  type InitPresentation,
-  type InitPromptChoice,
-  type InitPrompter,
-} from './init-prompt'
+  launchSetupAgent,
+  probeInitRuntimes,
+  selectSetupRuntime,
+  SETUP_RUNTIME_PREFERENCE,
+  type SetupAgentLauncher,
+} from './init-agent'
 
 export { SKILL_NAMESPACE }
-
-export type InitForge = 'github' | 'local-git'
-export type InitTicketSource = 'file' | 'linear'
-export type InitWorkspaceProvider = 'git-worktree'
-export type InitRoleProfile = string
-
-export const INIT_SPLIT_AUTHOR_MODEL = 'openai-codex/gpt-5.6-sol'
-export const INIT_SPLIT_REVIEWER_MODEL = 'kimi-coding/k3'
-
-export const INIT_FORGE_CHOICES = [
-  {
-    value: 'github',
-    label: 'GitHub',
-    help: 'Publishes branches and pull requests through git and the authenticated gh CLI.',
-  },
-  {
-    value: 'local-git',
-    label: 'Local Git',
-    help: 'Keeps review records and branches in this repository; no remote, account, or network required.',
-  },
-] as const satisfies readonly InitPromptChoice<InitForge>[]
-
-export const INIT_TICKET_SOURCE_CHOICES = [
-  {
-    value: 'file',
-    label: 'Local file tracker',
-    help: 'Stores markdown tickets locally under .autobuild/tickets; no account or secret required.',
-  },
-  {
-    value: 'linear',
-    label: 'Linear',
-    help: 'Uses Linear; you will set team/workflow fields and LINEAR_API_KEY after init.',
-  },
-] as const satisfies readonly InitPromptChoice<InitTicketSource>[]
-
-export const INIT_WORKSPACE_PROVIDER_CHOICES = [
-  {
-    value: 'git-worktree',
-    label: 'Git worktree',
-    help: 'Uses the shipped local git-worktree workspace provider; no infrastructure required.',
-  },
-] as const satisfies readonly InitPromptChoice<InitWorkspaceProvider>[]
-
-export const INIT_ROLE_PROFILE_CHOICES = [
-  {
-    value: 'split',
-    label: 'Independent author/reviewer models',
-    help: `Pi runs plan + implement on ${INIT_SPLIT_AUTHOR_MODEL}, and both review roles on ${INIT_SPLIT_REVIEWER_MODEL}.`,
-  },
-  {
-    value: 'claude',
-    label: 'Claude default',
-    help: "Uses the Claude runtime's own default model for every role (the historical template default).",
-  },
-  {
-    value: 'codex',
-    label: 'Codex default',
-    help: 'Uses the locally authenticated Codex CLI and its own default model for every role.',
-  },
-  {
-    value: 'pi',
-    label: 'Pi default',
-    help: "Uses the Pi runtime's own default model for every role.",
-  },
-] as const satisfies readonly InitPromptChoice<InitRoleProfile>[]
-
-function runtimeProfileChoice(runtime: string): InitPromptChoice<InitRoleProfile> {
-  const shipped = INIT_ROLE_PROFILE_CHOICES.find((choice) => choice.value === runtime)
-  return (
-    shipped ?? {
-      value: runtime,
-      label: `${runtime} default`,
-      help: `Uses the ${runtime} runtime's own default model for every role.`,
-    }
-  )
-}
-
-async function probeRuntime(
-  registration: RuntimeRegistry[string],
-  input: { cwd: string; env: Readonly<Record<string, string | undefined>>; models: string[] },
-): Promise<boolean> {
-  if (registration.initUsable === undefined) return false
-  try {
-    return await registration.initUsable(input)
-  } catch {
-    // Detection is advisory. A broken/unmet runtime is simply not offered.
-    return false
-  }
-}
-
-/** Probe every registered runtime; registrations without a probe are not guessed usable. */
-export async function detectUsableRoleProfiles(
-  runtimes: RuntimeRegistry,
-  cwd: string,
-  env: Readonly<Record<string, string | undefined>>,
-): Promise<InitPromptChoice<InitRoleProfile>[]> {
-  const usable = new Set<string>()
-  await Promise.all(
-    Object.entries(runtimes).map(async ([name, registration]) => {
-      const models = registration.defaultModel === undefined ? [] : [registration.defaultModel]
-      if (await probeRuntime(registration, { cwd, env, models })) usable.add(name)
-    }),
-  )
-
-  const choices: InitPromptChoice<InitRoleProfile>[] = []
-  const pi = runtimes.pi
-  if (
-    usable.has('pi') &&
-    pi !== undefined &&
-    (await probeRuntime(pi, {
-      cwd,
-      env,
-      models: [INIT_SPLIT_AUTHOR_MODEL, INIT_SPLIT_REVIEWER_MODEL],
-    }))
-  ) {
-    choices.push(INIT_ROLE_PROFILE_CHOICES[0])
-  }
-  for (const name of Object.keys(runtimes)) {
-    if (usable.has(name)) choices.push(runtimeProfileChoice(name))
-  }
-  return choices
-}
 
 /** Agent Skills standard project directory for vendored skills. */
 export const AGENTS_SKILLS_DIR = join('.agents', 'skills')
@@ -253,285 +132,6 @@ export async function readIfExists(path: string): Promise<string | undefined> {
   }
 }
 
-const FORGE_ANCHOR = '# @ab-init/forge'
-const PACKAGE_COMMANDS_ANCHOR = '# @ab-init/package-script-commands'
-const PACKAGE_VERIFY_STEPS_ANCHOR = '# @ab-init/package-script-verify-steps'
-const PACKAGE_VERIFY_TABLES_ANCHOR = '# @ab-init/package-script-verify-tables'
-const ROLES_START_ANCHOR = '# @ab-init/roles-start'
-const ROLES_END_ANCHOR = '# @ab-init/roles-end'
-const TICKETS_START_ANCHOR = '# @ab-init/tickets-start'
-const TICKETS_END_ANCHOR = '# @ab-init/tickets-end'
-
-/** Exact root-package script names that may contribute fresh config. */
-const PACKAGE_SCRIPT_CONFIG = [
-  { script: 'lint', shell: 'bun run lint' },
-  { script: 'type-check', shell: 'bun run type-check' },
-  { script: 'test', shell: 'bun run test' },
-] as const
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
- * Inspect only the target repository's root manifest. Missing package metadata
- * means there are no package-backed commands; malformed metadata must not be
- * mistaken for a successful empty detection.
- */
-export async function detectInitPackageScripts(targetRepo: string): Promise<Set<string>> {
-  const manifestPath = join(targetRepo, 'package.json')
-  let source: string | undefined
-  try {
-    source = await readIfExists(manifestPath)
-  } catch (error) {
-    throw new Error(`${manifestPath}: unable to read package manifest: ${errorMessage(error)}`)
-  }
-  if (source === undefined) return new Set()
-
-  let manifest: unknown
-  try {
-    manifest = JSON.parse(source)
-  } catch (error) {
-    throw new Error(`${manifestPath}: invalid JSON: ${errorMessage(error)}`)
-  }
-
-  const scripts = isRecord(manifest) ? manifest.scripts : undefined
-  if (!isRecord(scripts)) return new Set()
-
-  const detected = new Set<string>()
-  for (const descriptor of PACKAGE_SCRIPT_CONFIG) {
-    if (!Object.hasOwn(scripts, descriptor.script)) continue
-    const declaration = scripts[descriptor.script]
-    if (typeof declaration !== 'string' || declaration.trim() === '') {
-      throw new Error(
-        `${manifestPath}: package script "${descriptor.script}" must be a non-empty string`,
-      )
-    }
-    detected.add(descriptor.script)
-  }
-  return detected
-}
-
-function replaceTemplateAnchor(template: string, anchor: string, replacement: string): string {
-  const occurrences = template.split(anchor).length - 1
-  if (occurrences !== 1) {
-    throw new Error(
-      `autobuild.toml template anchor "${anchor}" must occur exactly once; found ${occurrences}`,
-    )
-  }
-  const line = `${anchor}\n`
-  if (!template.includes(line)) {
-    throw new Error(`autobuild.toml template anchor "${anchor}" must occupy its own line`)
-  }
-  return template.replace(line, replacement === '' ? '' : `${replacement}\n`)
-}
-
-/**
- * Render package-backed commands and their matching checks into the valid,
- * setup-only template baseline. Fixed descriptors and strict anchor counts
- * make every script subset deterministic and make template drift fail loudly.
- */
-export function renderAutobuildTemplate(
-  template: string,
-  detectedScripts: ReadonlySet<string>,
-): string {
-  const enabled = PACKAGE_SCRIPT_CONFIG.filter(({ script }) => detectedScripts.has(script))
-  const commands = enabled.map(({ script, shell }) => `${script} = "${shell}"`).join('\n')
-  const verifySteps = `steps = [${enabled.map(({ script }) => `"${script}"`).join(', ')}]`
-  const verifyTables = enabled
-    .map(
-      ({ script }) =>
-        `# ${script} verification gate.\n` +
-        `[verify.${script}]\n` +
-        `kind = "check"\n` +
-        `command = "${script}"\n` +
-        'always = true',
-    )
-    .join('\n\n')
-
-  let rendered = replaceTemplateAnchor(template, PACKAGE_COMMANDS_ANCHOR, commands)
-  rendered = replaceTemplateAnchor(rendered, PACKAGE_VERIFY_STEPS_ANCHOR, verifySteps)
-  return replaceTemplateAnchor(rendered, PACKAGE_VERIFY_TABLES_ANCHOR, verifyTables)
-}
-
-export interface InitSelectionInput {
-  forge?: string
-  ticketSource?: string
-  workspaceProvider?: string
-  roleProfile?: string
-  noInteractive?: boolean
-}
-
-export interface ResolvedInitSelections {
-  forge: InitForge
-  ticketSource: InitTicketSource
-  workspaceProvider: InitWorkspaceProvider
-  roleProfile: InitRoleProfile
-}
-
-function selectionValue<T extends string>(
-  surface: string,
-  raw: string,
-  choices: readonly InitPromptChoice<T>[],
-): T {
-  const choice = choices.find((candidate) => candidate.value === raw)
-  if (choice !== undefined) return choice.value
-  throw new Error(
-    `invalid --${surface} value "${raw}" — expected ${choices
-      .map((candidate) => candidate.value)
-      .join('|')}`,
-  )
-}
-
-async function resolveInitSelections(
-  input: InitSelectionInput,
-  prompter: InitPrompter | undefined,
-  runtimes: RuntimeRegistry,
-  targetRepo: string,
-  env: Readonly<Record<string, string | undefined>>,
-): Promise<ResolvedInitSelections> {
-  const supplied =
-    input.forge !== undefined ||
-    input.ticketSource !== undefined ||
-    input.workspaceProvider !== undefined ||
-    input.roleProfile !== undefined
-  if (input.noInteractive === true && supplied) {
-    throw new Error(
-      '--no-interactive cannot be combined with --forge, --ticket-source, --workspace-provider, or --role-profile',
-    )
-  }
-
-  const canPrompt = input.noInteractive !== true && prompter !== undefined
-  const availableRoleChoices =
-    input.roleProfile === undefined
-      ? await detectUsableRoleProfiles(runtimes, targetRepo, env)
-      : undefined
-  const ticketSource =
-    input.ticketSource !== undefined
-      ? selectionValue('ticket-source', input.ticketSource, INIT_TICKET_SOURCE_CHOICES)
-      : canPrompt
-        ? await prompter.select({
-            message: 'Choose a ticket source',
-            help: INIT_PLUGIN_HELP,
-            choices: INIT_TICKET_SOURCE_CHOICES,
-            defaultValue: 'file',
-          })
-        : 'file'
-  const workspaceProvider =
-    input.workspaceProvider !== undefined
-      ? selectionValue(
-          'workspace-provider',
-          input.workspaceProvider,
-          INIT_WORKSPACE_PROVIDER_CHOICES,
-        )
-      : canPrompt
-        ? await prompter.select({
-            message: 'Choose a workspace provider',
-            help: INIT_PLUGIN_HELP,
-            choices: INIT_WORKSPACE_PROVIDER_CHOICES,
-            defaultValue: 'git-worktree',
-          })
-        : 'git-worktree'
-  let roleProfile: InitRoleProfile
-  if (input.roleProfile !== undefined) {
-    const explicitChoices = [
-      ...(Object.hasOwn(runtimes, 'pi') ? [INIT_ROLE_PROFILE_CHOICES[0]] : []),
-      ...Object.keys(runtimes).map(runtimeProfileChoice),
-    ]
-    roleProfile = selectionValue('role-profile', input.roleProfile, explicitChoices)
-  } else {
-    const choices = availableRoleChoices!
-    if (choices.length === 0) {
-      throw new Error(
-        'no usable agent runtime was detected; install and authenticate a registered runtime, ' +
-          'or select one explicitly with --role-profile',
-      )
-    }
-    roleProfile = canPrompt
-      ? await prompter.select({
-          message: 'Choose a role runtime/model arrangement',
-          help: INIT_PLUGIN_HELP,
-          choices,
-          defaultValue: choices[0]!.value,
-        })
-      : choices[0]!.value
-  }
-  const forge =
-    input.forge !== undefined
-      ? selectionValue('forge', input.forge, INIT_FORGE_CHOICES)
-      : canPrompt
-        ? await prompter.select({
-            message: 'Choose a forge',
-            help: INIT_PLUGIN_HELP,
-            choices: INIT_FORGE_CHOICES,
-            defaultValue: 'github',
-          })
-        : 'github'
-  return { forge, ticketSource, workspaceProvider, roleProfile }
-}
-
-function replaceSelectionRegion(
-  rendered: string,
-  startAnchor: string,
-  endAnchor: string,
-  replacement: string,
-): string {
-  const startOccurrences = rendered.split(startAnchor).length - 1
-  const endOccurrences = rendered.split(endAnchor).length - 1
-  if (startOccurrences !== 1 || endOccurrences !== 1) {
-    throw new Error(
-      `autobuild.toml selection anchors "${startAnchor}" and "${endAnchor}" must each occur exactly once; found ${startOccurrences} and ${endOccurrences}`,
-    )
-  }
-  const start = rendered.indexOf(`${startAnchor}\n`)
-  const end = rendered.indexOf(`${endAnchor}\n`)
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error('autobuild.toml selection anchors must occupy ordered lines')
-  }
-  return `${rendered.slice(0, start)}${replacement}\n${rendered.slice(end + endAnchor.length + 1)}`
-}
-
-/** Render complete active ticket and role fragments for the survey selections. */
-export function renderInitSelections(baseline: string, selections: ResolvedInitSelections): string {
-  const tickets =
-    selections.ticketSource === 'linear'
-      ? '# Linear ticket source and dispatch gate.\n' +
-        '[tickets]\n' +
-        'source = "linear"\n' +
-        'teamKey = "REPLACE_WITH_LINEAR_TEAM_KEY"\n' +
-        'readyState = "REPLACE_WITH_LINEAR_READY_STATE"'
-      : '# Ticket source and dispatch gate.\n' +
-        '[tickets]\n' +
-        'source = "file"\n' +
-        'readyState = "ready"'
-
-  let roles: string
-  if (selections.roleProfile === 'split') {
-    roles =
-      '# Default agent runtime.\n' +
-      '[roles.default]\nruntime = "pi"\n\n' +
-      '# Plan agent.\n' +
-      `[roles.plan]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
-      '# Implementation agent.\n' +
-      `[roles.implement]\nruntime = "pi"\nmodel = "${INIT_SPLIT_AUTHOR_MODEL}"\n\n` +
-      '# Plan review agent.\n' +
-      `[roles.plan-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"\n\n` +
-      '# Code review agent.\n' +
-      `[roles.code-review]\nruntime = "pi"\nmodel = "${INIT_SPLIT_REVIEWER_MODEL}"`
-  } else {
-    roles = `# Default agent runtime.\n[roles.default]\nruntime = "${selections.roleProfile}"`
-  }
-
-  let rendered = replaceTemplateAnchor(baseline, FORGE_ANCHOR, `forge = "${selections.forge}"`)
-  rendered = replaceSelectionRegion(rendered, TICKETS_START_ANCHOR, TICKETS_END_ANCHOR, tickets)
-  rendered = replaceSelectionRegion(rendered, ROLES_START_ANCHOR, ROLES_END_ANCHOR, roles)
-  return rendered
-}
-
 /**
  * Ensure the exact repository-local state rule exists without rewriting any
  * existing ignore bytes. Re-running is duplicate-free, including when the
@@ -563,7 +163,7 @@ export async function ensureLocalStateIgnored(targetRepo: string): Promise<boole
  * invocation is precisely the point. Keep this set small; widening it needs the
  * §16.3 criterion, not convenience.
  */
-export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide'])
+export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide', 'setup'])
 
 /**
  * Rewrite a canonical skill's YAML frontmatter for installation (§16.3):
@@ -887,6 +487,39 @@ export interface InitReport {
   config: InitConfigAction
   /** Per-skill outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: InitSkillAction }>
+  /** Interactive setup child status; fallback/manual setup succeeds with zero. */
+  exitCode: number
+}
+
+function skillBody(source: string): string {
+  const lines = source.split('\n')
+  if (lines[0] !== '---') throw new Error('installed ab-setup skill has no YAML frontmatter')
+  const close = lines.indexOf('---', 1)
+  if (close === -1) throw new Error('installed ab-setup skill has unterminated YAML frontmatter')
+  return lines
+    .slice(close + 1)
+    .join('\n')
+    .trim()
+}
+
+function setupPrompt(configExists: boolean, source: string): string {
+  const preface = configExists
+    ? 'Review and improve the existing autobuild.toml. Preserve intentional repository choices; do not replace it with a generic template.'
+    : 'Complete the new minimal autobuild.toml skeleton using this repository and the user as your sources of truth.'
+  return `${preface}\n\n${skillBody(source)}\n`
+}
+
+function renderSkeleton(template: string, runtime: string): string {
+  const token = '@ab-init/runtime@'
+  const occurrences = template.split(token).length - 1
+  // Test/plugin distributions from before agent-driven init can still carry an
+  // explicit runtime. Preserve those valid templates rather than making skill
+  // installation depend on a newly introduced rendering token.
+  if (occurrences === 0) return template
+  if (occurrences !== 1) {
+    throw new Error(`autobuild.toml template must contain at most one ${token} token`)
+  }
+  return template.replace(token, runtime)
 }
 
 export async function abInit(opts: {
@@ -894,57 +527,35 @@ export async function abInit(opts: {
   distRoot?: string
   stdout?: (line: string) => void
   force?: boolean
-  selections?: InitSelectionInput
-  prompter?: InitPrompter
   runtimes?: RuntimeRegistry
   env?: Readonly<Record<string, string | undefined>>
+  interactive?: boolean
+  launcher?: SetupAgentLauncher
+  signal?: AbortSignal
 }): Promise<InitReport> {
   const distRoot = opts.distRoot ?? defaultDistRoot()
   const stdout = opts.stdout ?? (() => {})
   const force = opts.force ?? false
+  const env = opts.env ?? process.env
+  const runtimes = opts.runtimes ?? createProductionRuntimes().runtimes
   const configPath = join(opts.targetRepo, 'autobuild.toml')
   const configExists = (await readIfExists(configPath)) !== undefined
+  const probes = await probeInitRuntimes(runtimes, opts.targetRepo, env)
+  const selectedRuntime = selectSetupRuntime(probes)
+  const skeletonRuntime = selectedRuntime ?? SETUP_RUNTIME_PREFERENCE[0]
 
-  // Complete the first-run survey before any migration or write. Cancellation
-  // is therefore a true no-mutation boundary, regardless of which question is
-  // active. Existing-config reruns deliberately skip every question.
-  let resolvedSelections: ResolvedInitSelections | undefined
-  try {
-    if (!configExists) {
-      resolvedSelections = await resolveInitSelections(
-        opts.selections ?? {},
-        opts.prompter,
-        opts.runtimes ?? createProductionRuntimes().runtimes,
-        opts.targetRepo,
-        opts.env ?? process.env,
-      )
-    }
-  } finally {
-    opts.prompter?.close?.()
-  }
-
-  // Older releases used `.agent/skills`, which Pi does not discover. Move the
-  // complete tree only after a fresh survey has successfully finished.
   await migrateLegacyAgentSkills(opts.targetRepo)
 
-  // Render autobuild.toml only when it is absent (§16.3). Package inspection
-  // deliberately stays inside this branch: the repo's config is the repo's
-  // from the very first re-run, even if package scripts later change.
   let config: InitConfigAction
   if (!configExists) {
     const template = await readFile(join(distRoot, 'templates', 'autobuild.toml'), 'utf8')
-    const detectedScripts = await detectInitPackageScripts(opts.targetRepo)
-    const baseline = renderAutobuildTemplate(template, detectedScripts)
-    const rendered = renderInitSelections(baseline, resolvedSelections!)
     await mkdir(opts.targetRepo, { recursive: true })
-    await writeFile(configPath, rendered)
+    await writeFile(configPath, renderSkeleton(template, skeletonRuntime))
     config = 'written'
   } else {
     config = 'skipped'
   }
 
-  // State is repository-local by default and must never appear as source.
-  // This append-only/idempotent update preserves every user-authored rule.
   await ensureLocalStateIgnored(opts.targetRepo)
 
   const attention: string[] = []
@@ -961,8 +572,6 @@ export async function abInit(opts: {
       const local =
         file.path === 'SKILL.md' && migrated !== undefined ? migrated : await readIfExists(livePath)
       if (local === undefined || local === file.content) {
-        // Missing distributed files are added independently. Equality proves
-        // refreshing (or self-healing) their pristine base is safe.
         await writeInstalledSkillFile(opts.targetRepo, skill.installName, file.path, file.content)
         await writePristineFile(opts.targetRepo, skill.installName, file.path, file.content)
       } else if (force) {
@@ -970,8 +579,6 @@ export async function abInit(opts: {
         await writeInstalledSkillFile(opts.targetRepo, skill.installName, file.path, file.content)
         await writePristineFile(opts.targetRepo, skill.installName, file.path, file.content)
       } else {
-        // Local edits are NEVER clobbered by init (§16.3), even when SKILL.md
-        // is missing. Other files in the tree are handled independently.
         divergent = true
       }
     }
@@ -984,18 +591,15 @@ export async function abInit(opts: {
         : 'unchanged'
     await ensureClaudeSkillLink(opts.targetRepo, skill.installName)
     skills.push({ skill: skill.installName, action })
-    if (action === 'kept' || action === 'overwritten') {
+    if (action === 'kept' || action === 'overwritten')
       attention.push(`${skill.installName}: ${action}`)
-    }
   }
 
-  // Migration considers the complete old tree, including local additions
-  // unknown to this distribution. Keep their Claude discovery links valid too.
   for (const name of await listInstalledSkills(opts.targetRepo)) {
     await ensureClaudeSkillLink(opts.targetRepo, name)
   }
 
-  const skillCounts: InitPresentation['skillCounts'] = {
+  const skillCounts: Record<InitSkillAction, number> = {
     installed: 0,
     unchanged: 0,
     kept: 0,
@@ -1003,43 +607,42 @@ export async function abInit(opts: {
   }
   for (const skill of skills) skillCounts[skill.action] += 1
 
-  const nextSteps: string[] = ['Ask your coding agent to change autobuild.toml.']
-  if (config === 'written' && resolvedSelections?.ticketSource === 'linear') {
-    nextSteps.push(
-      'Linear setup required: replace [tickets].teamKey and [tickets].readyState, then set LINEAR_API_KEY in the environment (never in autobuild.toml).',
-    )
-  }
-  if (
-    config === 'written' &&
-    opts.selections?.roleProfile !== undefined &&
-    (resolvedSelections?.roleProfile === 'split' || resolvedSelections?.roleProfile === 'pi')
-  ) {
-    nextSteps.push(
-      'Pi setup required: authenticate the providers used by your selected role profile — run `pi` and use `/login`, or set the provider API key in the environment.',
-    )
-  }
-  if (config === 'written' && resolvedSelections?.roleProfile === 'codex') {
-    nextSteps.push(
-      'Codex setup required: install the `codex` executable and run `codex login` to authenticate it.',
-    )
+  stdout(`autobuild.toml: ${config}`)
+  stdout(
+    `Skills: ${skillCounts.installed} installed, ${skillCounts.unchanged} unchanged, ` +
+      `${skillCounts.kept} kept, ${skillCounts.overwritten} overwritten`,
+  )
+  for (const line of attention) stdout(line)
+  stdout('')
+  stdout('Runtime probes:')
+  for (const probe of probes) {
+    stdout(`  ${probe.runtime}: ${probe.usable ? 'usable' : 'unusable'} — ${probe.reason}`)
   }
 
-  const presentation: InitPresentation = { config, skillCounts, attention, nextSteps }
-  if (opts.prompter?.present !== undefined) {
-    opts.prompter.present(presentation)
-  } else {
-    stdout(`autobuild.toml: ${config}`)
-    stdout(
-      `Skills: ${skillCounts.installed} installed, ${skillCounts.unchanged} unchanged, ` +
-        `${skillCounts.kept} kept, ${skillCounts.overwritten} overwritten`,
-    )
-    for (const line of attention) stdout(line)
-    if (nextSteps.length > 0) {
-      stdout('')
-      stdout('Next steps:')
-      for (const step of nextSteps) stdout(`  - ${step}`)
-    }
+  const setupSource = await readIfExists(installedSkillPath(opts.targetRepo, 'ab-setup'))
+  // Pre-agent-driven fixture distributions can still exercise init/upgrade's
+  // vendoring contract. Current distributions always ship ab-setup.
+  if (setupSource === undefined) return { config, skills, exitCode: 0 }
+  const prompt = setupPrompt(configExists, setupSource)
+  if (selectedRuntime !== undefined && opts.interactive === true) {
+    stdout('')
+    stdout(`Starting setup agent with ${selectedRuntime}…`)
+    const exitCode = await (opts.launcher ?? launchSetupAgent)({
+      runtime: selectedRuntime,
+      prompt,
+      cwd: opts.targetRepo,
+      env,
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+    })
+    return { config, skills, exitCode }
   }
 
-  return { config, skills }
+  stdout('')
+  stdout(
+    selectedRuntime === undefined
+      ? 'No usable interactive runtime was detected. Run the following prompt in a coding agent:'
+      : 'No interactive terminal was detected. Run the following prompt in a coding agent:',
+  )
+  stdout(prompt)
+  return { config, skills, exitCode: 0 }
 }

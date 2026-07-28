@@ -1,31 +1,24 @@
 # Autobuild pipeline configuration.
 # Declarative only; nothing in this file is evaluated.
-# Ask your coding agent to change it.
+# The setup agent will replace this schema-valid skeleton with repository-specific choices.
 
 baseBranch = "main"
 capacity = 4
-# @ab-init/forge
 
-# Commands the kernel may run.
+# Commands are derived by the setup agent from this repository's actual toolchain.
 [commands]
-setup = "bun install"
-# @ab-init/package-script-commands
 
-# Verification gates.
+# Verification gates are selected by the setup agent.
 [verify]
-# @ab-init/package-script-verify-steps
-
-# @ab-init/package-script-verify-tables
+steps = []
 
 # Post-verification steps.
 [finalize]
 steps = []
 
-# @ab-init/roles-start
-# Default agent runtime.
+# Schema placeholder only; init's setup launcher does not constrain final role choices.
 [roles.default]
-runtime = "claude"
-# @ab-init/roles-end
+runtime = "@ab-init/runtime@"
 
 # Pipeline limits.
 [policy]
@@ -35,9 +28,7 @@ maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 5
 
-# @ab-init/tickets-start
-# Ticket source and dispatch gate.
+# Valid local ticket baseline; the setup agent reviews the repository's real workflow.
 [tickets]
 source = "file"
 readyState = "ready"
-# @ab-init/tickets-end
