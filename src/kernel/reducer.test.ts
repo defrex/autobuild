@@ -192,6 +192,31 @@ describe('reduceBuild: empty log', () => {
   })
 })
 
+describe('reduceBuild: dispatch recovery and discard', () => {
+  test('retains ordered failures and clears discard intent at terminal completion', () => {
+    const requested = toLog([
+      ev('dispatch.failed', { stage: 'workspace', attempt: 1, error: 'offline' }),
+      ev('dispatch.failed', { stage: 'workspace', attempt: 2, error: 'still offline' }),
+      ev('build.discard-requested', {}),
+    ])
+    expect(reduceBuild(requested)).toMatchObject({
+      status: 'queued',
+      dispatchFailures: [
+        { stage: 'workspace', attempt: 1, error: 'offline', seq: 1 },
+        { stage: 'workspace', attempt: 2, error: 'still offline', seq: 2 },
+      ],
+      discardRequest: { seq: 3 },
+    })
+
+    const completed = toLog([
+      ev('build.discard-requested', {}),
+      ev('build.completed', { outcome: 'discarded' }),
+    ])
+    expect(reduceBuild(completed)).toMatchObject({ status: 'done', outcome: 'discarded' })
+    expect(reduceBuild(completed).discardRequest).toBeUndefined()
+  })
+})
+
 describe('reduceBuild: §15.6 happy path', () => {
   const log = toLog([
     ...prelude(), // 1-4

@@ -25,6 +25,7 @@ export type BuildControlAction =
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'abort' }
+  | { kind: 'discard' }
   | { kind: 'auto-merge-on' }
   | { kind: 'auto-merge-off' }
   | { kind: 'toggle-pause' }
@@ -37,7 +38,13 @@ export type BuildControlAction =
       escalationIds?: readonly string[]
     }
 
-export type BuildControlCommand = 'pause' | 'resume' | 'abort' | 'auto-merge-on' | 'auto-merge-off'
+export type BuildControlCommand =
+  | 'pause'
+  | 'resume'
+  | 'abort'
+  | 'discard'
+  | 'auto-merge-on'
+  | 'auto-merge-off'
 
 export type BuildControlResult =
   | {
@@ -126,6 +133,13 @@ async function appendCommand(
         payload: {},
       })
       break
+    case 'discard':
+      event = await store.append(slug, {
+        actor,
+        type: 'build.discard-requested',
+        payload: {},
+      })
+      break
     case 'auto-merge-on':
       event = await store.append(slug, {
         actor,
@@ -169,10 +183,25 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     )
   }
 
-  const state = reduceBuild(await opts.store.getEvents(opts.slug))
-  activeState(opts.slug, state)
+  const events = await opts.store.getEvents(opts.slug)
+  const state = reduceBuild(events)
   const user = buildControlUser(opts.env)
 
+  if (opts.action.kind === 'discard') {
+    if (state.status !== 'queued') {
+      throw new BuildControlError(
+        'inactive',
+        `build "${opts.slug}" cannot be discarded (status: ${state.status}); discard requires queued`,
+      )
+    }
+    const existing = events.findLast((event) => event.type === 'build.discard-requested')
+    if (existing !== undefined) {
+      return { kind: 'command', slug: opts.slug, command: 'discard', event: existing }
+    }
+    return appendCommand(opts.store, opts.slug, user, 'discard')
+  }
+
+  activeState(opts.slug, state)
   switch (opts.action.kind) {
     case 'pause':
     case 'resume':
@@ -268,6 +297,8 @@ function actionLabel(action: BuildControlAction): string {
       return 'toggle auto-merge for'
     case 'toggle-pause':
       return 'pause or resume'
+    case 'discard':
+      return 'discard'
     case 'answer':
       return 'answer'
     default:

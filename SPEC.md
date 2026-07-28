@@ -195,7 +195,14 @@ Small, independently runnable, crash-safe:
   immutable build slug, provisions a workspace, and launches build-runners up
   to capacity. On process startup it attempts every current build for its
   repo, so re-running `ab dispatch` resumes durable work rather than only
-  looking for new tickets. It also owns observation back-pressure: settling
+  looking for new tickets. Every ordinary tick also completes queued dispatch
+  records whose pre-run sequence was interrupted: it reconstructs a missing
+  `build.created` from the immutable record, executes only missing workspace,
+  spec, and ticket-notification boundaries, and records each failed attempt as
+  `dispatch.failed`. `build.created` retains any claim-time auto-merge
+  attribution until its human-authored command fact is materialized, while
+  `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
+  It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
   (§12). Cron-friendly.
 - **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
@@ -863,7 +870,8 @@ event-level mechanics live in the repository catalog and reducer tests):
 
 The TicketSource **initiates and receives projections; it is never consulted
 mid-build and never used as artifact storage.** Dispatch reads the ticket
-(including the spec) at claim time as part of initiation; after import, the
+(including the spec) as part of initiation — at claim time, or on a later tick
+while an interrupted dispatch still lacks its imported spec. After import, the
 build never reads the tracker again. Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
@@ -914,8 +922,13 @@ rendered — the UI shows acknowledged state.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
-any build's trail. The concrete presentation — layout, key bindings, colors —
-is owned by the dashboard implementation and its tests.
+any build's trail. Every nonterminal build, including `queued`, has a dashboard
+row; a pre-run row names its pending dispatch boundary or latest durable
+failure. A human may discard only such a queued build. Discard is dispatcher
+cleanup, returns the ticket to its configured Ready state, and completes with
+`discarded`; it is deliberately distinct from abort, which returns work to
+Triage for human judgment. The concrete presentation — layout, key bindings,
+colors — is owned by the dashboard implementation and its tests.
 
 ## 15. Event vocabulary
 
@@ -969,7 +982,7 @@ accidentally interpret repository state.
 6. **Liveness is not history.** Heartbeats and runner leases are mutable
    columns on the `builds` table, never events — they would drown the log.
 7. **[D2] Operator commands are events in the same log.** Humans append
-   `*-requested`/`*-cancelled` events, `escalation.answered`, and dispatcher
+   `*-requested`/`*-cancelled` events (including queued-only discard), `escalation.answered`, and dispatcher
    setting facts; kernel or dispatcher plumbing acknowledges effects that
    require a boundary. The store is the *only* coordination surface — no side
    channel — and polling covers commands exactly the way it covers
@@ -983,8 +996,8 @@ The families, with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `runner.attached`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.auto-merge-requested`; `escalation.answered` |
+| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `build.completed` |
+| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -1030,6 +1043,10 @@ reducer precedence over blocked. Auto-merge state tracks the latest human
 *desired* value separately from the latest *applied* fact, settled only when
 both match — a stale acknowledgement can never erase newer intent.
 
+Queued state additionally retains ordered `dispatch.failed` diagnostics and an
+outstanding `build.discard-requested` fact. `build.completed {outcome:
+"discarded"}` settles that intent without changing the status vocabulary.
+
 Every projection — operator UI, CLI status, dispatcher decisions — is a
 reduction of the logs. Caches may key a reduction by last event sequence,
 but no decision ever consults a snapshot in place of the append-only log.
@@ -1042,7 +1059,7 @@ repository journal; each ignores the other's facts.
 run):
 
 ```
-build.created → workspace.provisioned{base:{source:remote,sha}} → spec.imported → runner.attached
+build.created → workspace.provisioned{base:{source:remote,sha}} → spec.imported → dispatch.comment-posted → runner.attached
 plan.started{r1} → plan.completed{plan@1, verifySteps}
 plan-review.started{r1} → plan-review.verdict{approve}
 implement.started{r1} → implement.completed{commits, notes@1}
@@ -1052,6 +1069,17 @@ verify.started{e2e} → pr-attachment.designated{artifact,filename,mediaType} �
 finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.completed{pr} → finalize.step-completed{release-notes}
 (later, janitor:) pr.merged → workspace.released → build.completed{merged} → pr-attachment.reclaimed{hostedSeq}
 ```
+
+**Interrupted dispatch:** if the log stops after `build.created`, a later
+ordinary dispatcher tick provisions the workspace, atomically imports the spec,
+posts the ticket notice once, and launches the runner. Claim-time auto-merge
+attribution retained by `build.created` is materialized as the ordinary
+human-authored request before launch. A failed boundary appends `dispatch.failed
+{stage,attempt,error}` and stays queued for another tick. A discard request is
+honored only while the build remains queued; one that races with runner
+attachment is inert and cannot tear down live work. A human discard instead
+releases any partial workspace and lease, returns the ticket to Ready, then
+appends `build.completed {outcome: discarded}` last. No runner is required.
 
 **A — verify failure:** `verify.completed {step: e2e, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started

@@ -207,6 +207,7 @@ function buildControlConfirmation(result: BuildControlResult): string {
         pause: 'pause requested',
         resume: 'resume requested',
         abort: 'abort requested',
+        discard: 'discard requested',
         'auto-merge-on': 'auto-merge requested',
         'auto-merge-off': 'auto-merge cancelled',
       }

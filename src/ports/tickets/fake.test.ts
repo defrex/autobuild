@@ -32,6 +32,15 @@ describe('FakeTicketSource', () => {
     expect(await source.claim('t-2')).toBe(true)
   })
 
+  test('any state transition releases a claim, including custom Ready names', async () => {
+    const source = new FakeTicketSource([ticket('t-1')])
+
+    expect(await source.claim('t-1')).toBe(true)
+    expect(await source.claim('t-1')).toBe(false)
+    await source.transition('t-1', 'Selected')
+    expect(await source.claim('t-1')).toBe(true)
+  })
+
   test('claim returns false for unknown ids', async () => {
     const source = new FakeTicketSource([ticket('t-1')])
     expect(await source.claim('nope')).toBe(false)

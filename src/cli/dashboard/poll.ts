@@ -13,9 +13,9 @@ export interface DashboardBuildReader {
 export interface DashboardPollSnapshot {
   /** Monotonic process-local cache revision. */
   revision: number
-  /** Active rows only. Objects are reused while their streams are unchanged. */
+  /** Every nonterminal row. Objects are reused while their streams are unchanged. */
   builds: DashboardBuild[]
-  /** Every nonterminal reduction, including queued builds that have no row yet. */
+  /** Every nonterminal reduction; this map and `builds` have matching membership. */
   states: ReadonlyMap<string, BuildState>
 }
 

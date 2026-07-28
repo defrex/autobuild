@@ -208,7 +208,7 @@ export function describeTicketSourceContract(
       })
     })
 
-    test('claim succeeds once and an immediate repeated claim returns false', async () => {
+    test('claim succeeds once, rejects an immediate repeat, and resets after Ready handback', async () => {
       await withTicketSource(factory, async (harness) => {
         const created = await createTracked(
           harness,
@@ -221,6 +221,8 @@ export function describeTicketSourceContract(
 
         expect(await harness.source.claim(created.ref.id)).toBe(true)
         expect(await harness.source.claim(created.ref.id)).toBe(false)
+        await harness.source.transition(created.ref.id, harness.states.ready)
+        expect(await harness.source.claim(created.ref.id)).toBe(true)
       })
     })
 
