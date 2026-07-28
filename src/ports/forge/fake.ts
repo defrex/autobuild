@@ -31,6 +31,7 @@ export interface OpenPrRecord {
   base: string
   title: string
   body: string
+  mergeMessage?: string
 }
 
 export interface CommentRecord {
@@ -311,6 +312,7 @@ export class FakeForge implements Forge {
     base: string
     title: string
     body: string
+    mergeMessage?: string
   }): Promise<PrRef> {
     // Idempotent by head branch, mirroring GitHubForge (SPEC §8.7).
     for (let i = this.opened.length - 1; i >= 0; i -= 1) {

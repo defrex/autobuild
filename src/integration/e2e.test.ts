@@ -179,6 +179,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
       base: 'main',
       title: 'Add login rate limiting',
       body: 'Throttles repeated failed logins per the spec.\n',
+      mergeMessage: 'Add login rate limiting\n\nThrottles repeated failed logins per the spec.\n',
     },
   ])
   expect(h.forge.comments).toHaveLength(1)
@@ -765,6 +766,63 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   expect(reduceBuild(final).status).toBe('done')
   expect(reduceBuild(final).outcome).toBe('merged')
   expect(typesOf(final)).not.toContain('escalation.raised')
+}, 30_000)
+
+test('local-git runs the complete no-remote lifecycle and lands only after independent observation', async () => {
+  const configToml = CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"')
+  const h = await track(
+    makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-1')],
+      configToml,
+      localGitForge: true,
+    }),
+  )
+
+  expect(await git(['remote', '-v'], h.origin)).toBe('')
+  await h.dispatcher.tick()
+  const initialBase = await git(['rev-parse', 'main'], h.origin)
+  const parked = await h.runLatest()
+  expect(parked.prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+
+  let events = await h.events(SLUG)
+  const finalized = ofType(events, 'finalize.completed')[0]!
+  expect(finalized.payload.pr.url).toBe(`refs/heads/${BRANCH}`)
+  const head = finalized.payload.pr.headSha
+  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
+  expect(await git(['diff', '--name-only', `main...${BRANCH}`], h.origin)).toContain(
+    'rate-limit.txt',
+  )
+
+  // No consent: polling is observation-only and leaves main untouched.
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await git(['rev-parse', 'main'], h.origin)).toBe(initialBase)
+  expect(typesOf(await h.events(SLUG))).not.toContain('pr.merged')
+
+  await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+
+  // First boundary performs only the guarded squash; no merge fact is assumed.
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  const landed = await git(['rev-parse', 'main'], h.origin)
+  expect(landed).not.toBe(initialBase)
+  events = await h.events(SLUG)
+  expect(typesOf(events)).not.toContain('pr.merged')
+
+  // A later independent state read observes the pending landing and completes.
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+  const final = await h.events(SLUG)
+  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(ofType(final, 'pr.merged')[0]!.payload.sha).toBe(landed)
+  expect(await git(['show', '-s', '--format=%P', landed], h.origin)).toBe(initialBase)
+  const description = textContent((await h.store.getArtifact(SLUG, 'pr-description'))!)
+  expect(await git(['show', '-s', '--format=%B', landed], h.origin)).toBe(description.trimEnd())
+  expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
+  expect(h.tickets.comments.at(-1)?.body).toBe(`build ${SLUG} merged: refs/heads/${BRANCH}`)
 }, 30_000)
 
 test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, and later recovers', async () => {

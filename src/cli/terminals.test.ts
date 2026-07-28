@@ -802,6 +802,7 @@ describe('ab done — finalize', () => {
         base: 'main',
         title: 'Add auth rate limiting',
         body: 'Closes ENG-42.\nDetails inside.\n',
+        mergeMessage: '# Add auth rate limiting\n\nCloses ENG-42.\nDetails inside.\n',
       },
     ])
     // §15.3: finalize.completed's actor is the KERNEL — the kernel opens the

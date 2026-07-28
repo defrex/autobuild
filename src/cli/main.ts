@@ -329,13 +329,15 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // repo, not a build, so they route before any store/env requirement.
     case 'init': {
       const usage =
-        'usage: ab init [target] [--force] [--ticket-source file|linear] ' +
-        '[--workspace-provider git-worktree] [--role-profile split|<registered-runtime>] ' +
+        'usage: ab init [target] [--force] [--forge github|local-git] ' +
+        '[--ticket-source file|linear] [--workspace-provider git-worktree] ' +
+        '[--role-profile split|<registered-runtime>] ' +
         '[--no-interactive] (§16.3)'
       const parsed = parseArgs(
         rest,
         {
           force: 'boolean',
+          forge: 'value',
           'ticket-source': 'value',
           'workspace-provider': 'value',
           'role-profile': 'value',
@@ -349,6 +351,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         force: parsed.flags.has('force'),
         stdout,
         selections: {
+          forge: stringFlag(parsed, 'forge'),
           ticketSource: stringFlag(parsed, 'ticket-source'),
           workspaceProvider: stringFlag(parsed, 'workspace-provider'),
           roleProfile: stringFlag(parsed, 'role-profile'),

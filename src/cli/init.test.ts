@@ -374,6 +374,7 @@ describe('abInit — package-script-aware config rendering', () => {
     )
     const baseline = renderAutobuildTemplate(template, new Set())
     const selections = {
+      forge: 'github',
       ticketSource: 'file',
       workspaceProvider: 'git-worktree',
       roleProfile: 'claude',
@@ -382,7 +383,7 @@ describe('abInit — package-script-aware config rendering', () => {
       renderInitSelections(baseline.replace('# @ab-init/roles-start', ''), selections),
     ).toThrow(/must each occur exactly once/)
     expect(() => renderInitSelections(`${baseline}\n${baseline}`, selections)).toThrow(
-      /must each occur exactly once/,
+      /must occur exactly once/,
     )
   })
 })
@@ -424,7 +425,12 @@ describe('abInit — interactive adapter onboarding', () => {
     const template = await readFile(join(DIST_ROOT, 'templates', 'autobuild.toml'), 'utf8')
     const expected = renderInitSelections(
       renderAutobuildTemplate(template, new Set(['lint', 'type-check', 'test'])),
-      { ticketSource: 'file', workspaceProvider: 'git-worktree', roleProfile: 'split' },
+      {
+        forge: 'github',
+        ticketSource: 'file',
+        workspaceProvider: 'git-worktree',
+        roleProfile: 'split',
+      },
     )
 
     await abInit({ targetRepo: target })
@@ -455,21 +461,25 @@ describe('abInit — interactive adapter onboarding', () => {
       'Choose a ticket source',
       'Choose a workspace provider',
       'Choose a role runtime/model arrangement',
+      'Choose a forge',
     ])
     expect(prompter.questions.map((question) => question.defaultValue)).toEqual([
       'file',
       'git-worktree',
       'split',
+      'github',
     ])
     expect(prompter.questions.map((question) => question.choices[0]?.value)).toEqual([
       'file',
       'git-worktree',
       'split',
+      'github',
     ])
     expect(prompter.questions.every((question) => question.help === INIT_PLUGIN_HELP)).toBe(true)
     expect(prompter.closed).toBe(true)
 
     const config = parseConfig(await generated(target))
+    expect(config.forge).toBe('github')
     expect(config.tickets.source).toBe('file')
     expect(config.workspace).toEqual({ provider: 'git-worktree', config: {} })
     expect(config.commands).toMatchObject({
@@ -578,6 +588,7 @@ describe('abInit — interactive adapter onboarding', () => {
     expect(partial.questions.map((question) => question.message)).toEqual([
       'Choose a workspace provider',
       'Choose a role runtime/model arrangement',
+      'Choose a forge',
     ])
 
     const fullRepo = join(target, 'full')
@@ -585,6 +596,7 @@ describe('abInit — interactive adapter onboarding', () => {
     await abInit({
       targetRepo: fullRepo,
       selections: {
+        forge: 'local-git',
         ticketSource: 'file',
         workspaceProvider: 'git-worktree',
         roleProfile: 'claude',
@@ -616,6 +628,26 @@ describe('abInit — interactive adapter onboarding', () => {
       expectLeanGeneratedConfig(flaggedSource)
     })
   }
+
+  test('interactive local-git forge is byte-identical to the equivalent flag', async () => {
+    const interactive = join(target, 'interactive-local-git')
+    const flagged = join(target, 'flagged-local-git')
+    await abInit({
+      targetRepo: interactive,
+      prompter: new ScriptedInitPrompter(['file', 'git-worktree', 'claude', 'local-git']),
+    })
+    await abInit({
+      targetRepo: flagged,
+      selections: {
+        forge: 'local-git',
+        ticketSource: 'file',
+        workspaceProvider: 'git-worktree',
+        roleProfile: 'claude',
+      },
+    })
+    expect(await generated(interactive)).toBe(await generated(flagged))
+    expect(parseConfig(await generated(flagged)).forge).toBe('local-git')
+  })
 
   for (const ticketSource of ['file', 'linear'] as const) {
     test(`interactive ${ticketSource} tickets are byte-identical to equivalent flags`, async () => {
@@ -665,7 +697,7 @@ describe('abInit — interactive adapter onboarding', () => {
   })
 
   test('cancellation at every question leaves the repository untouched', async () => {
-    for (const cancelAt of [1, 2, 3]) {
+    for (const cancelAt of [1, 2, 3, 4]) {
       const repo = join(target, `cancel-${cancelAt}`)
       await mkdir(repo)
       let selected = 0
@@ -691,6 +723,9 @@ describe('abInit — interactive adapter onboarding', () => {
   })
 
   test('fresh invalid and contradictory selections fail, while an existing config ignores them', async () => {
+    await expect(abInit({ targetRepo: target, selections: { forge: 'gitlab' } })).rejects.toThrow(
+      /invalid --forge.*github\|local-git/,
+    )
     await expect(
       abInit({ targetRepo: target, selections: { ticketSource: 'jira' } }),
     ).rejects.toThrow(/invalid --ticket-source.*file\|linear/)
@@ -707,6 +742,7 @@ describe('abInit — interactive adapter onboarding', () => {
       targetRepo: target,
       force: true,
       selections: {
+        forge: 'not-real',
         ticketSource: 'not-real',
         workspaceProvider: 'also-not-real',
         roleProfile: 'invalid',
@@ -1042,6 +1078,8 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
       await runCli(
         [
           'init',
+          '--forge',
+          'local-git',
           '--ticket-source',
           'linear',
           '--workspace-provider',
@@ -1054,6 +1092,7 @@ describe('runCli routing — init/upgrade run outside build sessions (§16.3)', 
     ).toBe(0)
     expect(prompter.questions).toHaveLength(0)
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
+    expect(config.forge).toBe('local-git')
     expect(config.tickets.source).toBe('linear')
     expect(config.roles.plan?.model).toBe(INIT_SPLIT_AUTHOR_MODEL)
     expect(config.roles['plan-review']?.model).toBe(INIT_SPLIT_REVIEWER_MODEL)

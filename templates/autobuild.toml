@@ -4,6 +4,7 @@
 
 baseBranch = "main"
 capacity = 1
+# @ab-init/forge
 
 # Commands the kernel may run.
 [commands]
