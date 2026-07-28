@@ -25,8 +25,19 @@ export interface RuntimeUsabilityInput {
   models: readonly string[]
 }
 
+export interface RuntimeUsabilityDiagnostic {
+  usable: boolean
+  /** Human-readable prerequisite/auth result. Must not contain credentials. */
+  reason: string
+}
+
+/** Boolean remains accepted for backward compatibility with plugin probes. */
+export type RuntimeUsabilityResult = boolean | RuntimeUsabilityDiagnostic
+
 /** Optional onboarding probe. Absence means init must not suggest the runtime. */
-export type RuntimeUsabilityProbe = (input: RuntimeUsabilityInput) => Promise<boolean>
+export type RuntimeUsabilityProbe = (
+  input: RuntimeUsabilityInput,
+) => Promise<RuntimeUsabilityResult>
 
 export interface RuntimeRegistration {
   /** The adapter behind this runtime (§9). */

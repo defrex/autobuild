@@ -15,7 +15,7 @@ import {
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError } from './provider-error'
-import type { RuntimeUsabilityInput } from './runtime'
+import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
 export interface CodexCliInvocation {
@@ -56,15 +56,23 @@ const runCodexCli: CodexCliRunFn = async (invocation) => {
 export async function isCodexRuntimeUsable(
   input: RuntimeUsabilityInput,
   runCli: CodexCliRunFn = runCodexCli,
-): Promise<boolean> {
+): Promise<RuntimeUsabilityResult> {
   const env = Object.fromEntries(
     Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   )
   try {
     const result = await runCli({ args: ['login', 'status'], cwd: input.cwd, env })
     return result.exitCode === 0
-  } catch {
-    return false
+      ? { usable: true, reason: 'Codex CLI is installed and logged in' }
+      : {
+          usable: false,
+          reason: result.stderr.trim() || result.stdout.trim() || 'Codex is not logged in',
+        }
+  } catch (error) {
+    return {
+      usable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 

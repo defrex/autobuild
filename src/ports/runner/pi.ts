@@ -55,7 +55,7 @@ import {
 import { classifyProviderError } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
-import type { RuntimeUsabilityInput } from './runtime'
+import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 
 /** Built-in tool set enabled for a build session. `bash` is mandatory — the
  * agent invokes the `ab` CLI through it — and is the one we override with an
@@ -104,8 +104,10 @@ const createPiAuthRuntime: PiAuthRuntimeFactory = async () => {
 export async function isPiRuntimeUsable(
   input: RuntimeUsabilityInput,
   createRuntime: PiAuthRuntimeFactory = createPiAuthRuntime,
-): Promise<boolean> {
-  if (input.models.length === 0) return false
+): Promise<RuntimeUsabilityResult> {
+  if (input.models.length === 0) {
+    return { usable: false, reason: 'Pi has no default model configured to probe' }
+  }
   const env = Object.fromEntries(
     Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   )
@@ -114,11 +116,19 @@ export async function isPiRuntimeUsable(
     for (const configured of new Set(input.models)) {
       const ref = parsePiModel(configured)
       const model = runtime.getModel(ref.provider, ref.id)
-      if (model === undefined || (await runtime.getAuth(model, { env })) === undefined) return false
+      if (model === undefined) {
+        return { usable: false, reason: `Pi model "${configured}" is unavailable` }
+      }
+      if ((await runtime.getAuth(model, { env })) === undefined) {
+        return { usable: false, reason: `Pi has no authentication for model "${configured}"` }
+      }
     }
-    return true
-  } catch {
-    return false
+    return { usable: true, reason: 'Pi model and authentication are available' }
+  } catch (error) {
+    return {
+      usable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 

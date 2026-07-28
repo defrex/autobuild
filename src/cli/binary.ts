@@ -11,7 +11,6 @@ import { loadDotEnv } from './dotenv'
 import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
 import { openProductionStore } from './store-opening'
 import { processTerminal, processTerminalInput } from './terminal'
-import { createProcessInitPrompter } from './init-prompt'
 import type { DashboardRendererResolver } from './dashboard/render'
 import { loadConfig } from '../config/load'
 import { loadPlugins } from '../plugins/load'
@@ -62,13 +61,7 @@ export async function runBinary(
         terminal: processTerminal(process.stdout),
         input: processTerminalInput(process.stdin),
         ...(command === 'init'
-          ? {
-              initPrompter: createProcessInitPrompter(
-                process.stdin,
-                process.stdout,
-                controller.signal,
-              ),
-            }
+          ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
           : {}),
         upgradeResolverFactory: createUpgradeAgentResolver,
         ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),

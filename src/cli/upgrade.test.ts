@@ -155,18 +155,14 @@ async function seedRealPlanConflict(repo: string): Promise<{
 }
 
 describe('upgrade distribution fixture', () => {
-  test('uses the complete verify-steps assignment anchor contract', async () => {
+  test('init leaves verification empty instead of interpreting package scripts', async () => {
     await writeFile(join(target, 'package.json'), JSON.stringify({ scripts: { test: 'bun test' } }))
 
     await install()
 
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
-    expect(config.verify.steps).toEqual(['test'])
-    expect(config.verify.stepConfigs.test).toEqual({
-      kind: 'check',
-      command: 'test',
-      always: true,
-    })
+    expect(config.commands).toEqual({})
+    expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
   })
 })
 

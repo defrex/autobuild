@@ -1308,22 +1308,24 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 
 This project ships the canonical default skills for every phase plus the
-non-phase surfaces (`spec`, `tickets`, `guide`, and the outer-loop skills).
-`ab init` installs into a repo:
+non-phase surfaces (`spec`, `tickets`, `guide`, `setup`, and the outer-loop
+skills). `ab init` installs into a repo:
 
-- **A baseline `autobuild.toml`**, rendered only when absent, seeded from the
-  target's own package scripts so generated commands match reality. On an
-  interactive first creation, init may select among the shipped ticket,
-  workspace, and role-runtime/model arrangements; every offered choice has a
-  headless flag equivalent. Local adapters are the prompt defaults, and the
-  suggested role arrangement separates authoring and review models. Init probes
-  every registered runtime through an optional runtime-local usability check;
-  only runtimes with usable executable/authentication prerequisites are
-  suggested. Non-interactive unresolved selection chooses a detected runtime
-  and writes `[roles.default].runtime` explicitly, or fails before mutation and
-  names the profile flag when none is usable. Existing config is never
-  prompted for, reconciled, validated against selection flags, or overwritten,
-  even with `--force`.
+- **A stack-neutral `autobuild.toml` skeleton**, rendered only when absent. It
+  declares no setup command or verify step and inspects no language or package
+  manifest. Its explicit `[roles.default].runtime` is only a schema placeholder.
+  Existing config is never overwritten, even with `--force`.
+- **An agent-driven setup handoff.** Init probes every registered runtime and
+  reports each usable/unusable result, then chooses an interactive setup agent
+  using the product-fixed `claude`, `codex`, `pi` preference order. The launcher
+  choice does not constrain the pipeline's final roles or models. On an
+  interactive terminal, init starts that coding-agent CLI directly in the
+  target repository with inherited terminal I/O and no `AB_*` session identity;
+  its exit status is init's. This direct process creates no build, session,
+  transcript, event, or BuildStore record. Without a usable shipped runtime or
+  an interactive terminal, installation still succeeds and init prints the
+  exact setup prompt for the user to run in a coding agent. On rerun, the prompt
+  asks the agent to review and improve the preserved existing config.
 - **Copies** of the default skills into the project skills directory,
   namespaced `ab-*`. Copies, not references — per-repo customization is the
   point: this repo's code-review standards and e2e driving instructions live
@@ -1333,8 +1335,8 @@ non-phase surfaces (`spec`, `tickets`, `guide`, and the outer-loop skills).
   non-agent-invocable: they are invoked explicitly by the runner or a human,
   never auto-triggered by a model pattern-matching a description — a model
   must not start a pipeline phase by accident. The model-invocable exceptions
-  (`ab-spec`, `ab-tickets`, `ab-guide`) are exactly the skills that **drive
-  no phase**; membership is decided by that criterion, not taste.
+  (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-setup`) are exactly the skills that
+  **drive no phase**; membership is decided by that criterion, not taste.
 
 **Installation identity** is local to the running distribution. `ab --version`
 reads its package version, Bun-recorded forge commit when present, and the

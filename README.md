@@ -63,9 +63,9 @@ Then, from the repository you want built:
 ab init
 ```
 
-Runs a short setup survey, writes an explicit runtime default to
-`autobuild.toml`, and vendors the `ab-*` agent skills — see the
-[configuration reference](docs/configuration.md) for every option.
+Vendors the editable `ab-*` skills, writes a stack-neutral config, and hands
+repository-aware setup to a coding agent — see the
+[configuration reference](docs/configuration.md) for details.
 
 ```sh
 ab dispatch

@@ -33,7 +33,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@clack/prompts": "^1.7.0",
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "drizzle-orm": "^0.45.2",
     "semver": "^7.7.4",
