@@ -318,6 +318,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'build.created':
       case 'workspace.provisioned':
       case 'workspace.released':
+      case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
       case 'pr-attachment.hosted':
       case 'pr-attachment.reclaimed':

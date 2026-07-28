@@ -527,7 +527,10 @@ export class Dispatcher {
         await this.reclaimPrAttachments(record.slug, events)
         continue
       }
-      if (state.discardRequest !== undefined) {
+      // Discard is a queued-only recovery control. A request that raced with
+      // runner attachment is deliberately inert: it must never tear a live
+      // runner's workspace down or return its ticket for a duplicate build.
+      if (state.status === 'queued' && state.discardRequest !== undefined) {
         await this.cleanupDiscarded(record, events, report)
         continue
       }
@@ -865,6 +868,9 @@ export class Dispatcher {
             ticket: record.ticket,
             repo: record.repo,
             baseBranch: config.baseBranch,
+            ...(seed?.autoMergeUser !== undefined
+              ? { autoMergeRequestedBy: seed.autoMergeUser }
+              : {}),
             ...(config.pr !== undefined ? { pr: config.pr } : {}),
           },
         })
@@ -874,12 +880,14 @@ export class Dispatcher {
         }
       }
 
+      const created = events.find((event) => event.type === 'build.created')
+      const autoMergeUser = seed?.autoMergeUser ?? created?.payload.autoMergeRequestedBy
       if (
-        seed?.autoMergeUser !== undefined &&
+        autoMergeUser !== undefined &&
         !events.some((event) => event.type === 'build.auto-merge-requested')
       ) {
         await store.append(record.slug, {
-          actor: humanActor(seed.autoMergeUser),
+          actor: humanActor(autoMergeUser),
           type: 'build.auto-merge-requested',
           payload: {},
         })
@@ -968,11 +976,24 @@ export class Dispatcher {
       }
 
       stage = 'comment'
-      if (record.ticket !== undefined) {
+      if (
+        record.ticket !== undefined &&
+        !events.some((event) => event.type === 'dispatch.comment-posted')
+      ) {
         await this.deps.tickets.comment(record.ticket.id, `build ${record.slug} dispatched`)
+        await store.append(record.slug, {
+          actor: DISPATCHER,
+          type: 'dispatch.comment-posted',
+          payload: {},
+        })
       }
 
       stage = 'launch'
+      // Discard validation and recovery selection happened before several
+      // provider awaits. Re-read immediately before launch so a request made
+      // during those boundaries parks cleanly for the next janitor pass.
+      const launchState = reduceBuild(await store.getEvents(record.slug))
+      if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) return false
       await this.launch(record.slug, launched)
       if (authored) report.authored += 1
       return true
@@ -1006,14 +1027,9 @@ export class Dispatcher {
       const events = await this.deps.store.getEvents(record.slug)
       const state = reduceBuild(events)
       if (state.status !== 'queued' || state.discardRequest !== undefined) continue
-      const latestFailure = state.dispatchFailures.at(-1)
-      const incomplete =
-        !events.some((event) => event.type === 'build.created') ||
-        openWorkspace(events) === null ||
-        state.specRev === undefined ||
-        latestFailure?.stage === 'comment' ||
-        latestFailure?.stage === 'launch'
-      if (!incomplete) continue
+      // Queued itself means runner attachment is still missing. Always enter
+      // the fact-driven helper: it skips every completed boundary and retries
+      // only the final launch when setup is already durable.
       if (await this.attemptDispatchCompletion(record, launched, report)) report.recovered += 1
     }
   }
@@ -1040,7 +1056,13 @@ export class Dispatcher {
 
       let events = await store.getEvents(record.slug)
       const state = reduceBuild(events)
-      if (state.status === 'done' || state.status === 'aborted') continue
+      if (
+        state.status === 'done' ||
+        state.status === 'aborted' ||
+        (state.status === 'queued' && state.discardRequest !== undefined)
+      ) {
+        continue
+      }
 
       let decision = decideNext(events, config)
       if (
@@ -1108,7 +1130,13 @@ export class Dispatcher {
         continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
       const events = await this.deps.store.getEvents(record.slug)
-      if (decideNext(events, this.deps.config).kind === 'wait') continue
+      const state = reduceBuild(events)
+      if (
+        (state.status === 'queued' && state.discardRequest !== undefined) ||
+        decideNext(events, this.deps.config).kind === 'wait'
+      ) {
+        continue
+      }
       const result = await this.launch(record.slug, launched)
       if (result === 'scheduled') report.swept += 1
     }

@@ -74,6 +74,7 @@ const HAPPY_PREFIX = [
   'build.created',
   'workspace.provisioned',
   'spec.imported',
+  'dispatch.comment-posted',
   'runner.attached',
   'plan.started',
   'session.started',
@@ -114,6 +115,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
   ])
   const created = ofType(afterDispatch, 'build.created')[0]!
   expect(created.actor).toEqual({ kind: 'dispatcher' })
@@ -149,7 +151,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 
   // Rule-boundary payloads.
-  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(3)
+  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(4)
   const planCompleted = ofType(events, 'plan.completed')[0]!
   expect(planCompleted.payload).toEqual({
     round: 1,
@@ -705,7 +707,12 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
+  expect(typesOf(events)).toEqual([
+    'build.created',
+    'workspace.provisioned',
+    'spec.imported',
+    'dispatch.comment-posted',
+  ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
   expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(branchCut)
@@ -773,7 +780,12 @@ test('a1. unavailable origin still dispatches from local main and records why', 
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
+  expect(typesOf(events)).toEqual([
+    'build.created',
+    'workspace.provisioned',
+    'spec.imported',
+    'dispatch.comment-posted',
+  ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base.source).toBe('local')
   if (provisioned.payload.base.source !== 'local') {
@@ -1269,6 +1281,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
     'runner.attached',
     'plan.started',
     'session.started',
@@ -1448,6 +1461,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
     'runner.attached',
     'plan.started',
     'session.started',

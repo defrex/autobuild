@@ -197,8 +197,11 @@ Small, independently runnable, crash-safe:
   repo, so re-running `ab dispatch` resumes durable work rather than only
   looking for new tickets. Every ordinary tick also completes queued dispatch
   records whose pre-run sequence was interrupted: it reconstructs a missing
-  `build.created` from the immutable record, executes only missing workspace
-  and spec boundaries, and records each failed attempt as `dispatch.failed`.
+  `build.created` from the immutable record, executes only missing workspace,
+  spec, and ticket-notification boundaries, and records each failed attempt as
+  `dispatch.failed`. `build.created` retains any claim-time auto-merge
+  attribution until its human-authored command fact is materialized, while
+  `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
   (§12). Cron-friendly.
@@ -993,7 +996,7 @@ The families, with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.failed`, `runner.attached`, `build.completed` |
+| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
@@ -1056,7 +1059,7 @@ repository journal; each ignores the other's facts.
 run):
 
 ```
-build.created → workspace.provisioned{base:{source:remote,sha}} → spec.imported → runner.attached
+build.created → workspace.provisioned{base:{source:remote,sha}} → spec.imported → dispatch.comment-posted → runner.attached
 plan.started{r1} → plan.completed{plan@1, verifySteps}
 plan-review.started{r1} → plan-review.verdict{approve}
 implement.started{r1} → implement.completed{commits, notes@1}
@@ -1069,8 +1072,12 @@ finalize.started → pr-attachment.hosted{designationSeq,asset} → finalize.com
 
 **Interrupted dispatch:** if the log stops after `build.created`, a later
 ordinary dispatcher tick provisions the workspace, atomically imports the spec,
-and launches the runner. A failed boundary appends `dispatch.failed {stage,
-attempt,error}` and stays queued for another tick. A human discard instead
+posts the ticket notice once, and launches the runner. Claim-time auto-merge
+attribution retained by `build.created` is materialized as the ordinary
+human-authored request before launch. A failed boundary appends `dispatch.failed
+{stage,attempt,error}` and stays queued for another tick. A discard request is
+honored only while the build remains queued; one that races with runner
+attachment is inert and cannot tear down live work. A human discard instead
 releases any partial workspace and lease, returns the ticket to Ready, then
 appends `build.completed {outcome: discarded}` last. No runner is required.
 

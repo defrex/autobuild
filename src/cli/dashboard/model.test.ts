@@ -410,6 +410,17 @@ describe('projectBuild: the nonterminal-build filter', () => {
       'dispatch workspace failed (attempt 3): missing credentials',
     )
 
+    const commentRecovered = toLog([
+      ...prelude()
+        .slice(0, 3)
+        .map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('dispatch.failed', { stage: 'comment', attempt: 1, error: 'tracker offline' }),
+      ev('dispatch.comment-posted', {}),
+    ])
+    expect(
+      projectBuild(RECORD, reduceBuild(commentRecovered), CONFIG, commentRecovered)?.dispatch,
+    ).toBe('runner attachment pending')
+
     const discarding = toLog([
       ...failed.map(({ actor, type, payload }) => ({ actor, type, payload })),
       ev('build.discard-requested', {}),

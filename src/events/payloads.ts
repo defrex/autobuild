@@ -126,6 +126,9 @@ export const eventPayloadSchemas = {
     ticket: ticketRefSchema,
     repo: z.string().min(1),
     baseBranch: z.string().min(1),
+    /** Claim-time auto-merge intent retained across dispatch recovery until the
+     * ordinary human-authored command fact can be materialized. */
+    autoMergeRequestedBy: z.string().min(1).optional(),
     /** Frozen at claim time. Historical logs and disabled installs omit it. */
     pr: z
       .strictObject({
@@ -154,6 +157,8 @@ export const eventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
   }),
+  /** Durable boundary preventing duplicate ticket notifications on recovery. */
+  'dispatch.comment-posted': empty,
 
   // ── Operator commands (D2: commands are events in the same log) ───────────
   'build.pause-requested': reasonOnly,

@@ -52,6 +52,48 @@ describe('dispatch recovery event protocol', () => {
     ).toThrow(/invalid payload/)
   })
 
+  test('comment completion is a strict dispatcher boundary fact', () => {
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} }),
+    ).toMatchObject({ type: 'dispatch.comment-posted' })
+    expect(() =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatch.comment-posted',
+        payload: {},
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatch.comment-posted',
+        payload: { extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('build creation can retain claim-time auto-merge attribution', () => {
+    const base = {
+      ticket: { source: 'linear', id: 'AUT-1' },
+      repo: 'acme/app',
+      baseBranch: 'main',
+    }
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeRequestedBy: 'dispatch-op' },
+      }).payload,
+    ).toEqual({ ...base, autoMergeRequestedBy: 'dispatch-op' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeRequestedBy: '' },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
   test('discard requests are strict human facts', () => {
     expect(
       validateEventWrite({

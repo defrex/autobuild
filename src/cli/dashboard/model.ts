@@ -408,6 +408,7 @@ export function projectBuild(
     const spec = events.findLast(
       (event) => event.type === 'spec.imported' || event.type === 'spec.authored',
     )
+    const commentPosted = events.findLast((event) => event.type === 'dispatch.comment-posted')
     const latestFailure = events.findLast((event) => event.type === 'dispatch.failed')
     const failureSuperseded =
       latestFailure !== undefined &&
@@ -419,7 +420,10 @@ export function projectBuild(
           workspace.seq > latestFailure.seq) ||
         (latestFailure.payload.stage === 'spec' &&
           spec !== undefined &&
-          spec.seq > latestFailure.seq))
+          spec.seq > latestFailure.seq) ||
+        (latestFailure.payload.stage === 'comment' &&
+          commentPosted !== undefined &&
+          commentPosted.seq > latestFailure.seq))
     const dispatch =
       state.discardRequest !== undefined
         ? 'discard requested; cleanup and Ready handback pending'
