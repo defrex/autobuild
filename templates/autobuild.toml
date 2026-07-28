@@ -3,7 +3,7 @@
 # Ask your coding agent to change it.
 
 baseBranch = "main"
-capacity = 1
+capacity = 4
 # @ab-init/forge
 
 # Commands the kernel may run.
