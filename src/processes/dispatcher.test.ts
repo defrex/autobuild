@@ -574,12 +574,13 @@ describe('Dispatcher dispatch', () => {
     expect(builds.map((b) => b.slug)).toEqual(['add-rate-limiting'])
     expect(builds[0]?.branch).toBe('ab/add-rate-limiting')
 
-    // Exact event sequence (§12): created → provisioned → spec imported.
+    // Exact event sequence (§12): setup facts precede notification and launch.
     const events = await h.store.getEvents('add-rate-limiting')
     expect(events.map((e) => e.type)).toEqual([
       'build.created',
       'workspace.provisioned',
       'spec.imported',
+      'dispatch.comment-posted',
     ])
     expect(events[0]?.actor).toEqual({ kind: 'dispatcher' })
     expect(events[0]?.payload).toEqual({
@@ -676,7 +677,9 @@ releaseId = 42
       'build.auto-merge-requested',
       'workspace.provisioned',
       'spec.imported',
+      'dispatch.comment-posted',
     ])
+    expect(events[0]?.payload).toMatchObject({ autoMergeRequestedBy: 'dispatch-op' })
     expect(launchSnapshot).toEqual(events.map((event) => event.type))
     expect(events[1]?.actor).toEqual({ kind: 'human', user: 'dispatch-op' })
     expect(events[1]?.payload).toEqual({})
@@ -695,6 +698,7 @@ releaseId = 42
       'build.created',
       'workspace.provisioned',
       'spec.imported',
+      'dispatch.comment-posted',
     ])
   })
 
@@ -1080,6 +1084,7 @@ releaseId = 42
       'build.created',
       'workspace.provisioned',
       'spec.authored',
+      'dispatch.comment-posted',
     ])
     expect(events[2]?.actor).toEqual({ kind: 'agent', role: 'spec', session: 's_1' })
     expect(events[2]?.payload).toEqual({
@@ -1780,6 +1785,254 @@ describe('Dispatcher dependency gate', () => {
     // deeper walk exists only so a cycle could be named.
     expect(report.dependencyDiagnostics).toContain('ticket T-1 blocked by T-2 (not complete)')
     expect(h.tickets.dependencyQueries).toEqual([['T-2'], ['T-3']])
+  })
+})
+
+describe('Dispatcher interrupted-dispatch recovery', () => {
+  async function seedInterrupted(
+    h: Harness,
+    slug = 'interrupted-dispatch',
+    autoMergeRequestedBy?: string,
+  ): Promise<void> {
+    const ticket = (await h.tickets.get('T-recover'))!
+    await h.tickets.claim(ticket.ref.id)
+    await h.store.createBuild({
+      slug,
+      repo: REPO,
+      ticket: ticket.ref,
+      branch: `ab/${slug}`,
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: ticket.ref,
+        repo: REPO,
+        baseBranch: 'main',
+        ...(autoMergeRequestedBy !== undefined ? { autoMergeRequestedBy } : {}),
+      },
+    })
+  }
+
+  test('records increasing provisioning failures, then resumes workspace/spec/launch on an ordinary tick', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h)
+    h.workspaces.setFailure('provision', new Error('workspace backend offline'))
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      dispatchFailed: 1,
+    })
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      dispatchFailed: 1,
+    })
+    let events = await h.store.getEvents('interrupted-dispatch')
+    expect(
+      events.filter((event) => event.type === 'dispatch.failed').map((event) => event.payload),
+    ).toEqual([
+      { stage: 'workspace', attempt: 1, error: 'workspace backend offline' },
+      { stage: 'workspace', attempt: 2, error: 'workspace backend offline' },
+    ])
+
+    h.workspaces.setFailure('provision', null)
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+    })
+    events = await h.store.getEvents('interrupted-dispatch')
+    expect(events.filter((event) => event.type === 'build.created')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'workspace.provisioned')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'spec.imported')).toHaveLength(1)
+    expect(h.workspaces.provisions).toHaveLength(1)
+    expect(h.launches).toEqual(['interrupted-dispatch'])
+  })
+
+  test('reconstructs an empty dispatch stream with a conditional build.created append', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    const ticket = (await h.tickets.get('T-recover'))!
+    await h.tickets.claim(ticket.ref.id)
+    await h.store.createBuild({
+      slug: 'empty-dispatch',
+      repo: REPO,
+      ticket: ticket.ref,
+      branch: 'ab/empty-dispatch',
+    })
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+    })
+    const events = await h.store.getEvents('empty-dispatch')
+    expect(events.map((event) => event.type)).toEqual([
+      'build.created',
+      'workspace.provisioned',
+      'spec.imported',
+      'dispatch.comment-posted',
+    ])
+  })
+
+  test('recovers claim-time auto-merge intent interrupted after build.created', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'auto-merge-interrupted', 'claiming-operator')
+
+    expect(
+      await h.dispatcher.tick({
+        acceptNewWork: false,
+        defaultAutoMerge: false,
+        autoMergeUser: 'different-current-operator',
+      }),
+    ).toEqual({ ...emptyTickReport(), recovered: 1 })
+
+    const events = await h.store.getEvents('auto-merge-interrupted')
+    const request = events.find((event) => event.type === 'build.auto-merge-requested')
+    expect(request?.actor).toEqual({ kind: 'human', user: 'claiming-operator' })
+    expect(request?.seq).toBe(2)
+    expect(reduceBuild(events).autoMerge.requested).toBe(true)
+  })
+
+  test('a failed launch retries without duplicating the dispatched ticket comment', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-recover')],
+      onLaunch: () => {
+        throw new Error('runner scheduler offline')
+      },
+    })
+    await seedInterrupted(h, 'launch-retry')
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      dispatchFailed: 1,
+    })
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      dispatchFailed: 1,
+    })
+
+    const events = await h.store.getEvents('launch-retry')
+    expect(events.filter((event) => event.type === 'dispatch.comment-posted')).toHaveLength(1)
+    expect(
+      events
+        .filter((event) => event.type === 'dispatch.failed')
+        .map((event) => event.payload.stage),
+    ).toEqual(['launch', 'launch'])
+    expect(
+      h.tickets.comments.filter(({ body }) => body === 'build launch-retry dispatched'),
+    ).toHaveLength(1)
+  })
+
+  test('a discard requested during setup parks before runner launch', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'discard-before-launch')
+    const comment = h.tickets.comment.bind(h.tickets)
+    let requested = false
+    h.tickets.comment = async (id, body) => {
+      await comment(id, body)
+      if (!requested && body === 'build discard-before-launch dispatched') {
+        requested = true
+        await h.store.append('discard-before-launch', {
+          actor: humanActor('operator'),
+          type: 'build.discard-requested',
+          payload: {},
+        })
+      }
+    }
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+    expect(reduceBuild(await h.store.getEvents('discard-before-launch')).status).toBe('queued')
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      discarded: 1,
+    })
+  })
+
+  test('a discard racing after the pre-launch check is inert once the runner attaches', async () => {
+    let launchedOnce = false
+    const h = harness({
+      tickets: [readyTicket('T-recover')],
+      onLaunch: async (slug, store) => {
+        if (launchedOnce) return
+        launchedOnce = true
+        await store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.discard-requested',
+          payload: {},
+        })
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.attached',
+          payload: { instance: 'live-runner', host: 'local' },
+        })
+        await store.claimLease(slug, 'live-runner', 60_000)
+      },
+    })
+    await seedInterrupted(h, 'late-discard-race')
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+    })
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+
+    const state = reduceBuild(await h.store.getEvents('late-discard-race'))
+    expect(state.status).toBe('running')
+    expect(state.discardRequest).toBeDefined()
+    expect(h.workspaces.releases).toEqual([])
+    expect(h.tickets.transitions).not.toContainEqual({ id: 'T-recover', state: 'Ready' })
+  })
+
+  test('discard works without a runner, lease, or workspace and returns the ticket to a custom Ready state', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-recover', { state: 'Selected' })],
+      toml: '[tickets]\nsource = "file"\nreadyState = "Selected"',
+    })
+    await seedInterrupted(h, 'discard-me')
+    await h.store.append('discard-me', {
+      actor: humanActor('operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      discarded: 1,
+    })
+    const state = reduceBuild(await h.store.getEvents('discard-me'))
+    expect(state).toMatchObject({ status: 'done', outcome: 'discarded' })
+    expect(h.tickets.transitions).toContainEqual({ id: 'T-recover', state: 'Selected' })
+    expect(h.tickets.comments.at(-1)?.body).toContain('returned to Selected')
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+    const builds = await h.store.listBuilds()
+    expect(builds.filter((record) => record.ticket?.id === 'T-recover')).toHaveLength(2)
+  })
+
+  test('discard releases a partially provisioned workspace before terminal completion', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'partial-discard')
+    const handle = await h.workspaces.provision({
+      repo: REPO,
+      baseBranch: 'main',
+      branch: 'ab/partial-discard',
+    })
+    await h.store.append('partial-discard', {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: { ...handle },
+    })
+    await h.store.append('partial-discard', {
+      actor: humanActor('operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.workspaces.releases).toHaveLength(1)
+    expect(
+      (await h.store.getEvents('partial-discard')).map((event) => event.type).slice(-2),
+    ).toEqual(['workspace.released', 'build.completed'])
   })
 })
 

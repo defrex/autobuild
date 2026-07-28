@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
-import { DISPATCHER, KERNEL, agentActor } from './envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from './envelope'
 import { normalizeVerifyCompletion } from './payloads'
 
 function plan(payload: unknown): EventWrite<'plan.completed'> {
@@ -26,6 +26,87 @@ function finalizeStep(payload: unknown): EventWrite<'finalize.step-completed'> {
     payload,
   }) as EventWrite<'finalize.step-completed'>
 }
+
+describe('dispatch recovery event protocol', () => {
+  test('dispatch failures are strict, positive-attempt dispatcher facts', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatch.failed',
+        payload: { stage: 'workspace', attempt: 2, error: 'forge unavailable' },
+      }),
+    ).toMatchObject({ type: 'dispatch.failed' })
+    expect(() =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatch.failed',
+        payload: { stage: 'workspace', attempt: 1, error: 'nope' },
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatch.failed',
+        payload: { stage: 'unknown', attempt: 0, error: '', extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('comment completion is a strict dispatcher boundary fact', () => {
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} }),
+    ).toMatchObject({ type: 'dispatch.comment-posted' })
+    expect(() =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatch.comment-posted',
+        payload: {},
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatch.comment-posted',
+        payload: { extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('build creation can retain claim-time auto-merge attribution', () => {
+    const base = {
+      ticket: { source: 'linear', id: 'AUT-1' },
+      repo: 'acme/app',
+      baseBranch: 'main',
+    }
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeRequestedBy: 'dispatch-op' },
+      }).payload,
+    ).toEqual({ ...base, autoMergeRequestedBy: 'dispatch-op' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeRequestedBy: '' },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('discard requests are strict human facts', () => {
+    expect(
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'build.discard-requested',
+        payload: {},
+      }),
+    ).toMatchObject({ type: 'build.discard-requested' })
+    expect(() =>
+      validateEventWrite({ actor: DISPATCHER, type: 'build.discard-requested', payload: {} }),
+    ).toThrow(/may not emit/)
+  })
+})
 
 describe('PR attachment event protocol', () => {
   const target = {

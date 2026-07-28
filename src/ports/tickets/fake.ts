@@ -94,7 +94,9 @@ export class FakeTicketSource implements TicketSource {
     return ticket ? cloneTicket(ticket) : null
   }
 
-  /** Claim-before-launch (SPEC §12): true exactly once per ticket. */
+  /** Claim-before-launch: true once per lifecycle stay. Any later transition
+   * releases the fake claim, mirroring real sources where moving out of the
+   * claimed state restores claimability regardless of the ready state's name. */
   async claim(id: string): Promise<boolean> {
     this.claims.push(id)
     if (!this.tickets.has(id) || this.claimed.has(id)) return false
@@ -110,6 +112,7 @@ export class FakeTicketSource implements TicketSource {
   async transition(id: string, state: string): Promise<void> {
     const ticket = this.require(id, 'transition')
     ticket.state = state
+    this.claimed.delete(id)
     this.transitions.push({ id, state })
   }
 

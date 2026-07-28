@@ -39,10 +39,13 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'runner.attached': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
+  'dispatch.failed': ['dispatcher'],
+  'dispatch.comment-posted': ['dispatcher'],
 
   'build.pause-requested': ['human'],
   'build.resume-requested': ['human'],
   'build.abort-requested': ['human'],
+  'build.discard-requested': ['human'],
   'build.auto-merge-requested': ['human'],
   'build.auto-merge-cancelled': ['human'],
   'build.paused': ['kernel'],

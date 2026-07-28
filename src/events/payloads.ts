@@ -36,6 +36,7 @@ const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
+const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
 
 const verifyStepSelectionSchema = z
   .array(
@@ -125,6 +126,9 @@ export const eventPayloadSchemas = {
     ticket: ticketRefSchema,
     repo: z.string().min(1),
     baseBranch: z.string().min(1),
+    /** Claim-time auto-merge intent retained across dispatch recovery until the
+     * ordinary human-authored command fact can be materialized. */
+    autoMergeRequestedBy: z.string().min(1).optional(),
     /** Frozen at claim time. Historical logs and disabled installs omit it. */
     pr: z
       .strictObject({
@@ -147,11 +151,20 @@ export const eventPayloadSchemas = {
     base: workspaceBaseSchema,
   }),
   'workspace.released': empty,
+  /** A post-creation dispatch attempt stopped before runner attachment. */
+  'dispatch.failed': z.strictObject({
+    stage: dispatchStage,
+    attempt,
+    error: z.string().min(1),
+  }),
+  /** Durable boundary preventing duplicate ticket notifications on recovery. */
+  'dispatch.comment-posted': empty,
 
   // ── Operator commands (D2: commands are events in the same log) ───────────
   'build.pause-requested': reasonOnly,
   'build.resume-requested': reasonOnly,
   'build.abort-requested': reasonOnly,
+  'build.discard-requested': empty,
   'build.auto-merge-requested': empty,
   'build.auto-merge-cancelled': empty,
   'build.paused': empty,

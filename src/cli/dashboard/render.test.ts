@@ -271,6 +271,24 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   })
 })
 
+describe('renderDashboard: queued dispatch rows', () => {
+  test('renders QUEUED, its actionable dispatch reason, and the conditional discard key', () => {
+    const queued = build({
+      status: 'queued',
+      steps: [],
+      dispatch: 'dispatch workspace failed (attempt 2): credentials missing',
+      pr: undefined,
+    })
+    const frame = model([queued])
+    frame.selection = { kind: 'build', slug: queued.slug }
+    const text = rd(frame, WIDE).map(stripAnsi).join('\n')
+    expect(text).toContain('QUEUED')
+    expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
+    expect(text).toContain('d discard')
+    expect(text).not.toContain('[ ] plan')
+  })
+})
+
 describe('renderDashboard: blocked-resume input', () => {
   const answering = (value = ''): DashboardModel => ({
     ...model([

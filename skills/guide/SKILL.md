@@ -768,7 +768,10 @@ separates the global section from the first body row, and another separates the
 body from the legend or feedback controls. The duplicate startup banner is
 suppressed; `--plain` and non-TTY output remain line-oriented and unchanged. A
 satisfied verify skip carries the literal `skipped` qualifier, so it remains
-distinct from a pass without color.
+distinct from a pass without color. Every nonterminal build has a row,
+including `queued` builds that have not attached a runner. A queued row shows
+its ticket, slug, literal `QUEUED` status, and either the pending dispatch
+boundary or the latest durable `dispatch.failed` stage, attempt, and error.
 
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
@@ -776,8 +779,9 @@ through repaint, re-sort, and row appearance/disappearance. The legend is
 contextual: every row offers navigation and quit; global offers `h harvest`,
 `m auto-merge`, and `i intake`; `Harvest` offers `p resume` for ordinary
 failure or `p acknowledge` for exhaustion/escalation only when that action is
-available; builds offer `m auto-merge` and `p pause`. `m` on `Harvest` is an
-explanatory build-only no-op.
+available; runner-attached builds offer `m auto-merge` and `p pause`, while
+queued builds offer `d discard`. `m` on `Harvest` is an explanatory build-only
+no-op.
 
 `--intake` and `--no-intake` are mutually exclusive durable repository setters.
 Omitting both reuses stored state, falling back to ON only when no intake fact
@@ -836,12 +840,18 @@ to the build's event log and apply the same write-time checks.
 
 | Intent | CLI | Dashboard | Durable event(s) |
 |---|---|---|---|
+| Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
 | Pause | `ab pause <slug> [--store <ref>]` | Select the build and press `p` while it is not paused or blocked. | `build.pause-requested` |
 | Resume | `ab resume <slug> [--store <ref>]` | Select a paused build and press `p`. | `build.resume-requested` |
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `p`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `p` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Abort | `ab abort <slug> [--store <ref>]` | No key in this release. | `build.abort-requested` |
+
+Discard is dashboard-only and queued-only. The dispatcher releases any partial
+workspace and lease, returns the ticket to `[tickets].readyState`, and completes
+the old build as `discarded`; a later tick may claim the ticket into a fresh
+build. This is not abort: abort continues to return the ticket to Triage.
 
 On the dashboard, `p` on a blocked build replaces the bottom legend with the
 optional feedback field while the blocker stays visible. All printable keys

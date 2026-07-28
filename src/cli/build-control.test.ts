@@ -299,6 +299,44 @@ describe('controlBuild — shared durable controls', () => {
     await store.close()
   })
 
+  test('discard is queued-only and duplicate requests reuse one durable fact', async () => {
+    const queued = await makeStore({ active: false })
+    const first = await controlBuild({
+      store: queued,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'discard-op' },
+      action: { kind: 'discard' },
+    })
+    const second = await controlBuild({
+      store: queued,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'discard-op' },
+      action: { kind: 'discard' },
+    })
+    expect(first).toMatchObject({ kind: 'command', command: 'discard' })
+    expect(second).toMatchObject({ kind: 'command', command: 'discard' })
+    const requests = (await queued.getEvents(SLUG)).filter(
+      (event) => event.type === 'build.discard-requested',
+    )
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.actor).toEqual({ kind: 'human', user: 'discard-op' })
+    await queued.close()
+
+    const running = await makeStore()
+    await expect(
+      controlBuild({
+        store: running,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'discard' },
+      }),
+    ).rejects.toThrow(/discard requires queued/)
+    await running.close()
+  })
+
   test('rejects missing, cross-repository, inactive, and unblocked targets', async () => {
     const store = await makeStore()
     await expect(

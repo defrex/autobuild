@@ -13,23 +13,28 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { controlBuild } from '../cli/build-control'
+import { projectBuild } from '../cli/dashboard/model'
 import { resolveHarvestCliEnv } from '../cli/env'
 import { runCli } from '../cli/main'
+import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion } from '../events/payloads'
-import { randomUuids } from '../ids'
+import { randomUuids, sequentialIds } from '../ids'
 import { decideNext } from '../kernel/engine'
 import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
 import { createPluginRegistry } from '../plugins/registry'
 import type { PluginFactoryContext } from '../plugins/manifest'
 import type { WorkspaceHandle, WorkspaceProvider } from '../ports/types'
+import { FakeForge } from '../ports/forge/fake'
 import { defaultTurnResult, ScriptedAgentRunner } from '../ports/runner/fake'
 import { AGENT_BIN_DIR, sessionEnv } from '../ports/runner/session-env'
 import { FileTicketSource } from '../ports/tickets/file'
 import { Dispatcher, emptyTickReport, type LaunchRunnerResult } from '../processes/dispatcher'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { createWorkspaceProvider } from '../ports/workspace/create'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { textContent } from '../store/types'
@@ -69,6 +74,7 @@ const HAPPY_PREFIX = [
   'build.created',
   'workspace.provisioned',
   'spec.imported',
+  'dispatch.comment-posted',
   'runner.attached',
   'plan.started',
   'session.started',
@@ -109,6 +115,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
   ])
   const created = ofType(afterDispatch, 'build.created')[0]!
   expect(created.actor).toEqual({ kind: 'dispatcher' })
@@ -144,7 +151,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 
   // Rule-boundary payloads.
-  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(3)
+  expect(ofType(events, 'runner.attached')[0]!.payload.resumedFromSeq).toBe(4)
   const planCompleted = ofType(events, 'plan.completed')[0]!
   expect(planCompleted.payload).toEqual({
     round: 1,
@@ -256,6 +263,117 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const reduced = reduceBuild(final)
   expect(reduced.status).toBe('done')
   expect(reduced.outcome).toBe('merged')
+}, 30_000)
+
+test('dispatch recovery is durable in SQLite and discard returns a file ticket to Ready for a fresh build', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ab-dispatch-recovery-e2e-'))
+  const store = openLocalStore(join(root, 'store'))
+  try {
+    const config = parseConfig(`
+capacity = 2
+
+[tickets]
+source = "file"
+readyState = "Ready"
+dir = "tickets"
+`)
+    const tickets = new FileTicketSource({ dir: join(root, 'tickets'), createState: 'Ready' })
+    const workspaces = new FakeWorkspaceProvider({
+      root: join(root, 'workspaces'),
+      mode: 'logical',
+    })
+    const forge = new FakeForge()
+    const ids = sequentialIds()
+    const launched: string[] = []
+    const dispatcher = new Dispatcher({
+      store,
+      tickets,
+      workspaces,
+      forge,
+      config,
+      repo: '/repo/dispatch-recovery-e2e',
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      launchRunner: async (slug) => {
+        launched.push(slug)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.attached',
+          payload: { instance: `runner-${slug}`, host: 'integration' },
+        })
+        return 'scheduled'
+      },
+      ids,
+      clock: steppingClock(),
+    })
+
+    const transient = await tickets.create({
+      title: 'Recover dispatch',
+      body: CONFORMING_BODY,
+      labels: [],
+    })
+    workspaces.setFailure('provision', new Error('transient workspace outage'))
+    expect(await dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatchFailed: 1 })
+    let events = await store.getEvents('recover-dispatch')
+    const queued = projectBuild(
+      (await store.getBuild('recover-dispatch'))!,
+      reduceBuild(events),
+      config,
+      events,
+    )
+    expect(queued).toMatchObject({
+      status: 'queued',
+      dispatch: 'dispatch workspace failed (attempt 1): transient workspace outage',
+    })
+
+    workspaces.setFailure('provision', null)
+    expect(await dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+    })
+    events = await store.getEvents('recover-dispatch')
+    expect(reduceBuild(events)).toMatchObject({ status: 'running', specRev: 0 })
+    expect(events.filter((event) => event.type === 'workspace.provisioned')).toHaveLength(1)
+    expect(events.filter((event) => event.type === 'spec.imported')).toHaveLength(1)
+    expect(launched).toEqual(['recover-dispatch'])
+    expect((await tickets.get(transient.ref.id))?.state).toBe('Doing')
+
+    const permanent = await tickets.create({
+      title: 'Permanent dispatch',
+      body: CONFORMING_BODY,
+      labels: [],
+    })
+    workspaces.setFailure('provision', new Error('permanent workspace outage'))
+    expect(await dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatchFailed: 1 })
+    await controlBuild({
+      store,
+      repo: '/repo/dispatch-recovery-e2e',
+      slug: 'permanent-dispatch',
+      env: { USER: 'integration-op' },
+      action: { kind: 'discard' },
+    })
+    expect(await dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      discarded: 1,
+    })
+    expect(reduceBuild(await store.getEvents('permanent-dispatch'))).toMatchObject({
+      status: 'done',
+      outcome: 'discarded',
+    })
+    expect((await tickets.get(permanent.ref.id))?.state).toBe('Ready')
+
+    workspaces.setFailure('provision', null)
+    expect(await dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+    const redispatched = (await store.listBuilds()).filter(
+      (record) => record.ticket?.id === permanent.ref.id,
+    )
+    expect(redispatched.map((record) => record.slug).sort()).toEqual([
+      'permanent-dispatch',
+      'permanent-dispatch-2',
+    ])
+  } finally {
+    await store.close()
+    await rm(root, { recursive: true, force: true })
+  }
 }, 30_000)
 
 test('plugin-selected workspace drives runner, PR polling, and terminal release with distinct ref and path', async () => {
@@ -589,7 +707,12 @@ test('a1. code review excludes multiple target commits absorbed after branch cut
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
+  expect(typesOf(events)).toEqual([
+    'build.created',
+    'workspace.provisioned',
+    'spec.imported',
+    'dispatch.comment-posted',
+  ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base).toEqual({ source: 'remote', sha: branchCut })
   expect(await git(['rev-parse', 'HEAD'], provisioned.payload.ref)).toBe(branchCut)
@@ -657,7 +780,12 @@ test('a1. unavailable origin still dispatches from local main and records why', 
     dispatched: 1,
   })
   const events = await h.events(SLUG)
-  expect(typesOf(events)).toEqual(['build.created', 'workspace.provisioned', 'spec.imported'])
+  expect(typesOf(events)).toEqual([
+    'build.created',
+    'workspace.provisioned',
+    'spec.imported',
+    'dispatch.comment-posted',
+  ])
   const provisioned = ofType(events, 'workspace.provisioned')[0]!
   expect(provisioned.payload.base.source).toBe('local')
   if (provisioned.payload.base.source !== 'local') {
@@ -1153,6 +1281,7 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
     'runner.attached',
     'plan.started',
     'session.started',
@@ -1332,6 +1461,7 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'build.created',
     'workspace.provisioned',
     'spec.imported',
+    'dispatch.comment-posted',
     'runner.attached',
     'plan.started',
     'session.started',
@@ -1475,8 +1605,9 @@ test('d. nonconforming ticket bounces back to Triage citing the standard (§6.3)
   expect(comment.body).toContain('docs/spec-standard.md')
   expect(comment.body).toContain("an '## Acceptance criteria' heading")
   expect(comment.body).toContain("an '## Out of scope' heading")
-  // Claim-before-launch happened even for the bounce (§12).
-  expect(await h.tickets.claim('T-9')).toBe(false)
+  // The transition out of the claimed state restores provider claimability;
+  // the configured Ready gate, not hidden adapter state, prevents re-dispatch.
+  expect(await h.tickets.claim('T-9')).toBe(true)
 }, 30_000)
 
 // ── d2. Ticket dependencies through the REAL file source (§13) ───────────────

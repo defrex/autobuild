@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#113](https://github.com/defrex/autobuild/pull/113) — Recover interrupted dispatches and expose queued builds
 - [#112](https://github.com/defrex/autobuild/pull/112) — Add an offline local-git forge
 - [#111](https://github.com/defrex/autobuild/pull/111) — Add a builtin Codex CLI agent runtime
 - [#109](https://github.com/defrex/autobuild/pull/109) — Add build drill-down to the dispatch dashboard

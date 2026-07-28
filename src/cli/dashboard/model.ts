@@ -52,9 +52,9 @@ import {
   type HarvestState,
 } from '../../kernel/harvest'
 
-/** The only statuses a listed build can have — queued/done/aborted are
- * filtered out entirely (they are not active work). */
-export type EffectiveStatus = 'running' | 'paused' | 'blocked'
+/** Every nonterminal build is listed; queued dispatch work consumes capacity
+ * just like runner-attached work and must never be invisible. */
+export type EffectiveStatus = 'queued' | 'running' | 'paused' | 'blocked'
 
 export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 
@@ -122,6 +122,8 @@ export interface DashboardBuild {
   alsoPaused: boolean
   ticketId?: string
   steps: PipelineStep[]
+  /** Queued-only explanation of the dispatcher boundary currently pending. */
+  dispatch?: string
   /** Every unresolved blocker's question. Resolved ones drop out by
    * construction — the reducer moves them to answeredEscalations. */
   blockers: string[]
@@ -165,8 +167,7 @@ export interface DashboardModel {
   repo: string
   /** Ready tickets waiting for a slot — the dispatcher's standing queue depth. */
   queued: number
-  /** Every nonterminal build consumes one configured dispatch capacity slot,
-   * including queued builds that deliberately have no visible row. */
+  /** Every nonterminal build consumes one configured dispatch capacity slot. */
   active: DashboardCounter
   /** Recorded observation occurrences not claimed by a Harvest snapshot. */
   observations: DashboardCounter
@@ -209,8 +210,8 @@ export function effectiveStatus(state: BuildState): BuildState['status'] {
     : state.status
 }
 
-function isActive(status: BuildState['status']): status is EffectiveStatus {
-  return status === 'running' || status === 'paused' || status === 'blocked'
+function isVisible(status: BuildState['status']): status is EffectiveStatus {
+  return status === 'queued' || status === 'running' || status === 'paused' || status === 'blocked'
 }
 
 export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
@@ -387,8 +388,7 @@ function timingFor(
 }
 
 /**
- * `record` + `state` → one dashboard row, or `null` when the build is not
- * active (queued / done / aborted) — this IS the list filter.
+ * `record` + `state` → one dashboard row, or `null` only for terminal builds.
  */
 export function projectBuild(
   record: BuildRecord,
@@ -397,7 +397,57 @@ export function projectBuild(
   events: AbEvent[],
 ): DashboardBuild | null {
   const status = effectiveStatus(state)
-  if (!isActive(status)) return null
+  if (!isVisible(status)) return null
+
+  if (status === 'queued') {
+    const created = events.findLast((event) => event.type === 'build.created')
+    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
+    const released = events.findLast((event) => event.type === 'workspace.released')
+    const openWorkspace =
+      workspace !== undefined && (released === undefined || workspace.seq > released.seq)
+    const spec = events.findLast(
+      (event) => event.type === 'spec.imported' || event.type === 'spec.authored',
+    )
+    const commentPosted = events.findLast((event) => event.type === 'dispatch.comment-posted')
+    const latestFailure = events.findLast((event) => event.type === 'dispatch.failed')
+    const failureSuperseded =
+      latestFailure !== undefined &&
+      ((latestFailure.payload.stage === 'create' &&
+        created !== undefined &&
+        created.seq > latestFailure.seq) ||
+        (latestFailure.payload.stage === 'workspace' &&
+          workspace !== undefined &&
+          workspace.seq > latestFailure.seq) ||
+        (latestFailure.payload.stage === 'spec' &&
+          spec !== undefined &&
+          spec.seq > latestFailure.seq) ||
+        (latestFailure.payload.stage === 'comment' &&
+          commentPosted !== undefined &&
+          commentPosted.seq > latestFailure.seq))
+    const dispatch =
+      state.discardRequest !== undefined
+        ? 'discard requested; cleanup and Ready handback pending'
+        : latestFailure !== undefined && !failureSuperseded
+          ? `dispatch ${latestFailure.payload.stage} failed (attempt ${latestFailure.payload.attempt}): ${latestFailure.payload.error}`
+          : created === undefined
+            ? 'dispatch initialization pending'
+            : !openWorkspace
+              ? 'workspace provisioning pending'
+              : spec === undefined
+                ? 'spec import pending'
+                : 'runner attachment pending'
+    return {
+      slug: record.slug,
+      status,
+      alsoPaused: false,
+      ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
+      steps: [],
+      dispatch,
+      blockers: [],
+      autoMerge: autoMergeDisplay(state),
+      sessions: projectSessions(events),
+    }
+  }
 
   // ── Boundaries ────────────────────────────────────────────────────────────
   //
