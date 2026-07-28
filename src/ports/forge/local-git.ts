@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -109,13 +109,17 @@ export class LocalGitForge implements Forge {
 
   private async writeBlob(cwd: string, record: LocalPrRecord): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), 'ab-local-git-'))
-    const path = join(dir, 'record.json')
-    await writeFile(path, `${JSON.stringify(record)}\n`, 'utf8')
-    const result = await this.command(['hash-object', '-w', path], cwd)
-    const sha = result.stdout.trim()
-    if (!objectId.safeParse(sha).success)
-      throw new Error('local-git failed to write PR record blob')
-    return sha
+    try {
+      const path = join(dir, 'record.json')
+      await writeFile(path, `${JSON.stringify(record)}\n`, 'utf8')
+      const result = await this.command(['hash-object', '-w', path], cwd)
+      const sha = result.stdout.trim()
+      if (!objectId.safeParse(sha).success)
+        throw new Error('local-git failed to write PR record blob')
+      return sha
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   }
 
   private async objectZeros(cwd: string): Promise<string> {
@@ -391,29 +395,33 @@ export class LocalGitForge implements Forge {
     message: string,
   ): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), 'ab-local-git-commit-'))
-    const path = join(dir, 'message.md')
-    await writeFile(path, message, 'utf8')
-    const result = await this.command(
-      [
-        '-c',
-        'commit.gpgSign=false',
-        '-c',
-        'user.name=Autobuild',
-        '-c',
-        'user.email=autobuild@localhost',
-        'commit-tree',
-        treeSha,
-        '-p',
-        baseSha,
-        '-F',
-        path,
-      ],
-      cwd,
-    )
-    const sha = result.stdout.trim()
-    if (!objectId.safeParse(sha).success)
-      throw new Error('local-git commit-tree returned no commit')
-    return sha
+    try {
+      const path = join(dir, 'message.md')
+      await writeFile(path, message, 'utf8')
+      const result = await this.command(
+        [
+          '-c',
+          'commit.gpgSign=false',
+          '-c',
+          'user.name=Autobuild',
+          '-c',
+          'user.email=autobuild@localhost',
+          'commit-tree',
+          treeSha,
+          '-p',
+          baseSha,
+          '-F',
+          path,
+        ],
+        cwd,
+      )
+      const sha = result.stdout.trim()
+      if (!objectId.safeParse(sha).success)
+        throw new Error('local-git commit-tree returned no commit')
+      return sha
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   }
 
   async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
