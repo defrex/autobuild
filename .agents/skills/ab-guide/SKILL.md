@@ -1,6 +1,6 @@
 ---
 name: ab-guide
-description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when setting up the dev server; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions autobuild, autobuild.toml, or the `ab` CLI.
+description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions autobuild, autobuild.toml, or the `ab` CLI.
 ---
 
 # Autobuild system guide
@@ -259,23 +259,6 @@ every generated package command names a script that exists and every generated
 check has a backing command. This detection does not restrict later manual
 configuration: commands remain an open map.
 
-### `[server]`
-
-Optional table. Config **declares**; the kernel **owns** the lifecycle. Agents
-control the server only through `ab server start|stop|restart|status|logs`, and
-only in the `implement` and `verify` phases — no ad-hoc process hunting. The
-kernel guarantees teardown at phase end via process-group ownership, so a dead
-session cannot orphan a server.
-
-| Field | Default | Allowed / constraints | Effect |
-|---|---|---|---|
-| `start` | — | **required**, nonempty string | Shell command that starts the dev server. |
-| `url` | — | **required**, nonempty string | Readiness probe target: hit until it succeeds or `readyTimeout` expires. |
-| `readyTimeout` | `60` | positive integer, **seconds** | How long the readiness probe waits before giving up. |
-
-Omitting `[server]` is fine for repos with nothing to drive — but see the
-`needsServer` constraint under `[verify]`.
-
 ### `[verify]`
 
 `steps` orders the verify phases; each entry `"<step>"` becomes a
@@ -288,7 +271,6 @@ subtables are part of this section — their fields are listed here.
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. `"ab-verify-e2e"`). |
-| `needsServer` | `false` | boolean, `kind = "agent"` only | `true` ⇒ the kernel starts `[server]` and waits for readiness before the session. |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
 
@@ -318,7 +300,6 @@ Cross-field rules the validator actually enforces — each is an **error**:
   `steps` or remove the table — a defined-but-unlisted step never runs, so this
   is never silently tolerated).
 - `command` naming a key that does not exist in `[commands]`.
-- `needsServer = true` with no `[server]` table.
 - An empty or malformed `paths` list. Matching is case-sensitive over Git's
   `/`-separated paths; supported syntax is literals, `*`, `?`, and `**` only as
   a whole segment. Absolute/traversing/empty segments, negation, escapes,
@@ -334,7 +315,7 @@ from the latest completed reconcile. It uses a NUL-delimited, no-rename Git diff
 adds/modifications/deletions and both rename sides participate. A reconcile
 starts a fresh cycle and evaluation repeats; upstream-only merged paths are
 excluded while build-owned resolutions remain visible. A miss starts no
-command, agent, server, or session and records `skipped` with
+command, agent, or session and records `skipped` with
 `excluded by [verify.<step>].paths: no changed path matched <JSON paths>`.
 Git/base failures fail closed as infrastructure rather than becoming skips.
 
@@ -351,7 +332,7 @@ without consuming that budget.
 
 `steps` orders the post-PR actions; every name requires a matching
 `[finalize.<step>]` table. Finalize has its own narrow union: verify-only
-`paths`, `always`, and `needsServer` fields are errors.
+`paths` and `always` fields are errors.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|

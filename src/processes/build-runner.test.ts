@@ -1,8 +1,8 @@
 /**
- * Build-runner process tests (SPEC §3.3, §8, §9, §10, §15.6, D5, D10): memory
- * store + ScriptedAgentRunner + FakeWorkspaceProvider + fake ServerLifecycle
- * + fake exec. The scripts SIMULATE what the `ab` CLI would do — they append
- * events and deposit artifacts through the store directly, using the ambient
+ * Build-runner process tests (SPEC §3.3, §8, §9, §10, §15.6, D5): memory
+ * store + ScriptedAgentRunner + FakeWorkspaceProvider + fake exec. The scripts
+ * SIMULATE what the `ab` CLI would do — they append events and deposit
+ * artifacts through the store directly, using the ambient
  * session id the runner injected (AB_SESSION, D8), exactly as `ab done` /
  * `ab verdict` would. Event sequences are asserted as type lists; payloads
  * are spot-checked where the rule lives (feedback, attempts, transcript
@@ -35,7 +35,6 @@ import {
   parseNulChangedPaths,
   selectPublishedBranchHead,
   selectVerifyDiffBase,
-  type ServerLifecycle,
 } from './build-runner'
 
 const SLUG = 'auth-rate-limit'
@@ -44,8 +43,8 @@ const TICKET = { source: 'linear', id: 'ENG-42', title: 'Auth rate limiting' }
 const KIMI_QUOTA =
   '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
 
-// Mirrors §16.1: two check steps (types, unit) + one agent step (e2e,
-// needsServer), one finalize post-step, one routed role with a model.
+// Mirrors §16.1: two check steps (types, unit) + one agent step (e2e), one
+// finalize post-step, one routed role with a model.
 const CONFIG_TOML = `
 [tickets]
 source = "file"
@@ -54,10 +53,6 @@ readyState = "ready"
 [commands]
 typecheck = "bun tsc --noEmit"
 test = "bun test"
-
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
 
 [verify]
 steps = ["types", "unit", "e2e"]
@@ -73,7 +68,6 @@ command = "test"
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 
 [finalize]
 steps = ["release-notes"]
@@ -240,18 +234,6 @@ function happyHandlers(store: BuildStore): Record<string, SkillHandler> {
   }
 }
 
-// ── Fakes ────────────────────────────────────────────────────────────────────
-
-class FakeServer implements ServerLifecycle {
-  constructor(private readonly ops: string[]) {}
-  async ensureStarted(): Promise<void> {
-    this.ops.push('server:ensureStarted')
-  }
-  async stop(): Promise<void> {
-    this.ops.push('server:stop')
-  }
-}
-
 // ── Harness ──────────────────────────────────────────────────────────────────
 
 type ReconcileRefresh = { sha: string } | { fetchError: string } | { resolveError: string }
@@ -262,7 +244,6 @@ type FinalizeGitResult<T> = T | { error: string }
 
 interface HarnessOptions {
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
-  noServer?: boolean
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
   failCommands?: string[]
   /** Shell commands whose Exec call throws before returning a result. */
@@ -442,7 +423,6 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       : { stdout: 'ok', stderr: '', exitCode: 0 }
   }
 
-  const server = options.noServer === true ? undefined : new FakeServer(ops)
   const forge = options.forge ?? new FakeForge()
   const selectedConfig = options.configToml !== undefined ? parseConfig(options.configToml) : config
   selectedConfig.roles.default ??= { runtime: 'scripted' }
@@ -462,7 +442,6 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     slug: SLUG,
     exec,
     forge,
-    ...(server !== undefined ? { server } : {}),
     ids: sequentialIds(),
     clock,
     instance: 'runner-1',
@@ -2084,7 +2063,7 @@ command = "dashboard"
 paths = ["src/cli/dashboard/**"]
 `
 
-  test('an omitted step records a kernel skip without diff, command, server, or session work', async () => {
+  test('an omitted step records a kernel skip without diff, command, or session work', async () => {
     const h = await makeHarness({
       configToml: conditionalOptional,
       verifyDiffs: [{ error: 'selection must precede path inspection' }],
@@ -2262,21 +2241,17 @@ command = "unit"
     ])
   })
 
-  test('nonmatching agent steps start neither a server nor a session', async () => {
+  test('nonmatching agent steps start no session', async () => {
     const h = await makeHarness({
       configToml: `
 [tickets]
 source = "file"
 readyState = "ready"
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
 [verify]
 steps = ["e2e"]
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**"]
 `,
       verifyDiffs: [{ paths: ['src/auth.ts'] }],
@@ -2288,28 +2263,24 @@ paths = ["web/**"]
     expect(ofType(await h.store.getEvents(SLUG), 'session.started')).toEqual([])
   })
 
-  test('matching agent steps retain normal server and session execution', async () => {
+  test('matching agent steps retain normal session execution', async () => {
     const h = await makeHarness({
       configToml: `
 [tickets]
 source = "file"
 readyState = "ready"
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
 [verify]
 steps = ["e2e"]
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**"]
 `,
       verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
     })
     await seedApproved(h.store)
     await h.br.step()
-    expect(h.ops).toEqual(['server:ensureStarted', 'session:ab-verify-e2e', 'server:stop'])
+    expect(h.ops).toEqual(['session:ab-verify-e2e'])
     expect(
       normalizeVerifyCompletion(
         ofType(await h.store.getEvents(SLUG), 'verify.completed').at(-1)!.payload,
@@ -2392,19 +2363,10 @@ paths = ["web/**"]
   })
 })
 
-// ── needsServer (§16.2, D10) ─────────────────────────────────────────────────
+// ── Agent verification ───────────────────────────────────────────────────────
 
-describe('needsServer (D10)', () => {
-  test('ensureStarted runs before the e2e session; stop runs at phase end', async () => {
-    const h = await makeHarness()
-    await h.br.run()
-    const i = h.ops.indexOf('server:ensureStarted')
-    expect(i).toBeGreaterThan(-1)
-    expect(h.ops[i + 1]).toBe('session:ab-verify-e2e')
-    expect(h.ops[i + 2]).toBe('server:stop')
-  })
-
-  test('stop is still called when the session throws; the failure is a phase.failed', async () => {
+describe('agent verification', () => {
+  test('a thrown session records phase.failed', async () => {
     const h = await makeHarness({
       handlers: (store) => ({
         ...happyHandlers(store),
@@ -2420,7 +2382,7 @@ describe('needsServer (D10)', () => {
     const decision = await h.br.step()
     expect(decision.kind).toBe('run-agent-verify')
 
-    expect(h.ops).toEqual(['server:ensureStarted', 'session:ab-verify-e2e', 'server:stop'])
+    expect(h.ops).toEqual(['session:ab-verify-e2e'])
     const events = await h.store.getEvents(SLUG)
     // The thrown start never returned a handle, so no session.ended arrives —
     // the dead session stays open (§15.6-C) and the failure is recorded.
@@ -2465,31 +2427,7 @@ describe('needsServer (D10)', () => {
     })
     expect(calls).toBe(1)
     expect(ofType(events, 'escalation.raised').at(-1)?.payload.question).toContain(KIMI_QUOTA)
-    expect(h.ops.filter((op) => op === 'server:ensureStarted')).toHaveLength(1)
-    expect(h.ops.filter((op) => op === 'server:stop').length).toBeGreaterThanOrEqual(1)
-  })
-
-  test('needsServer without a server dep fails the phase with a clear error, no session', async () => {
-    const h = await makeHarness({ noServer: true })
-    await seedPlanApproved(h.store)
-    await seedCodeApproved(h.store)
-    await h.br.step() // types
-    await h.br.step() // unit
-    const decision = await h.br.step()
-    expect(decision.kind).toBe('run-agent-verify')
-
-    expect(h.runner.sessions.size).toBe(0)
-    const events = await h.store.getEvents(SLUG)
-    expect(events.slice(-5).map((e) => e.type)).toEqual([
-      'verify.started',
-      'verify.completed',
-      'verify.started',
-      'verify.completed',
-      'phase.failed',
-    ])
-    const failed = ofType(events, 'phase.failed')[0]!
-    expect(failed.payload.phase).toBe('verify:e2e')
-    expect(failed.payload.error).toContain('needsServer')
+    expect(h.ops).toContain('session:ab-verify-e2e')
   })
 })
 

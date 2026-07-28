@@ -45,8 +45,6 @@ You never push — the push is plumbing that happens when you finish.
   ab observe --kind followup "…"
   ```
 
-- **Dev server** — if you need the running app, use the managed lifecycle,
-  never ad-hoc process hunting: `ab server start|stop|restart|status|logs`.
 - **Feedback rounds** — address every finding in `.ab/findings.json`, or a
   failed verify report in `.ab/verify/`, before anything else. The reviewer
   marks dodged findings as persisting, and persistent chains escalate to a

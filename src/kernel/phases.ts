@@ -71,8 +71,6 @@ export interface PhaseSpec {
   /** `implement` only: no `done` on a dirty worktree (D5). */
   requiresCleanWorktree?: boolean
   plumbing?: PhasePlumbing
-  /** Whether `ab server` is allowed — implement and verify only (§8.2). */
-  serverAccess: boolean
   inputs: ContextInputs
 }
 
@@ -85,7 +83,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminal: 'done',
     terminalEvent: 'plan.completed',
     requiredArtifact: 'plan',
-    serverAccess: false,
     inputs: {
       ticket: true,
       spec: true,
@@ -102,7 +99,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminalEvent: 'plan-review.verdict',
     requiredArtifact: 'plan-review',
     verdictVocabulary: ['approve', 'revise', 'escalate'],
-    serverAccess: false,
     inputs: { spec: true, plan: 'latest', findings: 'all-rounds' },
   },
   implement: {
@@ -115,7 +111,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     requiredArtifact: 'implement-notes',
     requiresCleanWorktree: true,
     plumbing: 'push-branch',
-    serverAccess: true,
     inputs: {
       spec: true,
       plan: 'approved',
@@ -133,7 +128,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminalEvent: 'code-review.verdict',
     requiredArtifact: 'code-review',
     verdictVocabulary: ['approve', 'revise', 'escalate'],
-    serverAccess: false,
     inputs: {
       spec: true,
       plan: 'approved',
@@ -150,7 +144,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminal: 'verdict',
     terminalEvent: 'verify.completed',
     verdictVocabulary: ['pass', 'fail', 'skip'],
-    serverAccess: true,
     inputs: { spec: true, stepConfig: true, commitRange: true },
   },
   finalize: {
@@ -162,7 +155,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminalEvent: 'finalize.completed',
     requiredArtifact: 'pr-description',
     plumbing: 'open-pr',
-    serverAccess: false,
     inputs: {
       spec: true,
       plan: 'approved',
@@ -180,7 +172,6 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminalEvent: 'reconcile.completed',
     requiredArtifact: 'reconcile-notes',
     plumbing: 'push-merge-commit',
-    serverAccess: false,
     inputs: {
       spec: true,
       plan: 'approved',

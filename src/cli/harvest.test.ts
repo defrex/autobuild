@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { humanActor, KERNEL } from '../events/envelope'
@@ -515,6 +515,19 @@ describeStoreOpeningContract('ab harvest status', {
 })
 
 describe('harvest CLI', () => {
+  test('context hydration removes legacy server scratch files', async () => {
+    const deps = await fixture()
+    const abDir = join(deps.workspacePath, '.ab')
+    await mkdir(abDir, { recursive: true })
+    await writeFile(join(abDir, 'server.pid'), '12345\n')
+    await writeFile(join(abDir, 'server.log'), 'legacy\n')
+
+    await buildHarvestContext(deps)
+
+    expect(await Bun.file(join(abDir, 'server.pid')).exists()).toBe(false)
+    expect(await Bun.file(join(abDir, 'server.log')).exists()).toBe(false)
+  })
+
   test('context scopes inputs; submit enforces coverage; reviewer deposits typed verdict', async () => {
     const deps = await fixture()
     const manifest = await buildHarvestContext(deps)

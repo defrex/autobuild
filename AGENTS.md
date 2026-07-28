@@ -78,7 +78,7 @@ Only `verify:*` and `finalize:*` are configurable extension points. Agents inter
 
 ## Codebase map
 
-- `src/kernel/` — pure pipeline decisions, reducer, convergence/stall logic, server lifecycle.
+- `src/kernel/` — pure pipeline decisions, reducer, and convergence/stall logic.
 - `src/events/` — event envelope, frozen payload schemas, actor and write validation.
 - `src/store/` — BuildStore contract plus memory, local SQLite/blob, and remote HTTP implementations.
 - `src/ports/` — swappable ticket, agent-runner, workspace, and forge adapters.

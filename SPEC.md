@@ -552,7 +552,6 @@ sessions need no separate global installation.
 | `ab artifact get <kind>[@rev]` | fetch an artifact within own build | no |
 | `ab artifact download …` | sessionless, read-only exact-byte retrieval; works after build termination | no |
 | `ab observe --kind <followup\|refactor\|latent-bug> …` | structured observation, any phase, any time | no |
-| `ab server <start\|stop\|restart\|status\|logs>` | dev-server lifecycle, config-driven (§16.2); `implement` and `verify` phases only | no |
 | `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
 | `ab escalate <question>` | park the build for human input | **yes** |
@@ -1165,8 +1164,8 @@ finalize → ( pr.conflicted → reconcile → verify:* )* → merged | closed
 
 ## 16. Per-repo configuration and installation
 
-Decisions here continue the series: **[D9]** declarative repo config,
-**[D10]** kernel-owned server lifecycle, **[D11]** vendored editable skills.
+Decisions here continue the series: **[D9]** declarative repo config and
+**[D11]** vendored editable skills.
 
 ### 16.1 `autobuild.toml` [D9]
 
@@ -1197,10 +1196,6 @@ typecheck = "bun run type-check"
 test = "bun run test"
 publish = "bun run publish"
 
-[server]                        # dev-server lifecycle — see §16.2
-start = "bun dev"
-url = "http://localhost:3000"   # readiness probe target
-
 [verify]
 steps = ["types", "unit", "e2e"]
 [verify.types]
@@ -1212,7 +1207,6 @@ command = "test"
 [verify.e2e]
 kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**"]              # optional changed-path applicability
 
 [finalize]
@@ -1282,21 +1276,6 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
   reconcile, so upstream-merged work is not attributed to the build). No
   match skips without launching anything; a Git failure is infrastructure and
   fails closed, never a synthetic skip.
-
-### 16.2 Server lifecycle [D10]
-
-**Config declares; the kernel owns.** The dev server matters most for e2e
-verification and must work identically local and sandboxed:
-
-- Readiness is a probe: hit `server.url` until success or `readyTimeout`.
-- Verify steps with `needsServer = true` get a running server before their
-  session starts.
-- Agents in `implement` and `verify` phases control it only through
-  `ab server start|stop|restart|status|logs` (§8.2) — deterministic,
-  config-driven plumbing; no ad-hoc process hunting, and `ab server logs`
-  gives agents the feedback loop they actually need when e2e fails.
-- The kernel guarantees teardown at phase end via process-group ownership: a
-  dead session can never orphan a server.
 
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 

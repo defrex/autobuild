@@ -8,14 +8,11 @@
  * findings but not the producer's session).
  *
  * `.ab/` is wiped and recreated on every run — stale context is worse than no
- * context — and nothing outside `.ab/` is ever touched. Two carve-outs keep
- * the wipe honest: the dev-server control state (`server.pid`/`server.log`,
- * §16.2 D10 — ServerControl's only handle to a deliberately CLI-outliving
- * process) survives it, and a self-excluding `.ab/.gitignore` is (re)written
- * so the scratch dir is actually gitignored (§7, §8.3) without mutating the
- * repo's own `.gitignore`.
+ * context — and nothing outside `.ab/` is ever touched. A self-excluding
+ * `.ab/.gitignore` is (re)written so the scratch dir is actually gitignored
+ * (§7, §8.3) without mutating the repo's own `.gitignore`.
  */
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
 import type { VerifyStepConfig } from '../config/schema'
@@ -140,18 +137,10 @@ function currentFeedback(events: AbEvent[], phase: Phase, round: number): Feedba
   return null
 }
 
-/** Dev-server control state that must survive the `.ab/` wipe (§16.2 D10):
- * ServerControl (src/cli/server-control.ts) keeps its only handle to the
- * CLI-outliving server process in these files. */
-const SERVER_CONTROL_FILES = new Set(['server.pid', 'server.log'])
-
-/** Empty `.ab/` except the server control files — see the module doc. */
+/** Empty and recreate `.ab/` so no stale context survives. */
 async function wipeAbDir(abDir: string): Promise<void> {
+  await rm(abDir, { recursive: true, force: true })
   await mkdir(abDir, { recursive: true })
-  for (const entry of await readdir(abDir)) {
-    if (SERVER_CONTROL_FILES.has(entry)) continue
-    await rm(join(abDir, entry), { recursive: true, force: true })
-  }
 }
 
 function dismissedIds(state: BuildState): string[] {
@@ -176,11 +165,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   const state = reduceBuild(events)
 
   // Wipe and recreate (§8.3): stale context is worse than no context. Only
-  // `.ab/` is ever removed — the workspace's other files are untouched — and
-  // the dev-server control state survives the wipe: `.ab/server.pid` is
-  // ServerControl's ONLY handle to a server that deliberately outlives its
-  // CLI process (§16.2 D10); deleting it would orphan a running server from
-  // every later `ab server` command.
+  // `.ab/` is ever removed — the workspace's other files are untouched.
   const abDir = join(workspacePath, '.ab')
   await wipeAbDir(abDir)
   // §7/§8.3 define `.ab/` as gitignored scratch, but nothing guarantees the

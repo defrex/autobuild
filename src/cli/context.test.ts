@@ -440,10 +440,6 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
     '[commands]',
     'typecheck = "bun tsc --noEmit"',
     '',
-    '[server]',
-    'start = "bun dev"',
-    'url = "http://localhost:3000"',
-    '',
     '[verify]',
     'steps = ["types", "e2e"]',
     '',
@@ -454,7 +450,6 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
     '[verify.e2e]',
     'kind = "agent"',
     'skill = "ab-verify-e2e"',
-    'needsServer = true',
     '',
   ].join('\n')
 
@@ -472,7 +467,7 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
     expect(await treeOf(join(workspace, '.ab'))).toEqual(['.gitignore', 'context.json', 'spec.md'])
     expect(manifest.step).toEqual({
       name: 'e2e',
-      config: { kind: 'agent', skill: 'ab-verify-e2e', needsServer: true },
+      config: { kind: 'agent', skill: 'ab-verify-e2e' },
     })
     expect(manifest.commitRange).toEqual({ base: 'sha-base', head: 'sha-head-1' })
     // The report kind is per-step, required only on fail (§8.2).
@@ -728,15 +723,10 @@ describe('buildContext — hygiene (§8.3)', () => {
     expect(await readFile(join(workspace, 'src.txt'), 'utf8')).toBe('workspace file\n')
   })
 
-  test('the wipe preserves the dev-server control state — server.pid/server.log (§16.2 D10)', async () => {
-    // ServerControl's ONLY handle to the (deliberately CLI-outliving) server
-    // is .ab/server.pid; wiping it would orphan a running server from every
-    // later `ab server` command — status would lie, stop would no-op, and
-    // start would EADDRINUSE against the unreachable original.
+  test('the wipe removes legacy server scratch files', async () => {
     await mkdir(join(workspace, '.ab'), { recursive: true })
     await writeFile(join(workspace, '.ab', 'server.pid'), '12345\n')
     await writeFile(join(workspace, '.ab', 'server.log'), 'listening on :3000\n')
-    await writeFile(join(workspace, '.ab', 'stale.txt'), 'stale\n')
 
     await buildContext({
       store,
@@ -744,9 +734,8 @@ describe('buildContext — hygiene (§8.3)', () => {
       workspacePath: workspace,
     })
 
-    expect(await abFile('server.pid')).toBe('12345\n')
-    expect(await abFile('server.log')).toBe('listening on :3000\n')
-    expect(existsSync(join(workspace, '.ab', 'stale.txt'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab', 'server.pid'))).toBe(false)
+    expect(existsSync(join(workspace, '.ab', 'server.log'))).toBe(false)
   })
 
   test('.ab/ is made self-gitignored on every run — the product establishes §7’s "gitignored .ab/"', async () => {

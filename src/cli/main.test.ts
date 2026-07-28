@@ -59,7 +59,6 @@ describe('runCli — routing and exit codes', () => {
       'ab context',
       'ab artifact',
       'ab observe',
-      'ab server',
       'ab done',
       'ab verdict',
       'ab escalate',
@@ -67,6 +66,7 @@ describe('runCli — routing and exit codes', () => {
       expect(help).toContain(command)
     }
     expect(help).not.toContain('ab artifact put')
+    expect(help).not.toContain('ab server')
   })
 
   test('ticket help documents every source-agnostic ticket operation', async () => {
@@ -167,7 +167,6 @@ describe('runCli — routing and exit codes', () => {
       ['context', '--store', 'state'],
       ['done', '--json'],
       ['artifact', 'put', 'plan', 'plan.md', '--output', 'copy'],
-      ['server', 'status', '--json'],
     ]) {
       const err: string[] = []
       expect(
@@ -361,10 +360,6 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab artifact get',
       },
       {
-        argv: ['server', 'status', 'extra'],
-        usage: 'usage: ab server',
-      },
-      {
         argv: ['harvest', 'submit', 'proposals.json', 'extra'],
         usage: 'usage: ab harvest submit',
       },
@@ -414,15 +409,7 @@ describe('SESSIONLESS_COMMANDS', () => {
   })
 
   test('session commands are absent — they require AB_* and must not route sessionless', () => {
-    for (const command of [
-      'context',
-      'done',
-      'verdict',
-      'escalate',
-      'observe',
-      'artifact',
-      'server',
-    ]) {
+    for (const command of ['context', 'done', 'verdict', 'escalate', 'observe', 'artifact']) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(false)
     }
   })
@@ -1021,7 +1008,7 @@ describe('runCli — artifact and observe', () => {
   })
 })
 
-describe('runCli — escalate and server', () => {
+describe('runCli — escalate and removed commands', () => {
   test('escalate joins the positional question and passes refs', async () => {
     const d = makeDeps({ store, env: makeEnv({ phase: 'plan', round: 1 }) })
     expect(await runCli(['escalate', 'is', 'the', 'spec', 'right?', '--refs', 'spec@0'], d)).toBe(0)
@@ -1039,32 +1026,17 @@ describe('runCli — escalate and server', () => {
     })
   })
 
-  test('server status works without config and reports not running', async () => {
-    const workspace = join(tmp, 'ws-server')
-    await initWorkspaceRepo(workspace)
-    const d = makeDeps({
-      store,
-      env: makeEnv({ phase: 'implement' }),
-      workspacePath: workspace,
-    })
-    expect(await runCli(['server', 'status'], d)).toBe(0)
-    expect(d.out).toEqual(['not running'])
-  })
-
-  test('server start in a phase without server access exits 1 with the policy error', async () => {
-    const d = makeDeps({
-      store,
-      env: makeEnv({ phase: 'plan' }),
-      workspacePath: join(tmp, 'nowhere'),
-    })
-    expect(await runCli(['server', 'start'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('not available in phase "plan"')
-  })
-
-  test('server with a bad subcommand prints usage and exits 1', async () => {
+  test('the removed server command fails as unknown', async () => {
     const d = makeDeps({ store, env: makeEnv({ phase: 'implement' }), workspacePath: tmp })
-    expect(await runCli(['server', 'reboot'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('usage: ab server <start|stop|restart|status|logs>')
+    expect(await runCli(['server', 'start'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('unknown command "server"')
+    expect(d.out).toEqual([])
+  })
+
+  test('help for the removed server command fails by name', async () => {
+    const d = deps()
+    expect(await runCli(['help', 'server'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('unknown help command "server"')
   })
 })
 

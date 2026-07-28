@@ -20,7 +20,6 @@ const COMMANDS = [
   'context',
   'artifact',
   'observe',
-  'server',
   'done',
   'verdict',
   'escalate',
@@ -179,7 +178,6 @@ describe('layered CLI help catalog', () => {
         'sessionless',
       ],
       observe: ['followup|refactor|latent-bug', '--files', '--refs', 'not a terminal'],
-      server: ['server start', 'server logs [n]', 'implement and verify', 'kernel owns teardown'],
       done: ['done [--notes <file>]', 'terminal command', 'exactly one terminal'],
       verdict: [
         'approve|revise|escalate|pass|fail|skip',
@@ -204,15 +202,18 @@ describe('layered CLI help catalog', () => {
     }
 
     const dispatch = renderCommandHelp('dispatch')
+    expect(renderTopLevelHelp()).not.toContain('ab server')
     expect(dispatch).not.toContain('p         Toggle intake')
     expect(dispatch).not.toContain('selected Harvest workflow or build')
   })
 
   test('unknown and malformed help requests fail with targeted feedback', async () => {
-    const unknown = deps()
-    expect(await runCli(['help', 'frobnicate'], unknown)).toBe(1)
-    expect(unknown.out).toEqual([])
-    expect(unknown.err.join('\n')).toContain('unknown help command "frobnicate"')
+    for (const command of ['frobnicate', 'server']) {
+      const unknown = deps()
+      expect(await runCli(['help', command], unknown)).toBe(1)
+      expect(unknown.out).toEqual([])
+      expect(unknown.err.join('\n')).toContain(`unknown help command "${command}"`)
+    }
 
     const malformed = deps()
     expect(await runCli(['help', 'context', 'extra'], malformed)).toBe(1)

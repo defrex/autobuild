@@ -23,7 +23,7 @@ There are three validation layers:
 1. TOML syntax and schema/cross-field validation happen while
    `autobuild.toml` is loaded. Errors start with the file path and either
    `TOML syntax error` or `invalid config`; schema errors then identify paths
-   such as `verify.e2e.needsServer` or `tickets.teamKey`.
+   such as `verify.e2e.skill` or `tickets.teamKey`.
 2. Configured plugin modules are resolved from the repository, evaluated,
    manifest-validated, checked for plugin-API compatibility, and registered
    before production adapters, stores, claims, or runners are started.
@@ -271,21 +271,6 @@ and after sandbox rehydration. Other names run only when referenced by a
 configured check. A check's `command` value is the key in this map, not an
 inline shell command. The kernel passes the mapped string to a shell as written.
 
-## `[server]`
-
-Optional. The table declares a development server; the kernel owns its process
-group, readiness wait, and teardown. Agents control it only with
-`ab server start|stop|restart|status|logs` during implement or verify.
-
-| Field | Default | Constraints | Purpose |
-|---|---:|---|---|
-| `start` | — | required nonempty string | Shell command that starts the server. |
-| `url` | — | required nonempty string | URL polled for readiness. |
-| `readyTimeout` | `60` | positive integer, seconds | Maximum readiness wait before startup fails. |
-
-An agent verifier with `needsServer = true` requires this table. The kernel
-stops the managed server at phase end even if the session fails.
-
 ## `[verify]` and `[verify.<step>]`
 
 `[verify].steps` defines the configured universe and execution order. It is
@@ -306,7 +291,6 @@ There are two strict step variants:
 | `kind` | — | required `"check"` or `"agent"` | Select the strict step variant. |
 | `command` | — | required for check; nonempty key in `[commands]` | Deterministic shell verb to run. Forbidden for agent steps. |
 | `skill` | — | required for agent; nonempty string | Exact installed verifier skill. Forbidden for check steps. |
-| `needsServer` | `false` | agent-only boolean | Start `[server]`, wait for readiness, then run the session. |
 | `paths` | omitted (unconditional) | optional nonempty array of positive repository-relative globs | Apply only when at least one changed path matches. Available to both variants. |
 | `always` | omitted (`false`) | optional boolean | `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants. |
 
@@ -314,10 +298,6 @@ There are two strict step variants:
 ```toml
 [commands]
 typecheck = "bun tsc --noEmit"
-
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
 
 [verify]
 steps = ["types", "e2e"]
@@ -330,7 +310,6 @@ always = true
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**", "src/routes/**"]
 ```
 
@@ -339,7 +318,6 @@ Cross-field validation rejects:
 - a listed step without its `[verify.<step>]` table;
 - a named table not present in `steps`;
 - a check whose command is absent from `[commands]`;
-- `needsServer = true` without `[server]`;
 - fields from the other kind, unknown fields, and malformed selectors.
 
 `always = true` does not make malformed `paths` acceptable: all supplied
@@ -371,7 +349,7 @@ approved plan; reconciliation reuses it.
 
 For each step the kernel evaluates approved-plan selection first, then path
 applicability. Exclusion by either mechanism records a queryable `skipped`
-outcome. A selection exclusion or path miss starts no check, agent, or server.
+outcome. A selection exclusion or path miss starts no check or agent.
 An `always = true` step cannot be excluded by the plan and runs regardless of
 its `paths` value.
 
@@ -415,8 +393,8 @@ to `[]`. These run after the finalize agent writes the PR description and the
 kernel opens the PR. Like verify, every listed name requires one matching table
 and every table must be listed.
 
-Finalize has a smaller strict union. Verify-only `paths`, `always`, and
-`needsServer` fields are errors.
+Finalize has a smaller strict union. Verify-only `paths` and `always` fields
+are errors.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
@@ -650,11 +628,6 @@ typecheck = "bun tsc --noEmit"
 test = "bun test"
 publish = "bun run publish"
 
-[server]
-start = "bun dev"
-url = "http://localhost:3000"
-readyTimeout = 60
-
 [verify]
 steps = ["types", "unit", "e2e"]
 
@@ -670,7 +643,6 @@ command = "test"
 [verify.e2e]
 kind = "agent"
 skill = "ab-verify-e2e"
-needsServer = true
 paths = ["web/**", "src/routes/**"]
 
 [finalize]
@@ -900,7 +872,7 @@ Fix TOML structure first. A schema failure starts with:
 
 ```text
 /path/to/autobuild.toml: invalid config
-  verify.e2e.needsServer: ...
+  verify.e2e.skill: ...
   tickets.teamKey: ...
 ```
 

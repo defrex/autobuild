@@ -16,7 +16,6 @@ import {
   policySchema,
   prSchema,
   roleSchema,
-  serverSchema,
   ticketsSchema,
   TOP_LEVEL_KEYS,
   TOP_LEVEL_SCALARS,
@@ -84,7 +83,6 @@ const TABLE_HEADINGS: Record<string, string> = {
   pr: '`[pr]`',
   workspace: '`[workspace]`',
   commands: '`[commands]`',
-  server: '`[server]`',
   verify: '`[verify]` and `[verify.<step>]`',
   finalize: '`[finalize]` and `[finalize.<step>]`',
   roles: '`[roles]`',
@@ -97,7 +95,6 @@ const TABLE_FIELDS: Record<string, string[]> = {
   workspace: Object.keys(workspaceSchema.shape),
   // Open map: command names are repository-defined.
   commands: [],
-  server: Object.keys(serverSchema.shape),
   // The transformed sections hide `steps`; strict variant schemas own the
   // remaining accepted fields.
   verify: unique([
@@ -204,6 +201,9 @@ describe('docs/configuration.md — schema coverage', () => {
       '[harvest]',
       '[outer]',
       '[agent]',
+      '[server]',
+      'needsServer',
+      'ab server',
     ]) {
       expect(doc).not.toContain(token)
     }
