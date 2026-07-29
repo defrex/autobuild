@@ -168,6 +168,7 @@ export type AutoMergeDeferralCode =
   | 'github-plan-limitation'
   | 'repository-auto-merge-disabled'
   | 'unproven-gate-state'
+  | 'local-base-checkout-dirty'
 
 export interface AutoMergeDeferralReason {
   /** Stable machine-readable family used by durable operator observations. */

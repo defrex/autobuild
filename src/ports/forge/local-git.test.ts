@@ -172,7 +172,91 @@ describe('LocalGitForge', () => {
     })
   })
 
-  test('a later observation repairs a crash after moving a checked-out base ref', async () => {
+  test('lands over non-overlapping tracked, staged, and untracked work without cleaning it', async () => {
+    const f = await fixture()
+    await writeFile(join(f.root, 'index-only.txt'), 'index base\n')
+    await git(f.root, 'add', 'index-only.txt')
+    await git(f.root, 'commit', '-m', 'advance base with index-only path')
+    const pr = await f.forge.openPr({
+      workspacePath: f.workspace,
+      head: f.head,
+      base: 'main',
+      title: 'carry operator work',
+      body: '',
+    })
+    await writeFile(join(f.root, 'shared.txt'), 'operator edit\n')
+    await writeFile(join(f.root, 'index-only.txt'), 'staged operator edit\n')
+    await git(f.root, 'add', 'index-only.txt')
+    await writeFile(join(f.root, 'scratch.txt'), 'operator scratch\n')
+
+    expect(await f.forge.setAutoMerge(f.workspace, pr.number, true)).toEqual({
+      kind: 'ungated',
+      headSha: pr.headSha,
+    })
+    await f.forge.squashMerge(f.workspace, pr.number, pr.headSha)
+    const landed = await git(f.root, 'rev-parse', 'main')
+    expect(await f.forge.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
+    expect(await Bun.file(join(f.root, 'shared.txt')).text()).toBe('operator edit\n')
+    expect(await Bun.file(join(f.root, 'index-only.txt')).text()).toBe('staged operator edit\n')
+    expect(await Bun.file(join(f.root, 'scratch.txt')).text()).toBe('operator scratch\n')
+    expect(await git(f.root, 'status', '--porcelain')).toContain('M shared.txt')
+    expect(await git(f.root, 'status', '--porcelain')).toContain('M  index-only.txt')
+    expect(await git(f.root, 'status', '--porcelain')).toContain('?? scratch.txt')
+    expect(await git(f.root, 'diff', '--cached', '--', 'index-only.txt')).toContain(
+      'staged operator edit',
+    )
+    expect(await git(f.root, 'diff', '--cached', '--', 'feature.txt')).toBe('')
+    expect(await git(f.root, 'diff', '--', 'feature.txt')).toBe('')
+    expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('feature\n')
+  })
+
+  test('tracked and untracked landing collisions defer with a path and retry after cleanup', async () => {
+    for (const collision of ['tracked', 'untracked'] as const) {
+      const f = await fixture()
+      if (collision === 'tracked') {
+        await writeFile(join(f.workspace, 'shared.txt'), 'landed shared\n')
+        await git(f.workspace, 'add', 'shared.txt')
+      } else {
+        await writeFile(join(f.workspace, 'added.txt'), 'landed add\n')
+        await git(f.workspace, 'add', 'added.txt')
+      }
+      await git(f.workspace, 'commit', '-m', `${collision} collision landing`)
+      const pr = await f.forge.openPr({
+        workspacePath: f.workspace,
+        head: f.head,
+        base: 'main',
+        title: `${collision} collision`,
+        body: '',
+      })
+      const before = await git(f.root, 'rev-parse', 'main')
+      const path = collision === 'tracked' ? 'shared.txt' : 'added.txt'
+      await writeFile(join(f.root, path), 'operator work\n')
+
+      const first = await f.forge.setAutoMerge(f.workspace, pr.number, true)
+      expect(first.kind).toBe('deferred')
+      if (first.kind !== 'deferred') throw new Error('expected checkout deferral')
+      expect(first.reason).toMatchObject({ code: 'local-base-checkout-dirty' })
+      expect(first.reason?.detail).toContain(path)
+      expect(await f.forge.setAutoMerge(f.workspace, pr.number, true)).toEqual(first)
+      expect(await git(f.root, 'rev-parse', 'main')).toBe(before)
+      expect(await Bun.file(join(f.root, path)).text()).toBe('operator work\n')
+
+      if (collision === 'tracked') await git(f.root, 'checkout', '--', path)
+      else await rm(join(f.root, path))
+      const candidate = await f.forge.setAutoMerge(f.workspace, pr.number, true)
+      expect(candidate).toEqual({ kind: 'ungated', headSha: pr.headSha })
+      await f.forge.squashMerge(f.workspace, pr.number, pr.headSha)
+      const landed = await git(f.root, 'rev-parse', 'main')
+      expect(await f.forge.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
+      expect(await Bun.file(join(f.root, path)).text()).toBe(
+        collision === 'tracked' ? 'landed shared\n' : 'landed add\n',
+      )
+      expect(await git(f.root, 'show', '-s', '--format=%P', landed)).toBe(before)
+      expect(await git(f.root, 'rev-list', '--count', `${before}..main`)).toBe('1')
+    }
+  })
+
+  test('a later observation repairs the post-ref crash window while preserving unrelated dirt', async () => {
     const f = await fixture()
     const pr = await f.forge.openPr({
       workspacePath: f.workspace,
@@ -181,38 +265,57 @@ describe('LocalGitForge', () => {
       title: 'crash repair',
       body: '',
     })
-    let failReset = true
+    await writeFile(join(f.root, 'shared.txt'), 'operator edit\n')
+    let failUpdate = true
     const crashing = new LocalGitForge({
       exec: async (cmd, opts) => {
-        if (failReset && cmd[0] === 'git' && cmd[1] === 'reset') {
-          failReset = false
+        if (failUpdate && cmd[0] === 'git' && cmd[1] === 'read-tree' && !cmd.includes('-n')) {
+          failUpdate = false
           return { stdout: '', stderr: 'simulated crash boundary', exitCode: 1 }
         }
         return bunExec(cmd, opts)
       },
     })
-    await expect(crashing.squashMerge(f.workspace, pr.number, pr.headSha)).rejects.toThrow(
-      'simulated crash boundary',
-    )
-    expect(await git(f.root, 'status', '--porcelain')).not.toBe('')
+    await crashing.squashMerge(f.workspace, pr.number, pr.headSha)
+    expect(await git(f.root, 'status', '--porcelain')).toContain('shared.txt')
 
     const state = await new LocalGitForge().getPrState(f.root, pr.number)
     expect(state.state).toBe('merged')
-    expect(await git(f.root, 'status', '--porcelain')).toBe('')
+    expect(await Bun.file(join(f.root, 'shared.txt')).text()).toBe('operator edit\n')
+    expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('feature\n')
   })
 
-  test('refuses a dirty checked-out base without moving it', async () => {
+  test('post-ref repair waits on a new collision and setAutoMerge reports the recorded transition', async () => {
     const f = await fixture()
     const pr = await f.forge.openPr({
       workspacePath: f.workspace,
       head: f.head,
       base: 'main',
-      title: 'dirty guard',
+      title: 'blocked crash repair',
       body: '',
     })
-    const before = await git(f.root, 'rev-parse', 'main')
-    await writeFile(join(f.root, 'dirty.txt'), 'operator work\n')
-    await expect(f.forge.squashMerge(f.workspace, pr.number, pr.headSha)).rejects.toThrow('dirty')
-    expect(await git(f.root, 'rev-parse', 'main')).toBe(before)
+    let injectCollision = true
+    const racing = new LocalGitForge({
+      exec: async (cmd, opts) => {
+        if (injectCollision && cmd[0] === 'git' && cmd[1] === 'read-tree' && !cmd.includes('-n')) {
+          injectCollision = false
+          await writeFile(join(f.root, 'feature.txt'), 'operator collision\n')
+        }
+        return bunExec(cmd, opts)
+      },
+    })
+    await racing.squashMerge(f.workspace, pr.number, pr.headSha)
+
+    expect(await racing.getPrState(f.root, pr.number)).toEqual({ state: 'open', mergeable: true })
+    const deferred = await racing.setAutoMerge(f.root, pr.number, true)
+    expect(deferred.kind).toBe('deferred')
+    if (deferred.kind !== 'deferred') throw new Error('expected checkout deferral')
+    expect(deferred.reason?.detail).toContain('feature.txt')
+    expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('operator collision\n')
+
+    await rm(join(f.root, 'feature.txt'))
+    const landed = await git(f.root, 'rev-parse', 'main')
+    expect(await racing.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
+    expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('feature\n')
   })
 })

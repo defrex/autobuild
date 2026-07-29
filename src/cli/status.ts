@@ -37,7 +37,14 @@ import {
   type OpenSession,
   type PrLifecycle,
 } from '../kernel/reducer'
-import type { BuildOutcome, BuildStatus, Phase, TicketRef, VerifyOutcome } from '../ontology'
+import type {
+  BuildOutcome,
+  BuildStatus,
+  ObservationKind,
+  Phase,
+  TicketRef,
+  VerifyOutcome,
+} from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { resolveMainRepo } from './repo-state'
@@ -84,9 +91,18 @@ export interface VerifyProgress {
   currentStep?: string
 }
 
+export interface BuildObservation {
+  id: string
+  kind: ObservationKind
+  summary: string
+  files?: string[]
+  refs?: string[]
+}
+
 export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   openSessions: OpenSession[]
+  observations: BuildObservation[]
   verify: VerifyProgress
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
   /** Present only with `--events <n>`: the newest n, chronological. */
@@ -209,6 +225,17 @@ export function detail(
     ...summary,
     openEscalations: state.openEscalations,
     openSessions: state.sessions.open,
+    // Observations are historical facts rather than a derived current-state
+    // opinion. Preserve event order and exact optional evidence fields.
+    observations: events
+      .filter((event) => event.type === 'observation.recorded')
+      .map((event) => ({
+        id: event.payload.id,
+        kind: event.payload.kind,
+        summary: event.payload.summary,
+        ...(event.payload.files !== undefined ? { files: event.payload.files } : {}),
+        ...(event.payload.refs !== undefined ? { refs: event.payload.refs } : {}),
+      })),
     verify: {
       // Preserve the status API's display counter while sourcing it explicitly
       // from the reducer's full-log high-water, never from cycle membership.
@@ -367,6 +394,19 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       lines.push(
         `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})`,
       )
+    }
+  }
+
+  if (d.observations.length > 0) {
+    lines.push(`  observations (${d.observations.length}):`)
+    for (const observation of d.observations) {
+      lines.push(`    [${observation.id}] ${observation.kind}: ${observation.summary}`)
+      if (observation.files !== undefined) {
+        lines.push(`      files: ${observation.files.join(', ')}`)
+      }
+      if (observation.refs !== undefined) {
+        lines.push(`      refs: ${observation.refs.join(', ')}`)
+      }
     }
   }
 

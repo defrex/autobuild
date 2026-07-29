@@ -519,6 +519,56 @@ describe('detail', () => {
     expect(rendered).toContain('quota')
   })
 
+  test('projects and renders observations chronologically without --events', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: agentActor('implement', 's_1'),
+      type: 'observation.recorded',
+      payload: {
+        id: 'obs_first',
+        kind: 'latent-bug',
+        summary: 'First historical observation',
+        files: ['src/first.ts'],
+      },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'observation.recorded',
+      payload: {
+        id: 'obs_checkout',
+        kind: 'followup',
+        summary:
+          "Local merge is blocked by uncommitted work in the base checkout: Entry 'src/config.ts' not uptodate",
+        refs: ['auto-merge-gate:pr:7:command:12'],
+      },
+    })
+
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.events).toBeUndefined()
+    expect(d.observations).toEqual([
+      {
+        id: 'obs_first',
+        kind: 'latent-bug',
+        summary: 'First historical observation',
+        files: ['src/first.ts'],
+      },
+      {
+        id: 'obs_checkout',
+        kind: 'followup',
+        summary:
+          "Local merge is blocked by uncommitted work in the base checkout: Entry 'src/config.ts' not uptodate",
+        refs: ['auto-merge-gate:pr:7:command:12'],
+      },
+    ])
+    const rendered = renderDetail(d, NOW).join('\n')
+    expect(rendered).toContain('observations (2):')
+    expect(rendered.indexOf('obs_first')).toBeLessThan(rendered.indexOf('obs_checkout'))
+    expect(rendered).toContain('src/config.ts')
+    expect(rendered).toContain('files: src/first.ts')
+    expect(rendered).toContain('refs: auto-merge-gate:pr:7:command:12')
+  })
+
   test('outcome present once the build is done', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1', status: 'done' })
@@ -651,6 +701,7 @@ describe('renderers', () => {
     const text = renderDetail(detail(record(), [], NOW), NOW).join('\n')
     expect(text).not.toContain('escalations')
     expect(text).not.toContain('open sessions')
+    expect(text).not.toContain('observations')
     expect(text).not.toContain('pr:')
     expect(text).not.toContain('verify:')
   })

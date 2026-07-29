@@ -789,8 +789,13 @@ set or copy them into `.env`; the runner stamps them for each session.
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
 credentials or network access: it keeps durable PR records under private Git
 refs, leaves each build at `refs/heads/ab/<slug>`, and squash-merges locally only
-after auto-merge consent. Inspect an open local change with `git diff main...ab/<slug>`.
-It has no review web UI and no image-hosting capability; attached artifacts use
+after auto-merge consent. A dirty checked-out base does not by itself block the
+landing: tracked and untracked work on paths untouched by the squash survives.
+If the squash would overwrite operator work, the PR remains open, `ab build
+status <slug>` shows a path-bearing observation, and later dispatcher ticks retry
+automatically after the operator commits, stashes, or discards the collision;
+Autobuild never mutates that work. Inspect an open local change with `git diff
+main...ab/<slug>`. It has no review web UI and no image-hosting capability; attached artifacts use
 the existing text-download projection.
 
 - for `forge = "github"`, authenticate GitHub CLI operations with `gh auth login`, and separately make

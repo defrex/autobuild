@@ -121,6 +121,7 @@ const DEFERRAL_SUMMARIES = {
     'GitHub rulesets are unavailable because of the repository account plan',
   'repository-auto-merge-disabled': 'repository-level auto-merge is disabled',
   'unproven-gate-state': 'merge-gate state or native auto-merge application could not be proven',
+  'local-base-checkout-dirty': 'local merge is blocked by uncommitted work in the base checkout',
 } as const satisfies Record<AutoMergeDeferralReason['code'], string>
 
 /** Kernel-authored durable diagnostic for a non-transient declined consent. */

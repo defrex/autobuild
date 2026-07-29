@@ -277,32 +277,40 @@ export class LocalGitForge implements Forge {
     throw new Error(`local-git could not compare landing ancestry: ${result.stderr.trim()}`)
   }
 
-  /** A process can die after moving a checked-out base ref but before resetting
-   * its index/worktree. Repair only when both still exactly represent the old
-   * base and there is no untracked operator work; otherwise observation never
-   * overwrites local changes. */
+  /** Apply Git's two-tree fast-forward operation. It carries index/worktree
+   * changes on paths unchanged by the landing and refuses any tracked or
+   * untracked overwrite. `dryRun` exercises those exact checks without writing. */
+  private async transitionCheckout(
+    checkout: string,
+    from: string,
+    to: string,
+    dryRun: boolean,
+  ): Promise<{ ok: true } | { ok: false; detail: string }> {
+    const result = await this.command(
+      ['read-tree', '-m', '-u', ...(dryRun ? ['-n'] : []), `${from}^{tree}`, `${to}^{tree}`],
+      checkout,
+      true,
+    )
+    if (result.exitCode === 0) return { ok: true }
+    return {
+      ok: false,
+      detail:
+        result.stderr.trim() ||
+        result.stdout.trim() ||
+        `git read-tree refused the checkout transition (exit ${result.exitCode})`,
+    }
+  }
+
+  /** Repair the crash window after the base ref moved but before its checked-out
+   * index/worktree was updated. A collision remains retryable and untouched. */
   private async repairObservedCheckout(
     cwd: string,
     baseRef: string,
     pending: z.infer<typeof pendingLanding>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const checkout = await this.checkedOutBase(cwd, baseRef)
-    if (checkout === undefined) return
-    const [index, oldTree, landedTree, unstaged, untracked] = await Promise.all([
-      this.command(['write-tree'], checkout),
-      this.command(['rev-parse', `${pending.baseSha}^{tree}`], checkout),
-      this.command(['rev-parse', `${pending.commitSha}^{tree}`], checkout),
-      this.command(['diff', '--quiet'], checkout, true),
-      this.command(['ls-files', '--others', '--exclude-standard', '-z'], checkout),
-    ])
-    if (index.stdout.trim() === landedTree.stdout.trim() && unstaged.exitCode === 0) return
-    if (
-      index.stdout.trim() === oldTree.stdout.trim() &&
-      unstaged.exitCode === 0 &&
-      untracked.stdout === ''
-    ) {
-      await this.command(['reset', '--hard', pending.commitSha], checkout)
-    }
+    if (checkout === undefined) return true
+    return (await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)).ok
   }
 
   async getPrState(workspacePath: string, number: number): Promise<PrState> {
@@ -317,7 +325,16 @@ export class LocalGitForge implements Forge {
       (await this.isAncestor(workspacePath, record.pendingLanding.commitSha, baseSha))
     ) {
       const landingSha = record.pendingLanding.commitSha
-      await this.repairObservedCheckout(workspacePath, baseRef, record.pendingLanding)
+      // At the exact ref-move crash boundary, merged observation waits until
+      // the checkout transition succeeds. A later descendant means another Git
+      // operation already advanced the landed base, so there is no old checkout
+      // left for this pending transition to repair.
+      if (
+        baseSha === landingSha &&
+        !(await this.repairObservedCheckout(workspacePath, baseRef, record.pendingLanding))
+      ) {
+        return { state: 'open', mergeable: true }
+      }
       record = await this.updateRecord(workspacePath, number, (current) => ({
         ...current,
         status: 'merged',
@@ -359,9 +376,37 @@ export class LocalGitForge implements Forge {
     if (!enabled) return { kind: 'applied' }
     if (record.status !== 'open') return { kind: 'deferred' }
     const headSha = await this.sha(`refs/heads/${record.head}`, workspacePath)
-    const baseSha = await this.sha(`refs/heads/${record.base}`, workspacePath)
-    if ((await this.mergeTree(workspacePath, baseSha, headSha)) === null) {
-      return { kind: 'deferred' }
+    const baseRef = `refs/heads/${record.base}`
+    const baseSha = await this.sha(baseRef, workspacePath)
+
+    let transitionFrom = baseSha
+    let transitionTo: string
+    const pending = record.pendingLanding
+    if (
+      pending !== undefined &&
+      pending.headSha === headSha &&
+      (baseSha === pending.baseSha || baseSha === pending.commitSha)
+    ) {
+      // This includes the post-ref checkout-repair window. Always inspect the
+      // recorded old-to-landed transition; current-base-to-head is a no-op there
+      // and would conceal the operator path that still blocks repair.
+      transitionFrom = pending.baseSha
+      transitionTo = pending.commitSha
+    } else {
+      const treeSha = await this.mergeTree(workspacePath, baseSha, headSha)
+      if (treeSha === null) return { kind: 'deferred' }
+      transitionTo = treeSha
+    }
+
+    const checkout = await this.checkedOutBase(workspacePath, baseRef)
+    if (checkout !== undefined) {
+      const preflight = await this.transitionCheckout(checkout, transitionFrom, transitionTo, true)
+      if (!preflight.ok) {
+        return {
+          kind: 'deferred',
+          reason: { code: 'local-base-checkout-dirty', detail: preflight.detail },
+        }
+      }
     }
     return { kind: 'ungated', headSha }
   }
@@ -375,17 +420,6 @@ export class LocalGitForge implements Forge {
       if (line === '') path = undefined
     }
     return undefined
-  }
-
-  private async assertCleanCheckout(path: string, expectedSha: string): Promise<void> {
-    const actual = await this.sha('HEAD', path)
-    if (actual !== expectedSha) {
-      throw new Error(`local-git base checkout moved (expected ${expectedSha}, found ${actual})`)
-    }
-    const status = await this.command(['status', '--porcelain=v1', '-z'], path)
-    if (status.stdout !== '') {
-      throw new Error('local-git refuses to merge into a dirty checked-out base branch')
-    }
   }
 
   private async commitTree(
@@ -468,7 +502,18 @@ export class LocalGitForge implements Forge {
     }
 
     const checkout = await this.checkedOutBase(workspacePath, baseRef)
-    if (checkout !== undefined) await this.assertCleanCheckout(checkout, baseSha)
+    if (checkout !== undefined) {
+      // Close the inspection-to-landing race at the last safe point. A refusal
+      // is a condition, not a failed dispatcher tick; pending evidence remains
+      // reusable and the next poll reports the typed deferral.
+      const preflight = await this.transitionCheckout(
+        checkout,
+        pending.baseSha,
+        pending.commitSha,
+        true,
+      )
+      if (!preflight.ok) return
+    }
     const moved = await this.command(
       ['update-ref', baseRef, pending.commitSha, pending.baseSha],
       workspacePath,
@@ -478,7 +523,10 @@ export class LocalGitForge implements Forge {
       throw new Error(`local-git base ${baseRef} moved before squash landing`)
     }
     if (checkout !== undefined) {
-      await this.command(['reset', '--hard', pending.commitSha], checkout)
+      // A racing operator edit can still appear after preflight. Never roll the
+      // ref back or overwrite it: leave the pending landing for getPrState and
+      // setAutoMerge to repair/report on a later poll.
+      await this.transitionCheckout(checkout, pending.baseSha, pending.commitSha, false)
     }
     // Deliberately do not mark the record merged here. The next getPrState
     // independently observes the landed commit and records that fact.
