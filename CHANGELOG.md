@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#116](https://github.com/defrex/autobuild/pull/116) — Contain janitor failures per build
 - [#115](https://github.com/defrex/autobuild/pull/115) — Make `ab init` agent-driven and stack-neutral
 - [#114](https://github.com/defrex/autobuild/pull/114) — Remove managed dev-server support
 - [#113](https://github.com/defrex/autobuild/pull/113) — Recover interrupted dispatches and expose queued builds
