@@ -267,9 +267,14 @@ publish = "bun run publish"
 ```
 
 `setup` is special by convention: the kernel runs it after workspace provision
-and after sandbox rehydration. Other names run only when referenced by a
-configured check. A check's `command` value is the key in this map, not an
-inline shell command. The kernel passes the mapped string to a shell as written.
+and after sandbox rehydration. A failure is recorded durably with its command,
+exit status, attempt, and output. Retries are bounded by
+`policy.maxSetupAttempts`; exhaustion blocks on a human-answerable setup
+escalation without creating a phase or verification result. A later successful
+attachment clears the current error projection. Other names run only when
+referenced by a configured check. A check's `command` value is the key in this
+map, not an inline shell command. The kernel passes the mapped string to a shell
+as written.
 
 ## `[verify]` and `[verify.<step>]`
 
@@ -510,6 +515,7 @@ Optional. Every field is a positive integer and receives its own default.
 |---|---:|---|---|
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
+| `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound conflict-reconciliation cycles. |
 | `maxReviewRounds` | `4` | positive integer | Bound each plan/review and implement/review convergence loop. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
@@ -671,6 +677,7 @@ extensions = ["web-access"]
 [policy]
 stallRounds = 3
 maxVerifyAttempts = 3
+maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 5
@@ -723,7 +730,7 @@ all such conflicts with move/remove guidance, skips the setup handoff, and exits
 
 The generated file is an active-only, schema-valid skeleton. It writes
 `baseBranch = "main"`, `capacity = 4`, empty `[commands]`, empty verify and
-finalize step arrays, all five default policy values, a valid local file-ticket
+finalize step arrays, all six default policy values, a valid local file-ticket
 gate, and the selected setup runtime as a temporary explicit role default. It
 contains no setup command, package-manager command, language assumption, or
 repository-derived value. Therefore repositories containing only `package.json`

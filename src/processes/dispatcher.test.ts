@@ -3121,6 +3121,49 @@ describe('Dispatcher startup resume', () => {
     })
   })
 
+  test('never auto-answers setup exhaustion; only a human answer allows relaunch', async () => {
+    const h = harness()
+    const slug = await seedBuild(h)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.setup-failed',
+      payload: {
+        command: 'bun install',
+        attempt: 3,
+        exitStatus: 1,
+        output: 'missing package.json',
+      },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_setup',
+        phase: 'setup',
+        source: 'policy',
+        question: 'setup failed three times',
+      },
+    })
+    await h.store.claimLease(slug, 'runner-1', 1000)
+    h.clock.advance(2000)
+
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+    expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('escalation.raised')
+
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_setup',
+        answer: 'fixed the environment',
+        resolution: 'guidance',
+      },
+    })
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
+  })
+
   test('does not override human pauses or agent judgment escalations', async () => {
     const paused = harness()
     await seedBuild(paused, { slug: 'paused' })

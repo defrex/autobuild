@@ -108,6 +108,61 @@ describe('dispatch recovery event protocol', () => {
   })
 })
 
+describe('runner setup failure protocol', () => {
+  test('setup failures are strict kernel facts with an explicit unavailable status', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'runner.setup-failed',
+        payload: { command: 'bun install', attempt: 2, exitStatus: 1, output: 'missing package' },
+      }).payload,
+    ).toEqual({ command: 'bun install', attempt: 2, exitStatus: 1, output: 'missing package' })
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'runner.setup-failed',
+        payload: { command: 'bun install', attempt: 1, exitStatus: null, output: 'spawn failed' },
+      }).payload,
+    ).toMatchObject({ exitStatus: null })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'runner.setup-failed',
+        payload: { command: 'bun install', attempt: 1, exitStatus: 1, output: '' },
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'runner.setup-failed',
+        payload: { command: '', attempt: 0, exitStatus: 'unknown', output: '', extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('setup is accepted only as escalation metadata, not as a phase', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_setup',
+          phase: 'setup',
+          source: 'policy',
+          question: 'setup is still failing',
+        },
+      }).payload,
+    ).toMatchObject({ phase: 'setup' })
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: { phase: 'setup', attempt: 1, error: 'nope', willRetry: false },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+})
+
 describe('PR attachment event protocol', () => {
   const target = {
     provider: 'github-release' as const,

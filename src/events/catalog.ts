@@ -37,6 +37,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.created': ['dispatcher', 'human'],
   'build.completed': ['dispatcher'],
   'runner.attached': ['kernel'],
+  'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
   'dispatch.failed': ['dispatcher'],

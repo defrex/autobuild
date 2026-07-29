@@ -67,6 +67,7 @@ model = "kimi-k3"
 [policy]
 stallRounds = 3
 maxVerifyAttempts = 3
+maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 7
@@ -138,6 +139,7 @@ describe('parseConfig — complete flattened surface', () => {
       policy: {
         stallRounds: 3,
         maxVerifyAttempts: 3,
+        maxSetupAttempts: 3,
         maxReconcileAttempts: 3,
         maxReviewRounds: 4,
         harvestThreshold: 7,
@@ -172,6 +174,7 @@ describe('parseConfig — defaults', () => {
       policy: {
         stallRounds: 3,
         maxVerifyAttempts: 3,
+        maxSetupAttempts: 3,
         maxReconcileAttempts: 3,
         maxReviewRounds: 4,
         harvestThreshold: 5,
@@ -294,6 +297,7 @@ skill = "ab-verify-e2e"
     expect(parseConfig(`${READY}[policy]\nstallRounds = 7\n`).policy).toEqual({
       stallRounds: 7,
       maxVerifyAttempts: 3,
+      maxSetupAttempts: 3,
       maxReconcileAttempts: 3,
       maxReviewRounds: 4,
       harvestThreshold: 5,

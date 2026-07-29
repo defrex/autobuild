@@ -445,6 +445,29 @@ describe('projectBuild: the nonterminal-build filter', () => {
     )
   })
 
+  test('projects a durable setup error until a successful attachment clears it', () => {
+    const failed = toLog([
+      ...prelude().map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('runner.setup-failed', {
+        command: 'bun install',
+        attempt: 2,
+        exitStatus: 1,
+        output: 'missing package.json',
+      }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(failed), CONFIG, failed)?.setupError).toBe(
+      '[commands].setup "bun install" failed (attempt 2, exit status 1): missing package.json',
+    )
+
+    const recovered = toLog([
+      ...failed.map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('runner.attached', { instance: 'runner-2', host: 'local' }),
+    ])
+    expect(
+      projectBuild(RECORD, reduceBuild(recovered), CONFIG, recovered)?.setupError,
+    ).toBeUndefined()
+  })
+
   test('buildDashboard drops only terminals and sorts by slug for a stable frame', () => {
     const activeLog = toLog(prelude())
     const queuedLog = toLog(prelude().slice(0, 3))

@@ -259,7 +259,11 @@ likes.
 | `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from check steps in `[verify.<step>]` or `[finalize.<step>]`. |
 
 `setup` is special by convention: it runs after workspace provision and after a
-sandbox rehydrate. Values are never evaluated as config — they are handed to a
+sandbox rehydrate. Failures are durable, remain visible in build status and the
+dashboard, and retry up to `[policy].maxSetupAttempts`; exhaustion raises a
+setup-targeted escalation without manufacturing a pipeline phase or verdict. A
+human answer re-arms the budget, and a later successful `runner.attached` clears
+the current error. Values are never evaluated as config — they are handed to a
 shell as written.
 
 Fresh init config deliberately leaves this map empty. The non-phase `ab-setup`
@@ -436,6 +440,7 @@ Every field is a **positive integer**.
 |---|---|---|---|
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
+| `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
 | `maxReviewRounds` | `4` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |

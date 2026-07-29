@@ -126,6 +126,9 @@ export interface DashboardBuild {
   steps: PipelineStep[]
   /** Queued-only explanation of the dispatcher boundary currently pending. */
   dispatch?: string
+  /** Current durable setup error, attributed to this build and retained until
+   * a later successful attachment proves recovery. */
+  setupError?: string
   /** Every unresolved blocker's question. Resolved ones drop out by
    * construction — the reducer moves them to answeredEscalations. */
   blockers: string[]
@@ -704,6 +707,16 @@ export function projectBuild(
       : { accumulatedMs: 0, runningSince: lastMs }
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
 
+  const setupError =
+    state.setupFailure === undefined
+      ? undefined
+      : `[commands].setup ${JSON.stringify(state.setupFailure.command)} failed ` +
+        `(attempt ${state.setupFailure.attempt}, ${
+          state.setupFailure.exitStatus === null
+            ? 'exit status unavailable'
+            : `exit status ${state.setupFailure.exitStatus}`
+        }): ${state.setupFailure.output || '(no output)'}`
+
   const decision = decideNext(events, config)
   const mergeWaitReason =
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
@@ -716,6 +729,7 @@ export function projectBuild(
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps,
+    ...(setupError !== undefined ? { setupError } : {}),
     blockers: [
       ...state.openEscalations.map((e) => e.question),
       ...(mergeWaitReason !== undefined ? [mergeWaitReason] : []),

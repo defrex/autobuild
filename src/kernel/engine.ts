@@ -30,6 +30,7 @@ import {
   type ArtifactRef,
   type CorePhase,
   type EscalationSource,
+  type EscalationTarget,
   type Feedback,
   type Finding,
   type Phase,
@@ -656,7 +657,7 @@ function liveChains(
  * feedback (PHASE_SPECS.inputs.answeredGuidance materializes the latest
  * answer as .ab/guidance.json for those phases).
  */
-function loopOfPhase(phase: Phase): 'plan' | 'code' | 'other' {
+function loopOfPhase(phase: EscalationTarget): 'plan' | 'code' | 'other' {
   if (phase === 'plan' || phase === 'plan-review') return 'plan'
   if (phase === 'implement' || phase === 'code-review' || isVerifyPhase(phase)) return 'code'
   return 'other'

@@ -14,6 +14,7 @@ import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
+import { reduceBuild } from '../kernel/reducer'
 import type { Finding } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import {
@@ -32,6 +33,7 @@ import { manualClock, steppingClock } from '../testing/fixed'
 import {
   BuildRunner,
   LeaseHeldError,
+  SetupFailureError,
   parseNulChangedPaths,
   selectPublishedBranchHead,
   selectVerifyDiffBase,
@@ -248,6 +250,8 @@ interface HarnessOptions {
   failCommands?: string[]
   /** Shell commands whose Exec call throws before returning a result. */
   throwCommands?: string[]
+  /** Exact successive setup outcomes; the final value repeats. */
+  setupResults?: Array<{ stdout: string; stderr: string; exitCode: number } | { error: string }>
   /** Results for successive reconcile-time remote-base refreshes. The final
    * entry repeats when more refreshes occur. */
   reconcileRefreshes?: ReconcileRefresh[]
@@ -331,6 +335,8 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
 
   const failing = new Set(options.failCommands ?? [])
   const throwing = new Set(options.throwCommands ?? [])
+  const setupResults = options.setupResults
+  let setupResultIndex = 0
   const refreshes = options.reconcileRefreshes ?? [{ sha: 'a'.repeat(40) }]
   let refreshIndex = -1
   const currentRefresh = (): ReconcileRefresh =>
@@ -413,6 +419,13 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       return { stdout: `${refresh.sha}\n`, stderr: '', exitCode: 0 }
     }
     const shell = cmd[2] ?? ''
+    if (shell === 'bun install' && setupResults !== undefined) {
+      const result = setupResults[Math.min(setupResultIndex, setupResults.length - 1)]
+      setupResultIndex += 1
+      if (result === undefined) throw new Error('no setup result configured')
+      if ('error' in result) throw new Error(result.error)
+      return result
+    }
     if (throwing.has(shell)) throw new Error(`exec unavailable for ${shell}`)
     return failing.has(shell)
       ? {
@@ -695,13 +708,117 @@ describe('setup command (§16.1)', () => {
     expect(h.execCalls.map((c) => c.cmd[2])).toEqual(['bun install', 'bun install'])
   })
 
-  test('a failing setup aborts the attach with a clear error and starts no session', async () => {
+  test('a failing setup deposits exact durable evidence and starts no phase or session', async () => {
     const h = await makeHarness({
       configToml: TOML_WITH_SETUP,
       failCommands: ['bun install'],
     })
-    await expect(h.br.run()).rejects.toThrow(/\[commands\]\.setup "bun install" exited 1/)
-    expect(h.runner.sessions.size).toBe(0) // no phase ran on a broken workspace
+    await expect(h.br.run()).rejects.toBeInstanceOf(SetupFailureError)
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'runner.setup-failed')[0]?.payload).toEqual({
+      command: 'bun install',
+      attempt: 1,
+      exitStatus: 1,
+      output: 'typecheck failed\nsrc/auth.ts(3,7): error TS2304: Cannot find name',
+    })
+    expect(events.slice(-2).map((event) => event.type)).toEqual([
+      'runner.attached',
+      'runner.setup-failed',
+    ])
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'session.started' ||
+          event.type === 'phase.failed' ||
+          event.type === 'verify.completed',
+      ),
+    ).toEqual([])
+    expect(h.runner.sessions.size).toBe(0)
+  })
+
+  test('bounds repeated setup failures, raises once, and parks further attaches', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      failCommands: ['bun install'],
+    })
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    }
+    const beforePark = h.execCalls.length
+    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    expect(h.execCalls).toHaveLength(beforePark)
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'runner.setup-failed').map((event) => event.payload.attempt)).toEqual([
+      1, 2, 3,
+    ])
+    expect(ofType(events, 'runner.attached')).toHaveLength(1)
+    expect(ofType(events, 'escalation.raised')).toHaveLength(1)
+    expect(ofType(events, 'escalation.raised')[0]?.payload).toMatchObject({
+      phase: 'setup',
+      source: 'policy',
+    })
+    expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('bun install')
+    expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
+  })
+
+  test('a transient failure recovers with one delayed attachment and no stale error', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      setupResults: [
+        { stdout: 'first stdout', stderr: 'first stderr', exitCode: 1 },
+        { stdout: 'installed', stderr: '', exitCode: 0 },
+      ],
+    })
+    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    await h.br.attach()
+
+    const events = await h.store.getEvents(SLUG)
+    expect(events.slice(-3).map((event) => event.type)).toEqual([
+      'runner.attached',
+      'runner.setup-failed',
+      'runner.attached',
+    ])
+    const recovered = ofType(events, 'runner.attached').at(-1)
+    expect(recovered?.payload.resumedFromSeq).toBe(ofType(events, 'runner.setup-failed')[0]?.seq)
+    expect(reduceBuild(events).setupFailure).toBeUndefined()
+    expect(ofType(events, 'escalation.raised')).toHaveLength(0)
+  })
+
+  test('a human answer re-arms the exhausted setup budget', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      failCommands: ['bun install'],
+    })
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    }
+    const escalation = ofType(await h.store.getEvents(SLUG), 'escalation.raised')[0]!
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: escalation.payload.id,
+        answer: 'environment repaired; retry',
+        resolution: 'guidance',
+      },
+    })
+    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'runner.setup-failed').at(-1)?.payload.attempt,
+    ).toBe(1)
+  })
+
+  test('an execution exception records an explicit unavailable status', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      throwCommands: ['bun install'],
+    })
+    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    expect(ofType(await h.store.getEvents(SLUG), 'runner.setup-failed')[0]?.payload).toMatchObject({
+      exitStatus: null,
+      output: 'exec unavailable for bun install',
+    })
   })
 
   test('no [commands].setup → attach execs nothing (the knob is optional)', async () => {

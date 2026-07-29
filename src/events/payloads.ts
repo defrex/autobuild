@@ -19,6 +19,7 @@ import {
   prImageHostSchema,
   escalationResolutionSchema,
   escalationSourceSchema,
+  escalationTargetSchema,
   feedbackSchema,
   findingSchema,
   hostedPrAttachmentAssetSchema,
@@ -141,6 +142,14 @@ export const eventPayloadSchemas = {
     instance: z.string().min(1),
     host: z.string().min(1),
     resumedFromSeq: z.number().int().nonnegative().optional(),
+  }),
+  /** Pre-phase setup infrastructure failed. `null` explicitly means the
+   * command could not produce an exit status (for example, Exec threw). */
+  'runner.setup-failed': z.strictObject({
+    command: z.string().min(1),
+    attempt,
+    exitStatus: z.number().int().nullable(),
+    output: z.string(),
   }),
   'workspace.provisioned': z.strictObject({
     provider: z.string().min(1),
@@ -299,7 +308,7 @@ export const eventPayloadSchemas = {
   }),
   'escalation.raised': z.strictObject({
     id: z.string().min(1),
-    phase: phaseSchema,
+    phase: escalationTargetSchema,
     round: round.optional(),
     source: escalationSourceSchema,
     question: z.string().min(1),
