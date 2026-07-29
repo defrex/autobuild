@@ -1714,6 +1714,7 @@ type FakeInputKey =
   | 'auto-merge'
   | 'intake'
   | 'pause'
+  | 'resume'
   | 'harvest-gate'
   | 'letter-d'
   | 'letter-a'
@@ -1730,6 +1731,8 @@ function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
       return { type: 'text', text: 'i' }
     case 'pause':
       return { type: 'text', text: 'p' }
+    case 'resume':
+      return { type: 'text', text: 'r' }
     case 'harvest-gate':
       return { type: 'text', text: 'h' }
     case 'letter-d':
@@ -3757,7 +3760,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('Down selects by slug; p/m target that build with human events; rapid m toggles in order', async () => {
+  test('Down selects by slug; p pauses/cancels while rapid m toggles in order', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-alpha', { title: 'Alpha work' }),
@@ -3800,6 +3803,9 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*beta-work/m.test(stripAnsi(term.all())))
       input.press('pause')
+      await waitFor(() => /beta-work.*PAUSING/.test(latestDashboardFrame(term)))
+      expect(latestDashboardFrame(term)).toContain('p cancel pause')
+      input.press('pause')
       input.press('auto-merge')
       input.press('auto-merge')
       await waitFor(async () => {
@@ -3808,12 +3814,14 @@ describe('abDispatch interactive keyboard controls', () => {
           events.filter((event) =>
             [
               'build.pause-requested',
+              'build.resume-requested',
               'build.auto-merge-requested',
               'build.auto-merge-cancelled',
             ].includes(event.type),
-          ).length === 3
+          ).length === 4
         )
       })
+      await waitFor(() => /beta-work.*RUNNING/.test(latestDashboardFrame(term)))
 
       // Removing the selected final row chooses its predecessor, not a stale
       // row index. Let the polling projection reconcile, then p must target
@@ -3838,14 +3846,15 @@ describe('abDispatch interactive keyboard controls', () => {
       const commands = (await fx.store.getEvents('beta-work')).filter(
         (event) => event.actor.kind === 'human',
       )
-      expect(commands.map((event) => event.type).slice(-3)).toEqual([
+      expect(commands.map((event) => event.type).slice(-4)).toEqual([
         'build.pause-requested',
+        'build.resume-requested',
         'build.auto-merge-requested',
         'build.auto-merge-cancelled',
       ])
       expect(
         commands
-          .slice(-3)
+          .slice(-4)
           .every((event) => event.actor.kind === 'human' && event.actor.user === 'dashboard-op'),
       ).toBe(true)
       expect(input.starts).toBe(1)
@@ -3977,7 +3986,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('detail view routes m and blocked p to its build and Escape cancels only the modal', async () => {
+  test('detail view routes m and blocked r to its build and Escape cancels only the modal', async () => {
     const fx = await makeFixture(
       readyTicket('T-detail-actions', { title: 'Detail actions' }),
       happyHandlers(),
@@ -4038,7 +4047,7 @@ describe('abDispatch interactive keyboard controls', () => {
       )
       const afterAutoMerge = await fx.store.getEvents('detail-actions')
 
-      input.press('pause')
+      input.press('resume')
       await waitFor(() => latestPaintedFrame(term).includes('Resume feedback'))
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).toContain('Which detail action should resume this build?')
@@ -4223,7 +4232,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('p on a blocked build opens input without writing; typed guidance answers it as the configured human', async () => {
+  test('r on a blocked build opens input without writing; typed guidance answers it as the configured human', async () => {
     const fx = await makeFixture(
       readyTicket('T-guidance', { title: 'Guidance work' }),
       happyHandlers(),
@@ -4274,7 +4283,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*guidance-work/m.test(stripAnsi(term.all())))
 
-      input.press('pause')
+      input.press('resume')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       expect(await fx.store.getEvents('guidance-work')).toHaveLength(before.length)
 
@@ -4373,7 +4382,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
       input.press('down')
       await waitFor(() => /^ > .*retry-work/m.test(stripAnsi(term.all())))
-      input.press('pause')
+      input.press('resume')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('   ')
       input.press('enter')
@@ -4506,7 +4515,7 @@ describe('abDispatch interactive keyboard controls', () => {
           (event) => event.type === 'build.auto-merge-cancelled',
         ),
       )
-      input.press('pause')
+      input.press('resume')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.press('enter')
       await waitFor(async () =>
@@ -4598,7 +4607,7 @@ describe('abDispatch interactive keyboard controls', () => {
       )
       input.press('down')
       await waitFor(() => /^ > .*cancel-work/m.test(stripAnsi(term.all())))
-      input.press('pause')
+      input.press('resume')
       await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
       input.text('do not submit this')
       input.press('escape')
@@ -4617,7 +4626,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('p on an authoritatively paused build writes resume-requested', async () => {
+  test('r on an authoritatively paused build writes resume-requested while p is inert', async () => {
     const fx = await makeFixture(readyTicket('T-paused', { title: 'Paused work' }), happyHandlers())
     try {
       await abDispatch({
@@ -4650,11 +4659,18 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => input.starts === 1)
       // Let the initial projection establish the global selection, then move
-      // to the build row before applying its contextual p action.
+      // to the build row before applying its contextual action.
       await new Promise((resolve) => setTimeout(resolve, 20))
       input.press('down')
       await waitFor(() => /^ > .*paused-work/m.test(latestDashboardFrame(term)))
+      const beforePauseKey = await fx.store.getEvents('paused-work')
       input.press('pause')
+      input.press('up')
+      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      input.press('down')
+      await waitFor(() => /^ > .*paused-work/m.test(latestDashboardFrame(term)))
+      expect(await fx.store.getEvents('paused-work')).toEqual(beforePauseKey)
+      input.press('resume')
       await waitFor(async () =>
         (await fx.store.getEvents('paused-work')).some(
           (event) => event.type === 'build.resume-requested',

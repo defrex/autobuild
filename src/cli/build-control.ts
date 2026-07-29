@@ -28,7 +28,8 @@ export type BuildControlAction =
   | { kind: 'discard' }
   | { kind: 'auto-merge-on' }
   | { kind: 'auto-merge-off' }
-  | { kind: 'toggle-pause' }
+  | { kind: 'dashboard-pause' }
+  | { kind: 'dashboard-resume' }
   | { kind: 'toggle-auto-merge' }
   | {
       kind: 'answer'
@@ -218,7 +219,21 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     case 'auto-merge-off':
       return appendCommand(opts.store, opts.slug, user, opts.action.kind)
 
-    case 'toggle-pause': {
+    case 'dashboard-pause': {
+      const pendingPause = state.pendingCommands.some((command) => command.command === 'pause')
+      if (state.status !== 'running') {
+        throw new BuildControlError(
+          'inactive',
+          `build "${opts.slug}" cannot use dashboard pause (status: ${state.status}); ` +
+            'dashboard pause requires running or a pending pause',
+        )
+      }
+      // The reducer already makes an opposing command supersede an
+      // unacknowledged request. Reuse that durable rule to cancel PAUSING.
+      return appendCommand(opts.store, opts.slug, user, pendingPause ? 'resume' : 'pause')
+    }
+
+    case 'dashboard-resume': {
       // A blocker takes precedence over pause state in the operator flow. The
       // prompt itself is process-local and writes nothing until submitted.
       if (state.openEscalations.length > 0) {
@@ -228,12 +243,15 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           escalationIds: state.openEscalations.map((item) => item.id),
         }
       }
-      return appendCommand(
-        opts.store,
-        opts.slug,
-        user,
-        state.status === 'paused' ? 'resume' : 'pause',
-      )
+      const pendingResume = state.pendingCommands.some((command) => command.command === 'resume')
+      if (state.status !== 'paused' || pendingResume) {
+        throw new BuildControlError(
+          'inactive',
+          `build "${opts.slug}" cannot use dashboard resume (status: ${state.status}); ` +
+            'dashboard resume requires paused with no pending resume',
+        )
+      }
+      return appendCommand(opts.store, opts.slug, user, 'resume')
     }
 
     case 'toggle-auto-merge':
@@ -303,8 +321,10 @@ function actionLabel(action: BuildControlAction): string {
       return 'disable auto-merge for'
     case 'toggle-auto-merge':
       return 'toggle auto-merge for'
-    case 'toggle-pause':
-      return 'pause or resume'
+    case 'dashboard-pause':
+      return 'pause or cancel pause for'
+    case 'dashboard-resume':
+      return 'resume'
     case 'discard':
       return 'discard'
     case 'answer':

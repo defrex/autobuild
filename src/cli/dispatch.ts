@@ -36,7 +36,9 @@ import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/
 import type { BuildState } from '../kernel/reducer'
 import {
   buildDashboardFromProjected,
+  dashboardBuildControl,
   projectHarvest,
+  type DashboardBuild,
   type DashboardModel,
   type DashboardSelection,
   type DashboardView,
@@ -129,6 +131,7 @@ type DashboardAction =
   | 'auto-merge'
   | 'intake'
   | 'pause'
+  | 'resume'
   | 'discard'
   | 'abort-confirm'
   | 'harvest-gate'
@@ -548,7 +551,9 @@ class DispatchLoop {
     this.paint()
   }
 
-  private selectedBuildSlug(action: 'auto-merge' | 'pause/resume' | 'discard'): string | undefined {
+  private selectedBuildSlug(
+    action: 'auto-merge' | 'pause' | 'resume' | 'discard',
+  ): string | undefined {
     if (this.view !== undefined) return this.view.slug
     const selection = this.selection
     if (selection === undefined) {
@@ -562,7 +567,7 @@ class DispatchLoop {
           ? `${subject} auto-merge unavailable: select a build`
           : action === 'discard'
             ? `${subject} discard unavailable: select a queued build`
-            : `${subject} pause/resume unavailable: select a build`,
+            : `${subject} ${action} unavailable: select a build`,
       )
       return undefined
     }
@@ -592,8 +597,18 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
-  private async togglePause(): Promise<void> {
-    const slug = this.selectedBuildSlug('pause/resume')
+  private selectedDashboardBuild(): DashboardBuild | undefined {
+    const slug =
+      this.view?.kind === 'detail'
+        ? this.view.slug
+        : this.view === undefined && this.selection?.kind === 'build'
+          ? this.selection.slug
+          : undefined
+    return this.model?.builds.find((candidate) => candidate.slug === slug)
+  }
+
+  private async dashboardPause(): Promise<void> {
+    const slug = this.selectedBuildSlug('pause')
     if (slug === undefined) return
 
     let result: BuildControlResult
@@ -603,7 +618,36 @@ class DispatchLoop {
         repo: this.opts.targetRepo,
         slug,
         env: this.opts.env,
-        action: { kind: 'toggle-pause' },
+        action: { kind: 'dashboard-pause' },
+      })
+    } catch (error) {
+      if (await this.ignoreControlError('action', error)) return
+      throw error
+    }
+
+    if (result.kind !== 'command' || (result.command !== 'pause' && result.command !== 'resume')) {
+      throw new Error('build-control returned an invalid dashboard pause result')
+    }
+    this.say(
+      result.command === 'resume'
+        ? `build ${slug}: pending pause cancelled`
+        : `build ${slug}: pause requested`,
+    )
+    await this.renderOnce()
+  }
+
+  private async dashboardResume(): Promise<void> {
+    const slug = this.selectedBuildSlug('resume')
+    if (slug === undefined) return
+
+    let result: BuildControlResult
+    try {
+      result = await controlBuild({
+        store: this.wiring.store,
+        repo: this.opts.targetRepo,
+        slug,
+        env: this.opts.env,
+        action: { kind: 'dashboard-resume' },
       })
     } catch (error) {
       if (await this.ignoreControlError('action', error)) return
@@ -620,10 +664,10 @@ class DispatchLoop {
       this.paint()
       return
     }
-    if (result.kind !== 'command' || (result.command !== 'pause' && result.command !== 'resume')) {
-      throw new Error('build-control returned an invalid pause toggle result')
+    if (result.kind !== 'command' || result.command !== 'resume') {
+      throw new Error('build-control returned an invalid dashboard resume result')
     }
-    this.say(`build ${slug}: ${result.command} requested`)
+    this.say(`build ${slug}: resume requested`)
     await this.renderOnce()
   }
 
@@ -951,7 +995,10 @@ class DispatchLoop {
         await this.toggleIntake()
         return
       case 'pause':
-        await this.togglePause()
+        await this.dashboardPause()
+        return
+      case 'resume':
+        await this.dashboardResume()
         return
       case 'auto-merge':
         await this.toggleAutoMerge()
@@ -1065,12 +1112,17 @@ class DispatchLoop {
         if (this.view === undefined && this.selection?.kind === 'global') this.queueAction('intake')
         return
       case 'p':
-        if (this.view?.kind === 'detail') {
-          this.queueAction('pause')
-        } else if (this.view === undefined && this.selection?.kind === 'harvest') {
+        if (this.view === undefined && this.selection?.kind === 'harvest') {
           this.queueAction({ kind: 'harvest-run', run: this.model?.harvest?.run })
-        } else if (this.view === undefined && this.selection?.kind === 'build') {
+          return
+        }
+        if (dashboardBuildControl(this.selectedDashboardBuild()?.status ?? 'queued')?.key === 'p') {
           this.queueAction('pause')
+        }
+        return
+      case 'r':
+        if (dashboardBuildControl(this.selectedDashboardBuild()?.status ?? 'queued')?.key === 'r') {
+          this.queueAction('resume')
         }
         return
       case 'd': {

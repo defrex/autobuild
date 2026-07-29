@@ -85,7 +85,7 @@ describe('controlBuild — shared durable controls', () => {
     }
   })
 
-  test('dashboard toggles derive from freshly reduced pause and auto-merge state', async () => {
+  test('dashboard pause and resume derive from freshly reduced state', async () => {
     const store = await makeStore()
 
     const pause = await controlBuild({
@@ -93,10 +93,28 @@ describe('controlBuild — shared durable controls', () => {
       repo: REPO,
       slug: SLUG,
       env: {},
-      action: { kind: 'toggle-pause' },
+      action: { kind: 'dashboard-pause' },
     })
     expect(pause).toMatchObject({ kind: 'command', command: 'pause' })
 
+    const cancelPause = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: { kind: 'dashboard-pause' },
+    })
+    expect(cancelPause).toMatchObject({ kind: 'command', command: 'resume' })
+    expect((await eventTypes(store)).slice(-2)).toEqual([
+      'build.pause-requested',
+      'build.resume-requested',
+    ])
+
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'build.resumed',
+      payload: {},
+    })
     await store.append(SLUG, {
       actor: KERNEL,
       type: 'build.paused',
@@ -107,9 +125,21 @@ describe('controlBuild — shared durable controls', () => {
       repo: REPO,
       slug: SLUG,
       env: {},
-      action: { kind: 'toggle-pause' },
+      action: { kind: 'dashboard-resume' },
     })
     expect(resume).toMatchObject({ kind: 'command', command: 'resume' })
+
+    const beforeDuplicate = await store.getEvents(SLUG)
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'dashboard-resume' },
+      }),
+    ).rejects.toMatchObject({ code: 'inactive' })
+    expect(await store.getEvents(SLUG)).toEqual(beforeDuplicate)
 
     const on = await controlBuild({
       store,
@@ -134,18 +164,29 @@ describe('controlBuild — shared durable controls', () => {
     await store.close()
   })
 
-  test('a blocked pause toggle requests input and writes nothing', async () => {
+  test('a blocked dashboard resume requests input and writes nothing', async () => {
     const store = await makeStore()
     await raise(store, 'esc-1')
     await raise(store, 'esc-2', 'policy')
     const before = await store.getEvents(SLUG)
+
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'dashboard-pause' },
+      }),
+    ).rejects.toMatchObject({ code: 'inactive' })
+    expect(await store.getEvents(SLUG)).toEqual(before)
 
     const result = await controlBuild({
       store,
       repo: REPO,
       slug: SLUG,
       env: {},
-      action: { kind: 'toggle-pause' },
+      action: { kind: 'dashboard-resume' },
     })
 
     expect(result).toEqual({
