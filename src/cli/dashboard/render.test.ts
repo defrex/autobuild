@@ -466,6 +466,13 @@ describe('renderDashboard: emphasis', () => {
     expect(out.some((l) => l.includes('second question'))).toBe(true)
   })
 
+  test('an auto-merge wait blocker preserves the complete provider detail', () => {
+    const reason =
+      "Auto-merge gate could not apply consent for PR #7: local merge blocked - error: Entry 'autobuild.toml' not uptodate."
+    const out = rd(model([build({ blockers: [reason] })]), { color: false, width: 160 })
+    expect(out.join('\n')).toContain(reason)
+  })
+
   test('a PR URL becomes an OSC 8 hyperlink when color is on', () => {
     const out = colored(build({ pr: { url: 'https://x/7', state: 'open' } }))
     expect(out).toContain('\x1b]8;;https://x/7\x07PR open\x1b]8;;\x07')
