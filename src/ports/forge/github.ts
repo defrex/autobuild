@@ -22,6 +22,7 @@ import {
 import type {
   AutoMergeDeferralReason,
   AutoMergeResult,
+  ClosePrResult,
   PrAttachmentHosting,
   Forge,
   PrRef,
@@ -595,6 +596,41 @@ export class GitHubForge implements Forge {
       case 'OPEN':
         return { state: 'open', mergeable: MERGEABLE_MAP[view.mergeable] }
     }
+  }
+
+  async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
+    const before = await this.getPrState(workspacePath, number)
+    if (before.state === 'merged' || before.state === 'closed') return before
+
+    let closeError: unknown
+    try {
+      await this.run(['gh', 'pr', 'close', String(number)], workspacePath)
+    } catch (error) {
+      closeError = error
+    }
+    // Re-read even after a mutation failure: GitHub may have merged the PR in
+    // the inspection-to-close race, and merged state must never be overwritten.
+    const after = await this.getPrState(workspacePath, number)
+    if (after.state === 'merged' || after.state === 'closed') return after
+    if (closeError !== undefined) throw closeError
+    throw new Error(`GitHub PR #${number} remained open after gh pr close`)
+  }
+
+  async deleteBranch(workspacePath: string, branch: string): Promise<void> {
+    const ref = `refs/heads/${branch}`
+    const valid = await this.exec(['git', 'check-ref-format', ref], { cwd: workspacePath })
+    if (valid.exitCode !== 0) throw new Error(`GitHub branch cleanup rejected invalid ref ${ref}`)
+    const probe = await this.exec(['git', 'ls-remote', '--exit-code', '--heads', 'origin', ref], {
+      cwd: workspacePath,
+    })
+    if (probe.exitCode === 2) return
+    if (probe.exitCode !== 0) {
+      throw new Error(
+        `forge command failed while checking remote branch ${ref} (exit ${probe.exitCode}): ` +
+          (probe.stderr.trim() || probe.stdout.trim() || '(no output)'),
+      )
+    }
+    await this.run(['git', 'push', 'origin', '--delete', branch], workspacePath)
   }
 
   /** Read the provider's projected native desired state. Mutations are not

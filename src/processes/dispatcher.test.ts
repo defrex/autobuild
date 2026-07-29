@@ -2922,12 +2922,18 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), abandoned: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-2)).toEqual(['workspace.released', 'build.completed'])
+    expect(events.map((e) => e.type).slice(-4)).toEqual([
+      'workspace.released',
+      'abort.local-branch-deleted',
+      'abort.ticket-returned',
+      'build.completed',
+    ])
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     expect(h.workspaces.releases.map((r) => r.ref)).toEqual([`/ws/ab/${slug}`])
     // Aborted work goes back to a human (D1 discipline), never to Done.
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
+    expect(h.tickets.updates).toEqual([{ id: 'T-1', patch: { labels: ['autobuild:aborted'] } }])
+    expect(h.tickets.comments).toEqual([])
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
@@ -2958,7 +2964,9 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       janitorFailed: 1,
-      janitorDiagnostics: [`build ${slug}: janitor failed — ticket source outage`],
+      janitorDiagnostics: [
+        `build ${slug}: janitor failed — abort cleanup ticket handback failed for fake ticket T-1; remaining cleanup will retry on next dispatcher tick — ticket source outage`,
+      ],
     })
     // The terminal event did NOT land: the build still reduces to 'aborted',
     // so the next tick re-runs the whole cleanup (workspace release is
@@ -2969,7 +2977,10 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
+    // The first tick already applied the idempotent label union before the
+    // transition failed; retry reads it back and does not replace labels again.
+    expect(h.tickets.updates).toEqual([{ id: 'T-1', patch: { labels: ['autobuild:aborted'] } }])
+    expect(h.tickets.comments).toEqual([])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('build.completed')
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })

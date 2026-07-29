@@ -540,6 +540,21 @@ export class Dispatcher {
           await this.reclaimPrAttachments(record.slug, events)
           continue
         }
+        // Abort is destructive human judgment and therefore outranks a queued
+        // discard when both requests raced into the same stream.
+        if (
+          state.status === 'queued' &&
+          state.pendingCommands.some((command) => command.command === 'abort')
+        ) {
+          const acknowledged = await this.deps.store.append(record.slug, {
+            actor: DISPATCHER,
+            type: 'build.aborted',
+            payload: {},
+          } satisfies EventWrite<'build.aborted'>)
+          events.push(acknowledged)
+          await this.cleanupAborted(record, events, report)
+          continue
+        }
         // Discard is a queued-only recovery control. A request that raced with
         // runner attachment is deliberately inert: it must never tear a live
         // runner's workspace down or return its ticket for a duplicate build.
@@ -560,32 +575,153 @@ export class Dispatcher {
     }
   }
 
-  /** Aborted build: release the workspace, hand the ticket back to a human,
-   * and complete as abandoned — aborting is a human judgment that this work
-   * should not proceed as-is, so it re-enters Triage rather than Done.
-   * Ticket ops run BEFORE the terminal event, matching checkPr: once
-   * `build.completed` lands the janitor skips the build forever, so a crash
-   * (or ticket-source outage) between the two must leave the transition
-   * still due — the next tick re-runs it (§3.3 re-run safety, D1). */
+  /** Complete abort cleanup as an ordered checkpointed saga. External effects
+   * are idempotent; a fact after each one prevents already-settled work from
+   * repeating on later ticks. `build.completed` is deliberately last. */
   private async cleanupAborted(
     record: BuildRecord,
     events: AbEvent[],
     report: TickReport,
   ): Promise<void> {
-    const { store, tickets } = this.deps
-    await this.releaseWorkspace(record.slug, events)
-    if (record.ticket) {
-      await tickets.transition(record.ticket.id, this.triageState)
-      await tickets.comment(
-        record.ticket.id,
-        `build ${record.slug} was aborted — returned to ${this.triageState} for human triage`,
+    const { store, tickets, forge } = this.deps
+    const branch = record.branch
+    const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
+    const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
+      const event = await store.append(record.slug, write)
+      events.push(event as AbEvent)
+    }
+    const fail = (operation: string, identity: string, error: unknown): never => {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `abort cleanup ${operation} failed for ${identity}; remaining cleanup will retry on next dispatcher tick — ${detail}`,
       )
     }
-    await store.append(record.slug, {
+
+    if (record.lease !== undefined) {
+      try {
+        await store.releaseLease(record.slug, record.lease.holder)
+      } catch (error) {
+        fail('lease release', `build ${record.slug}`, error)
+      }
+    }
+
+    const reduced = reduceBuild(events)
+    if (reduced.pr !== undefined && !has('pr.closed') && !has('pr.merged')) {
+      const closePr = forge.closePr
+      if (closePr === undefined) {
+        fail(
+          'PR close',
+          `${forge.name} PR #${reduced.pr.number}`,
+          new Error(
+            `selected forge "${forge.name}" does not implement closePr; upgrade its plugin`,
+          ),
+        )
+      }
+      try {
+        const result = await closePr!(
+          openWorkspace(events)?.path ?? openWorkspace(events)?.ref ?? this.deps.repo,
+          reduced.pr.number,
+        )
+        await append(
+          result.state === 'merged'
+            ? { actor: DISPATCHER, type: 'pr.merged', payload: { sha: result.sha } }
+            : { actor: DISPATCHER, type: 'pr.closed', payload: {} },
+        )
+      } catch (error) {
+        fail('PR close', `${forge.name} PR #${reduced.pr.number}`, error)
+      }
+    }
+
+    try {
+      await this.releaseWorkspace(record.slug, events)
+      if (openWorkspace(events) !== null) {
+        // releaseWorkspace appended outside our local array.
+        events = await store.getEvents(record.slug)
+      }
+    } catch (error) {
+      fail('workspace release', `build ${record.slug}`, error)
+    }
+
+    const wasPublished = events.some(
+      (event) =>
+        event.type === 'implement.completed' ||
+        event.type === 'reconcile.completed' ||
+        (event.type === 'finalize.step-completed' &&
+          event.payload.ok &&
+          event.payload.headSha !== undefined),
+    )
+    if (branch !== undefined && wasPublished && !has('abort.remote-branch-deleted')) {
+      const deleteBranch = forge.deleteBranch
+      if (deleteBranch === undefined) {
+        fail(
+          'remote branch deletion',
+          `${forge.name} branch ${branch}`,
+          new Error(
+            `selected forge "${forge.name}" does not implement deleteBranch; upgrade its plugin`,
+          ),
+        )
+      }
+      try {
+        await deleteBranch!(this.deps.repo, branch)
+        await append({
+          actor: DISPATCHER,
+          type: 'abort.remote-branch-deleted',
+          payload: { branch },
+        })
+      } catch (error) {
+        fail('remote branch deletion', `${forge.name} branch ${branch}`, error)
+      }
+    }
+
+    if (branch !== undefined && !has('abort.local-branch-deleted')) {
+      const ref = `refs/heads/${branch}`
+      try {
+        const valid = await this.deps.exec(['git', 'check-ref-format', ref], {
+          cwd: this.deps.repo,
+        })
+        if (valid.exitCode !== 0) throw new Error(`invalid exact build ref ${ref}`)
+        const deleted = await this.deps.exec(['git', 'update-ref', '-d', ref], {
+          cwd: this.deps.repo,
+        })
+        if (deleted.exitCode !== 0) {
+          throw new Error(
+            deleted.stderr.trim() || deleted.stdout.trim() || `git exited ${deleted.exitCode}`,
+          )
+        }
+        await append({
+          actor: DISPATCHER,
+          type: 'abort.local-branch-deleted',
+          payload: { branch },
+        })
+      } catch (error) {
+        fail('local branch deletion', ref, error)
+      }
+    }
+
+    if (record.ticket !== undefined && !has('abort.ticket-returned')) {
+      const label = 'autobuild:aborted'
+      try {
+        const current = await tickets.get(record.ticket.id)
+        if (current === null) throw new Error(`ticket no longer exists in ${tickets.name}`)
+        if (!current.labels.includes(label)) {
+          await tickets.update(record.ticket.id, { labels: [...current.labels, label] })
+        }
+        await tickets.transition(record.ticket.id, this.triageState)
+        await append({
+          actor: DISPATCHER,
+          type: 'abort.ticket-returned',
+          payload: { ticket: record.ticket, state: this.triageState, label },
+        })
+      } catch (error) {
+        fail('ticket handback', `${tickets.name} ticket ${record.ticket.id}`, error)
+      }
+    }
+
+    await append({
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'abandoned' },
-    } satisfies EventWrite<'build.completed'>)
+    })
     await this.reclaimPrAttachments(record.slug, events)
     report.abandoned += 1
   }

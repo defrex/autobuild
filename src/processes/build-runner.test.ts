@@ -2617,6 +2617,41 @@ describe('operator commands (D2)', () => {
     expect((await typesOf(h.store)).slice(-2)).toEqual(['runner.attached', 'build.aborted'])
     expect(h.runner.sessions.size).toBe(0) // no phase ever ran
   })
+
+  test('an abort cancels a live turn, deposits its transcript, and releases the lease', async () => {
+    let observedSignal: AbortSignal | undefined
+    const h = await makeHarness({
+      handlers: () => ({
+        plan: async (ctx) => {
+          observedSignal = ctx.opts.signal
+          await new Promise<void>(() => {})
+          return defaultTurnResult('unreachable')
+        },
+      }),
+    })
+
+    const running = h.br.run()
+    while (observedSignal === undefined) await Bun.sleep(1)
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop now' },
+    })
+    const state = await Promise.race([
+      running,
+      Bun.sleep(1000).then(() => {
+        throw new Error('live abort did not settle within one second')
+      }),
+    ])
+
+    expect(observedSignal.aborted).toBe(true)
+    expect(state.status).toBe('aborted')
+    const events = await h.store.getEvents(SLUG)
+    expect(events.some((event) => event.type === 'session.ended')).toBe(true)
+    expect(events.some((event) => event.type === 'phase.failed')).toBe(false)
+    expect(events.some((event) => event.type === 'plan.completed')).toBe(false)
+    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
+  })
 })
 
 // ── Resume (§15.6-C) ─────────────────────────────────────────────────────────

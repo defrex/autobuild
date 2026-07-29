@@ -202,7 +202,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       opts?.env !== undefined
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts
-    const turn = await this.runTurn(message, turnOpts, { resume: session.id })
+    const turn = await this.runTurn(message, turnOpts, { resume: session.id }, opts?.signal)
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
@@ -250,6 +250,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     prompt: string,
     opts: AgentStartOpts,
     session: { sessionId: string } | { resume: string },
+    signal: AbortSignal | undefined = opts.signal,
   ): Promise<ClaudeTurn> {
     const args = this.baseArgs()
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
@@ -261,6 +262,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       args,
       cwd: opts.workspacePath,
       env: sessionEnv(opts.env),
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 

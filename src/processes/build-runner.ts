@@ -559,6 +559,10 @@ export class BuildRunner {
       await store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
     } else {
       await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+      // Abort is terminal runner work, not an ordinary park. Release ownership
+      // immediately so janitor cleanup never waits for the TTL.
+      await store.releaseLease(slug, this.deps.instance)
+      this.attached = false
     }
   }
 
@@ -869,6 +873,7 @@ export class BuildRunner {
         failureNote = await this.runFinalizeCheck(action.command)
       } else {
         const outcome = await this.runFinalizeAgent(step, action.skill)
+        if (outcome.cancelled) return
         actor = outcome.actor
         failureNote = outcome.failureNote
       }
@@ -910,12 +915,12 @@ export class BuildRunner {
   private async runFinalizeAgent(
     step: string,
     skill: string,
-  ): Promise<{ actor: Actor; failureNote: string | undefined }> {
+  ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
     const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
 
-    await store.append(slug, {
+    const started = await store.append(slug, {
       actor: KERNEL,
       type: 'session.started',
       payload: {
@@ -928,6 +933,12 @@ export class BuildRunner {
       },
     } satisfies EventWrite<'session.started'>)
 
+    const controller = new AbortController()
+    const unsubscribe = store.subscribe(slug, { fromSeq: started.seq, pollMs: 25 }, (event) => {
+      if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
+        controller.abort(new Error(`build ${slug} aborted by operator`))
+      }
+    })
     let handle: AgentSessionHandle | undefined
     let failureNote: string | undefined
     try {
@@ -939,6 +950,7 @@ export class BuildRunner {
         ...(model !== undefined ? { model } : {}),
         ...(extensions !== undefined ? { extensions } : {}),
         env: this.sessionEnvFor('finalize@1', session),
+        signal: controller.signal,
       })
       handle = turn.session
       if (turn.result.kind === 'failed') {
@@ -946,6 +958,8 @@ export class BuildRunner {
       }
     } catch (error) {
       failureNote = `agent session failed: ${errorMessage(error)}`
+    } finally {
+      unsubscribe()
     }
 
     if (handle !== undefined) {
@@ -963,7 +977,11 @@ export class BuildRunner {
       }
     }
 
-    return { actor: agentActor(step, session), failureNote }
+    return {
+      actor: agentActor(step, session),
+      failureNote,
+      cancelled: controller.signal.aborted,
+    }
   }
 
   /** Both finalize kinds append the same facts and always let the engine
@@ -1090,6 +1108,12 @@ export class BuildRunner {
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
     let turnError: unknown
+    const turnAbort = new AbortController()
+    const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
+      if (event.type === 'build.abort-requested' && !turnAbort.signal.aborted) {
+        turnAbort.abort(new Error(`build ${slug} aborted by operator`))
+      }
+    })
     try {
       if (live !== undefined) {
         // §10: the producer continues its session; the feedback message
@@ -1101,6 +1125,7 @@ export class BuildRunner {
         handle = live.handle
         result = await live.runner.continue(handle, continueMessage(spec), {
           env: this.sessionEnvFor(spec.abPhase, session),
+          signal: turnAbort.signal,
         })
       } else {
         const turn = await runner.start({
@@ -1111,12 +1136,15 @@ export class BuildRunner {
           ...(model !== undefined ? { model } : {}),
           ...(extensions !== undefined ? { extensions } : {}),
           env: this.sessionEnvFor(spec.abPhase, session),
+          signal: turnAbort.signal,
         })
         handle = turn.session
         result = turn.result
       }
     } catch (error) {
       turnError = error
+    } finally {
+      unsubscribe()
     }
 
     // The turn is over: what did the CLI leave in the log? Terminal = the
@@ -1144,6 +1172,30 @@ export class BuildRunner {
       round: spec.round,
       role: spec.role,
       runnerName,
+    }
+
+    // Operator cancellation is not an infrastructure failure. Close whatever
+    // handle the adapter created, retain its transcript, and return to the
+    // engine loop; the pending durable command is acknowledged there.
+    if (turnAbort.signal.aborted) {
+      if (handle !== undefined) {
+        const owner = live?.runner ?? runner
+        try {
+          const transcript = await owner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? model,
+          )
+        } catch {
+          // A provider that died before yielding an endable handle leaves the
+          // open session for stale-runner recovery, but never a phase failure.
+        }
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      return
     }
 
     if (terminal && handle !== undefined && result !== undefined) {

@@ -99,15 +99,18 @@ export class ScriptedAgentRunner implements AgentRunner {
     }
     this.sessions.set(session.id, journal)
 
-    const result = await this.script({
-      // Scripts observe the same effective launch environment as production
-      // adapters; the journal below intentionally retains the caller's raw
-      // start options as the session identity.
-      opts: { ...opts, env: sessionEnv(opts.env) },
-      session,
-      turn: 1,
-      history: [],
-    })
+    const result = await this.runScript(
+      {
+        // Scripts observe the same effective launch environment as production
+        // adapters; the journal below intentionally retains the caller's raw
+        // start options as the session identity.
+        opts: { ...opts, env: sessionEnv(opts.env) },
+        session,
+        turn: 1,
+        history: [],
+      },
+      opts.signal,
+    )
     journal.turns.push({ turn: 1, result })
     return { session, result }
   }
@@ -125,15 +128,22 @@ export class ScriptedAgentRunner implements AgentRunner {
     // CLI resolves exactly what a real agent's `ab` would. The journal keeps
     // the START opts — they are the session's identity.
     const scoped = opts?.env !== undefined ? { ...journal.opts.env, ...opts.env } : journal.opts.env
-    const turnOpts = { ...journal.opts, env: sessionEnv(scoped) }
+    const turnOpts = {
+      ...journal.opts,
+      env: sessionEnv(scoped),
+      ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+    }
 
-    const result = await this.script({
-      opts: turnOpts,
-      session: journal.session,
-      turn,
-      message,
-      history,
-    })
+    const result = await this.runScript(
+      {
+        opts: turnOpts,
+        session: journal.session,
+        turn,
+        message,
+        history,
+      },
+      opts?.signal,
+    )
     journal.messages.push(message)
     journal.turns.push({ turn, message, result })
     return result
@@ -168,6 +178,17 @@ export class ScriptedAgentRunner implements AgentRunner {
         usage,
       },
     }
+  }
+
+  private async runScript(ctx: ScriptContext, signal?: AbortSignal): Promise<AgentTurnResult> {
+    const running = Promise.resolve(this.script(ctx))
+    if (signal === undefined) return running
+    if (signal.aborted) return failedTurnResult('scripted runner: turn aborted', false)
+    return new Promise<AgentTurnResult>((resolve, reject) => {
+      const aborted = (): void => resolve(failedTurnResult('scripted runner: turn aborted', false))
+      signal.addEventListener('abort', aborted, { once: true })
+      running.then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
+    })
   }
 
   private liveJournal(session: AgentSessionHandle, op: 'continue' | 'end'): SessionJournal {

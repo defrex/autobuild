@@ -161,6 +161,10 @@ export type PrState =
   | { state: 'merged'; sha: string }
   | { state: 'closed' }
 
+/** Abort cleanup may race landing. A merged result is terminal and must never
+ * be overwritten by a close attempt. */
+export type ClosePrResult = { state: 'closed' } | { state: 'merged'; sha: string }
+
 /** Result of reconciling durable auto-merge intent with the forge. Native
  * state is acknowledged only by `applied`; the other results deliberately
  * leave the command pending for a later janitor poll. */
@@ -232,6 +236,10 @@ export interface Forge {
   }): Promise<string>
   /** Janitor poll (§15.7): merged/closed/mergeability for one PR. */
   getPrState(workspacePath: string, number: number): Promise<PrState>
+  /** Optional additive abort-cleanup capabilities. Older plugins remain
+   * loadable, but cleanup stays pending with an actionable diagnostic. */
+  closePr?(workspacePath: string, number: number): Promise<ClosePrResult>
+  deleteBranch?(workspacePath: string, branch: string): Promise<void>
   /**
    * Reconcile GitHub-native auto-merge desired state. Enabling returns an
    * ungated candidate only after proving the base branch has no merge-blocking
@@ -322,6 +330,9 @@ export interface AgentStartOpts {
    * AB_TOKEN. Adapters merge it over their process environment and then apply
    * the runner-controlled Autobuild CLI PATH prefix. */
   env: Record<string, string>
+  /** Caller-owned cancellation for this turn. Aborting must leave any created
+   * session endable so its transcript can still be deposited. */
+  signal?: AbortSignal
 }
 
 /** Per-turn refresh for a continued session (§10): each continue turn is a
@@ -339,6 +350,8 @@ export function agentInvocation(opts: AgentStartOpts): string {
 
 export interface AgentContinueOpts {
   env?: Record<string, string>
+  /** Caller-owned cancellation for this continued turn. */
+  signal?: AbortSignal
 }
 
 export interface AgentRunner {
