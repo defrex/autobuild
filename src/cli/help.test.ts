@@ -149,6 +149,9 @@ describe('layered CLI help catalog', () => {
       ],
       ticket: [
         'ticket create',
+        '--state <state>',
+        'overrides [tickets].createState',
+        'passed through unchanged and validated by the source',
         'ticket update',
         'ticket block',
         'ticket unblock',

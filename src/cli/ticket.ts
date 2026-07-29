@@ -41,6 +41,9 @@ export interface TicketCreateOpts extends TicketCommandOpts {
   /** Path to the ticket body — the spec (docs/spec-standard.md). */
   bodyFile: string
   labels?: string[]
+  /** Source-local workflow state for this create; validation belongs to the
+   * adapter. Omission preserves its configured/provider default. */
+  state?: string
   /** Source-local ids of tickets that must complete before this one is
    * dispatched (§13). Validated against the configured source before create. */
   blockedBy?: string[]
@@ -201,12 +204,18 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     }
   }
 
-  const ticket = await source.create({
+  const draft = {
     title: opts.title,
     body,
     ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
     ...(blockedBy.length > 0 ? { blockedBy } : {}),
-  })
+  }
+  // Preserve the no-override call exactly for adapters and plugins that
+  // distinguish an omitted options argument from explicit create options.
+  const ticket =
+    opts.state === undefined
+      ? await source.create(draft)
+      : await source.create(draft, { state: opts.state })
   const state = ticket.state ?? 'created'
   const url = ticket.ref.url !== undefined ? ` — ${ticket.ref.url}` : ''
   const blockers =
@@ -299,7 +308,7 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
 }
 
 const CREATE_USAGE =
-  'usage: ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id] (§8.8)'
+  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] (§8.8)'
 const UPDATE_USAGE =
   'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] (§8.8)'
 const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id> (§8.8)'
@@ -337,7 +346,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'create': {
       const parsed = parseArgs(
         args,
-        { body: 'value', labels: 'value', 'blocked-by': 'value' },
+        { body: 'value', state: 'value', labels: 'value', 'blocked-by': 'value' },
         TICKET_USAGE,
       )
       const title = parsed.positionals.join(' ')
@@ -345,12 +354,15 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       if (title.trim() === '' || bodyFile === undefined || bodyFile.trim() === '') {
         throw new Error(TICKET_USAGE)
       }
+      const state = stringFlag(parsed, 'state')
+      if (state !== undefined && state.trim() === '') throw new Error(TICKET_USAGE)
       const labels = stringFlag(parsed, 'labels')
       const blockedBy = stringFlag(parsed, 'blocked-by')
       await abTicketCreate({
         ...opts,
         title,
         bodyFile,
+        ...(state !== undefined ? { state } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
       })

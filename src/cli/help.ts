@@ -127,7 +127,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     summary: 'Create, groom, inspect, and move source-agnostic tickets.',
     detail: page([
       'Usage:',
-      '  ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
+      '  ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]',
       '  ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
       '  ab ticket block <id> <blocker-id>',
       '  ab ticket unblock <id> <blocker-id>',
@@ -137,6 +137,8 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '',
       'Operate on the configured [tickets] source (§8.8); all ticket commands run',
       'outside sessions. create files a ticket and may establish initial blockers.',
+      '--state overrides [tickets].createState (or the provider default) for that',
+      'create only; it is passed through unchanged and validated by the source.',
       'update partially replaces editable fields: omitted fields survive, --labels',
       '"" clears labels, and update never changes state. block and unblock are',
       'idempotent.',

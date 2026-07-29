@@ -538,7 +538,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
 | `teamKey` | — | required for Linear; forbidden for file; optional for plugins | Linear team key such as `"ENG"`, or an existing plugin config field. |
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
-| `createState` | provider default | optional nonempty string | State used by newly created tickets. |
+| `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
@@ -560,9 +560,12 @@ Source-specific validation is strict:
   any additional semantic validation. No untyped plugin-options table exists.
 
 For Linear, omitting `createState` lets the team's default state apply. For the
-file source it defaults to `Triage`. An omitted Linear `triageState` uses
-`Backlog`, because every team has it while the optional Linear triage feature
-may be disabled. The file source uses `Triage`.
+file source it defaults to `Triage`. A caller may override that default for one
+create with `ab ticket create --state <state>`; the value is passed unchanged to
+the selected source, which owns its workflow vocabulary and rejects unknown
+states before creating anything. An omitted Linear `triageState` uses `Backlog`,
+because every team has it while the optional Linear triage feature may be
+disabled. The file source uses `Triage`.
 
 The default file directory follows a selected local `AB_STORE` root and writes
 its own self-excluding `.gitignore`. An explicitly configured `dir` belongs to

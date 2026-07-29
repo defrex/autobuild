@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#121](https://github.com/defrex/autobuild/pull/121) — Allow per-ticket creation state overrides
 - [#120](https://github.com/defrex/autobuild/pull/120) — Support aliased skill directories during vendoring
 - [#119](https://github.com/defrex/autobuild/pull/119) — Limit setup retries and surface durable failures
 - [#118](https://github.com/defrex/autobuild/pull/118) — Show actionable merge wait reasons

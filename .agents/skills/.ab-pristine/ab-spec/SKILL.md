@@ -39,12 +39,22 @@ in order, but as a conversation, not a form:
    prior discussion.
 
 Draft the spec in full, show it, iterate until the user accepts. Then create
-the ticket with the spec as its body using `ab ticket create`. The ticket lands
-in `[tickets].createState`, or the ticket source's default creation state when
-that setting is absent. If that state is also `[tickets].readyState`, creation
-can make the ticket immediately dispatchable once every other configured
-readiness and dependency gate is satisfied; otherwise it still needs the
-repository's normal route to the ready state before dispatch.
+the ticket with the spec as its body using `ab ticket create`. Honor a
+destination workflow state when the human already named one during grooming:
+
+```
+ab ticket create "…" --body spec.md --state "<state>"
+```
+
+Do not ask a placement question solely to obtain a state, and do not infer one
+from the ticket. If grooming named no destination, omit `--state`; the create
+then uses `[tickets].createState`, or the ticket source's own default when that
+setting is absent.
+
+When the explicitly named destination equals `[tickets].readyState`, tell the
+human in the completion response that the ticket may be claimed by the next
+dispatch once the repository's label, dependency, intake, capacity, and other
+readiness gates are satisfied.
 
 If grooming established that this work is blocked by other tickets, pass them
 at creation:

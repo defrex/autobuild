@@ -74,7 +74,7 @@ describe('runCli — routing and exit codes', () => {
     expect(await runCli(['help', 'ticket'], d)).toBe(0)
     const help = d.out.join('\n')
     for (const form of [
-      'ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]',
       'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
       'ab ticket block <id> <blocker-id>',
       'ab ticket unblock <id> <blocker-id>',
@@ -84,6 +84,8 @@ describe('runCli — routing and exit codes', () => {
     ]) {
       expect(help).toContain(form)
     }
+    expect(help).toContain('--state overrides [tickets].createState')
+    expect(help).toContain('passed through unchanged and validated by the source')
     expect(help).toContain('same ready criteria as dispatch')
     expect(help).toContain('show one ticket, including its body/spec')
     expect(help).toContain('the first id is always the ticket being changed')
