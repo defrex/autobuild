@@ -11,6 +11,7 @@ import {
 import type {
   AutoMergeDeferralReason,
   AutoMergeResult,
+  ClosePrResult,
   PrAttachmentHosting,
   PrAttachmentReclaimRequest,
   PrAttachmentUploadRequest,
@@ -59,6 +60,16 @@ export interface SquashMergeRecord {
   expectedHeadSha: string
 }
 
+export interface ClosePrRecord {
+  workspacePath: string
+  number: number
+}
+
+export interface DeleteBranchRecord {
+  workspacePath: string
+  branch: string
+}
+
 export type PrAttachmentUploadRecord = PrAttachmentUploadRequest
 export type PrAttachmentReclaimRecord = PrAttachmentReclaimRequest
 
@@ -79,6 +90,8 @@ export class FakeForge implements Forge {
   readonly getPrStateCalls: GetPrStateRecord[] = []
   readonly autoMergeCalls: AutoMergeRecord[] = []
   readonly squashMergeCalls: SquashMergeRecord[] = []
+  readonly closePrCalls: ClosePrRecord[] = []
+  readonly deleteBranchCalls: DeleteBranchRecord[] = []
   readonly prAttachmentUploads: PrAttachmentUploadRecord[] = []
   readonly prAttachmentReclaims: PrAttachmentReclaimRecord[] = []
 
@@ -97,6 +110,9 @@ export class FakeForge implements Forge {
   private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
   private readonly attachmentUploadErrors: string[] = []
   private readonly attachmentReclaimErrors: string[] = []
+  private readonly closePrErrors: string[] = []
+  private readonly deleteBranchErrors: string[] = []
+  private readonly publishedBranches = new Set<string>()
 
   constructor(
     opts: {
@@ -284,6 +300,18 @@ export class FakeForge implements Forge {
     // Missing means it was already deleted: cleanup is idempotent.
   }
 
+  failNextClosePr(message: string): void {
+    this.closePrErrors.push(message)
+  }
+
+  failNextDeleteBranch(message: string): void {
+    this.deleteBranchErrors.push(message)
+  }
+
+  hasPublishedBranch(branch: string): boolean {
+    return this.publishedBranches.has(branch)
+  }
+
   /** Move the PR head to exercise --match-head-commit race rejection. */
   setPrHeadSha(number: number, headSha: string): void {
     this.assertPr(number)
@@ -304,6 +332,25 @@ export class FakeForge implements Forge {
 
   async pushBranch(workspacePath: string, branch: string): Promise<void> {
     this.pushes.push({ workspacePath, branch })
+    this.publishedBranches.add(branch)
+  }
+
+  async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
+    this.closePrCalls.push({ workspacePath, number })
+    const error = this.closePrErrors.shift()
+    if (error !== undefined) throw new Error(error)
+    const state = this.prs.get(number)
+    if (state === undefined) throw new Error(`FakeForge: unknown PR #${number}`)
+    if (state.state === 'merged') return state
+    if (state.state === 'open') this.prs.set(number, { state: 'closed' })
+    return { state: 'closed' }
+  }
+
+  async deleteBranch(workspacePath: string, branch: string): Promise<void> {
+    this.deleteBranchCalls.push({ workspacePath, branch })
+    const error = this.deleteBranchErrors.shift()
+    if (error !== undefined) throw new Error(error)
+    this.publishedBranches.delete(branch)
   }
 
   async openPr(opts: {

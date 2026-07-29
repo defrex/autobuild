@@ -124,6 +124,15 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
   }
 }
 
+function waitForContractAbort(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal === undefined) return reject(new Error('contract CLI received no AbortSignal'))
+    const abort = () => reject(signal.reason ?? new Error('contract CLI aborted'))
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
   const calls: ClaudeCliInvocation[] = []
   const runCli: ClaudeCliRunFn = async (call) => {
@@ -134,6 +143,12 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
         assistant(CONTRACT_ONE_SHOT_TEXT),
         result('unused-one-shot', 2, 1, { result: CONTRACT_ONE_SHOT_TEXT }),
       ])
+    }
+    if (
+      scenario === 'cancel-start' ||
+      (scenario === 'cancel-continue' && prompt === CONTRACT_FOLLOW_UP)
+    ) {
+      return waitForContractAbort(call.signal)
     }
     if (scenario === 'retryable-failure') {
       return output([

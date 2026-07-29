@@ -160,6 +160,14 @@ export const eventPayloadSchemas = {
     base: workspaceBaseSchema,
   }),
   'workspace.released': empty,
+  /** Checkpoints in the dispatcher-owned, retry-safe abort cleanup saga. */
+  'abort.remote-branch-deleted': z.strictObject({ branch: z.string().min(1) }),
+  'abort.local-branch-deleted': z.strictObject({ branch: z.string().min(1) }),
+  'abort.ticket-returned': z.strictObject({
+    ticket: ticketRefSchema,
+    state: z.string().min(1),
+    label: z.string().min(1),
+  }),
   /** A post-creation dispatch attempt stopped before runner attachment. */
   'dispatch.failed': z.strictObject({
     stage: dispatchStage,

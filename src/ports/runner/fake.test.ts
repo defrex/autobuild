@@ -46,6 +46,15 @@ describe('defaultTurnResult', () => {
   })
 })
 
+function waitForContractAbort(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal === undefined) return reject(new Error('contract turn received no AbortSignal'))
+    const abort = () => reject(signal.reason ?? new Error('contract turn aborted'))
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 const scriptedContractFactory: AgentRunnerContractFactory = (scenario) => {
   const turns: Array<{ message?: string; env: Record<string, string> }> = []
   const runner = new ScriptedAgentRunner({
@@ -54,6 +63,12 @@ const scriptedContractFactory: AgentRunnerContractFactory = (scenario) => {
         ...(ctx.message !== undefined ? { message: ctx.message } : {}),
         env: ctx.opts.env,
       })
+      if (
+        scenario === 'cancel-start' ||
+        (scenario === 'cancel-continue' && ctx.message !== undefined)
+      ) {
+        return waitForContractAbort(ctx.opts.signal)
+      }
       if (scenario === 'retryable-failure') {
         return failedTurnResult(CONTRACT_RETRYABLE_FAILURE, false)
       }

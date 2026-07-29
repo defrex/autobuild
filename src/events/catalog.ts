@@ -40,6 +40,9 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
+  'abort.remote-branch-deleted': ['dispatcher'],
+  'abort.local-branch-deleted': ['dispatcher'],
+  'abort.ticket-returned': ['dispatcher'],
   'dispatch.failed': ['dispatcher'],
   'dispatch.comment-posted': ['dispatcher'],
 
@@ -51,7 +54,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.auto-merge-cancelled': ['human'],
   'build.paused': ['kernel'],
   'build.resumed': ['kernel'],
-  'build.aborted': ['kernel'],
+  'build.aborted': ['kernel', 'dispatcher'],
 
   'spec.imported': ['dispatcher'],
   'spec.authored': ['agent'],

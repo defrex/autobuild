@@ -89,6 +89,8 @@ function harness(
     onLaunch?: (slug: string, store: MemoryBuildStore) => Promise<void> | void
     workspaceBase?: WorkspaceBase
     prAttachments?: boolean
+    forge?: FakeForge
+    exec?: Exec
   } = {},
 ) {
   const clock = manualClock()
@@ -100,14 +102,22 @@ function harness(
     mode: 'logical',
     ...(opts.workspaceBase ? { base: opts.workspaceBase } : {}),
   })
-  const forge = new FakeForge({
-    ...(opts.prAttachments === true ? { prAttachments: true } : {}),
-  })
+  const forge =
+    opts.forge ??
+    new FakeForge({
+      ...(opts.prAttachments === true ? { prAttachments: true } : {}),
+    })
   const launches: string[] = []
   const execCalls: string[][] = []
-  const exec: Exec = async (cmd) => {
+  const exec: Exec = async (cmd, execOpts) => {
     execCalls.push(cmd)
-    return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+    return (
+      opts.exec?.(cmd, execOpts) ?? {
+        stdout: `${BASE_SHA}\trefs/heads/main\n`,
+        stderr: '',
+        exitCode: 0,
+      }
+    )
   }
   const dispatcher = new Dispatcher({
     store,
@@ -2913,8 +2923,8 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([])
   })
 
-  test('aborted build: release + completed{abandoned} + back to Triage; second tick no-ops', async () => {
-    const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
+  test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
+    const h = harness({ tickets: [readyTicket('T-1', { labels: ['autobuild', 'priority:high'] })] })
     const slug = await seedBuild(h, { ticketId: 'T-1' })
     await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
@@ -2922,16 +2932,201 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), abandoned: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-2)).toEqual(['workspace.released', 'build.completed'])
+    expect(events.map((e) => e.type).slice(-5)).toEqual([
+      'workspace.released',
+      'abort.remote-branch-deleted',
+      'abort.local-branch-deleted',
+      'abort.ticket-returned',
+      'build.completed',
+    ])
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
     expect(h.workspaces.releases.map((r) => r.ref)).toEqual([`/ws/ab/${slug}`])
     // Aborted work goes back to a human (D1 discipline), never to Done.
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
+    expect(h.tickets.updates).toEqual([
+      {
+        id: 'T-1',
+        patch: { labels: ['autobuild', 'priority:high', 'autobuild:aborted'] },
+      },
+    ])
+    expect(h.forge.deleteBranchCalls).toEqual([{ workspacePath: REPO, branch: `ab/${slug}` }])
+    expect(h.execCalls.slice(-2)).toEqual([
+      ['git', 'check-ref-format', `refs/heads/ab/${slug}`],
+      ['git', 'update-ref', '-d', `refs/heads/ab/${slug}`],
+    ])
+    expect(h.tickets.comments).toEqual([])
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
   })
+
+  test('queued abort is dispatcher-acknowledged before the complete cleanup saga', async () => {
+    const h = harness({ tickets: [readyTicket('T-queued-abort', { labels: [] })] })
+    const slug = await seedBuild(h, {
+      slug: 'queued-abort',
+      ticketId: 'T-queued-abort',
+      attached: false,
+    })
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.abort-requested',
+      payload: { reason: 'cancel queued work' },
+    })
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+    const events = await h.store.getEvents(slug)
+    const acknowledged = events.find((event) => event.type === 'build.aborted')
+    expect(acknowledged?.actor).toEqual(DISPATCHER)
+    expect(events.at(-1)).toMatchObject({
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+  })
+
+  test.each([
+    ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
+    ['already closed', { state: 'closed' } as const, 'pr.closed'],
+    ['merged before close', { state: 'merged', sha: 'landing-sha' } as const, 'pr.merged'],
+  ])(
+    'aborted build with %s PR records the authoritative settlement',
+    async (_name, prState, fact) => {
+      const h = harness()
+      const slug = await seedBuild(h, { pr: PR })
+      h.forge.setPrState(PR.number, prState)
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+      const events = await h.store.getEvents(slug)
+      expect(events.some((event) => event.type === fact)).toBe(true)
+      expect(h.forge.closePrCalls).toEqual([{ workspacePath: `/ws/ab/${slug}`, number: PR.number }])
+      if (fact === 'pr.merged') {
+        expect(events.find((event) => event.type === 'pr.merged')?.payload).toEqual({
+          sha: 'landing-sha',
+        })
+      }
+    },
+  )
+
+  test('a later-step outage resumes from durable checkpoints without repeating settled effects', async () => {
+    const h = harness({ tickets: [readyTicket('T-checkpoint', { labels: ['keep-me'] })] })
+    const slug = await seedBuild(h, { slug: 'checkpoint', ticketId: 'T-checkpoint', pr: PR })
+    h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+    h.forge.failNextDeleteBranch('remote unavailable')
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    const failed = await h.dispatcher.tick()
+    expect(failed.janitorFailed).toBe(1)
+    expect(failed.janitorDiagnostics[0]).toContain('remote branch deletion')
+    expect((await h.store.getBuild(slug))?.lease).toBeUndefined()
+    let events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'pr.closed')).toBe(true)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+    expect(events.some((event) => event.type === 'build.completed')).toBe(false)
+    expect(h.forge.closePrCalls).toHaveLength(1)
+    expect(h.workspaces.releases).toHaveLength(1)
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+      abandoned: 1,
+    })
+    events = await h.store.getEvents(slug)
+    expect(h.forge.closePrCalls).toHaveLength(1)
+    expect(h.workspaces.releases).toHaveLength(1)
+    expect(h.forge.deleteBranchCalls).toHaveLength(2) // failed side effect is safely retried
+    expect(h.tickets.updates).toEqual([
+      { id: 'T-checkpoint', patch: { labels: ['keep-me', 'autobuild:aborted'] } },
+    ])
+    expect(events.at(-1)?.type).toBe('build.completed')
+  })
+
+  test.each([0, 1, 2, 3, 4, 5])(
+    'a crash after cleanup checkpoint prefix %i resumes only the remaining external effects',
+    async (settled) => {
+      const ticketId = `T-prefix-${settled}`
+      const h = harness({
+        tickets: [
+          readyTicket(ticketId, {
+            labels: ['keep', 'autobuild:aborted'],
+            state: 'In Progress',
+          }),
+        ],
+      })
+      const slug = await seedBuild(h, {
+        slug: `checkpoint-prefix-${settled}`,
+        ticketId,
+        pr: PR,
+      })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+      if (settled >= 1) {
+        await h.store.append(slug, { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+      }
+      if (settled >= 2) {
+        await h.store.append(slug, { actor: DISPATCHER, type: 'workspace.released', payload: {} })
+      }
+      if (settled >= 3) {
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'abort.remote-branch-deleted',
+          payload: { branch: `ab/${slug}` },
+        })
+      }
+      if (settled >= 4) {
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'abort.local-branch-deleted',
+          payload: { branch: `ab/${slug}` },
+        })
+      }
+      if (settled >= 5) {
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'abort.ticket-returned',
+          payload: {
+            ticket: { source: 'fake', id: ticketId, title: slug },
+            state: 'Triage',
+            label: 'autobuild:aborted',
+          },
+        })
+      }
+
+      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+      expect(h.forge.closePrCalls).toHaveLength(settled >= 1 ? 0 : 1)
+      expect(h.workspaces.releases).toHaveLength(settled >= 2 ? 0 : 1)
+      expect(h.forge.deleteBranchCalls).toHaveLength(settled >= 3 ? 0 : 1)
+      expect(h.execCalls).toHaveLength(settled >= 4 ? 0 : 2)
+      expect(h.tickets.updates).toEqual([]) // marker was already present
+      expect(h.tickets.transitions).toHaveLength(settled >= 5 ? 0 : 1)
+      expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('build.completed')
+    },
+  )
+
+  test.each(['closePr', 'deleteBranch'] as const)(
+    'missing Forge %s capability leaves cleanup pending with an actionable diagnostic',
+    async (capability) => {
+      const forge = new FakeForge()
+      Object.defineProperty(forge, capability, { value: undefined })
+      const h = harness({ forge })
+      const slug = await seedBuild(h, {
+        slug: `missing-${capability.toLowerCase()}`,
+        ...(capability === 'closePr' ? { pr: PR } : {}),
+      })
+      if (capability === 'closePr') {
+        forge.setPrState(PR.number, { state: 'open', mergeable: true })
+      }
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+      const report = await h.dispatcher.tick()
+      expect(report.janitorFailed).toBe(1)
+      expect(report.janitorDiagnostics[0]).toContain(`does not implement ${capability}`)
+      expect(report.janitorDiagnostics[0]).toContain('retry on next dispatcher tick')
+      expect(
+        (await h.store.getEvents(slug)).some((event) => event.type === 'build.completed'),
+      ).toBe(false)
+    },
+  )
 
   test('aborted build: a ticket-source outage leaves the Triage handback retryable (§3.3)', async () => {
     // Regression: build.completed used to land BEFORE the ticket transition,
@@ -2958,7 +3153,9 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       janitorFailed: 1,
-      janitorDiagnostics: [`build ${slug}: janitor failed — ticket source outage`],
+      janitorDiagnostics: [
+        `build ${slug}: janitor failed — abort cleanup ticket handback failed for fake ticket T-1; remaining cleanup will retry on next dispatcher tick — ticket source outage`,
+      ],
     })
     // The terminal event did NOT land: the build still reduces to 'aborted',
     // so the next tick re-runs the whole cleanup (workspace release is
@@ -2969,7 +3166,10 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
-    expect(h.tickets.comments).toEqual([{ id: 'T-1', body: expect.stringContaining('aborted') }])
+    // The first tick already applied the idempotent label union before the
+    // transition failed; retry reads it back and does not replace labels again.
+    expect(h.tickets.updates).toEqual([{ id: 'T-1', patch: { labels: ['autobuild:aborted'] } }])
+    expect(h.tickets.comments).toEqual([])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('build.completed')
     expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })

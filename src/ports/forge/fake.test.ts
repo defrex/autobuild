@@ -29,7 +29,7 @@ const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
     body: 'Autobuild Forge contract fixture',
     controls: {
       remoteHead: async (branch) => {
-        if (!forge.pushes.some((push) => push.branch === branch)) {
+        if (!forge.hasPublishedBranch(branch)) {
           throw new Error(`fake contract probe: branch ${branch} was not pushed`)
         }
         return headSha

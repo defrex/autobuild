@@ -80,6 +80,7 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
   const creates: RecordedCreate[] = []
   const prompts: RecordedPrompt[] = []
   let nextSession = 0
+  let disposals = 0
   const createSessionFn: PiCreateSessionFn = async (opts) => {
     creates.push({
       cwd: opts.cwd,
@@ -98,7 +99,18 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
             usage: { inputTokens: 2, outputTokens: 1 },
           }
         }
-        if (scenario !== 'success') {
+        if (
+          scenario === 'cancel-start' ||
+          (scenario === 'cancel-continue' && text === CONTRACT_FOLLOW_UP)
+        ) {
+          await new Promise<never>((_, reject) => {
+            if (signal === undefined) return reject(new Error('contract prompt received no signal'))
+            const abort = () => reject(signal.reason ?? new Error('contract prompt aborted'))
+            if (signal.aborted) abort()
+            else signal.addEventListener('abort', abort, { once: true })
+          })
+        }
+        if (scenario !== 'success' && scenario !== 'cancel-continue') {
           const message =
             scenario === 'permanent-failure'
               ? CONTRACT_PERMANENT_FAILURE
@@ -119,7 +131,9 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
           usage: { inputTokens: 3, outputTokens: 2 },
         }
       },
-      dispose() {},
+      dispose() {
+        disposals += 1
+      },
     }
   }
   const runner = new PiAgentRunner({ createSessionFn })
@@ -134,6 +148,7 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
           ...(prompt.text === CONTRACT_FOLLOW_UP ? { message: prompt.text } : {}),
           env: prompt.env,
         })),
+    disposed: () => disposals,
     oneShot: {
       completion: runner,
       observation: () => {

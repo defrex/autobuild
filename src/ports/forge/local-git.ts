@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import type { AutoMergeResult, Forge, PrRef, PrState } from '../types'
+import type { AutoMergeResult, ClosePrResult, Forge, PrRef, PrState } from '../types'
 import { bunExec, type Exec } from './github'
 
 const objectId = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
@@ -365,6 +365,24 @@ export class LocalGitForge implements Forge {
       state: 'open',
       mergeable: (await this.mergeTree(workspacePath, baseSha, headSha)) !== null,
     }
+  }
+
+  async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
+    const current = await this.getPrState(workspacePath, number)
+    if (current.state === 'merged') return current
+    if (current.state === 'closed') return current
+    const record = await this.updateRecord(workspacePath, number, (value) =>
+      value.status === 'merged' ? value : { ...value, status: 'closed', pendingLanding: undefined },
+    )
+    return record.status === 'merged'
+      ? { state: 'merged', sha: record.mergedSha! }
+      : { state: 'closed' }
+  }
+
+  async deleteBranch(workspacePath: string, branch: string): Promise<void> {
+    const ref = `refs/heads/${branch}`
+    await this.assertRef(ref, workspacePath)
+    await this.command(['update-ref', '-d', ref], workspacePath)
   }
 
   async setAutoMerge(

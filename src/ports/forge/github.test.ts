@@ -276,6 +276,51 @@ describe('GitHubForge.getPrState', () => {
   })
 })
 
+describe('GitHubForge abort cleanup', () => {
+  const stateJson = (
+    state: string,
+    mergeable = 'UNKNOWN',
+    mergeCommit: { oid: string } | null = null,
+  ) => JSON.stringify({ state, mergeable, mergeCommit })
+
+  test('closes only an open PR and confirms authoritative closed state', async () => {
+    const { forge, calls } = makeForge([
+      { stdout: stateJson('OPEN') },
+      {},
+      { stdout: stateJson('CLOSED') },
+    ])
+    expect(await forge.closePr('/repo', 42)).toEqual({ state: 'closed' })
+    expect(calls.map((call) => call.cmd)).toEqual([
+      ['gh', 'pr', 'view', '42', '--json', 'state,mergeable,mergeCommit'],
+      ['gh', 'pr', 'close', '42'],
+      ['gh', 'pr', 'view', '42', '--json', 'state,mergeable,mergeCommit'],
+    ])
+  })
+
+  test('preserves a merge that races a failed close', async () => {
+    const { forge } = makeForge([
+      { stdout: stateJson('OPEN') },
+      { exitCode: 1, stderr: 'PR already merged' },
+      { stdout: stateJson('MERGED', 'UNKNOWN', { oid: 'landing' }) },
+    ])
+    expect(await forge.closePr('/repo', 42)).toEqual({ state: 'merged', sha: 'landing' })
+  })
+
+  test('deletes an existing exact branch and treats a missing branch as clean', async () => {
+    const existing = makeForge([{}, { stdout: 'abc\trefs/heads/ab/work\n' }, {}])
+    await existing.forge.deleteBranch('/repo', 'ab/work')
+    expect(existing.calls.map((call) => call.cmd)).toEqual([
+      ['git', 'check-ref-format', 'refs/heads/ab/work'],
+      ['git', 'ls-remote', '--exit-code', '--heads', 'origin', 'refs/heads/ab/work'],
+      ['git', 'push', 'origin', '--delete', 'ab/work'],
+    ])
+
+    const missing = makeForge([{}, { exitCode: 2 }])
+    await missing.forge.deleteBranch('/repo', 'ab/work')
+    expect(missing.calls).toHaveLength(2)
+  })
+})
+
 describe('rulesetsHaveMergeGate', () => {
   const pullRequestParameters = {
     required_approving_review_count: 0,

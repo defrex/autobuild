@@ -6,7 +6,12 @@ import type { AgentRunner, AgentSessionHandle, AgentTurnResult, Transcript } fro
 import type { OneShotCompletion, OneShotCompletionInput } from './one-shot'
 import { AGENT_BIN_DIR } from './session-env'
 
-export type AgentRunnerContractScenario = 'success' | 'retryable-failure' | 'permanent-failure'
+export type AgentRunnerContractScenario =
+  | 'success'
+  | 'retryable-failure'
+  | 'permanent-failure'
+  | 'cancel-start'
+  | 'cancel-continue'
 
 export const CONTRACT_INVOCATION = 'agent-runner-contract'
 export const CONTRACT_SKILL = 'ab-runner-contract'
@@ -44,6 +49,8 @@ export interface AgentRunnerContractHarness {
   workspacePath: string
   /** Independent observations from the script/SDK seam, in turn order. */
   turns: () => readonly AgentRunnerContractTurnObservation[]
+  /** Adapter-specific disposal observation, when the transport exposes one. */
+  disposed?: () => number
   /** Present only when the runtime declares the optional capability. */
   oneShot?: AgentRunnerContractOneShotHarness
   cleanup?: () => Promise<void>
@@ -131,6 +138,15 @@ function expectTranscript(transcript: Transcript, runner: AgentRunner, model: st
   expect(transcript.metadata.runner).toBe(runner.name)
   expect(transcript.metadata.model).toBe(model)
   expectUsage(transcript.metadata.usage)
+}
+
+async function waitForTurn(harness: AgentRunnerContractHarness, count: number): Promise<void> {
+  const deadline = Date.now() + 1000
+  while (harness.turns().length < count) {
+    if (Date.now() >= deadline)
+      throw new Error(`runner did not start turn ${count} within one second`)
+    await Bun.sleep(1)
+  }
 }
 
 async function invokeManagedCli(env: Record<string, string>): Promise<void> {
@@ -225,6 +241,68 @@ export function describeAgentRunnerContract(
         } finally {
           await rm(conflictDir, { recursive: true, force: true })
         }
+      })
+    })
+
+    test('an aborted start terminates promptly and retains an endable transcript', async () => {
+      await withHarness(factory, 'cancel-start', async (harness) => {
+        const controller = new AbortController()
+        const pending = harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+          signal: controller.signal,
+        })
+        await waitForTurn(harness, 1)
+        controller.abort(new Error('contract operator cancellation'))
+        const started = await Promise.race([
+          pending,
+          Bun.sleep(1000).then(() => {
+            throw new Error('cancelled start did not settle within one second')
+          }),
+        ])
+        const { transcript } = await withEndedSession(harness.runner, started.session, async () => {
+          expect(started.result).toMatchObject({
+            kind: 'failed',
+            failure: { permanent: false },
+          })
+        })
+        expectTranscript(transcript, harness.runner, harness.model)
+        if (harness.disposed !== undefined) expect(harness.disposed()).toBe(1)
+        await expect(harness.runner.end(started.session)).rejects.toThrow()
+      })
+    })
+
+    test('an aborted continued turn terminates promptly and the whole session remains disposable', async () => {
+      await withHarness(factory, 'cancel-continue', async (harness) => {
+        const started = await harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+        })
+        expectTypedCompleted(started.result)
+        const controller = new AbortController()
+        const pending = harness.runner.continue(started.session, CONTRACT_FOLLOW_UP, {
+          env: { AB_PHASE: 'implement@2' },
+          signal: controller.signal,
+        })
+        await waitForTurn(harness, 2)
+        controller.abort(new Error('contract operator cancellation'))
+        const { transcript } = await withEndedSession(harness.runner, started.session, async () => {
+          const result = await Promise.race([
+            pending,
+            Bun.sleep(1000).then(() => {
+              throw new Error('cancelled continuation did not settle within one second')
+            }),
+          ])
+          expect(result).toMatchObject({ kind: 'failed', failure: { permanent: false } })
+        })
+        expectTranscript(transcript, harness.runner, harness.model)
+        if (harness.disposed !== undefined) expect(harness.disposed()).toBe(1)
       })
     })
 

@@ -41,7 +41,7 @@ describe('autobuild/plugin-sdk package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.1.0')
+    expect(PLUGIN_API_VERSION).toBe('1.2.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,

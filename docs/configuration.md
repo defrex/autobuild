@@ -94,15 +94,16 @@ TicketSource, AgentRunner, WorkspaceProvider, Forge, BuildStore, and BlobStore
 contract suites. Adapter values may use the backward-compatible bare factory or
 carry a contract fixture descriptor. Ticket sources may also declare
 `requiredEnv`; the host checks every declared variable for a nonempty value
-before invoking the adapter factory. Plugins using descriptors introduced in
-API 1.1 should require `^1.1.0`.
+before invoking the adapter factory. Plugins using Forge abort-cleanup and
+AgentRunner turn-cancellation capabilities introduced in API 1.2 should require
+`^1.2.0`.
 
 ```ts
 import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
 
 export default {
   name: 'acme-integrations',
-  apiVersion: '^1.1.0',
+  apiVersion: '^1.2.0',
   ticketSources: {
     jira: {
       requiredEnv: ['JIRA_TOKEN'],

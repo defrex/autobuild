@@ -415,9 +415,20 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       extensions: opts.extensions ?? [],
     })
 
-    // Every phase skill takes only the build slug (§4).
+    // Every phase skill takes only the build slug (§4). A cancelled/failed
+    // prompt still returns an endable handle so the SDK session is disposed and
+    // its transcript joins the build corpus.
     const prompt = `/${opts.skill} ${agentInvocation(opts)}`
-    const turn = await session.prompt(prompt, this.turnEnv(opts.env))
+    let turn: PiTurn
+    try {
+      turn = await session.prompt(prompt, this.turnEnv(opts.env), opts.signal)
+    } catch (error) {
+      turn = {
+        text: '',
+        usage: { inputTokens: 0, outputTokens: 0 },
+        failure: classifyProviderError(error instanceof Error ? error.message : String(error)),
+      }
+    }
 
     const handle: AgentSessionHandle = {
       id: session.sessionId,
@@ -443,7 +454,16 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     // new AB_SESSION) merged over the start env, so the CLI — and the bash
     // subprocess it runs in — resolve THIS round, not round 1's stale identity.
     const scoped = opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
-    const turn = await state.session.prompt(message, this.turnEnv(scoped))
+    let turn: PiTurn
+    try {
+      turn = await state.session.prompt(message, this.turnEnv(scoped), opts?.signal)
+    } catch (error) {
+      turn = {
+        text: '',
+        usage: { inputTokens: 0, outputTokens: 0 },
+        failure: classifyProviderError(error instanceof Error ? error.message : String(error)),
+      }
+    }
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }

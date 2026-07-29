@@ -208,6 +208,44 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
       })
     })
 
+    test('closePr is idempotent and preserves merged PRs', async () => {
+      await withForge(factory, undefined, async (harness) => {
+        expect(harness.forge.closePr).toBeDefined()
+        const { pr } = await pushAndOpen(harness)
+        expect(await harness.forge.closePr!(harness.workspacePath, pr.number)).toEqual({
+          state: 'closed',
+        })
+        expect(await harness.forge.closePr!(harness.workspacePath, pr.number)).toEqual({
+          state: 'closed',
+        })
+
+        const merged = await pushAndOpen(harness)
+        await harness.controls.prepareMergeable(merged.pr.number)
+        const candidate = await harness.forge.setAutoMerge(
+          harness.workspacePath,
+          merged.pr.number,
+          true,
+        )
+        expect(candidate).toEqual({ kind: 'ungated', headSha: merged.pr.headSha })
+        await harness.forge.squashMerge(harness.workspacePath, merged.pr.number, merged.pr.headSha)
+        const sha = await harness.controls.mergeSha(merged.pr.number)
+        expect(await harness.forge.closePr!(harness.workspacePath, merged.pr.number)).toEqual({
+          state: 'merged',
+          sha,
+        })
+      })
+    })
+
+    test('deleteBranch removes the exact published branch and is idempotent', async () => {
+      await withForge(factory, undefined, async (harness) => {
+        expect(harness.forge.deleteBranch).toBeDefined()
+        await harness.forge.pushBranch(harness.workspacePath, harness.head)
+        await harness.forge.deleteBranch!(harness.workspacePath, harness.head)
+        await expect(harness.controls.remoteHead(harness.head)).rejects.toThrow()
+        await harness.forge.deleteBranch!(harness.workspacePath, harness.head)
+      })
+    })
+
     test('commentOnPr delivers the exact unique body', async () => {
       await withForge(factory, undefined, async (harness) => {
         const { pr } = await pushAndOpen(harness)

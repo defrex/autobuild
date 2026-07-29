@@ -201,11 +201,19 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     return appendCommand(opts.store, opts.slug, user, 'discard')
   }
 
+  if (opts.action.kind === 'abort') {
+    if (state.status !== 'queued') activeState(opts.slug, state)
+    const existing = events.findLast((event) => event.type === 'build.abort-requested')
+    if (existing !== undefined) {
+      return { kind: 'command', slug: opts.slug, command: 'abort', event: existing }
+    }
+    return appendCommand(opts.store, opts.slug, user, 'abort')
+  }
+
   activeState(opts.slug, state)
   switch (opts.action.kind) {
     case 'pause':
     case 'resume':
-    case 'abort':
     case 'auto-merge-on':
     case 'auto-merge-off':
       return appendCommand(opts.store, opts.slug, user, opts.action.kind)

@@ -80,6 +80,15 @@ function startOpts(overrides: Partial<AgentStartOpts> = {}): AgentStartOpts {
   }
 }
 
+function waitForContractAbort(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal === undefined) return reject(new Error('contract CLI received no AbortSignal'))
+    const abort = () => reject(signal.reason ?? new Error('contract CLI aborted'))
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 const codexContractFactory: AgentRunnerContractFactory = (scenario) => {
   const calls: CodexCliInvocation[] = []
   const runCli: CodexCliRunFn = async (call) => {
@@ -87,6 +96,12 @@ const codexContractFactory: AgentRunnerContractFactory = (scenario) => {
     const prompt = promptOf(call)
     if (prompt === CONTRACT_ONE_SHOT_PROMPT) {
       return output([thread('one-shot'), message(CONTRACT_ONE_SHOT_TEXT), completed(2, 1)])
+    }
+    if (
+      scenario === 'cancel-start' ||
+      (scenario === 'cancel-continue' && prompt === CONTRACT_FOLLOW_UP)
+    ) {
+      return waitForContractAbort(call.signal)
     }
     if (scenario === 'retryable-failure') {
       return output([

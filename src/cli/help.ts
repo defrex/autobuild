@@ -227,13 +227,17 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
   {
     name: 'abort',
     audience: 'human',
-    summary: 'Request that an active build abort.',
+    summary: 'Request that a non-terminal build abort and be cleaned up.',
     detail: page([
       'Usage:',
       '  ab abort <slug> [--store <ref>]',
       '',
-      'Durably request that an active build abort. --store overrides the BuildStore',
-      'path or URL. This command is sessionless; a phase may not control its own build.',
+      'Durably request that a queued, running, paused, or blocked build abort. The live',
+      'agent turn is cancelled promptly; dispatcher cleanup closes any unmerged PR,',
+      'removes the workspace and local/remote branches, labels the ticket',
+      'autobuild:aborted, and returns it to triage. Cleanup is asynchronous and retry-safe.',
+      '--store overrides the BuildStore path or URL. This command is sessionless; a phase',
+      'may not control its own build.',
     ]),
   },
   {

@@ -246,7 +246,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       opts?.env !== undefined
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
         : state.opts
-    const turn = await this.runTurn(message, turnOpts, state.nativeThreadId)
+    const turn = await this.runTurn(message, turnOpts, state.nativeThreadId, opts?.signal)
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
@@ -291,7 +291,12 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     return state
   }
 
-  private runTurn(prompt: string, opts: AgentStartOpts, resume?: string): Promise<CodexTurn> {
+  private runTurn(
+    prompt: string,
+    opts: AgentStartOpts,
+    resume?: string,
+    signal: AbortSignal | undefined = opts.signal,
+  ): Promise<CodexTurn> {
     const args = ['exec']
     if (resume !== undefined) args.push('resume')
     args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--config', SHELL_ENV_INHERIT)
@@ -302,6 +307,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       args,
       cwd: opts.workspacePath,
       env: sessionEnv(opts.env),
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 
