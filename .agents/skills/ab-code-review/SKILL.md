@@ -28,15 +28,6 @@ goes nowhere.
      author's assumption.
    - **Spec conformance** — every acceptance criterion met; nothing beyond
      the spec's scope smuggled in.
-   - **Documentation accuracy** — on every round, use the diff and the
-     behavior or seams it touches to identify and read only the relevant
-     sections of `README.md`, `SPEC.md`, and files under `docs/**`, rather than
-     rereading the full documentation corpus. If the reviewed change leaves
-     any of those sections stale or inaccurate, raise a normal concrete
-     finding and choose `blocking`, `important`, or `minor` by impact so the
-     documentation is corrected in this build. A discrepancy that predates
-     and was not caused by the reviewed change is out of scope: record it with
-     `ab observe`, never as a finding.
    - **Tests** — do the new tests exercise the seams this change created or
      moved? Would they fail if the change were wrong?
    - **Fit** — matches the codebase's idioms; no needless indirection.

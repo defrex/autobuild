@@ -85,11 +85,8 @@ Every module must default-export one strict `AutobuildPluginManifest`:
   `[tickets]` fields, workspace providers receive `[workspace.config]`, and
   runtime and forge factories currently receive an empty `config` object.
 
-Add the module specifier at the TOML root, before any table. Repository-path
-specifiers resolve from the config-bearing root, which is the immutable build
-worktree in scoped phases. npm package specifiers resolve from the consuming
-main checkout's installed dependencies, independent of local store/worktree
-placement; missing packages fail and are never installed automatically:
+Add the module specifier at the TOML root, before any table. Relative paths and
+npm package specifiers resolve from the consuming repository:
 
 ```toml
 plugins = ["./autobuild-plugin.ts"]
@@ -99,6 +96,11 @@ forge = "acme"
 source = "file"
 readyState = "ready"
 ```
+
+Each configured specifier string must be unique. An exact repeat fails config
+validation before Bun resolves or evaluates any plugin, identifies the repeated
+value and both list positions, and tells the operator to remove or deduplicate
+the entry. Distinct specifiers remain separate declarations.
 
 Select only the adapters the repository uses. Set `forge = "acme"` for the
 example forge above; set `[tickets].source`, `[workspace].provider`, or a
@@ -110,7 +112,8 @@ under the open `[workspace.config]` table.
 Plugin modules load in declaration order. Resolution/evaluation failure, a
 missing or malformed default export, incompatible API range, or collision
 fails before claims/builds. Builtin and earlier-plugin names cannot be
-shadowed within one port; the same adapter name may exist on different ports.
+shadowed within one port; a collision between distinct plugins identifies the
+adapter and both owners. The same adapter name may exist on different ports.
 Registration is atomic per manifest. Plugins are trusted like configured shell
 commands: Bun evaluates them in-process with repository authority and no
 sandbox.
