@@ -37,6 +37,7 @@ import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
 import { abTicket } from './ticket'
 import { abUpgrade, type ResolveConflict } from './upgrade'
+import { withUpgradeProgress } from './upgrade-progress'
 import { formatInstalledVersion, readDistributionIdentity } from './installation'
 import {
   selfUpdate,
@@ -133,10 +134,10 @@ export interface SessionlessCliDeps {
   /** Stop signal for long-running sessionless commands (`ab dispatch`'s watch
    * loop); the binary aborts it on SIGINT. */
   signal?: AbortSignal
-  /** Interactive output seam for `ab dispatch`'s dashboard (§14). Absent ⇒
+  /** Interactive output seam for live dispatch and upgrade rendering. Absent ⇒
    * non-interactive ⇒ plain, line-oriented output. */
   terminal?: TerminalOut
-  /** Raw keyboard seam for the interactive dispatch dashboard. */
+  /** Raw keyboard seam for interactive dispatch and upgrade controls. */
   input?: TerminalInput
   /** True only when both stdin and stdout are interactive terminals. */
   initInteractive?: boolean
@@ -386,7 +387,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const resolveConflict: ResolveConflict | undefined =
         resolverFactory === undefined
           ? undefined
-          : async (input) => {
+          : async (input, options) => {
               // Factory/config/runtime work is lazy: a clean upgrade never
               // needs agent infrastructure. Throws are caught per skill by
               // abUpgrade and become the byte-preserving conflicted outcome.
@@ -394,14 +395,21 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                 targetRepo,
                 env: deps.processEnv ?? {},
               })
-              return resolver(input)
+              return resolver(input, options)
             }
+      const progressResolver =
+        resolveConflict === undefined || deps.terminal === undefined
+          ? resolveConflict
+          : withUpgradeProgress(resolveConflict, {
+              terminal: deps.terminal,
+              input: deps.input ?? { start: () => () => {} },
+            })
       const report = await abUpgrade({
         targetRepo,
         stdout,
         ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
         ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
-        ...(resolveConflict !== undefined ? { resolveConflict } : {}),
+        ...(progressResolver !== undefined ? { resolveConflict: progressResolver } : {}),
       })
       return report.exitCode
     }

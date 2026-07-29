@@ -5,7 +5,12 @@ import type { OneShotCompletion, OneShotCompletionInput } from '../ports/runner/
 import type { ProductionRuntimes } from '../ports/runner/production'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { createPluginRegistry } from '../plugins/registry'
-import { createUpgradeAgentResolver, UPGRADE_CONFLICT_DECLINE } from './upgrade-agent'
+import {
+  createUpgradeAgentResolver,
+  DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS,
+  UPGRADE_CONFLICT_DECLINE,
+} from './upgrade-agent'
+import { UPGRADE_RESOLUTION_CANCELLED_MESSAGE } from './upgrade'
 
 const INPUT = {
   skill: 'ab-plan',
@@ -37,6 +42,10 @@ function registration(
 }
 
 describe('createUpgradeAgentResolver', () => {
+  test('the production per-file deadline is at least ten minutes', () => {
+    expect(DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS).toBeGreaterThanOrEqual(600_000)
+  })
+
   test('loads lazily and propagates exact versions, local bias, cwd, env, and inherited role model', async () => {
     const calls: OneShotCompletionInput[] = []
     let loads = 0
@@ -266,6 +275,70 @@ describe('createUpgradeAgentResolver', () => {
     )
     expect(signal).toBeInstanceOf(AbortSignal)
     expect(signal?.aborted).toBe(true)
+  })
+
+  test('caller cancellation aborts the active one-shot and reports human cancellation', async () => {
+    let signal: AbortSignal | undefined
+    const resolve = createUpgradeAgentResolver({
+      targetRepo: '/repo',
+      env: {},
+      load: async () => config('[roles.default]\nruntime = "alpha"\n'),
+      runtimeFactory: () => ({
+        runtimes: {
+          alpha: registration(
+            {
+              complete: (input) => {
+                signal = input.signal
+                return new Promise(() => {})
+              },
+            },
+            ['alpha-'],
+          ),
+        },
+      }),
+    })
+    const controller = new AbortController()
+    const pending = resolve(INPUT, { signal: controller.signal })
+    while (signal === undefined) await Promise.resolve()
+
+    controller.abort()
+
+    await expect(pending).rejects.toThrow(UPGRADE_RESOLUTION_CANCELLED_MESSAGE)
+    expect(signal.aborted).toBe(true)
+  })
+
+  test('cancellation during lazy setup prevents a one-shot invocation', async () => {
+    let finishLoad!: (value: ReturnType<typeof config>) => void
+    const loading = new Promise<ReturnType<typeof config>>((resolve) => {
+      finishLoad = resolve
+    })
+    let completions = 0
+    const resolve = createUpgradeAgentResolver({
+      targetRepo: '/repo',
+      env: {},
+      load: async () => loading,
+      runtimeFactory: () => ({
+        runtimes: {
+          alpha: registration(
+            {
+              complete: async () => {
+                completions += 1
+                return { text: 'too late' }
+              },
+            },
+            ['alpha-'],
+          ),
+        },
+      }),
+    })
+    const controller = new AbortController()
+    const pending = resolve(INPUT, { signal: controller.signal })
+    controller.abort()
+
+    await expect(pending).rejects.toThrow(UPGRADE_RESOLUTION_CANCELLED_MESSAGE)
+    finishLoad(config('[roles.default]\nruntime = "alpha"\n'))
+    await Promise.resolve()
+    expect(completions).toBe(0)
   })
 
   test('missing one-shot capability and completion failures surface to the upgrade engine', async () => {

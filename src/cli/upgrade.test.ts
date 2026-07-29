@@ -26,6 +26,7 @@ import {
 import { parseConfig } from '../config/load'
 import { runCli } from './main'
 import { abUpgrade } from './upgrade'
+import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 
 const BODY = [
   '# alpha',
@@ -967,6 +968,96 @@ describe('runCli routing — ab upgrade outside a session', () => {
       expect(await readFile(installedSkillPath(repo, 'ab-plan'), 'utf8')).toBe(fixture.local)
       expect(await readFile(pristineSkillPath(repo, 'ab-plan'), 'utf8')).toBe(fixture.base)
     }
+  })
+
+  test('interactive Ctrl-C cancels one file byte-safely and continues to a later skill', async () => {
+    const repo = join(root, 'cli-cancel')
+    const oldDist = join(root, 'cancel-old')
+    const nextDist = join(root, 'cancel-next')
+    await mkdir(repo, { recursive: true })
+    await writeDist(oldDist, { alpha: BODY, beta: BODY.replace('# alpha', '# beta') })
+    await abInit({ targetRepo: repo, distRoot: oldDist })
+
+    const locals = new Map<string, string>()
+    const pristineBefore = new Map<string, string>()
+    for (const skill of ['ab-alpha', 'ab-beta']) {
+      const live = installedSkillPath(repo, skill)
+      const pristine = pristineSkillPath(repo, skill)
+      const local = (await readFile(live, 'utf8')).replace(
+        'middle line two',
+        'middle line two (local)',
+      )
+      await writeFile(live, local)
+      locals.set(skill, local)
+      pristineBefore.set(skill, await readFile(pristine, 'utf8'))
+    }
+    await writeDist(nextDist, {
+      alpha: BODY.replace('middle line two', 'middle line two (incoming)'),
+      beta: BODY.replace('# alpha', '# beta').replace(
+        'middle line two',
+        'middle line two (incoming)',
+      ),
+    })
+
+    let handler: ((event: TerminalInputEvent) => void) | undefined
+    const input: TerminalInput & { starts: number; cleanups: number } = {
+      starts: 0,
+      cleanups: 0,
+      start(onInput): () => void {
+        input.starts += 1
+        handler = onInput
+        return () => {
+          input.cleanups += 1
+          handler = undefined
+        }
+      },
+    }
+    const raw: string[] = []
+    const terminal: TerminalOut = {
+      interactive: true,
+      columns: 100,
+      rows: 24,
+      write: (chunk) => raw.push(chunk),
+    }
+    const calls: string[] = []
+    let cancelledSignal: AbortSignal | undefined
+    const out: string[] = []
+    const code = await runCli(['upgrade', repo, '--no-self-update'], {
+      workspacePath: repo,
+      distributionRoot: nextDist,
+      terminal,
+      input,
+      upgradeResolverFactory: () => async (conflict, options) => {
+        calls.push(conflict.skill)
+        if (conflict.skill === 'ab-alpha') {
+          cancelledSignal = options?.signal
+          queueMicrotask(() => handler?.({ type: 'interrupt' }))
+          return new Promise(() => {})
+        }
+        return locals.get(conflict.skill)!
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+
+    expect(code).toBe(0)
+    expect(calls).toEqual(['ab-alpha', 'ab-beta'])
+    expect(cancelledSignal?.aborted).toBe(true)
+    expect(out[0]).toContain(
+      'ab-alpha: conflicted — agent resolution failed: upgrade conflict resolution cancelled by human',
+    )
+    expect(out[1]).toBe('ab-beta: resolved')
+    expect(await readFile(installedSkillPath(repo, 'ab-alpha'), 'utf8')).toBe(
+      locals.get('ab-alpha')!,
+    )
+    expect(await readFile(pristineSkillPath(repo, 'ab-alpha'), 'utf8')).toBe(
+      pristineBefore.get('ab-alpha')!,
+    )
+    expect(await readFile(installedSkillPath(repo, 'ab-beta'), 'utf8')).toBe(locals.get('ab-beta')!)
+    expect(input.starts).toBe(2)
+    expect(input.cleanups).toBe(2)
+    expect(raw.join('')).toContain('Resolving ab-alpha/SKILL.md')
+    expect(raw.join('')).toContain('Resolving ab-beta/SKILL.md')
   })
 
   test('ab upgrade <target> works with no store/env deps and prints per-skill lines', async () => {

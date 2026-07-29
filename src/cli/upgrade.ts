@@ -82,14 +82,31 @@ export interface UpgradeReport {
  * CUSTOMIZATION — adopt upstream only where it doesn't collide with what
  * the repo deliberately changed.
  */
-export type ResolveConflict = (input: {
-  skill: string
-  /** POSIX-style path relative to the installed skill directory. */
-  path: string
-  base: string
-  local: string
-  incoming: string
-}) => Promise<string | null>
+export interface ResolveConflictOptions {
+  /** Per-file caller cancellation. A cancelled proposal must never be applied. */
+  signal?: AbortSignal
+}
+
+export const UPGRADE_RESOLUTION_CANCELLED_MESSAGE = 'upgrade conflict resolution cancelled by human'
+
+export class UpgradeResolutionCancelledError extends Error {
+  constructor() {
+    super(UPGRADE_RESOLUTION_CANCELLED_MESSAGE)
+    this.name = 'UpgradeResolutionCancelledError'
+  }
+}
+
+export type ResolveConflict = (
+  input: {
+    skill: string
+    /** POSIX-style path relative to the installed skill directory. */
+    path: string
+    base: string
+    local: string
+    incoming: string
+  },
+  options?: ResolveConflictOptions,
+) => Promise<string | null>
 
 export interface MergeConflictLabels {
   local: string

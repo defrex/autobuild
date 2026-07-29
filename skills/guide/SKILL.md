@@ -612,9 +612,19 @@ Outcomes:
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
-The agent runs under a fixed caller-owned deadline, and its output is only an
-untrusted proposal. Each merge uses unguessable labels so marker-looking skill
-content cannot impersonate that merge's structure. `ab upgrade` requires a
+The agent gets a fixed per-file deadline of at least ten minutes. While it is
+resolving and stdout is interactive, `ab upgrade` continuously redraws one line
+with the skill and file path, elapsed time, and `Ctrl-C to cancel`. Ctrl-C then
+aborts only that agent invocation, records the file as the usual byte-preserving
+`conflicted` outcome, and continues through later files and skills. Ctrl-C when
+no resolution is active retains ordinary process termination. Piped and other
+non-TTY output has no indicator, cursor sequences, or changed bytes. Timeouts
+and cancellations remain content conflicts with exit zero; only Claude
+discovery conflicts make upgrade exit nonzero.
+
+The agent output is only an untrusted proposal. Each merge uses unguessable
+labels so marker-looking skill content cannot impersonate that merge's
+structure. `ab upgrade` requires a
 complete file with every region outside the uniquely labelled conflict hunks
 unchanged and in order; `SKILL.md` additionally requires the same namespaced
 frontmatter identity. Standard marker lines are rejected in agent-authored hunk
