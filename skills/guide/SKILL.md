@@ -724,9 +724,14 @@ terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Auto Build` summary with the repository
-basename, queue depth, and active-build count, followed by an indented controls
-line for `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and
-`harvest ON`/`harvest OFF`. The controls start in the title column. From the top
+basename followed by the compact counters
+`queue <depth> | active <current>/<limit> | obs <current>/<limit>`.
+`queue` is the ready-ticket queue depth; `active` is the current
+nonterminal-build count against root `capacity`; and `obs` is the current count
+of recorded observation occurrences not yet claimed by a Harvest snapshot
+against `[policy].harvestThreshold`. An indented controls line follows for
+`intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
+ON`/`harvest OFF`. The controls start in the title column. From the top
 of the frame through the body, the two-column marker lane stays empty except for
 the selected row's `> ` marker. All three controls are durable repository
 projections and converge across dispatchers on the existing poll; harvest
