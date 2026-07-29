@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#127](https://github.com/defrex/autobuild/pull/127) — Add complete dashboard abort cleanup
 - [#125](https://github.com/defrex/autobuild/pull/125) — Exercise Codex slug naming in integration
 - [#124](https://github.com/defrex/autobuild/pull/124) — Document dispatch dashboard pressure counters
 - [#123](https://github.com/defrex/autobuild/pull/123) — Synchronize installed plugin resolution guidance
