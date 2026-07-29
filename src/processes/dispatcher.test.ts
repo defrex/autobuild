@@ -2078,6 +2078,137 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.transitions).toHaveLength(1)
   })
 
+  test('per-build poll failures do not stop sibling janitor work, lease sweep, dispatch, or retry', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-ready')],
+      toml: 'capacity = 10\n',
+    })
+    const failedA = await seedBuild(h, {
+      slug: 'poll-failed-a',
+      pr: { ...PR, number: 91 },
+    })
+    const failedB = await seedBuild(h, {
+      slug: 'poll-failed-b',
+      pr: { ...PR, number: 92 },
+    })
+    const merged = await seedBuild(h, {
+      slug: 'merged-sibling',
+      pr: { ...PR, number: 93 },
+    })
+    const stale = await seedBuild(h, { slug: 'stale-runner' })
+    h.forge.setPrState(91, { state: 'merged', sha: 'squash-a' })
+    h.forge.setPrState(92, { state: 'merged', sha: 'squash-b' })
+    h.forge.setPrState(93, { state: 'merged', sha: 'squash-sibling' })
+
+    const failedPolls = new Set([91, 92])
+    const pollCounts = new Map<number, number>()
+    const getPrState = h.forge.getPrState.bind(h.forge)
+    h.forge.getPrState = async (workspacePath, number) => {
+      pollCounts.set(number, (pollCounts.get(number) ?? 0) + 1)
+      if (failedPolls.has(number)) throw new Error(`forge poll unavailable for PR #${number}`)
+      return getPrState(workspacePath, number)
+    }
+    const failedABefore = await h.store.getEvents(failedA)
+    const failedBBefore = await h.store.getEvents(failedB)
+    await h.store.claimLease(failedA, 'poll-a-live', 60_000)
+    await h.store.claimLease(failedB, 'poll-b-live', 60_000)
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      merged: 1,
+      swept: 1,
+      dispatched: 1,
+      janitorFailed: 2,
+      janitorDiagnostics: [
+        'build poll-failed-a: janitor failed — forge poll unavailable for PR #91',
+        'build poll-failed-b: janitor failed — forge poll unavailable for PR #92',
+      ],
+    })
+    expect(reduceBuild(await h.store.getEvents(merged)).status).toBe('done')
+    expect(h.launches).toEqual([stale, 'add-rate-limiting'])
+    expect((await h.store.listBuilds()).some((record) => record.ticket?.id === 'T-ready')).toBe(
+      true,
+    )
+    expect(await h.store.getEvents(failedA)).toEqual(failedABefore)
+    expect(await h.store.getEvents(failedB)).toEqual(failedBBefore)
+    expect(reduceBuild(await h.store.getEvents(failedA)).status).not.toBe('done')
+
+    // Materialize the fake launch boundary and keep both launched runners out
+    // of later recovery/sweeps, so the next report isolates janitor retries.
+    await h.store.append('add-rate-limiting', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'new-runner', host: 'local' },
+    })
+    await h.store.claimLease(stale, 'stale-live', 60_000)
+    await h.store.claimLease('add-rate-limiting', 'new-live', 60_000)
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      janitorFailed: 2,
+      janitorDiagnostics: [
+        'build poll-failed-a: janitor failed — forge poll unavailable for PR #91',
+        'build poll-failed-b: janitor failed — forge poll unavailable for PR #92',
+      ],
+    })
+    expect(pollCounts.get(91)).toBe(2)
+    expect(pollCounts.get(92)).toBe(2)
+
+    failedPolls.clear()
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 2 })
+    expect(reduceBuild(await h.store.getEvents(failedA)).status).toBe('done')
+    expect(reduceBuild(await h.store.getEvents(failedB)).status).toBe('done')
+  })
+
+  test('ticket comment failure is attributed and leaves partial merged facts retryable', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-bad', { labels: [] }), readyTicket('T-good', { labels: [] })],
+    })
+    const failed = await seedBuild(h, {
+      slug: 'ticket-outage',
+      ticketId: 'T-bad',
+      pr: { ...PR, number: 11 },
+    })
+    const sibling = await seedBuild(h, {
+      slug: 'ticket-healthy',
+      ticketId: 'T-good',
+      pr: { ...PR, number: 12 },
+    })
+    h.forge.setPrState(11, { state: 'merged', sha: 'squash-bad' })
+    h.forge.setPrState(12, { state: 'merged', sha: 'squash-good' })
+    await h.store.claimLease(failed, 'ticket-outage-live', 60_000)
+    const comment = h.tickets.comment.bind(h.tickets)
+    let outage = true
+    h.tickets.comment = async (id, body) => {
+      if (id === 'T-bad' && outage) {
+        outage = false
+        throw new Error('ticket comment unavailable')
+      }
+      return comment(id, body)
+    }
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      merged: 1,
+      janitorFailed: 1,
+      janitorDiagnostics: ['build ticket-outage: janitor failed — ticket comment unavailable'],
+    })
+    expect(reduceBuild(await h.store.getEvents(sibling)).status).toBe('done')
+    const partial = await h.store.getEvents(failed)
+    expect(partial.map((event) => event.type)).toContain('pr.merged')
+    expect(partial.map((event) => event.type)).toContain('workspace.released')
+    expect(partial.map((event) => event.type)).not.toContain('build.completed')
+    expect(h.tickets.transitions.filter((entry) => entry.id === 'T-bad')).toEqual([
+      { id: 'T-bad', state: 'Done' },
+    ])
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+    expect(reduceBuild(await h.store.getEvents(failed)).status).toBe('done')
+    expect(h.tickets.transitions.filter((entry) => entry.id === 'T-bad')).toHaveLength(2)
+    expect(
+      h.workspaces.releases.filter((release) => release.branch === `ab/${failed}`),
+    ).toHaveLength(1)
+  })
+
   test('closed PR: closed-unmerged outcome, back to Triage', async () => {
     const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
     const slug = await seedBuild(h, { ticketId: 'T-1', pr: PR })
@@ -2244,7 +2375,11 @@ describe('Dispatcher janitor', () => {
       return realSet(...args)
     }
 
-    await expect(h.dispatcher.tick()).rejects.toThrow('forge temporarily unavailable')
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      janitorFailed: 1,
+      janitorDiagnostics: [`build ${slug}: janitor failed — forge temporarily unavailable`],
+    })
     expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.auto-merge-enabled')).toBe(
       false,
     )
@@ -2456,7 +2591,11 @@ describe('Dispatcher janitor', () => {
       return result
     }
 
-    await expect(h.dispatcher.tick()).rejects.toThrow('head changed')
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      janitorFailed: 1,
+      janitorDiagnostics: [expect.stringContaining(`build ${slug}: janitor failed —`)],
+    })
     expect(h.forge.squashMergeCalls).toEqual([])
     expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.merged')).toBe(false)
   })
@@ -2800,7 +2939,9 @@ describe('Dispatcher janitor', () => {
     // janitor skipped the build forever — the aborted ticket silently never
     // returned to Triage (D1). Ticket ops must precede the terminal event,
     // exactly as the merged/closed paths order them.
-    const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
+    const h = harness({
+      tickets: [readyTicket('T-1', { labels: [], state: 'In Progress' })],
+    })
     const slug = await seedBuild(h, { ticketId: 'T-1' })
     await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
@@ -2814,7 +2955,11 @@ describe('Dispatcher janitor', () => {
       return realTransition(id, state)
     }
 
-    await expect(h.dispatcher.tick()).rejects.toThrow('ticket source outage')
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      janitorFailed: 1,
+      janitorDiagnostics: [`build ${slug}: janitor failed — ticket source outage`],
+    })
     // The terminal event did NOT land: the build still reduces to 'aborted',
     // so the next tick re-runs the whole cleanup (workspace release is
     // log-deduped) instead of stranding the ticket.

@@ -245,6 +245,10 @@ export interface TickReport {
   abandoned: number
   /** Janitor: queued builds explicitly discarded and returned to Ready. */
   discarded: number
+  /** Janitor failures contained to individual builds during this pass. */
+  janitorFailed: number
+  /** One actionable line per contained janitor failure, attributed by slug. */
+  janitorDiagnostics: string[]
   /** Ordinary-tick recovery completed an interrupted post-creation dispatch. */
   recovered: number
   /** Post-creation dispatch attempts that durably recorded a failure. */
@@ -293,6 +297,8 @@ export function emptyTickReport(): TickReport {
     conflicted: 0,
     abandoned: 0,
     discarded: 0,
+    janitorFailed: 0,
+    janitorDiagnostics: [],
     recovered: 0,
     dispatchFailed: 0,
     resumed: 0,
@@ -513,32 +519,44 @@ export class Dispatcher {
   // ── a. Janitor (SPEC §15.7, D1) ────────────────────────────────────────────
 
   private async janitor(report: TickReport, launched: Set<string>): Promise<void> {
-    for (const record of await this.deps.store.listBuilds()) {
+    // Listing is repository-wide work: if it fails there is no individual
+    // build to attribute, so the caller's existing top-level boundary owns it.
+    const records = await this.deps.store.listBuilds()
+    for (const record of records) {
       // One dispatcher per repo (§12), but the store is shared by design
       // (§7.2) — another repo's builds are another dispatcher's duty. Acting
       // on them would poll foreign PRs and break single-writer discipline.
       if (record.repo !== this.deps.repo) continue
-      const events = await this.deps.store.getEvents(record.slug)
-      const state = reduceBuild(events)
-      // Pipeline/ticket/workspace state is settled, but release-asset cleanup
-      // has its own crash window after build.completed. Revisit only pending
-      // hosted handles; this never relaunches a runner or consumes capacity.
-      if (state.status === 'done') {
-        await this.reclaimPrAttachments(record.slug, events)
-        continue
+      try {
+        // Once a record is known, contain its complete janitor path: loading
+        // and reducing facts, cleanup, forge/ticket calls, and store writes.
+        // Existing partial facts leave the same work due on the next tick.
+        const events = await this.deps.store.getEvents(record.slug)
+        const state = reduceBuild(events)
+        // Pipeline/ticket/workspace state is settled, but release-asset cleanup
+        // has its own crash window after build.completed. Revisit only pending
+        // hosted handles; this never relaunches a runner or consumes capacity.
+        if (state.status === 'done') {
+          await this.reclaimPrAttachments(record.slug, events)
+          continue
+        }
+        // Discard is a queued-only recovery control. A request that raced with
+        // runner attachment is deliberately inert: it must never tear a live
+        // runner's workspace down or return its ticket for a duplicate build.
+        if (state.status === 'queued' && state.discardRequest !== undefined) {
+          await this.cleanupDiscarded(record, events, report)
+          continue
+        }
+        if (state.status === 'aborted') {
+          await this.cleanupAborted(record, events, report)
+          continue
+        }
+        if (state.pr) await this.checkPr(record, events, state, report, launched)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        report.janitorFailed += 1
+        report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
       }
-      // Discard is a queued-only recovery control. A request that raced with
-      // runner attachment is deliberately inert: it must never tear a live
-      // runner's workspace down or return its ticket for a duplicate build.
-      if (state.status === 'queued' && state.discardRequest !== undefined) {
-        await this.cleanupDiscarded(record, events, report)
-        continue
-      }
-      if (state.status === 'aborted') {
-        await this.cleanupAborted(record, events, report)
-        continue
-      }
-      if (state.pr) await this.checkPr(record, events, state, report, launched)
     }
   }
 
