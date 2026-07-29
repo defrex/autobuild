@@ -337,7 +337,7 @@ describe('controlBuild — shared durable controls', () => {
     await running.close()
   })
 
-  test('rejects missing, cross-repository, inactive, and unblocked targets', async () => {
+  test('rejects missing, cross-repository, and unblocked targets while abort accepts queued', async () => {
     const store = await makeStore()
     await expect(
       controlBuild({
@@ -368,15 +368,15 @@ describe('controlBuild — shared durable controls', () => {
     ).rejects.toMatchObject({ code: 'no-open-escalations' })
 
     const queued = await makeStore({ active: false })
-    await expect(
-      controlBuild({
+    expect(
+      await controlBuild({
         store: queued,
         repo: REPO,
         slug: SLUG,
         env: {},
         action: { kind: 'abort' },
       }),
-    ).rejects.toThrow(/not active \(status: queued\)/)
+    ).toMatchObject({ kind: 'command', command: 'abort' })
     await store.close()
     await queued.close()
   })

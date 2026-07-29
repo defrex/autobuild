@@ -130,6 +130,7 @@ type DashboardAction =
   | 'intake'
   | 'pause'
   | 'discard'
+  | 'abort-confirm'
   | 'harvest-gate'
   | { kind: 'harvest-run'; run: string | undefined }
 
@@ -364,6 +365,8 @@ class DispatchLoop {
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
   private resumeSubmitting = false
+  /** First `a` captures identity only; Enter performs the shared control. */
+  private abortConfirmation: { slug: string } | undefined
   /** One queue defines order between ticks and mutating keys. */
   private operationTail: Promise<void> = Promise.resolve()
   private acceptingKeys = false
@@ -476,6 +479,7 @@ class DispatchLoop {
       selection: _oldSelection,
       warningLine: _oldWarningLine,
       resumeInput: _oldResumeInput,
+      abortConfirmation: _oldAbortConfirmation,
       view: _oldView,
       ...base
     } = this.model
@@ -490,6 +494,9 @@ class DispatchLoop {
               value: this.resumePrompt.value,
             },
           }
+        : {}),
+      ...(this.abortConfirmation !== undefined
+        ? { abortConfirmation: this.abortConfirmation }
         : {}),
       ...(this.view !== undefined ? { view: this.view } : {}),
     }
@@ -618,6 +625,30 @@ class DispatchLoop {
     }
     this.say(`build ${slug}: ${result.command} requested`)
     await this.renderOnce()
+  }
+
+  private async abortConfirmed(): Promise<void> {
+    const confirmation = this.abortConfirmation
+    if (confirmation === undefined) return
+    this.abortConfirmation = undefined
+    this.syncModelControls()
+    try {
+      const result = await controlBuild({
+        store: this.wiring.store,
+        repo: this.opts.targetRepo,
+        slug: confirmation.slug,
+        env: this.opts.env,
+        action: { kind: 'abort' },
+      })
+      if (result.kind !== 'command' || result.command !== 'abort') {
+        throw new Error('build-control returned an invalid abort result')
+      }
+      this.say(`build ${confirmation.slug}: abort requested`)
+      await this.renderOnce()
+    } catch (error) {
+      if (await this.ignoreControlError('action', error)) return
+      throw error
+    }
   }
 
   private async discardSelected(): Promise<void> {
@@ -928,6 +959,9 @@ class DispatchLoop {
       case 'discard':
         await this.discardSelected()
         return
+      case 'abort-confirm':
+        await this.abortConfirmed()
+        return
       case 'harvest-gate':
         await this.toggleHarvestGate()
         return
@@ -1000,6 +1034,15 @@ class DispatchLoop {
       this.handleResumeInput(input)
       return
     }
+    if (this.abortConfirmation !== undefined) {
+      if (input.type === 'enter') this.queueAction('abort-confirm')
+      else if (input.type === 'escape') {
+        this.abortConfirmation = undefined
+        this.syncModelControls()
+        this.paint()
+      }
+      return
+    }
 
     if (input.type === 'up' || input.type === 'down') {
       this.queueAction(input.type)
@@ -1035,6 +1078,17 @@ class DispatchLoop {
           this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
         const build = this.model?.builds.find((candidate) => candidate.slug === slug)
         if (build?.status === 'queued') this.queueAction('discard')
+        return
+      }
+      case 'a': {
+        if (this.view?.kind === 'transcript') return
+        const slug =
+          this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
+        const build = this.model?.builds.find((candidate) => candidate.slug === slug)
+        if (build === undefined) return
+        this.abortConfirmation = { slug: build.slug }
+        this.syncModelControls()
+        this.paint()
         return
       }
       case 'h':
@@ -1349,6 +1403,15 @@ class DispatchLoop {
         this.resumePrompt = undefined
       } else if (remaining.length !== prompt.escalationIds.length) {
         this.resumePrompt = { ...prompt, escalationIds: remaining }
+      }
+    }
+    if (this.abortConfirmation !== undefined) {
+      const state = buildSnapshot.states.get(this.abortConfirmation.slug)
+      if (
+        state === undefined ||
+        !['queued', 'running', 'paused', 'blocked'].includes(state.status)
+      ) {
+        this.abortConfirmation = undefined
       }
     }
 

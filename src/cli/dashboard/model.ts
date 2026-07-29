@@ -163,6 +163,10 @@ export interface ResumeInputView {
   value: string
 }
 
+export interface AbortConfirmationView {
+  /** Captured build identity; confirmation never retargets after re-sorting. */
+  slug: string
+}
 export interface DashboardCounter {
   current: number
   limit: number
@@ -190,6 +194,8 @@ export interface DashboardModel {
   warningLine?: string
   /** Ephemeral blocked-resume field; never derived from or stored in events. */
   resumeInput?: ResumeInputView
+  /** Ephemeral destructive-action confirmation; the first `a` writes nothing. */
+  abortConfirmation?: AbortConfirmationView
   /** Nested read-only dashboard mode. Omission is the byte-stable list view. */
   view?: DashboardView
   builds: DashboardBuild[]

@@ -244,7 +244,9 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       },
       WIDE,
     )
-    expect(buildLines.at(-1)).toBe(' Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit')
+    expect(buildLines.at(-1)).toBe(
+      ' Keys: Up/Down select  m auto-merge  p pause  a abort  Ctrl-C quit',
+    )
     for (const controls of [
       globalLines.at(-1),
       runningHarvestLines.at(-1),
@@ -286,6 +288,20 @@ describe('renderDashboard: queued dispatch rows', () => {
     expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
     expect(text).toContain('d discard')
     expect(text).not.toContain('[ ] plan')
+  })
+})
+
+describe('renderDashboard: abort confirmation', () => {
+  test('names the destructive target and requires Enter or Escape', () => {
+    const confirming: DashboardModel = {
+      ...model([build()]),
+      selection: { kind: 'build', slug: 'auth-rate-limit' },
+      abortConfirmation: { slug: 'auth-rate-limit' },
+    }
+    const controls = rd(confirming, WIDE).at(-1)!
+    expect(controls).toContain('Abort auth-rate-limit')
+    expect(controls).toContain('Enter confirm')
+    expect(controls).toContain('Esc cancel')
   })
 })
 

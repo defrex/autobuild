@@ -431,8 +431,9 @@ export const DASHBOARD_HARVEST_LEGEND = 'Keys: Up/Down select  Ctrl-C quit'
 export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  Ctrl-C quit'
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
-export const DASHBOARD_BUILD_LEGEND = 'Keys: Up/Down select  m auto-merge  p pause  Ctrl-C quit'
-export const DASHBOARD_QUEUED_BUILD_LEGEND = 'Keys: Up/Down select  d discard  Ctrl-C quit'
+export const DASHBOARD_BUILD_LEGEND =
+  'Keys: Up/Down select  m auto-merge  p pause  a abort  Ctrl-C quit'
+export const DASHBOARD_QUEUED_BUILD_LEGEND = 'Keys: Up/Down select  d discard  a abort  Ctrl-C quit'
 
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
  * exact process state. Non-ASCII and control characters (including newlines)
@@ -568,13 +569,13 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
     )
   }
   const controls =
-    model.resumeInput !== undefined
+    model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, color, width)
       : truncate(
           paint(
             build.status === 'queued'
-              ? 'Keys: d discard  Esc back  Ctrl-C quit'
-              : 'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  Esc back  Ctrl-C quit',
+              ? 'Keys: d discard  a abort  Esc back  Ctrl-C quit'
+              : 'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  a abort  Esc back  Ctrl-C quit',
             'dim',
             color,
           ),
@@ -676,6 +677,16 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
 }
 
 function dashboardControls(model: DashboardModel, color: boolean, width: number): string {
+  if (model.abortConfirmation !== undefined) {
+    return truncate(
+      paint(
+        `Abort ${displayText(model.abortConfirmation.slug)} and delete its workspace, PR, and branches?  Enter confirm  Esc cancel`,
+        'red',
+        color,
+      ),
+      width,
+    )
+  }
   if (model.resumeInput === undefined) {
     const legend =
       model.selection?.kind === 'build'
