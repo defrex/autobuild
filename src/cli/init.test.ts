@@ -58,15 +58,18 @@ describe('agent-driven ab init', () => {
   test.each(['claude-to-agents', 'agents-to-claude'] as const)(
     'vendors every skill when the skill roots are aliased: %s',
     async (direction) => {
+      const backingRoot = join(
+        target,
+        ...(direction === 'claude-to-agents' ? ['.agents', 'skills'] : ['.claude', 'skills']),
+      )
       if (direction === 'claude-to-agents') {
-        await mkdir(join(target, '.agents', 'skills'), { recursive: true })
         await mkdir(join(target, '.claude'), { recursive: true })
         await symlink('../.agents/skills', join(target, '.claude', 'skills'), 'dir')
       } else {
-        await mkdir(join(target, '.claude', 'skills'), { recursive: true })
         await mkdir(join(target, '.agents'), { recursive: true })
         await symlink('../.claude/skills', join(target, '.agents', 'skills'), 'dir')
       }
+      expect(existsSync(backingRoot)).toBe(false)
 
       const report = await init()
 

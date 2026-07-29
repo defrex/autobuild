@@ -765,15 +765,18 @@ describe('abUpgrade — distribution vs local skill sets', () => {
   test.each(['claude-to-agents', 'agents-to-claude'] as const)(
     'fresh and repeated upgrades preserve aliased skill roots: %s',
     async (direction) => {
+      const backingRoot = join(
+        target,
+        ...(direction === 'claude-to-agents' ? ['.agents', 'skills'] : ['.claude', 'skills']),
+      )
       if (direction === 'claude-to-agents') {
-        await mkdir(join(target, '.agents', 'skills'), { recursive: true })
         await mkdir(join(target, '.claude'), { recursive: true })
         await symlink('../.agents/skills', join(target, '.claude', 'skills'), 'dir')
       } else {
-        await mkdir(join(target, '.claude', 'skills'), { recursive: true })
         await mkdir(join(target, '.agents'), { recursive: true })
         await symlink('../.claude/skills', join(target, '.agents', 'skills'), 'dir')
       }
+      expect(existsSync(backingRoot)).toBe(false)
       await writeDist(distV2, {
         alpha: BODY,
         beta: '# beta\n\nbeta body\n',

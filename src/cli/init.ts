@@ -275,6 +275,36 @@ async function sameDirectoryEntry(left: string, right: string): Promise<boolean>
   )
 }
 
+async function symlinkPointsAt(link: string, target: string): Promise<boolean> {
+  try {
+    const linkStat = await lstat(link)
+    if (!linkStat.isSymbolicLink()) return false
+    return resolve(dirname(link), await readlink(link)) === resolve(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/**
+ * Recognize a root alias even while its target is still missing, and
+ * materialize that target so later writes through either spelling succeed.
+ */
+async function prepareAliasedSkillRoots(targetRepo: string): Promise<boolean> {
+  const agentsRoot = join(targetRepo, AGENTS_SKILLS_DIR)
+  const claudeRoot = join(targetRepo, CLAUDE_SKILLS_DIR)
+  if (await sameDirectoryEntry(agentsRoot, claudeRoot)) return true
+  if (await symlinkPointsAt(claudeRoot, agentsRoot)) {
+    await mkdir(agentsRoot, { recursive: true })
+    return true
+  }
+  if (await symlinkPointsAt(agentsRoot, claudeRoot)) {
+    await mkdir(claudeRoot, { recursive: true })
+    return true
+  }
+  return false
+}
+
 /** An actionable collision with a distinct, user-owned Claude skill directory. */
 export class ClaudeSkillDiscoveryConflict extends Error {
   readonly skill: string
@@ -298,13 +328,10 @@ export async function ensureClaudeSkillLink(
 ): Promise<void> {
   const link = claudeSkillPath(targetRepo, installName)
   const target = dirname(installedSkillPath(targetRepo, installName))
-  const agentsRoot = join(targetRepo, AGENTS_SKILLS_DIR)
-  const claudeRoot = join(targetRepo, CLAUDE_SKILLS_DIR)
-
   // A repository-level alias already gives Claude the canonical tree. Check
-  // before touching a per-skill path: on a fresh upgrade that path may not yet
-  // exist, and creating it through the alias would create a self-link.
-  if (await sameDirectoryEntry(agentsRoot, claudeRoot)) return
+  // before touching a per-skill path: on a fresh upgrade its target root may
+  // not yet exist, and creating through the alias would create a self-link.
+  if (await prepareAliasedSkillRoots(targetRepo)) return
 
   await mkdir(dirname(link), { recursive: true })
 
@@ -383,6 +410,7 @@ async function moveMissingEntries(source: string, destination: string): Promise<
  * pristine merge bases move together. Safe and idempotent.
  */
 export async function migrateLegacyAgentSkills(targetRepo: string): Promise<void> {
+  await prepareAliasedSkillRoots(targetRepo)
   await moveMissingEntries(
     join(targetRepo, LEGACY_AGENT_SKILLS_DIR),
     join(targetRepo, AGENTS_SKILLS_DIR),
@@ -406,14 +434,7 @@ export async function migrateLegacySkill(
 ): Promise<string | undefined> {
   // When the roots are aliases, `.claude` is not a legacy copy: it is the
   // canonical live and pristine tree viewed through another path.
-  if (
-    await sameDirectoryEntry(
-      join(targetRepo, AGENTS_SKILLS_DIR),
-      join(targetRepo, CLAUDE_SKILLS_DIR),
-    )
-  ) {
-    return undefined
-  }
+  if (await prepareAliasedSkillRoots(targetRepo)) return undefined
 
   let migrated: string | undefined
   if ((await readIfExists(installedSkillPath(targetRepo, installName))) === undefined) {
