@@ -5,12 +5,13 @@ description: Design a feature spec-first through conversation, or flesh out an e
 
 # /ab-spec [ticket]
 
-The conversational surface over the spec standard (`docs/spec-standard.md`
-in the autobuild distribution — read it first; it defines "buildable": what
-and why but never how, verifiable acceptance criteria, explicit out-of-scope,
-evidence). This skill runs *before* a build exists, so it takes a ticket, not
-a build slug — and unlike the phase skills, it is a conversation with a
-human, not an autonomous session.
+The conversational surface over the complete
+[spec standard](../ab-guide/references/spec-standard.md) installed with
+`ab-guide` — read it first. It defines "buildable": what and why but never how,
+verifiable acceptance criteria, explicit out-of-scope, and evidence. This skill
+runs *before* a build exists, so it takes a ticket, not a build slug — and
+unlike the phase skills, it is a conversation with a human, not an autonomous
+session.
 
 ## Ticket operations
 

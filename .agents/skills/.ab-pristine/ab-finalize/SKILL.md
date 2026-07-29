@@ -23,8 +23,8 @@ never touch the forge).
    - **Verification** — which verify steps ran and what they proved; note
      anything a human should re-check by hand.
    - Follow the PR template if the context includes one.
-   Do not paste the audit trail — verdict history and links into the store
-   are appended by the kernel's summary comment (SPEC §7.5).
+   Do not paste the audit trail — the kernel's summary comment appends verdict
+   history and links into the store.
 3. Finish:
 
    ```
