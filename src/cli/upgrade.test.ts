@@ -9,7 +9,7 @@
  * real distribution only anchors init.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -761,9 +761,99 @@ describe('abUpgrade — distribution vs local skill sets', () => {
     expect(report.skills).toEqual([{ skill: 'ab-alpha', action: 'installed' }])
     expect(existsSync(pristineSkillPath(target, 'ab-alpha'))).toBe(true)
   })
+
+  test.each(['claude-to-agents', 'agents-to-claude'] as const)(
+    'fresh and repeated upgrades preserve aliased skill roots: %s',
+    async (direction) => {
+      if (direction === 'claude-to-agents') {
+        await mkdir(join(target, '.agents', 'skills'), { recursive: true })
+        await mkdir(join(target, '.claude'), { recursive: true })
+        await symlink('../.agents/skills', join(target, '.claude', 'skills'), 'dir')
+      } else {
+        await mkdir(join(target, '.claude', 'skills'), { recursive: true })
+        await mkdir(join(target, '.agents'), { recursive: true })
+        await symlink('../.claude/skills', join(target, '.agents', 'skills'), 'dir')
+      }
+      await writeDist(distV2, {
+        alpha: BODY,
+        beta: '# beta\n\nbeta body\n',
+      })
+
+      const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+      const pristineBefore = new Map(
+        await Promise.all(
+          ['ab-alpha', 'ab-beta'].map(
+            async (skill) =>
+              [skill, await readFile(pristineSkillPath(target, skill), 'utf8')] as const,
+          ),
+        ),
+      )
+      const lines: string[] = []
+      const second = await abUpgrade({
+        targetRepo: target,
+        distRoot: distV2,
+        stdout: (line) => lines.push(line),
+      })
+
+      expect(first.exitCode).toBe(0)
+      expect(first.skills.every((entry) => entry.action === 'installed')).toBe(true)
+      expect(second.exitCode).toBe(0)
+      expect(second.discoveryConflicts).toEqual([])
+      expect(lines.join('\n')).not.toContain('conflicting legacy pristine files remain')
+      for (const skill of ['ab-alpha', 'ab-beta']) {
+        expect(await readFile(pristineSkillPath(target, skill), 'utf8')).toBe(
+          pristineBefore.get(skill)!,
+        )
+        expect(await readFile(installedSkillPath(target, skill), 'utf8')).toBe(
+          await readFile(join(target, '.claude', 'skills', skill, 'SKILL.md'), 'utf8'),
+        )
+        expect((await lstat(join(target, '.claude', 'skills', skill))).isSymbolicLink()).toBe(false)
+        expect(existsSync(join(target, '.agents', 'skills', skill, skill))).toBe(false)
+      }
+    },
+  )
 })
 
 describe('runCli routing — ab upgrade outside a session', () => {
+  test('returns nonzero after reporting every discovery conflict and processing later skills', async () => {
+    await writeDist(distV2, {
+      alpha: BODY,
+      beta: '# beta\n\nbeta body\n',
+      gamma: '# gamma\n\ngamma body\n',
+    })
+    for (const [name, body] of [
+      ['alpha', BODY],
+      ['beta', '# beta\n\nbeta body\n'],
+    ] as const) {
+      const installName = `ab-${name}`
+      const canonical = installedSkillPath(target, installName)
+      const claude = join(target, '.claude', 'skills', installName, 'SKILL.md')
+      await mkdir(dirname(canonical), { recursive: true })
+      await mkdir(dirname(claude), { recursive: true })
+      await writeFile(canonical, installedForm(name, body))
+      await writeFile(claude, `---\nname: ${installName}\n---\ndistinct Claude copy\n`)
+    }
+    const out: string[] = []
+
+    const code = await runCli(['upgrade', target, '--no-self-update'], {
+      workspacePath: target,
+      distributionRoot: distV2,
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+
+    expect(code).toBe(1)
+    expect(out).toContain('ab-alpha: adopted')
+    expect(out).toContain('ab-beta: adopted')
+    expect(out).toContain('ab-gamma: installed')
+    expect(existsSync(installedSkillPath(target, 'ab-gamma'))).toBe(true)
+    const output = out.join('\n')
+    expect(output).toContain('Claude discovery conflicts:')
+    expect(output).toContain('.claude/skills/ab-alpha')
+    expect(output).toContain('.claude/skills/ab-beta')
+    expect(output.match(/move or remove/g)).toHaveLength(2)
+  })
+
   test('the real CLI seam reports resolved and preserves the documented local bias', async () => {
     const repo = join(root, 'cli-resolved')
     const fixture = await seedRealPlanConflict(repo)

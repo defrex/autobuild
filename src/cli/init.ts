@@ -26,6 +26,7 @@ import {
   rename,
   rm,
   rmdir,
+  stat,
   symlink,
   unlink,
   writeFile,
@@ -256,6 +257,40 @@ export async function readDistSkills(distRoot: string): Promise<DistSkill[]> {
   return skills
 }
 
+/** True when two existing directory paths resolve to the same filesystem entry. */
+async function sameDirectoryEntry(left: string, right: string): Promise<boolean> {
+  let leftStat: Stats
+  let rightStat: Stats
+  try {
+    ;[leftStat, rightStat] = await Promise.all([stat(left), stat(right)])
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  return (
+    leftStat.isDirectory() &&
+    rightStat.isDirectory() &&
+    leftStat.dev === rightStat.dev &&
+    leftStat.ino === rightStat.ino
+  )
+}
+
+/** An actionable collision with a distinct, user-owned Claude skill directory. */
+export class ClaudeSkillDiscoveryConflict extends Error {
+  readonly skill: string
+
+  constructor(targetRepo: string, installName: string) {
+    const claude = relative(targetRepo, claudeSkillPath(targetRepo, installName))
+    const canonical = relative(targetRepo, dirname(installedSkillPath(targetRepo, installName)))
+    super(
+      `cannot create Claude discovery link for "${installName}": ${claude} is a distinct ` +
+        `real directory from ${canonical}; move or remove ${claude}, then rerun the command`,
+    )
+    this.name = 'ClaudeSkillDiscoveryConflict'
+    this.skill = installName
+  }
+}
+
 /** Ensure Claude discovers the canonical `.agents` skill through a symlink. */
 export async function ensureClaudeSkillLink(
   targetRepo: string,
@@ -263,18 +298,29 @@ export async function ensureClaudeSkillLink(
 ): Promise<void> {
   const link = claudeSkillPath(targetRepo, installName)
   const target = dirname(installedSkillPath(targetRepo, installName))
+  const agentsRoot = join(targetRepo, AGENTS_SKILLS_DIR)
+  const claudeRoot = join(targetRepo, CLAUDE_SKILLS_DIR)
+
+  // A repository-level alias already gives Claude the canonical tree. Check
+  // before touching a per-skill path: on a fresh upgrade that path may not yet
+  // exist, and creating it through the alias would create a self-link.
+  if (await sameDirectoryEntry(agentsRoot, claudeRoot)) return
+
   await mkdir(dirname(link), { recursive: true })
 
   try {
-    const stat = await lstat(link)
-    if (stat.isSymbolicLink()) {
+    const linkStat = await lstat(link)
+    if (linkStat.isSymbolicLink()) {
       const current = resolve(dirname(link), await readlink(link))
-      if (current === resolve(target)) return
+      if (current === resolve(target) || (await sameDirectoryEntry(link, target))) return
       await unlink(link)
+    } else if (linkStat.isDirectory()) {
+      if (await sameDirectoryEntry(link, target)) return
+      throw new ClaudeSkillDiscoveryConflict(targetRepo, installName)
     } else {
       throw new Error(
-        `cannot create Claude link for "${installName}": ${CLAUDE_SKILLS_DIR}/${installName} ` +
-          `is a real directory while ${AGENTS_SKILLS_DIR}/${installName} already exists`,
+        `cannot create Claude link for "${installName}": ` +
+          `${CLAUDE_SKILLS_DIR}/${installName} exists and is not a directory symlink`,
       )
     }
   } catch (error) {
@@ -358,6 +404,17 @@ export async function migrateLegacySkill(
   installName: string,
   warning?: (line: string) => void,
 ): Promise<string | undefined> {
+  // When the roots are aliases, `.claude` is not a legacy copy: it is the
+  // canonical live and pristine tree viewed through another path.
+  if (
+    await sameDirectoryEntry(
+      join(targetRepo, AGENTS_SKILLS_DIR),
+      join(targetRepo, CLAUDE_SKILLS_DIR),
+    )
+  ) {
+    return undefined
+  }
+
   let migrated: string | undefined
   if ((await readIfExists(installedSkillPath(targetRepo, installName))) === undefined) {
     const legacy = await readIfExists(legacyInstalledSkillPath(targetRepo, installName))
@@ -482,12 +539,19 @@ export async function writePristine(
 export type InitSkillAction = 'installed' | 'kept' | 'unchanged' | 'overwritten'
 export type InitConfigAction = 'written' | 'skipped'
 
+export interface SkillDiscoveryConflict {
+  skill: string
+  message: string
+}
+
 export interface InitReport {
   /** What happened to autobuild.toml. */
   config: InitConfigAction
   /** Per-skill outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: InitSkillAction }>
-  /** Interactive setup child status; fallback/manual setup succeeds with zero. */
+  /** Distinct Claude directories that prevented discovery-link maintenance. */
+  discoveryConflicts: SkillDiscoveryConflict[]
+  /** Interactive setup child status, or one when discovery conflicts remain. */
   exitCode: number
 }
 
@@ -559,6 +623,11 @@ export async function abInit(opts: {
   await ensureLocalStateIgnored(opts.targetRepo)
 
   const attention: string[] = []
+  const discoveryConflictMap = new Map<string, SkillDiscoveryConflict>()
+  const containDiscoveryConflict = (error: unknown): void => {
+    if (!(error instanceof ClaudeSkillDiscoveryConflict)) throw error
+    discoveryConflictMap.set(error.skill, { skill: error.skill, message: error.message })
+  }
   const skills: InitReport['skills'] = []
   for (const skill of await readDistSkills(distRoot)) {
     const migrated = await migrateLegacySkill(opts.targetRepo, skill.installName, (line) => {
@@ -589,15 +658,25 @@ export async function abInit(opts: {
       : rootLocal === undefined
         ? 'installed'
         : 'unchanged'
-    await ensureClaudeSkillLink(opts.targetRepo, skill.installName)
+    try {
+      await ensureClaudeSkillLink(opts.targetRepo, skill.installName)
+    } catch (error) {
+      containDiscoveryConflict(error)
+    }
     skills.push({ skill: skill.installName, action })
     if (action === 'kept' || action === 'overwritten')
       attention.push(`${skill.installName}: ${action}`)
   }
 
   for (const name of await listInstalledSkills(opts.targetRepo)) {
-    await ensureClaudeSkillLink(opts.targetRepo, name)
+    if (discoveryConflictMap.has(name)) continue
+    try {
+      await ensureClaudeSkillLink(opts.targetRepo, name)
+    } catch (error) {
+      containDiscoveryConflict(error)
+    }
   }
+  const discoveryConflicts = [...discoveryConflictMap.values()]
 
   const skillCounts: Record<InitSkillAction, number> = {
     installed: 0,
@@ -613,16 +692,24 @@ export async function abInit(opts: {
       `${skillCounts.kept} kept, ${skillCounts.overwritten} overwritten`,
   )
   for (const line of attention) stdout(line)
+  if (discoveryConflicts.length > 0) {
+    stdout('Claude discovery conflicts:')
+    for (const conflict of discoveryConflicts) stdout(`  ${conflict.message}`)
+  }
   stdout('')
   stdout('Runtime probes:')
   for (const probe of probes) {
     stdout(`  ${probe.runtime}: ${probe.usable ? 'usable' : 'unusable'} — ${probe.reason}`)
   }
 
+  if (discoveryConflicts.length > 0) {
+    return { config, skills, discoveryConflicts, exitCode: 1 }
+  }
+
   const setupSource = await readIfExists(installedSkillPath(opts.targetRepo, 'ab-setup'))
   // Pre-agent-driven fixture distributions can still exercise init/upgrade's
   // vendoring contract. Current distributions always ship ab-setup.
-  if (setupSource === undefined) return { config, skills, exitCode: 0 }
+  if (setupSource === undefined) return { config, skills, discoveryConflicts, exitCode: 0 }
   const prompt = setupPrompt(configExists, setupSource)
   if (selectedRuntime !== undefined && opts.interactive === true) {
     stdout('')
@@ -634,7 +721,7 @@ export async function abInit(opts: {
       env,
       ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     })
-    return { config, skills, exitCode }
+    return { config, skills, discoveryConflicts, exitCode }
   }
 
   stdout('')
@@ -644,5 +731,5 @@ export async function abInit(opts: {
       : 'No interactive terminal was detected. Run the following prompt in a coding agent:',
   )
   stdout(prompt)
-  return { config, skills, exitCode: 0 }
+  return { config, skills, discoveryConflicts, exitCode: 0 }
 }

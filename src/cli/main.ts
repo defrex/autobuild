@@ -396,14 +396,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
               })
               return resolver(input)
             }
-      await abUpgrade({
+      const report = await abUpgrade({
         targetRepo,
         stdout,
         ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
         ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
         ...(resolveConflict !== undefined ? { resolveConflict } : {}),
       })
-      return 0
+      return report.exitCode
     }
 
     // Ticket grooming runs OUTSIDE build sessions (§8.8): command-scoped flag

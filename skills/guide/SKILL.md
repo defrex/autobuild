@@ -546,7 +546,10 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   not links. Every file is **editable**: per-repo customization is the point.
   Unknown repository-local support files are left alone.
 - Links `.claude/skills/ab-<name>` → the `.agents` directory, so Claude, Codex,
-  and Pi discover **one** editable tree rather than diverging copies.
+  and Pi discover **one** editable tree rather than diverging copies. If the
+  `.claude/skills` and `.agents/skills` roots already resolve to the same
+  directory, that repository-level alias satisfies discovery: no per-skill
+  link or legacy `.claude` pristine migration is attempted.
 - Records the **pristine** installed tree at
   `.agents/skills/.ab-pristine/ab-<name>/` — repo-versioned, and the per-file
   base for `ab upgrade`'s three-way merges.
@@ -556,9 +559,12 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
 The final report states `autobuild.toml: written|skipped`, aggregates all skill
 counts, names only attention-worthy `kept` and `overwritten` skills, and reports
-every runtime probe result. The interactive path then names the selected setup
-runtime; the fallback prints its manual-run instruction and exact prompt.
-Non-TTY output is plain text.
+every runtime probe result. A distinct real `.claude/skills/ab-*` directory is
+not mistaken for an alias: init processes the remaining skills, accumulates all
+such conflicts with move/remove guidance, skips setup, and exits nonzero. The
+interactive path otherwise names the selected setup runtime; the fallback
+prints its manual-run instruction and exact prompt. Non-TTY output is plain
+text.
 
 **`ab --version`** reports the installed package version, Bun-recorded commit
 when available, and plugin API version using local distribution metadata only.
@@ -609,8 +615,12 @@ unchanged and in order; `SKILL.md` additionally requires the same namespaced
 frontmatter identity. Standard marker lines are rejected in agent-authored hunk
 gaps but allowed when already protected as exact clean content. Validation
 finishes before either file is written. A rejected proposal remains report-only alongside the marked merge diagnostic;
-the CLI prints the exact pristine path to merge by hand. Local customization
-survives upgrades, and divergence is visible instead of silent.
+the CLI prints the exact pristine path to merge by hand. Distinct real Claude
+skill directories are a separate discovery-conflict class: upgrade processes
+all skills, reports every collision with move/remove guidance, and exits
+nonzero, while content-level `conflicted` outcomes retain their exit-zero
+contract. Local customization survives upgrades, and divergence is visible
+instead of silent.
 
 ## Local state and store selection
 
