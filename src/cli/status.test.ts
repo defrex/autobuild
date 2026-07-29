@@ -565,6 +565,52 @@ describe('detail', () => {
     expect(renderDetail(d, NOW).join('\n')).toContain('FAIL  e2e')
   })
 
+  test('projects and renders the current setup failure, including multiline and unavailable output', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'runner.setup-failed',
+      payload: {
+        command: 'bun install',
+        attempt: 2,
+        exitStatus: null,
+        output: 'spawn failed\npermission denied',
+      },
+    })
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.setupFailure).toEqual({
+      command: 'bun install',
+      attempt: 2,
+      exitStatus: null,
+      output: 'spawn failed\npermission denied',
+    })
+    expect(JSON.parse(JSON.stringify(d)).setupFailure).toEqual(d.setupFailure)
+    const rendered = renderDetail(d, NOW).join('\n')
+    expect(rendered).toContain('setup failure: attempt 2')
+    expect(rendered).toContain('command: bun install')
+    expect(rendered).toContain('exit status unavailable')
+    expect(rendered).toContain('      spawn failed\n      permission denied')
+  })
+
+  test('a later successful attachment clears setup failure detail', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'runner.setup-failed',
+      payload: { command: 'bun install', attempt: 1, exitStatus: 1, output: '' },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i2', host: 'h2' },
+    })
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.setupFailure).toBeUndefined()
+    expect(renderDetail(d, NOW).join('\n')).not.toContain('setup failure:')
+  })
+
   test('open escalations, open sessions, and lastEvent', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1', status: 'blocked' })

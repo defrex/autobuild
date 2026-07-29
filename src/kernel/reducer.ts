@@ -17,6 +17,7 @@ import type {
   CommitRange,
   EscalationResolution,
   EscalationSource,
+  EscalationTarget,
   Finding,
   Phase,
   VerifyOutcome,
@@ -28,7 +29,7 @@ import { verifyPhase } from '../ontology'
  * any order. */
 export interface OpenEscalation {
   id: string
-  phase: Phase
+  phase: EscalationTarget
   round?: number
   source: EscalationSource
   question: string
@@ -243,6 +244,10 @@ export interface BuildState {
   reconcileAttempts: number
   /** `observation.recorded` payloads in order — harvest input (§12). */
   observations: ObservationRecord[]
+  /** Every setup failure remains historical evidence. `setupFailure` is the
+   * latest one not superseded by a later successful runner attachment. */
+  setupFailures: Array<EventPayload<'runner.setup-failed'> & { seq: number }>
+  setupFailure?: EventPayload<'runner.setup-failed'> & { seq: number }
   /** Pre-run dispatch attempts, retained as durable operator diagnostics. */
   dispatchFailures: Array<EventPayload<'dispatch.failed'> & { seq: number }>
   /** Outstanding human discard intent. It is settled only by terminal completion. */
@@ -281,6 +286,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   const verify: BuildState['verify'] = { maxAttemptSeen: 0, results: [], cycleSince: 0 }
   let reconcileAttempts = 0
   const observations: ObservationRecord[] = []
+  const setupFailures: BuildState['setupFailures'] = []
+  let setupFailure: BuildState['setupFailure']
   const dispatchFailures: BuildState['dispatchFailures'] = []
   let discardRequest: BuildState['discardRequest']
   const pending: Record<PendingCommand['command'], PendingCommand[]> = {
@@ -331,7 +338,16 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         break
       case 'runner.attached':
         attached = true
+        // On a recovery attempt attachment is delayed until setup succeeds,
+        // so this fact is also the durable proof that the condition cleared.
+        setupFailure = undefined
         break
+      case 'runner.setup-failed': {
+        const failure = { ...event.payload, seq: event.seq }
+        setupFailures.push(failure)
+        setupFailure = failure
+        break
+      }
       case 'dispatch.failed':
         dispatchFailures.push({ ...event.payload, seq: event.seq })
         break
@@ -633,6 +649,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     verify,
     reconcileAttempts,
     observations,
+    setupFailures,
+    setupFailure,
     dispatchFailures,
     ...(terminal === undefined && discardRequest !== undefined ? { discardRequest } : {}),
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(

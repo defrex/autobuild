@@ -334,6 +334,16 @@ function renderBuild(
       ),
     )
   }
+  // Durable setup errors belong to the build row, not the process-global
+  // warning line. Keep them visible across polls until attachment proves
+  // recovery, escaping control-heavy command output before wrapping.
+  if (build.setupError !== undefined) {
+    const [first, ...rest] = packLines(displayText(build.setupError).split(/\s+/), width - 4, '')
+    if (first !== undefined) {
+      lines.push(truncate(paint(`  ! ${first}`, 'red', color), width))
+      for (const line of rest) lines.push(truncate(paint(`    ${line}`, 'red', color), width))
+    }
+  }
   // Blockers wrap too — "every unresolved blocker message is displayed" is not
   // satisfied by its first 80 characters, and a policy escalation's question
   // is routinely longer than that. Escape external text before tokenization so
@@ -527,6 +537,12 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   } else {
     body.push('', paint('Pipeline', 'bold', color))
     body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
+  }
+  if (build.setupError !== undefined) {
+    body.push('', paint('Setup failure', 'bold', color))
+    body.push(
+      ...wrappedText(build.setupError, width, '  ').map((line) => paint(line, 'red', color)),
+    )
   }
   if (build.blockers.length > 0) {
     body.push('', paint('Unresolved blockers', 'bold', color))

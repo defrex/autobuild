@@ -1087,7 +1087,9 @@ export class Dispatcher {
         decision.kind === 'wait' &&
         decision.reason === 'blocked' &&
         state.openEscalations.length > 0 &&
-        state.openEscalations.every((escalation) => escalation.source === 'policy')
+        state.openEscalations.every(
+          (escalation) => escalation.source === 'policy' && escalation.phase !== 'setup',
+        )
       ) {
         for (const escalation of state.openEscalations) {
           await store.append(record.slug, {
