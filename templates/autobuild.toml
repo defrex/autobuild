@@ -24,6 +24,7 @@ runtime = "@ab-init/runtime@"
 [policy]
 stallRounds = 3
 maxVerifyAttempts = 3
+maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 5

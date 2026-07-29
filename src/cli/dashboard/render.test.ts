@@ -457,6 +457,26 @@ describe('renderDashboard: emphasis', () => {
     expect(out).toContain('\x1b[33m')
   })
 
+  test('a setup failure is attributed beneath its build, wraps, and escapes controls', () => {
+    const lines = rd(
+      model([
+        build({
+          slug: 'broken-setup',
+          pr: undefined,
+          setupError:
+            '[commands].setup "bun install" failed (attempt 2, exit status 1): first line\nsecond\u001b[2J line',
+        }),
+      ]),
+      { color: false, width: 48 },
+    ).map(stripAnsi)
+    const frame = lines.join('\n')
+    expect(frame).toContain('broken-setup')
+    expect(frame).toContain('[commands].setup')
+    expect(frame).toContain('second\\u{1b}[2J')
+    expect(frame).not.toContain('\u001b[2J')
+    expect(lines.every((line) => line.length <= 48)).toBe(true)
+  })
+
   test('every unresolved blocker gets its own line', () => {
     const out = rd(
       model([build({ status: 'blocked', blockers: ['first question', 'second question'] })]),

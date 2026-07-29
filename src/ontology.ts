@@ -102,6 +102,15 @@ export type ObservationKind = z.infer<typeof observationKindSchema>
 export const escalationSourceSchema = z.enum(['agent', 'stall', 'policy'])
 export type EscalationSource = z.infer<typeof escalationSourceSchema>
 
+/** Setup may block a build through the escalation protocol without becoming a
+ * pipeline phase. Keeping this target separate preserves the fixed phase
+ * grammar while allowing the ordinary answer/retry machinery to re-arm setup. */
+export type EscalationTarget = Phase | 'setup'
+export const escalationTargetSchema = z.custom<EscalationTarget>(
+  (value) => value === 'setup' || (typeof value === 'string' && isPhase(value)),
+  { message: 'not an escalation target: expected "setup", a core phase, or "verify:<step>"' },
+)
+
 export const escalationResolutionSchema = z.enum([
   'guidance',
   'dismiss-finding',

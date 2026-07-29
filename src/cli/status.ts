@@ -91,6 +91,13 @@ export interface VerifyProgress {
   currentStep?: string
 }
 
+export interface SetupFailureDetail {
+  attempt: number
+  command: string
+  exitStatus: number | null
+  output: string
+}
+
 export interface BuildObservation {
   id: string
   kind: ObservationKind
@@ -103,6 +110,8 @@ export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   openSessions: OpenSession[]
   observations: BuildObservation[]
+  /** Current setup failure only; a later successful attachment clears it. */
+  setupFailure?: SetupFailureDetail
   verify: VerifyProgress
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
   /** Present only with `--events <n>`: the newest n, chronological. */
@@ -236,6 +245,16 @@ export function detail(
         ...(event.payload.files !== undefined ? { files: event.payload.files } : {}),
         ...(event.payload.refs !== undefined ? { refs: event.payload.refs } : {}),
       })),
+    ...(state.setupFailure !== undefined
+      ? {
+          setupFailure: {
+            attempt: state.setupFailure.attempt,
+            command: state.setupFailure.command,
+            exitStatus: state.setupFailure.exitStatus,
+            output: state.setupFailure.output,
+          },
+        }
+      : {}),
     verify: {
       // Preserve the status API's display counter while sourcing it explicitly
       // from the reducer's full-log high-water, never from cycle membership.
@@ -265,6 +284,17 @@ export function detail(
 /** Lease health as a literal word — never a color (§16: colors out of scope). */
 function healthWord(health: LeaseHealth): string {
   return health === 'none' ? 'no-lease' : health
+}
+
+/** Preserve printable text while making terminal control bytes inert. Newlines
+ * are split by the caller so multiline setup output remains readable. */
+function safeStatusText(value: string): string {
+  let displayed = ''
+  for (const char of value) {
+    const code = char.codePointAt(0)!
+    displayed += code >= 0x20 && code !== 0x7f ? char : `\\u{${code.toString(16)}}`
+  }
+  return displayed
 }
 
 /** `r<round>` / `a<attempt>` suffixed onto the phase — the loop vs verify axis. */
@@ -379,6 +409,19 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(
       `  pr:       #${d.pr.number}${d.pr.state !== undefined ? ` (${d.pr.state})` : ''} ${d.pr.url}`,
     )
+  }
+
+  if (d.setupFailure !== undefined) {
+    const status =
+      d.setupFailure.exitStatus === null
+        ? 'exit status unavailable'
+        : `exit status ${d.setupFailure.exitStatus}`
+    lines.push(`  setup failure: attempt ${d.setupFailure.attempt}`)
+    lines.push(`    command: ${safeStatusText(d.setupFailure.command)}`)
+    lines.push(`    status:  ${status}`)
+    lines.push('    output:')
+    const output = d.setupFailure.output || '(no output)'
+    for (const line of output.split('\n')) lines.push(`      ${safeStatusText(line)}`)
   }
 
   if (d.openEscalations.length > 0) {

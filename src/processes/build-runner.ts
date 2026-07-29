@@ -42,6 +42,7 @@
  */
 import type { Config } from '../config/schema'
 import type { AbEvent, EventWrite } from '../events/catalog'
+import type { EventPayload } from '../events/payloads'
 import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import type { IdSource } from '../ids'
 import { decideNext, type Decision } from '../kernel/engine'
@@ -52,6 +53,7 @@ import {
   verifyPhase,
   verifyReportKind,
   type CorePhase,
+  type EscalationTarget,
   type Feedback,
   type Phase,
 } from '../ontology'
@@ -75,6 +77,25 @@ export class LeaseHeldError extends Error {
         'cannot attach while the holder is live (§7.4)',
     )
     this.name = 'LeaseHeldError'
+  }
+}
+
+/** Recognizable launch failure whose durable detail is already in the build
+ * log. Interactive dispatch therefore renders it on the build row rather than
+ * duplicating it in process-global warning chrome. */
+export class SetupFailureError extends Error {
+  constructor(
+    readonly slug: string,
+    readonly failure: EventPayload<'runner.setup-failed'>,
+    readonly exhausted: boolean,
+  ) {
+    const status =
+      failure.exitStatus === null ? 'exit status unavailable' : `exited ${failure.exitStatus}`
+    super(
+      `[commands].setup ${JSON.stringify(failure.command)} ${status} ` +
+        `(attempt ${failure.attempt}): ${failure.output || '(no output)'}`,
+    )
+    this.name = 'SetupFailureError'
   }
 }
 
@@ -292,37 +313,96 @@ export class BuildRunner {
     this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
   }
 
-  /**
-   * Claim the lease (§7.4), announce the attachment (§15.3 `runner.attached`,
-   * with `resumedFromSeq` when resuming a non-empty log), start the
-   * heartbeat, and run `[commands].setup` (§16.1: after workspace provision
-   * and after sandbox rehydrate — §15.6-C) so dependencies exist before any
-   * phase or check touches the worktree. Throws LeaseHeldError when another
-   * sandbox owns the build; throws on a failing setup (an infra failure —
-   * the lease expires and the sweep retries, never a bogus verify report).
-   */
-  async attach(): Promise<void> {
-    const { store, slug, instance, host } = this.deps
-    const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
-    if (!claimed) throw new LeaseHeldError(slug, instance)
+  /** Consecutive durable setup failures since the latest successful attachment
+   * or explicit human answer. The answer re-arms the budget but deliberately
+   * does not erase the current diagnostic while recovery is still running. */
+  private setupStreak(events: readonly AbEvent[]): number {
+    const setupEscalations = new Set<string>()
+    let boundary = 0
+    for (const event of events) {
+      if (event.type === 'runner.attached') boundary = event.seq
+      else if (event.type === 'escalation.raised' && event.payload.phase === 'setup') {
+        setupEscalations.add(event.payload.id)
+      } else if (event.type === 'escalation.answered' && setupEscalations.has(event.payload.id)) {
+        boundary = event.seq
+      }
+    }
+    return events.filter((event) => event.type === 'runner.setup-failed' && event.seq > boundary)
+      .length
+  }
 
-    const events = await store.getEvents(slug)
-    const lastSeq = events.at(-1)?.seq ?? 0
+  private setupQuestion(failure: EventPayload<'runner.setup-failed'>): string {
+    const status =
+      failure.exitStatus === null ? 'exit status unavailable' : `exit status ${failure.exitStatus}`
+    return (
+      `maxSetupAttempts (${this.deps.config.policy.maxSetupAttempts}) exhausted: ` +
+      `[commands].setup ${JSON.stringify(failure.command)} failed with ${status}. ` +
+      `Output: ${failure.output || '(no output)'}`
+    )
+  }
+
+  private async raiseSetupEscalation(failure: EventPayload<'runner.setup-failed'>): Promise<void> {
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: this.deps.ids('esc'),
+        phase: 'setup',
+        source: 'policy',
+        question: this.setupQuestion(failure),
+      },
+    } satisfies EventWrite<'escalation.raised'>)
+  }
+
+  private async appendAttached(resumedFromSeq: number): Promise<void> {
+    const { store, slug, instance, host } = this.deps
     await store.append(slug, {
       actor: KERNEL,
       type: 'runner.attached',
       payload: {
         instance,
         host,
-        ...(lastSeq > 0 ? { resumedFromSeq: lastSeq } : {}),
+        ...(resumedFromSeq > 0 ? { resumedFromSeq } : {}),
       },
     } satisfies EventWrite<'runner.attached'>)
+  }
+
+  /**
+   * Claim the lease and run pre-phase setup. The first attempt retains the
+   * historical successful-path protocol by announcing attachment before setup.
+   * Once a setup failure is current, retries delay `runner.attached` until
+   * setup succeeds; that fact then proves recovery and clears the projection.
+   */
+  async attach(): Promise<void> {
+    const { store, slug, instance } = this.deps
+    const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
+    if (!claimed) throw new LeaseHeldError(slug, instance)
+
+    let events = await store.getEvents(slug)
+    const state = reduceBuild(events)
+    const currentFailure = state.setupFailure
+    const openSetupEscalation = state.openEscalations.some(
+      (escalation) => escalation.phase === 'setup',
+    )
+    const streak = this.setupStreak(events)
+
+    // Crash-safe exhaustion: the final failure and escalation are separate
+    // appends. If only the failure landed, raise the blocker before another
+    // command execution can buy an extra attempt.
+    if (currentFailure !== undefined && streak >= this.deps.config.policy.maxSetupAttempts) {
+      if (!openSetupEscalation) await this.raiseSetupEscalation(currentFailure)
+      throw new SetupFailureError(slug, currentFailure, true)
+    }
+    if (currentFailure !== undefined && openSetupEscalation) {
+      throw new SetupFailureError(slug, currentFailure, true)
+    }
+
+    const recovering = currentFailure !== undefined
+    if (!recovering) await this.appendAttached(events.at(-1)?.seq ?? 0)
 
     // First beat immediately (liveness visible without waiting an interval),
-    // then keep-alive; unref'd so a forgotten timer never pins the process.
-    // A false beat is a LAPSED lease, not an outage: the store only renews
-    // live leases the caller holds (§15.2.6), so the flag stops this runner
-    // before it executes alongside the sweep's replacement (§7.4).
+    // then keep-alive. Setup runs under this heartbeat so a slow install cannot
+    // outlive the claimed lease.
     await store.heartbeat(slug, instance)
     this.heartbeatTimer = setInterval(() => {
       store.heartbeat(slug, instance).then(
@@ -336,32 +416,59 @@ export class BuildRunner {
       )
     }, this.heartbeatMs)
     this.heartbeatTimer.unref?.()
-    this.attached = true
 
-    // §16.1 [D9]: `setup` (e.g. "bun install") runs after provision and after
-    // every rehydrate — a fresh worktree/sandbox has no dependencies, and
-    // running verify without them routes a bogus infra report into the code
-    // loop (§15.6-A). Idempotent by convention, so re-attach re-runs it.
-    // After the heartbeat starts, so a slow install cannot outlive the lease.
     const setup = this.deps.config.commands.setup
     if (setup !== undefined) {
+      let failure: EventPayload<'runner.setup-failed'> | undefined
       try {
         const result = await this.deps.exec(['sh', '-c', setup], {
           cwd: this.deps.workspacePath,
         })
         if (result.exitCode !== 0) {
-          const output = [result.stderr, result.stdout].filter((s) => s !== '').join('\n')
-          throw new Error(
-            `[commands].setup "${setup}" exited ${result.exitCode} (§16.1): ` +
-              `${output.trim() || '(no output)'}`,
-          )
+          failure = {
+            command: setup,
+            attempt: streak + 1,
+            exitStatus: result.exitCode,
+            output: [result.stderr, result.stdout].filter((text) => text !== '').join('\n'),
+          }
         }
+      } catch (error) {
+        failure = {
+          command: setup,
+          attempt: streak + 1,
+          exitStatus: null,
+          output: errorMessage(error),
+        }
+      }
+
+      if (failure !== undefined) {
+        try {
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'runner.setup-failed',
+            payload: failure,
+          } satisfies EventWrite<'runner.setup-failed'>)
+          const exhausted = failure.attempt >= this.deps.config.policy.maxSetupAttempts
+          if (exhausted) await this.raiseSetupEscalation(failure)
+          throw new SetupFailureError(slug, failure, exhausted)
+        } finally {
+          this.stopHeartbeat()
+          this.attached = false
+        }
+      }
+    }
+
+    if (recovering) {
+      try {
+        events = await store.getEvents(slug)
+        await this.appendAttached(events.at(-1)?.seq ?? 0)
       } catch (error) {
         this.stopHeartbeat()
         this.attached = false
         throw error
       }
     }
+    this.attached = true
   }
 
   /**
@@ -1227,7 +1334,7 @@ export class BuildRunner {
     round: number,
   ): { count: number; lastError?: string; lastWillRetry?: boolean } {
     /** id → the raise's {phase, round} — answers are matched by id (§15.3). */
-    const raised = new Map<string, { phase: Phase; round?: number }>()
+    const raised = new Map<string, { phase: EscalationTarget; round?: number }>()
     let count = 0
     let lastError: string | undefined
     let lastWillRetry: boolean | undefined

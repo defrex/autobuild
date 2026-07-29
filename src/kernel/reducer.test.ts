@@ -186,9 +186,64 @@ describe('reduceBuild: empty log', () => {
     expect(state.openEscalations).toEqual([])
     expect(state.answeredEscalations).toEqual([])
     expect(state.observations).toEqual([])
+    expect(state.setupFailures).toEqual([])
+    expect(state.setupFailure).toBeUndefined()
     expect(state.pendingCommands).toEqual([])
     expect(state.sessions.open).toEqual([])
     expect(state.failures).toEqual({})
+  })
+})
+
+describe('reduceBuild: durable setup failure', () => {
+  test('retains history, projects the current error, and clears it on successful attachment', () => {
+    const failed = toLog([
+      ev('runner.attached', { instance: 'runner-1', host: 'local' }),
+      ev('runner.setup-failed', {
+        command: 'bun install',
+        attempt: 1,
+        exitStatus: 1,
+        output: 'missing package.json',
+      }),
+    ])
+    expect(reduceBuild(failed).setupFailure).toEqual({
+      command: 'bun install',
+      attempt: 1,
+      exitStatus: 1,
+      output: 'missing package.json',
+      seq: 2,
+    })
+
+    const recovered = toLog([
+      ...failed.map(({ actor, type, payload }) => ({ actor, type, payload }) as EventWrite),
+      ev('runner.attached', { instance: 'runner-2', host: 'local', resumedFromSeq: 2 }),
+    ])
+    expect(reduceBuild(recovered).setupFailures).toHaveLength(1)
+    expect(reduceBuild(recovered).setupFailure).toBeUndefined()
+  })
+
+  test('a setup-targeted escalation blocks and answers through the ordinary protocol', () => {
+    const log = toLog([
+      ev('runner.setup-failed', {
+        command: 'bun install',
+        attempt: 3,
+        exitStatus: null,
+        output: 'spawn failed',
+      }),
+      ev('escalation.raised', {
+        id: 'esc_setup',
+        phase: 'setup',
+        source: 'policy',
+        question: 'setup still fails',
+      }),
+      ev('escalation.answered', {
+        id: 'esc_setup',
+        answer: 'retry after fixing the environment',
+        resolution: 'guidance',
+      }),
+    ])
+    expect(stateAfter(log, 'escalation.raised').status).toBe('blocked')
+    expect(reduceBuild(log).status).toBe('queued')
+    expect(reduceBuild(log).answeredEscalations[0]?.phase).toBe('setup')
   })
 })
 

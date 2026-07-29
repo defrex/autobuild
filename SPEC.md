@@ -996,7 +996,7 @@ The families, with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `build.completed` |
+| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
@@ -1046,6 +1046,9 @@ both match — a stale acknowledgement can never erase newer intent.
 Queued state additionally retains ordered `dispatch.failed` diagnostics and an
 outstanding `build.discard-requested` fact. `build.completed {outcome:
 "discarded"}` settles that intent without changing the status vocabulary.
+Runner state retains ordered `runner.setup-failed {command,attempt,exitStatus,
+output}` facts and projects the latest one until a later `runner.attached`
+proves successful setup recovery.
 
 Every projection — operator UI, CLI status, dispatcher decisions — is a
 reduction of the logs. Caches may key a reduction by last event sequence,
@@ -1095,7 +1098,18 @@ verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 producer round as authoritative feedback; `dismiss-finding` marks the chain
 human-resolved and the next reviewer round is told so.
 
-**C — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
+**C — setup failure:** the first attach retains the normal `runner.attached`
+fact, then a failed setup appends `runner.setup-failed
+{command,attempt,exitStatus,output}` and starts no phase or session. A retry runs
+setup under the claimed lease before announcing another attachment. Another
+failure appends only a new failure fact; success appends `runner.attached
+{resumedFromSeq}` and clears the current error projection. After
+`policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
+`setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
+answer re-arms the setup budget. This target belongs only to escalation
+metadata and is not a pipeline `Phase`.
+
+**D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
 `workspace.provisioned {base: {source: existing, sha}}` → `runner.attached
 {resumedFromSeq}` → reducer says implement r2 started-not-completed → re-run
@@ -1263,6 +1277,7 @@ model = "moonshotai/kimi-k3"
 [policy]
 stallRounds = 3
 maxVerifyAttempts = 3
+maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 5            # observation-count back-pressure in dispatch

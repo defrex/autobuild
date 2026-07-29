@@ -59,7 +59,7 @@ import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { BuildRunner, LeaseHeldError } from '../processes/build-runner'
+import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { scanUnclaimedObservations } from '../processes/harvest'
 import {
@@ -1205,9 +1205,12 @@ class DispatchLoop {
               this.say(`build ${slug} already held by another runner — skipped`)
               return
             }
-            this.warn(
-              `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`,
-            )
+            const line = `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`
+            // SetupFailureError has already deposited an attributed durable
+            // fact. Plain mode still needs a line; the TTY gets the persistent
+            // build-row projection on its next store poll, not a global notice.
+            if (error instanceof SetupFailureError && this.dashboard) return
+            this.warn(line)
           },
         )
         .finally(() => {
