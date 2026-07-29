@@ -1360,6 +1360,15 @@ skills). `ab init` installs into a repo:
   (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-setup`) are exactly the skills that
   **drive no phase**; membership is decided by that criterion, not taste.
 
+When `.agents/skills` and `.claude/skills` resolve to the same filesystem
+entry, that repository-level alias already satisfies harness discovery. Init
+and upgrade create no per-skill links through it and do not reinterpret its
+live or pristine files as legacy `.claude` copies. A real
+`.claude/skills/ab-*` directory that is a distinct filesystem entry remains a
+conflict: all other skills are still processed, every such conflict is reported
+with move/remove guidance, setup is not launched by init, and the command exits
+nonzero.
+
 **Installation identity** is local to the running distribution. `ab --version`
 reads its package version, Bun-recorded forge commit when present, and the
 independent plugin API version; it needs no repository, config, store, or

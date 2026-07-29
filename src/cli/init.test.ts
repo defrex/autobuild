@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -53,6 +53,71 @@ describe('agent-driven ab init', () => {
       expect(await readlink(claudeSkillPath(target, skill))).toBe(`../../.agents/skills/${skill}`)
     }
     expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('.autobuild/\n')
+  })
+
+  test.each(['claude-to-agents', 'agents-to-claude'] as const)(
+    'vendors every skill when the skill roots are aliased: %s',
+    async (direction) => {
+      const backingRoot = join(
+        target,
+        ...(direction === 'claude-to-agents' ? ['.agents', 'skills'] : ['.claude', 'skills']),
+      )
+      if (direction === 'claude-to-agents') {
+        await mkdir(join(target, '.claude'), { recursive: true })
+        await symlink('../.agents/skills', join(target, '.claude', 'skills'), 'dir')
+      } else {
+        await mkdir(join(target, '.agents'), { recursive: true })
+        await symlink('../.claude/skills', join(target, '.agents', 'skills'), 'dir')
+      }
+      expect(existsSync(backingRoot)).toBe(false)
+
+      const report = await init()
+
+      expect(report.exitCode).toBe(0)
+      expect(report.discoveryConflicts).toEqual([])
+      expect(report.skills.length).toBeGreaterThan(1)
+      expect(report.skills.every((entry) => entry.action === 'installed')).toBe(true)
+      for (const { skill } of report.skills) {
+        expect(await readFile(installedSkillPath(target, skill), 'utf8')).toBe(
+          await readFile(join(target, '.claude', 'skills', skill, 'SKILL.md'), 'utf8'),
+        )
+        expect((await lstat(claudeSkillPath(target, skill))).isSymbolicLink()).toBe(false)
+        expect(existsSync(join(target, '.agents', 'skills', skill, skill))).toBe(false)
+      }
+    },
+  )
+
+  test('contains a distinct Claude directory conflict and skips setup after processing skills', async () => {
+    const skill = 'ab-code-review'
+    const canonical = installedSkillPath(target, skill)
+    const claude = join(target, '.claude', 'skills', skill, 'SKILL.md')
+    await mkdir(dirname(canonical), { recursive: true })
+    await mkdir(dirname(claude), { recursive: true })
+    await writeFile(canonical, '---\nname: ab-code-review\n---\ncanonical local copy\n')
+    await writeFile(claude, '---\nname: ab-code-review\n---\ndistinct Claude copy\n')
+    const lines: string[] = []
+    let launches = 0
+
+    const report = await init({
+      interactive: true,
+      stdout: (line) => lines.push(line),
+      launcher: async () => {
+        launches += 1
+        return 0
+      },
+    })
+
+    expect(report.exitCode).toBe(1)
+    expect(report.discoveryConflicts).toHaveLength(1)
+    expect(report.discoveryConflicts[0]?.skill).toBe(skill)
+    expect(report.skills.some((entry) => entry.skill === 'ab-verify-e2e')).toBe(true)
+    expect(existsSync(installedSkillPath(target, 'ab-verify-e2e'))).toBe(true)
+    expect(launches).toBe(0)
+    const output = lines.join('\n')
+    expect(output).toContain(`.claude/skills/${skill}`)
+    expect(output).toContain(`.agents/skills/${skill}`)
+    expect(output).toContain('move or remove')
+    expect(output).not.toContain('Starting setup agent')
   })
 
   test('writes a valid stack-neutral skeleton independent of manifests', async () => {

@@ -41,6 +41,7 @@ import { dirname, join } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import {
+  ClaudeSkillDiscoveryConflict,
   defaultDistRoot,
   ensureClaudeSkillLink,
   installedSkillFilePath,
@@ -52,6 +53,7 @@ import {
   readIfExists,
   writeInstalledSkillFile,
   writePristineFile,
+  type SkillDiscoveryConflict,
 } from './init'
 
 export type UpgradeSkillAction =
@@ -64,8 +66,12 @@ export type UpgradeSkillAction =
   | 'unknown'
 
 export interface UpgradeReport {
-  /** Per-skill outcome, keyed by the namespaced install name. */
+  /** Per-skill content outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: UpgradeSkillAction; detail?: string }>
+  /** Distinct Claude directories that prevented discovery-link maintenance. */
+  discoveryConflicts: SkillDiscoveryConflict[]
+  /** Nonzero only for discovery conflicts; content conflicts remain exit zero. */
+  exitCode: number
 }
 
 /**
@@ -369,6 +375,11 @@ export async function abUpgrade(opts: {
   await migrateLegacyAgentSkills(targetRepo)
 
   const skills: UpgradeReport['skills'] = []
+  const discoveryConflictMap = new Map<string, SkillDiscoveryConflict>()
+  const containDiscoveryConflict = (error: unknown): void => {
+    if (!(error instanceof ClaudeSkillDiscoveryConflict)) throw error
+    discoveryConflictMap.set(error.skill, { skill: error.skill, message: error.message })
+  }
   const report = (skill: string, action: UpgradeSkillAction, detail?: string): void => {
     skills.push({ skill, action, ...(detail !== undefined ? { detail } : {}) })
   }
@@ -384,7 +395,11 @@ export async function abUpgrade(opts: {
   for (const skill of dist) {
     const name = skill.installName
     const migrated = await migrateLegacySkill(targetRepo, name, stdout)
-    await ensureClaudeSkillLink(targetRepo, name)
+    try {
+      await ensureClaudeSkillLink(targetRepo, name)
+    } catch (error) {
+      containDiscoveryConflict(error)
+    }
 
     const incoming = new Map(skill.files.map((file) => [file.path, file.content]))
     const pristineRoot = pristineSkillFilePath(targetRepo, name, 'SKILL.md')
@@ -563,10 +578,24 @@ export async function abUpgrade(opts: {
   const distNames = new Set(dist.map((skill) => skill.installName))
   for (const name of await listInstalledSkills(targetRepo)) {
     if (distNames.has(name)) continue
-    await ensureClaudeSkillLink(targetRepo, name)
+    try {
+      await ensureClaudeSkillLink(targetRepo, name)
+    } catch (error) {
+      containDiscoveryConflict(error)
+    }
     report(name, 'unknown', 'not in the distribution — left alone (local addition)')
     stdout(`${name}: unknown (not in the distribution — left alone)`)
   }
 
-  return { skills }
+  const discoveryConflicts = [...discoveryConflictMap.values()]
+  if (discoveryConflicts.length > 0) {
+    stdout('Claude discovery conflicts:')
+    for (const conflict of discoveryConflicts) stdout(`  ${conflict.message}`)
+  }
+
+  return {
+    skills,
+    discoveryConflicts,
+    exitCode: discoveryConflicts.length > 0 ? 1 : 0,
+  }
 }

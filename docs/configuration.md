@@ -705,23 +705,28 @@ every registered runtime for executable/authentication usability.
 Init reports every probe result and chooses a setup launcher from the fixed
 product preference `claude`, then `codex`, then `pi`. That choice only starts
 setup; the temporary `[roles.default].runtime` skeleton value does not constrain
-the role runtimes or models the setup agent ultimately configures. With both
-stdin and stdout attached to a TTY, init starts the selected coding-agent CLI in
-the target repository with the installed `ab-setup` prompt. The user can answer
-its repository- and team-specific questions directly. The child exit status is
+the role runtimes or models the setup agent ultimately configures. When a
+shipped runtime is usable, no Claude discovery conflict remains, and both stdin
+and stdout are attached to a TTY, init starts the selected coding-agent CLI in
+the target repository with the installed `ab-setup` prompt. The user can answer its repository- and
+team-specific questions directly. When launched, the child exit status is
 init's exit status, and the direct handoff creates no build or BuildStore data.
 
-If no shipped runtime is usable or either terminal stream is non-interactive,
-init still completes deterministic installation and exits successfully. It
-prints the same setup prompt verbatim with instructions to run it in a coding
-agent; unusable runtime reports include their reasons. The setup agent derives
+When no discovery conflict exists but no shipped runtime is usable or either
+terminal stream is non-interactive, init still completes deterministic
+installation and exits successfully. It prints the same setup prompt verbatim
+with instructions to run it in a coding agent; unusable runtime reports include
+their reasons. The setup agent derives
 commands and verification from the actual repository, chooses pipeline roles,
 configures ticket workflow and environment-only credentials, arranges suitable
 end-to-end verification, and leaves one groomed dispatchable ticket.
 
 After installation, init reports `autobuild.toml: written|skipped`, counts all
 skill outcomes, names attention-worthy local edits, and prints runtime probe
-results. Redirected/non-TTY output is plain text.
+results. A distinct real `.claude/skills/ab-*` directory is an actionable
+discovery conflict rather than an alias: init processes every skill, summarizes
+all such conflicts with move/remove guidance, skips the setup handoff, and exits
+1. Redirected/non-TTY output is plain text.
 
 The generated file is an active-only, schema-valid skeleton. It writes
 `baseBranch = "main"`, `capacity = 4`, empty `[commands]`, empty verify and
