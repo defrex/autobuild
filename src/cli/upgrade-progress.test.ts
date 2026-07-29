@@ -116,6 +116,49 @@ describe('withUpgradeProgress', () => {
     expect(clock.active()).toBe(0)
   })
 
+  test('narrow-terminal frames never wrap and final cleanup leaves no residue', async () => {
+    const terminal = fakeTerminal()
+    terminal.columns = 80
+    const input = fakeInput()
+    const clock = fakeSchedule()
+    const result = deferred<string | null>()
+    const decorated = withUpgradeProgress(() => result.promise, {
+      terminal,
+      input,
+      now: clock.now,
+      schedule: clock.schedule,
+      cancelSchedule: clock.cancel,
+    })
+
+    const pending = decorated({
+      ...CONFLICT,
+      path: 'references/plugin-authoring.md',
+    })
+    clock.tick(599_000)
+    result.resolve('resolved bytes')
+    await pending
+
+    const clear = '\r\u001b[2K'
+    const frames = terminal.writes.slice(0, -1)
+    expect(frames).toHaveLength(2)
+    for (const write of frames) {
+      expect(write.startsWith(clear)).toBe(true)
+      expect(write.slice(clear.length).length).toBeLessThanOrEqual(terminal.columns)
+      expect(write).toContain('ab-guide/references/plugin-authoring.md')
+      expect(write).toContain('Ctrl-C')
+    }
+    expect(frames.some((frame) => frame.endsWith('~'))).toBe(true)
+
+    // Model the single physical row: every write clears it before painting,
+    // and the final bare clear must leave no previous-frame characters.
+    let visibleRow = ''
+    for (const write of terminal.writes) {
+      expect(write.startsWith(clear)).toBe(true)
+      visibleRow = write.slice(clear.length)
+    }
+    expect(visibleRow).toBe('')
+  })
+
   test('Ctrl-C cancels once, aborts the resolver signal, and discards a late proposal', async () => {
     const terminal = fakeTerminal()
     const input = fakeInput()

@@ -9,6 +9,15 @@ const SPINNER = ['|', '/', '-', '\\'] as const
 const DEFAULT_REFRESH_MS = 250
 const CLEAR_LINE = '\r\u001b[2K'
 
+/** Keep every repaint on one physical terminal row. */
+function fitToColumns(frame: string, columns: number): string {
+  const width = Math.max(0, Math.floor(columns))
+  if (frame.length <= width) return frame
+  if (width === 0) return ''
+  if (width === 1) return '~'
+  return `${frame.slice(0, width - 1)}~`
+}
+
 export interface UpgradeProgressOptions {
   terminal: TerminalOut
   input: TerminalInput
@@ -61,10 +70,10 @@ export function withUpgradeProgress(
       const elapsed = Math.max(0, Math.floor((now() - startedAt) / 1_000))
       const spinner = SPINNER[frame % SPINNER.length]
       frame += 1
-      options.terminal.write(
-        `${CLEAR_LINE}${spinner} Resolving ${conflict.skill}/${conflict.path} — ` +
-          `elapsed ${elapsed}s — Ctrl-C to cancel`,
-      )
+      const status =
+        `${spinner} Resolving ${conflict.skill}/${conflict.path} — ` +
+        `elapsed ${elapsed}s — Ctrl-C to cancel`
+      options.terminal.write(`${CLEAR_LINE}${fitToColumns(status, options.terminal.columns)}`)
     }
 
     let timer: unknown
