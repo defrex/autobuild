@@ -39,6 +39,8 @@ import type { AbEvent } from '../../events/catalog'
 import type { RepositoryEvent } from '../../events/repository'
 import type { Config } from '../../config/schema'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
+import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
+import { decideNext } from '../../kernel/engine'
 import { verifyPhase } from '../../ontology'
 import type { BuildRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
@@ -715,6 +717,12 @@ export function projectBuild(
             : `exit status ${state.setupFailure.exitStatus}`
         }): ${state.setupFailure.output || '(no output)'}`
 
+  const decision = decideNext(events, config)
+  const mergeWaitReason =
+    decision.kind === 'wait' && decision.reason === 'awaiting-pr'
+      ? currentAutoMergeDeferral(events, state)
+      : undefined
+
   return {
     slug: record.slug,
     status,
@@ -722,7 +730,10 @@ export function projectBuild(
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps,
     ...(setupError !== undefined ? { setupError } : {}),
-    blockers: state.openEscalations.map((e) => e.question),
+    blockers: [
+      ...state.openEscalations.map((e) => e.question),
+      ...(mergeWaitReason !== undefined ? [mergeWaitReason] : []),
+    ],
     autoMerge: autoMergeDisplay(state),
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }

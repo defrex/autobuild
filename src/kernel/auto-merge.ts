@@ -116,6 +116,34 @@ export function hasAutoMergeDeferralObservation(
   )
 }
 
+/**
+ * The exact provider-bearing summary for the current, unapplied enable
+ * command. Deferral observations are durable history, so correlation to both
+ * the current PR and command is what prevents an old reason from looking live
+ * after consent is applied, cancelled, or replaced.
+ */
+export function currentAutoMergeDeferral(
+  events: AbEvent[],
+  state: Pick<BuildState, 'autoMerge' | 'pr'>,
+): string | undefined {
+  const pending = pendingAutoMerge(state)
+  if (pending?.enabled !== true || state.pr === undefined) return undefined
+
+  const marker = autoMergeDeferralRef(state.pr.number, pending.commandSeq)
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (
+      event !== undefined &&
+      event.seq > pending.commandSeq &&
+      event.type === 'observation.recorded' &&
+      event.payload.refs?.includes(marker) === true
+    ) {
+      return event.payload.summary
+    }
+  }
+  return undefined
+}
+
 const DEFERRAL_SUMMARIES = {
   'github-plan-limitation':
     'GitHub rulesets are unavailable because of the repository account plan',

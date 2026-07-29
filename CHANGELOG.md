@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#119](https://github.com/defrex/autobuild/pull/119) — Limit setup retries and surface durable failures
+- [#118](https://github.com/defrex/autobuild/pull/118) — Show actionable merge wait reasons
 - [#117](https://github.com/defrex/autobuild/pull/117) — Allow safe local merges into dirty checkouts
 - [#116](https://github.com/defrex/autobuild/pull/116) — Contain janitor failures per build
 - [#115](https://github.com/defrex/autobuild/pull/115) — Make `ab init` agent-driven and stack-neutral

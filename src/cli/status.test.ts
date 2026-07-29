@@ -11,6 +11,10 @@
  * never occurs in production.
  */
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -109,6 +113,105 @@ async function seedBuild(
     })
   }
 }
+
+async function seedAwaitingPr(
+  store: MemoryBuildStore,
+  workspace: string,
+  detail?: string,
+  refOnly = false,
+): Promise<void> {
+  await seedBuild(store, { slug: 'merge-wait' })
+  await store.append('merge-wait', {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'test',
+      ref: workspace,
+      ...(refOnly ? {} : { path: workspace }),
+      branch: 'ab/merge-wait',
+      base: { source: 'remote', sha: 'base' },
+    },
+  })
+  await store.append('merge-wait', {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: { artifact: { kind: 'spec', rev: 0 }, ticket: { source: 'linear', id: 'ENG-1' } },
+  })
+  await store.append('merge-wait', { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+  await store.append('merge-wait', {
+    actor: agentActor('plan', 's_plan'),
+    type: 'plan.completed',
+    payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+  })
+  await store.append('merge-wait', {
+    actor: KERNEL,
+    type: 'plan-review.started',
+    payload: { round: 1 },
+  })
+  await store.append('merge-wait', {
+    actor: agentActor('plan-review', 's_plan_review'),
+    type: 'plan-review.verdict',
+    payload: {
+      round: 1,
+      verdict: 'approve',
+      findings: [],
+      artifact: { kind: 'plan-review', rev: 0 },
+    },
+  })
+  await store.append('merge-wait', {
+    actor: KERNEL,
+    type: 'implement.started',
+    payload: { round: 1 },
+  })
+  await store.append('merge-wait', {
+    actor: agentActor('implement', 's_implement'),
+    type: 'implement.completed',
+    payload: {
+      round: 1,
+      commits: { base: 'base', head: 'head' },
+      artifact: { kind: 'implement-notes', rev: 0 },
+    },
+  })
+  await store.append('merge-wait', {
+    actor: KERNEL,
+    type: 'code-review.started',
+    payload: { round: 1 },
+  })
+  await store.append('merge-wait', {
+    actor: agentActor('code-review', 's_code_review'),
+    type: 'code-review.verdict',
+    payload: {
+      round: 1,
+      verdict: 'approve',
+      findings: [],
+      artifact: { kind: 'code-review', rev: 0 },
+    },
+  })
+  await store.append('merge-wait', { actor: KERNEL, type: 'finalize.started', payload: {} })
+  await store.append('merge-wait', {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr: { number: 7, url: 'https://example.test/pull/7', headSha: 'head' } },
+  })
+  const command = await store.append('merge-wait', {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  if (detail !== undefined) {
+    await store.append(
+      'merge-wait',
+      autoMergeDeferralObservation(
+        { code: 'local-base-checkout-dirty', detail },
+        7,
+        command.seq,
+        'obs_merge_wait',
+      ),
+    )
+  }
+}
+
+const MINIMAL_CONFIG = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
 describe('leaseHealth', () => {
   test('held when the lease has not expired', () => {
@@ -675,6 +778,57 @@ describe('renderers', () => {
     expect(detailText).not.toContain('\x1b')
   })
 
+  test('an awaiting-PR decision renders a bare or provider-qualified wait and accurate lease note', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    const events = await store.getEvents('b1')
+    const expired = record({
+      slug: 'b1',
+      lease: { holder: 'runner-1', expiresAt: '2026-07-15T11:00:00.000Z' },
+    })
+    const reason =
+      "Auto-merge gate could not apply consent for PR #7 — error: Entry 'autobuild.toml' not uptodate."
+
+    const qualified = detail(expired, events, NOW, undefined, {
+      kind: 'awaiting-pr',
+      reason,
+    })
+    expect(qualified.decision).toEqual({ kind: 'awaiting-pr', reason })
+    const qualifiedText = renderDetail(qualified, NOW).join('\n')
+    expect(qualifiedText).toContain(`waiting:  on PR — ${reason}`)
+    expect(qualifiedText).toContain('parked waiting on the PR')
+    expect(qualifiedText).toContain('no runner re-attachment is pending')
+    expect(qualifiedText).not.toContain('lease sweep will re-attach')
+
+    const bareText = renderDetail(
+      detail(expired, events, NOW, undefined, { kind: 'awaiting-pr' }),
+      NOW,
+    ).join('\n')
+    expect(bareText).toContain('waiting:  on PR')
+    expect(bareText).not.toContain('Auto-merge gate')
+  })
+
+  test('lease guidance retains re-attachment only for confirmed runner work', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    const events = await store.getEvents('b1')
+    const expired = record({
+      slug: 'b1',
+      lease: { holder: 'runner-1', expiresAt: '2026-07-15T11:00:00.000Z' },
+    })
+    const actionable = renderDetail(
+      detail(expired, events, NOW, undefined, { kind: 'runner-work' }),
+      NOW,
+    ).join('\n')
+    expect(actionable).toContain('lease sweep will re-attach it')
+
+    const parked = renderDetail(
+      detail(expired, events, NOW, undefined, { kind: 'parked', reason: 'paused' }),
+      NOW,
+    ).join('\n')
+    expect(parked).not.toContain('lease sweep will re-attach')
+  })
+
   test('a healthy running build reads differently from an expired one', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -925,6 +1079,111 @@ describe('abBuildStatus', () => {
       slug: 'b1',
     })
     expect(out.join('\n')).toContain('build b1')
+  })
+
+  test('projects the exact current merge-wait reason in human and JSON output', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-status-wait-'))
+    try {
+      await writeFile(join(workspace, 'autobuild.toml'), MINIMAL_CONFIG)
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      const providerDetail = "error: Entry 'autobuild.toml' not uptodate. Cannot merge."
+      await seedAwaitingPr(store, workspace, providerDetail)
+      await store.claimLease('merge-wait', 'runner-held', 60 * 60 * 1000)
+
+      const human: string[] = []
+      await abBuildStatus({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: (line) => human.push(line),
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'merge-wait',
+      })
+      expect(human.join('\n')).toContain(`waiting:  on PR — Auto-merge gate`)
+      expect(human.join('\n')).toContain(providerDetail)
+
+      const json: string[] = []
+      await abBuildStatus({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: (line) => json.push(line),
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'merge-wait',
+        json: true,
+      })
+      const parsed = JSON.parse(json.join('\n'))
+      expect(parsed.decision.kind).toBe('awaiting-pr')
+      expect(parsed.decision.reason).toContain(providerDetail)
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('renders an unqualified current PR wait when no deferral was recorded', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-status-bare-wait-'))
+    try {
+      await writeFile(join(workspace, 'autobuild.toml'), MINIMAL_CONFIG)
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      await seedAwaitingPr(store, workspace)
+      const out: string[] = []
+      await abBuildStatus({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: (line) => out.push(line),
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'merge-wait',
+      })
+      expect(out.join('\n')).toContain('waiting:  on PR')
+      expect(out.join('\n')).not.toContain('Auto-merge gate could not apply consent')
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('degrades missing, unreadable, and remote-only build configs without claiming current reason or re-attachment', async () => {
+    const badWorkspace = await mkdtemp(join(tmpdir(), 'ab-status-bad-config-'))
+    try {
+      await writeFile(join(badWorkspace, 'autobuild.toml'), '[invalid')
+      for (const [workspace, refOnly] of [
+        [join(badWorkspace, 'missing'), false],
+        [badWorkspace, false],
+        ['sandbox:remote-host/build-7', true],
+      ] as const) {
+        const store = new MemoryBuildStore({
+          clock: steppingClock('2026-07-15T11:00:00.000Z'),
+        })
+        await seedAwaitingPr(
+          store,
+          workspace,
+          'historical provider detail that must not look current',
+          refOnly,
+        )
+        await store.claimLease('merge-wait', 'runner-expired', 1000)
+        const out: string[] = []
+        await abBuildStatus({
+          targetRepo: '/anywhere',
+          env: {},
+          exec: fakeExec,
+          stdout: (line) => out.push(line),
+          openStore: () => store,
+          now: () => NOW,
+          slug: 'merge-wait',
+        })
+        const text = out.join('\n')
+        expect(text).toContain('decision: unavailable')
+        expect(text).toContain('runner actionability could not be determined')
+        expect(text).not.toContain('waiting:  on PR —')
+        expect(text).not.toContain('lease sweep will re-attach')
+        expect(text).toContain('observations (1)')
+      }
+    } finally {
+      await rm(badWorkspace, { recursive: true, force: true })
+    }
   })
 
   test('an unknown slug is an actionable error', async () => {

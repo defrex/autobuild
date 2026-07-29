@@ -7,6 +7,7 @@ import {
   autoMergeDeferralObservation,
   autoMergeDeferralRef,
   classifyAutoMergeEnable,
+  currentAutoMergeDeferral,
   hasAutoMergeDeferralObservation,
   mergeStateStatuses,
   recordAutoMergeDeferralObservation,
@@ -78,6 +79,71 @@ class ConditionalBarrierStore extends MemoryBuildStore {
     return super.appendIfCurrent(slug, expectedSeq, event)
   }
 }
+
+describe('currentAutoMergeDeferral', () => {
+  const observation = (pr: number, commandSeq: number, summary: string): AbEvent =>
+    ({
+      build: 'build-1',
+      seq: commandSeq + 1,
+      ts: '2026-01-01T00:00:00.000Z',
+      ...autoMergeDeferralObservation(
+        { code: 'repository-auto-merge-disabled', detail: summary },
+        pr,
+        commandSeq,
+        `obs_${commandSeq}`,
+      ),
+    }) as AbEvent
+
+  test('returns the complete provider-bearing summary for the current pending enable', () => {
+    const github = observation(42, 17, 'allow_auto_merge=false')
+    const local = observation(42, 18, "error: Entry 'src/config.ts' not uptodate")
+
+    expect(
+      currentAutoMergeDeferral([github], {
+        pr: { number: 42, url: 'https://example.test/42', headSha: 'head' },
+        autoMerge: { requested: true, commandSeq: 17 },
+      }),
+    ).toContain('allow_auto_merge=false')
+    expect(
+      currentAutoMergeDeferral([local], {
+        pr: { number: 42, url: 'local://42', headSha: 'head' },
+        autoMerge: { requested: true, commandSeq: 18 },
+      }),
+    ).toContain("error: Entry 'src/config.ts' not uptodate")
+  })
+
+  test('ignores another PR or superseded command', () => {
+    const old = observation(42, 17, 'old provider detail')
+    expect(
+      currentAutoMergeDeferral([old], {
+        pr: { number: 43, url: 'https://example.test/43', headSha: 'head' },
+        autoMerge: { requested: true, commandSeq: 17 },
+      }),
+    ).toBeUndefined()
+    expect(
+      currentAutoMergeDeferral([old], {
+        pr: { number: 42, url: 'https://example.test/42', headSha: 'head' },
+        autoMerge: { requested: true, commandSeq: 19 },
+      }),
+    ).toBeUndefined()
+  })
+
+  test('ignores applied and cancelled consent', () => {
+    const deferred = observation(42, 17, 'provider detail')
+    expect(
+      currentAutoMergeDeferral([deferred], {
+        pr: { number: 42, url: 'https://example.test/42', headSha: 'head' },
+        autoMerge: { requested: true, commandSeq: 17, applied: { enabled: true, commandSeq: 17 } },
+      }),
+    ).toBeUndefined()
+    expect(
+      currentAutoMergeDeferral([deferred], {
+        pr: { number: 42, url: 'https://example.test/42', headSha: 'head' },
+        autoMerge: { requested: false, commandSeq: 19 },
+      }),
+    ).toBeUndefined()
+  })
+})
 
 describe('auto-merge deferral observations', () => {
   test('uses an auto-merge-gate-specific summary and stable PR/command marker', () => {

@@ -24,6 +24,7 @@ import {
 } from '../../events/catalog'
 import { KERNEL, humanActor, type Actor } from '../../events/envelope'
 import type { eventPayloadSchemas, EventType } from '../../events/payloads'
+import { autoMergeDeferralRef } from '../../kernel/auto-merge'
 import { decideNext } from '../../kernel/engine'
 import { reduceBuild } from '../../kernel/reducer'
 import type { Config } from '../../config/schema'
@@ -132,6 +133,20 @@ function toLog(writes: EventWrite[]): AbEvent[] {
         payload: write.payload,
       }) as AbEvent,
   )
+}
+
+function withAutoMergeDeferral(writes: EventWrite[], summary: string): EventWrite[] {
+  const commandSeq = writes.length + 1
+  return [
+    ...writes,
+    ev('build.auto-merge-requested', {}),
+    ev('observation.recorded', {
+      id: `obs_${commandSeq}`,
+      kind: 'followup',
+      summary,
+      refs: [autoMergeDeferralRef(7, commandSeq)],
+    }),
+  ]
 }
 
 const RECORD: BuildRecord = {
@@ -1293,6 +1308,51 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(stateOf(build, 'merge')).toBe('current')
     expect(stepFor(build, 'merge')?.qualifier).toBe('waiting')
     expect(build.pr).toEqual({ url: 'https://github.com/defrex/app/pull/7', state: 'open' })
+    expect(build.blockers).toEqual([])
+  })
+
+  test('an awaiting-PR deferral surfaces its complete forge-agnostic provider detail', () => {
+    const reason =
+      "Auto-merge gate could not apply consent for PR #7: local merge is blocked — error: Entry 'autobuild.toml' not uptodate."
+    const log = toLog(withAutoMergeDeferral(throughPr, reason))
+    expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+    expect(project(log).blockers).toEqual([reason])
+  })
+
+  test('a pending deferral is suppressed while finalize work or a human gate takes precedence', () => {
+    const reason = 'Auto-merge gate deferred — provider-specific detail'
+    const finalizeDue = toLog(withAutoMergeDeferral(throughPr, reason))
+    expect(decideNext(finalizeDue, CONFIG_POST_STEPS)).toMatchObject({
+      kind: 'run-finalize-step',
+    })
+    expect(project(finalizeDue, CONFIG_POST_STEPS).blockers).toEqual([])
+
+    const paused = toLog([...withAutoMergeDeferral(throughPr, reason), ev('build.paused', {})])
+    expect(decideNext(paused, CONFIG)).toEqual({ kind: 'wait', reason: 'paused' })
+    expect(project(paused).blockers).toEqual([])
+
+    const blocked = toLog([
+      ...withAutoMergeDeferral(throughPr, reason),
+      ev('escalation.raised', {
+        id: 'e_merge',
+        phase: 'finalize',
+        source: 'agent',
+        question: 'operator decision required',
+      }),
+    ])
+    expect(decideNext(blocked, CONFIG)).toEqual({ kind: 'wait', reason: 'blocked' })
+    expect(project(blocked).blockers).toEqual(['operator decision required'])
+  })
+
+  test('an applied or superseded deferral remains historical rather than current', () => {
+    const reason = 'Auto-merge gate deferred — stale detail'
+    const appliedWrites = withAutoMergeDeferral(throughPr, reason)
+    const commandSeq = throughPr.length + 1
+    const applied = toLog([...appliedWrites, ev('pr.auto-merge-enabled', { commandSeq })])
+    expect(project(applied).blockers).toEqual([])
+
+    const superseded = toLog([...appliedWrites, ev('build.auto-merge-requested', {})])
+    expect(project(superseded).blockers).toEqual([])
   })
 
   test('a skipped verify step drains into finalize and merge without becoming a pass', () => {
