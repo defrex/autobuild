@@ -1416,10 +1416,18 @@ base × local edits × new default). A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local
 customization**. The agent output is only an untrusted proposal — deterministic
 validation verifies skill identity and exact preservation of every already-clean
-merge region before anything is written. Failed or unavailable judgment leaves
-both live and pristine byte-untouched and names the manual merge path. Local
-customization survives upgrades; divergence is visible instead of silent. No
-other command checks for or installs releases in the foreground or background.
+merge region before anything is written. Each per-file judgment has a fixed
+generous deadline of at least ten minutes. While it runs on an interactive
+stdout, upgrade redraws a live indicator naming the skill and path, elapsed
+time, and Ctrl-C cancellation. Ctrl-C there aborts only that invocation: the
+file becomes an ordinary byte-untouched content conflict and upgrade continues.
+Outside an active resolution Ctrl-C retains ordinary process termination.
+Non-TTY output stays byte-identical and line-oriented. Failed, timed-out,
+cancelled, or unavailable judgment leaves both live and pristine byte-untouched
+and names the manual merge path. These content conflicts remain exit zero;
+discovery conflicts retain their nonzero contract. Local customization survives
+upgrades; divergence is visible instead of silent. No other command checks for
+or installs releases in the foreground or background.
 
 ## 17. Out of scope for v2.0 (explicitly)
 

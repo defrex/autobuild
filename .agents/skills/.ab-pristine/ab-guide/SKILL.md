@@ -259,17 +259,17 @@ likes.
 | `<name>` | — | nonempty string → nonempty shell string | Names a deterministic verb the kernel may run. Referenced by name from check steps in `[verify.<step>]` or `[finalize.<step>]`. |
 
 `setup` is special by convention: it runs after workspace provision and after a
-sandbox rehydrate. Values are never evaluated as config — they are handed to a
+sandbox rehydrate. Failures are durable, remain visible in build status and the
+dashboard, and retry up to `[policy].maxSetupAttempts`; exhaustion raises a
+setup-targeted escalation without manufacturing a pipeline phase or verdict. A
+human answer re-arms the budget, and a later successful `runner.attached` clears
+the current error. Values are never evaluated as config — they are handed to a
 shell as written.
 
-For first config creation, `ab init` starts with `setup = "bun install"` and
-recognizes only exact own keys in the root `package.json` scripts map. Each of
-`lint`, `type-check`, and `test` adds an identically named `bun run <script>`
-command plus an identically named verify check with `always = true`. Missing
-scripts add nothing (`typecheck` is not an alias for `type-check`), so every
-generated package command names a script that exists and every generated check
-has a backing command. This detection does not restrict later manual
-configuration: commands remain an open map.
+Fresh init config deliberately leaves this map empty. The non-phase `ab-setup`
+agent derives commands from the repository's actual toolchain and asks the user
+about choices source cannot answer; deterministic init code never guesses a
+language or package manager.
 
 ### `[verify]`
 
@@ -440,6 +440,7 @@ Every field is a **positive integer**.
 |---|---|---|---|
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
+| `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
 | `maxReviewRounds` | `4` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
@@ -518,51 +519,31 @@ environment variable instead and say why.
 
 ## Setup and upgrades
 
-**`ab init <target> [--force] [--forge github|local-git]
-[--ticket-source file|linear] [--workspace-provider git-worktree]
-[--role-profile split|<registered-runtime>]
-[--no-interactive]`** runs *outside* build sessions — it takes a repo path,
-needs no `AB_*` environment, and is safe to re-run. It:
+**`ab init <target> [--force]`** runs *outside* build sessions — it takes a
+repo path, needs no `AB_*` environment, and is safe to re-run. It:
 
-- If `autobuild.toml` is absent and both stdin and stdout are TTYs, prompts for
-  unresolved ticket, workspace, role, and forge choices. GitHub is preselected;
-  local-git needs no account, credentials, remote, or network. The first
-  ticket/workspace options are the no-account local file tracker and shipped git-worktree
-  provider. Runtime choices are limited to registered runtimes whose local
-  executable/authentication probe succeeds. The `split` role profile is offered
-  only when Pi can authenticate both of its models; it uses Pi with
-  `openai-codex/gpt-5.6-sol` for plan/implement and `kimi-coding/k3` for both
-  review roles. The shipped runtime choices are `claude`, `codex`, and `pi`;
-  each writes that runtime as the explicit default, with Codex driving the
-  locally authenticated Codex CLI. Move with Up/Down and confirm with Enter;
-  each option's explanation is inline, and each submitted prompt remains on
-  screen collapsed to its chosen label. Every prompt also notes that custom
-  adapters can be built with an agent and points to
-  `.agents/skills/ab-guide/references/plugin-authoring.md`. Ctrl+C cancels with
-  a plain message before config, ignore rules, migration, or skills are written.
-- Each selection flag suppresses its corresponding prompt; all four make init
-  prompt-free. Noninteractive init defaults the forge to GitHub. Explicit role profiles are operator overrides. An unresolved
-  non-interactive role choice selects a detected usable runtime and writes it
-  explicitly; when none is usable, init fails before mutation and names
-  `--role-profile`.
-- The generated config is a lean active-only skeleton: its short header says it
-  is declarative and unevaluated and directs changes to the coding agent. It
-  keeps `capacity`, all policy defaults, and verify/finalize `steps` explicit;
-  configuration alternatives live in this complete reference rather than as
-  commented-out TOML.
-- The config uses the target's root `package.json`: exact `lint`, `type-check`,
-  and `test` scripts add the command/check fragments described above. Missing
-  package metadata means no package-backed commands or checks; malformed JSON
-  or an invalid recognized declaration fails with the manifest path.
-- Linear selection writes placeholders for required non-secret `teamKey` and
-  `readyState`, then prints those fields and the required `LINEAR_API_KEY`
-  environment variable. It never asks for or writes a secret. Pi selections
-  say to run `pi` and use `/login`, or set the provider API key in the
-  environment. Codex selection says to install the `codex` executable and run
-  `codex login`; Autobuild has no login facility of its own.
-- It **never prompts, validates selection flags, inspects package scripts, or
-  overwrites config once the file exists**, even with `--force`; the repo's
-  config is the repo's from the first re-run onward.
+- Probes every registered runtime and reports whether it is usable, including a
+  diagnostic reason. Setup launch selection uses the fixed product order
+  `claude`, `codex`, then `pi`; it never depends on repository content or a user
+  questionnaire.
+- If config is absent, writes a valid stack-neutral skeleton with empty
+  `[commands]`, no verify or finalize steps, a valid local ticket gate, and one
+  explicit runtime solely as a schema placeholder. It reads no package or
+  language manifest and invents no command.
+- Vendors skills before handoff, then reads the locally editable `ab-setup`
+  skill. On an interactive terminal it starts the selected coding-agent CLI in
+  the target repository and propagates that process's exit status. The direct
+  child inherits terminal I/O but no ambient `AB_*` identity, and creates no
+  build, session, event, transcript, or BuildStore record.
+- Without an interactive terminal or usable shipped runtime, deterministic
+  installation still succeeds. Init prints every probe reason and the exact
+  setup prompt for the user to run in a coding agent.
+- The setup agent inspects the repository, configures real commands and verify
+  steps, independently chooses pipeline role runtimes/models, configures the
+  ticket source and environment-only credentials, arranges repository-specific
+  end-to-end verification, and files one groomed dispatchable ticket.
+- It never overwrites config once the file exists, even with `--force`; a rerun
+  launches or prints a prompt that asks the agent to review and improve it.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
   preserving every existing byte/rule and handling a missing trailing newline.
 - **Copies each complete canonical skill directory** to
@@ -570,22 +551,25 @@ needs no `AB_*` environment, and is safe to re-run. It:
   not links. Every file is **editable**: per-repo customization is the point.
   Unknown repository-local support files are left alone.
 - Links `.claude/skills/ab-<name>` → the `.agents` directory, so Claude, Codex,
-  and Pi discover **one** editable tree rather than diverging copies.
+  and Pi discover **one** editable tree rather than diverging copies. If the
+  `.claude/skills` and `.agents/skills` roots already resolve to the same
+  directory, that repository-level alias satisfies discovery: no per-skill
+  link or legacy `.claude` pristine migration is attempted.
 - Records the **pristine** installed tree at
   `.agents/skills/.ab-pristine/ab-<name>/` — repo-versioned, and the per-file
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
-  set (`ab-spec`, `ab-tickets`, `ab-guide`).
+  set (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-setup`).
 
-The final report states `autobuild.toml: written|skipped` and aggregates all
-skill counts. Per-skill outcomes are `installed` (new), `unchanged`
-(byte-identical to the default), `kept` (locally edited — **init never clobbers
-an edit**), or `overwritten` (only under `--force`, the explicit human
-override). Only `kept` and `overwritten` skills are named individually. The
-next-steps block always says that the operator can ask their coding agent to
-change `autobuild.toml`; Linear and runtime-auth follow-ups join it when selected. Non-TTY
-output is plain text with no ANSI escapes or box drawing.
+The final report states `autobuild.toml: written|skipped`, aggregates all skill
+counts, names only attention-worthy `kept` and `overwritten` skills, and reports
+every runtime probe result. A distinct real `.claude/skills/ab-*` directory is
+not mistaken for an alias: init processes the remaining skills, accumulates all
+such conflicts with move/remove guidance, skips setup, and exits nonzero. The
+interactive path otherwise names the selected setup runtime; the fallback
+prints its manual-run instruction and exact prompt. Non-TTY output is plain
+text.
 
 **`ab --version`** reports the installed package version, Bun-recorded commit
 when available, and plugin API version using local distribution metadata only.
@@ -636,8 +620,12 @@ unchanged and in order; `SKILL.md` additionally requires the same namespaced
 frontmatter identity. Standard marker lines are rejected in agent-authored hunk
 gaps but allowed when already protected as exact clean content. Validation
 finishes before either file is written. A rejected proposal remains report-only alongside the marked merge diagnostic;
-the CLI prints the exact pristine path to merge by hand. Local customization
-survives upgrades, and divergence is visible instead of silent.
+the CLI prints the exact pristine path to merge by hand. Distinct real Claude
+skill directories are a separate discovery-conflict class: upgrade processes
+all skills, reports every collision with move/remove guidance, and exits
+nonzero, while content-level `conflicted` outcomes retain their exit-zero
+contract. Local customization survives upgrades, and divergence is visible
+instead of silent.
 
 ## Local state and store selection
 
@@ -736,9 +724,14 @@ terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Auto Build` summary with the repository
-basename, queue depth, and active-build count, followed by an indented controls
-line for `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and
-`harvest ON`/`harvest OFF`. The controls start in the title column. From the top
+basename followed by the compact counters
+`queue <depth> | active <current>/<limit> | obs <current>/<limit>`.
+`queue` is the ready-ticket queue depth; `active` is the current
+nonterminal-build count against root `capacity`; and `obs` is the current count
+of recorded observation occurrences not yet claimed by a Harvest snapshot
+against `[policy].harvestThreshold`. An indented controls line follows for
+`intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
+ON`/`harvest OFF`. The controls start in the title column. From the top
 of the frame through the body, the two-column marker lane stays empty except for
 the selected row's `> ` marker. All three controls are durable repository
 projections and converge across dispatchers on the existing poll; harvest
@@ -898,8 +891,12 @@ filter matched nothing, not that the command failed. Widen it with `--queued`
 or `--all` before concluding a build doesn't exist.
 
 **`ab build status <slug>`** details one build: unresolved escalations, open
-sessions, verify progress for the current cycle, PR lifecycle, latest event,
-heartbeat, and lease. `--events <n>` appends the newest `n` event envelopes in
+sessions, chronological durable observations, verify progress for the current
+cycle, PR lifecycle, latest event, heartbeat, and lease. Observations are shown
+without `--events`; for `forge = "local-git"`, this is where a deferred landing
+names uncommitted work that collides with the squash. Autobuild leaves that work
+untouched and later dispatcher ticks retry automatically after the operator
+resolves it. `--events <n>` appends the newest `n` event envelopes in
 chronological order — the fastest way to see what a build actually just did.
 
 Verify progress covers the **current cycle** — the results since the latest
@@ -958,6 +955,7 @@ default, when you need to know what this repo's version says).
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
 | `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invocable.** |
+| `ab-setup` | Outside the pipeline | Repository-aware first configuration and rerun review, launched directly by `ab init` or copied as its fallback prompt. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
 | `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
@@ -968,11 +966,11 @@ default, when you need to know what this repo's version says).
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
 
-Everything except `ab-spec`, `ab-tickets`, and `ab-guide` is **runner-invoked**
-by the kernel and carries `disable-model-invocation: true` — do not invoke a
-phase skill yourself, and do not remove that key to make one convenient to call.
-A model starting a pipeline phase by pattern-matching a description is exactly
-what the flag prevents. The three exceptions drive no phase, which is the
-criterion for membership (§16.3): `ab-spec` and `ab-tickets` are the
-human/agent-facing surfaces that run before a build exists, and `ab-guide` is
-read-only reference material.
+Everything except `ab-spec`, `ab-tickets`, `ab-guide`, and `ab-setup` is
+**runner-invoked** by the kernel and carries `disable-model-invocation: true` —
+do not invoke a phase skill yourself, and do not remove that key to make one
+convenient to call. A model starting a pipeline phase by pattern-matching a
+description is exactly what the flag prevents. The four exceptions drive no
+phase, which is the criterion for membership (§16.3): `ab-spec` and
+`ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is read-only
+reference, and `ab-setup` configures a repository without a build session.
