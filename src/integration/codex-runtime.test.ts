@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { abDispatch } from '../cli/dispatch'
+import { reduceBuild } from '../kernel/reducer'
 import type { AgentSessionHandle, AgentTurnResult } from '../ports/types'
 import {
   CodexAgentRunner,
@@ -6,6 +8,7 @@ import {
   type CodexCliResult,
 } from '../ports/runner/codex'
 import type { ScriptedAgentRunner } from '../ports/runner/fake'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   happyHandlers,
   makeHarness,
@@ -16,6 +19,11 @@ import {
 } from './harness'
 
 const CODEX_CONFIG = CONFIG_TOML.replace('runtime = "scripted"', 'runtime = "codex"')
+const CODEX_SLUG = 'login-throttling'
+
+function isOneShotCall(call: CodexCliInvocation): boolean {
+  return call.args[0] === 'exec' && call.args[1] === '--json' && call.args[2] === '--ephemeral'
+}
 
 function jsonl(events: Record<string, unknown>[]): CodexCliResult {
   return {
@@ -64,6 +72,20 @@ function codexTransport(agents: ScriptedAgentRunner) {
       const modelIndex = call.args.indexOf('--model')
       const model = modelIndex >= 0 ? call.args[modelIndex + 1] : undefined
       const resume = call.args[1] === 'resume'
+
+      if (isOneShotCall(call)) {
+        return jsonl([
+          { type: 'thread.started', thread_id: 'codex-one-shot' },
+          {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: CODEX_SLUG },
+          },
+          {
+            type: 'turn.completed',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        ])
+      }
 
       if (resume) {
         const threadId = call.args[separator - 1]
@@ -128,14 +150,29 @@ test('a Codex-only runtime drives a full build and native producer continuation'
     },
   })
 
+  const dispatchErrors: string[] = []
   try {
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
-    const state = await h.runLatest()
-    expect(state.prState).toBe('open')
+    await abDispatch({
+      targetRepo: h.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => dispatchErrors.push(line),
+      once: true,
+      wire: () => h.wiring,
+    })
+
+    expect(dispatchErrors).toEqual([])
     expect(h.cliErrors).toEqual([])
     expect(planReviews).toBe(2)
 
-    const events = await h.events('add-rate-limiting')
+    const builds = await h.store.listBuilds()
+    expect(builds).toHaveLength(1)
+    expect(builds[0]?.slug).toBe(CODEX_SLUG)
+    expect(builds[0]?.branch).toBe(`ab/${CODEX_SLUG}`)
+
+    const events = await h.events(CODEX_SLUG)
+    expect(reduceBuild(events).prState).toBe('open')
     const started = ofType(events, 'session.started')
     expect(started.length).toBeGreaterThan(0)
     expect(started.every((event) => event.payload.runner === 'codex')).toBe(true)
@@ -144,11 +181,17 @@ test('a Codex-only runtime drives a full build and native producer continuation'
     const calls = transport?.calls ?? []
     expect(calls.length).toBeGreaterThan(0)
     expect(calls.every((call) => call.args[0] === 'exec')).toBe(true)
+    const oneShots = calls.filter(isOneShotCall)
+    expect(oneShots).toHaveLength(1)
+    const oneShotSeparator = oneShots[0]!.args.lastIndexOf('--')
+    const oneShotPrompt = oneShots[0]!.args[oneShotSeparator + 1]
+    expect(oneShotPrompt).toContain('Choose a short identifier for this software build.')
+    expect(oneShotPrompt).toContain('<build-spec>')
     const resume = calls.find((call) => call.args[1] === 'resume')
     expect(resume).toBeDefined()
     expect(resume?.args).toContain('codex-thread-1')
 
-    const transcripts = await h.store.listArtifacts('add-rate-limiting', 'transcript')
+    const transcripts = await h.store.listArtifacts(CODEX_SLUG, 'transcript')
     expect(transcripts.length).toBeGreaterThan(0)
     expect(transcripts.every((artifact) => artifact.metadata.runner === 'codex')).toBe(true)
     expect(h.forge.opened).toHaveLength(1)
