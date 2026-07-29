@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#124](https://github.com/defrex/autobuild/pull/124) — Document dispatch dashboard pressure counters
+- [#123](https://github.com/defrex/autobuild/pull/123) — Synchronize installed plugin resolution guidance
 - [#122](https://github.com/defrex/autobuild/pull/122) — Restore the explicit runtime changelog entry
 - [#110](https://github.com/defrex/autobuild/pull/110) — Require an explicit default agent runtime instead of silently defaulting to Claude
 - [#121](https://github.com/defrex/autobuild/pull/121) — Allow per-ticket creation state overrides
