@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#129](https://github.com/defrex/autobuild/pull/129) — Make dashboard pause and resume controls explicit
 - [#127](https://github.com/defrex/autobuild/pull/127) — Add complete dashboard abort cleanup
 - [#126](https://github.com/defrex/autobuild/pull/126) — Show cancellable progress during skill upgrades
 - [#125](https://github.com/defrex/autobuild/pull/125) — Exercise Codex slug naming in integration
