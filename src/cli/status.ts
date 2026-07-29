@@ -4,12 +4,12 @@
  * init/upgrade/ticket/dispatch (§16.3): they take a repo, not a build.
  *
  * The shape is one decision: **the projection is pure, the IO is a thin
- * shell.** The functions below map `(BuildRecord, AbEvent[], now)` to plain
- * data (`BuildSummary`, `BuildDetail`), and the renderers map that data to
- * `string[]`. The command entry points only resolve a store, fetch, project,
- * and print. So `--json` IS the projection object and the human text is a
- * second renderer over the same value — there is no "compute for text" path
- * that can disagree with the JSON.
+ * shell.** The functions below map build facts plus an optional build-config
+ * decision to plain data (`BuildSummary`, `BuildDetail`), and the renderers map
+ * that data to `string[]`. The command entry points only resolve a store, fetch
+ * the build-owned config when needed, project, and print. So `--json` IS the
+ * projection object and the human text is a second renderer over the same
+ * value — there is no "compute for text" path that can disagree with the JSON.
  *
  * Effective status comes from `reduceBuild` — the authoritative event-derived
  * projection (§15.5, §3.4). This is NOT a second read model: it reduces the
@@ -28,8 +28,12 @@
  * formatting" are both satisfied by emitting none rather than by gating on a
  * TTY check.
  */
+import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
 import type { Actor } from '../events/envelope'
+import { loadConfig } from '../config/load'
+import { currentAutoMergeDeferral } from '../kernel/auto-merge'
+import { decideNext } from '../kernel/engine'
 import {
   reduceBuild,
   type BuildState,
@@ -99,7 +103,16 @@ export interface BuildObservation {
   refs?: string[]
 }
 
+export type BuildDecisionProjection =
+  | { kind: 'awaiting-pr'; reason?: string }
+  | { kind: 'parked'; reason: string }
+  | { kind: 'runner-work' }
+  | { kind: 'unavailable'; diagnostic: string }
+
 export interface BuildDetail extends BuildSummary {
+  /** Current engine decision from the build-owned config, when an active PR
+   * makes that classification relevant. */
+  decision?: BuildDecisionProjection
   openEscalations: OpenEscalation[]
   openSessions: OpenSession[]
   observations: BuildObservation[]
@@ -200,6 +213,7 @@ export function detail(
   events: AbEvent[],
   now: Date,
   eventCount?: number,
+  decision?: BuildDecisionProjection,
 ): BuildDetail {
   const state = reduceBuild(events)
   const summary = summarizeFrom(record, state, now)
@@ -223,6 +237,7 @@ export function detail(
     }))
   return {
     ...summary,
+    ...(decision !== undefined ? { decision } : {}),
     openEscalations: state.openEscalations,
     openSessions: state.sessions.open,
     // Observations are historical facts rather than a derived current-state
@@ -370,15 +385,36 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(`  heartbeat: ${d.lease.heartbeatAt} (${relativeTime(d.lease.heartbeatAt, now)})`)
   }
   if (d.status === 'running' && d.lease.health === 'expired') {
-    lines.push(
-      '  note:     running with an expired lease — the runner is gone; the lease sweep will re-attach it',
-    )
+    if (d.decision?.kind === 'awaiting-pr') {
+      lines.push(
+        '  note:     running with an expired lease — parked waiting on the PR; no runner re-attachment is pending',
+      )
+    } else if (d.decision?.kind === 'parked') {
+      lines.push(
+        '  note:     running with an expired lease — the current decision is parked; no runner re-attachment is pending',
+      )
+    } else if (d.decision?.kind === 'unavailable') {
+      lines.push(
+        '  note:     running with an expired lease — runner actionability could not be determined from the unavailable build config',
+      )
+    } else {
+      lines.push(
+        '  note:     running with an expired lease — the runner is gone; the lease sweep will re-attach it',
+      )
+    }
   }
 
   if (d.pr !== undefined) {
     lines.push(
       `  pr:       #${d.pr.number}${d.pr.state !== undefined ? ` (${d.pr.state})` : ''} ${d.pr.url}`,
     )
+  }
+  if (d.decision?.kind === 'awaiting-pr') {
+    lines.push(
+      `  waiting:  on PR${d.decision.reason !== undefined ? ` — ${d.decision.reason}` : ''}`,
+    )
+  } else if (d.decision?.kind === 'unavailable') {
+    lines.push(`  decision: unavailable — ${d.decision.diagnostic}`)
   }
 
   if (d.openEscalations.length > 0) {
@@ -517,6 +553,54 @@ export interface AbBuildStatusOpts extends StatusOpts {
   events?: number
 }
 
+function openWorkspacePath(events: AbEvent[]): string | undefined {
+  let path: string | undefined
+  for (const event of events) {
+    if (event.type === 'workspace.provisioned') {
+      path = event.payload.path ?? event.payload.ref
+    } else if (event.type === 'workspace.released') {
+      path = undefined
+    }
+  }
+  return path
+}
+
+/** Load the exact config frozen into the active build workspace. An absent or
+ * remote-only workspace is a reportable degradation, never a reason to guess
+ * from the current main branch or to make the read-only command fail. */
+async function projectBuildDecision(
+  events: AbEvent[],
+): Promise<BuildDecisionProjection | undefined> {
+  const state = reduceBuild(events)
+  const active =
+    state.status === 'running' || state.status === 'paused' || state.status === 'blocked'
+  if (!active || state.prState !== 'open') return undefined
+
+  const workspace = openWorkspacePath(events)
+  if (workspace === undefined) {
+    return {
+      kind: 'unavailable',
+      diagnostic: 'no unreleased build workspace is recorded, so the build config cannot be read',
+    }
+  }
+
+  const configPath = join(workspace, 'autobuild.toml')
+  try {
+    const config = await loadConfig(configPath)
+    const decision = decideNext(events, config)
+    if (decision.kind !== 'wait') return { kind: 'runner-work' }
+    if (decision.reason !== 'awaiting-pr') return { kind: 'parked', reason: decision.reason }
+    const reason = currentAutoMergeDeferral(events, state)
+    return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      kind: 'unavailable',
+      diagnostic: `could not read the build config at ${configPath}: ${message}`,
+    }
+  }
+}
+
 /** `ab build status <slug>` — one build in detail. Read-only. */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
@@ -531,7 +615,9 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     if (record.repo !== repo) {
       throw new Error(`build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`)
     }
-    const d = detail(record, await store.getEvents(opts.slug), now, opts.events)
+    const events = await store.getEvents(opts.slug)
+    const decision = await projectBuildDecision(events)
+    const d = detail(record, events, now, opts.events, decision)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(d, null, 2))
       return
