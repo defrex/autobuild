@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#120](https://github.com/defrex/autobuild/pull/120) — Support aliased skill directories during vendoring
 - [#118](https://github.com/defrex/autobuild/pull/118) — Show actionable merge wait reasons
 - [#117](https://github.com/defrex/autobuild/pull/117) — Allow safe local merges into dirty checkouts
 - [#116](https://github.com/defrex/autobuild/pull/116) — Contain janitor failures per build
