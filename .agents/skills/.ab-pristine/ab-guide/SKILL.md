@@ -465,7 +465,7 @@ state eligible.
 | `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file canonicalizes it to a state directory (`ready` → `ready/`). There is no any-state mode. |
 | `teamKey` | — | required by `linear`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`) or an existing plugin configuration field. |
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
-| `createState` | — | optional, nonempty string | State new tickets are filed into. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
+| `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
@@ -672,9 +672,11 @@ The sessionless `ab ticket` namespace constructs whichever TicketSource the
 repository's `[tickets]` table selects. These forms therefore work unchanged
 with Linear and the file tracker, without provider-specific API/MCP calls:
 
-- `ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]`
-  files a ticket. Blocker ids belong to the same source and are checked before
-  creation.
+- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]`
+  files a ticket. Without `--state`, the source uses `[tickets].createState` or
+  its own default. A named state is passed through unchanged and the selected
+  source validates it before creating anything. Blocker ids belong to the same
+  source and are also checked before the single create call.
 - `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]`
   partially replaces editable fields. At least one flag is required.
 - `ab ticket block <id> <blocker-id>` adds one blocking relationship.

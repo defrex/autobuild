@@ -4,6 +4,14 @@ import { join, resolve } from 'node:path'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
+const installedSpec = await readFile(
+  join(DIST_ROOT, '.agents', 'skills', 'ab-spec', 'SKILL.md'),
+  'utf8',
+)
+const pristineSpec = await readFile(
+  join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-spec', 'SKILL.md'),
+  'utf8',
+)
 const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
 const installedTickets = await readFile(
   join(DIST_ROOT, '.agents', 'skills', 'ab-tickets', 'SKILL.md'),
@@ -22,6 +30,26 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).toContain('ab ticket unblock <ticket> <blocker-id>')
     expect(spec).toContain('Omitted metadata is preserved')
     expect(spec).not.toContain("Changing* an existing ticket's dependencies is not available")
+  })
+
+  test('spec honors stated create placement without asking or inferring it', () => {
+    expect(spec).toContain('ab ticket create "…" --body spec.md --state "<state>"')
+    expect(spec).toContain('Do not ask a placement question solely to obtain a state')
+    expect(spec).toContain('do not infer one\nfrom the ticket')
+    expect(spec).toContain('If grooming named no destination, omit `--state`')
+    expect(spec).toContain("uses `[tickets].createState`, or the ticket source's own default")
+    expect(spec).toContain('explicitly named destination equals `[tickets].readyState`')
+    expect(spec).toContain('may be claimed by the next\ndispatch')
+    for (const gate of ['label', 'dependency', 'intake', 'capacity', 'readiness']) {
+      expect(spec).toContain(gate)
+    }
+  })
+
+  test('checked-in live and pristine spec skills match the canonical install form', () => {
+    const expectedInstalled = spec.replace('\nname: spec\n', '\nname: ab-spec\n')
+    expect(expectedInstalled).not.toBe(spec)
+    expect(installedSpec).toBe(expectedInstalled)
+    expect(pristineSpec).toBe(expectedInstalled)
   })
 
   test('tickets keeps file lifecycle transitions local but blocker edits source-agnostic', () => {

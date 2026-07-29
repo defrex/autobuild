@@ -10,7 +10,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type { Ticket, TicketDraft, TicketListing, TicketSource, TicketUpdate } from '../ports/types'
+import type {
+  Ticket,
+  TicketCreateOptions,
+  TicketDraft,
+  TicketListing,
+  TicketSource,
+  TicketUpdate,
+} from '../ports/types'
 import { runCli } from './main'
 import {
   abTicketBlock,
@@ -62,6 +69,7 @@ function fakeFactory(
     env?: Record<string, string | undefined>
     targetRepo?: string
     draft?: TicketDraft
+    createOptions?: TicketCreateOptions
     update?: { id: string; patch: TicketUpdate }
     blockerAdds?: Array<{ id: string; blockerId: string }>
     blockerRemovals?: Array<{ id: string; blockerId: string }>
@@ -113,8 +121,9 @@ function fakeFactory(
             blockedBy: [],
           })),
         ),
-      create: (draft: TicketDraft): Promise<Ticket> => {
+      create: (draft: TicketDraft, options?: TicketCreateOptions): Promise<Ticket> => {
         created.draft = draft
+        created.createOptions = options
         return Promise.resolve({
           ref: { source: 'fake', id: 'fake-1', url: 'https://example.test/fake-1' },
           title: draft.title,
@@ -218,7 +227,27 @@ describe('abTicketCreate', () => {
       body: '## What and why\n\nBecause.\n',
       labels: ['autobuild'],
     })
+    expect(created.createOptions).toBeUndefined()
     expect(out).toEqual(['ticket created: fake:fake-1 (Triage) — https://example.test/fake-1'])
+  })
+
+  test('passes an explicit source-local state unchanged as create options', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const created: Parameters<typeof fakeFactory>[0] = {}
+
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Awaiting external review',
+      bodyFile,
+      state: ' Awaiting Partner Review ',
+      env: {},
+      stdout: () => {},
+      sourceFactory: fakeFactory(created),
+    })
+
+    expect(created.createOptions).toEqual({ state: ' Awaiting Partner Review ' })
   })
 
   test('with source = "file" and no factory override, writes a real ticket file', async () => {
@@ -242,6 +271,83 @@ describe('abTicketCreate', () => {
     expect(written).toContain('title = "Real file ticket"')
     expect(written).toContain('the spec body')
     expect(written).not.toContain('state =')
+  })
+
+  test('an explicit state overrides createState and composes with body, labels, and blockers', async () => {
+    await writeRepo('[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "done"\n')
+    const blockerBody = join(tmp, 'blocker.md')
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(blockerBody, 'blocker body\n')
+    await writeFile(bodyFile, 'dependent body\n')
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Blocker',
+      bodyFile: blockerBody,
+      env: {},
+      stdout: () => {},
+    })
+    const out: string[] = []
+
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Ready dependent',
+      bodyFile,
+      state: 'ready',
+      labels: ['api', 'groomed'],
+      blockedBy: ['file-1'],
+      env: {},
+      stdout: (line) => out.push(line),
+    })
+
+    expect(out).toEqual(['ticket created: file:file-2 (Ready) — blocked by file-1'])
+    expect(existsSync(join(tmp, 'tickets', 'done', 'file-2.md'))).toBe(false)
+    const written = await readFile(join(tmp, 'tickets', 'ready', 'file-2.md'), 'utf8')
+    expect(written).toContain('title = "Ready dependent"')
+    expect(written).toContain('labels = [ "api", "groomed" ]')
+    expect(written).toContain('blockedBy = [ "file-1" ]')
+    expect(written).toContain('dependent body')
+  })
+
+  test('omitting state still uses a configured createState', async () => {
+    await writeRepo('[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "done"\n')
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const out: string[] = []
+
+    await abTicketCreate({
+      targetRepo: tmp,
+      title: 'Use configured default',
+      bodyFile,
+      env: {},
+      stdout: (line) => out.push(line),
+    })
+
+    expect(out).toEqual(['ticket created: file:file-1 (Done)'])
+    expect(await readFile(join(tmp, 'tickets', 'done', 'file-1.md'), 'utf8')).toContain(
+      'title = "Use configured default"',
+    )
+  })
+
+  test('an adapter-owned invalid explicit state creates no ticket', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+
+    await expect(
+      abTicketCreate({
+        targetRepo: tmp,
+        title: 'Invalid destination',
+        bodyFile,
+        state: 'Review',
+        env: {},
+        stdout: () => {},
+      }),
+    ).rejects.toThrow(
+      'unknown state "Review" — this tracker\'s states are the directories: Triage, Ready, Doing, Done',
+    )
+    for (const state of ['triage', 'ready', 'doing', 'done']) {
+      expect(existsSync(join(tmp, 'tickets', state, 'file-1.md'))).toBe(false)
+    }
   })
 
   test('a missing autobuild.toml is an error naming the path', async () => {
@@ -831,6 +937,20 @@ describe('runCli — ticket routing', () => {
     expect(out.join('\n')).toContain('ticket created: file:file-1')
   })
 
+  test('--state creates directly in the named source state and reports it', async () => {
+    await writeRepo('[tickets]\nsource = "file"\ndir = "tickets"\ncreateState = "done"\n')
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out } = sessionlessDeps()
+
+    expect(
+      await runCli(['ticket', 'create', 'Ready now', '--body', bodyFile, '--state', 'ready'], deps),
+    ).toBe(0)
+    expect(out).toEqual(['ticket created: file:file-1 (Ready)'])
+    expect(existsSync(join(tmp, 'tickets', 'ready', 'file-1.md'))).toBe(true)
+    expect(existsSync(join(tmp, 'tickets', 'done', 'file-1.md'))).toBe(false)
+  })
+
   test('--blocked-by parses comma-separated ids and reaches the source', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')
@@ -1046,6 +1166,8 @@ describe('runCli — ticket routing', () => {
   test('malformed argv and unknown subcommands print every ticket form', async () => {
     const cases = [
       ['ticket', 'frobnicate'],
+      ['ticket', 'create', 'Title', '--body', 'spec.md', '--state'],
+      ['ticket', 'create', 'Title', '--body', 'spec.md', '--state', ''],
       ['ticket', 'list', 'extra'],
       ['ticket', 'list', '--state'],
       ['ticket', 'list', '--state', '--json'],

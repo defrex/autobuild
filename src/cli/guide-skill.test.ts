@@ -204,7 +204,7 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
 describe('ab-guide — ticket grooming coverage', () => {
   test('documents every configured-source write form and its state boundary', () => {
     for (const form of [
-      'ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]',
       'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
       'ab ticket block <id> <blocker-id>',
       'ab ticket unblock <id> <blocker-id>',
@@ -254,7 +254,7 @@ describe('ab-guide — durable build-control coverage', () => {
 describe('ab-guide — source-agnostic ticket operations', () => {
   test('documents every command form and machine-readable option', () => {
     for (const form of [
-      '`ab ticket create <title> --body <file> [--labels a,b] [--blocked-by id,id]`',
+      '`ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]`',
       '`ab ticket list [--state <state>] [--labels a,b] [--json]`',
       '`ab ticket show <id> [--json]`',
       '`ab ticket move <id> <state> [--json]`',
@@ -271,6 +271,10 @@ describe('ab-guide — source-agnostic ticket operations', () => {
       'only explicitly supplied',
       'every requested label must match',
       'body verbatim',
+      'Without `--state`, the source uses `[tickets].createState`',
+      'passed through unchanged',
+      'validates it before creating anything',
+      'checked before the single create call',
       'State names and ids are source-local',
       "invalid state fails with the\nsource's known states",
       'error naming both the\nid and configured source',
