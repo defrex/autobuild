@@ -161,6 +161,23 @@ describe('ab-guide — init behavior', () => {
   })
 })
 
+describe('ab-guide — dispatch dashboard summary', () => {
+  test('documents the live queue and pressure-counter grammar', () => {
+    const section = headingSection('## Dispatch dashboard')
+    expect(section).toBeDefined()
+    const compact = section?.replace(/\s+/g, ' ') ?? ''
+    expect(compact).toContain('`queue <depth> | active <current>/<limit> | obs <current>/<limit>`')
+    expect(compact).toContain('`queue` is the ready-ticket queue depth')
+    expect(compact).toContain(
+      '`active` is the current nonterminal-build count against root `capacity`',
+    )
+    expect(compact).toContain(
+      '`obs` is the current count of recorded observation occurrences not yet claimed by a Harvest snapshot against `[policy].harvestThreshold`',
+    )
+    expect(compact).not.toContain('basename, queue depth, and active-build count')
+  })
+})
+
 describe('ab-guide — finalize publication boundary', () => {
   test('keeps local commits, clean-worktree validation, and regular push kernel-owned', () => {
     const finalize = sectionFor('finalize')
