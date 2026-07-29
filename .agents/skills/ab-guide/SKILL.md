@@ -166,10 +166,13 @@ under the preceding table.
 | `forge` | `"github"` | nonblank string | Selects a builtin or plugin-registered Forge adapter. |
 | `plugins` | `[]` | array of nonblank module specifiers | Trusted Bun plugin modules loaded in declaration order before dispatch and scoped phase wiring. |
 
-Relative paths and npm package specifiers resolve from the consuming repository.
-Modules are trusted, in-process Bun code and cannot shadow builtin or
-previously registered names. All four registration maps have production
-selectors: `[tickets].source`, the root `forge` scalar, `[workspace].provider`,
+Repository-path specifiers resolve from the config-bearing root, which is the
+immutable build worktree in scoped phases. npm package specifiers resolve from
+the consuming main checkout's installed dependencies, independent of local
+store/worktree placement; missing packages fail and are never installed
+automatically. Modules are trusted, in-process Bun code and cannot shadow
+builtin or previously registered names. All four registration maps have
+production selectors: `[tickets].source`, the root `forge` scalar, `[workspace].provider`,
 and `[roles.*].runtime`. BuildStore uses the remote HTTP protocol, not this
 manifest, and TelemetrySource has no registration map.
 

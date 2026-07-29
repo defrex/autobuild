@@ -85,8 +85,11 @@ Every module must default-export one strict `AutobuildPluginManifest`:
   `[tickets]` fields, workspace providers receive `[workspace.config]`, and
   runtime and forge factories currently receive an empty `config` object.
 
-Add the module specifier at the TOML root, before any table. Relative paths and
-npm package specifiers resolve from the consuming repository:
+Add the module specifier at the TOML root, before any table. Repository-path
+specifiers resolve from the config-bearing root, which is the immutable build
+worktree in scoped phases. npm package specifiers resolve from the consuming
+main checkout's installed dependencies, independent of local store/worktree
+placement; missing packages fail and are never installed automatically:
 
 ```toml
 plugins = ["./autobuild-plugin.ts"]
