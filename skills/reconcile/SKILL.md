@@ -7,9 +7,9 @@ description: Resolve a conflicted PR by merging base into the build branch. Invo
 
 The build's PR no longer merges cleanly: main moved. Your job is one merge
 commit — base merged *into* the build branch — that preserves both what this
-build was for and what landed on main since. **Never rebase** (SPEC §15.7:
-rebase re-resolves conflicts against a moving target and severs recorded
-SHA provenance; it is banned in this system).
+build was for and what landed on main since. **Never rebase**: rebasing
+re-resolves conflicts against a moving target and severs recorded SHA
+provenance, so it is banned in this system.
 
 ## Session shape
 

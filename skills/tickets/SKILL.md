@@ -36,11 +36,12 @@ ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [
 ```
 
 It lands in `triage/` and prints the new id. `--body` is a file, and its
-contents are the spec — write it to the spec standard first
-(`docs/spec-standard.md`; `/ab-spec` is the conversational way to get there).
-A ticket whose body isn't a conforming spec gets bounced back to `triage/` by
-the dispatcher rather than built. Blocker ids are source-local; every blocker
-must exist before creation succeeds.
+contents are the spec — write it to the complete
+[spec standard](../ab-guide/references/spec-standard.md) first (`/ab-spec` is
+the conversational way to get there). A ticket whose body isn't a conforming
+spec gets bounced back to `triage/` by the dispatcher rather than built.
+Blocker ids are source-local; every blocker must exist before creation
+succeeds.
 
 ## Edit content or blockers
 

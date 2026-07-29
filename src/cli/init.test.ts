@@ -9,9 +9,13 @@ import type { RuntimeRegistry } from '../ports/runner/runtime'
 import {
   abInit,
   claudeSkillPath,
+  defaultDistRoot,
+  installedSkillFilePath,
   installedSkillPath,
   MODEL_INVOCABLE_SKILLS,
+  pristineSkillFilePath,
   pristineSkillPath,
+  readDistSkills,
 } from './init'
 import type { SetupAgentInvocation } from './init-agent'
 import { runCli, type SessionlessCliDeps } from './main'
@@ -46,11 +50,25 @@ describe('agent-driven ab init', () => {
     expect(report.skills.some((entry) => entry.skill === 'ab-setup')).toBe(true)
     expect(MODEL_INVOCABLE_SKILLS).toContain('setup')
 
-    for (const { skill } of report.skills) {
-      const live = await readFile(installedSkillPath(target, skill), 'utf8')
-      expect(await readFile(pristineSkillPath(target, skill), 'utf8')).toBe(live)
-      expect((await lstat(claudeSkillPath(target, skill))).isSymbolicLink()).toBe(true)
-      expect(await readlink(claudeSkillPath(target, skill))).toBe(`../../.agents/skills/${skill}`)
+    const distributed = await readDistSkills(defaultDistRoot())
+    expect(report.skills.map((entry) => entry.skill)).toEqual(
+      distributed.map((skill) => skill.installName),
+    )
+    for (const skill of distributed) {
+      for (const file of skill.files) {
+        const live = await readFile(
+          installedSkillFilePath(target, skill.installName, file.path),
+          'utf8',
+        )
+        expect(live).toBe(file.content)
+        expect(
+          await readFile(pristineSkillFilePath(target, skill.installName, file.path), 'utf8'),
+        ).toBe(file.content)
+      }
+      expect((await lstat(claudeSkillPath(target, skill.installName))).isSymbolicLink()).toBe(true)
+      expect(await readlink(claudeSkillPath(target, skill.installName))).toBe(
+        `../../.agents/skills/${skill.installName}`,
+      )
     }
     expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('.autobuild/\n')
   })

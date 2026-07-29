@@ -45,10 +45,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 ```
 
 - **Grooming and dispatch.** Work enters at Triage. Ingesters *propose*
-  tickets; a human grooms them to the spec standard (`docs/spec-standard.md`:
-  what and why but never how, verifiable acceptance criteria, explicit
-  out-of-scope, evidence) and dispatches. Generated work cannot leave Triage
-  un-groomed. The dispatcher claims tickets that pass the `[tickets]` ready
+  tickets; a human grooms them to the complete
+  [spec standard](references/spec-standard.md) — what and why but never how,
+  verifiable acceptance criteria, explicit out-of-scope, and evidence — and
+  dispatches. Generated work cannot leave Triage un-groomed. The dispatcher
+  claims tickets that pass the `[tickets]` ready
   gate, chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
@@ -124,11 +125,10 @@ The distinctions that change an administrator's answer:
 - **The kernel owns determinism** — phase transitions, gating, deduplication,
   convergence and stall detection. Outcomes come from the typed `ab` CLI, never
   from parsing an agent's stdout.
-- **The BuildStore is append-only event logs.** Build status is reduced from
-  each build stream (`src/kernel/reducer.ts`); dispatcher settings and harvest
-  state are independently reduced from the repository journal
-  (`src/kernel/dispatch-settings.ts`, `src/kernel/harvest.ts`). Snapshots are
-  never authoritative. Events record facts, never derived state.
+- **The BuildStore is append-only event logs.** The kernel reduces build status
+  from each build stream; dispatcher settings and harvest state are reduced
+  independently from the repository journal. Snapshots are never authoritative.
+  Events record facts, never derived state.
 - **Workspaces** are provisioned per build. Config is read from **the build's
   branch** at provision — so a config change flows through the pipeline like
   any other change, and every phase of one build sees one consistent config.
@@ -470,8 +470,8 @@ state eligible.
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
-`readyLabels` is the only source-aware readiness default, resolved by
-`readyCriteria` in `src/processes/dispatcher.ts`:
+`readyLabels` is the only source-aware readiness default. Dispatch resolves it
+as follows:
 
 | `[tickets].source` | `readyLabels` absent |
 |---|---|

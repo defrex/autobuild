@@ -8,8 +8,8 @@ conformance or a successful `ab plugin doctor` alone is not certification.
 
 ## 1. Choose the port and preserve its semantics
 
-Import public types only from `autobuild/plugin-sdk`; internal `src/` paths are
-not API.
+Import public types only from `autobuild/plugin-sdk`; package-internal module
+paths are not API.
 
 | CLI port | Manifest map | Factory result | Required semantics |
 |---|---|---|---|
@@ -20,9 +20,10 @@ not API.
 
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the
-language-neutral `docs/remote-store-protocol.md` shipped with Autobuild and run
-its conformance path instead. `TelemetrySource` is a frozen port type
-with no plugin registration surface in this release.
+colocated language-neutral
+[remote store protocol](remote-store-protocol.md) and run its conformance path
+instead. `TelemetrySource` is a frozen port type with no plugin registration
+surface in this release.
 
 All four manifest maps have production selectors. Use `[tickets].source` for a
 ticket source, the root `forge` key for a forge, `[workspace].provider` for a
