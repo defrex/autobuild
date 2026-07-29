@@ -20,6 +20,12 @@ import { randomIds } from '../ids'
 import { systemClock } from '../store/types'
 import { resolveMainRepo } from './repo-state'
 
+/** Upgrade owns Ctrl-C only while raw per-file progress is active. Everywhere
+ * else its process must retain Node's ordinary immediate SIGINT termination. */
+export function usesGenericSessionlessSigintHandler(command: string | undefined): boolean {
+  return command !== 'upgrade'
+}
+
 export async function runBinary(
   argv: string[],
   resolveDashboardRenderer?: DashboardRendererResolver,
@@ -51,11 +57,12 @@ export async function runBinary(
     // a future dispatch re-attaches).
     const controller = new AbortController()
     const onSigint = (): void => controller.abort()
-    process.once('SIGINT', onSigint)
+    const ownsSigint = usesGenericSessionlessSigintHandler(command)
+    if (ownsSigint) process.once('SIGINT', onSigint)
     try {
       return await runCli(argv, {
         ...unscopedDeps,
-        signal: controller.signal,
+        ...(ownsSigint ? { signal: controller.signal } : {}),
         // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
         // TTY, so a pipe or redirect silently gets plain output.
         terminal: processTerminal(process.stdout),
@@ -67,7 +74,7 @@ export async function runBinary(
         ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
       })
     } finally {
-      process.removeListener('SIGINT', onSigint)
+      if (ownsSigint) process.removeListener('SIGINT', onSigint)
     }
   }
 

@@ -12,13 +12,13 @@ import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { OneShotCompletion } from '../ports/runner/one-shot'
 import { createProductionRuntimes, type ProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
-import type { ResolveConflict } from './upgrade'
+import { UpgradeResolutionCancelledError, type ResolveConflict } from './upgrade'
 
 /** The one output that means the model considers the conflict ambiguous. */
 export const UPGRADE_CONFLICT_DECLINE = 'AB_UPGRADE_CONFLICT_DECLINE'
 
 /** A provider stall must not hold the sessionless upgrade command forever. */
-export const DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS = 60_000
+export const DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS = 10 * 60_000
 
 export interface UpgradeAgentResolverOpts {
   targetRepo: string
@@ -123,19 +123,38 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
     return resolved
   }
 
-  return async (input) => {
-    const selected = await completion()
+  return async (input, options) => {
     const timeoutMs = Math.max(0, opts.timeoutMs ?? DEFAULT_UPGRADE_RESOLUTION_TIMEOUT_MS)
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(new Error(`upgrade conflict resolution deadline exceeded after ${timeoutMs}ms`))
-      }, timeoutMs)
+    let rejectStop!: (error: Error) => void
+    const stopped = new Promise<never>((_resolve, reject) => {
+      rejectStop = reject
     })
+    let settled = false
+    const stop = (error: Error): void => {
+      if (settled) return
+      settled = true
+      controller.abort()
+      rejectStop(error)
+    }
+    const onCancel = (): void => stop(new UpgradeResolutionCancelledError())
+
+    if (options?.signal !== undefined) {
+      options.signal.addEventListener('abort', onCancel, { once: true })
+      if (options.signal.aborted) onCancel()
+    }
+    timer = setTimeout(
+      () => stop(new Error(`upgrade conflict resolution deadline exceeded after ${timeoutMs}ms`)),
+      timeoutMs,
+    )
 
     try {
+      // Cancellation and the deadline cover lazy config/plugin/runtime setup as
+      // well as completion. Setup itself has no abortable port, but no one-shot
+      // invocation is launched after this race has stopped.
+      const selected = await Promise.race([completion(), stopped])
+      if (controller.signal.aborted) return await stopped
       const result = await Promise.race([
         selected.oneShot.complete({
           prompt: upgradeConflictPrompt(input),
@@ -144,11 +163,13 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
           signal: controller.signal,
           ...(selected.model !== undefined ? { model: selected.model } : {}),
         }),
-        deadline,
+        stopped,
       ])
       return result.text.trim() === UPGRADE_CONFLICT_DECLINE ? null : result.text
     } finally {
+      settled = true
       if (timer !== undefined) clearTimeout(timer)
+      options?.signal?.removeEventListener('abort', onCancel)
     }
   }
 }
