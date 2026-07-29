@@ -56,7 +56,29 @@ import {
 
 /** Every nonterminal build is listed; queued dispatch work consumes capacity
  * just like runner-attached work and must never be invisible. */
-export type EffectiveStatus = 'queued' | 'running' | 'paused' | 'blocked'
+export type EffectiveStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'resuming' | 'blocked'
+
+export type DashboardBuildControl =
+  | { key: 'p'; action: 'pause'; label: 'pause' }
+  | { key: 'p'; action: 'cancel-pause'; label: 'cancel pause' }
+  | { key: 'r'; action: 'resume'; label: 'resume' }
+
+/** One authoritative display-status → keyboard-control mapping, shared by
+ * rendering and input routing so an inactive shortcut can never be advertised. */
+export function dashboardBuildControl(status: EffectiveStatus): DashboardBuildControl | undefined {
+  switch (status) {
+    case 'running':
+      return { key: 'p', action: 'pause', label: 'pause' }
+    case 'pausing':
+      return { key: 'p', action: 'cancel-pause', label: 'cancel pause' }
+    case 'paused':
+    case 'blocked':
+      return { key: 'r', action: 'resume', label: 'resume' }
+    case 'queued':
+    case 'resuming':
+      return undefined
+  }
+}
 
 export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 
@@ -214,15 +236,35 @@ export interface DashboardModel {
  * does not. A paused+blocked build still parks on `paused` in `decideNext`,
  * exactly as today.
  */
-export function effectiveStatus(state: BuildState): BuildState['status'] {
-  return (state.status === 'paused' || state.status === 'blocked') &&
+export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState['status'] {
+  if (
+    (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
-    ? 'blocked'
-    : state.status
+  ) {
+    return 'blocked'
+  }
+  if (state.status === 'running') {
+    return state.pendingCommands.some((command) => command.command === 'pause')
+      ? 'pausing'
+      : 'running'
+  }
+  if (state.status === 'paused') {
+    return state.pendingCommands.some((command) => command.command === 'resume')
+      ? 'resuming'
+      : 'paused'
+  }
+  return state.status
 }
 
-function isVisible(status: BuildState['status']): status is EffectiveStatus {
-  return status === 'queued' || status === 'running' || status === 'paused' || status === 'blocked'
+function isVisible(status: EffectiveStatus | BuildState['status']): status is EffectiveStatus {
+  return (
+    status === 'queued' ||
+    status === 'running' ||
+    status === 'pausing' ||
+    status === 'paused' ||
+    status === 'resuming' ||
+    status === 'blocked'
+  )
 }
 
 export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
@@ -515,17 +557,24 @@ export function projectBuild(
   // Per-occurrence durations from the raw log — the reducer collapses them
   // away, so they are derived here (display-only, at the one call site that
   // already has the log in hand). A running build keeps its open interval live
-  // (the renderer ticks it against `now`); a paused/blocked build freezes every
-  // open interval at the log's last-event ts, so its timers do not advance
-  // (AC 10). Each step scopes by the SAME seq boundary its state uses, so
+  // (the renderer ticks it against `now`); a paused build freezes every open
+  // interval at its acknowledgement (including while RESUMING), while a
+  // blocked build freezes at the latest durable event. Timers therefore do not
+  // advance behind either gate (AC 10). Each step scopes by the SAME seq boundary its state uses, so
   // durations and states restart in lockstep (AC 12).
   const intervals = phaseIntervals(events)
+  const pausedAt =
+    state.status === 'paused'
+      ? events.findLast((event) => event.type === 'build.paused')?.ts
+      : undefined
   const frozenNow =
-    status === 'running'
+    state.status === 'running'
       ? undefined
-      : state.lastEvent !== undefined
-        ? Date.parse(state.lastEvent.ts)
-        : undefined
+      : pausedAt !== undefined
+        ? Date.parse(pausedAt)
+        : state.lastEvent !== undefined
+          ? Date.parse(state.lastEvent.ts)
+          : undefined
 
   // ── Shared derivations ────────────────────────────────────────────────────
   // ORDER MATTERS: `cycleFailed` must be defined before `codeDone` reads it.

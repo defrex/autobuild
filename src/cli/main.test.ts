@@ -1296,5 +1296,7 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     )
     expect(help).toContain('durably set repository defaults')
     expect(help).toContain('omission reuses stored state (fresh repo: intake on, auto-merge off)')
+    expect(help).toContain('Pause/cancel a pending pause on a build')
+    expect(help).toContain('Resume a paused/blocked build')
   })
 })

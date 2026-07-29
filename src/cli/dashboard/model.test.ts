@@ -36,6 +36,7 @@ import type { BuildRecord } from '../../store/types'
 import {
   buildDashboard,
   buildDashboardFromProjected,
+  dashboardBuildControl,
   projectBuild,
   type DashboardBuild,
   type PipelineStep,
@@ -700,6 +701,36 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     // there. `decideNext` must still park a paused+blocked build on `paused`.
     expect(reduceBuild(blockedAndPaused).status).toBe('paused')
     expect(decideNext(blockedAndPaused, CONFIG)).toEqual({ kind: 'wait', reason: 'paused' })
+  })
+
+  test('pending commands project PAUSING and RESUMING, with cancellation returning to RUNNING', () => {
+    const pausingWrites = [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('build.pause-requested', {}),
+    ]
+    const pausingLog = toLog(pausingWrites)
+    expect(project(pausingLog).status).toBe('pausing')
+    expect(dashboardBuildControl('pausing')).toEqual({
+      key: 'p',
+      action: 'cancel-pause',
+      label: 'cancel pause',
+    })
+
+    const cancelledLog = toLog([...pausingWrites, ev('build.resume-requested', {})])
+    expect(project(cancelledLog).status).toBe('running')
+    expect(dashboardBuildControl('running')?.key).toBe('p')
+
+    const resumingLog = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('build.paused', {}),
+      ev('build.resume-requested', {}),
+    ])
+    expect(project(resumingLog).status).toBe('resuming')
+    expect(dashboardBuildControl('resuming')).toBeUndefined()
+    expect(dashboardBuildControl('paused')?.key).toBe('r')
+    expect(dashboardBuildControl('blocked')?.key).toBe('r')
   })
 
   test('paused alone stays paused; blocked alone stays blocked', () => {
@@ -1506,6 +1537,30 @@ describe('durations: accumulation and scope', () => {
     expect(timing?.accumulatedMs).toBe(0)
     // The open interval stays open — the renderer ticks it against `now`.
     expect(timing?.runningSince).toBe(tsMsOf(log, 5)) // the plan.started seq
+  })
+
+  test('PAUSING keeps its open timer live while RESUMING stays frozen', () => {
+    const pausing = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('build.pause-requested', {}),
+    ])
+    const pausingBuild = project(pausing)
+    expect(pausingBuild.status).toBe('pausing')
+    expect(stepFor(pausingBuild, 'plan')?.timing).toEqual({
+      accumulatedMs: 0,
+      runningSince: tsMsOf(pausing, 5),
+    })
+
+    const resuming = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('build.paused', {}),
+      ev('build.resume-requested', {}),
+    ])
+    const resumingBuild = project(resuming)
+    expect(resumingBuild.status).toBe('resuming')
+    expect(stepFor(resumingBuild, 'plan')?.timing).toEqual({ accumulatedMs: 1000 })
   })
 
   test('a paused build freezes its open timer at the last event (AC 10)', () => {

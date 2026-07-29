@@ -29,6 +29,7 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
+import { dashboardBuildControl } from './model'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { dashboardSelections, sameSelection } from './selection'
@@ -249,7 +250,9 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
 const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status'], ColorName> = {
   queued: 'cyan',
   running: 'green',
+  pausing: 'yellow',
   paused: 'yellow',
+  resuming: 'cyan',
   blocked: 'red',
   escalated: 'yellow',
   failed: 'red',
@@ -435,6 +438,19 @@ export const DASHBOARD_BUILD_LEGEND =
   'Keys: Up/Down select  m auto-merge  p pause  a abort  Ctrl-C quit'
 export const DASHBOARD_QUEUED_BUILD_LEGEND = 'Keys: Up/Down select  d discard  a abort  Ctrl-C quit'
 
+function buildLegend(build: DashboardBuild, detail: boolean): string {
+  if (build.status === 'queued') {
+    return detail
+      ? 'Keys: d discard  a abort  Esc back  Ctrl-C quit'
+      : DASHBOARD_QUEUED_BUILD_LEGEND
+  }
+  const control = dashboardBuildControl(build.status)
+  const action = control === undefined ? '' : `  ${control.key} ${control.label}`
+  return detail
+    ? `Keys: Up/Down select session  Enter transcript  m auto-merge${action}  a abort  Esc back  Ctrl-C quit`
+    : `Keys: Up/Down select  m auto-merge${action}  a abort  Ctrl-C quit`
+}
+
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
  * exact process state. Non-ASCII and control characters (including newlines)
  * are displayed as code-point escapes; the model value is never rewritten. */
@@ -571,16 +587,7 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, color, width)
-      : truncate(
-          paint(
-            build.status === 'queued'
-              ? 'Keys: d discard  a abort  Esc back  Ctrl-C quit'
-              : 'Keys: Up/Down select session  Enter transcript  m auto-merge  p pause/resume  a abort  Esc back  Ctrl-C quit',
-            'dim',
-            color,
-          ),
-          width,
-        )
+      : truncate(paint(buildLegend(build, true), 'dim', color), width)
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
   const capacity = height === undefined ? body.length : Math.max(0, height - top.length - 3)
@@ -690,12 +697,13 @@ function dashboardControls(model: DashboardModel, color: boolean, width: number)
   if (model.resumeInput === undefined) {
     const legend =
       model.selection?.kind === 'build'
-        ? model.builds.find(
-            (build) =>
-              build.slug === (model.selection?.kind === 'build' ? model.selection.slug : ''),
-          )?.status === 'queued'
-          ? DASHBOARD_QUEUED_BUILD_LEGEND
-          : DASHBOARD_BUILD_LEGEND
+        ? (() => {
+            const build = model.builds.find(
+              (candidate) =>
+                candidate.slug === (model.selection?.kind === 'build' ? model.selection.slug : ''),
+            )
+            return build === undefined ? DASHBOARD_BUILD_LEGEND : buildLegend(build, false)
+          })()
         : model.selection?.kind === 'harvest'
           ? model.harvest?.action === 'resume'
             ? DASHBOARD_HARVEST_RESUME_LEGEND

@@ -271,6 +271,48 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       expect(runControls).not.toContain('pause')
     }
   })
+
+  test('transition statuses and list/detail legends expose only their state-specific control', () => {
+    const cases = [
+      ['running', 'RUNNING', 'p pause'],
+      ['pausing', 'PAUSING', 'p cancel pause'],
+      ['paused', 'PAUSED', 'r resume'],
+      ['resuming', 'RESUMING', undefined],
+      ['blocked', 'BLOCKED', 'r resume'],
+    ] as const
+
+    for (const [status, literal, control] of cases) {
+      const selected = build({ status })
+      const list = rd(
+        {
+          ...model([selected]),
+          selection: { kind: 'build', slug: selected.slug },
+        },
+        WIDE,
+      ).map(stripAnsi)
+      expect(list.join('\n')).toContain(literal)
+      if (control === undefined) {
+        expect(list.at(-1)).not.toMatch(/ {2}[pr] (?:pause|cancel pause|resume)/)
+      } else {
+        expect(list.at(-1)).toContain(control)
+      }
+
+      const detail = rd(
+        {
+          ...model([selected]),
+          selection: { kind: 'build', slug: selected.slug },
+          view: { kind: 'detail', slug: selected.slug },
+        },
+        WIDE,
+      ).map(stripAnsi)
+      expect(detail.join('\n')).toContain(`status ${literal}`)
+      if (control === undefined) {
+        expect(detail.at(-1)).not.toMatch(/ {2}[pr] (?:pause|cancel pause|resume)/)
+      } else {
+        expect(detail.at(-1)).toContain(control)
+      }
+    }
+  })
 })
 
 describe('renderDashboard: queued dispatch rows', () => {
