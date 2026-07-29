@@ -618,7 +618,8 @@ export class Dispatcher {
         )
       }
       try {
-        const result = await closePr!(
+        const result = await closePr!.call(
+          forge,
           openWorkspace(events)?.path ?? openWorkspace(events)?.ref ?? this.deps.repo,
           reduced.pr.number,
         )
@@ -633,24 +634,16 @@ export class Dispatcher {
     }
 
     try {
-      await this.releaseWorkspace(record.slug, events)
-      if (openWorkspace(events) !== null) {
-        // releaseWorkspace appended outside our local array.
-        events = await store.getEvents(record.slug)
-      }
+      const released = await this.releaseWorkspace(record.slug, events)
+      if (released !== undefined) events.push(released)
     } catch (error) {
       fail('workspace release', `build ${record.slug}`, error)
     }
 
-    const wasPublished = events.some(
-      (event) =>
-        event.type === 'implement.completed' ||
-        event.type === 'reconcile.completed' ||
-        (event.type === 'finalize.step-completed' &&
-          event.payload.ok &&
-          event.payload.headSha !== undefined),
-    )
-    if (branch !== undefined && wasPublished && !has('abort.remote-branch-deleted')) {
+    // A provider push happens before its completion fact is appended. Always
+    // attempt the exact idempotent delete so an abort in that crash window
+    // cannot strand an otherwise unobservable remote branch.
+    if (branch !== undefined && !has('abort.remote-branch-deleted')) {
       const deleteBranch = forge.deleteBranch
       if (deleteBranch === undefined) {
         fail(
@@ -662,7 +655,7 @@ export class Dispatcher {
         )
       }
       try {
-        await deleteBranch!(this.deps.repo, branch)
+        await deleteBranch!.call(forge, this.deps.repo, branch)
         await append({
           actor: DISPATCHER,
           type: 'abort.remote-branch-deleted',
@@ -956,16 +949,16 @@ export class Dispatcher {
 
   /** Release the build's workspace if the log shows one still provisioned;
    * append `workspace.released`. Log-deduped, so re-runs are no-ops. */
-  private async releaseWorkspace(slug: string, events: AbEvent[]): Promise<void> {
+  private async releaseWorkspace(slug: string, events: AbEvent[]): Promise<AbEvent | undefined> {
     const open = openWorkspace(events)
-    if (!open) return
+    if (!open) return undefined
     await this.deps.workspaces.release({
       provider: open.provider,
       ref: open.ref,
       path: open.path ?? open.ref,
       branch: open.branch,
     })
-    await this.deps.store.append(slug, {
+    return this.deps.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.released',
       payload: {},

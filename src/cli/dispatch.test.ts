@@ -1716,6 +1716,7 @@ type FakeInputKey =
   | 'pause'
   | 'harvest-gate'
   | 'letter-d'
+  | 'letter-a'
   | 'interrupt'
   | 'enter'
   | 'backspace'
@@ -1733,6 +1734,8 @@ function fakeInputEvent(key: FakeInputKey): TerminalInputEvent {
       return { type: 'text', text: 'h' }
     case 'letter-d':
       return { type: 'text', text: 'd' }
+    case 'letter-a':
+      return { type: 'text', text: 'a' }
     default:
       return { type: key }
   }
@@ -4049,6 +4052,12 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).not.toContain('Auto Build')
 
+      input.press('letter-a')
+      await waitFor(() => latestPaintedFrame(term).includes('Abort detail-actions'))
+      expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
+      input.press('escape')
+      await waitFor(() => !latestPaintedFrame(term).includes('Abort detail-actions'))
+
       input.press('interrupt')
       await run
       run = undefined
@@ -4663,6 +4672,131 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
+  test('a on a paused list row requires confirmation, Escape cancels, and Enter attributes abort', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-abort-list', { title: 'Abort list' }),
+      happyHandlers(),
+    )
+    const input = fakeInput()
+    const term = fakeTerminal(true, { columns: 160, rows: 40 })
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const slug = (await fx.store.listBuilds())[0]!.slug
+      await fx.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'abort-list-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes(slug))
+      input.press('down')
+      await waitFor(() => new RegExp(`^ > .*${slug}`, 'm').test(latestDashboardFrame(term)))
+
+      input.press('letter-a')
+      await waitFor(() => latestDashboardFrame(term).includes(`Abort ${slug}`))
+      expect(
+        (await fx.store.getEvents(slug)).some((event) => event.type === 'build.abort-requested'),
+      ).toBe(false)
+      input.press('escape')
+      await waitFor(() => !latestDashboardFrame(term).includes(`Abort ${slug}`))
+      expect(
+        (await fx.store.getEvents(slug)).some((event) => event.type === 'build.abort-requested'),
+      ).toBe(false)
+
+      input.press('letter-a')
+      await waitFor(() => latestDashboardFrame(term).includes(`Abort ${slug}`))
+      input.press('enter')
+      await waitFor(async () =>
+        (await fx.store.getEvents(slug)).some((event) => event.type === 'build.abort-requested'),
+      )
+      const request = (await fx.store.getEvents(slug)).find(
+        (event) => event.type === 'build.abort-requested',
+      )
+      expect(request?.actor).toEqual({ kind: 'human', user: 'abort-list-op' })
+      input.press('interrupt')
+      await run
+      run = undefined
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a enters confirmation from build detail and stale terminalization clears it', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-abort-detail', { title: 'Abort detail' }),
+      happyHandlers(),
+    )
+    const input = fakeInput()
+    const term = fakeTerminal(true, { columns: 160, rows: 40 })
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const slug = (await fx.store.listBuilds())[0]!.slug
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'abort-detail-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes(slug))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => stripAnsi(term.all()).includes(`Build  ${slug}`))
+      input.press('letter-a')
+      await waitFor(() => latestPaintedFrame(term).includes(`Abort ${slug}`))
+
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'abandoned' },
+      })
+      await waitFor(() => !latestPaintedFrame(term).includes(`Abort ${slug}`))
+      input.press('enter')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(
+        (await fx.store.getEvents(slug)).some((event) => event.type === 'build.abort-requested'),
+      ).toBe(false)
+      input.press('interrupt')
+      await run
+      run = undefined
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('d discards the selected queued row with dashboard attribution', async () => {
     const ticket = readyTicket('T-discard-key', { title: 'Discard key' })
     const fx = await makeFixture(ticket, {})
@@ -4702,6 +4836,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => latestDashboardFrame(term).includes('discard-key'))
       input.press('down')
       await waitFor(() => /^ > .*discard-key/m.test(latestDashboardFrame(term)))
+      expect(latestDashboardFrame(term)).toContain('a abort')
+      expect(latestDashboardFrame(term)).toContain('d discard')
+      input.press('letter-a')
+      await waitFor(() => latestDashboardFrame(term).includes('Abort discard-key'))
+      expect(
+        (await fx.store.getEvents('discard-key')).some(
+          (event) => event.type === 'build.abort-requested',
+        ),
+      ).toBe(false)
+      input.press('escape')
       input.press('letter-d')
       await waitFor(async () =>
         (await fx.store.getEvents('discard-key')).some(
