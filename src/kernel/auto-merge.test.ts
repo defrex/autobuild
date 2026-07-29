@@ -96,6 +96,22 @@ describe('auto-merge deferral observations', () => {
     expect(hasAutoMergeDeferralObservation([event], 42, 19)).toBe(false)
   })
 
+  test('describes a local checkout collision with the provider path detail', () => {
+    const write = autoMergeDeferralObservation(
+      {
+        code: 'local-base-checkout-dirty',
+        detail: "error: Entry 'src/config.ts' not uptodate. Cannot merge.",
+      },
+      42,
+      17,
+      'obs_checkout',
+    )
+    expect(write.payload.summary).toBe(
+      "Auto-merge gate could not apply consent for PR #42: local merge is blocked by uncommitted work in the base checkout — error: Entry 'src/config.ts' not uptodate. Cannot merge.",
+    )
+    expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
+  })
+
   test('a single writer records a newly encountered deferral', async () => {
     const store = new MemoryBuildStore()
     await store.createBuild(sampleBuildInput('deferral-single'))

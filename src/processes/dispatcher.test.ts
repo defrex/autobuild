@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
-import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
+import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -2284,6 +2284,42 @@ describe('Dispatcher janitor', () => {
       'workspace.released',
       'build.completed',
     ])
+  })
+
+  test('a local checkout collision is nonfatal, observed once, and retries to a guarded squash', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setAutoMergeDeferral(1, {
+      code: 'local-base-checkout-dirty',
+      detail: "error: Entry 'autobuild.toml' not uptodate. Cannot merge.",
+    })
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    const blockedEvents = await h.store.getEvents(slug)
+    const observations = blockedEvents.filter((event) => event.type === 'observation.recorded')
+    expect(observations).toHaveLength(1)
+    expect(observations[0]?.payload.summary).toContain('uncommitted work in the base checkout')
+    expect(observations[0]?.payload.summary).toContain('autobuild.toml')
+    expect(observations[0]?.payload.refs).toEqual([`auto-merge-gate:pr:1:command:${command.seq}`])
+    expect(pendingAutoMerge(reduceBuild(blockedEvents))).toEqual({
+      enabled: true,
+      commandSeq: command.seq,
+    })
+    expect(h.forge.squashMergeCalls).toEqual([])
+
+    h.forge.setGatePresence(1, 'absent')
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.forge.squashMergeCalls).toHaveLength(1)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   })
 
   test('ungated CLEAN uses guarded squash only while awaiting-pr, then settles by observation', async () => {

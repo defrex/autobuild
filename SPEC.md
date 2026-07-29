@@ -1163,10 +1163,17 @@ with native auto-merge disabled is left open for a human; Autobuild never
 changes the setting. The local-git forge has no external gate or native
 setting: consent produces the same inspected-head guarded squash candidate,
 mergeability is recomputed against the current local base, and the exact
-`pr-description` becomes the single-parent squash commit message. Its durable
-record is written before moving the base ref so a crash can be repaired. No
-merge is ever assumed: a build reaches `merged` only when a later poll observes
-that the PR actually landed. Without consent, the local branch and PR record
+`pr-description` becomes the single-parent squash commit message. When the base
+branch is checked out, Git's two-tree `read-tree -m -u` transition preflights and
+lands the old-to-squash tree: tracked/index changes on untouched paths and
+untracked non-colliding files survive, while a tracked or untracked overwrite
+leaves consent pending and records one path-bearing follow-up instead of failing
+the dispatcher. Its durable pending-landing record is written before moving the
+base ref. A poll after a crash retries that same old-to-landed transition without
+rolling back the ref or overwriting operator work; the PR remains open and
+retryable until checkout repair succeeds. No merge is ever assumed: a build
+reaches `merged` only when a later poll observes the landing and any required
+checkout synchronization. Without consent, the local branch and PR record
 remain open for inspection with ordinary Git.
 
 **Conflicts re-enter the pipeline via `reconcile`.** When the janitor's

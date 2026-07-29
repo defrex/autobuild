@@ -172,8 +172,12 @@ factory, and preserves the returned adapter's optional capabilities. The
 local-git adapter in `src/ports/forge/local-git.ts` stores versioned JSON PR
 records as blobs behind private `refs/autobuild/local-git/` refs in the shared
 Git database. It computes mergeability with `git merge-tree`, leaves the build
-branch reachable, and lands a guarded single-parent squash locally; a later
-poll independently observes the landing. Forge-native base snapshotting lets
+branch reachable, and lands a guarded single-parent squash locally. For a
+checked-out base, dry-run and real `git read-tree -m -u <old> <landed>` calls
+let Git carry forward non-overlapping operator changes and report colliding
+paths. The pending landing precedes the guarded ref update; a later poll retries
+the same two-tree checkout transition across the crash window and observes the
+PR as merged only after synchronization succeeds. Forge-native base snapshotting lets
 it pin the current local base without `origin`, while capability-less adapters
 retain the legacy private-ref fetch path. Dispatch constructs one
 selected adapter before opening the store and threads it through runners,

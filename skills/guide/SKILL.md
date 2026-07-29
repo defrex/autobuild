@@ -869,8 +869,12 @@ filter matched nothing, not that the command failed. Widen it with `--queued`
 or `--all` before concluding a build doesn't exist.
 
 **`ab build status <slug>`** details one build: unresolved escalations, open
-sessions, verify progress for the current cycle, PR lifecycle, latest event,
-heartbeat, and lease. `--events <n>` appends the newest `n` event envelopes in
+sessions, chronological durable observations, verify progress for the current
+cycle, PR lifecycle, latest event, heartbeat, and lease. Observations are shown
+without `--events`; for `forge = "local-git"`, this is where a deferred landing
+names uncommitted work that collides with the squash. Autobuild leaves that work
+untouched and later dispatcher ticks retry automatically after the operator
+resolves it. `--events <n>` appends the newest `n` event envelopes in
 chronological order — the fastest way to see what a build actually just did.
 
 Verify progress covers the **current cycle** — the results since the latest
