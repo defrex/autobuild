@@ -8,21 +8,22 @@ conformance or a successful `ab plugin doctor` alone is not certification.
 
 ## 1. Choose the port and preserve its semantics
 
-Import public types only from `autobuild/plugin-sdk`; internal `src/` paths are
-not API.
+Import public types only from `autobuild/plugin-sdk`; package-internal module
+paths are not API.
 
 | CLI port | Manifest map | Factory result | Required semantics |
 |---|---|---|---|
 | `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
-| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh, typed retryable/permanent failures, and the distribution-managed `ab` launcher. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the frozen runner interface. |
+| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed retryable/permanent failures, and the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
 | `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. |
-| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
+| `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
 
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the
-language-neutral `docs/remote-store-protocol.md` shipped with Autobuild and run
-its conformance path instead. `TelemetrySource` is a frozen port type
-with no plugin registration surface in this release.
+colocated language-neutral
+[remote store protocol](remote-store-protocol.md) and run its conformance path
+instead. `TelemetrySource` is a frozen port type with no plugin registration
+surface in this release.
 
 All four manifest maps have production selectors. Use `[tickets].source` for a
 ticket source, the root `forge` key for a forge, `[workspace].provider` for a
@@ -58,7 +59,7 @@ const createForge: ForgePluginFactory = ({ config, env, repoRoot }) => {
 
 export default {
   name: 'acme-forge',
-  apiVersion: '^1.1.0',
+  apiVersion: '^1.2.0',
   forges: { acme: createForge },
 } satisfies AutobuildPluginManifest
 ```
@@ -137,7 +138,7 @@ A contract-bearing registration has this shape:
 ```ts
 const manifest = {
   name: 'acme',
-  apiVersion: '^1.1.0',
+  apiVersion: '^1.2.0',
   ticketSources: {
     acme: {
       factory: createAcmeTicketSource,
@@ -215,7 +216,7 @@ const ticketContract: TicketSourceContractFactory = async () => ({
 
 export default {
   name: 'walkthrough',
-  apiVersion: '^1.1.0',
+  apiVersion: '^1.2.0',
   ticketSources: {
     walkthrough: {
       factory: createSource,

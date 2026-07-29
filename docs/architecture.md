@@ -56,8 +56,8 @@ K unclaimed observation.recorded events
 | `src/integration/` | End-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
-| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and the full config surface. Update it when config changes; `src/cli/guide-skill.test.ts` fails if a schema field goes undocumented | §16.3 |
-| `docs/spec-standard.md` | The definition of "buildable" every ticket surface cites | §6.1 |
+| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `src/cli/guide-skill.test.ts` guards schema coverage and `src/cli/skill-self-containment.test.ts` guards installed references | §16.3 |
+| `docs/spec-standard.md` | The standalone definition of "buildable" every ticket surface uses; kept byte-identical with `skills/guide/references/spec-standard.md` for installed agents | §6.1 |
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
 ## Key boundaries

@@ -36,6 +36,21 @@ guessing. The cost asymmetry is known from experience: a repo-specific
 concern hardcoded into the product took a dedicated ticket to unwind
 (AUT-78), while a clarifying question costs minutes.
 
+## Vendored skills are self-contained
+
+Canonical skills in `skills/` must remain usable after `ab init` without access
+to an Autobuild source checkout. Shared Autobuild-owned supporting material
+belongs under `skills/guide/references/`; another canonical skill links to it
+through the installed sibling `../ab-guide/` tree. Do not require an installed
+skill to consult `SPEC.md`, source-only documentation, or internal implementation
+paths. References to the consuming repository's own files and to public external
+resources remain appropriate when the task calls for them.
+
+When adding or changing a skill reference, keep its installed path valid and
+update the checked-in public/reference copies together. The self-containment
+coverage must be able to prove that every required Autobuild-owned local
+reference is delivered in the collective `ab-*` install tree.
+
 ## What the README is for
 
 `README.md` is marketing material for engineers: enough to understand what
