@@ -822,12 +822,21 @@ to the build's event log and apply the same write-time checks.
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `p`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `p` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
-| Abort | `ab abort <slug> [--store <ref>]` | No key in this release. | `build.abort-requested` |
+| Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
 
 Discard is dashboard-only and queued-only. The dispatcher releases any partial
 workspace and lease, returns the ticket to `[tickets].readyState`, and completes
 the old build as `discarded`; a later tick may claim the ticket into a fresh
-build. This is not abort: abort continues to return the ticket to Triage.
+build. This is not abort: abort returns the ticket to Triage.
+
+Abort accepts queued, running, paused, or blocked builds. A live turn receives a
+cancellation signal and the runner releases its lease after acknowledging the
+request. The dispatcher then performs checkpointed, retry-safe cleanup: close an
+open unmerged PR, release the workspace, delete the exact remote and local build
+branches, preserve existing ticket labels while adding `autobuild:aborted`, and
+return the ticket to configured Triage before completing as `abandoned`. Missing
+Forge cleanup capabilities or provider outages leave cleanup pending with an
+actionable diagnostic for the next tick.
 
 On the dashboard, `p` on a blocked build replaces the bottom legend with the
 optional feedback field while the blocker stays visible. All printable keys
@@ -844,9 +853,9 @@ surfaces append all answers first and `build.resume-requested` last. A plain
 `ab resume` does not answer blockers; use `ab answer` for a blocked build.
 
 Every command requires the target to exist in this repository and be active
-(`running`, `paused`, or `blocked`); `ab answer` additionally requires an open
-escalation. A stale, missing, queued, done, aborted, or unblocked target is an
-error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
+(`running`, `paused`, or `blocked`), except abort also accepts `queued`;
+`ab answer` additionally requires an open escalation. A stale, missing, done,
+aborted, or otherwise inapplicable target is an error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
 same stable fallback on both surfaces. All five commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
 local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
@@ -859,11 +868,10 @@ guarantee: if the condition still fails, a phase may raise a new escalation and
 block again. A fresh `ab dispatch` still auto-retries only an all-policy
 escalation set and never invents guidance.
 
-Two asymmetries are intentional and explicit. Durable repository intake and the
-claim-time auto-merge default have launch-flag setters and global-row toggles,
-but no standalone sessionless control commands. Conversely, abort has a CLI
-command but gains no TUI key in this release. Global-row `h` owns the durable
-harvest gate, and global-row `p` is a no-op. On the optional repository-scoped
+Durable repository intake and the claim-time auto-merge default have launch-flag
+setters and global-row toggles but no standalone sessionless control commands.
+Abort is available through both its CLI command and the confirmed build-row/detail
+`a` key. Global-row `h` owns the durable harvest gate, and global-row `p` is a no-op. On the optional repository-scoped
 `Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
 and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
 rows, `i` and `h` are also no-ops.

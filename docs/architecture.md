@@ -218,6 +218,17 @@ text projection for finalize and late designations. The GitHub release transport
 lives in `src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
 and retry facts remain dispatcher janitor duty.
 
+**Abort control and cleanup.** CLI and dashboard call the same
+`src/cli/build-control.ts` service. A confirmed dashboard `a` action appends only
+the durable abort request. `build-runner.ts` observes that request through the
+BuildStore subscription, forwards an `AbortSignal` to the current AgentRunner
+turn, deposits/ends the session without a phase failure, acknowledges abort, and
+releases its lease. `dispatcher.ts` then resumes an event-checkpointed saga that
+closes an unmerged PR, releases the workspace, deletes exact remote/local branch
+refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
+Triage, and appends abandoned completion last. Forge close/delete operations are
+optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.
+
 **Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
@@ -271,11 +282,12 @@ behavioral assertions against every implementation:
 - `src/store/contract.ts` — `BuildStore` and `BlobStore`;
 - `src/ports/tickets/contract.ts` — `TicketSource`;
 - `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
-- `src/ports/forge/contract.ts` — `Forge`;
+- `src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
+  branch deletion with merged-race preservation;
 - `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
   transcript metadata and usage, typed failure permanence, per-turn ambient
-  environment refresh, distribution-managed `ab` resolution, and the optional
-  tool-free one-shot capability.
+  environment refresh and cancellation, distribution-managed `ab` resolution,
+  and the optional tool-free one-shot capability.
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and

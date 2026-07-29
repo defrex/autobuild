@@ -927,8 +927,12 @@ row; a pre-run row names its pending dispatch boundary or latest durable
 failure. A human may discard only such a queued build. Discard is dispatcher
 cleanup, returns the ticket to its configured Ready state, and completes with
 `discarded`; it is deliberately distinct from abort, which returns work to
-Triage for human judgment. The concrete presentation — layout, key bindings,
-colors — is owned by the dashboard implementation and its tests.
+Triage for human judgment. Any selected nonterminal build can be aborted from
+the list or detail view with `a`; Enter confirms and Escape cancels, so the first
+keypress never writes destructive intent. CLI and dashboard both append the same
+`build.abort-requested` fact through the shared control service. The concrete
+presentation — layout, key bindings, colors — is owned by the dashboard
+implementation and its tests.
 
 ## 15. Event vocabulary
 
@@ -987,7 +991,10 @@ accidentally interpret repository state.
    require a boundary. The store is the *only* coordination surface — no side
    channel — and polling covers commands exactly the way it covers
    `subscribe`. A runner that is dead still receives pause/resume/abort
-   commands and escalation answers on resume.
+   commands and escalation answers on resume. While a turn is live, the runner
+   subscribes from its session boundary and forwards an abort as caller-owned
+   cancellation to the AgentRunner; it closes the session transcript without
+   recording `phase.failed`, acknowledges abort, and releases its lease.
 
 ### 15.3 Catalog
 
@@ -996,7 +1003,7 @@ The families, with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `build.completed` |
+| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
@@ -1006,6 +1013,14 @@ The families, with illustrative members:
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; the `harvest.*` workflow, recovery, and ledger facts |
+
+Abort cleanup is a dispatcher-owned ordered saga. It releases any lease, closes
+an open unmerged PR without overriding a racing merge, releases the workspace,
+deletes the exact published remote branch and exact local branch, unions the
+`autobuild:aborted` label into the current ticket labels, returns the ticket to
+configured Triage, and only then completes as `abandoned`. External effects are
+idempotent and the three `abort.*` facts checkpoint projections across crashes;
+missing Forge capabilities or outages leave the remainder due on the next tick.
 
 One deliberate subtlety worth recording: `pr.conflicted.baseSha` is
 detection-time evidence, while `reconcile.started.baseSha` is the freshly
