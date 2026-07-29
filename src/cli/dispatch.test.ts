@@ -1003,6 +1003,47 @@ model = "gpt-slug-name"
     }
   }, 30_000)
 
+  test('prints contained janitor failures with build attribution and a numeric count', async () => {
+    const fx = await makeFixture(readyTicket('T-poll'), happyHandlers())
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const [build] = await fx.store.listBuilds()
+      expect(build).toBeDefined()
+      fx.err.length = 0
+      fx.forge.getPrState = async () => {
+        throw new Error('forge poll timed out')
+      }
+      const out: string[] = []
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([`build ${build!.slug}: janitor failed — forge poll timed out`])
+      const tick = out.find((line) => line.startsWith('tick: '))
+      expect(tick).toContain('janitorFailed=1')
+      expect(tick).not.toContain('janitorDiagnostics')
+      expect(out).not.toContain('tick: idle')
+      expect([...out, ...fx.err].some((line) => line.startsWith('tick failed:'))).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('a new invocation retries a current build parked by an infrastructure policy failure', async () => {
     const handlers = happyHandlers()
     const happyPlan = handlers.plan!

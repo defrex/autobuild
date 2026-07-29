@@ -1263,13 +1263,14 @@ class DispatchLoop {
   }
 
   /**
-   * Ticket and dependency diagnostics are independent notices (line-oriented
-   * in plain mode; on a TTY only warning-severity diagnostics are rendered).
-   * Invalid ticket records use the warning seam so scripted JSON/stdout
-   * consumers stay clean; dependency holds retain their ordinary notice seam.
-   * In line-oriented mode this is the operator's view of why a ready ticket is
-   * sitting still, with no provider, filesystem, or database inspection. The
-   * counts map guards on `typeof count === 'number'`
+   * Janitor, ticket, and dependency diagnostics are independent notices
+   * (line-oriented in plain mode; on a TTY only warning-severity diagnostics
+   * are rendered). Contained janitor failures and invalid ticket records use
+   * the warning seam so scripted JSON/stdout consumers stay clean; dependency
+   * holds retain their ordinary notice seam. In line-oriented mode this is the
+   * operator's attributed view of why a build or ready ticket is sitting still,
+   * with no provider, filesystem, or database inspection. The counts map
+   * guards on `typeof count === 'number'`
    * because a non-numeric TickReport field would otherwise be dropped here
    * silently (`count > 0` is false for an array, with no type error).
    *
@@ -1280,7 +1281,14 @@ class DispatchLoop {
   private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>, printIdle = true): boolean {
     // `queued` is a standing depth, not a tick action — the header owns it;
     // repeating it in the notice would make every saturated tick look busy.
-    const { ticketDiagnostics, dependencyDiagnostics, queued: _queued, ...counts } = report
+    const {
+      janitorDiagnostics,
+      ticketDiagnostics,
+      dependencyDiagnostics,
+      queued: _queued,
+      ...counts
+    } = report
+    for (const line of janitorDiagnostics) this.warn(line)
     for (const line of ticketDiagnostics) this.warn(line)
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
@@ -1296,7 +1304,11 @@ class DispatchLoop {
       this.opts.stdout('tick: idle')
       return true
     }
-    return ticketDiagnostics.length > 0 || dependencyDiagnostics.length > 0
+    return (
+      janitorDiagnostics.length > 0 ||
+      ticketDiagnostics.length > 0 ||
+      dependencyDiagnostics.length > 0
+    )
   }
 
   // ── The live region ───────────────────────────────────────────────────────
