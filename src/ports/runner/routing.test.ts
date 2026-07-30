@@ -190,3 +190,72 @@ describe('createRuntimeResolver — exact compatibility', () => {
     }
   })
 })
+
+/**
+ * `resolve(role, ...aliases)` answers ONE question: which declared key applies.
+ * The earliest declared candidate wins — that single rule is what lets an agent
+ * verify step route by its step name (§9) while its deprecated skill-name key
+ * keeps working for configs written before the rule was stated.
+ */
+describe('createRuntimeResolver — deprecated alias candidates', () => {
+  const roles = {
+    default: { runtime: 'claude' },
+    e2e: { runtime: 'pi', model: 'kimi-k3' },
+    'ab-verify-e2e': { runtime: 'gemini', model: 'gpt-5.6-sol' },
+  }
+
+  test('an alias resolves when the primary key is undeclared', () => {
+    const r = resolver({ default: roles.default, 'ab-verify-e2e': roles['ab-verify-e2e'] })
+    expect(r.resolve('e2e', 'ab-verify-e2e')).toMatchObject({
+      runtime: 'gemini',
+      model: 'gpt-5.6-sol',
+    })
+  })
+
+  test('the primary key wins when both are declared', () => {
+    expect(resolver(roles).resolve('e2e', 'ab-verify-e2e')).toMatchObject({
+      runtime: 'pi',
+      model: 'kimi-k3',
+    })
+  })
+
+  test('an alias never shadows an explicitly declared primary', () => {
+    const r = resolver({ default: roles.default, e2e: roles.e2e })
+    expect(r.resolve('e2e', 'ab-verify-e2e')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
+    // …and the alias, requested on its own, is simply undeclared.
+    expect(r.resolve('ab-verify-e2e').runtime).toBe('claude')
+  })
+
+  test('neither declared falls back to [roles.default], exactly as before', () => {
+    const r = resolver({ default: { runtime: 'pi', model: 'kimi-k3' } })
+    expect(r.resolve('e2e', 'ab-verify-e2e')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
+  })
+
+  test('the RESERVED primary wins over a later declared alias', () => {
+    // The case a naive `resolvedRoles`-only walk gets backwards: `default` is
+    // deliberately never cached, so an alias would otherwise outrank an agent
+    // verify step literally named `default`.
+    const r = resolver({
+      default: { runtime: 'pi', model: 'kimi-k3' },
+      x: { runtime: 'gemini', model: 'gpt-5.6-sol' },
+    })
+    expect(r.resolve('default', 'x')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
+  })
+
+  test('candidate order is truthful past `default` — it terminates the walk', () => {
+    const r = resolver({
+      default: { runtime: 'pi', model: 'kimi-k3' },
+      b: { runtime: 'gemini', model: 'gpt-5.6-sol' },
+    })
+    // `a` is undeclared, `default` matches at its position, `b` is never consulted.
+    expect(r.resolve('a', 'default', 'b')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
+  })
+
+  test('the eager error is untouched: a role nothing requests is still validated', () => {
+    // The new warning path reports declared-but-unrequested keys; it must never
+    // soften the eager runtime/model failure that already covers them.
+    expect(() => resolver({ ghost: { runtime: 'nonesuch' } })).toThrow(
+      /\[roles\.ghost\] resolves to runtime "nonesuch", which is not registered/,
+    )
+  })
+})

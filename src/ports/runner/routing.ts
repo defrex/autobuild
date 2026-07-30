@@ -9,6 +9,13 @@
  * be registered and must serve that model. Resolution never substitutes a
  * runtime-local default for an incompatible configured model and never hunts
  * the registry for a runtime that happens to serve a model-only role.
+ *
+ * At lookup time the resolver answers one question: WHICH DECLARED KEY APPLIES.
+ * A caller may offer deprecated compatibility keys after the primary role, and
+ * the reserved base is matched by name at its own position in that walk even
+ * though it is never cached as a phase role. When no candidate is declared the
+ * validated `[roles.default]` result is returned — a real, wholesale fallback,
+ * which `ab dispatch` warns about from the declaration side (`src/config/roles.ts`).
  */
 import type { AgentRunner } from '../types'
 import { serves, type RuntimeRegistry } from './runtime'
@@ -48,9 +55,20 @@ export class RuntimeConfigError extends Error {
 }
 
 export interface RuntimeResolver {
-  /** The resolution for a role, cached at construction. A role absent from
-   * config resolves to the validated `[roles.default]` result. */
-  resolve(role: string): ResolvedRuntime
+  /**
+   * The resolution for a role, cached at construction.
+   *
+   * @param role    the logical name the pipeline dispatched (core phase, verify
+   *                or finalize step name, internal role).
+   * @param aliases deprecated compatibility keys, consulted IN ORDER and only
+   *                when `role` itself is not declared — today, an agent verify
+   *                step's configured skill name (§9 routing).
+   *
+   * The earliest declared candidate wins. When no candidate is declared, the
+   * validated `[roles.default]` result is returned, exactly as before aliases
+   * existed.
+   */
+  resolve(role: string, ...aliases: string[]): ResolvedRuntime
 }
 
 /** The registered runtime names, for error messages. */
@@ -148,8 +166,16 @@ export function createRuntimeResolver(
   const fallback = resolvedDefault!
 
   return {
-    resolve(role: string): ResolvedRuntime {
-      return resolvedRoles[role] ?? fallback
+    resolve(role: string, ...aliases: string[]): ResolvedRuntime {
+      for (const key of [role, ...aliases]) {
+        // The reserved base is declared by definition — construction fails
+        // without it — but it is deliberately never cached as a phase role, so
+        // match it here or a later alias would outrank it.
+        if (key === 'default') return fallback
+        const resolved = resolvedRoles[key]
+        if (resolved !== undefined) return resolved
+      }
+      return fallback
     },
   }
 }
