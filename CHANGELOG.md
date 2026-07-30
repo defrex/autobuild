@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#138](https://github.com/defrex/autobuild/pull/138) — Hold the harvest reviewer to the persistence rule
+- [#137](https://github.com/defrex/autobuild/pull/137) — Calibrate review severity against the spec, not against certainty
 - [#136](https://github.com/defrex/autobuild/pull/136) — Narrow `persists` marking to a surviving disagreement
+- [#135](https://github.com/defrex/autobuild/pull/135) — Route agent verify steps by step name, warn on unconsumed role keys
 - [#134](https://github.com/defrex/autobuild/pull/134) — Replace the one-line resume field with a multi-line composer panel
 - [#133](https://github.com/defrex/autobuild/pull/133) — Add pause-all and resume-all to the dispatch dashboard top row
 - [#132](https://github.com/defrex/autobuild/pull/132) — Spell Autobuild as one word everywhere the repository controls
