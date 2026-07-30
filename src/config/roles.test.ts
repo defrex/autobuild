@@ -256,6 +256,52 @@ skill = "ab-verify-thing"
     })
   }
 
+  // `__proto__` is the sharpest of these: it is a legal TOML key, but assigning
+  // it into a normal object invokes the legacy prototype setter instead of
+  // creating an own key. Everything below therefore goes through `parseConfig`,
+  // not a hand-built roles object — a directly constructed map would bypass the
+  // exact step that used to lose the entry.
+  for (const key of ['__proto__', 'constructor', 'toString']) {
+    test(`a declared but unconsumed [roles."${key}"] survives parseConfig and is reported`, () => {
+      const parsed = config(`${DEFAULT_ROLE}[roles."${key}"]\nruntime = "claude"\n`)
+      expect(Object.keys(parsed.roles)).toContain(key)
+      expect(Object.hasOwn(parsed.roles, key)).toBe(true)
+      expect(roleKeyDiagnostics(parsed).unconsumed).toEqual([key])
+      expect(roleKeyWarnings(parsed)[0]).toContain(`[roles.${key}]`)
+    })
+
+    test(`a CONSUMED [roles."${key}"] parses, is silent, and keeps its own fields`, () => {
+      const parsed = withVerify(
+        `[verify]
+steps = ["${key}"]
+
+[verify."${key}"]
+kind = "agent"
+skill = "ab-verify-thing"
+`,
+        `[roles."${key}"]\nruntime = "pi"\nmodel = "kimi-coding/k3"\n`,
+      )
+      // The entry is a real role table, not a mangled prototype.
+      expect(parsed.roles[key]).toEqual({ runtime: 'pi', model: 'kimi-coding/k3' })
+      expect(roleKeyWarnings(parsed)).toEqual([])
+      expect(roleKeyDiagnostics(parsed).valid).toContain(key)
+    })
+  }
+
+  test('an open map never leaks its entries onto the prototype chain', () => {
+    const parsed = config(
+      `${DEFAULT_ROLE}[roles."__proto__"]\nruntime = "pi"\nmodel = "kimi-coding/k3"\n\n` +
+        `[commands]\n"__proto__" = "echo hi"\n`,
+    )
+    // The setter would have made `roles.runtime` readable through inheritance
+    // while `Object.keys` showed nothing.
+    expect(Object.getPrototypeOf(parsed.roles)).toBeNull()
+    expect(Object.getPrototypeOf(parsed.commands)).toBeNull()
+    expect((parsed.roles as Record<string, unknown>).runtime).toBeUndefined()
+    // By descriptor: an OWN entry is the claim, and it is what the setter ate.
+    expect(Object.getOwnPropertyDescriptor(parsed.commands, '__proto__')?.value).toBe('echo hi')
+  })
+
   test('a check step named `constructor` is still not consumable', () => {
     // The own-property fix must not accidentally make every named table count:
     // a check starts no session whatever it is called.

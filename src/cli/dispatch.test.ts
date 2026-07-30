@@ -4992,6 +4992,39 @@ runtime = "claude"
     'reconcile',
   ]
 
+  test('a `[roles."__proto__"]` entry reaches the operator like any other stray key', async () => {
+    // The sharpest open-map key: legal TOML, but assigning it into a normal
+    // object invokes the legacy prototype setter instead of creating an own
+    // key. It used to parse fine and then be invisible to every surface —
+    // never resolved, never dispatchable, never warned about. Driven through
+    // a real autobuild.toml on disk, so nothing about the config path is faked.
+    const toml = DISPATCH_CONFIG_TOML.replace(
+      '[policy]',
+      '[roles."__proto__"]\nruntime = "claude"\n\n[policy]',
+    )
+    const fx = await makeFixture([], happyHandlers(), toml)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime and model never reach a session.',
+        'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      ])
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('line-oriented mode writes every notice to stderr, in full, and leaves stdout clean', async () => {
     const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
     const out: string[] = []
