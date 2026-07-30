@@ -17,7 +17,8 @@ disagree, the code is authoritative.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    current build; each phase resumes as a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
-   Triage without a human grooming it to Ready.
+   Triage without a human grooming it to Ready, unless the repository waives
+   that gate explicitly with `[tickets].proposalState`.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## Pipeline
@@ -33,7 +34,8 @@ adjacent, never a build phase:
 
 ```
 K unclaimed observation.recorded events
-  → scan → synthesize ⇄ review → file approved proposals in Triage
+  → scan → synthesize ⇄ review → file approved proposals in proposalState
+                                  (Triage by default)
 ```
 
 ## Layout

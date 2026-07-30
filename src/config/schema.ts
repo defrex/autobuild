@@ -389,6 +389,15 @@ export const ticketsSchema = z.strictObject({
    * provider's default (Linear: Backlog; file: Triage) — resolved by
    * defaultTriageState in src/processes/dispatcher.ts. */
   triageState: z.string().min(1).optional(),
+  /** State harvest files its synthesized proposals into (§12). Absent = the
+   * triage state, which keeps the constitutional grooming gate: a proposal
+   * waits for a human before it can be dispatched. Setting it to readyState
+   * waives that gate for this repository — proposals dispatch unread — and is
+   * the only supported way to do so. Separate from triageState so the waiver
+   * does not also redirect spec-gate bounces, aborts, and closed-unmerged PRs
+   * into the ready state, where a bounce would re-dispatch itself. Resolved by
+   * defaultProposalState in src/processes/dispatcher.ts. */
+  proposalState: z.string().min(1).optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
