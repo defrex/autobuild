@@ -739,10 +739,42 @@ deterministic fail-safe.
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and
   extension allowlist live in one open `[roles]` map whose reserved `default`
-  entry is the inheritance base and must explicitly name a runtime. There is no
-  wiring fallback. Every concrete role merges over it independently per field;
-  the merged runtime/model pair must be compatible —
-  the resolver never silently substitutes a runtime or model. All roles
+  entry is the inheritance base and must explicitly name a runtime.
+
+  **Which key a session selects.** One rule for both kinds of agent step: an
+  agent verify step and an agent finalize step each select `[roles.<step>]` by
+  their *logical step name*; core phases select `[roles.<phase>]`.
+
+  ```toml
+  [verify.e2e]
+  kind = "agent"
+  skill = "ab-verify-e2e"
+
+  [roles.e2e]        # the STEP name — not "ab-verify-e2e"
+  runtime = "pi"
+  ```
+
+  The step's configured skill name remains a deprecated alias for existing
+  configurations and will be removed in a future release. It is consulted only
+  when `[roles.<step>]` is undeclared, so the step name always wins.
+
+  **What is and is not a fallback**, stated as three separate facts so none of
+  them is read as the others:
+
+  1. A *resolved* role never has its runtime or model substituted per field.
+     Every concrete role merges over `default` independently per field; the
+     merged runtime/model pair must be compatible, and an incompatible one is
+     an error, not a substitution.
+  2. A **requested** role key that no `[roles.<key>]` declares resolves to
+     `[roles.default]` wholesale. That is a real fallback and not an error — a
+     pipeline whose config names no roles at all runs entirely on the default.
+  3. A **declared** key that nothing ever requests is resolved, validated, and
+     then never used. `ab dispatch` reports it at startup, naming the key and
+     the keys valid for that configuration. It stays a warning: an unmatched
+     role key is never a hard error, so upgrading with a stale or typo'd key
+     never turns a working repository red.
+
+  All roles
   resolve **eagerly, before any session launches**, with problems aggregated
   into one error. A missing default diagnostic includes a copyable table and
   every materialized runtime name. Builtin and plugin registrations use the same model-family,

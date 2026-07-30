@@ -330,6 +330,31 @@ Cross-field validation rejects:
 selectors are validated even though the mandatory step will not use them for
 applicability.
 
+### Role routing for an agent verify step
+
+An agent verify step selects `[roles.<step>]` by its **logical step name** —
+the name in `[verify].steps`, not the skill it runs. This is the same rule an
+agent finalize post-step follows.
+
+<!-- config-fragment:verify-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+runtime = "pi"
+model = "gpt-5.6-sol"
+```
+
+The step's configured skill name remains a deprecated alias for existing
+configurations and will be removed in a future release. It is consulted only
+when `[roles.<step>]` is undeclared, so the step name always wins when both are
+present, and `ab dispatch` reports the alias with the step name to rename it to.
+
 ### Plan-selected steps
 
 A plan may open with strict TOML front matter naming the complete set of
@@ -426,7 +451,37 @@ kind = "agent"
 skill = "ab-release-notes"
 ```
 
-The logical step name selects `[roles.<step>]` for an agent post-step. Both
+The logical step name selects `[roles.<step>]` for an agent post-step — the
+same rule an agent verify step follows, so one convention covers both:
+
+<!-- config-fragment:finalize-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
+[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+runtime = "pi"
+
+[roles.release-notes]    # finalize step name
+runtime = "pi"
+```
+
+For an agent *verify* step, the step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. Finalize has never had such an alias.
+
+Both
 kinds are failure-tolerant: nonzero commands, launch/execution errors, and
 structured agent failures record `ok = false` plus a follow-up observation,
 then the sequence continues. A post-step cannot turn an otherwise green build
@@ -495,12 +550,20 @@ opt-in:
 `AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test src/ports/runner/codex.live.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
-`code-review`, `finalize`, and `reconcile`). Agent verify sessions route by
-their configured `skill` name; agent finalize post-steps route by logical step
-name. Repository judgments use `harvest` and `harvest-review`; `slug` and
-`upgrade` configure tool-free one-shot judgments. Arbitrary additional role
-keys are accepted, but only a name selected by one of these routes affects a
-session.
+`code-review`, `finalize`, and `reconcile`). Agent verify steps and agent
+finalize post-steps both route by their logical step name. The verify step's
+configured skill name remains a deprecated alias for existing configurations
+and will be removed in a future release. Repository judgments use `harvest` and
+`harvest-review`; `slug` and `upgrade` configure tool-free one-shot judgments.
+Arbitrary additional role keys are accepted, but only a name selected by one of
+these routes affects a session.
+
+A declared key that no route requests is resolved and validated like any other,
+and then never used — `ab dispatch` reports it at startup, naming the key and
+the keys valid for this configuration, and reports a deprecated skill-name key
+with the step name to rename it to. Both stay warnings; neither blocks a
+session or changes which runtime and model run. `kind = "check"` steps start no
+session, so a role named after one is always unconsumed.
 
 Resolver construction validates `default` and every declared role eagerly and
 aggregates all unknown-runtime and incompatible-model problems. Unknown-runtime

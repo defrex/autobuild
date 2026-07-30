@@ -298,6 +298,28 @@ verifySteps = ["types", "e2e"]
 Names must already exist in `[verify].steps` with matching tables; duplicates,
 blanks, unknown names, malformed metadata, and omission of an `always = true`
 step make the planner's `ab done` fail before `plan.completed` is appended.
+
+An agent verify step selects `[roles.<step>]` by its **logical step name** —
+the name in `[verify].steps`, not the skill it runs. An agent finalize
+post-step follows the same rule.
+
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+runtime = "pi"
+model = "gpt-5.6-sol"
+```
+
+The step's configured skill name remains a deprecated alias for existing
+configurations and will be removed in a future release. It applies only when
+`[roles.<step>]` is undeclared, so the step name always wins when both are
+present, and `ab dispatch` reports the alias with the step name to rename it to.
 Written order never reorders execution: the event records the canonical config
 order. No front matter means all configured steps, preserving old plans and
 logs; an explicit empty list is valid only when all steps are optional. The
@@ -366,7 +388,36 @@ kind = "agent"
 skill = "ab-release-notes"
 ```
 
-The logical step name still selects `[roles.<step>]` for agent routing. Checks
+The logical step name selects `[roles.<step>]` for agent routing — the same
+rule an agent verify step follows, so one convention covers both:
+
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
+[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+runtime = "pi"
+
+[roles.release-notes]    # finalize step name
+runtime = "pi"
+```
+
+For an agent *verify* step, the step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. Finalize has never had such an alias.
+
+Checks
 write their completion and any follow-up with kernel attribution; agents retain
 their session actor and transcript. Nonzero command exits, execution/launch
 exceptions, and structured agent failures all produce `ok = false` plus a
@@ -399,14 +450,24 @@ declares `kimi-coding/k3`. Trusted plugins may register additional runtime names
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 
-The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
-plus each verify/finalize step by name. The repository workflow resolves
-`harvest` and `harvest-review`. Two non-phase judgments use the same
-runtime/model resolver: `slug` optionally proposes pre-build naming, and
-`upgrade` proposes a resolution only when a vendored skill merge conflicts.
-Both are tool-free one-shots with extensions disabled. Missing slug capability
-uses the deterministic title fallback; unavailable upgrade judgment retains the
-conflict for manual resolution.
+The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
+`finalize`, and `reconcile`, plus each **agent** verify and finalize step by
+its logical step name. A verify step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. The repository workflow resolves `harvest` and `harvest-review`. Two
+non-phase judgments use the same runtime/model resolver: `slug` optionally
+proposes pre-build naming, and `upgrade` proposes a resolution only when a
+vendored skill merge conflicts. Both are tool-free one-shots with extensions
+disabled. Missing slug capability uses the deterministic title fallback;
+unavailable upgrade judgment retains the conflict for manual resolution.
+
+A declared key that none of those routes requests is resolved and validated
+like any other, and then never used — `ab dispatch` reports it at startup,
+naming the key and the keys valid for this configuration, and reports a
+deprecated skill-name key with the step name to rename it to. Both stay
+warnings; neither blocks a session or changes which runtime and model run. A
+`kind = "check"` step starts no session, so a role named after one is always
+unconsumed.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
