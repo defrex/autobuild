@@ -1825,7 +1825,7 @@ function fakeTerminal(
 
 function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
-    [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Auto Build')) ?? '',
+    [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Autobuild')) ?? '',
   )
 }
 
@@ -1873,7 +1873,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       const firstPaintOrigin = term.frames.indexOf('\x1b[2J\x1b[1;1H')
       expect(firstPaintOrigin).toBeGreaterThanOrEqual(0)
       expect(stripAnsi(term.frames[firstPaintOrigin + 1] ?? '').split('\n')[0]).toContain(
-        'Auto Build',
+        'Autobuild',
       )
       expect(header).toContain('queue 0 | active 1')
       expect(header).not.toMatch(/\bonce\b/)
@@ -1998,7 +1998,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       const painted = stripAnsi(term.all())
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
-      expect(painted).toContain('Auto Build')
+      expect(painted).toContain('Autobuild')
       expect(painted).toContain(slug)
       expect(painted).not.toContain(`build ${slug} parked`)
       expect(painted).not.toContain('tick:')
@@ -2164,7 +2164,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       await sleepStarted.promise
-      await waitFor(() => stripAnsi(term.all()).includes('Auto Build'))
+      await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
       gateNextPoll = true
       await pollStarted.promise
 
@@ -2253,7 +2253,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       )
 
       await sleepStarted.promise
-      await waitFor(() => stripAnsi(term.all()).includes('Auto Build'))
+      await waitFor(() => stripAnsi(term.all()).includes('Autobuild'))
       gateNextPoll = true
       await pollStarted.promise
 
@@ -2266,7 +2266,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(error).toBe(dispatchError)
       expect(finalReads).toBe(1)
       expect(input.cleanups).toBe(1)
-      expect(latestDashboardFrame(term)).toContain('Auto Build')
+      expect(latestDashboardFrame(term)).toContain('Autobuild')
       expect(term.all()).toContain('\x1b[?1049l')
       expect(term.all()).toContain('\x1b[?25h')
       expect(fx.err).toEqual([])
@@ -2313,7 +2313,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.cliErrors).toEqual([])
       expect(tallestFrame(term)).toBeGreaterThan(0) // it really did paint
       expect(tallestFrame(term)).toBeLessThan(rows) // STRICTLY — see above
-      expect(term.all()).toContain('Auto Build') // the title survives
+      expect(term.all()).toContain('Autobuild') // the title survives
     } finally {
       await fx.cleanup()
     }
@@ -2365,7 +2365,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
       const painted = stripAnsi(term.all())
-      expect(painted).toContain('> Auto Build')
+      expect(painted).toContain('> Autobuild')
       expect(painted).toContain('intake OFF')
       expect(painted).not.toContain('dispatcher intake OFF')
       expect(painted).toContain('no active builds')
@@ -2396,7 +2396,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         input,
       })
       const painted = stripAnsi(term.all())
-      expect(painted).toContain('> Auto Build')
+      expect(painted).toContain('> Autobuild')
       expect(painted).toContain('intake OFF')
       expect(painted).not.toContain('dispatcher intake OFF')
       expect(painted).not.toContain('no active row is selected')
@@ -2482,12 +2482,12 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).not.toContain(diagnostic)
       expect(painted).not.toContain('tick: invalidTickets=1 dependencyBlocked=1')
       const warningLines = stripAnsi(invalidFrame!).split('\n').slice(0, -1)
-      expect(warningLines[0]).toContain('Auto Build')
+      expect(warningLines[0]).toContain('Autobuild')
       expect(warningLines[0]).toContain('queue 0 | active 0')
       expect(warningLines[0]).not.toMatch(/\bwatch\b/)
       expect(warningLines[1]).toContain('intake ON')
       expect(warningLines[2]).toBe(`   ${invalid}`)
-      expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Auto Build'))
+      expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Autobuild'))
     } finally {
       await fx.cleanup()
     }
@@ -2971,7 +2971,7 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: term,
         input,
       })
-      await waitFor(() => stripAnsi(term.all()).includes('> Auto Build'))
+      await waitFor(() => stripAnsi(term.all()).includes('> Autobuild'))
 
       // Global p is intentionally unbound. The following m is the serialized
       // synchronization point and the only action that may append a fact.
@@ -3509,7 +3509,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // its serialization fence; neither action needs a transient notice.
       input.press('pause')
       input.press('up')
-      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 1)
       expect(stripAnsi(term.all())).not.toContain('harvest run: resume acknowledgement pending')
 
@@ -3521,11 +3521,11 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => {
         const latest = [...term.frames]
           .reverse()
-          .find((frame) => stripAnsi(frame).includes('Auto Build'))
+          .find((frame) => stripAnsi(frame).includes('Autobuild'))
         return (
           latest !== undefined &&
           !/Harvest.*FAILED/.test(stripAnsi(latest)) &&
-          /^ > Auto Build/m.test(stripAnsi(latest))
+          /^ > Autobuild/m.test(stripAnsi(latest))
         )
       })
 
@@ -3574,11 +3574,11 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => {
         const latest = [...term.frames]
           .reverse()
-          .find((frame) => stripAnsi(frame).includes('Auto Build'))
+          .find((frame) => stripAnsi(frame).includes('Autobuild'))
         return (
           latest !== undefined &&
           !/Harvest.*ESCALATED/.test(stripAnsi(latest)) &&
-          /^ > Auto Build/m.test(stripAnsi(latest))
+          /^ > Autobuild/m.test(stripAnsi(latest))
         )
       })
 
@@ -3651,7 +3651,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('pause')
       input.press('up')
       // The selection move is serialized after the no-op run action.
-      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before)
       expect(stripAnsi(term.all())).not.toContain(
         'harvest run action unavailable while harvest is OFF',
@@ -3677,7 +3677,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           frame.includes('harvest ON') &&
           !/Harvest.*ESCALATED/.test(frame) &&
-          /^ > Auto Build/m.test(frame)
+          /^ > Autobuild/m.test(frame)
         )
       })
 
@@ -3745,7 +3745,7 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           !/^ > .*Harvest/m.test(frame) &&
           !/^ {3}Harvest/m.test(frame) &&
-          /^ > Auto Build/m.test(frame)
+          /^ > Autobuild/m.test(frame)
         )
       })
 
@@ -3903,7 +3903,7 @@ describe('abDispatch interactive keyboard controls', () => {
         terminal: term,
         input,
       })
-      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       const before = await fx.store.getRepoEvents(fx.origin)
 
       // Down/Up are serialization fences. If either preceding Enter opened a
@@ -3915,7 +3915,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('enter')
       input.press('up')
-      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(before)
 
       input.press('interrupt')
@@ -3970,7 +3970,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(
         () =>
-          /^ > Auto Build/m.test(latestPaintedFrame(term)) &&
+          /^ > Autobuild/m.test(latestPaintedFrame(term)) &&
           !latestPaintedFrame(term).includes('Build  terminal-detail'),
       )
       expect(latestPaintedFrame(term)).toContain('no active builds')
@@ -4059,7 +4059,7 @@ describe('abDispatch interactive keyboard controls', () => {
           !latestPaintedFrame(term).includes('Resume feedback'),
       )
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
-      expect(latestPaintedFrame(term)).not.toContain('Auto Build')
+      expect(latestPaintedFrame(term)).not.toContain('Autobuild')
 
       input.press('letter-a')
       await waitFor(() => latestPaintedFrame(term).includes('Abort detail-actions'))
@@ -4120,7 +4120,7 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(detail).toContain('Pipeline')
       expect(detail).toContain('Sessions')
       expect(detail).toContain('runtime')
-      expect(detail).not.toContain('Auto Build')
+      expect(detail).not.toContain('Autobuild')
 
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Transcript  drilldown-work'))
@@ -4666,7 +4666,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const beforePauseKey = await fx.store.getEvents('paused-work')
       input.press('pause')
       input.press('up')
-      await waitFor(() => /^ > Auto Build/m.test(latestDashboardFrame(term)))
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
       input.press('down')
       await waitFor(() => /^ > .*paused-work/m.test(latestDashboardFrame(term)))
       expect(await fx.store.getEvents('paused-work')).toEqual(beforePauseKey)

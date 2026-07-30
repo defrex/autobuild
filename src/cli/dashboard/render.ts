@@ -767,7 +767,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     : paint('harvest ON', 'green', color)
   const summary = truncate(
     `${marker}${[
-      paint('Auto Build', 'bold', color),
+      paint('Autobuild', 'bold', color),
       displayText(basename(model.repo)),
       paint(
         `queue ${model.queued} | active ${model.active.current}/${model.active.limit} | ` +
