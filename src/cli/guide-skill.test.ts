@@ -272,6 +272,8 @@ describe('ab-guide — durable build-control coverage', () => {
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
       ['abort', /`ab abort <slug> \[--store <ref>\]`/],
+      ['pause all', /`ab pause --all \[--store <ref>\] \[--json\]`/],
+      ['resume all', /`ab resume --all \[--store <ref>\] \[--json\]`/],
     ]
     for (const [name, form] of forms) {
       if (!form.test(guide)) missing.push(name)
