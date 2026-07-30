@@ -79,6 +79,22 @@ describe('roleKeyDiagnostics — unconsumed keys', () => {
     expect(d.valid).not.toContain('tag')
   })
 
+  test('…but a check step NAME can still be consumed by another route', () => {
+    // A check step is not a route; it is not an anti-route either. A check step
+    // named `plan` leaves [roles.plan] consumed by the core plan phase, so
+    // "a role named after a check step is unconsumed" is only true when that
+    // check is the key's ONLY apparent route. Both docs say so; this pins it.
+    const parsed = config(
+      `[commands]\ncheck = "true"\n\n` +
+        `[verify]\nsteps = ["plan"]\n\n[verify.plan]\nkind = "check"\ncommand = "check"\n\n` +
+        `${DEFAULT_ROLE}[roles.plan]\nruntime = "claude"\n`,
+    )
+    const d = roleKeyDiagnostics(parsed)
+    expect(d.unconsumed).toEqual([])
+    expect(d.valid).toContain('plan')
+    expect(roleKeyWarnings(parsed)).toEqual([])
+  })
+
   test('an agent verify step name and an agent finalize step name are both consumable', () => {
     const parsed = config(
       `${E2E_STEP}\n` +
@@ -235,6 +251,82 @@ skill = "e2e"
     )
     expect(roleKeyWarnings(parsed)).toEqual([])
     expect(roleKeyDiagnostics(parsed).deprecated).toEqual([])
+  })
+})
+
+describe('roleKeyWarnings — one notice is always ONE line', () => {
+  // A notice goes to stderr verbatim, one per line, and the dashboard wraps it
+  // into rows it controls. A raw control character in a user-chosen name breaks
+  // both: stderr silently gains a physical line, so what is one diagnostic
+  // becomes two. Escaping the table header is not enough — the PROSE phrases
+  // carry names too, and `canonicalUse` builds one of them outside the notice
+  // renderer entirely.
+  const HOSTILE = ['odd\nname', 'quote"d', 'tab\there', 'carriage\rreturn', 'ui.visual']
+
+  const roleFor = (key: string) => `[roles.${JSON.stringify(key)}]\nruntime = "claude"\n`
+  const agentStep = (step: string, skill: string) =>
+    `[verify.${JSON.stringify(step)}]\nkind = "agent"\nskill = ${JSON.stringify(skill)}\n`
+
+  /** The same odd name driven through every branch of the notice renderer. */
+  function branches(name: string) {
+    return {
+      unconsumed: config(`${DEFAULT_ROLE}${roleFor(name)}`),
+      safeRename: config(
+        `[verify]\nsteps = [${JSON.stringify(name)}]\n${agentStep(name, 'legacy')}` +
+          `${DEFAULT_ROLE}${roleFor('legacy')}`,
+      ),
+      inert: config(
+        `[verify]\nsteps = [${JSON.stringify(name)}]\n${agentStep(name, 'legacy')}` +
+          `${DEFAULT_ROLE}${roleFor(name)}${roleFor('legacy')}`,
+      ),
+      // The finding's case: the declared legacy key is ALSO a canonical step
+      // name, so the shared/colliding branch appends the `canonicalUse` phrase.
+      canonicalCollision: config(
+        `[verify]\nsteps = [${JSON.stringify(name)}, "visual"]\n` +
+          `${agentStep(name, 'other-skill')}${agentStep('visual', name)}` +
+          `${DEFAULT_ROLE}${roleFor(name)}`,
+      ),
+    }
+  }
+
+  for (const name of HOSTILE) {
+    test(`no notice for a name like ${JSON.stringify(name)} carries a raw control character`, () => {
+      for (const parsed of Object.values(branches(name))) {
+        const lines = roleKeyWarnings(parsed)
+        expect(lines.length).toBeGreaterThan(0)
+        for (const line of lines) {
+          expect(line).not.toMatch(/[\u0000-\u001f\u007f]/)
+          expect(line.split('\n')).toHaveLength(1)
+        }
+      }
+    })
+  }
+
+  test('a canonical collision escapes the step name in its "Keep" clause', () => {
+    // Pinned explicitly: this phrase is built in `roleKeyDiagnostics`, not in
+    // the notice renderer, and was the one path header escaping never reached.
+    const [notice, ...rest] = roleKeyWarnings(branches('odd\nname').canonicalCollision)
+    expect(rest).toEqual([])
+    expect(notice).toBe(
+      'autobuild.toml: [roles."odd\\nname"] should be [roles.visual] — it routes that agent ' +
+        'verify step through the deprecated skill-name key. Keep [roles."odd\\nname"]: it is ' +
+        'also agent verify step "odd\\nname".',
+    )
+  })
+
+  test('a quote in a step name cannot break out of its prose phrase', () => {
+    const [notice] = roleKeyWarnings(branches('quote"d').canonicalCollision)
+    expect(notice).toContain('agent verify step "quote\\"d"')
+    // The escaped phrase round-trips back to the real name.
+    expect(JSON.parse(notice!.slice(notice!.lastIndexOf('step ') + 5, -1))).toBe('quote"d')
+  })
+
+  test('ordinary names are untouched — escaping is need-only', () => {
+    const [notice] = roleKeyWarnings(
+      withVerify(E2E_STEP, '[roles.ab-verify-e2e]\nruntime = "claude"\n'),
+    )
+    expect(notice).toContain('agent verify step "e2e"')
+    expect(notice).not.toContain('\\')
   })
 })
 

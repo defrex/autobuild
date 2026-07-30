@@ -466,8 +466,10 @@ like any other, and then never used — `ab dispatch` reports it at startup,
 naming the key and the keys valid for this configuration, and reports a
 deprecated skill-name key with the step name to rename it to. Both stay
 warnings; neither blocks a session or changes which runtime and model run. A
-`kind = "check"` step starts no session, so a role named after one is always
-unconsumed.
+`kind = "check"` step starts no session and so is not a route: naming a role
+after one does not make it consumed. It is reported only when that check step is
+its sole apparent route — a check step named `plan` leaves `[roles.plan]`
+consumed by the core `plan` phase, and nothing is reported.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|

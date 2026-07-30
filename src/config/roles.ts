@@ -103,6 +103,41 @@ function agentSteps(
   return agents
 }
 
+// ── Rendering a user-chosen name ─────────────────────────────────────────────
+//
+// Role names, verify step names, and finalize step names are ARBITRARY nonempty
+// strings. Every one of them reaches an operator's terminal, so every one is
+// rendered through the two helpers below and never hand-quoted or interpolated
+// bare. Two failures follow from getting this wrong, and both have happened:
+// `[roles.ui.visual]` is not the key it looks like (TOML reads the dot as
+// nesting), and a name containing a newline splits ONE notice into two physical
+// stderr lines, breaking the one-notice-per-line contract every surface
+// downstream assumes.
+
+/** TOML bare keys are letters, digits, `-`, and `_` only. */
+const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/
+
+/**
+ * A name AS THE OPERATOR MUST TYPE IT in a table header. Quoting only when
+ * needed keeps every ordinary notice byte-identical; `JSON.stringify` emits
+ * exactly the escapes a TOML basic string accepts (`\"`, `\\`, `\n`, `\uXXXX`).
+ */
+function tomlKey(name: string): string {
+  return TOML_BARE_KEY.test(name) ? name : JSON.stringify(name)
+}
+
+/**
+ * A name IN PROSE — always quoted, always escaped. `JSON.stringify` is the
+ * escaper for the awkward cases so a quote cannot break out of the phrase and
+ * no control character can reach a line-oriented sink raw.
+ */
+function displayName(name: string): string {
+  return TOML_BARE_KEY.test(name) ? `"${name}"` : JSON.stringify(name)
+}
+
+/** The table header to write, quoted when the name needs it. */
+const roleTable = (name: string): string => `[roles.${tomlKey(name)}]`
+
 /**
  * Classify every declared `[roles.<key>]` against every consumer it has.
  * Iterates `steps` rather than the `stepConfigs` key sets so only steps that
@@ -114,12 +149,26 @@ export function roleKeyDiagnostics(config: Config): RoleKeyDiagnostics {
 
   // `default` is tested FIRST so the reserved phrase always wins, which is also
   // what keeps the rename/delete advice structurally unreachable for it.
+  //
+  // Every arm renders through `displayName`, including the two whose names come
+  // from fixed lists. Those two are safe on their own, but a phrase built here
+  // is appended verbatim to a notice by the shared/colliding branch, and one
+  // uniform rule is what stops the next arm added to this list from being the
+  // hand-quoted one.
   const canonicalUse = (key: string): string | undefined => {
-    if (key === RESERVED_ROLE) return `the reserved [roles.${RESERVED_ROLE}] inheritance base`
-    if ((CORE_PHASES as readonly string[]).includes(key)) return `the "${key}" core phase role`
-    if (verifyAgents.some((agent) => agent.step === key)) return `agent verify step "${key}"`
-    if (finalizeAgents.some((agent) => agent.step === key)) return `agent finalize step "${key}"`
-    if ((INTERNAL_ROLES as readonly string[]).includes(key)) return `the internal "${key}" role`
+    if (key === RESERVED_ROLE) return `the reserved ${roleTable(RESERVED_ROLE)} inheritance base`
+    if ((CORE_PHASES as readonly string[]).includes(key)) {
+      return `the ${displayName(key)} core phase role`
+    }
+    if (verifyAgents.some((agent) => agent.step === key)) {
+      return `agent verify step ${displayName(key)}`
+    }
+    if (finalizeAgents.some((agent) => agent.step === key)) {
+      return `agent finalize step ${displayName(key)}`
+    }
+    if ((INTERNAL_ROLES as readonly string[]).includes(key)) {
+      return `the internal ${displayName(key)} role`
+    }
     return undefined
   }
 
@@ -188,29 +237,8 @@ function andList(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
 }
 
-/** TOML bare keys are letters, digits, `-`, and `_` only. */
-const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/
-
-/**
- * A role or step name AS THE OPERATOR MUST TYPE IT.
- *
- * Role and step names are arbitrary nonempty strings, so interpolating one
- * bare is wrong twice over: `[roles.ab verify]` is a syntax error, and
- * `[roles.ui.visual]` is not the key at all — TOML reads the dot as nesting and
- * rejects it as an unknown field under `roles.ui`. Quoting only when needed
- * keeps every ordinary notice byte-identical. `JSON.stringify` emits exactly the
- * escapes a TOML basic string accepts (`\"`, `\\`, `\n`, `\uXXXX`, …).
- */
-function tomlKey(name: string): string {
-  return TOML_BARE_KEY.test(name) ? name : JSON.stringify(name)
-}
-
-/** The table header to write, quoted when the name needs it. */
-const roleTable = (name: string): string => `[roles.${tomlKey(name)}]`
-
-/** A step name in prose. Escaped, so an odd name cannot break out of its quotes. */
-const named = (steps: readonly string[]): string =>
-  andList(steps.map((step) => (TOML_BARE_KEY.test(step) ? `"${step}"` : JSON.stringify(step))))
+/** Step names in prose — each through `displayName`, never hand-quoted. */
+const named = (steps: readonly string[]): string => andList(steps.map(displayName))
 
 const roleTables = (names: readonly string[]): string => andList(names.map(roleTable))
 
