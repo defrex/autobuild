@@ -621,6 +621,78 @@ describe('renderDashboard: the resume panel allocation (AC 7)', () => {
     ],
   ]
 
+  test('PRIORITY IS A PREFIX: no block ever outlives a higher-priority one', () => {
+    // The capacity walk above only exercises widths where every block is
+    // representable. A width-DROPPED block is the other way the order can be
+    // broken, and it broke it: below content width 7 `resumeKeysRows` is empty,
+    // and the allocator used to sail past it into the title and the blocker —
+    // printing a question the operator cannot answer because the panel no
+    // longer names a single key.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    for (let width = 1; width <= 40; width += 1) {
+      for (let capacity = 0; capacity <= 14; capacity += 1) {
+        const rows = resumePanel(m, false, width, capacity).map(stripAnsi)
+        const at = blocksOf(rows, width)
+        const where = `width ${width}, capacity ${capacity}`
+        // field > keys > title > hint > questions, top to bottom.
+        expect([where, at.keys > 0 && at.field === 0]).toEqual([where, false])
+        expect([where, at.title > 0 && at.keys === 0]).toEqual([where, false])
+        expect([where, at.hint > 0 && at.title === 0]).toEqual([where, false])
+        expect([where, at.question > 0 && at.hint === 0]).toEqual([where, false])
+      }
+    }
+  })
+
+  test('at the keys boundary the panel is the field and nothing else', () => {
+    // `resumeKeysRows(6) === []`: no layout can name `newline`, so the block is
+    // dropped whole — and everything below it in the order goes with it, however
+    // much capacity is left over. The rows freed up make the field taller,
+    // because the field outranks every block that can halt the order.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    expect(resumeKeysRows(6)).toEqual([])
+    for (const capacity of [1, 4, 12, 40]) {
+      const rows = resumePanel(m, false, 6, capacity).map(stripAnsi)
+      expect(blocksOf(rows, 6)).toEqual({
+        title: 0,
+        hint: 0,
+        question: 0,
+        field: Math.min(capacity, 6),
+        keys: 0,
+      })
+      expect(rows.join('\n')).not.toContain('Resume')
+      expect(rows.join('\n')).not.toContain('Q')
+      expect(rows.join('\n')).not.toContain('...')
+    }
+    // One column wider, the keys come back and carry the title with them.
+    expect(blocksOf(resumePanel(m, false, 7, 12).map(stripAnsi), 7)).toEqual({
+      title: 1,
+      hint: 0,
+      question: 0,
+      field: 5,
+      keys: 6,
+    })
+  })
+
+  test('at the hint boundary the blocker goes but the keys stay', () => {
+    // `resumeHintRows(10) === []`, so questions halt with it — but the field and
+    // its bindings, which AC 7 keeps last, are untouched.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    expect(resumeHintRows(10)).toEqual([])
+    const narrow = resumePanel(m, false, 10, 12).map(stripAnsi)
+    expect(blocksOf(narrow, 10)).toEqual({
+      title: 1,
+      hint: 0,
+      question: 0,
+      field: 6,
+      keys: 5,
+    })
+    // One column wider the hint fits, and the blocker returns behind it.
+    const wider = resumePanel(m, false, 11, 12).map(stripAnsi)
+    expect(blocksOf(wider, 11).hint).toBeGreaterThan(0)
+    expect(blocksOf(wider, 11).question).toBeGreaterThan(0)
+    expect(blocksOf(wider, 11).keys).toBe(5)
+  })
+
   for (const [width, steps] of CASES) {
     test(`content width ${width}`, () => {
       for (const [capacity, expected] of steps) {

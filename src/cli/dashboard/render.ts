@@ -863,6 +863,15 @@ function renderFieldRow(
  *   5. question rows, up to `min(desired, QUESTION_MAX_ROWS, ceil(rest / 2))`,
  *   6. further field rows, up to `FIELD_MAX_ROWS`,
  *   7. any capacity still unspent, back to questions.
+ *
+ * >>> That order is a PREFIX under WIDTH exactly as it is under capacity. <<<
+ *
+ * A block the granted width cannot represent at all — the keys below content
+ * width 7, the hint below 11 — HALTS the order rather than yielding its rows to
+ * whatever comes next. Without that, a six-column panel printed a truncated
+ * title and a wrapped blocker while naming none of its keys, which is the
+ * degradation order run exactly backwards. Only the field is exempt, because it
+ * outranks every block that can halt: leftover rows still make it taller.
  */
 export function resumePanel(
   model: DashboardModel,
@@ -912,15 +921,25 @@ export function resumePanel(
     rest -= granted
     return granted
   }
+  // Both blocks are built from constants, so an empty one means the width
+  // cannot represent it — never that there was nothing to say. Each halts every
+  // block BELOW it in the priority order.
+  const keysDropped = keysRows.length === 0
+  const hintDropped = keysDropped || hintRows.length === 0
+
   let fieldGrant = spend(1)
   const keysGrant = spend(keysRows.length)
-  const titleGrant = spend(1)
+  const titleGrant = keysDropped ? 0 : spend(1)
   const hintGrant = spend(hintRows.length)
-  let questionGrant = spend(
-    Math.min(questionRows.length, QUESTION_MAX_ROWS, Math.ceil(Math.max(0, rest) / 2)),
-  )
+  let questionGrant = hintDropped
+    ? 0
+    : spend(Math.min(questionRows.length, QUESTION_MAX_ROWS, Math.ceil(Math.max(0, rest) / 2)))
+  // Ungated: the field outranks every block that can halt the order, so rows a
+  // halt freed up are exactly what a taller field is for.
   fieldGrant += spend(Math.min(field.rows.length, FIELD_MAX_ROWS) - fieldGrant)
-  questionGrant += spend(Math.min(questionRows.length, QUESTION_MAX_ROWS) - questionGrant)
+  questionGrant += hintDropped
+    ? 0
+    : spend(Math.min(questionRows.length, QUESTION_MAX_ROWS) - questionGrant)
 
   const rows: string[] = []
   if (titleGrant > 0) rows.push(title)
