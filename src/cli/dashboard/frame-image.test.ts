@@ -24,7 +24,7 @@ describe('renderDashboardFrameImage', () => {
 
   test('renders deterministic PNG bytes with pinned dimensions and fonts', () => {
     const lines = [
-      '\x1b[1mAuto Build\x1b[0m  \x1b[32mintake ON\x1b[0m',
+      '\x1b[1mAutobuild\x1b[0m  \x1b[32mintake ON\x1b[0m',
       '\x1b[2m[ ] verify:dashboard\x1b[0m',
     ]
     const first = renderDashboardFrameImage(lines, { columns: 40 })

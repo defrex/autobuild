@@ -1,6 +1,6 @@
 ---
 name: guide
-description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; or when a question mentions autobuild, autobuild.toml, or the `ab` CLI.
+description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; when a question mentions autobuild, autobuild.toml, or the `ab` CLI; or when writing the product's own name in prose, documentation, or a UI string.
 ---
 
 # Autobuild system guide
@@ -34,6 +34,15 @@ suboptimal — a missing verify step, a policy limit you'd set differently — t
 is not a finding to act on. Make the change the user asked for, and nothing
 else. Mentioning an unrelated observation at most belongs in a closing
 sentence, never in a diff.
+
+## The product's name
+
+Autobuild is one word. Write it `Autobuild` in prose and as a proper noun, and
+`autobuild` in identifiers, commands, paths, config keys, and other technical
+contexts. Never split or hyphenate it — not in UI strings, documentation,
+comments, commit messages, or tests. The one exception is a verbatim quotation
+of a name owned by an external system: that system's spelling is its own to
+choose, not this project's to correct.
 
 ## The lifecycle
 
@@ -733,7 +742,7 @@ On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
 terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
-process-global header has a selectable `Auto Build` summary with the repository
+process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
 `queue <depth> | active <current>/<limit> | obs <current>/<limit>`.
 `queue` is the ready-ticket queue depth; `active` is the current
