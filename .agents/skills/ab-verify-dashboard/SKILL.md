@@ -24,7 +24,10 @@ the diff and not to decide applicability again.
    each image opened and non-empty; rows/status/progress/separators do not
    overlap; the Harvest row is legible; the narrow frame truncates/wraps
    deliberately without clipping; colour emphasis is present while literal
-   status remains readable.
+   status remains readable; and the resume-prompt frame shows the blocked-build
+   composer panel in place of the key legend — build name, optional-guidance
+   note, blocker question, a two-line field with a visible caret, and its key
+   bindings.
 5. If and only if every visual criterion passes, designate the reviewed files
    as ordinary PR attachments, then issue the passing verdict:
 
@@ -33,6 +36,8 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:mixed-wide:png .ab/dashboard-frames/mixed-wide.png --attach
    ab artifact put dashboard-frame:mixed-narrow:text .ab/dashboard-frames/mixed-narrow.txt --attach
    ab artifact put dashboard-frame:mixed-narrow:png .ab/dashboard-frames/mixed-narrow.png --attach
+   ab artifact put dashboard-frame:resume-prompt:text .ab/dashboard-frames/resume-prompt.txt --attach
+   ab artifact put dashboard-frame:resume-prompt:png .ab/dashboard-frames/resume-prompt.png --attach
    ab verdict pass --notes .ab/dashboard-frames/verify-report.md
    ```
 

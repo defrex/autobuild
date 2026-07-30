@@ -58,12 +58,18 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.status).toBe('')
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
-  expect(first.result.frames.map((frame) => frame.id)).toEqual(['mixed-wide', 'mixed-narrow'])
+  expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'mixed-wide',
+    'mixed-narrow',
+    'resume-prompt',
+  ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
   expect(report).toContain('mixed-wide.png')
   expect(report).toContain('mixed-narrow.txt')
   expect(report).toContain('- [ ] Every PNG opens and is non-empty.')
+  expect(report).toContain('resume-prompt.png')
+  expect(report).toContain('- [ ] The resume-prompt frame shows the composer panel in place of the')
 
   for (const frame of first.result.frames) {
     const again = second.result.frames.find((item) => item.id === frame.id)!
@@ -80,6 +86,21 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).not.toContain('\x1b')
   }
   expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
+
+  // The composer panel replaces the key legend, states its optional-guidance
+  // note, keeps the blocker visible, and renders both typed lines with a caret.
+  const resume = first.result.frames.find((frame) => frame.id === 'resume-prompt')!.text
+  expect(resume).toContain('Resume plan-blocked-dashboard')
+  expect(resume).toMatch(/optional/i)
+  expect(resume).toContain(
+    'The scripted plan scenario is intentionally blocked for dashboard capture.',
+  )
+  expect(resume).toContain('Use the manual merge path.')
+  expect(resume).toContain('Re-run verify:test |afterwards.')
+  expect(resume).toContain('Enter submit')
+  expect(resume).toContain('newline')
+  expect(resume).toContain('Esc cancel')
+  expect(resume).not.toContain('Up/Down select')
 
   for (const frame of first.result.frames) {
     expect(await readFile(frame.textPath, 'utf8')).toBe(frame.text)
