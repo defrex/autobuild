@@ -180,11 +180,12 @@ describe('ab-guide — dispatch dashboard summary', () => {
 
 describe('ab-guide — persistence marking', () => {
   /**
-   * The guide and the two review skills must give one answer about what
+   * The guide and the three review skills must give one answer about what
    * `persists` means, because an agent reads whichever it reaches first. The
    * two phrases below are literal shared text: `review-skills.test.ts`
-   * asserts them against `plan-review` and `code-review`, this asserts them
-   * against `ab-guide`, so neither side can be reworded alone.
+   * asserts them against `plan-review`, `code-review`, and `harvest-review`,
+   * this asserts them against `ab-guide`, so neither side can be reworded
+   * alone.
    */
   const SHARED_WITH_REVIEW_SKILLS = [
     'still present in the work under review',

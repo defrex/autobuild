@@ -3,11 +3,13 @@
  *
  * `persists` chains are the only input to the kernel's stall guard, so the
  * rule that decides whether a chain continues is load-bearing prose. It must
- * say the same thing in `plan-review` and `code-review` — the plan loop and
- * the code loop are the same loop as far as `stallRounds` is concerned — and
- * it must sit in each skill's `## Writing findings` section, where a reviewer
- * choosing `persists` is already reading. Both properties are asserted here
- * rather than trusted, because prose cannot be type-checked.
+ * say the same thing in `plan-review`, `code-review`, and `harvest-review` —
+ * all three are the same loop as far as `stallRounds` is concerned, the third
+ * because `src/processes/harvest-runner.ts` walks reviewer-marked chains
+ * through the same `stalledChains` machinery the kernel uses for the other two
+ * — and it must sit in each skill's `## Writing findings` section, where a
+ * reviewer choosing `persists` is already reading. Both properties are
+ * asserted here rather than trusted, because prose cannot be type-checked.
  *
  * The anchors are whole sentences of the shared rule, asserted one at a time,
  * so a failure names the sentence that was dropped instead of reporting that
@@ -43,6 +45,15 @@ const pristineCodeReview = await readSkill(
   'ab-code-review',
   'SKILL.md',
 )
+const harvestReview = await readSkill('skills', 'harvest-review', 'SKILL.md')
+const installedHarvestReview = await readSkill('.agents', 'skills', 'ab-harvest-review', 'SKILL.md')
+const pristineHarvestReview = await readSkill(
+  '.agents',
+  'skills',
+  '.ab-pristine',
+  'ab-harvest-review',
+  'SKILL.md',
+)
 
 const reviewSkills = [
   ['plan-review (canonical)', planReview],
@@ -51,6 +62,9 @@ const reviewSkills = [
   ['code-review (canonical)', codeReview],
   ['code-review (installed)', installedCodeReview],
   ['code-review (pristine)', pristineCodeReview],
+  ['harvest-review (canonical)', harvestReview],
+  ['harvest-review (installed)', installedHarvestReview],
+  ['harvest-review (pristine)', pristineHarvestReview],
 ] as const
 
 /** Collapse wrapping so anchors survive a reflow. */
@@ -76,8 +90,9 @@ function findingsSection(text: string): string | undefined {
  * The shared rule, sentence by sentence: the definition, the applicable test,
  * the disposition for a new instance of an already-fixed defect class, and
  * the preserved duty not to let a dodged finding look fresh. Byte-identical
- * text in both review skills is what makes "worded symmetrically for the plan
- * loop and the code loop" a mechanical property instead of a judgment.
+ * text in all three review skills is what makes "worded symmetrically for the
+ * plan loop, the code loop, and the harvest loop" a mechanical property
+ * instead of a judgment.
  *
  * The first and third sentences share literal phrases with `ab-guide`'s
  * account of the same rule; `guide-skill.test.ts` asserts those phrases
@@ -102,7 +117,7 @@ describe('review skills — persistence marking', () => {
     }
   })
 
-  test('plan-review and code-review carry the rule as one identical paragraph', () => {
+  test('plan-review, code-review, and harvest-review carry the rule as one identical paragraph', () => {
     for (const [, text] of reviewSkills) {
       expect(normalize(findingsSection(text) ?? '')).toContain(RULE)
     }
@@ -116,6 +131,9 @@ describe('review skills — persistence marking', () => {
       'so mark honestly: neither re-litigate resolved findings',
     )
     expect(normalize(findingsSection(codeReview) ?? '')).not.toContain('Mark persistence honestly:')
+    expect(normalize(findingsSection(harvestReview) ?? '')).not.toContain(
+      'when the same defect survives',
+    )
   })
 })
 
@@ -142,5 +160,12 @@ describe('review skills — vendored copies', () => {
     expect(expected).not.toBe(codeReview)
     expect(installedCodeReview).toBe(expected)
     expect(pristineCodeReview).toBe(expected)
+  })
+
+  test('checked-in live and pristine harvest-review match the canonical install form', () => {
+    const expected = installForm(harvestReview, 'harvest-review')
+    expect(expected).not.toBe(harvestReview)
+    expect(installedHarvestReview).toBe(expected)
+    expect(pristineHarvestReview).toBe(expected)
   })
 })
