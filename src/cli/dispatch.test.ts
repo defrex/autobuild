@@ -1711,6 +1711,10 @@ describe('abDispatch watch harvest coordination', () => {
 type FakeInputKey =
   | 'up'
   | 'down'
+  | 'left'
+  | 'right'
+  | 'home'
+  | 'end'
   | 'auto-merge'
   | 'intake'
   | 'pause'
@@ -1720,6 +1724,7 @@ type FakeInputKey =
   | 'letter-a'
   | 'interrupt'
   | 'enter'
+  | 'newline'
   | 'backspace'
   | 'escape'
 
@@ -1751,6 +1756,7 @@ function fakeInput(
 ): TerminalInput & {
   press: (key: FakeInputKey) => void
   text: (text: string) => void
+  paste: (text: string) => void
   starts: number
   cleanups: number
 } {
@@ -1776,6 +1782,11 @@ function fakeInput(
     },
     text(text: string): void {
       onInput?.({ type: 'text', text })
+    },
+    /** One bracketed paste, exactly as the terminal seam delivers it: whole,
+     * with its line structure, and never split into keystrokes. */
+    paste(text: string): void {
+      onInput?.({ type: 'paste', text })
     },
   }
   return input
@@ -4213,7 +4224,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const afterAutoMerge = await fx.store.getEvents('detail-actions')
 
       input.press('resume')
-      await waitFor(() => latestPaintedFrame(term).includes('Resume feedback'))
+      await waitFor(() => latestPaintedFrame(term).includes('Resume '))
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).toContain('Which detail action should resume this build?')
 
@@ -4221,7 +4232,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(
         () =>
           latestPaintedFrame(term).includes('Build  detail-actions') &&
-          !latestPaintedFrame(term).includes('Resume feedback'),
+          !latestPaintedFrame(term).includes('Resume '),
       )
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).not.toContain('Autobuild')
@@ -4286,6 +4297,15 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(detail).toContain('Sessions')
       expect(detail).toContain('runtime')
       expect(detail).not.toContain('Autobuild')
+
+      // Outside the resume prompt `newline` drives the SAME action as `enter`.
+      // That is the structural mitigation for the terminal seam now telling CR
+      // from LF: if some terminal reports Return as LF, only the composer can
+      // tell, and Enter cannot stop working anywhere else.
+      input.press('escape')
+      await waitFor(() => /^ > .*drilldown-work/m.test(latestDashboardFrame(term)))
+      input.press('newline')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
 
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Transcript  drilldown-work'))
@@ -4449,7 +4469,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^ > .*guidance-work/m.test(stripAnsi(term.all())))
 
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       expect(await fx.store.getEvents('guidance-work')).toHaveLength(before.length)
 
       // m/p/d are feedback characters while the modal is active, never global
@@ -4485,6 +4505,186 @@ describe('abDispatch interactive keyboard controls', () => {
           ].includes(event.type),
         ),
       ).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  /** One blocked build with an open escalation, its dashboard running, its
+   * resume prompt open, and nothing written yet. */
+  async function promptOpen(
+    fx: Awaited<ReturnType<typeof makeFixture>>,
+    slug: string,
+    question: string,
+    escalationId: string,
+  ) {
+    await abDispatch({
+      targetRepo: fx.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      once: true,
+      wire: fx.wire,
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id: escalationId, phase: 'plan', source: 'agent', question },
+    })
+    const before = await fx.store.getEvents(slug)
+    const term = fakeTerminal()
+    const input = fakeInput()
+    const run = abDispatch({
+      targetRepo: fx.origin,
+      env: { USER: 'dashboard-op' },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      intervalMs: 60_000,
+      wire: fx.wire,
+      terminal: term,
+      input,
+    })
+    await waitFor(() => stripAnsi(term.all()).includes(question))
+    input.press('down')
+    await waitFor(() => new RegExp(`^ > .*${slug}`, 'm').test(stripAnsi(term.all())))
+    input.press('resume')
+    await waitFor(() => stripAnsi(term.all()).includes(`Resume ${slug}`))
+    expect(await fx.store.getEvents(slug)).toHaveLength(before.length)
+    return { term, input, run, before }
+  }
+
+  test('guidance typed across a newline reaches the agent with its line structure intact', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-multiline', { title: 'Multiline work' }),
+      happyHandlers(),
+    )
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'multiline-work',
+        'Which merge strategy should finalize use?',
+        'esc_multiline',
+      )
+
+      input.text('first line')
+      input.press('newline')
+      input.text('second line')
+      // Home/End are LOGICAL line bounds, so this edits the second line only.
+      input.press('home')
+      input.text('> ')
+      input.press('end')
+      await waitFor(() => stripAnsi(term.all()).includes('> second line'))
+      input.press('enter')
+
+      await waitFor(async () =>
+        (await fx.store.getEvents('multiline-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const added = (await fx.store.getEvents('multiline-work')).slice(before.length)
+      const answers = added.filter((event) => event.type === 'escalation.answered')
+      // Same event type, same id, same resolution vocabulary as the one-line
+      // prompt wrote — the write path is untouched.
+      expect(answers).toHaveLength(1)
+      expect(answers[0]?.payload).toEqual({
+        id: 'esc_multiline',
+        answer: 'first line\n> second line',
+        resolution: 'guidance',
+      })
+      expect(answers[0]?.actor).toEqual({ kind: 'human', user: 'dashboard-op' })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a multi-line paste inserts wholly without submitting, and Enter then sends all of it', async () => {
+    const fx = await makeFixture(readyTicket('T-paste', { title: 'Paste work' }), happyHandlers())
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'paste-work',
+        'Which reconciliation approach should the agent take?',
+        'esc_paste',
+      )
+
+      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      input.paste(pasted)
+      await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
+      // No part of the paste is interpreted as submit, however many line
+      // breaks it carries.
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(await fx.store.getEvents('paste-work')).toHaveLength(before.length)
+
+      input.press('enter')
+      await waitFor(async () =>
+        (await fx.store.getEvents('paste-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const answer = (await fx.store.getEvents('paste-work'))
+        .slice(before.length)
+        .find((event) => event.type === 'escalation.answered')
+      // Asserted against the EXACT pasted text, so a cap or a dropped tail
+      // fails here too.
+      expect(answer?.payload).toEqual({
+        id: 'esc_paste',
+        answer: pasted,
+        resolution: 'guidance',
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Up and Down move the caret while the prompt is open and never move the selected row', async () => {
+    const fx = await makeFixture(readyTicket('T-caret', { title: 'Caret work' }), happyHandlers())
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'caret-work',
+        'Should the finalize step keep native auto-merge?',
+        'esc_caret',
+      )
+
+      input.text('one')
+      input.press('newline')
+      input.text('two')
+      input.press('up')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      // The row selection is exactly where it was; Up belongs to the composer
+      // while the prompt is open.
+      const painted = stripAnsi(term.all())
+      expect(painted).toMatch(/^ > .*caret-work/m)
+      input.text('X')
+      input.press('enter')
+
+      await waitFor(async () =>
+        (await fx.store.getEvents('caret-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const answer = (await fx.store.getEvents('caret-work'))
+        .slice(before.length)
+        .find((event) => event.type === 'escalation.answered')
+      expect(answer?.payload).toEqual({
+        id: 'esc_caret',
+        answer: 'oneX\ntwo',
+        resolution: 'guidance',
+      })
+      // The selection never left the build row, so no other build's controls
+      // were ever addressed.
+      expect(stripAnsi(term.all())).not.toMatch(/^ > Autobuild/m)
     } finally {
       await fx.cleanup()
     }
@@ -4548,7 +4748,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*retry-work/m.test(stripAnsi(term.all())))
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.text('   ')
       input.press('enter')
       await waitFor(async () => {
@@ -4681,7 +4881,7 @@ describe('abDispatch interactive keyboard controls', () => {
         ),
       )
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.press('enter')
       await waitFor(async () =>
         (await fx.store.getEvents('finalize-retry')).some(
@@ -4773,7 +4973,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*cancel-work/m.test(stripAnsi(term.all())))
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.text('do not submit this')
       input.press('escape')
       await new Promise((resolve) => setTimeout(resolve, 30))
