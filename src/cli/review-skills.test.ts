@@ -12,12 +12,18 @@
  * calibration text itself. Delete either rule and every test still passes
  * unless it is anchored here.
  *
- * Each rule must say the same thing in `plan-review` and `code-review` — the
- * plan loop and the code loop are the same loop as far as `stallRounds` and
- * severity are concerned — and each must sit in the `## Writing findings`
- * section, where a reviewer choosing a `persists` id or a level is already
- * reading. Both properties are asserted rather than trusted, because prose
- * cannot be type-checked.
+ * The two rules cover different sets of skills. The persistence rule must say
+ * the same thing in `plan-review`, `code-review`, and `harvest-review` — all
+ * three are the same loop as far as `stallRounds` is concerned, the third
+ * because `src/processes/harvest-runner.ts` walks reviewer-marked chains
+ * through the same `stalledChains` machinery the kernel uses for the other
+ * two. The severity calibration covers `plan-review` and `code-review`, the
+ * two loops it was written for; whether the harvest loop states the same
+ * calibration is a separate question this file does not answer. Each rule
+ * must sit in the `## Writing findings` section of every skill it covers,
+ * where a reviewer choosing a `persists` id or a level is already reading.
+ * Both properties are asserted rather than trusted, because prose cannot be
+ * type-checked.
  *
  * The anchors are whole sentences of the shared rules, asserted one at a
  * time, so a failure names the sentence that was dropped instead of reporting
@@ -53,14 +59,42 @@ const pristineCodeReview = await readSkill(
   'ab-code-review',
   'SKILL.md',
 )
+const harvestReview = await readSkill('skills', 'harvest-review', 'SKILL.md')
+const installedHarvestReview = await readSkill('.agents', 'skills', 'ab-harvest-review', 'SKILL.md')
+const pristineHarvestReview = await readSkill(
+  '.agents',
+  'skills',
+  '.ab-pristine',
+  'ab-harvest-review',
+  'SKILL.md',
+)
 
-const reviewSkills = [
+/**
+ * The skills the severity calibration covers: the plan loop and the code
+ * loop, which are the same loop as far as severity is concerned. Kept as its
+ * own list rather than folded into `reviewSkills` because the persistence
+ * rule reaches one skill further.
+ */
+const calibratedSkills = [
   ['plan-review (canonical)', planReview],
   ['plan-review (installed)', installedPlanReview],
   ['plan-review (pristine)', pristinePlanReview],
   ['code-review (canonical)', codeReview],
   ['code-review (installed)', installedCodeReview],
   ['code-review (pristine)', pristineCodeReview],
+] as const
+
+/**
+ * Every skill the persistence rule covers — the calibrated two plus the
+ * harvest loop, whose runner walks the same `persists` chains through the
+ * same stall machinery. Derived from `calibratedSkills` so a newly vendored
+ * plan- or code-review copy joins both lists at once.
+ */
+const reviewSkills = [
+  ...calibratedSkills,
+  ['harvest-review (canonical)', harvestReview],
+  ['harvest-review (installed)', installedHarvestReview],
+  ['harvest-review (pristine)', pristineHarvestReview],
 ] as const
 
 /** Collapse wrapping so anchors survive a reflow. */
@@ -86,8 +120,9 @@ function findingsSection(text: string): string | undefined {
  * The shared rule, sentence by sentence: the definition, the applicable test,
  * the disposition for a new instance of an already-fixed defect class, and
  * the preserved duty not to let a dodged finding look fresh. Byte-identical
- * text in both review skills is what makes "worded symmetrically for the plan
- * loop and the code loop" a mechanical property instead of a judgment.
+ * text in all three review skills is what makes "worded symmetrically for the
+ * plan loop, the code loop, and the harvest loop" a mechanical property
+ * instead of a judgment.
  *
  * The first and third sentences share literal phrases with `ab-guide`'s
  * account of the same rule; `guide-skill.test.ts` asserts those phrases
@@ -112,7 +147,7 @@ describe('review skills — persistence marking', () => {
     }
   })
 
-  test('plan-review and code-review carry the rule as one identical paragraph', () => {
+  test('plan-review, code-review, and harvest-review carry the rule as one identical paragraph', () => {
     for (const [, text] of reviewSkills) {
       expect(normalize(findingsSection(text) ?? '')).toContain(RULE)
     }
@@ -126,6 +161,9 @@ describe('review skills — persistence marking', () => {
       'so mark honestly: neither re-litigate resolved findings',
     )
     expect(normalize(findingsSection(codeReview) ?? '')).not.toContain('Mark persistence honestly:')
+    expect(normalize(findingsSection(harvestReview) ?? '')).not.toContain(
+      'when the same defect survives',
+    )
   })
 })
 
@@ -171,7 +209,7 @@ const APPROVE_SENTENCE =
   'Known immaterial defects are not a reason to withhold approval — record them with `ab observe` and approve.'
 
 describe('review skills — severity calibration', () => {
-  test.each(reviewSkills)('%s calibrates severity in its findings section', (_label, text) => {
+  test.each(calibratedSkills)('%s calibrates severity in its findings section', (_label, text) => {
     const section = findingsSection(text)
     expect(section).toBeDefined()
     const compact = normalize(section ?? '')
@@ -184,12 +222,12 @@ describe('review skills — severity calibration', () => {
     // A per-sentence failure above means a sentence was dropped; a failure
     // here with those passing means the two skills' text diverged. Diff the
     // `## Writing findings` sections rather than loosening the anchor.
-    for (const [, text] of reviewSkills) {
+    for (const [, text] of calibratedSkills) {
       expect(normalize(findingsSection(text) ?? '')).toContain(CALIBRATION)
     }
   })
 
-  test.each(reviewSkills)(
+  test.each(calibratedSkills)(
     '%s says an observation-carrying result is approvable',
     (_label, text) => {
       expect(normalize(findingsSection(text) ?? '')).toContain(APPROVE_SENTENCE)
@@ -229,5 +267,12 @@ describe('review skills — vendored copies', () => {
     expect(expected).not.toBe(codeReview)
     expect(installedCodeReview).toBe(expected)
     expect(pristineCodeReview).toBe(expected)
+  })
+
+  test('checked-in live and pristine harvest-review match the canonical install form', () => {
+    const expected = installForm(harvestReview, 'harvest-review')
+    expect(expected).not.toBe(harvestReview)
+    expect(installedHarvestReview).toBe(expected)
+    expect(pristineHarvestReview).toBe(expected)
   })
 })
