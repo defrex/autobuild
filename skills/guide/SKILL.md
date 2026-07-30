@@ -108,7 +108,8 @@ If a request seems to need a new phase, say so rather than improvising one.
 dispatch
 runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
-spec-standard proposals are created directly in Triage. A repository journal,
+spec-standard proposals are created, in `[tickets].proposalState` — the triage
+state unless this repository has named another one. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
 crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
@@ -563,6 +564,7 @@ state eligible.
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -575,6 +577,12 @@ as follows:
 | plugin | `[]` — no host-imposed label convention |
 
 An explicit `readyLabels` value always wins for every source.
+
+`proposalState` is the one supported way to waive the grooming gate, and it is
+deliberately not `triageState`. Do not suggest pointing `triageState` at the
+ready state to get auto-dispatched proposals: `triageState` is also where a
+spec-gate bounce lands, so a nonconforming ticket would be claimed, bounced,
+and reclaimed on every tick. `proposalState` moves only what harvest files.
 
 Cross-field rules, each an **error**:
 

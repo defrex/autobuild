@@ -57,7 +57,10 @@ decision below answers to them:
    no separate resume path; every phase is a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated moves past
    Triage without a human grooming it to Ready. That single gate is where
-   taste and prioritization live.
+   taste and prioritization live. A repository may waive the gate for its own
+   harvest by naming a filing state (`[tickets].proposalState`, §12); the
+   waiver is explicit, repository-wide, and configured, and no code path
+   reaches Ready without one.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## 3. System decomposition
@@ -868,7 +871,8 @@ The fixed workflow is:
    create/join/suppress proposals; a fresh reviewer checks coverage, semantic
    dedup, spec quality, and evidence. Only approval advances.
 3. **file (deterministic)** — render creates to the spec standard and file
-   them into Triage with the reserved `autobuild:proposal` provenance label.
+   them into `[tickets].proposalState`, Triage by default, with the reserved
+   `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -895,8 +899,15 @@ event-level mechanics live in the repository catalog and reducer tests):
   ordinary parked run and clears every exhaustion barrier. It never
   resurrects a terminal run. Completed and escalated runs are irrevocable; a
   deliberate escalation consumes its snapshot and is never auto-recovered.
-- **The harvester only proposes.** It never claims, readies, grooms, or
-  dispatches a proposal. Humans still own Triage → Ready.
+- **The harvester only proposes.** It never claims, grooms, or dispatches a
+  proposal, and it files every one into the same configured state rather than
+  ranking them. Humans own Triage → Ready by default. A repository that points
+  `[tickets].proposalState` at its ready state has waived that gate for itself:
+  every harvested proposal becomes dispatchable unread, on the strength of the
+  synthesize ⇄ review loop and the spec gate alone. The waiver is a field of
+  its own rather than a reuse of `triageState`, because bounces, aborts, and
+  closed-unmerged PRs must still land where the next tick will not reclaim
+  them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
 

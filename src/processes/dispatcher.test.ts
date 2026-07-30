@@ -20,6 +20,8 @@ import { manualClock } from '../testing/fixed'
 import {
   Dispatcher,
   analyzeDependencies,
+  defaultProposalState,
+  defaultTriageState,
   emptyTickReport,
   fallbackSlug,
   kebab,
@@ -1073,6 +1075,34 @@ releaseId = 42
     })
     await opted.dispatcher.tick()
     expect(opted.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
+  })
+
+  test('proposalState is harvest-only: it never moves the bounce target', async () => {
+    // The whole reason proposals get their own field. A repository that files
+    // proposals straight into readyState must still bounce nonconforming work
+    // somewhere a dispatch tick will not immediately reclaim it.
+    const h = harness({
+      tickets: [readyTicket('T-1', { body: 'make it faster' })],
+      toml: '[tickets]\nsource = "linear"\nteamKey = "AUT"\nproposalState = "Todo"\n',
+    })
+    await h.dispatcher.tick()
+    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Backlog' }])
+  })
+
+  test('defaultProposalState: configured value, else the resolved triage state', () => {
+    const linear = (extra = '') =>
+      parseConfig(`[tickets]\nsource = "linear"\nteamKey = "AUT"\nreadyState = "Todo"\n${extra}`)
+
+    expect(defaultProposalState(linear())).toBe('Backlog')
+    expect(defaultProposalState(linear('triageState = "Icebox"\n'))).toBe('Icebox')
+    expect(defaultProposalState(linear('proposalState = "Todo"\n'))).toBe('Todo')
+    // An explicit proposal state overrides the triage state without moving it.
+    const both = linear('triageState = "Icebox"\nproposalState = "Todo"\n')
+    expect(defaultProposalState(both)).toBe('Todo')
+    expect(defaultTriageState(both)).toBe('Icebox')
+    expect(
+      defaultProposalState(parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')),
+    ).toBe('Triage')
   })
 
   test('authorSpec success: authored body is recorded and then supplied to naming', async () => {
