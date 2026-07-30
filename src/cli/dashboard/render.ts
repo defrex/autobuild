@@ -435,8 +435,9 @@ export const DASHBOARD_HARVEST_RESUME_LEGEND = 'Keys: Up/Down select  p resume  
 export const DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND =
   'Keys: Up/Down select  p acknowledge  Ctrl-C quit'
 export const DASHBOARD_BUILD_LEGEND =
-  'Keys: Up/Down select  m auto-merge  p pause  a abort  Ctrl-C quit'
-export const DASHBOARD_QUEUED_BUILD_LEGEND = 'Keys: Up/Down select  d discard  a abort  Ctrl-C quit'
+  'Keys: Up/Down select  Enter details  m auto-merge  p pause  a abort  Ctrl-C quit'
+export const DASHBOARD_QUEUED_BUILD_LEGEND =
+  'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
 
 function buildLegend(build: DashboardBuild, detail: boolean): string {
   if (build.status === 'queued') {
@@ -448,7 +449,7 @@ function buildLegend(build: DashboardBuild, detail: boolean): string {
   const action = control === undefined ? '' : `  ${control.key} ${control.label}`
   return detail
     ? `Keys: Up/Down select session  Enter transcript  m auto-merge${action}  a abort  Esc back  Ctrl-C quit`
-    : `Keys: Up/Down select  m auto-merge${action}  a abort  Ctrl-C quit`
+    : `Keys: Up/Down select  Enter details  m auto-merge${action}  a abort  Ctrl-C quit`
 }
 
 /** Keep the renderer's one-physical-row ASCII/width invariant while retaining
