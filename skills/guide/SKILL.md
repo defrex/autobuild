@@ -517,6 +517,15 @@ Every field is a **positive integer**.
 | `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 
+`stallRounds` counts *persistence chains*, which reviewers mark and the kernel
+only follows. A finding's `persists` ids name prior-round findings whose defect
+is still present in the work under review; a new instance of a defect class
+whose reported instance was fixed is fresh work and starts its own chain,
+however closely it resembles its predecessor. So the counter measures a
+producer/reviewer stalemate rather than a defect category the loop keeps
+converging on, and the kernel decides only whether a marked chain has survived
+the threshold — never whether two findings are the same disagreement.
+
 Harvest is driven by back-pressure inside `ab dispatch`, not by a wall clock,
 and remains independent of build `capacity` and repository intake. Once the
 threshold is reached, the run claims the whole current accumulation. Dispatch

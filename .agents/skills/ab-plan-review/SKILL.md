@@ -67,9 +67,18 @@ Findings are structured JSON (the CLI validates and stamps ids):
   (should fix, wouldn't sink the build), `minor` (worth noting).
 - `persists`: if a prior round's finding (see `.ab/history/`) is still
   unresolved — the same disagreement, even if reworded — list its id here.
-  This is judgment only you can apply; the kernel mechanically escalates
-  chains that persist too long, so mark honestly: neither re-litigate
-  resolved findings nor let a dodged one look fresh.
+  This is judgment only you can apply.
+
+`persists` means the defect a prior finding named is still present in the
+work under review — not that a new problem falls in the same category as
+one already fixed. Test it that way: if the exact defect the prior finding
+named is gone, the chain ends there, however closely your new finding
+resembles it. A new instance of a defect class whose reported instance was
+fixed is fresh work and starts its own chain — raise it with no `persists`
+link. Mark honestly in both directions: neither re-litigate a resolved
+finding nor let a dodged one look fresh, because the kernel mechanically
+escalates a chain that persists too long, and a stalemate is the only
+thing that counter can usefully measure.
 
 Approve when the plan would satisfy the spec — not when it matches how you
 would have written it. Escalate when the *spec* is the problem (contradictory
