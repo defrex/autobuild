@@ -370,7 +370,7 @@ interface LoopTrace {
 }
 
 // decideNext's policy knobs come from config defaults: stallRounds 3,
-// maxReviewRounds 4 (§16.1). converge gets the same numbers below.
+// maxReviewRounds 6 (§16.1). converge gets the same numbers below.
 const diffConfig = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')
 const DIFF_POLICY = {
   maxRounds: diffConfig.policy.maxReviewRounds,
@@ -572,8 +572,10 @@ describe('converge ⇄ decideNext differential (§10: one primitive, two impleme
       { verdict: 'revise', findings: [finding('f_b')] },
       { verdict: 'revise', findings: [finding('f_c')] },
       { verdict: 'revise', findings: [finding('f_d')] },
+      { verdict: 'revise', findings: [finding('f_e')] },
+      { verdict: 'revise', findings: [finding('f_f')] },
     ])
-    expect(trace).toMatchObject({ outcome: 'escalated', source: 'policy', rounds: 4 })
+    expect(trace).toMatchObject({ outcome: 'escalated', source: 'policy', rounds: 6 })
   })
 
   test('a dismissed chain tip suppresses the stall in both and the loop converges', async () => {
