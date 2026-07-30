@@ -24,11 +24,19 @@ import { join, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 
-const REMEDY =
-  "re-run the canonical → vendored copy: sed '0,/^name: guide$/s//name: ab-guide/' " +
-  'skills/guide/SKILL.md > .agents/skills/ab-guide/SKILL.md && cp -r skills/guide/references/. ' +
-  '.agents/skills/ab-guide/references/ && cp -r .agents/skills/ab-guide/. ' +
-  '.agents/skills/.ab-pristine/ab-guide/'
+/**
+ * A complete remedy for every drift class the tests below detect, including a
+ * canonical file that was removed or renamed. It rebuilds each mirror from
+ * scratch rather than copying over it: an overlay copy can add and update files
+ * but never removes one the canonical tree dropped, which would leave the
+ * path-set assertion red after following the advice.
+ */
+const REMEDY = [
+  'rm -rf .agents/skills/ab-guide .agents/skills/.ab-pristine/ab-guide',
+  'cp -r skills/guide .agents/skills/ab-guide',
+  "sed '0,/^name: guide$/s//name: ab-guide/' skills/guide/SKILL.md > .agents/skills/ab-guide/SKILL.md",
+  'cp -r .agents/skills/ab-guide .agents/skills/.ab-pristine/ab-guide',
+].join(' && ')
 
 /**
  * Every regular file under `root`, keyed by POSIX path relative to it.
@@ -103,13 +111,16 @@ describe('vendored ab-guide mirrors', () => {
   test.each(mirrors)('%s carries the canonical file set', (label, mirror) => {
     // Compared first, so an added, removed, or renamed file is reported as a
     // path rather than surfacing as a content mismatch.
-    expect(sortedPaths(mirror), `${label} has the wrong files — ${REMEDY}`).toEqual(
-      sortedPaths(expectedTree()),
-    )
+    expect(
+      sortedPaths(mirror),
+      `${label} has the wrong files — re-run the canonical → vendored sync:\n${REMEDY}`,
+    ).toEqual(sortedPaths(expectedTree()))
   })
 
   test.each(mirrors)('%s matches the canonical install form', (label, mirror) => {
     const drifted = driftedPaths(expectedTree(), mirror)
-    expect(drifted, `${label} is stale — ${REMEDY}`).toEqual([])
+    expect(drifted, `${label} is stale — re-run the canonical → vendored sync:\n${REMEDY}`).toEqual(
+      [],
+    )
   })
 })
