@@ -867,10 +867,19 @@ return the ticket to configured Triage before completing as `abandoned`. Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.
 
-On the dashboard, `r` on a blocked build replaces the bottom legend with the
-optional feedback field while the blocker stays visible. All printable keys
-edit the field instead of triggering dashboard actions; Backspace deletes,
-Enter submits, and Escape cancels.
+On the dashboard, `r` on a blocked build replaces the bottom legend with a
+multi-line composer panel: the build being resumed, a note that guidance is
+optional, the build's unresolved blocker questions, the field itself, and its
+key bindings. All printable keys edit the field instead of triggering dashboard
+actions. `Enter` submits (an empty field resumes without guidance), `Ctrl-J`
+inserts a line break — as does `Shift+Enter` in terminals that report it
+distinctly — `Backspace` deletes at the caret, `Left`/`Right`/`Up`/`Down` and
+`Home`/`End` move the caret rather than the dashboard's row selection, and
+`Escape` cancels without writing. Line breaks survive submission, so the
+guidance the agent receives keeps the operator's line structure. Pasting
+multi-line text inserts all of it in one step in terminals that support
+bracketed paste; where they do not, a paste still submits at its first line
+break.
 
 `ab answer` answers every escalation that is open when the command runs,
 regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
