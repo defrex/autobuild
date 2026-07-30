@@ -518,7 +518,7 @@ Optional. Every field is a positive integer and receives its own default.
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound conflict-reconciliation cycles. |
-| `maxReviewRounds` | `4` | positive integer | Bound each plan/review and implement/review convergence loop. |
+| `maxReviewRounds` | `6` | positive integer | Bound each plan/review and implement/review convergence loop. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 
 Harvest is driven by observation back-pressure during dispatcher ticks, not a
@@ -683,7 +683,7 @@ stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
 maxReconcileAttempts = 3
-maxReviewRounds = 4
+maxReviewRounds = 6
 harvestThreshold = 5
 
 [tickets]

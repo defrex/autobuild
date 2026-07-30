@@ -24,7 +24,7 @@ import { decideNext, type Decision, type WaitReason } from './engine'
 const BUILD = 'auth-rate-limit'
 
 // Policy defaults apply: stallRounds 3, maxVerifyAttempts 3,
-// maxReconcileAttempts 3, maxReviewRounds 4 (§16.1).
+// maxReconcileAttempts 3, maxReviewRounds 6 (§16.1).
 const CONFIG_TOML = `
 [tickets]
 source = "file"
@@ -58,14 +58,6 @@ skill = "ab-release-notes"
 `
 
 const config = parseConfig(CONFIG_TOML)
-
-/**
- * Same config with a roomier review cap. Tests about feedback plumbing across
- * a post-stall round (guidance consumption, chain dismissal) need the loop to
- * survive past round 4; the cap itself is exercised by its own tests above, so
- * letting it fire here would assert the wrong thing.
- */
-const roomyConfig = parseConfig(`${CONFIG_TOML}\n[policy]\nmaxReviewRounds = 6\n`)
 
 // ── Fixture plumbing (reducer-test style) ────────────────────────────────────
 
@@ -113,11 +105,6 @@ function toLog(writes: EventWrite[]): AbEvent[] {
 
 function decide(writes: EventWrite[]): Decision {
   return decideNext(toLog(writes), config)
-}
-
-/** `decide` under `roomyConfig` — see its comment. */
-function decideRoomy(writes: EventWrite[]): Decision {
-  return decideNext(toLog(writes), roomyConfig)
 }
 
 function finding(id: string, persists: string[] = []): Finding {
@@ -875,20 +862,22 @@ describe('decideNext: rule 5 — plan loop', () => {
   })
 
   test('maxReviewRounds exhausted (fresh findings each round) → policy escalation', () => {
-    expect(
-      decide([
-        ...prelude(),
-        ...planRound(1, 'revise', [finding('f_a')]),
-        ...planRound(2, 'revise', [finding('f_b')]),
-        ...planRound(3, 'revise', [finding('f_c')]),
-        ...planRound(4, 'revise', [finding('f_d')]),
-      ]),
-    ).toEqual({
+    const throughFive = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_a')]),
+      ...planRound(2, 'revise', [finding('f_b')]),
+      ...planRound(3, 'revise', [finding('f_c')]),
+      ...planRound(4, 'revise', [finding('f_d')]),
+      ...planRound(5, 'revise', [finding('f_e')]),
+    ]
+    expect(decide(throughFive)).toEqual(runPhase('plan', 6, { findings: ['f_e'] }))
+
+    expect(decide([...throughFive, ...planRound(6, 'revise', [finding('f_f')])])).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
       phase: 'plan-review',
-      round: 4,
-      question: 'maxReviewRounds (4) exhausted without approval',
+      round: 6,
+      question: 'maxReviewRounds (6) exhausted without approval',
     })
   })
 
@@ -899,14 +888,16 @@ describe('decideNext: rule 5 — plan loop', () => {
       ...planRound(2, 'revise', [finding('f_b')]),
       ...planRound(3, 'revise', [finding('f_c')]),
       ...planRound(4, 'revise', [finding('f_d')]),
+      ...planRound(5, 'revise', [finding('f_e')]),
+      ...planRound(6, 'revise', [finding('f_f')]),
       ev(
         'escalation.raised',
         {
           id: 'e_1',
           phase: 'plan-review',
-          round: 4,
+          round: 6,
           source: 'policy',
-          question: 'maxReviewRounds (4) exhausted without approval',
+          question: 'maxReviewRounds (6) exhausted without approval',
         },
         KERNEL,
       ),
@@ -922,7 +913,7 @@ describe('decideNext: rule 5 — plan loop', () => {
         }),
       ]),
     ).toEqual(
-      runPhase('plan', 5, {
+      runPhase('plan', 7, {
         guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' },
       }),
     )
@@ -996,6 +987,38 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
     })
   })
 
+  test('six fresh code-review rounds exhaust the default policy limit', () => {
+    const throughFive = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'revise', [finding('f_a')]),
+      ...implementRound(2, 'sha-r2', { findings: ['f_a'] }),
+      ...codeReview(2, 'revise', [finding('f_b')]),
+      ...implementRound(3, 'sha-r3', { findings: ['f_b'] }),
+      ...codeReview(3, 'revise', [finding('f_c')]),
+      ...implementRound(4, 'sha-r4', { findings: ['f_c'] }),
+      ...codeReview(4, 'revise', [finding('f_d')]),
+      ...implementRound(5, 'sha-r5', { findings: ['f_d'] }),
+      ...codeReview(5, 'revise', [finding('f_e')]),
+    ]
+    expect(decide(throughFive)).toEqual(runPhase('implement', 6, { findings: ['f_e'] }))
+
+    expect(
+      decide([
+        ...throughFive,
+        ...implementRound(6, 'sha-r6', { findings: ['f_e'] }),
+        ...codeReview(6, 'revise', [finding('f_f')]),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'code-review',
+      round: 6,
+      question: 'maxReviewRounds (6) exhausted without approval',
+    })
+  })
+
   test('the stall decision is stable on re-decide (raised exactly once)', () => {
     expect(decide(threeReviseRounds)).toEqual(decide(threeReviseRounds))
     // once escalation.raised lands, the open escalation blocks (no re-raise)
@@ -1028,7 +1051,7 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
 
   test('consumed guidance is not reused: the next revise round gets findings feedback', () => {
     expect(
-      decideRoomy([
+      decide([
         ...threeReviseRounds,
         stallRaised,
         ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
@@ -1073,7 +1096,7 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
 
   test('no re-stall on the dismissed chain: the next reviewer round proceeds', () => {
     expect(
-      decideRoomy([
+      decide([
         ...threeReviseRounds,
         stallRaised,
         ev('escalation.answered', {

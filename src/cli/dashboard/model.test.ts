@@ -44,7 +44,7 @@ import {
 
 const BUILD = 'auth-rate-limit'
 
-/** Default policy: maxVerifyAttempts 3, maxReviewRounds 4. `[finalize].steps`
+/** Default policy: maxVerifyAttempts 3, maxReviewRounds 6. `[finalize].steps`
  * defaults to `[]` — the DEFAULT config path, and the one the merge row's
  * vacuous-`every` window lives in. */
 const CONFIG = parseConfig(`

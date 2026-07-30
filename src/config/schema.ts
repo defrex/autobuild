@@ -244,7 +244,7 @@ export const policySchema = z.strictObject({
   maxSetupAttempts: z.number().int().positive().default(3),
   maxReconcileAttempts: z.number().int().positive().default(3),
   /** converge's `maxRounds` for the review loops (SPEC §10). */
-  maxReviewRounds: z.number().int().positive().default(4),
+  maxReviewRounds: z.number().int().positive().default(6),
   /** Unclaimed observation occurrences required to start one harvest run. */
   harvestThreshold: z.number().int().positive().default(5),
 })
