@@ -129,9 +129,12 @@ describe('roleKeyDiagnostics — the deprecated skill-name alias', () => {
     )
   })
 
-  test('a shared skill names only the steps it still routes, and never advises deletion', () => {
-    const parsed = withVerify(
-      `[verify]
+  test('a shared skill whose other step is superseded is a plain rename that CONVERGES', () => {
+    // A superseded alias is inert by definition, so it is not a reason to keep
+    // the key. Calling it one produced advice that did not converge: "keep it,
+    // it is also the superseded key for e2e", then "it can be deleted" on the
+    // very next dispatch.
+    const shared = `[verify]
 steps = ["e2e", "visual"]
 
 [verify.e2e]
@@ -141,21 +144,34 @@ skill = "ab-verify-e2e"
 [verify.visual]
 kind = "agent"
 skill = "ab-verify-e2e"
-`,
-      '[roles.e2e]\nruntime = "claude"\n\n[roles.ab-verify-e2e]\nruntime = "claude"\n',
+`
+    const parsed = withVerify(
+      shared,
+      '[roles.e2e]\nruntime = "claude"\n\n[roles.ab-verify-e2e]\nruntime = "pi"\n',
     )
     const d = roleKeyDiagnostics(parsed)
     expect(d.unconsumed).toEqual([])
+    // The superseded step is still REPORTED — it is a real fact about the key.
     expect(d.deprecated).toEqual([
       { key: 'ab-verify-e2e', activeAlias: ['visual'], supersededAlias: ['e2e'] },
     ])
-    const [notice] = roleKeyWarnings(parsed)
-    expect(notice).toContain('[roles.ab-verify-e2e] should be [roles.visual]')
-    expect(notice).toContain(
-      'Keep [roles.ab-verify-e2e]: it is also the superseded skill-name key for "e2e".',
+    const [notice, ...rest] = roleKeyWarnings(parsed)
+    expect(rest).toEqual([])
+    expect(notice).toBe(
+      'autobuild.toml: [roles.ab-verify-e2e] should be [roles.visual] — it is the deprecated ' +
+        'skill-name key for agent verify step "visual" and stops working in a future release.',
     )
-    expect(notice).not.toContain('can be deleted')
-    expect(notice).not.toContain('Delete')
+    // It never says to keep the key for a step that does not use it.
+    expect(notice).not.toContain('Keep [roles.ab-verify-e2e]')
+    expect(notice).not.toContain('superseded')
+
+    // Follow it LITERALLY — rename the key — and the config goes silent. One
+    // edit, not a two-step dance ending in a delete.
+    const migrated = withVerify(
+      shared,
+      '[roles.e2e]\nruntime = "claude"\n\n[roles.visual]\nruntime = "pi"\n',
+    )
+    expect(roleKeyWarnings(migrated)).toEqual([])
   })
 
   test('two steps and nothing else: declare both, then delete', () => {
@@ -219,6 +235,84 @@ skill = "e2e"
     )
     expect(roleKeyWarnings(parsed)).toEqual([])
     expect(roleKeyDiagnostics(parsed).deprecated).toEqual([])
+  })
+})
+
+describe('roleKeyWarnings — every emitted key is TOML the operator can paste', () => {
+  /** Every `[roles.<key>]` a notice tells the operator to write. */
+  function emittedTables(lines: readonly string[]): string[] {
+    return lines.flatMap((line) =>
+      [...line.matchAll(/\[roles\.(?:"(?:[^"\\]|\\.)*"|[^\]]*)\]/g)].map((m) => m[0]),
+    )
+  }
+
+  // Role and step names are arbitrary nonempty strings. A bare interpolation is
+  // wrong two different ways: `[roles.ab verify]` is a syntax error, and
+  // `[roles.ui.visual]` is not the key at all — TOML reads the dot as nesting
+  // and rejects `visual` as an unknown field under `roles.ui`.
+  const AWKWARD = ['ui.visual', 'ab verify', 'e2e#1', 'smoke:fast', 'quote"d']
+
+  for (const name of AWKWARD) {
+    test(`a step named ${JSON.stringify(name)} yields a replacement that PARSES`, () => {
+      const parsed = withVerify(
+        `[verify]
+steps = [${JSON.stringify(name)}]
+
+[verify.${JSON.stringify(name)}]
+kind = "agent"
+skill = "legacy-skill"
+`,
+        '[roles.legacy-skill]\nruntime = "claude"\n',
+      )
+      const tables = emittedTables(roleKeyWarnings(parsed))
+      expect(tables).toContain('[roles.legacy-skill]')
+
+      // Apply each emitted header verbatim. A header that is not valid TOML
+      // throws; one that silently NESTS (`[roles.ui.visual]`) declares the
+      // wrong key or is rejected as an unknown field. Both are what an operator
+      // following the advice would hit.
+      const declaredBy = (table: string): string[] => {
+        const applied = parseConfig(`${TICKETS}\n${DEFAULT_ROLE}${table}\nruntime = "claude"\n`)
+        return Object.keys(applied.roles).filter((key) => key !== 'default')
+      }
+      for (const table of tables) expect(declaredBy(table)).toHaveLength(1)
+
+      // …and the replacement it names really is the step's own literal key.
+      const replacement = tables.find((table) => table !== '[roles.legacy-skill]')
+      expect(replacement).toBeDefined()
+      expect(declaredBy(replacement!)).toEqual([name])
+    })
+
+    test(`an unconsumed [roles] key named ${JSON.stringify(name)} is reported quotably`, () => {
+      const parsed = config(`${DEFAULT_ROLE}[roles.${JSON.stringify(name)}]\nruntime = "claude"\n`)
+      const [stray, validList] = roleKeyWarnings(parsed)
+      for (const table of emittedTables([stray!])) {
+        expect(() =>
+          parseConfig(`${TICKETS}\n${DEFAULT_ROLE}${table}\nruntime = "claude"\n`),
+        ).not.toThrow()
+      }
+      // The valid-key list is what the operator types next, so it carries the
+      // same quoting rather than a bare name that would not parse.
+      expect(validList).toContain('Valid role keys:')
+    })
+  }
+
+  test('a valid key needing quotes is listed quoted, and ordinary keys are untouched', () => {
+    const parsed = withVerify(
+      `[verify]
+steps = ["ui.visual"]
+
+[verify."ui.visual"]
+kind = "agent"
+skill = "ab-verify-ui"
+`,
+      '[roles.ghost]\nruntime = "claude"\n',
+    )
+    const [, validList] = roleKeyWarnings(parsed)
+    expect(validList).toContain('"ui.visual"')
+    // Bare-key names stay bare — no churn for an ordinary configuration.
+    expect(validList).toContain('code-review')
+    expect(validList).not.toContain('"code-review"')
   })
 })
 

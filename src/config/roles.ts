@@ -174,11 +174,13 @@ export function roleKeyDiagnostics(config: Config): RoleKeyDiagnostics {
 // ── Notices ──────────────────────────────────────────────────────────────────
 //
 // One string per key, so advice is never blanket, and every branch's advice is
-// safe to follow literally. Two shape constraints: the key and its replacement
-// land in the FIRST CLAUSE, so they are on the first rendered row at any
-// realistic width; and the valid-key list is its own string, so it starts at
-// column 0 of its own row instead of trailing a paragraph. House style is
-// subject-first, `subject: predicate — detail`, with no `warning:` prefix.
+// safe to follow literally — which means BOTH that following it converges (one
+// edit, then silence) and that what it tells you to type is valid TOML. Two
+// shape constraints: the key and its replacement land in the FIRST CLAUSE, so
+// they are on the first rendered row at any realistic width; and the valid-key
+// list is its own string, so it starts at column 0 of its own row instead of
+// trailing a paragraph. House style is subject-first, `subject: predicate —
+// detail`, with no `warning:` prefix.
 
 function andList(parts: readonly string[]): string {
   if (parts.length <= 1) return parts[0] ?? ''
@@ -186,50 +188,74 @@ function andList(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
 }
 
-const quoted = (steps: readonly string[]): string => andList(steps.map((step) => `"${step}"`))
-const roleKeys = (steps: readonly string[]): string => andList(steps.map((s) => `[roles.${s}]`))
+/** TOML bare keys are letters, digits, `-`, and `_` only. */
+const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/
+
+/**
+ * A role or step name AS THE OPERATOR MUST TYPE IT.
+ *
+ * Role and step names are arbitrary nonempty strings, so interpolating one
+ * bare is wrong twice over: `[roles.ab verify]` is a syntax error, and
+ * `[roles.ui.visual]` is not the key at all — TOML reads the dot as nesting and
+ * rejects it as an unknown field under `roles.ui`. Quoting only when needed
+ * keeps every ordinary notice byte-identical. `JSON.stringify` emits exactly the
+ * escapes a TOML basic string accepts (`\"`, `\\`, `\n`, `\uXXXX`, …).
+ */
+function tomlKey(name: string): string {
+  return TOML_BARE_KEY.test(name) ? name : JSON.stringify(name)
+}
+
+/** The table header to write, quoted when the name needs it. */
+const roleTable = (name: string): string => `[roles.${tomlKey(name)}]`
+
+/** A step name in prose. Escaped, so an odd name cannot break out of its quotes. */
+const named = (steps: readonly string[]): string =>
+  andList(steps.map((step) => (TOML_BARE_KEY.test(step) ? `"${step}"` : JSON.stringify(step))))
+
+const roleTables = (names: readonly string[]): string => andList(names.map(roleTable))
 
 function deprecationNotice(entry: RoleKeyConsumers): string {
   const { key, canonicalUse, activeAlias, supersededAlias } = entry
 
-  // Inert: the key routes nothing, because every step naming it as a skill
-  // already declares its own step-named role.
+  // A SUPERSEDED alias is not a consumer. It is inert by definition — the step
+  // declares its own step-named role, which wins — so it can never be a reason
+  // to keep this key, and it never blocks the rename. Counting it as one made
+  // the advice non-converging: "keep it, it is also the superseded key for
+  // e2e", followed on the next dispatch by "it can be deleted".
+
+  // Inert: the key routes nothing at all.
   if (activeAlias.length === 0) {
     const subject =
       supersededAlias.length === 1
-        ? `agent verify step ${quoted(supersededAlias)} declares its own step-named role`
-        : `agent verify steps ${quoted(supersededAlias)} each declare their own step-named role`
+        ? `agent verify step ${named(supersededAlias)} declares its own step-named role`
+        : `agent verify steps ${named(supersededAlias)} each declare their own step-named role`
     return (
-      `autobuild.toml: [roles.${key}] can be deleted — ${subject}, so this ` +
+      `autobuild.toml: ${roleTable(key)} can be deleted — ${subject}, so this ` +
       `deprecated skill-name key changes nothing.`
     )
   }
 
-  // Safe rename: one step, no other consumer — the key can simply move.
-  if (canonicalUse === undefined && activeAlias.length === 1 && supersededAlias.length === 0) {
+  // Safe rename: one step still routed and no OTHER consumer, so the key moves
+  // in one edit. Superseded steps are deliberately not "other consumers".
+  if (canonicalUse === undefined && activeAlias.length === 1) {
     return (
-      `autobuild.toml: [roles.${key}] should be [roles.${activeAlias[0]}] — it is the ` +
-      `deprecated skill-name key for agent verify step "${activeAlias[0]}" and stops ` +
+      `autobuild.toml: ${roleTable(key)} should be ${roleTable(activeAlias[0]!)} — it is the ` +
+      `deprecated skill-name key for agent verify step ${named(activeAlias)} and stops ` +
       `working in a future release.`
     )
   }
 
-  // Shared or colliding: the key still routes steps, but renaming it would
-  // break something else, so the advice is to declare and then keep or delete.
+  // Shared or colliding: the key routes several steps, or its name is itself
+  // canonical, so the advice is to declare each step and then keep or delete.
   const routed =
     activeAlias.length === 1
       ? 'it routes that agent verify step through the deprecated skill-name key'
       : 'it routes those agent verify steps through the deprecated skill-name key'
-  const keep: string[] = []
-  if (canonicalUse !== undefined) keep.push(canonicalUse)
-  if (supersededAlias.length > 0) {
-    keep.push(`the superseded skill-name key for ${quoted(supersededAlias)}`)
-  }
   const advice =
-    keep.length > 0
-      ? `Keep [roles.${key}]: it is also ${andList(keep)}.`
-      : `Delete [roles.${key}] once those are declared.`
-  return `autobuild.toml: [roles.${key}] should be ${roleKeys(activeAlias)} — ${routed}. ${advice}`
+    canonicalUse !== undefined
+      ? `Keep ${roleTable(key)}: it is also ${canonicalUse}.`
+      : `Delete ${roleTable(key)} once those are declared.`
+  return `autobuild.toml: ${roleTable(key)} should be ${roleTables(activeAlias)} — ${routed}. ${advice}`
 }
 
 /**
@@ -249,13 +275,15 @@ export function roleKeyWarnings(config: Config): string[] {
   const { valid, unconsumed, deprecated } = roleKeyDiagnostics(config)
   const lines: string[] = []
   if (unconsumed.length > 0) {
-    const keys = unconsumed.map((key) => `[roles.${key}]`).join(', ')
+    const keys = unconsumed.map(roleTable).join(', ')
     lines.push(
       unconsumed.length === 1
         ? `autobuild.toml: ${keys} is declared but nothing requests it — its runtime and model never reach a session.`
         : `autobuild.toml: ${keys} are declared but nothing requests them — their runtime and model never reach a session.`,
     )
-    lines.push(`Valid role keys: ${valid.join(', ')}`)
+    // Rendered as keys, not as prose names: this list is what the operator
+    // types next, so a name needing quotes must show them here too.
+    lines.push(`Valid role keys: ${valid.map(tomlKey).join(', ')}`)
   }
   for (const entry of deprecated) lines.push(deprecationNotice(entry))
   return lines
