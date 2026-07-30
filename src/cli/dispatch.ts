@@ -76,6 +76,7 @@ import {
   controlBuild,
   type BuildControlResult,
 } from './build-control'
+import { bulkControlReport, bulkControlRepository, type BulkDirection } from './bulk-control'
 import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
@@ -132,6 +133,8 @@ type DashboardAction =
   | 'intake'
   | 'pause'
   | 'resume'
+  | 'bulk-pause'
+  | 'bulk-resume'
   | 'discard'
   | 'abort-confirm'
   | 'harvest-gate'
@@ -597,6 +600,26 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
+  /** Repository-wide quiescence from the always-present global row: park every
+   * pausable build and stop intake, or reverse both. Unlike the per-build keys
+   * this never toggles — it is an absolute request in one direction, so a build
+   * already pausing keeps its single pending pause. A store failure propagates
+   * to `queueAction`'s catch, which reports it on the same notice row. */
+  private async bulkControl(direction: BulkDirection): Promise<void> {
+    // The key routing already guards; keeping it with the action means the
+    // invariant travels with the write rather than only with the keypress.
+    if (this.view !== undefined || this.selection?.kind !== 'global') return
+
+    const summary = await bulkControlRepository({
+      store: this.wiring.store,
+      repo: this.opts.targetRepo,
+      env: this.opts.env,
+      direction,
+    })
+    this.announce(bulkControlReport(summary))
+    await this.renderOnce()
+  }
+
   private selectedDashboardBuild(): DashboardBuild | undefined {
     const slug =
       this.view?.kind === 'detail'
@@ -1000,6 +1023,12 @@ class DispatchLoop {
       case 'resume':
         await this.dashboardResume()
         return
+      case 'bulk-pause':
+        await this.bulkControl('pause')
+        return
+      case 'bulk-resume':
+        await this.bulkControl('resume')
+        return
       case 'auto-merge':
         await this.toggleAutoMerge()
         return
@@ -1112,6 +1141,10 @@ class DispatchLoop {
         if (this.view === undefined && this.selection?.kind === 'global') this.queueAction('intake')
         return
       case 'p':
+        if (this.view === undefined && this.selection?.kind === 'global') {
+          this.queueAction('bulk-pause')
+          return
+        }
         if (this.view === undefined && this.selection?.kind === 'harvest') {
           this.queueAction({ kind: 'harvest-run', run: this.model?.harvest?.run })
           return
@@ -1121,6 +1154,10 @@ class DispatchLoop {
         }
         return
       case 'r':
+        if (this.view === undefined && this.selection?.kind === 'global') {
+          this.queueAction('bulk-resume')
+          return
+        }
         if (dashboardBuildControl(this.selectedDashboardBuild()?.status ?? 'queued')?.key === 'r') {
           this.queueAction('resume')
         }
@@ -1364,6 +1401,17 @@ class DispatchLoop {
 
   private say(line: string): void {
     if (!this.dashboard) this.opts.stdout(line)
+  }
+
+  /** Report a completed operator action where the operator can see it. The
+   * header's conditional row is one shared notice slot — a warning and an
+   * action report compete for the same line, and the latest wins. `say` is
+   * deliberately silent on a TTY, so a report routed through it would never
+   * appear; `warn` would reach the row but write stderr in plain mode, which
+   * this is not. Hence the third seam. */
+  private announce(line: string): void {
+    if (this.dashboard) this.setWarning(line)
+    else this.opts.stdout(line)
   }
 
   private warn(line: string): void {

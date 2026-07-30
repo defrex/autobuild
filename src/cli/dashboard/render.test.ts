@@ -205,7 +205,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('the final legend exposes only controls meaningful for the selection', () => {
     const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
-      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit',
+      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  p pause all  r resume all  Ctrl-C quit',
     )
 
     const runningHarvestLines = rd(
@@ -950,6 +950,21 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
         ...model([build()]),
         selection: { kind: 'build', slug: 'auth-rate-limit' },
       },
+      { color: false, width: 40 },
+    )
+    const controls = lines.at(-1)!
+    expect(controls.startsWith(' Keys:')).toBe(true)
+    expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
+    expect(controls.endsWith('~')).toBe(true)
+    expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
+  })
+
+  test('the global legend stays one physical row at a narrow width', () => {
+    // The global legend is now the longest of them all — it carries both
+    // repository toggles and both bulk controls — and, like the build one, it
+    // either fits or it truncates.
+    const lines = rd(
+      { ...model([build()]), selection: { kind: 'global' } },
       { color: false, width: 40 },
     )
     const controls = lines.at(-1)!

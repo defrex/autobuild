@@ -2973,9 +2973,9 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       await waitFor(() => stripAnsi(term.all()).includes('> Autobuild'))
 
-      // Global p is intentionally unbound. The following m is the serialized
+      // Global p/r are the bulk pause/resume controls, covered by their own
+      // test; this one stays on the toggles, so m is both the serialized
       // synchronization point and the only action that may append a fact.
-      input.press('pause')
       input.press('auto-merge')
       await waitFor(
         async () =>
@@ -3861,6 +3861,171 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(input.cleanups).toBe(1)
       expect(term.all()).toContain('\x1b[?25h')
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('global p/r pause and resume every build and flip intake, leaving build-row p/r alone', async () => {
+    const fx = await makeFixture(
+      [
+        readyTicket('T-alpha', { title: 'Alpha work' }),
+        readyTicket('T-beta', { title: 'Beta work' }),
+      ],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    let run: Promise<void> | undefined
+    const term = fakeTerminal()
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const slugs = (await fx.store.listBuilds()).map((record) => record.slug).sort()
+      expect(slugs).toEqual(['alpha-work', 'beta-work'])
+
+      const countCommands = async (slug: string, type: string): Promise<number> =>
+        (await fx.store.getEvents(slug)).filter((event) => event.type === type).length
+      const bothHave = async (type: string, n: number): Promise<boolean> =>
+        (await countCommands('alpha-work', type)) === n &&
+        (await countCommands('beta-work', type)) === n
+      const ack = async (slug: string, type: 'build.paused' | 'build.resumed'): Promise<void> => {
+        await fx.store.append(slug, { actor: KERNEL, type, payload: {} })
+      }
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'bulk-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      // The default selection is the global row, so no navigation is needed.
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
+      await waitFor(() => stripAnsi(term.all()).includes('alpha-work'))
+      expect(latestDashboardFrame(term)).toContain('p pause all  r resume all')
+
+      // Uppercase: the dashboard's keys are case-insensitive everywhere.
+      input.text('P')
+      await waitFor(() => bothHave('build.pause-requested', 1))
+      await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
+      await waitFor(() =>
+        latestDashboardFrame(term).includes('pause all: pause requested for 2 builds; intake OFF'),
+      )
+
+      // No live runner in this fixture, so the kernel's acknowledgement — the
+      // thing that actually settles a pause — is written explicitly.
+      await ack('alpha-work', 'build.paused')
+      await ack('beta-work', 'build.paused')
+      await waitFor(() => {
+        const frame = latestDashboardFrame(term)
+        return /alpha-work.*PAUSED/.test(frame) && /beta-work.*PAUSED/.test(frame)
+      })
+
+      input.text('R')
+      await waitFor(() => bothHave('build.resume-requested', 1))
+      await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
+      await waitFor(() =>
+        latestDashboardFrame(term).includes('resume all: resume requested for 2 builds; intake ON'),
+      )
+
+      await ack('alpha-work', 'build.resumed')
+      await ack('beta-work', 'build.resumed')
+      await waitFor(() => {
+        const frame = latestDashboardFrame(term)
+        return /alpha-work.*RUNNING/.test(frame) && /beta-work.*RUNNING/.test(frame)
+      })
+
+      // RUNNING is the one state in which build-row `p` is offered. Intake
+      // staying ON is the sharpest proof the per-build route ran, not the bulk.
+      input.press('down')
+      await waitFor(() => /^ > .*alpha-work/m.test(latestDashboardFrame(term)))
+      input.press('pause')
+      await waitFor(async () => (await countCommands('alpha-work', 'build.pause-requested')) === 2)
+      await waitFor(() => {
+        const frame = latestDashboardFrame(term)
+        return /alpha-work.*PAUSING/.test(frame) && /beta-work.*RUNNING/.test(frame)
+      })
+      expect(await countCommands('beta-work', 'build.pause-requested')).toBe(1)
+      expect(latestDashboardFrame(term)).toContain('intake ON')
+
+      await ack('alpha-work', 'build.paused')
+      await waitFor(() => /alpha-work.*PAUSED/.test(latestDashboardFrame(term)))
+      input.press('resume')
+      await waitFor(async () => (await countCommands('alpha-work', 'build.resume-requested')) === 2)
+      expect(await countCommands('beta-work', 'build.resume-requested')).toBe(1)
+      expect(latestDashboardFrame(term)).toContain('intake ON')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+
+      const bulkWrites = (await fx.store.getEvents('beta-work')).filter(
+        (event) => event.actor.kind === 'human',
+      )
+      expect(bulkWrites.map((event) => event.type)).toEqual([
+        'build.pause-requested',
+        'build.resume-requested',
+      ])
+      expect(
+        bulkWrites.every((event) => event.actor.kind === 'human' && event.actor.user === 'bulk-op'),
+      ).toBe(true)
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('global p with nothing pausable still stops intake and says so', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'quiet-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
+
+      input.press('pause')
+      await waitFor(() =>
+        latestDashboardFrame(term).includes('pause all: no pausable builds; intake OFF'),
+      )
+      expect(latestDashboardFrame(term)).toContain('intake OFF')
+      const intakeWrites = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.intake-set',
+      )
+      expect(intakeWrites).toHaveLength(1)
+      expect(intakeWrites[0]?.payload).toEqual({ enabled: false })
+      expect(intakeWrites[0]?.actor).toEqual({ kind: 'human', user: 'quiet-op' })
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
