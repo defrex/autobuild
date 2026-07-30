@@ -683,7 +683,10 @@ describe('renderDashboard: the resume panel obeys the frame budget', () => {
   })
 
   test('every width x height combination stays inside the frame', () => {
-    for (const width of [8, 11, 13, 14, 20, 40, 80, 200]) {
+    // Widths start at 1, not at a comfortable 8: `renderDashboard` reserves its
+    // one-column gutter BEFORE composing, so the interesting boundary is the
+    // terminal that leaves the panel ZERO content columns.
+    for (const width of [1, 2, 3, 4, 5, 8, 11, 13, 14, 20, 40, 80, 200]) {
       for (const height of [0, 1, 2, 3, 5, 8, 14, 26, 30]) {
         const lines = rd(answering('a very long answer '.repeat(20)), {
           color: true,
@@ -696,6 +699,29 @@ describe('renderDashboard: the resume panel obeys the frame budget', () => {
         }
       }
     }
+  })
+
+  test('a ONE-column terminal renders no field column the frame did not grant', () => {
+    // The gutter leaves zero content columns here. Clamping the field back up
+    // to one column produced a two-column physical row on a one-column screen:
+    // the caret plus the gutter the outer renderer adds afterwards.
+    for (const height of [1, 3, 5, 10, 30]) {
+      const lines = rd(answering('abc'), { color: false, width: 1, height })
+      expect(lines.length).toBeLessThanOrEqual(height)
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(1)
+      expect(lines.join('')).not.toContain('|')
+    }
+    // And the panel itself is empty rather than one manufactured column.
+    expect(resumePanel(answering('abc'), false, 0, 12)).toEqual([])
+    expect(resumePanel(answering('abc'), false, -1, 12)).toEqual([])
+  })
+
+  test('a two-column terminal still fits its single content column', () => {
+    // One content column is the narrowest frame that can show anything, and
+    // the caret is what it shows.
+    const lines = rd(answering('abc'), { color: false, width: 3, height: 30 })
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(3)
+    expect(lines.join('\n')).toContain('|')
   })
 
   test('the field and its bindings outlive the blocker text as height disappears', () => {

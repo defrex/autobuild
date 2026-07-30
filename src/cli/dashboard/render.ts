@@ -871,6 +871,14 @@ export function resumePanel(
   capacity: number,
 ): string[] {
   const prompt = model.resumeInput!
+  // A frame that granted NO content columns can render nothing at all. This is
+  // not the same as running out of capacity: `renderDashboard` reserves its
+  // one-column gutter BEFORE calling in, so a one-column terminal arrives here
+  // as width 0, and a field that clamped itself up to one column would emit a
+  // physical row two columns wide. The panel never manufactures a column the
+  // frame did not grant — which is what makes every `fieldWidth` below at
+  // least 1 without a clamp.
+  if (width <= 0) return []
   const questions = model.builds.find((candidate) => candidate.slug === prompt.slug)?.blockers ?? []
 
   const title = truncate(
@@ -892,8 +900,10 @@ export function resumePanel(
       )
     }
   }
+  // The indent is dropped before it could eat the field's last column, so this
+  // is at least 1 for every width the early return above lets through.
   const fieldIndent = width >= 6 ? '  ' : ''
-  const fieldWidth = Math.max(1, width - fieldIndent.length)
+  const fieldWidth = width - fieldIndent.length
   const field = layoutComposer(prompt.value, prompt.cursor, fieldWidth)
 
   let rest = capacity
