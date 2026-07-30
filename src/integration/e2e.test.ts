@@ -1394,10 +1394,16 @@ const GUIDANCE_ANSWER = 'A fixed 5-minute window is correct; approve unless it r
 
 test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-B)', async () => {
   const guidanceSeen: Array<{ round: number; escalation: string; answer: string }> = []
+  const feedbackSeen: Array<{ round: number; guidance: boolean; findings: boolean }> = []
   const handlers = happyHandlers()
   handlers.implement = async (cli) => {
     await cli.run(['context'])
     const guidancePath = join(cli.ws, '.ab', 'guidance.json')
+    feedbackSeen.push({
+      round: cli.round,
+      guidance: existsSync(guidancePath),
+      findings: existsSync(join(cli.ws, '.ab', 'findings.json')),
+    })
     if (existsSync(guidancePath)) {
       const guidance = JSON.parse(await Bun.file(guidancePath).text()) as {
         escalation: string
@@ -1557,6 +1563,14 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   })
   // …and the script actually read it from the materialized .ab/guidance.json.
   expect(guidanceSeen).toEqual([{ round: 4, escalation: 'esc_1', answer: GUIDANCE_ANSWER }])
+  // Feedback is exclusive: the guidance round gets .ab/guidance.json and no
+  // .ab/findings.json — the file the skills used to point at unconditionally.
+  expect(feedbackSeen).toEqual([
+    { round: 1, guidance: false, findings: false },
+    { round: 2, guidance: false, findings: true },
+    { round: 3, guidance: false, findings: true },
+    { round: 4, guidance: true, findings: false },
+  ])
 
   // Each bracket's re-issued AB_SESSION (D8) stamps its own terminal (§15.3)…
   expect(ofType(events, 'implement.completed').map(agentSession)).toEqual([

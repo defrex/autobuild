@@ -78,6 +78,23 @@ consults a snapshot in place of the append-only log.
 only through `src/cli/` terminals, which convert artifact deposits into
 event facts atomically — the engine never reads blobs.
 
+**Human guidance delivery.** The routing fact is an `escalation.answered`
+event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
+answer` and the dashboard's blocked-build resume control are two surfaces over
+the one `src/cli/build-control.ts` operation that appends it, so delivery is
+identical whichever a human used.
+`src/kernel/engine.ts`'s `loopOfPhase` feeds a plan- or code-loop answer
+(including `verify:*`, which belongs to the code loop) to that loop's producer
+as the round's feedback, consumed once a `*.started` carries it; `finalize` and
+`reconcile` have no producer round, so `PHASE_SPECS.inputs.answeredGuidance`
+makes `ab context` their delivery channel for the latest answer addressed to
+that phase. Either way `src/cli/context.ts` materializes `.ab/guidance.json`
+with the escalation id and answer text. A producer round's feedback is a
+discriminated union — findings, a failed verify report, or guidance — and a
+round may carry none, so a round with guidance writes no `.ab/findings.json`;
+the four receiving skills say so, and `src/cli/skill-guidance.test.ts` derives
+that requirement from the phase table.
+
 **Finalize publication.** Content-producing `finalize:*` checks or agents
 select and commit files locally and leave a clean worktree. `build-runner.ts`
 derives the last published head from event facts, rejects a non-descendant

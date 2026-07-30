@@ -266,6 +266,22 @@ describe('ab-guide — durable build-control coverage', () => {
       expect(guide).toContain(`\`${event}\``)
     }
   })
+
+  // The operator-side account of `ab answer` has to join up with the agent-side
+  // contract the four receiving skills state, or the guide teaches a mechanism
+  // that appears to end at the event log.
+  test('says where an answer lands for the agent and which phase consumes it', () => {
+    const section = headingSection('### Durable build controls: CLI and dashboard')
+    expect(section).toBeDefined()
+    for (const claim of [
+      '`.ab/guidance.json`',
+      'feeds the next `plan` round',
+      'feeds the next `implement` round',
+      "A round's feedback is exclusive",
+    ]) {
+      expect(section ?? '').toContain(claim)
+    }
+  })
 })
 
 describe('ab-guide — source-agnostic ticket operations', () => {
