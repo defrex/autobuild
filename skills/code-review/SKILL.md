@@ -43,10 +43,18 @@ goes nowhere.
 Same schema as every review (the CLI validates and stamps ids): `severity`
 (`blocking` | `important` | `minor`), optional `file`/`lines`, `summary`,
 optional `detail`, and `persists` — ids of prior-round findings this one
-continues. Mark persistence honestly: it is how the kernel detects a
-producer/reviewer stalemate and hands it to a human instead of burning
-rounds. If a prior finding was addressed, do not resurrect it; if it was
-dodged, do not let it look fresh.
+continues.
+
+`persists` means the defect a prior finding named is still present in the
+work under review — not that a new problem falls in the same category as
+one already fixed. Test it that way: if the exact defect the prior finding
+named is gone, the chain ends there, however closely your new finding
+resembles it. A new instance of a defect class whose reported instance was
+fixed is fresh work and starts its own chain — raise it with no `persists`
+link. Mark honestly in both directions: neither re-litigate a resolved
+finding nor let a dodged one look fresh, because the kernel mechanically
+escalates a chain that persists too long, and a stalemate is the only
+thing that counter can usefully measure.
 
 Each finding must name a concrete failure, not a preference. "This could be
 cleaner" is not a finding; "a sixth login attempt bypasses the limiter
