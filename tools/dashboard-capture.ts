@@ -16,10 +16,43 @@ import {
 } from '../src/integration/harness'
 
 const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
-const FRAME_SPECS = [
+
+interface FrameSpec {
+  id: string
+  columns: number
+  rows: number
+  /** Open the blocked-resume composer over the projected model. This is
+   * faithful rather than a fake: `resumeInput` is process-local presentation
+   * state that a keypress sets and no event ever produces, so there is nothing
+   * in the log for the capture to drive it from. */
+  resume?: { slug: string; value: string; cursor: number }
+  /** Frame-specific evidence this capture exists to show. */
+  requires?: readonly string[]
+}
+
+const RESUME_GUIDANCE = 'Use the manual merge path.\nRe-run verify:test afterwards.'
+
+const FRAME_SPECS: readonly FrameSpec[] = [
   { id: 'mixed-wide', columns: 140, rows: 40 },
   { id: 'mixed-narrow', columns: 64, rows: 50 },
-] as const
+  {
+    id: 'resume-prompt',
+    columns: 100,
+    rows: 30,
+    resume: {
+      slug: 'plan-blocked-dashboard',
+      value: RESUME_GUIDANCE,
+      // Mid-buffer, on the second line, so the caret is visibly not just an
+      // end-of-text marker.
+      cursor: RESUME_GUIDANCE.indexOf('afterwards'),
+    },
+    requires: [
+      'Resume plan-blocked-dashboard',
+      'Enter submit',
+      'The scripted plan scenario is intentionally blocked for dashboard capture.',
+    ],
+  },
+]
 
 const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 3')
 
@@ -200,7 +233,8 @@ const NO_INPUT: TerminalInput = {
   start: () => () => {},
 }
 
-function validateCapturedFrame(id: string, lines: string[] | undefined, columns: number): string[] {
+function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): string[] {
+  const { id, columns } = spec
   if (lines === undefined || lines.length === 0) {
     throw new Error(`dashboard capture ${id}: dispatch painted no frame`)
   }
@@ -228,16 +262,20 @@ function validateCapturedFrame(id: string, lines: string[] | undefined, columns:
       )
     }
   }
+  for (const required of spec.requires ?? []) {
+    if (!text.includes(required)) {
+      throw new Error(
+        `dashboard capture ${id}: final frame omitted required evidence "${required}"`,
+      )
+    }
+  }
   if (id === 'mixed-narrow' && !text.includes('~')) {
     throw new Error('dashboard capture mixed-narrow: width did not exercise dashboard truncation')
   }
   return [...lines]
 }
 
-async function capturePaint(
-  harness: E2eHarness,
-  spec: (typeof FRAME_SPECS)[number],
-): Promise<string[]> {
+async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<string[]> {
   const terminal = new CaptureTerminal(spec.columns, spec.rows)
   const stderr: string[] = []
   let captured: string[] | undefined
@@ -253,10 +291,13 @@ async function capturePaint(
     input: NO_INPUT,
     wire: () => harness.wiring,
     resolveDashboardRenderer: () => (model, options) => {
-      const lines = renderDashboard(model, {
-        ...options,
-        now: RENDER_NOW,
-      })
+      const lines = renderDashboard(
+        spec.resume === undefined ? model : { ...model, resumeInput: spec.resume },
+        {
+          ...options,
+          now: RENDER_NOW,
+        },
+      )
       captured = [...lines]
       return lines
     },
@@ -265,7 +306,7 @@ async function capturePaint(
   if (stderr.length > 0) {
     throw new Error(`dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`)
   }
-  return validateCapturedFrame(spec.id, captured, spec.columns)
+  return validateCapturedFrame(spec, captured)
 }
 
 function assertOutputUnderScratch(workspacePath: string, outputDir: string): void {
@@ -332,6 +373,9 @@ export async function captureDashboardFrames(
         '- [ ] The Harvest row remains legible.',
         '- [ ] The narrow frame truncates deliberately without clipping.',
         '- [ ] Colour emphasis is present and literal statuses remain readable.',
+        '- [ ] The resume-prompt frame shows the composer panel in place of the',
+        '      key legend: build name, optional-guidance note, blocker, a',
+        '      two-line field with a visible caret, and its key bindings.',
         '',
       ].join('\n'),
     )

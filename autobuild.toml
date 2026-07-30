@@ -1,72 +1,48 @@
-# autobuild.toml — per-repo declarative configuration (SPEC §16.1, D9).
-# Read from the build's branch at workspace provision: every build sees one
-# consistent config, and changes to this file flow through the pipeline
-# itself. Declarative only — commands are plain shell strings, nothing here
-# is evaluated.
+# Autobuild pipeline configuration for this repository. Declarative only —
+# commands are plain shell strings and nothing here is evaluated. Each build
+# reads this file from its own branch, so config changes flow through the
+# pipeline itself. Full surface: docs/configuration.md.
 
-# Root scalars must appear before the first TOML table.
+# Root scalars, which TOML requires before the first table.
 baseBranch = "main"
-capacity = 10             # concurrent builds for this repo
-# Forge adapter: builtin GitHub by default, or a name registered below.
-#forge = "github"
-# Trusted Bun modules loaded from this repository before dispatch starts.
-# Relative paths and installed package specifiers are both supported.
-#plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
+capacity = 10            # concurrent builds
 
-# Optional review-window hosting for explicitly attached images. Text download
-# commands work without it. The release must already exist, be published and
-# mutable, and live in a public repository; private source repos may name a
-# separate public asset repo. The gh identity needs Contents write permission.
-# Hosted copies are deleted automatically after build completion.
-#[pr.imageHost]
-#provider = "github-release"
-#repository = "owner/public-review-assets"
-#releaseId = 123456
-
-# Deterministic verbs the kernel may run. `setup` runs after provision and
-# after a sandbox rehydrate (§15.6-C); the rest are referenced by name from
-# [verify.*] or [finalize.*] check steps.
+# Named commands the kernel may run. `setup` runs after workspace provision and
+# after a sandbox rehydrate; the rest are referenced by name from check steps.
 [commands]
 setup = "bun install"
 lint = "bun run check"
 typecheck = "bun tsc --noEmit"
 test = "bun run test"
 
+# The configured universe and order of verification. A plan may deselect
+# optional steps in its opening `verifySteps` front matter; a plan without that
+# metadata runs all of them.
 [verify]
-# These are the configured universe/order. A plan may select any optional step
-# in opening `verifySteps` front matter. Lint is unconditional and cannot be
-# deselected by a plan; plans without metadata select every step.
 steps = ["lint", "types", "unit", "dashboard"]
 
 [verify.lint]
-kind = "check"
-command = "lint"
-always = true
+kind = "check"           # deterministic command + pass/fail, never an agent
+command = "lint"         # ref into [commands]
+always = true            # unconditional; a plan cannot deselect it
 
 [verify.types]
-kind = "check"        # deterministic: command + pass/fail, never an agent
-command = "typecheck" # ref into [commands]
+kind = "check"
+command = "typecheck"
 
 [verify.unit]
 kind = "check"
 command = "test"
 
-# Visual evidence for dashboard-touching builds. Applicability is evaluated by
-# the kernel from the build-owned diff; the skill never inspects Git or skips.
+# Visual evidence for dashboard-touching builds. The kernel decides
+# applicability from the build-owned diff; the skill never inspects Git or skips.
 [verify.dashboard]
 kind = "agent"
 skill = "ab-verify-dashboard"
 paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts", "tools/dashboard-capture.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
 
-# Agent-verify example — a skill run with a pass|fail|skip verdict (§5):
-#[verify.e2e]
-#kind = "agent"
-#skill = "ab-verify-e2e"
-
-# Optional ordered post-steps. Checks run deterministic command refs without
-# an agent session; agents run the exact configured skill. Either kind is
-# failure-tolerant: a failure files an observation and never kills a green
-# build (§5).
+# Ordered post-verification steps, all failure-tolerant: a failure files an
+# observation and never fails an otherwise green build.
 [finalize]
 steps = ["changelog"]
 
@@ -74,36 +50,17 @@ steps = ["changelog"]
 kind = "agent"
 skill = "ab-finalize-changelog"
 
-# Check post-step example:
-#[finalize.publish]
-#kind = "check"
-#command = "publish"             # ref into [commands]
-
-# Agent post-step example:
-#[finalize.release-notes]
-#kind = "agent"
-#skill = "ab-release-notes"      # exact installed skill name
-
-# Runtime/model/extensions configuration (§9) is one open map of roles. The
-# reserved `default` entry is the repo-wide inheritance base and is never
-# dispatched as a phase. Each phase role overrides it independently per field.
-# Adding a runtime touches only the adapter registry; two ship today (claude,
-# pi), and an unregistered or incompatible merged pair fails before launch.
+# Runtime, model, and extensions per phase role. `default` is the inheritance
+# base and is never dispatched as a phase; every other role overrides each field
+# independently, and a declared extensions list replaces rather than unions.
 [roles.default]
-runtime = "claude"                      # repo-wide default runtime (local Claude Code CLI)
-model = "claude-opus-5"                 # repo-wide default model (`ab models` looks Pi ids up)
-# extensions unset ⇒ hermetic by default (no internet / sub-agents / MCP).
+runtime = "claude"       # local Claude Code CLI
+model = "claude-opus-5"
+# extensions unset ⇒ hermetic: no internet, sub-agents, or MCP.
 
-# A role's runtime, model, and extensions each inherit independently from
-# `default`; a set extensions list replaces rather than unions. The exact
-# merged runtime/model pair must be compatible — no model-driven runtime search
-# and no substitution of a runtime-local default for an incompatible model.
-# Mixing models across roles is intentional: the producers run Claude Opus 5
-# and both reviewers run GPT-5.6-SOL, so a fresh reviewer is not the model that
-# wrote the work. Extensions are a Pi-only axis — the `claude` runtime ignores
-# them, so today they apply only to the two review roles. Extension package
-# names match installed Pi package sources as substrings; MCP remains off
-# unless named. Internet access stays outside implementation.
+# Producers run Claude Opus 5 and both reviewers run GPT-5.6-SOL, so a reviewer
+# is never the model that wrote the work. Extensions are a Pi-only axis — the
+# claude runtime ignores them — and internet access stays out of implementation.
 [roles.plan]
 extensions = ["subagents", "web-access"]
 
@@ -121,28 +78,19 @@ model = "openai-codex/gpt-5.6-sol"
 extensions = ["web-access"]
 
 [policy]
-stallRounds = 3          # same finding surviving N rounds escalates (§15.4)
+stallRounds = 3          # a finding surviving N review rounds escalates
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
-# Structured observations are harvested on back-pressure by `ab dispatch`.
-# The workflow is repository-scoped and independent of build capacity; its two
-# optional runtime/model overrides are `[roles.harvest]` and
-# `[roles.harvest-review]`.
-harvestThreshold = 5
+harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
-# Ticket source and lifecycle states (§3.2, §3.3, §13). The Linear API key is a
-# secret — set the LINEAR_API_KEY environment variable (a local .env works),
-# never put it in this file.
+# Ticket source and lifecycle states. LINEAR_API_KEY is a secret: set it in the
+# environment (a local .env works), never here.
 [tickets]
 source = "linear"
 teamKey = "AUT"                 # Linear team key ("Auto-build")
-readyLabels = []                 # labels that additionally narrow readiness ([] = no label gate)
-# Required: the sole ready gate for this repo (readyLabels is empty). The AUT
-# team's Linear workflow has no "Ready" state — "Todo" is the column tickets sit
-# in before claim() moves them to "In Progress". Matched case-sensitively.
-readyState = "Todo"
-claimedState = "In Progress"    # workflow state claim() moves an issue to
-createState = "Todo"         # state new tickets are filed into (absent = provider default)
-triageState = "Backlog"         # where bounced/aborted/closed-unmerged tickets return (team AUT has Triage disabled; "Backlog" is also the linear default)
-# — or file-based: source = "file" with readyState = "ready" and optional dir = "tickets"
+readyState = "Todo"             # sole ready gate here; team AUT has no "Ready" state. Case-sensitive.
+readyLabels = []                # additional label gate ([] = none)
+claimedState = "In Progress"    # claim() moves the issue here
+createState = "Todo"            # new tickets are filed here
+triageState = "Backlog"         # bounced, aborted, and closed-unmerged tickets return here

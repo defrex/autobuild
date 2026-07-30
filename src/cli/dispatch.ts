@@ -51,6 +51,7 @@ import {
   type DashboardRendererResolver,
 } from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
+import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
@@ -77,6 +78,7 @@ import {
   controlBuild,
   type BuildControlResult,
 } from './build-control'
+import { bulkControlReport, bulkControlRepository, type BulkDirection } from './bulk-control'
 import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
@@ -133,6 +135,8 @@ type DashboardAction =
   | 'intake'
   | 'pause'
   | 'resume'
+  | 'bulk-pause'
+  | 'bulk-resume'
   | 'discard'
   | 'abort-confirm'
   | 'harvest-gate'
@@ -143,6 +147,8 @@ interface ResumePrompt {
   /** Snapshot at prompt-open time. Submission revalidates each id. */
   escalationIds: string[]
   value: string
+  /** Caret as a code-point offset into `value`; the composer owns the geometry. */
+  cursor: number
 }
 
 /** The real adapters the loop drives — resolved by `wire` (default: the
@@ -508,6 +514,7 @@ class DispatchLoop {
             resumeInput: {
               slug: this.resumePrompt.slug,
               value: this.resumePrompt.value,
+              cursor: this.resumePrompt.cursor,
             },
           }
         : {}),
@@ -610,6 +617,26 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
+  /** Repository-wide quiescence from the always-present global row: park every
+   * pausable build and stop intake, or reverse both. Unlike the per-build keys
+   * this never toggles — it is an absolute request in one direction, so a build
+   * already pausing keeps its single pending pause. A store failure propagates
+   * to `queueAction`'s catch, which reports it on the same notice row. */
+  private async bulkControl(direction: BulkDirection): Promise<void> {
+    // The key routing already guards; keeping it with the action means the
+    // invariant travels with the write rather than only with the keypress.
+    if (this.view !== undefined || this.selection?.kind !== 'global') return
+
+    const summary = await bulkControlRepository({
+      store: this.wiring.store,
+      repo: this.opts.targetRepo,
+      env: this.opts.env,
+      direction,
+    })
+    this.announce(bulkControlReport(summary))
+    await this.renderOnce()
+  }
+
   private selectedDashboardBuild(): DashboardBuild | undefined {
     const slug =
       this.view?.kind === 'detail'
@@ -672,6 +699,7 @@ class DispatchLoop {
         slug,
         escalationIds: result.escalationIds,
         value: '',
+        cursor: 0,
       }
       this.syncModelControls()
       this.paint()
@@ -1013,6 +1041,12 @@ class DispatchLoop {
       case 'resume':
         await this.dashboardResume()
         return
+      case 'bulk-pause':
+        await this.bulkControl('pause')
+        return
+      case 'bulk-resume':
+        await this.bulkControl('resume')
+        return
       case 'auto-merge':
         await this.toggleAutoMerge()
         return
@@ -1043,19 +1077,38 @@ class DispatchLoop {
   private handleResumeInput(input: TerminalInputEvent): void {
     const prompt = this.resumePrompt
     if (prompt === undefined || this.resumeSubmitting) return
+    const edit = (next: { value: string; cursor: number }): void => {
+      this.resumePrompt = { ...prompt, ...next }
+      this.syncModelControls()
+      this.paint()
+    }
+    const move = (motion: ComposerMotion): void => {
+      this.resumePrompt = { ...prompt, cursor: moveCursor(prompt.value, prompt.cursor, motion) }
+      this.syncModelControls()
+      this.paint()
+    }
     switch (input.type) {
+      // A paste is one insertion, not a burst of keystrokes: no part of it can
+      // be interpreted as submit, and none of it is dropped.
       case 'text':
-        this.resumePrompt = { ...prompt, value: prompt.value + input.text }
-        this.syncModelControls()
-        this.paint()
+      case 'paste':
+        edit(insertText(prompt.value, prompt.cursor, input.text))
+        return
+      case 'newline':
+        edit(insertText(prompt.value, prompt.cursor, '\n'))
         return
       case 'backspace':
-        this.resumePrompt = {
-          ...prompt,
-          value: [...prompt.value].slice(0, -1).join(''),
-        }
-        this.syncModelControls()
-        this.paint()
+        edit(deleteBefore(prompt.value, prompt.cursor))
+        return
+      case 'left':
+      case 'right':
+      case 'up':
+      case 'down':
+      case 'home':
+      case 'end':
+        // Up/Down move the CARET while the prompt is open; the dashboard's row
+        // selection deliberately does not follow.
+        move(input.type)
         return
       case 'escape':
         this.clearResumePrompt(prompt.slug)
@@ -1076,8 +1129,6 @@ class DispatchLoop {
             this.paint()
           })
         return
-      case 'up':
-      case 'down':
       case 'interrupt':
         return
     }
@@ -1094,8 +1145,13 @@ class DispatchLoop {
       this.handleResumeInput(input)
       return
     }
+    // Outside the resume prompt `newline` is handled identically to `enter`.
+    // That is the structural mitigation for splitting CR from LF: only the
+    // composer can tell the two apart, so a terminal that reports Return as LF
+    // cannot make Enter stop working anywhere else.
+    const enterLike = input.type === 'enter' || input.type === 'newline'
     if (this.abortConfirmation !== undefined) {
-      if (input.type === 'enter') this.queueAction('abort-confirm')
+      if (enterLike) this.queueAction('abort-confirm')
       else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncModelControls()
@@ -1108,7 +1164,7 @@ class DispatchLoop {
       this.queueAction(input.type)
       return
     }
-    if (input.type === 'enter') {
+    if (enterLike) {
       this.queueAction('enter')
       return
     }
@@ -1116,6 +1172,8 @@ class DispatchLoop {
       this.leaveView()
       return
     }
+    // A stray paste outside the prompt is a no-op, not a burst of command keys;
+    // cursor motions have nothing to move.
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':
@@ -1125,6 +1183,10 @@ class DispatchLoop {
         if (this.view === undefined && this.selection?.kind === 'global') this.queueAction('intake')
         return
       case 'p':
+        if (this.view === undefined && this.selection?.kind === 'global') {
+          this.queueAction('bulk-pause')
+          return
+        }
         if (this.view === undefined && this.selection?.kind === 'harvest') {
           this.queueAction({ kind: 'harvest-run', run: this.model?.harvest?.run })
           return
@@ -1134,6 +1196,10 @@ class DispatchLoop {
         }
         return
       case 'r':
+        if (this.view === undefined && this.selection?.kind === 'global') {
+          this.queueAction('bulk-resume')
+          return
+        }
         if (dashboardBuildControl(this.selectedDashboardBuild()?.status ?? 'queued')?.key === 'r') {
           this.queueAction('resume')
         }
@@ -1377,6 +1443,17 @@ class DispatchLoop {
 
   private say(line: string): void {
     if (!this.dashboard) this.opts.stdout(line)
+  }
+
+  /** Report a completed operator action where the operator can see it. The
+   * header's conditional row is one shared notice slot — a warning and an
+   * action report compete for the same line, and the latest wins. `say` is
+   * deliberately silent on a TTY, so a report routed through it would never
+   * appear; `warn` would reach the row but write stderr in plain mode, which
+   * this is not. Hence the third seam. */
+  private announce(line: string): void {
+    if (this.dashboard) this.setWarning(line)
+    else this.opts.stdout(line)
   }
 
   private warn(line: string): void {

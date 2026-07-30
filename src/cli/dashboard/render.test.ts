@@ -9,6 +9,9 @@ import {
   formatDuration,
   moveTranscriptScroll,
   renderDashboard,
+  resumeHintRows,
+  resumeKeysRows,
+  resumePanel,
   stripAnsi,
   transcriptScrollLimit,
   type RenderOpts,
@@ -98,7 +101,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const lines = rd(model([build()]), WIDE).map(stripAnsi)
     const summary = lines[0]!
     const toggles = lines[1]!
-    expect(summary).toContain('Auto Build')
+    expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
     expect(summary).toContain('queue 2 | active 1/5 | obs 5/7')
@@ -107,8 +110,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggles).toContain('intake ON')
     expect(toggles).toContain('auto merge OFF')
     expect(toggles).toContain('harvest ON')
-    expect(summary.indexOf('Auto Build')).toBe(3)
-    expect(toggles.search(/\S/)).toBe(summary.indexOf('Auto Build'))
+    expect(summary.indexOf('Autobuild')).toBe(3)
+    expect(toggles.search(/\S/)).toBe(summary.indexOf('Autobuild'))
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
 
@@ -121,7 +124,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       WIDE,
     ).map(stripAnsi)
     expect(warned[2]).toBe('   ticket source unavailable')
-    expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Auto Build'))
+    expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Autobuild'))
     expect(warned[3]).toBe('')
     expect(warned).toHaveLength(clean.length + 1)
   })
@@ -276,7 +279,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
 
   test('the summary is the selected global row even with no harvest or builds', () => {
     const lines = rd({ ...model([]), selection: { kind: 'global' } }, WIDE).map(stripAnsi)
-    expect(lines[0]!.startsWith(' > Auto Build')).toBe(true)
+    expect(lines[0]!.startsWith(' > Autobuild')).toBe(true)
     expect(lines[1]!.startsWith('   intake ON')).toBe(true)
     expect(lines.filter((line) => line.startsWith(' > '))).toHaveLength(1)
     expect(lines.join('\n')).toContain('no active builds')
@@ -285,7 +288,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   test('the final legend exposes only controls meaningful for the selection', () => {
     const globalLines = rd({ ...model([build()]), selection: { kind: 'global' } }, WIDE)
     expect(globalLines.at(-1)).toBe(
-      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  Ctrl-C quit',
+      ' Keys: Up/Down select  h harvest  m auto-merge  i intake  p pause all  r resume all  Ctrl-C quit',
     )
 
     const runningHarvestLines = rd(
@@ -453,44 +456,390 @@ describe('renderDashboard: abort confirmation', () => {
 })
 
 describe('renderDashboard: blocked-resume input', () => {
+  const BLOCKER = 'Choose whether finalize should keep native auto-merge.'
+  const answering = (value = '', cursor = [...value].length): DashboardModel => ({
+    ...model([build({ status: 'blocked', blockers: [BLOCKER] })]),
+    selection: { kind: 'build', slug: 'auth-rate-limit' },
+    resumeInput: { slug: 'auth-rate-limit', value, cursor },
+  })
+
+  /** The panel occupies the frame's tail, starting at its title row. */
+  const panelOf = (lines: string[]): string[] => {
+    const start = lines.findIndex((line) =>
+      stripAnsi(line).trimStart().startsWith('Resume auth-rate-limit'),
+    )
+    expect(start).toBeGreaterThanOrEqual(0)
+    return lines.slice(start).map(stripAnsi)
+  }
+
+  test('the panel takes over the controls region — no key legend beside it', () => {
+    const lines = rd(answering('use manual merge'), WIDE).map(stripAnsi)
+    const panel = panelOf(lines)
+    expect(panel[0]!.trim()).toBe('Resume auth-rate-limit')
+    expect(panel.join('\n')).toContain('use manual merge')
+    expect(panel.join('\n')).toContain(BLOCKER)
+    expect(panel.join('\n')).toContain('Enter submit')
+    expect(panel.join('\n')).toContain('Ctrl-J')
+    expect(panel.join('\n')).toContain('Esc cancel')
+    // The legend is REPLACED, not pushed up: answering is the only action
+    // available, so there is nothing else for the region to say.
+    expect(lines.join('\n')).not.toContain('Up/Down select')
+    expect(lines.at(-1)).not.toContain(DASHBOARD_BUILD_LEGEND)
+  })
+
+  test('the caret sits at the cursor, not at the end of the buffer', () => {
+    const panel = panelOf(rd(answering('abcdef', 2), WIDE))
+    expect(panel.some((line) => line.includes('ab|cdef'))).toBe(true)
+  })
+
+  test('a multi-line value renders across rows with nothing pinned to its right', () => {
+    const panel = panelOf(rd(answering('first line\nsecond line'), WIDE)).map((line) => line.trim())
+    expect(panel).toContain('first line')
+    expect(panel).toContain('second line|')
+    // The old prompt pinned `]  Enter submit  Esc cancel` to the right of the
+    // field, which is what truncated the operator's own text.
+    expect(panel.some((line) => line.trimEnd().endsWith('submit'))).toBe(false)
+  })
+
+  test('a long value scrolls, keeping the cursor row visible', () => {
+    const value = 'z'.repeat(4000)
+    const panel = panelOf(rd(answering(value), { color: false, width: 60, height: 30 }))
+    const fieldRows = panel.filter((line) => /^\s*z+\|?$/.test(line))
+    expect(fieldRows.length).toBeLessThanOrEqual(6)
+    expect(fieldRows.at(-1)).toContain('|')
+    // Scrolled to the tail: the buffer's first row is off the top of the field.
+    expect(fieldRows.length).toBeLessThan(Math.ceil(value.length / 56))
+  })
+
+  test('the panel behaves identically from the detail view (AC 6)', () => {
+    const opts = { color: false, width: 100, height: 24 }
+    const list = rd(answering('typed guidance'), opts)
+    const detail = rd(
+      { ...answering('typed guidance'), view: { kind: 'detail', slug: 'auth-rate-limit' } },
+      opts,
+    )
+    expect(panelOf(detail)).toEqual(panelOf(list))
+  })
+})
+
+describe('renderDashboard: the resume panel names its bindings (AC 4)', () => {
+  // Revision 4 of the plan abbreviated the action words to buy narrow widths
+  // and passed a key-name assertion while failing AC 4 outright. So the
+  // assertion here is on the ACTION LABELS, looped over every supported width.
+  const WIDTHS = [78, 55, 46, 38, 18, 12, 10, 9, 7]
+
+  test('every width names submit, newline, and cancel', () => {
+    for (const width of WIDTHS) {
+      const joined = resumeKeysRows(width).join('\n')
+      expect(joined).toContain('submit')
+      expect(joined).toContain('newline')
+      expect(joined).toContain('cancel')
+    }
+  })
+
+  test('no row overflows and no action word is split across rows', () => {
+    for (let width = 7; width <= 90; width += 1) {
+      const rows = resumeKeysRows(width)
+      for (const row of rows) expect(row.length).toBeLessThanOrEqual(width)
+      for (const action of ['submit', 'newline', 'cancel']) {
+        expect(rows.filter((row) => row.includes(action))).toHaveLength(1)
+      }
+    }
+  })
+
+  test('the worked row split at each width', () => {
+    expect(resumeKeysRows(78)).toEqual([
+      'Keys: Enter submit  Ctrl-J or Shift+Enter newline  Esc cancel',
+    ])
+    expect(resumeKeysRows(55)).toEqual(['Enter submit  Ctrl-J or Shift+Enter newline  Esc cancel'])
+    expect(resumeKeysRows(46)).toEqual(['Keys: Enter submit  Ctrl-J newline  Esc cancel'])
+    expect(resumeKeysRows(38)).toEqual(['Enter submit  Ctrl-J newline', 'Esc cancel'])
+    expect(resumeKeysRows(18)).toEqual(['Enter submit', 'Ctrl-J newline', 'Esc cancel'])
+    expect(resumeKeysRows(12)).toEqual(['Enter submit', 'Ctrl-J', '  newline', 'Esc cancel'])
+    expect(resumeKeysRows(10)).toEqual(['Enter', '  submit', 'Ctrl-J', '  newline', 'Esc cancel'])
+    expect(resumeKeysRows(9)).toEqual([
+      'Enter',
+      '  submit',
+      'Ctrl-J',
+      '  newline',
+      'Esc',
+      '  cancel',
+    ])
+    // The continuation indent is the first thing to go, never the action word.
+    expect(resumeKeysRows(7)).toEqual(['Enter', 'submit', 'Ctrl-J', 'newline', 'Esc', 'cancel'])
+  })
+
+  test('below the width where newline fits, the block is dropped WHOLE, not partially', () => {
+    // Naming submit and cancel while silently omitting newline would
+    // misrepresent what the prompt accepts.
+    expect(resumeKeysRows(6)).toEqual([])
+    expect(resumeKeysRows(1)).toEqual([])
+    expect(resumeKeysRows(0)).toEqual([])
+  })
+})
+
+describe('renderDashboard: the resume panel states both hint facts (AC 2)', () => {
+  // A narrow width invites paying in WORDS, and this AC is denominated in
+  // words. Every rung carries both facts; narrow widths pay in rows instead.
+  const WIDTHS = [78, 38, 20, 18, 12]
+
+  test('every width says guidance is optional AND that Enter alone resumes', () => {
+    for (const width of WIDTHS) {
+      const joined = resumeHintRows(width).join(' ')
+      expect(joined).toMatch(/optional/i)
+      expect(joined).toMatch(/Enter (?:on an empty field|alone) resumes/i)
+    }
+  })
+
+  test('the worked row split at each width', () => {
+    expect(resumeHintRows(78)).toEqual([
+      'Guidance is optional -- Enter on an empty field resumes without it',
+    ])
+    expect(resumeHintRows(38)).toEqual(['Guidance optional; Enter alone resumes'])
+    expect(resumeHintRows(20)).toEqual(['Guidance optional;', 'Enter alone resumes'])
+    expect(resumeHintRows(18)).toEqual(['Guidance optional;', 'Enter alone', 'resumes'])
+    expect(resumeHintRows(12)).toEqual(['Guidance', 'optional;', 'Enter alone', 'resumes'])
+  })
+
+  test('no row overflows its width', () => {
+    for (let width = 1; width <= 90; width += 1) {
+      for (const row of resumeHintRows(width)) expect(row.length).toBeLessThanOrEqual(width)
+    }
+  })
+
+  test('past the row cap the block is dropped whole rather than rendered deficient', () => {
+    expect(resumeHintRows(10)).toEqual([])
+    expect(resumeHintRows(0)).toEqual([])
+  })
+})
+
+describe('renderDashboard: the resume panel through the real frame gutter', () => {
+  // Content width is TWO less than the terminal width anyone eyeballs, which is
+  // the half of the trap that a direct `resumeKeysRows(80)` check misses. These
+  // go through `renderDashboard` so the gutter is included rather than assumed.
   const answering = (value = ''): DashboardModel => ({
+    ...model([build({ status: 'blocked', blockers: ['Which merge strategy?'] })]),
+    selection: { kind: 'build', slug: 'auth-rate-limit' },
+    resumeInput: { slug: 'auth-rate-limit', value, cursor: [...value].length },
+  })
+
+  test('terminal widths 14, 20, 40, and 80 all state both facts and name all three actions', () => {
+    // Terminal width 14 is content width 12 — the case revision 4's own table
+    // contradicted.
+    for (const width of [14, 20, 40, 80]) {
+      const out = rd(answering('x'), { color: false, width, height: 30 }).join('\n')
+      expect(out).toMatch(/optional/i)
+      // `\s+` because the hint WRAPS at narrow widths — it pays in rows, and
+      // the two facts survive across the break.
+      expect(out).toMatch(/Enter\s+(?:on\s+an\s+empty\s+field|alone)\s+resumes/i)
+      expect(out).toContain('submit')
+      expect(out).toContain('newline')
+      expect(out).toContain('cancel')
+    }
+  })
+})
+
+describe('renderDashboard: the resume panel allocation (AC 7)', () => {
+  // The drop order IS the AC, so it is walked as a list rather than spot
+  // checked: the field and its bindings survive last, the blocker goes first.
+  const allocating = (value: string, blocker: string): DashboardModel => ({
+    ...model([build({ status: 'blocked', blockers: [blocker] })]),
+    resumeInput: { slug: 'auth-rate-limit', value, cursor: [...value].length },
+  })
+
+  const blocksOf = (rows: string[], width: number) => {
+    const hint = resumeHintRows(width)
+    const keys = resumeKeysRows(width)
+    return {
+      title: rows.filter((row) => row.startsWith('Resume')).length,
+      hint: rows.filter((row) => hint.includes(row)).length,
+      question: rows.filter((row) => row.includes('Q') || row.includes('...')).length,
+      field: rows.filter((row) => row.includes('Z')).length,
+      keys: rows.filter((row) => keys.includes(row)).length,
+    }
+  }
+
+  type Blocks = ReturnType<typeof blocksOf>
+  const CASES: Array<[number, Array<[number, Blocks]>]> = [
+    [
+      78,
+      [
+        [1, { title: 0, hint: 0, question: 0, field: 1, keys: 0 }],
+        [2, { title: 0, hint: 0, question: 0, field: 1, keys: 1 }],
+        [3, { title: 1, hint: 0, question: 0, field: 1, keys: 1 }],
+        [4, { title: 1, hint: 1, question: 0, field: 1, keys: 1 }],
+        [6, { title: 1, hint: 1, question: 1, field: 2, keys: 1 }],
+        [9, { title: 1, hint: 1, question: 1, field: 3, keys: 1 }],
+        [11, { title: 1, hint: 1, question: 1, field: 3, keys: 1 }],
+        [12, { title: 1, hint: 1, question: 1, field: 3, keys: 1 }],
+      ],
+    ],
+    [
+      12,
+      [
+        [1, { title: 0, hint: 0, question: 0, field: 1, keys: 0 }],
+        [2, { title: 0, hint: 0, question: 0, field: 1, keys: 1 }],
+        [4, { title: 0, hint: 0, question: 0, field: 1, keys: 3 }],
+        [6, { title: 1, hint: 0, question: 0, field: 1, keys: 4 }],
+        [9, { title: 1, hint: 3, question: 0, field: 1, keys: 4 }],
+        [11, { title: 1, hint: 4, question: 1, field: 1, keys: 4 }],
+        [12, { title: 1, hint: 4, question: 1, field: 2, keys: 4 }],
+      ],
+    ],
+    [
+      11,
+      [
+        [1, { title: 0, hint: 0, question: 0, field: 1, keys: 0 }],
+        [3, { title: 0, hint: 0, question: 0, field: 1, keys: 2 }],
+        [6, { title: 0, hint: 0, question: 0, field: 1, keys: 5 }],
+        [9, { title: 1, hint: 2, question: 0, field: 1, keys: 5 }],
+        // The narrow worst case: eleven rows of named blocks, and the blocker
+        // still has not been granted one.
+        [11, { title: 1, hint: 4, question: 0, field: 1, keys: 5 }],
+        [12, { title: 1, hint: 4, question: 1, field: 1, keys: 5 }],
+      ],
+    ],
+  ]
+
+  test('PRIORITY IS A PREFIX: no block ever outlives a higher-priority one', () => {
+    // The capacity walk above only exercises widths where every block is
+    // representable. A width-DROPPED block is the other way the order can be
+    // broken, and it broke it: below content width 7 `resumeKeysRows` is empty,
+    // and the allocator used to sail past it into the title and the blocker —
+    // printing a question the operator cannot answer because the panel no
+    // longer names a single key.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    for (let width = 1; width <= 40; width += 1) {
+      for (let capacity = 0; capacity <= 14; capacity += 1) {
+        const rows = resumePanel(m, false, width, capacity).map(stripAnsi)
+        const at = blocksOf(rows, width)
+        const where = `width ${width}, capacity ${capacity}`
+        // field > keys > title > hint > questions, top to bottom.
+        expect([where, at.keys > 0 && at.field === 0]).toEqual([where, false])
+        expect([where, at.title > 0 && at.keys === 0]).toEqual([where, false])
+        expect([where, at.hint > 0 && at.title === 0]).toEqual([where, false])
+        expect([where, at.question > 0 && at.hint === 0]).toEqual([where, false])
+      }
+    }
+  })
+
+  test('at the keys boundary the panel is the field and nothing else', () => {
+    // `resumeKeysRows(6) === []`: no layout can name `newline`, so the block is
+    // dropped whole — and everything below it in the order goes with it, however
+    // much capacity is left over. The rows freed up make the field taller,
+    // because the field outranks every block that can halt the order.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    expect(resumeKeysRows(6)).toEqual([])
+    for (const capacity of [1, 4, 12, 40]) {
+      const rows = resumePanel(m, false, 6, capacity).map(stripAnsi)
+      expect(blocksOf(rows, 6)).toEqual({
+        title: 0,
+        hint: 0,
+        question: 0,
+        field: Math.min(capacity, 6),
+        keys: 0,
+      })
+      expect(rows.join('\n')).not.toContain('Resume')
+      expect(rows.join('\n')).not.toContain('Q')
+      expect(rows.join('\n')).not.toContain('...')
+    }
+    // One column wider, the keys come back and carry the title with them.
+    expect(blocksOf(resumePanel(m, false, 7, 12).map(stripAnsi), 7)).toEqual({
+      title: 1,
+      hint: 0,
+      question: 0,
+      field: 5,
+      keys: 6,
+    })
+  })
+
+  test('at the hint boundary the blocker goes but the keys stay', () => {
+    // `resumeHintRows(10) === []`, so questions halt with it — but the field and
+    // its bindings, which AC 7 keeps last, are untouched.
+    const m = allocating('Z'.repeat(200), 'QQQ short blocker')
+    expect(resumeHintRows(10)).toEqual([])
+    const narrow = resumePanel(m, false, 10, 12).map(stripAnsi)
+    expect(blocksOf(narrow, 10)).toEqual({
+      title: 1,
+      hint: 0,
+      question: 0,
+      field: 6,
+      keys: 5,
+    })
+    // One column wider the hint fits, and the blocker returns behind it.
+    const wider = resumePanel(m, false, 11, 12).map(stripAnsi)
+    expect(blocksOf(wider, 11).hint).toBeGreaterThan(0)
+    expect(blocksOf(wider, 11).question).toBeGreaterThan(0)
+    expect(blocksOf(wider, 11).keys).toBe(5)
+  })
+
+  for (const [width, steps] of CASES) {
+    test(`content width ${width}`, () => {
+      for (const [capacity, expected] of steps) {
+        const rows = resumePanel(
+          allocating('Z'.repeat(200), 'QQQ short blocker'),
+          false,
+          width,
+          capacity,
+        ).map(stripAnsi)
+        expect(rows.length).toBeLessThanOrEqual(capacity)
+        for (const row of rows) expect(row.length).toBeLessThanOrEqual(width)
+        expect({ capacity, ...blocksOf(rows, width) }).toEqual({ capacity, ...expected })
+      }
+    })
+  }
+})
+
+describe('renderDashboard: the resume panel never loses a question silently (AC 3)', () => {
+  const asking = (blockers: string[]): DashboardModel => ({
+    ...model([build({ status: 'blocked', blockers })]),
+    resumeInput: { slug: 'auth-rate-limit', value: '', cursor: 0 },
+  })
+
+  test('an 80-character unbroken token appears IN FULL across question rows', () => {
+    const token = `https://example.test/${'p'.repeat(59)}`
+    expect(token).toHaveLength(80)
+    const rows = resumePanel(asking([`see ${token} now`]), false, 40, 12).map(stripAnsi)
+    const questions = rows.filter(
+      (row) => row.trimStart().startsWith('!') || row.startsWith('    '),
+    )
+    expect(questions.join('').replace(/[!\s]/g, '')).toContain(token)
+    expect(questions.join('')).not.toContain('~')
+  })
+
+  test('an over-long blocker ends in an explicit omission notice, not a silent cut', () => {
+    const rows = resumePanel(
+      asking([Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ')]),
+      false,
+      40,
+      12,
+    ).map(stripAnsi)
+    const questions = rows.filter((row) => row.includes('word') || row.includes('...'))
+    expect(questions.at(-1)).toMatch(/\.\.\. and \d+ more lines/)
+  })
+
+  test('with no capacity for questions the blocker is absent — the drop order, not a cut', () => {
+    const rows = resumePanel(asking(['a question']), false, 78, 2).map(stripAnsi)
+    expect(rows.join('\n')).not.toContain('a question')
+    expect(rows.join('\n')).not.toContain('...')
+  })
+})
+
+describe('renderDashboard: the resume panel obeys the frame budget', () => {
+  const answering = (value: string): DashboardModel => ({
     ...model([
-      build({
-        status: 'blocked',
-        blockers: ['Choose whether finalize should keep native auto-merge.'],
-      }),
+      build({ status: 'blocked', blockers: ['Which merge strategy should finalize use?'] }),
     ]),
     selection: { kind: 'build', slug: 'auth-rate-limit' },
-    resumeInput: { slug: 'auth-rate-limit', value },
+    resumeInput: { slug: 'auth-rate-limit', value, cursor: [...value].length },
   })
 
-  test('the modal replaces only the bottom legend with a field and Enter/Esc instructions', () => {
-    const lines = rd(answering('use manual merge'), WIDE)
-    const controls = lines.at(-1)!
-    expect(controls).toContain('Resume feedback')
-    expect(controls).toContain('use manual merge')
-    expect(controls).toContain('Enter submit')
-    expect(controls).toContain('Esc cancel')
-    expect(controls).not.toContain('Up/Down')
-  })
-
-  test('the blocker remains visible while its answer is being typed', () => {
-    const out = rd(answering('manual merge'), WIDE).join('\n')
-    expect(out).toContain('Choose whether finalize should keep native auto-merge.')
-    expect(out).toContain('manual merge')
-  })
-
-  test('plain modal rendering has no ANSI and safely escapes non-ASCII without changing the model value', () => {
-    const m = answering('type p/m, café')
-    const out = rd(m, { color: false, width: 100 }).join('\n')
-    expect(out).not.toContain('\x1b')
-    expect(out).toContain('type p/m, caf\\u{e9}')
-    expect(m.resumeInput?.value).toBe('type p/m, café')
-  })
-
-  test('modal controls obey constrained width and height caps', () => {
-    for (const width of [20, 40, 80]) {
-      for (const height of [0, 1, 2, 4, 10]) {
+  test('every width x height combination stays inside the frame', () => {
+    // Widths start at 1, not at a comfortable 8: `renderDashboard` reserves its
+    // one-column gutter BEFORE composing, so the interesting boundary is the
+    // terminal that leaves the panel ZERO content columns.
+    for (const width of [1, 2, 3, 4, 5, 8, 11, 13, 14, 20, 40, 80, 200]) {
+      for (const height of [0, 1, 2, 3, 5, 8, 14, 26, 30]) {
         const lines = rd(answering('a very long answer '.repeat(20)), {
           color: true,
           width,
@@ -502,6 +851,63 @@ describe('renderDashboard: blocked-resume input', () => {
         }
       }
     }
+  })
+
+  test('a ONE-column terminal renders no field column the frame did not grant', () => {
+    // The gutter leaves zero content columns here. Clamping the field back up
+    // to one column produced a two-column physical row on a one-column screen:
+    // the caret plus the gutter the outer renderer adds afterwards.
+    for (const height of [1, 3, 5, 10, 30]) {
+      const lines = rd(answering('abc'), { color: false, width: 1, height })
+      expect(lines.length).toBeLessThanOrEqual(height)
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(1)
+      expect(lines.join('')).not.toContain('|')
+    }
+    // And the panel itself is empty rather than one manufactured column.
+    expect(resumePanel(answering('abc'), false, 0, 12)).toEqual([])
+    expect(resumePanel(answering('abc'), false, -1, 12)).toEqual([])
+  })
+
+  test('a two-column terminal still fits its single content column', () => {
+    // One content column is the narrowest frame that can show anything, and
+    // the caret is what it shows.
+    const lines = rd(answering('abc'), { color: false, width: 3, height: 30 })
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(3)
+    expect(lines.join('\n')).toContain('|')
+  })
+
+  test('the field and its bindings outlive the blocker text as height disappears', () => {
+    const m = answering('typed')
+    const tall = rd(m, { color: false, width: 100, height: 30 }).join('\n')
+    expect(tall).toContain('Which merge strategy should finalize use?')
+
+    const short = rd(m, { color: false, width: 100, height: 8 }).join('\n')
+    expect(short).not.toContain('Which merge strategy should finalize use?')
+    expect(short).toContain('typed|')
+    expect(short).toContain('submit')
+  })
+
+  test('the detail view drops the panel last too', () => {
+    const m = { ...answering('typed'), view: { kind: 'detail' as const, slug: 'auth-rate-limit' } }
+    for (const height of [3, 4, 5, 8]) {
+      const lines = rd(m, { color: false, width: 100, height })
+      expect(lines.length).toBeLessThanOrEqual(height)
+      expect(lines.join('\n')).toContain('typed|')
+    }
+  })
+
+  test('plain rendering has no ANSI and escapes non-ASCII without changing the model value', () => {
+    const m = answering('type p/m, caf\u00e9')
+    const out = rd(m, { color: false, width: 100, height: 30 }).join('\n')
+    expect(out).not.toContain('\x1b')
+    expect(out).toContain('type p/m, caf\\u{e9}')
+    expect(m.resumeInput?.value).toBe('type p/m, caf\u00e9')
+  })
+
+  test('a prompt frame emits only escape vocabulary the capture adapter accepts', () => {
+    const lines = rd(answering('multi\nline guidance'), { color: true, width: 120, height: 30 })
+    const image = renderDashboardFrameImage(lines, { columns: 120 })
+    expect([...image.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
   })
 })
 
@@ -794,7 +1200,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     const lines = rd(dashboard, { color: false, width: 52 })
     expectInsideGutters(lines, 52)
 
-    const summary = lines.find((line) => line.includes('Auto Build'))!
+    const summary = lines.find((line) => line.includes('Autobuild'))!
     const toggles = lines.find((line) => line.includes('intake ON'))!
     const warning = lines.find((line) => line.includes('ticket source unavailable'))!
     const selected = lines.find((line) => line.includes('auth-rate-limit'))!
@@ -802,7 +1208,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     const blocker = lines.find((line) => line.includes('! a blocker'))!
     const controls = lines.find((line) => line.includes('Keys:'))!
 
-    expect(summary.indexOf('Auto Build')).toBe(3)
+    expect(summary.indexOf('Autobuild')).toBe(3)
     expect(toggles.search(/\S/)).toBe(3)
     expect(warning.search(/\S/)).toBe(3)
     expect(selected.startsWith(' > ')).toBe(true)
@@ -1039,6 +1445,21 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
   })
 
+  test('the global legend stays one physical row at a narrow width', () => {
+    // The global legend is now the longest of them all — it carries both
+    // repository toggles and both bulk controls — and, like the build one, it
+    // either fits or it truncates.
+    const lines = rd(
+      { ...model([build()]), selection: { kind: 'global' } },
+      { color: false, width: 40 },
+    )
+    const controls = lines.at(-1)!
+    expect(controls.startsWith(' Keys:')).toBe(true)
+    expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
+    expect(controls.endsWith('~')).toBe(true)
+    expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
+  })
+
   test('a line that fits is left exactly alone', () => {
     const lines = rd(model([build()]), WIDE)
     // `[~]` is a state marker; any other tilde would be truncate()'s ellipsis.
@@ -1119,7 +1540,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
           height,
         }).map(stripAnsi)
         expect(lines.length).toBeLessThanOrEqual(height)
-        if (height >= 1) expect(lines[0]).toContain('Auto Build')
+        if (height >= 1) expect(lines[0]).toContain('Autobuild')
         if (height >= 2) {
           expect(lines[1]).toContain('intake ON')
           expect(lines[1]).toContain('harvest ON')
@@ -1135,7 +1556,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   test('the header survives the clamp — it is the line the ACs name', () => {
     for (let height = 1; height <= 12; height += 1) {
       const [header] = rd(model(many(8)), { color: false, width: 80, height })
-      expect(header).toContain('Auto Build')
+      expect(header).toContain('Autobuild')
       expect(header).toContain('queue 2')
       // The count is on the header, so it still reports every build even when
       // most rows are clamped away.
@@ -1487,7 +1908,7 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(out).toContain('>   plan phase plan round 1 runtime pi model openai/gpt ended')
     expect(out).toContain('tokens 90 in/30 out, 2 turns')
     expect(out).toContain('plan-review phase plan-review round 1 runtime claude open')
-    expect(out).not.toContain('Auto Build')
+    expect(out).not.toContain('Autobuild')
   })
 
   test('structured and producer-boundary transcripts render prompts, text, failures, usage, and notice', () => {

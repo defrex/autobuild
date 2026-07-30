@@ -236,6 +236,9 @@ raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
 frames; `live.ts` owns the alternate-screen region and teardown; `poll.ts` is a
 display-only incremental cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
+`composer.ts` owns the text geometry the blocked-resume panel edits against —
+display-cell wrapping, caret placement, and code-point motions — as pure,
+ANSI-free arithmetic shared by `render.ts` and `dispatch.ts`.
 Nested navigation, session selection, and pinned artifact retrieval are
 read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,
