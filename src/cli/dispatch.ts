@@ -50,6 +50,7 @@ import {
   type DashboardRendererResolver,
 } from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
+import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
@@ -142,6 +143,8 @@ interface ResumePrompt {
   /** Snapshot at prompt-open time. Submission revalidates each id. */
   escalationIds: string[]
   value: string
+  /** Caret as a code-point offset into `value`; the composer owns the geometry. */
+  cursor: number
 }
 
 /** The real adapters the loop drives — resolved by `wire` (default: the
@@ -495,6 +498,7 @@ class DispatchLoop {
             resumeInput: {
               slug: this.resumePrompt.slug,
               value: this.resumePrompt.value,
+              cursor: this.resumePrompt.cursor,
             },
           }
         : {}),
@@ -659,6 +663,7 @@ class DispatchLoop {
         slug,
         escalationIds: result.escalationIds,
         value: '',
+        cursor: 0,
       }
       this.syncModelControls()
       this.paint()
@@ -1030,19 +1035,38 @@ class DispatchLoop {
   private handleResumeInput(input: TerminalInputEvent): void {
     const prompt = this.resumePrompt
     if (prompt === undefined || this.resumeSubmitting) return
+    const edit = (next: { value: string; cursor: number }): void => {
+      this.resumePrompt = { ...prompt, ...next }
+      this.syncModelControls()
+      this.paint()
+    }
+    const move = (motion: ComposerMotion): void => {
+      this.resumePrompt = { ...prompt, cursor: moveCursor(prompt.value, prompt.cursor, motion) }
+      this.syncModelControls()
+      this.paint()
+    }
     switch (input.type) {
+      // A paste is one insertion, not a burst of keystrokes: no part of it can
+      // be interpreted as submit, and none of it is dropped.
       case 'text':
-        this.resumePrompt = { ...prompt, value: prompt.value + input.text }
-        this.syncModelControls()
-        this.paint()
+      case 'paste':
+        edit(insertText(prompt.value, prompt.cursor, input.text))
+        return
+      case 'newline':
+        edit(insertText(prompt.value, prompt.cursor, '\n'))
         return
       case 'backspace':
-        this.resumePrompt = {
-          ...prompt,
-          value: [...prompt.value].slice(0, -1).join(''),
-        }
-        this.syncModelControls()
-        this.paint()
+        edit(deleteBefore(prompt.value, prompt.cursor))
+        return
+      case 'left':
+      case 'right':
+      case 'up':
+      case 'down':
+      case 'home':
+      case 'end':
+        // Up/Down move the CARET while the prompt is open; the dashboard's row
+        // selection deliberately does not follow.
+        move(input.type)
         return
       case 'escape':
         this.clearResumePrompt(prompt.slug)
@@ -1063,8 +1087,6 @@ class DispatchLoop {
             this.paint()
           })
         return
-      case 'up':
-      case 'down':
       case 'interrupt':
         return
     }
@@ -1081,8 +1103,13 @@ class DispatchLoop {
       this.handleResumeInput(input)
       return
     }
+    // Outside the resume prompt `newline` is handled identically to `enter`.
+    // That is the structural mitigation for splitting CR from LF: only the
+    // composer can tell the two apart, so a terminal that reports Return as LF
+    // cannot make Enter stop working anywhere else.
+    const enterLike = input.type === 'enter' || input.type === 'newline'
     if (this.abortConfirmation !== undefined) {
-      if (input.type === 'enter') this.queueAction('abort-confirm')
+      if (enterLike) this.queueAction('abort-confirm')
       else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncModelControls()
@@ -1095,7 +1122,7 @@ class DispatchLoop {
       this.queueAction(input.type)
       return
     }
-    if (input.type === 'enter') {
+    if (enterLike) {
       this.queueAction('enter')
       return
     }
@@ -1103,6 +1130,8 @@ class DispatchLoop {
       this.leaveView()
       return
     }
+    // A stray paste outside the prompt is a no-op, not a burst of command keys;
+    // cursor motions have nothing to move.
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':

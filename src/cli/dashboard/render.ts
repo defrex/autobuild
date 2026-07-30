@@ -33,6 +33,7 @@ import { dashboardBuildControl } from './model'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { dashboardSelections, sameSelection } from './selection'
+import { displayText, layoutComposer, packAtomic, wrapDisplay } from './composer'
 
 export interface RenderOpts {
   /** ANSI on. False ⇒ not a single `\x1b` in the output (the `--plain` AC). */
@@ -452,18 +453,17 @@ function buildLegend(build: DashboardBuild, detail: boolean): string {
     : `Keys: Up/Down select  Enter details  m auto-merge${action}  a abort  Ctrl-C quit`
 }
 
-/** Keep the renderer's one-physical-row ASCII/width invariant while retaining
- * exact process state. Non-ASCII and control characters (including newlines)
- * are displayed as code-point escapes; the model value is never rewritten. */
-function displayText(value: string): string {
-  let displayed = ''
-  for (const char of value) {
-    const code = char.codePointAt(0)!
-    displayed += code >= 0x20 && code <= 0x7e ? char : `\\u{${code.toString(16)}}`
-  }
-  return displayed
-}
-
+/**
+ * Wrap prose for the legacy frame elements — build rows, harvest detail,
+ * detail view, transcripts.
+ *
+ * Deliberately unchanged, and deliberately NOT the composer's `wrapDisplay`:
+ * this truncates a token wider than the line with a `~`, which every existing
+ * frame's byte-stable output depends on. Operator-facing prose that must
+ * survive in full — the resume panel's questions and hint — goes through
+ * `wrapDisplay` instead, and short labels that must stay whole go through
+ * `packAtomic`.
+ */
 function wrappedText(value: string, width: number, indent = ''): string[] {
   if (width <= 0) return []
   const paragraphs = value.split(/\r?\n/)
@@ -587,17 +587,22 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   }
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
-      ? dashboardControls(model, color, width)
-      : truncate(paint(buildLegend(build, true), 'dim', color), width)
+      ? dashboardControls(model, color, width, controlsCapacity(height, top.length))
+      : [truncate(paint(buildLegend(build, true), 'dim', color), width)]
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
-  const capacity = height === undefined ? body.length : Math.max(0, height - top.length - 3)
+  // Mirror the list view's boundary branches so the panel is the last thing
+  // the detail view drops as height disappears.
+  if (height !== undefined && height === top.length + 1) return [...top, ...controls]
+  if (height !== undefined && height === top.length + 2) return [...top, '', ...controls]
+  const capacity =
+    height === undefined ? body.length : Math.max(0, height - top.length - 2 - controls.length)
   return [
     ...top,
     '',
     ...viewport(body, capacity, focus).map((line) => truncate(line, width)),
     '',
-    controls,
+    ...controls,
   ].slice(0, height === undefined ? Number.POSITIVE_INFINITY : height)
 }
 
@@ -684,16 +689,285 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
   )
 }
 
-function dashboardControls(model: DashboardModel, color: boolean, width: number): string {
-  if (model.abortConfirmation !== undefined) {
-    return truncate(
-      paint(
-        `Abort ${displayText(model.abortConfirmation.slug)} and delete its workspace, PR, and branches?  Enter confirm  Esc cancel`,
-        'red',
+// ── The blocked-build resume panel ───────────────────────────────────────────
+//
+// Answering a blocked build is the ONLY thing that can happen while the prompt
+// is open, so the controls region has nothing else to say and the panel takes
+// it over whole. It is a block of rows, not a line: a title, a hint, the
+// blocker being answered, a real multi-line field with a caret, and its own key
+// bindings.
+//
+// The panel is bounded from OUTSIDE (a capacity the frame grants) and from
+// INSIDE (its own per-block row caps), which is what makes graceful degradation
+// a property of the allocation rather than a special case per element.
+
+const FIELD_MAX_ROWS = 6
+const KEYS_MAX_ROWS = 6
+const HINT_MAX_ROWS = 4
+const QUESTION_MAX_ROWS = 4
+/** The caret is an inserted ASCII glyph, not reverse video: `frame-image.ts`
+ * rejects any SGR outside the dashboard's palette, and this file's opening rule
+ * is that stripping escapes must leave the actionable state intact — which a
+ * colour-only cursor does not. */
+const RESUME_CARET = '|'
+
+interface ResumeBinding {
+  key: string
+  /** A shorter key form, used only when it saves a ROW. Dropping the alias
+   * costs a convenience; dropping an action word would cost the panel its
+   * meaning. */
+  keyShort?: string
+  action: string
+}
+
+/**
+ * The panel's key bindings, held as data rather than baked into format strings
+ * so the invariant is visible at the definition site:
+ *
+ *   >>> A rendered binding ALWAYS reads `<key> <action>`, action spelled out.
+ *
+ * Narrow widths are paid for in ROWS — by wrapping a binding across two — never
+ * in words. `Ctrl-J nl` fits where `Ctrl-J newline` does not, and stops naming
+ * the action, which was the entire point of the row.
+ */
+const RESUME_BINDINGS: readonly ResumeBinding[] = [
+  { key: 'Enter', action: 'submit' },
+  { key: 'Ctrl-J or Shift+Enter', keyShort: 'Ctrl-J', action: 'newline' },
+  { key: 'Esc', action: 'cancel' },
+]
+
+/** Lay one set of key forms out at `width`, or `undefined` when some binding
+ * cannot be named at all — its key or its action alone overflows the row. */
+function layoutBindings(
+  bindings: ReadonlyArray<{ key: string; action: string }>,
+  width: number,
+): string[] | undefined {
+  const blocks: string[][] = []
+  let allSingleRow = true
+  for (const binding of bindings) {
+    const single = `${binding.key} ${binding.action}`
+    if (single.length <= width) {
+      blocks.push([single])
+      continue
+    }
+    if (binding.key.length > width || binding.action.length > width) return undefined
+    allSingleRow = false
+    // The continuation indent is the first thing to go; the action word is not.
+    const indent = 2 + binding.action.length <= width ? '  ' : ''
+    blocks.push([binding.key, `${indent}${binding.action}`])
+  }
+  if (!allSingleRow) return blocks.flat()
+  const tokens = blocks.map((block) => block[0]!)
+  // The `Keys: ` prefix earns its columns only when all three still share one
+  // row with it.
+  const prefixed = `Keys: ${tokens.join('  ')}`
+  if (prefixed.length <= width) return [prefixed]
+  return packAtomic(tokens, width)
+}
+
+/**
+ * The keys block: 0…`KEYS_MAX_ROWS` rows naming submit, newline, and cancel.
+ *
+ * Below the width where `newline` fits a row at all the block is dropped
+ * WHOLE. Rendering the other two while silently omitting newline would
+ * misrepresent what the prompt accepts, which is worse than saying nothing.
+ */
+export function resumeKeysRows(width: number): string[] {
+  if (width <= 0) return []
+  const long = layoutBindings(
+    RESUME_BINDINGS.map((b) => ({ key: b.key, action: b.action })),
+    width,
+  )
+  const short = layoutBindings(
+    RESUME_BINDINGS.map((b) => ({ key: b.keyShort ?? b.key, action: b.action })),
+    width,
+  )
+  // Fewer rows wins; a tie goes to the long form, so `Shift+Enter` is named
+  // whenever it is free.
+  const chosen =
+    long === undefined ? short : short !== undefined && short.length < long.length ? short : long
+  return (chosen ?? []).slice(0, KEYS_MAX_ROWS)
+}
+
+/**
+ * The hint's rungs, widest first.
+ *
+ *   >>> EVERY rung states both facts: guidance is optional, and submitting an
+ *   >>> empty field resumes the build without it.
+ *
+ * The rungs shorten the connective tissue, never the content. A future edit
+ * that shortens one past both facts is visible right here.
+ */
+const RESUME_HINTS: readonly string[] = [
+  'Guidance is optional -- Enter on an empty field resumes without it',
+  'Guidance is optional -- Enter alone resumes without it',
+  'Guidance optional; Enter alone resumes without it',
+  'Guidance optional; Enter alone resumes',
+]
+
+/** The widest rung that fits one row, else the narrowest rung WRAPPED — because
+ * wrapping costs rows while shortening cost meaning. Past the row cap the block
+ * is dropped whole: half a sentence states neither fact. */
+export function resumeHintRows(width: number): string[] {
+  if (width <= 0) return []
+  for (const rung of RESUME_HINTS) if (rung.length <= width) return [rung]
+  const wrapped = wrapDisplay(RESUME_HINTS.at(-1)!, width)
+  return wrapped.length <= HINT_MAX_ROWS ? wrapped : []
+}
+
+/**
+ * Rows the controls region may claim.
+ *
+ * Exactly `1` at every height where today's frame has room for only the
+ * legend — so a one-line legend spends exactly what it always did and every
+ * non-prompt frame stays byte-identical — and otherwise at least one body row
+ * is reserved for the build list.
+ */
+export function controlsCapacity(height: number | undefined, topLength: number): number {
+  if (height === undefined) return Number.POSITIVE_INFINITY
+  const below = height - topLength - 2
+  return Math.max(1, Math.min(below - 1, Math.max(4, Math.floor(below / 2))))
+}
+
+/** One field row with the caret inserted at `caret`, painted but never wider
+ * than `width`. The composer reserves a column for the glyph, so the clip is a
+ * no-op for every `width >= 2`; at width 1 it keeps the caret visible. */
+function renderFieldRow(
+  row: string,
+  caret: number | undefined,
+  width: number,
+  color: boolean,
+): string {
+  if (caret === undefined) return truncate(row, width)
+  let text = `${row.slice(0, caret)}${RESUME_CARET}${row.slice(caret)}`
+  let at = caret
+  if (text.length > width) {
+    const start = Math.max(0, Math.min(text.length, at + 1) - width)
+    text = text.slice(start, start + width)
+    at -= start
+  }
+  return `${text.slice(0, at)}${paint(RESUME_CARET, 'cyan', color)}${text.slice(at + 1)}`
+}
+
+/**
+ * The panel, assembled and allocated.
+ *
+ * Against a granted capacity, rows go out in this flat order while capacity
+ * remains — the field and its bindings are the LAST things to go and the
+ * blocker text is the first:
+ *
+ *   1. the first field row,
+ *   2. every keys row, in order,
+ *   3. the title row,
+ *   4. every hint row, in order,
+ *   5. question rows, up to `min(desired, QUESTION_MAX_ROWS, ceil(rest / 2))`,
+ *   6. further field rows, up to `FIELD_MAX_ROWS`,
+ *   7. any capacity still unspent, back to questions.
+ */
+export function resumePanel(
+  model: DashboardModel,
+  color: boolean,
+  width: number,
+  capacity: number,
+): string[] {
+  const prompt = model.resumeInput!
+  const questions = model.builds.find((candidate) => candidate.slug === prompt.slug)?.blockers ?? []
+
+  const title = truncate(
+    paint(paint(`Resume ${displayText(prompt.slug)}`, 'cyan', color), 'bold', color),
+    width,
+  )
+  const hintRows = resumeHintRows(width)
+  const keysRows = resumeKeysRows(width)
+  // Questions go through the NON-truncating wrap: an 80-character URL in a
+  // blocker occupies three rows rather than losing its tail to a `~`. Content
+  // leaves the panel only in whole-row units, which is what the omission
+  // notice accounts for.
+  const questionRows: string[] = []
+  for (const question of questions) {
+    const wrapped = wrapDisplay(question, width - 4)
+    for (const [index, line] of wrapped.entries()) {
+      questionRows.push(
+        truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, 'red', color), width),
+      )
+    }
+  }
+  const fieldIndent = width >= 6 ? '  ' : ''
+  const fieldWidth = Math.max(1, width - fieldIndent.length)
+  const field = layoutComposer(prompt.value, prompt.cursor, fieldWidth)
+
+  let rest = capacity
+  const spend = (want: number): number => {
+    const granted = Math.max(0, Math.min(want, rest))
+    rest -= granted
+    return granted
+  }
+  let fieldGrant = spend(1)
+  const keysGrant = spend(keysRows.length)
+  const titleGrant = spend(1)
+  const hintGrant = spend(hintRows.length)
+  let questionGrant = spend(
+    Math.min(questionRows.length, QUESTION_MAX_ROWS, Math.ceil(Math.max(0, rest) / 2)),
+  )
+  fieldGrant += spend(Math.min(field.rows.length, FIELD_MAX_ROWS) - fieldGrant)
+  questionGrant += spend(Math.min(questionRows.length, QUESTION_MAX_ROWS) - questionGrant)
+
+  const rows: string[] = []
+  if (titleGrant > 0) rows.push(title)
+  for (const line of hintRows.slice(0, hintGrant)) {
+    rows.push(truncate(paint(line, 'dim', color), width))
+  }
+  if (questionGrant > 0) {
+    const shown = questionRows.slice(0, questionGrant)
+    const omitted = questionRows.length - questionGrant
+    // Whole-row loss is accounted for explicitly rather than cut silently. At
+    // zero granted rows the blocker is absent entirely — AC 7's drop order,
+    // with no row left to carry a notice.
+    if (omitted > 0) {
+      shown[shown.length - 1] = overflowNotice(`and ${omitted + 1} more lines`, color, width)
+    }
+    rows.push(...shown)
+  }
+  // The visible window is the granted slice containing the cursor row, biased
+  // to keep that row last while typing.
+  const start = Math.max(
+    0,
+    Math.min(field.cursorRow - fieldGrant + 1, Math.max(0, field.rows.length - fieldGrant)),
+  )
+  for (const [offset, row] of field.rows.slice(start, start + fieldGrant).entries()) {
+    const index = start + offset
+    rows.push(
+      `${fieldIndent}${renderFieldRow(
+        row,
+        index === field.cursorRow ? field.cursorColumn : undefined,
+        fieldWidth,
         color,
-      ),
-      width,
+      )}`,
     )
+  }
+  for (const line of keysRows.slice(0, keysGrant)) {
+    rows.push(truncate(paint(line, 'dim', color), width))
+  }
+  return rows
+}
+
+function dashboardControls(
+  model: DashboardModel,
+  color: boolean,
+  width: number,
+  capacity: number,
+): string[] {
+  if (model.abortConfirmation !== undefined) {
+    return [
+      truncate(
+        paint(
+          `Abort ${displayText(model.abortConfirmation.slug)} and delete its workspace, PR, and branches?  Enter confirm  Esc cancel`,
+          'red',
+          color,
+        ),
+        width,
+      ),
+    ]
   }
   if (model.resumeInput === undefined) {
     const legend =
@@ -712,20 +986,9 @@ function dashboardControls(model: DashboardModel, color: boolean, width: number)
               ? DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND
               : DASHBOARD_HARVEST_LEGEND
           : DASHBOARD_GLOBAL_LEGEND
-    return truncate(paint(legend, 'dim', color), width)
+    return [truncate(paint(legend, 'dim', color), width)]
   }
-
-  // Instructions are right-pinned and the field is the flexible segment, just
-  // like status on a build row. The full value remains in DashboardModel even
-  // when this display copy is truncated.
-  const prefix = 'Resume feedback (empty retries): ['
-  const suffix = ']  Enter submit  Esc cancel'
-  const fieldWidth = width - prefix.length - suffix.length
-  const plain =
-    fieldWidth > 0
-      ? `${prefix}${truncate(displayText(model.resumeInput.value), fieldWidth)}${suffix}`
-      : 'Resume: Enter=submit Esc=cancel'
-  return truncate(paint(plain, 'cyan', color), width)
+  return resumePanel(model, color, width, capacity)
 }
 
 function overflowNotice(text: string, color: boolean, width: number): string {
@@ -789,7 +1052,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       ? undefined
       : truncate(`  ${displayText(model.warningLine)}`, width)
   const top = [summary, toggles, ...(warning !== undefined ? [warning] : [])]
-  const controls = dashboardControls(model, color, width)
+  const controls = dashboardControls(model, color, width, controlsCapacity(height, top.length))
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
   // nothing. Its trailing newline would scroll a single line off even on the
@@ -801,10 +1064,10 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // on body content. One additional row has no room for spacing; two retain
   // the top/body separator. A visible body requires both separators.
   if (height !== undefined && height === top.length + 1) {
-    return [...top, controls]
+    return [...top, ...controls]
   }
   if (height !== undefined && height === top.length + 2) {
-    return [...top, '', controls]
+    return [...top, '', ...controls]
   }
 
   const widths = frameWidths(model.builds, model.harvest)
@@ -844,8 +1107,13 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     },
   )
 
+  // Both frame composers derive their body budget from `controls.length`, so a
+  // one-line legend reduces to exactly today's arithmetic and a prompt panel
+  // grows into rows the body gives up.
   const bodyBudget =
-    height === undefined ? Number.POSITIVE_INFINITY : Math.max(0, height - top.length - 3)
+    height === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, height - top.length - 2 - controls.length)
   let body: string[]
   if (rows.length === 0) {
     body = bodyBudget >= 1 ? [truncate(paint('  no active builds', 'dim', color), width)] : []
@@ -934,7 +1202,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // Both blank separators are fixed frame chrome, not part of a row block:
   // the first separates the global top section from harvest/build content and
   // the second separates that content from the contextual controls.
-  return [...top, '', ...body, '', controls]
+  return [...top, '', ...body, '', ...controls]
 }
 
 /** Render the dashboard inside a fixed one-column horizontal gutter.

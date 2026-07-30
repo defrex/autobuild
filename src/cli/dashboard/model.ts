@@ -181,8 +181,12 @@ export type DashboardView =
 export interface ResumeInputView {
   /** The prompt stays bound to this build even while polling re-sorts rows. */
   slug: string
-  /** Full operator input. Rendering may truncate it, submission never does. */
+  /** Full operator input, line structure included. Rendering may scroll it,
+   * submission never truncates it. */
   value: string
+  /** Caret position as a CODE-POINT offset into `value` — the composer's one
+   * piece of geometry the controller owns, so the renderer stays pure. */
+  cursor: number
 }
 
 export interface AbortConfirmationView {
