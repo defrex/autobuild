@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#131](https://github.com/defrex/autobuild/pull/131) — Show the Enter affordance in the list-view build legend
+
 ## v0.3.0 — 2026-07-30
 
 This release broadens where Autobuild can run: a builtin Codex CLI agent runtime joins Claude, an offline local-git forge removes the hard dependency on a hosted provider, and ab init is now agent-driven and stack-neutral, with the default agent runtime required explicitly rather than silently falling back to Claude. The dispatch dashboard gains build drill-down, explicit pause and resume controls, documented pressure counters, and complete cleanup on abort. Reliability work contains janitor failures to a single build, recovers interrupted dispatches, limits setup retries while surfacing durable failures, explains why a merge is waiting, and permits safe local merges into dirty checkouts. Rounding it out, vendored skills are now self-contained, skill upgrades show cancellable progress, the default review-round limit rises from four to six, and managed dev-server support has been removed.

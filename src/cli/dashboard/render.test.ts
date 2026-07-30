@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
 import {
+  DASHBOARD_BUILD_LEGEND,
   formatDuration,
   moveTranscriptScroll,
   renderDashboard,
@@ -245,8 +246,28 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       WIDE,
     )
     expect(buildLines.at(-1)).toBe(
-      ' Keys: Up/Down select  m auto-merge  p pause  a abort  Ctrl-C quit',
+      ' Keys: Up/Down select  Enter details  m auto-merge  p pause  a abort  Ctrl-C quit',
     )
+    // The exported constant is the poll-race fallback for a build row whose
+    // build vanished between poll and paint. Pinning it to the rendered line
+    // keeps the wording from flickering for that one frame.
+    expect(buildLines.at(-1)).toBe(` ${DASHBOARD_BUILD_LEGEND}`)
+
+    // The detail legend sits on the line directly above the list one in the
+    // source; freezing it exactly is what stops an edit to the list branch
+    // from silently landing on the detail branch instead.
+    const detailLines = rd(
+      {
+        ...model([build()]),
+        selection: { kind: 'build', slug: 'auth-rate-limit' },
+        view: { kind: 'detail', slug: 'auth-rate-limit' },
+      },
+      WIDE,
+    )
+    expect(detailLines.at(-1)).toBe(
+      ' Keys: Up/Down select session  Enter transcript  m auto-merge  p pause  a abort  Esc back  Ctrl-C quit',
+    )
+
     for (const controls of [
       globalLines.at(-1),
       runningHarvestLines.at(-1),
@@ -325,11 +346,15 @@ describe('renderDashboard: queued dispatch rows', () => {
     })
     const frame = model([queued])
     frame.selection = { kind: 'build', slug: queued.slug }
-    const text = rd(frame, WIDE).map(stripAnsi).join('\n')
+    const lines = rd(frame, WIDE).map(stripAnsi)
+    const text = lines.join('\n')
     expect(text).toContain('QUEUED')
     expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
     expect(text).toContain('d discard')
     expect(text).not.toContain('[ ] plan')
+    expect(lines.at(-1)).toBe(
+      ' Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit',
+    )
   })
 })
 
@@ -914,6 +939,24 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     expect(plain).toContain('RUNNING') // status survives, right-pinned
     expect(plain).toContain('~') // the slug is what got cut
     expect(plain.length).toBeLessThanOrEqual(40)
+  })
+
+  test('the build legend stays one physical row at a narrow width', () => {
+    // The list-view legend is the longest it has ever been now that it carries
+    // `Enter details`, and the controls line has no wrapping path — it either
+    // fits or it truncates.
+    const lines = rd(
+      {
+        ...model([build()]),
+        selection: { kind: 'build', slug: 'auth-rate-limit' },
+      },
+      { color: false, width: 40 },
+    )
+    const controls = lines.at(-1)!
+    expect(controls.startsWith(' Keys:')).toBe(true)
+    expect(controls.length).toBeLessThanOrEqual(39) // the frame's width - 1 contract
+    expect(controls.endsWith('~')).toBe(true)
+    expect(lines.filter((line) => line.includes('Keys:'))).toHaveLength(1)
   })
 
   test('a line that fits is left exactly alone', () => {
