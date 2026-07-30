@@ -464,6 +464,31 @@ function displayText(value: string): string {
   return displayed
 }
 
+/**
+ * A warning notice's required detail — a deprecated role key's replacement, the
+ * valid-key list — can be longer than the frame is wide, and truncation drops
+ * exactly the tail the operator needs. Wrap instead: `packLines` keeps both hard
+ * invariants (one rendered line is one physical row; no row exceeds the width)
+ * while nothing falls off the right edge.
+ *
+ * `displayText` runs FIRST so a newline in external text becomes an escape
+ * rather than a row break — the frame's row structure stays ours, which is what
+ * the old one-row rule was really protecting. That is also why this splits on
+ * `' '` alone rather than `\s`, as `wrappedText` does: every other whitespace
+ * character is already a printable escape by the time we get here.
+ */
+function warningRows(lines: readonly string[], width: number): string[] {
+  return lines.flatMap((line) =>
+    packLines(
+      displayText(line)
+        .split(' ')
+        .filter((token) => token !== ''),
+      width,
+      '  ',
+    ),
+  )
+}
+
 function wrappedText(value: string, width: number, indent = ''): string[] {
   if (width <= 0) return []
   const paragraphs = value.split(/\r?\n/)
@@ -782,13 +807,11 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // marker prefix aligns the first toggle with the title while keeping the
   // selection lane empty.
   const toggles = truncate(`  ${[intake, autoMergeDefault, harvestGate].join('  ')}`, width)
-  // A warning is conditional chrome, not a reserved log slot. Escaping
-  // controls prevents external text from adding rows or violating ASCII width.
-  const warning =
-    model.warningLine === undefined
-      ? undefined
-      : truncate(`  ${displayText(model.warningLine)}`, width)
-  const top = [summary, toggles, ...(warning !== undefined ? [warning] : [])]
+  // Warnings are conditional chrome, not a reserved log slot. The region is
+  // wrapped and UNCAPPED: a notice's tail must never be unreachable and no
+  // notice may be dropped by count. Its only bound is the frame height, i.e.
+  // the `top.slice` degradation below.
+  const top = [summary, toggles, ...warningRows(model.warningLines ?? [], width)]
   const controls = dashboardControls(model, color, width)
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint

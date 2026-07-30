@@ -4949,3 +4949,139 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 })
+
+/**
+ * Startup role-key diagnostics (SPEC §9). These reach the operator through the
+ * seam `ab dispatch` already uses for configuration-level notices, and both
+ * surfaces get the IDENTICAL strings in full — stderr writes them verbatim, the
+ * dashboard wraps them into its warning region. No fixture here dispatches a
+ * build: the diagnostic is emitted before the first tick and is what is under
+ * test.
+ */
+describe('abDispatch: unconsumed and deprecated [roles] keys', () => {
+  /** A stray key plus a deprecated skill-name alias for a real agent step. */
+  const BROKEN_ROLES_TOML = DISPATCH_CONFIG_TOML.replace(
+    'steps = ["unit"]',
+    'steps = ["unit", "e2e"]',
+  ).replace(
+    '[policy]',
+    `[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.ghost]
+runtime = "claude"
+
+[roles.typo]
+runtime = "claude"
+
+[roles.ab-verify-e2e]
+runtime = "claude"
+
+[policy]`,
+  )
+
+  /** Every detail an operator needs to act, on either surface. */
+  const DETAILS = [
+    '[roles.ghost]',
+    '[roles.typo]',
+    '[roles.ab-verify-e2e]',
+    '[roles.e2e]',
+    'harvest-review',
+    'plan-review',
+    'reconcile',
+  ]
+
+  test('line-oriented mode writes every notice to stderr, in full, and leaves stdout clean', async () => {
+    const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+        'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+        'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
+      ])
+      // Scripted stdout consumers stay clean.
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  for (const size of [
+    { columns: 120, rows: 40 },
+    { columns: 80, rows: 24 },
+  ]) {
+    test(`the painted frame carries every detail at ${size.columns}x${size.rows}`, async () => {
+      const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+      const term = fakeTerminal(true, size)
+      try {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          terminal: term,
+        })
+
+        // The whole frame, because details legitimately land on continuation
+        // rows — that is what wrapping means.
+        const frame = latestDashboardFrame(term)
+        for (const detail of DETAILS) expect(frame).toContain(detail)
+        // Uncapped: no notice is dropped by count. (`~` is deliberately NOT
+        // asserted absent — packLines truncating an over-wide single token is
+        // an inherited invariant this change does not own.)
+        expect(frame).not.toMatch(/\+\d+ more/)
+        // The interactive frame is the only surface: stderr stays silent.
+        expect(fx.err).toEqual([])
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
+
+  test('a later transient warning does not erase the config diagnostic', async () => {
+    const fx = await makeFixture(readyTicket('T-sticky'), happyHandlers(), BROKEN_ROLES_TOML)
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    const transient = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [transient] }
+    }
+    const term = fakeTerminal()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      // `setWarning` replaces the transient slot outright, so sharing it would
+      // have let this tick's ticket diagnostic erase the startup notice for the
+      // life of the process. The final frame carries BOTH.
+      const frame = latestDashboardFrame(term)
+      for (const detail of DETAILS) expect(frame).toContain(detail)
+      expect(frame).toContain('invalid frontmatter')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 60_000)
+})

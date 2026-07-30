@@ -116,28 +116,108 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const clean = rd(model([build()]), WIDE).map(stripAnsi)
     expect(clean[2]).toBe('')
 
-    const warned = rd({ ...model([build()]), warningLine: 'ticket source unavailable' }, WIDE).map(
-      stripAnsi,
-    )
+    const warned = rd(
+      { ...model([build()]), warningLines: ['ticket source unavailable'] },
+      WIDE,
+    ).map(stripAnsi)
     expect(warned[2]).toBe('   ticket source unavailable')
     expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Auto Build'))
     expect(warned[3]).toBe('')
     expect(warned).toHaveLength(clean.length + 1)
   })
 
-  test('long, multiline, and non-ASCII warnings stay on one safe physical row', () => {
+  test('long, multiline, and non-ASCII warnings WRAP onto safe physical rows', () => {
     const clean = rd(model([build()]), { color: true, width: 40 })
     const warned = rd(
       {
         ...model([build()]),
-        warningLine: `warning\n${'x'.repeat(100)} café`,
+        warningLines: [`warning\n${'x'.repeat(30)} ${'y'.repeat(30)} café`],
       },
       { color: true, width: 40 },
     )
-    expect(warned).toHaveLength(clean.length + 1)
-    expect(stripAnsi(warned[2]!).length).toBeLessThanOrEqual(40)
-    expect(warned[2]).not.toContain('\n')
-    expect(stripAnsi(warned[2]!)).toContain('warning\\u{a}')
+    // Wrapped, not truncated: the notice takes several rows and every one of
+    // them still honours the two redraw invariants.
+    const rows = warned.slice(2, warned.length - (clean.length - 2))
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) {
+      expect(stripAnsi(row).length).toBeLessThanOrEqual(40)
+      expect(row).not.toContain('\n')
+    }
+    const region = rows.map(stripAnsi).join('\n')
+    expect(region).toContain('warning\\u{a}')
+    // The tail — the part truncation always dropped — is now reachable.
+    expect(region).toContain('caf\\u{e9}')
+    // Continuation rows keep the first row's indent (2 in content coordinates,
+    // plus `renderDashboard`'s one-column left gutter).
+    for (const row of rows) expect(stripAnsi(row).search(/\S/)).toBe(3)
+  })
+
+  test('a multi-notice warning region is wrapped, uncapped, and never elided', () => {
+    const notices = [
+      'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
+    ]
+    const lines = rd({ ...model([build()]), warningLines: notices }, { color: false, width: 80 })
+    const frame = lines.join('\n')
+
+    // Uncapped: no elision marker anywhere in the frame.
+    expect(frame).not.toContain('+N more')
+    expect(frame).not.toMatch(/\+\d+ more/)
+    // Every notice survives whole, including the last one's final word.
+    expect(frame).toContain('[roles.ghost]')
+    expect(frame).toContain('[roles.typo]')
+    expect(frame).toContain('upgrade')
+    expect(frame).toContain('[roles.e2e]')
+    expect(frame).toContain('release.')
+
+    const regionRows: string[] = []
+    for (const row of lines.slice(2)) {
+      if (stripAnsi(row).trim() === '') break
+      regionRows.push(row)
+    }
+    // Wrapped: more physical rows than notices, every one within the width and
+    // aligned under the first.
+    expect(regionRows.length).toBeGreaterThan(notices.length)
+    for (const row of regionRows) {
+      expect(stripAnsi(row).length).toBeLessThanOrEqual(80)
+      expect(stripAnsi(row).search(/\S/)).toBe(3)
+    }
+  })
+
+  test('a representative role diagnostic survives whole at operator terminal sizes', () => {
+    const notices = [
+      'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+      'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
+      'autobuild.toml: [roles.ab-verify-dash] should be [roles.dashboard] — it is the deprecated skill-name key for agent verify step "dashboard" and stops working in a future release.',
+    ]
+    const builds = ['a', 'b', 'c', 'd', 'e'].map((slug) => ({ ...build(), slug }))
+    for (const { width, height } of [
+      { width: 80, height: 24 },
+      { width: 120, height: 40 },
+    ]) {
+      const frame = rd({ ...model(builds), warningLines: notices }, { color: false, width, height })
+        .map(stripAnsi)
+        .join('\n')
+      for (const detail of [
+        '[roles.ghost]',
+        '[roles.typo]',
+        '[roles.ab-verify-e2e]',
+        '[roles.e2e]',
+        '[roles.ab-verify-dash]',
+        '[roles.dashboard]',
+        'harvest-review',
+        'plan-review',
+        'reconcile',
+      ]) {
+        expect(frame).toContain(detail)
+      }
+      expect(frame).not.toMatch(/\+\d+ more/)
+      // The build rows are still there — the region did not eat the body.
+      expect(frame).toContain('a')
+      expect(frame).toContain('e')
+    }
   })
 
   test('an empty dashboard says so', () => {
@@ -639,7 +719,7 @@ describe('renderDashboard: layout', () => {
           build({ slug: 'alpha', blockers: ['operator input required'] }),
           build({ slug: 'beta' }),
         ]),
-        warningLine: 'ticket source warning',
+        warningLines: ['ticket source warning'],
         harvest: harvest({ detail: 'stopped at review' }),
         selection: { kind: 'build', slug: 'beta' },
       },
@@ -707,7 +787,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
           ],
         }),
       ]),
-      warningLine: 'ticket source unavailable',
+      warningLines: ['ticket source unavailable'],
       harvest: harvest({ status: 'failed', detail: 'stopped at review after automatic recovery' }),
       selection: { kind: 'build' as const, slug: 'auth-rate-limit' },
     }
@@ -761,7 +841,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
           build({ slug: `overflow-${index}`, ticketId: `AUT-${index}`, pr: undefined }),
         ),
       ]),
-      warningLine: 'warning row',
+      warningLines: ['warning row'],
       harvest: harvest({ status: 'failed', detail: 'harvest detail '.repeat(6) }),
       selection: { kind: 'build' as const, slug: 'overflow-4' },
     }
@@ -1023,11 +1103,14 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     }
   })
 
+  // The mandatory-header ordering is UNCHANGED by the wrapped warning region:
+  // `top.slice(0, height)` still outranks warning chrome as height disappears.
+  // This sweep is the regression proof for that inherited invariant.
   test('warning and no-warning height sweeps keep complete header lines ahead of body', () => {
     for (const warningLine of [undefined, 'store read failed'] as const) {
       const dashboard = {
         ...model(many(5)),
-        ...(warningLine !== undefined ? { warningLine } : {}),
+        ...(warningLine !== undefined ? { warningLines: [warningLine] } : {}),
       }
       for (let height = 0; height <= 16; height += 1) {
         const lines = rd(dashboard, {
