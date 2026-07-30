@@ -98,7 +98,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const lines = rd(model([build()]), WIDE).map(stripAnsi)
     const summary = lines[0]!
     const toggles = lines[1]!
-    expect(summary).toContain('Auto Build')
+    expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
     expect(summary).toContain('queue 2 | active 1/5 | obs 5/7')
@@ -107,8 +107,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggles).toContain('intake ON')
     expect(toggles).toContain('auto merge OFF')
     expect(toggles).toContain('harvest ON')
-    expect(summary.indexOf('Auto Build')).toBe(3)
-    expect(toggles.search(/\S/)).toBe(summary.indexOf('Auto Build'))
+    expect(summary.indexOf('Autobuild')).toBe(3)
+    expect(toggles.search(/\S/)).toBe(summary.indexOf('Autobuild'))
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
 
@@ -120,7 +120,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       stripAnsi,
     )
     expect(warned[2]).toBe('   ticket source unavailable')
-    expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Auto Build'))
+    expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Autobuild'))
     expect(warned[3]).toBe('')
     expect(warned).toHaveLength(clean.length + 1)
   })
@@ -196,7 +196,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
 
   test('the summary is the selected global row even with no harvest or builds', () => {
     const lines = rd({ ...model([]), selection: { kind: 'global' } }, WIDE).map(stripAnsi)
-    expect(lines[0]!.startsWith(' > Auto Build')).toBe(true)
+    expect(lines[0]!.startsWith(' > Autobuild')).toBe(true)
     expect(lines[1]!.startsWith('   intake ON')).toBe(true)
     expect(lines.filter((line) => line.startsWith(' > '))).toHaveLength(1)
     expect(lines.join('\n')).toContain('no active builds')
@@ -714,7 +714,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     const lines = rd(dashboard, { color: false, width: 52 })
     expectInsideGutters(lines, 52)
 
-    const summary = lines.find((line) => line.includes('Auto Build'))!
+    const summary = lines.find((line) => line.includes('Autobuild'))!
     const toggles = lines.find((line) => line.includes('intake ON'))!
     const warning = lines.find((line) => line.includes('ticket source unavailable'))!
     const selected = lines.find((line) => line.includes('auth-rate-limit'))!
@@ -722,7 +722,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     const blocker = lines.find((line) => line.includes('! a blocker'))!
     const controls = lines.find((line) => line.includes('Keys:'))!
 
-    expect(summary.indexOf('Auto Build')).toBe(3)
+    expect(summary.indexOf('Autobuild')).toBe(3)
     expect(toggles.search(/\S/)).toBe(3)
     expect(warning.search(/\S/)).toBe(3)
     expect(selected.startsWith(' > ')).toBe(true)
@@ -1051,7 +1051,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
           height,
         }).map(stripAnsi)
         expect(lines.length).toBeLessThanOrEqual(height)
-        if (height >= 1) expect(lines[0]).toContain('Auto Build')
+        if (height >= 1) expect(lines[0]).toContain('Autobuild')
         if (height >= 2) {
           expect(lines[1]).toContain('intake ON')
           expect(lines[1]).toContain('harvest ON')
@@ -1067,7 +1067,7 @@ describe('renderDashboard: `height` caps the LINE count', () => {
   test('the header survives the clamp — it is the line the ACs name', () => {
     for (let height = 1; height <= 12; height += 1) {
       const [header] = rd(model(many(8)), { color: false, width: 80, height })
-      expect(header).toContain('Auto Build')
+      expect(header).toContain('Autobuild')
       expect(header).toContain('queue 2')
       // The count is on the header, so it still reports every build even when
       // most rows are clamped away.
@@ -1419,7 +1419,7 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(out).toContain('>   plan phase plan round 1 runtime pi model openai/gpt ended')
     expect(out).toContain('tokens 90 in/30 out, 2 turns')
     expect(out).toContain('plan-review phase plan-review round 1 runtime claude open')
-    expect(out).not.toContain('Auto Build')
+    expect(out).not.toContain('Autobuild')
   })
 
   test('structured and producer-boundary transcripts render prompts, text, failures, usage, and notice', () => {

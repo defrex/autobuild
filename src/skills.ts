@@ -1,4 +1,4 @@
-/** Repo-installed Auto Build skills share one harness-neutral namespace. */
+/** Repo-installed Autobuild skills share one harness-neutral namespace. */
 export const SKILL_NAMESPACE = 'ab-'
 
 /** Add the namespace once, accepting explicit namespaced config values too. */
