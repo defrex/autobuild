@@ -52,7 +52,7 @@ K unclaimed observation.recorded events
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
-| `src/config/` | `autobuild.toml` parsing and strict validation; user reference in `docs/configuration.md` | §16.1 |
+| `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
 | `src/integration/` | End-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |

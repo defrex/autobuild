@@ -26,6 +26,8 @@ import {
 } from './schema'
 import { parseConfig } from './load'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
+import { createProductionRuntimes } from '../ports/runner/production'
+import { createRuntimeResolver } from '../ports/runner/routing'
 
 const ROOT = resolve(import.meta.dir, '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
@@ -229,6 +231,33 @@ describe('docs/configuration.md — executable examples', () => {
         parseConfig(source, `docs/configuration.md#${fragment.name ?? 'fragment'}`),
       ).not.toThrow()
     }
+  })
+
+  test('every documented [roles] pair is one the SHIPPED runtimes actually serve', () => {
+    // Parsing is not enough: runtime/model compatibility is checked by the
+    // registry-aware eager resolver, a layer `parseConfig` never reaches. A
+    // documented `runtime = "pi"` with an unqualified `model = "gpt-…"` parses
+    // cleanly and then fails `ab dispatch` for anyone who copies it — which is
+    // exactly what a worked example must not do.
+    const blocks = markedTomlBlocks().filter(
+      (block) => block.kind === 'config-fragment' || block.kind === 'complete-config',
+    )
+    const registry = createProductionRuntimes().runtimes
+    let checked = 0
+    for (const block of blocks) {
+      const source = hasTicketsTable(block.source)
+        ? block.source
+        : `${block.source}\n\n${MINIMAL_TICKETS}`
+      const roles = parseConfig(source, `docs/configuration.md#${block.name ?? 'fragment'}`).roles
+      if (Object.keys(roles).length === 0) continue
+      checked += 1
+      // A fragment need not carry [roles.default]; supply the documented
+      // product default so the merge has a base, exactly as a real file would.
+      expect(() =>
+        createRuntimeResolver(registry, { default: { runtime: 'claude' }, ...roles }),
+      ).not.toThrow()
+    }
+    expect(checked).toBeGreaterThan(1)
   })
 
   test('the delimited complete example parses as-is', () => {
