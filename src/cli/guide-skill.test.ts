@@ -206,6 +206,52 @@ describe('ab-guide — persistence marking', () => {
   })
 })
 
+describe('ab-guide — review severity calibration', () => {
+  /**
+   * `headingSection()` stops at the next `###`, which for a level-two heading
+   * with no level-three children would run past two later `##` sections. This
+   * slices `## The lifecycle` to the next level-two heading instead, so
+   * asserting placement inside it is a real claim. `\n## ` cannot match a
+   * `###` heading, so the scan is safe.
+   */
+  function lifecycleSection(): string | undefined {
+    const heading = '## The lifecycle'
+    const start = guide.indexOf(heading)
+    if (start === -1) return undefined
+    const after = start + heading.length
+    const next = guide.indexOf('\n## ', after)
+    return next === -1 ? guide.slice(after) : guide.slice(after, next)
+  }
+
+  /**
+   * The guide and the two review skills must give one answer about what
+   * severity measures, because an agent reads whichever it reaches first. The
+   * four phrases below are literal shared text: `review-skills.test.ts`
+   * asserts them against `plan-review` and `code-review`, this asserts them
+   * against `ab-guide`, so neither side can be reworded alone.
+   */
+  const SHARED_WITH_REVIEW_SKILLS = [
+    "the spec's acceptance criteria and the realistic operating conditions of the work under review",
+    'puts no acceptance criterion at risk, breaks no stated invariant, and is unreachable under realistic input is `ab observe`, not a finding',
+    'raise a bar the spec set',
+    'does not promise to handle is `minor` or an observation, unless a security boundary, an acceptance criterion, or a stated invariant makes it material',
+  ]
+
+  test('the lifecycle section rates findings by proportion to the spec', () => {
+    const section = lifecycleSection()
+    expect(section).toBeDefined()
+    const compact = section?.replace(/\s+/g, ' ') ?? ''
+    for (const claim of [
+      '**Review severity is proportion to the spec.**',
+      '`blocking` names an acceptance criterion the defect defeats, `important` names a criterion or stated invariant it puts at material risk.',
+      'work carrying such observations is approvable',
+      ...SHARED_WITH_REVIEW_SKILLS,
+    ]) {
+      expect(compact).toContain(claim)
+    }
+  })
+})
+
 describe('ab-guide — finalize publication boundary', () => {
   test('keeps local commits, clean-worktree validation, and regular push kernel-owned', () => {
     const finalize = sectionFor('finalize')

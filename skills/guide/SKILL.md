@@ -84,6 +84,20 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   back through `verify:*`. This can repeat. The build terminates **merged** or
   **closed**.
 
+**Review severity is proportion to the spec.** Both review loops rate a
+finding by what the defect costs against the spec's acceptance criteria and
+the realistic operating conditions of the work under review, not by how
+certainly it is a defect: `blocking` names an acceptance criterion the defect
+defeats, `important` names a criterion or stated invariant it puts at material
+risk. A true defect that puts no acceptance criterion at risk, breaks no
+stated invariant, and is unreachable under realistic input is `ab observe`,
+not a finding, and work carrying such observations is approvable. A reviewer
+does not raise a bar the spec set: where the spec bounds a failure model or an
+operating condition, a stricter model is not a defect, and hostile or
+pathological input that the surface's contract does not promise to handle is
+`minor` or an observation, unless a security boundary, an acceptance
+criterion, or a stated invariant makes it material.
+
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
 autobuild by configuring verify and finalize steps, never by inventing stages.
