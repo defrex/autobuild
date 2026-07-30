@@ -178,6 +178,34 @@ describe('ab-guide — dispatch dashboard summary', () => {
   })
 })
 
+describe('ab-guide — persistence marking', () => {
+  /**
+   * The guide and the two review skills must give one answer about what
+   * `persists` means, because an agent reads whichever it reaches first. The
+   * two phrases below are literal shared text: `review-skills.test.ts`
+   * asserts them against `plan-review` and `code-review`, this asserts them
+   * against `ab-guide`, so neither side can be reworded alone.
+   */
+  const SHARED_WITH_REVIEW_SKILLS = [
+    'still present in the work under review',
+    'defect class whose reported instance was fixed is fresh work and starts its own chain',
+  ]
+
+  test('the `[policy]` section scopes `stallRounds` to a surviving disagreement', () => {
+    const section = sectionFor('policy')
+    expect(section).toBeDefined()
+    const compact = section?.replace(/\s+/g, ' ') ?? ''
+    for (const claim of [
+      '`stallRounds` counts *persistence chains*, which reviewers mark and the kernel only follows.',
+      "A finding's `persists` ids name prior-round findings whose defect is still present in the work under review; a new instance of a defect class whose reported instance was fixed is fresh work and starts its own chain, however closely it resembles its predecessor.",
+      'So the counter measures a producer/reviewer stalemate rather than a defect category the loop keeps converging on, and the kernel decides only whether a marked chain has survived the threshold — never whether two findings are the same disagreement.',
+      ...SHARED_WITH_REVIEW_SKILLS,
+    ]) {
+      expect(compact).toContain(claim)
+    }
+  })
+})
+
 describe('ab-guide — finalize publication boundary', () => {
   test('keeps local commits, clean-worktree validation, and regular push kernel-owned', () => {
     const finalize = sectionFor('finalize')
