@@ -254,140 +254,176 @@ skill = "e2e"
   })
 })
 
-describe('roleKeyWarnings — one notice is always ONE line', () => {
-  // A notice goes to stderr verbatim, one per line, and the dashboard wraps it
-  // into rows it controls. A raw control character in a user-chosen name breaks
-  // both: stderr silently gains a physical line, so what is one diagnostic
-  // becomes two. Escaping the table header is not enough — the PROSE phrases
-  // carry names too, and `canonicalUse` builds one of them outside the notice
-  // renderer entirely.
-  const HOSTILE = ['odd\nname', 'quote"d', 'tab\there', 'carriage\rreturn', 'ui.visual']
+describe('roleKeyWarnings — a user-chosen name renders safely, whatever it holds', () => {
+  // Role and step names are ARBITRARY nonempty strings, and a notice both
+  // prints one and tells the operator to type it. Two invariants follow, and
+  // both are asserted below over a whole corpus rather than case by case:
+  //
+  // 1. A notice is exactly ONE line of printable ASCII. It reaches stderr
+  //    verbatim, one per line, and the dashboard wraps it into rows it
+  //    controls; anything unprintable silently turns one diagnostic into two.
+  // 2. Every `[roles.…]` header a notice emits parses back to the exact key it
+  //    names. `[roles.ab verify]` is a syntax error and `[roles.ui.visual]` is
+  //    a different key entirely — TOML reads the dot as nesting.
+  //
+  // The corpus-and-invariant shape is the point. Three review rounds each found
+  // one more code point the previous escaper passed through raw; asserting the
+  // allowlist itself is what ends that, because there is no next code point.
+  const HOSTILE = [
+    'ui.visual', // dotted — TOML reads the dot as nesting
+    'ab verify', // spaced — not a bare key
+    'e2e#1', // a comment character
+    'smoke:fast',
+    'quote"d', // the quote that would close the string
+    'back\\slash', // the escape character itself
+    'odd\nname', // newline — would split one notice into two physical lines
+    'tab\there',
+    'carriage\rreturn',
+    'delete\u007fchar', // U+007F — the control `JSON.stringify` passed raw
+    'café-résumé', // non-ASCII
+    'ステップ', // non-ASCII with no ASCII at all
+    'grin\u{1f600}', // above the BMP — needs `\U`, not a surrogate pair
+  ]
 
-  const roleFor = (key: string) => `[roles.${JSON.stringify(key)}]\nruntime = "claude"\n`
+  /**
+   * A TOML basic string for the fixtures. Deliberately NOT the module's own
+   * escaper — one that wrote the fixture the same way it writes the notice
+   * could hide its own bug — and deliberately a different rule: TOML accepts a
+   * raw non-ASCII character in a string, so only what TOML actually forbids is
+   * escaped here.
+   */
+  const tomlString = (value: string): string =>
+    `"${[...value]
+      .map((char) => {
+        const code = char.codePointAt(0)!
+        if (char === '"' || char === '\\') return `\\${char}`
+        return code < 0x20 || code === 0x7f ? `\\u${code.toString(16).padStart(4, '0')}` : char
+      })
+      .join('')}"`
+
+  const roleFor = (key: string) => `[roles.${tomlString(key)}]\nruntime = "claude"\n`
   const agentStep = (step: string, skill: string) =>
-    `[verify.${JSON.stringify(step)}]\nkind = "agent"\nskill = ${JSON.stringify(skill)}\n`
+    `[verify.${tomlString(step)}]\nkind = "agent"\nskill = ${tomlString(skill)}\n`
 
-  /** The same odd name driven through every branch of the notice renderer. */
+  /** The same name driven through every branch of the notice renderer. */
   function branches(name: string) {
     return {
       unconsumed: config(`${DEFAULT_ROLE}${roleFor(name)}`),
       safeRename: config(
-        `[verify]\nsteps = [${JSON.stringify(name)}]\n${agentStep(name, 'legacy')}` +
+        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
           `${DEFAULT_ROLE}${roleFor('legacy')}`,
       ),
       inert: config(
-        `[verify]\nsteps = [${JSON.stringify(name)}]\n${agentStep(name, 'legacy')}` +
+        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
           `${DEFAULT_ROLE}${roleFor(name)}${roleFor('legacy')}`,
       ),
-      // The finding's case: the declared legacy key is ALSO a canonical step
-      // name, so the shared/colliding branch appends the `canonicalUse` phrase.
+      // The declared legacy key is ALSO a canonical step name, so the
+      // shared/colliding branch appends the `canonicalUse` phrase — the phrase
+      // built in `roleKeyDiagnostics`, one layer above the notice renderer.
       canonicalCollision: config(
-        `[verify]\nsteps = [${JSON.stringify(name)}, "visual"]\n` +
+        `[verify]\nsteps = [${tomlString(name)}, "visual"]\n` +
           `${agentStep(name, 'other-skill')}${agentStep('visual', name)}` +
           `${DEFAULT_ROLE}${roleFor(name)}`,
+      ),
+      // A stray key alongside a step with this name — the one arrangement that
+      // emits the valid-key LIST with the name in it.
+      strayAlongsideStep: config(
+        `[verify]\nsteps = [${tomlString(name)}]\n${agentStep(name, 'legacy')}` +
+          `${DEFAULT_ROLE}${roleFor('ghost')}`,
       ),
     }
   }
 
+  /** Every quoted-or-bare `[roles.<key>]` a notice tells the operator to write. */
+  const emittedTables = (lines: readonly string[]): string[] =>
+    lines.flatMap((line) =>
+      [...line.matchAll(/\[roles\.(?:"(?:[^"\\]|\\.)*"|[^\]]*)\]/g)].map((m) => m[0]),
+    )
+
+  /**
+   * Apply an emitted header verbatim and report the keys it declares. A header
+   * that is not valid TOML throws; one that silently NESTS declares the wrong
+   * key or is rejected as an unknown field. Both are what an operator following
+   * the advice would hit, so both must be unreachable.
+   */
+  const declaredBy = (table: string): string[] => {
+    const applied = parseConfig(`${TICKETS}\n${DEFAULT_ROLE}${table}\nruntime = "claude"\n`)
+    return Object.keys(applied.roles).filter((key) => key !== 'default')
+  }
+
+  /** The only role keys the fixtures above legitimately name. */
+  const fixtureKeys = (name: string) => [name, 'legacy', 'visual', 'ghost']
+
   for (const name of HOSTILE) {
-    test(`no notice for a name like ${JSON.stringify(name)} carries a raw control character`, () => {
+    test(`every notice for ${JSON.stringify(name)} is one printable line`, () => {
       for (const parsed of Object.values(branches(name))) {
         const lines = roleKeyWarnings(parsed)
         expect(lines.length).toBeGreaterThan(0)
         for (const line of lines) {
-          expect(line).not.toMatch(/[\u0000-\u001f\u007f]/)
           expect(line.split('\n')).toHaveLength(1)
+          // No control or format character anywhere in a notice, whatever its
+          // code point — the whole class, not one banned character at a time.
+          // (The prose itself is not ASCII: house style uses an em dash.)
+          expect(line).not.toMatch(/\p{C}/u)
+          // The escaper's allowlist, asserted where it applies. A name reaches
+          // a notice either bare — and a bare TOML key is ASCII by grammar — or
+          // inside quotes, and every quoted run is printable ASCII.
+          for (const [quoted] of line.matchAll(/"(?:[^"\\]|\\.)*"/g)) {
+            expect(quoted).toMatch(/^[\x20-\x7e]*$/)
+          }
         }
       }
     })
+
+    test(`every header emitted for ${JSON.stringify(name)} parses back to its exact key`, () => {
+      for (const parsed of Object.values(branches(name))) {
+        for (const table of emittedTables(roleKeyWarnings(parsed))) {
+          const keys = declaredBy(table)
+          expect(keys).toHaveLength(1)
+          expect(fixtureKeys(name)).toContain(keys[0]!)
+        }
+      }
+    })
+
+    test(`the advice for a step named ${JSON.stringify(name)} names that step exactly`, () => {
+      // The sharpest form of the round trip: the replacement is not merely
+      // parseable, it is the step's own literal key.
+      const tables = emittedTables(roleKeyWarnings(branches(name).safeRename))
+      expect(tables).toContain('[roles.legacy]')
+      const replacement = tables.find((table) => table !== '[roles.legacy]')
+      expect(replacement).toBeDefined()
+      expect(declaredBy(replacement!)).toEqual([name])
+
+      // The valid-key list is what the operator types next, so it renders a
+      // name exactly as a header does rather than bare, which would not parse.
+      // Compared against the header rather than a hand-written literal: one
+      // escaper, so one expected string.
+      const [, validList] = roleKeyWarnings(branches(name).strayAlongsideStep)
+      expect(validList).toContain('Valid role keys:')
+      expect(validList).toContain(replacement!.slice('[roles.'.length, -1))
+    })
   }
 
-  test('a canonical collision escapes the step name in its "Keep" clause', () => {
-    // Pinned explicitly: this phrase is built in `roleKeyDiagnostics`, not in
-    // the notice renderer, and was the one path header escaping never reached.
+  test('a canonical collision escapes the step name in its "Keep" clause too', () => {
+    // Pinned as an exact string: this phrase is built in `roleKeyDiagnostics`,
+    // not in the notice renderer, and was the one path header escaping missed.
     const [notice, ...rest] = roleKeyWarnings(branches('odd\nname').canonicalCollision)
     expect(rest).toEqual([])
     expect(notice).toBe(
-      'autobuild.toml: [roles."odd\\nname"] should be [roles.visual] — it routes that agent ' +
-        'verify step through the deprecated skill-name key. Keep [roles."odd\\nname"]: it is ' +
-        'also agent verify step "odd\\nname".',
+      'autobuild.toml: [roles."odd\\u000Aname"] should be [roles.visual] — it routes that ' +
+        'agent verify step through the deprecated skill-name key. Keep ' +
+        '[roles."odd\\u000Aname"]: it is also agent verify step "odd\\u000Aname".',
     )
   })
 
   test('a quote in a step name cannot break out of its prose phrase', () => {
     const [notice] = roleKeyWarnings(branches('quote"d').canonicalCollision)
     expect(notice).toContain('agent verify step "quote\\"d"')
-    // The escaped phrase round-trips back to the real name.
-    expect(JSON.parse(notice!.slice(notice!.lastIndexOf('step ') + 5, -1))).toBe('quote"d')
+    // A name in prose renders exactly as a quoted header does, so it round-trips
+    // through the real parser rather than through JSON's escape rules.
+    const inProse = notice!.match(/agent verify step ("(?:[^"\\]|\\.)*")/)![1]!
+    expect(declaredBy(`[roles.${inProse}]`)).toEqual(['quote"d'])
   })
-
-  test('ordinary names are untouched — escaping is need-only', () => {
-    const [notice] = roleKeyWarnings(
-      withVerify(E2E_STEP, '[roles.ab-verify-e2e]\nruntime = "claude"\n'),
-    )
-    expect(notice).toContain('agent verify step "e2e"')
-    expect(notice).not.toContain('\\')
-  })
-})
-
-describe('roleKeyWarnings — every emitted key is TOML the operator can paste', () => {
-  /** Every `[roles.<key>]` a notice tells the operator to write. */
-  function emittedTables(lines: readonly string[]): string[] {
-    return lines.flatMap((line) =>
-      [...line.matchAll(/\[roles\.(?:"(?:[^"\\]|\\.)*"|[^\]]*)\]/g)].map((m) => m[0]),
-    )
-  }
-
-  // Role and step names are arbitrary nonempty strings. A bare interpolation is
-  // wrong two different ways: `[roles.ab verify]` is a syntax error, and
-  // `[roles.ui.visual]` is not the key at all — TOML reads the dot as nesting
-  // and rejects `visual` as an unknown field under `roles.ui`.
-  const AWKWARD = ['ui.visual', 'ab verify', 'e2e#1', 'smoke:fast', 'quote"d']
-
-  for (const name of AWKWARD) {
-    test(`a step named ${JSON.stringify(name)} yields a replacement that PARSES`, () => {
-      const parsed = withVerify(
-        `[verify]
-steps = [${JSON.stringify(name)}]
-
-[verify.${JSON.stringify(name)}]
-kind = "agent"
-skill = "legacy-skill"
-`,
-        '[roles.legacy-skill]\nruntime = "claude"\n',
-      )
-      const tables = emittedTables(roleKeyWarnings(parsed))
-      expect(tables).toContain('[roles.legacy-skill]')
-
-      // Apply each emitted header verbatim. A header that is not valid TOML
-      // throws; one that silently NESTS (`[roles.ui.visual]`) declares the
-      // wrong key or is rejected as an unknown field. Both are what an operator
-      // following the advice would hit.
-      const declaredBy = (table: string): string[] => {
-        const applied = parseConfig(`${TICKETS}\n${DEFAULT_ROLE}${table}\nruntime = "claude"\n`)
-        return Object.keys(applied.roles).filter((key) => key !== 'default')
-      }
-      for (const table of tables) expect(declaredBy(table)).toHaveLength(1)
-
-      // …and the replacement it names really is the step's own literal key.
-      const replacement = tables.find((table) => table !== '[roles.legacy-skill]')
-      expect(replacement).toBeDefined()
-      expect(declaredBy(replacement!)).toEqual([name])
-    })
-
-    test(`an unconsumed [roles] key named ${JSON.stringify(name)} is reported quotably`, () => {
-      const parsed = config(`${DEFAULT_ROLE}[roles.${JSON.stringify(name)}]\nruntime = "claude"\n`)
-      const [stray, validList] = roleKeyWarnings(parsed)
-      for (const table of emittedTables([stray!])) {
-        expect(() =>
-          parseConfig(`${TICKETS}\n${DEFAULT_ROLE}${table}\nruntime = "claude"\n`),
-        ).not.toThrow()
-      }
-      // The valid-key list is what the operator types next, so it carries the
-      // same quoting rather than a bare name that would not parse.
-      expect(validList).toContain('Valid role keys:')
-    })
-  }
 
   test('a valid key needing quotes is listed quoted, and ordinary keys are untouched', () => {
     const parsed = withVerify(
@@ -405,6 +441,14 @@ skill = "ab-verify-ui"
     // Bare-key names stay bare — no churn for an ordinary configuration.
     expect(validList).toContain('code-review')
     expect(validList).not.toContain('"code-review"')
+  })
+
+  test('ordinary names are untouched — escaping is need-only', () => {
+    const [notice] = roleKeyWarnings(
+      withVerify(E2E_STEP, '[roles.ab-verify-e2e]\nruntime = "claude"\n'),
+    )
+    expect(notice).toContain('agent verify step "e2e"')
+    expect(notice).not.toContain('\\')
   })
 })
 

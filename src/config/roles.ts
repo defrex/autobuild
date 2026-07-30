@@ -107,10 +107,10 @@ function agentSteps(
 //
 // Role names, verify step names, and finalize step names are ARBITRARY nonempty
 // strings. Every one of them reaches an operator's terminal, so every one is
-// rendered through the two helpers below and never hand-quoted or interpolated
-// bare. Two failures follow from getting this wrong, and both have happened:
-// `[roles.ui.visual]` is not the key it looks like (TOML reads the dot as
-// nesting), and a name containing a newline splits ONE notice into two physical
+// rendered through `displayName`/`tomlKey` below and never hand-quoted or
+// interpolated bare. Two failures follow from getting this wrong, and both have
+// happened: `[roles.ui.visual]` is not the key it looks like (TOML reads the dot
+// as nesting), and a name carrying a newline splits ONE notice into two physical
 // stderr lines, breaking the one-notice-per-line contract every surface
 // downstream assumes.
 
@@ -118,21 +118,50 @@ function agentSteps(
 const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/
 
 /**
- * A name AS THE OPERATOR MUST TYPE IT in a table header. Quoting only when
- * needed keeps every ordinary notice byte-identical; `JSON.stringify` emits
- * exactly the escapes a TOML basic string accepts (`\"`, `\\`, `\n`, `\uXXXX`).
+ * The body of a TOML basic string, escaped on an ALLOWLIST: a character is
+ * emitted raw only when it is printable ASCII a basic string accepts unescaped.
+ * Everything else — every C0 control, U+007F, and every non-ASCII code point —
+ * becomes TOML's own `\uXXXX`, or `\UXXXXXXXX` above the BMP.
+ *
+ * The allowlist is the whole design. `JSON.stringify` was the escaper here for
+ * three rounds and is a DENYLIST: it escapes C0 controls, then passes U+007F
+ * through raw, then passes every other non-ASCII code point through raw. Each
+ * gap was found and patched one code point at a time, which is not a process
+ * that terminates. Nothing outside the allowlist can reach a terminal now,
+ * whatever it is, and there is no per-character rule left to get wrong.
+ *
+ * Iterating with `for…of` walks code points, so an astral character is escaped
+ * once as `\U0001F600` rather than as two lone surrogates — which TOML rejects
+ * outright and which therefore would not round-trip.
  */
-function tomlKey(name: string): string {
-  return TOML_BARE_KEY.test(name) ? name : JSON.stringify(name)
+function escapeBasic(name: string): string {
+  let out = ''
+  for (const char of name) {
+    const code = char.codePointAt(0)!
+    if (char === '"' || char === '\\') out += `\\${char}`
+    else if (code >= 0x20 && code <= 0x7e) out += char
+    else if (code > 0xffff) out += `\\U${code.toString(16).toUpperCase().padStart(8, '0')}`
+    else out += `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
+  }
+  return out
+}
+
+/** A name IN PROSE — always quoted, always escaped. The one place a name is
+ * wrapped in quotes, so a quote cannot break out of the phrase and nothing
+ * unprintable can reach a line-oriented sink raw. */
+function displayName(name: string): string {
+  return `"${escapeBasic(name)}"`
 }
 
 /**
- * A name IN PROSE — always quoted, always escaped. `JSON.stringify` is the
- * escaper for the awkward cases so a quote cannot break out of the phrase and
- * no control character can reach a line-oriented sink raw.
+ * A name AS THE OPERATOR MUST TYPE IT in a table header: bare when TOML's
+ * bare-key grammar accepts it — which keeps every ordinary notice
+ * byte-identical — and otherwise the quoted prose form, unchanged. The two
+ * renderings differ in exactly that one condition and share the escaper, so
+ * they cannot drift into disagreeing about what is safe.
  */
-function displayName(name: string): string {
-  return TOML_BARE_KEY.test(name) ? `"${name}"` : JSON.stringify(name)
+function tomlKey(name: string): string {
+  return TOML_BARE_KEY.test(name) ? name : displayName(name)
 }
 
 /** The table header to write, quoted when the name needs it. */
