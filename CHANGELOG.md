@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#130](https://github.com/defrex/autobuild/pull/130) — Raise the default review-round limit from four to six
 - [#129](https://github.com/defrex/autobuild/pull/129) — Make dashboard pause and resume controls explicit
 - [#128](https://github.com/defrex/autobuild/pull/128) — Make vendored skills self-contained
 - [#127](https://github.com/defrex/autobuild/pull/127) — Add complete dashboard abort cleanup
