@@ -1,19 +1,29 @@
 /**
- * Review-skill prose guards: what a reviewer is told to put in `persists`.
+ * Review-skill prose guards: the two rules that decide how a review round
+ * ends — what a reviewer puts in `persists`, and which severity a finding
+ * gets.
  *
- * `persists` chains are the only input to the kernel's stall guard, so the
- * rule that decides whether a chain continues is load-bearing prose. It must
- * say the same thing in `plan-review` and `code-review` — the plan loop and
- * the code loop are the same loop as far as `stallRounds` is concerned — and
- * it must sit in each skill's `## Writing findings` section, where a reviewer
- * choosing `persists` is already reading. Both properties are asserted here
- * rather than trusted, because prose cannot be type-checked.
+ * Both are load-bearing and neither is enforceable in code. `persists` chains
+ * are the only input to the kernel's stall guard, so the rule that decides
+ * whether a chain continues decides when a build escalates. Severity has no
+ * mechanical effect anywhere in `src/` — `blocking` and `important` alike
+ * cost the producer a revision round purely by skill convention — so the only
+ * thing keeping an immaterial true defect from spending a round is the
+ * calibration text itself. Delete either rule and every test still passes
+ * unless it is anchored here.
  *
- * The anchors are whole sentences of the shared rule, asserted one at a time,
- * so a failure names the sentence that was dropped instead of reporting that
- * a paragraph "changed". They are normalized for whitespace: every skill file
- * wraps at ~76 columns, and an anchor carrying a hard newline would break on
- * the next reflow rather than on a real regression.
+ * Each rule must say the same thing in `plan-review` and `code-review` — the
+ * plan loop and the code loop are the same loop as far as `stallRounds` and
+ * severity are concerned — and each must sit in the `## Writing findings`
+ * section, where a reviewer choosing a `persists` id or a level is already
+ * reading. Both properties are asserted rather than trusted, because prose
+ * cannot be type-checked.
+ *
+ * The anchors are whole sentences of the shared rules, asserted one at a
+ * time, so a failure names the sentence that was dropped instead of reporting
+ * that a paragraph "changed". They are normalized for whitespace: every skill
+ * file wraps at ~76 columns, and an anchor carrying a hard newline would break
+ * on the next reflow rather than on a real regression.
  */
 import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
@@ -116,6 +126,83 @@ describe('review skills — persistence marking', () => {
       'so mark honestly: neither re-litigate resolved findings',
     )
     expect(normalize(findingsSection(codeReview) ?? '')).not.toContain('Mark persistence honestly:')
+  })
+})
+
+/**
+ * The shared severity calibration, sentence by sentence: what severity
+ * measures, the three levels defined against something nameable, the
+ * disposition for a true-but-immaterial defect, and the two limits on
+ * inventing a bar the spec did not set. The level bullets carry their `- `
+ * prefix because `normalize()` collapses a markdown list into inline text.
+ *
+ * Byte-identical text in both review skills is what makes "the plan loop and
+ * the code loop stay symmetric" a mechanical property instead of a judgment.
+ *
+ * Four phrases here are shared literally with `ab-guide`'s account of the
+ * same rule; `guide-skill.test.ts` asserts those against the guide, so an
+ * edit to either side fails the other side's test.
+ */
+const CALIBRATION_SENTENCES = [
+  'Severity measures proportion, not certainty.',
+  "Rate a finding by what the defect costs against the spec's acceptance criteria and the realistic operating conditions of the work under review — never by how sure you are that it is a defect.",
+  'Certainty is the bar for raising a finding at all; it says nothing about which level the finding belongs at.',
+  '- `blocking` — name the acceptance criterion the defect defeats. Approving would deliver work the spec does not accept.',
+  '- `important` — name the acceptance criterion or stated invariant the defect puts at material risk under realistic conditions, short of defeating it outright.',
+  '- `minor` — real and in scope, but nothing above turns on it.',
+  '`blocking` and `important` both cost the producer a revision round, so if you cannot name that criterion or invariant, the finding does not belong at either level.',
+  'A true defect that puts no acceptance criterion at risk, breaks no stated invariant, and is unreachable under realistic input is `ab observe`, not a finding — the same disposition an out-of-scope discovery gets.',
+  'Do not raise a bar the spec set: where the spec bounds a failure model or an operating condition, conformance is measured against that bound, and a stricter model you would have chosen is not a defect.',
+  "Hostile or pathological input that the surface's contract does not promise to handle is `minor` or an observation, unless a security boundary, an acceptance criterion, or a stated invariant makes it material.",
+] as const
+
+/**
+ * Valid because the block is contiguous: every gap between its parts — a
+ * paragraph break, a list break, a wrap — normalizes to exactly one space.
+ */
+const CALIBRATION = CALIBRATION_SENTENCES.join(' ')
+
+/**
+ * The counterpart on the approve side. Without it, a reviewer who correctly
+ * files an immaterial defect as an observation could still read the approve
+ * instruction as barring approval while a known defect stands.
+ */
+const APPROVE_SENTENCE =
+  'Known immaterial defects are not a reason to withhold approval — record them with `ab observe` and approve.'
+
+describe('review skills — severity calibration', () => {
+  test.each(reviewSkills)('%s calibrates severity in its findings section', (_label, text) => {
+    const section = findingsSection(text)
+    expect(section).toBeDefined()
+    const compact = normalize(section ?? '')
+    for (const sentence of CALIBRATION_SENTENCES) {
+      expect(compact).toContain(sentence)
+    }
+  })
+
+  test('plan-review and code-review carry the calibration as one identical block', () => {
+    // A per-sentence failure above means a sentence was dropped; a failure
+    // here with those passing means the two skills' text diverged. Diff the
+    // `## Writing findings` sections rather than loosening the anchor.
+    for (const [, text] of reviewSkills) {
+      expect(normalize(findingsSection(text) ?? '')).toContain(CALIBRATION)
+    }
+  })
+
+  test.each(reviewSkills)(
+    '%s says an observation-carrying result is approvable',
+    (_label, text) => {
+      expect(normalize(findingsSection(text) ?? '')).toContain(APPROVE_SENTENCE)
+    },
+  )
+
+  test('the superseded severity gloss is gone, not left beside the calibration', () => {
+    // The old bullet defined the levels by consequence to approval, which is
+    // exactly the non-proportional rule the calibration replaces. Leaving it
+    // in place would hand a reviewer two rules to choose between.
+    expect(normalize(findingsSection(planReview) ?? '')).not.toContain(
+      "(should fix, wouldn't sink the build)",
+    )
   })
 })
 
