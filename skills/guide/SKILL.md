@@ -772,7 +772,7 @@ Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
 contextual: every row offers navigation and quit; global offers `h harvest`,
-`m auto-merge`, and `i intake`; `Harvest` offers `p resume` for ordinary
+`m auto-merge`, `i intake`, `p pause all`, and `r resume all`; `Harvest` offers `p resume` for ordinary
 failure or `p acknowledge` for exhaustion/escalation only when that action is
 available; runner-attached builds offer `m auto-merge` plus the state-specific
 `p pause`, `p cancel pause`, or `r resume` action, while queued builds offer
@@ -787,6 +787,20 @@ cancel a pending resume. Blocked takes visual precedence, including when the
 build is also operator-paused, and `r` opens the existing feedback field. Keys
 that are not offered for the current build state are no-ops and append no
 control event.
+
+Global-row `p` is the repository-wide version: it appends
+`build.pause-requested` to every `RUNNING` build and durably turns intake off,
+so the repository comes to rest before a machine, terminal, or dispatcher
+restart. It skips `PAUSING` — the bulk control never cancels a pending pause,
+unlike build-row `p` — and skips `QUEUED`, `PAUSED`, `RESUMING`, and `BLOCKED`
+without error. Global-row `r` reverses it: `build.resume-requested` on every
+`PAUSED` build, including builds paused by hand beforehand, and intake back on.
+It does not touch `BLOCKED` builds, whose blockers still need the per-build `r`
+feedback field. Both report the affected build count and the new intake value on
+the notice row. Two carve-outs: the harvest gate is independent, so a harvest
+session can still start after a bulk pause (`h` stops it), and a `QUEUED` build
+can still be launched by the lease sweep regardless of intake. This is
+quiescence, not a global stop.
 
 `--intake` and `--no-intake` are mutually exclusive durable repository setters.
 Omitting both reuses stored state, falling back to ON only when no intake fact
@@ -848,6 +862,8 @@ to the build's event log and apply the same write-time checks.
 | Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
 | Pause | `ab pause <slug> [--store <ref>]` | Select a `RUNNING` build and press `p`; press `p` again while `PAUSING` to cancel the pending pause. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
 | Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
+| Pause all | — | Select the global row and press `p`. | One `build.pause-requested` per `RUNNING` build, plus `dispatcher.intake-set` |
+| Resume all | — | Select the global row and press `r`. | One `build.resume-requested` per `PAUSED` build, plus `dispatcher.intake-set` |
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
@@ -909,7 +925,9 @@ escalation set and never invents guidance.
 Durable repository intake and the claim-time auto-merge default have launch-flag
 setters and global-row toggles but no standalone sessionless control commands.
 Abort is available through both its CLI command and the confirmed build-row/detail
-`a` key. Global-row `h` owns the durable harvest gate, and global-row `p` is a no-op. On the optional repository-scoped
+`a` key. Global-row `h` owns the durable harvest gate, and global-row `p`/`r`
+own the repository-wide pause-all and resume-all described above; there is no
+`ab pause --all` CLI equivalent. On the optional repository-scoped
 `Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
 and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
 rows, `i` and `h` are also no-ops.

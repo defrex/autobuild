@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#134](https://github.com/defrex/autobuild/pull/134) — Replace the one-line resume field with a multi-line composer panel
+- [#133](https://github.com/defrex/autobuild/pull/133) — Add pause-all and resume-all to the dispatch dashboard top row
 - [#132](https://github.com/defrex/autobuild/pull/132) — Spell Autobuild as one word everywhere the repository controls
 - [#131](https://github.com/defrex/autobuild/pull/131) — Show the Enter affordance in the list-view build legend
 
