@@ -38,6 +38,9 @@ import {
   workspaceSchema,
 } from '../config/schema'
 import { readDistSkills } from './init'
+import { parseConfig } from '../config/load'
+import { createProductionRuntimes } from '../ports/runner/production'
+import { createRuntimeResolver } from '../ports/runner/routing'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 const GUIDE_PATH = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
@@ -145,6 +148,32 @@ describe('ab-guide — autobuild.toml coverage (AC6)', () => {
     expect(section).toBeDefined()
     for (const field of Object.keys(imageHostSchema.shape)) {
       expect(section).toMatch(new RegExp(`^\\| \`${escapeRegex(field)}\` \\|`, 'm'))
+    }
+  })
+})
+
+describe('ab-guide — worked config examples actually work', () => {
+  test('every [roles] example names a runtime/model pair the SHIPPED runtimes serve', () => {
+    // The guide has no fence-classification test, so a worked example here can
+    // drift into a shape that parses and then fails eager resolution for anyone
+    // who copies it. Runtime/model compatibility lives a layer past
+    // `parseConfig`, in the registry-aware resolver, so this checks both.
+    const fences = [...guide.matchAll(/```toml\n([\s\S]*?)\n```/g)]
+      .map((match) => match[1]!)
+      .filter((source) => source.includes('[roles.'))
+    expect(fences.length).toBeGreaterThan(1)
+    const registry = createProductionRuntimes().runtimes
+    for (const source of fences) {
+      const roles = parseConfig(
+        `${source}\n\n[tickets]\nsource = "file"\nreadyState = "ready"\n`,
+        'skills/guide/SKILL.md',
+      ).roles
+      expect(Object.keys(roles).length).toBeGreaterThan(0)
+      // A fragment need not carry [roles.default]; supply the product default
+      // so the per-field merge has a base, exactly as a real file would.
+      expect(() =>
+        createRuntimeResolver(registry, { default: { runtime: 'claude' }, ...roles }),
+      ).not.toThrow()
     }
   })
 })

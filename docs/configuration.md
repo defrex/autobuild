@@ -347,7 +347,7 @@ skill = "ab-verify-e2e"
 
 [roles.e2e]        # the STEP name — not "ab-verify-e2e"
 runtime = "pi"
-model = "gpt-5.6-sol"
+model = "openai-codex/gpt-5.6-sol"
 ```
 
 The step's configured skill name remains a deprecated alias for existing
