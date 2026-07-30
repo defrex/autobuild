@@ -153,7 +153,13 @@ export function createRuntimeResolver(
 
   const resolvedDefault = resolveSpec(defaultSpec, {}, registry, '[roles.default]', problems)
 
-  const resolvedRoles: Record<string, ResolvedRuntime> = {}
+  // NULL-PROTOTYPE, and load-bearing: role keys are user-chosen names from an
+  // open map, and `resolve` treats "the cache has this key" as "the config
+  // declares this role". On a normal `{}`, `resolvedRoles['constructor']` (or
+  // `toString`, `valueOf`, …) hits `Object.prototype` and answers a FUNCTION —
+  // an undeclared role would resolve to it, shadow a declared alias, and hand
+  // `executeSession` an object with no runner or runtime.
+  const resolvedRoles: Record<string, ResolvedRuntime> = Object.create(null)
   for (const [role, spec] of Object.entries(roles)) {
     // Reserved inheritance base, never a dispatched phase-role cache entry.
     if (role === 'default') continue
@@ -172,6 +178,8 @@ export function createRuntimeResolver(
         // without it — but it is deliberately never cached as a phase role, so
         // match it here or a later alias would outrank it.
         if (key === 'default') return fallback
+        // Sound as a declaration test only because the cache has a null
+        // prototype — see its construction above.
         const resolved = resolvedRoles[key]
         if (resolved !== undefined) return resolved
       }

@@ -251,6 +251,55 @@ describe('createRuntimeResolver — deprecated alias candidates', () => {
     expect(r.resolve('a', 'default', 'b')).toMatchObject({ runtime: 'pi', model: 'kimi-k3' })
   })
 
+  // Verify step names are an open set, so `constructor`, `toString`, and
+  // friends are legal step names — and a cache with a normal prototype answers
+  // them with an inherited FUNCTION, which reads as "declared".
+  describe('a prototype-colliding key is only ever declared on purpose', () => {
+    for (const colliding of ['constructor', 'toString', 'valueOf', '__proto__']) {
+      test(`an undeclared "${colliding}" primary still consults the declared alias`, () => {
+        const r = resolver({
+          default: { runtime: 'claude' },
+          [`ab-verify-${colliding}`]: { runtime: 'pi', model: 'kimi-k3' },
+        })
+        expect(r.resolve(colliding, `ab-verify-${colliding}`)).toMatchObject({
+          runner: pi,
+          runtime: 'pi',
+          model: 'kimi-k3',
+        })
+      })
+
+      test(`an undeclared "${colliding}" with no alias falls back to the default`, () => {
+        const r = resolver({ default: { runtime: 'pi', model: 'kimi-k3' } })
+        expect(r.resolve(colliding)).toMatchObject({ runner: pi, runtime: 'pi' })
+      })
+    }
+
+    test('…and a DECLARED prototype-colliding key still wins over its alias', () => {
+      const r = resolver({
+        default: { runtime: 'claude' },
+        constructor: { runtime: 'pi', model: 'kimi-k3' },
+        'ab-verify-constructor': { runtime: 'gemini', model: 'gpt-5.6-sol' },
+      })
+      expect(r.resolve('constructor', 'ab-verify-constructor')).toMatchObject({
+        runtime: 'pi',
+        model: 'kimi-k3',
+      })
+    })
+
+    test('every resolution is a runtime, never an inherited function', () => {
+      const r = resolver({ default: { runtime: 'claude' } })
+      for (const key of ['constructor', 'toString', 'hasOwnProperty', 'isPrototypeOf']) {
+        const resolved = r.resolve(key)
+        // The failure this guards: destructuring `Object.prototype.constructor`
+        // in executeSession yields undefined runner/runtime and kills the
+        // session instead of routing it.
+        expect(typeof resolved).toBe('object')
+        expect(resolved.runner).toBeDefined()
+        expect(resolved.runtime).toBe('claude')
+      }
+    })
+  })
+
   test('the eager error is untouched: a role nothing requests is still validated', () => {
     // The new warning path reports declared-but-unrequested keys; it must never
     // soften the eager runtime/model failure that already covers them.

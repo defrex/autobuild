@@ -89,8 +89,15 @@ function agentSteps(
   for (const step of steps) {
     if (seen.has(step)) continue
     seen.add(step)
-    const table = stepConfigs[step]
-    if (table === undefined || table.kind !== 'agent') continue
+    // OWN property, for the same reason `declared` below is spelled out: step
+    // names are user-chosen from an open set, so `constructor` and `toString`
+    // are legal, and a bare read would answer an inherited function for a
+    // listed-but-tableless step. Cross-validation rejects that config before it
+    // can reach here, so this is redundant in practice — it keeps the read
+    // sound on its own rather than on a guarantee made in another file.
+    if (!Object.hasOwn(stepConfigs, step)) continue
+    const table = stepConfigs[step]!
+    if (table.kind !== 'agent') continue
     agents.push({ step, skill: table.skill })
   }
   return agents

@@ -222,6 +222,59 @@ skill = "e2e"
   })
 })
 
+describe('roleKeyDiagnostics — prototype-colliding step names', () => {
+  // Step names are an open set, so `constructor` and friends are legal. Reading
+  // the step table off a normal object answers an inherited FUNCTION, which
+  // fails the `kind` test and silently drops the step from the consumable set.
+  // The diagnostic would then contradict the role the resolver really routes it
+  // on — the pairing this whole change exists to keep honest.
+  for (const step of ['constructor', 'toString', 'valueOf']) {
+    const STEP_TOML = `[verify]
+steps = ["${step}"]
+
+[verify.${step}]
+kind = "agent"
+skill = "ab-verify-thing"
+`
+
+    test(`an agent verify step named "${step}" is consumable, not unconsumed`, () => {
+      const parsed = withVerify(STEP_TOML, `[roles."${step}"]\nruntime = "claude"\n`)
+      const d = roleKeyDiagnostics(parsed)
+      expect(d.unconsumed).toEqual([])
+      expect(d.valid).toContain(step)
+      expect(roleKeyWarnings(parsed)).toEqual([])
+    })
+
+    test(`…and its deprecated skill-name key is reported against "${step}"`, () => {
+      const parsed = withVerify(STEP_TOML, '[roles.ab-verify-thing]\nruntime = "claude"\n')
+      expect(roleKeyDiagnostics(parsed).deprecated).toEqual([
+        { key: 'ab-verify-thing', activeAlias: [step], supersededAlias: [] },
+      ])
+      expect(roleKeyWarnings(parsed)[0]).toContain(
+        `[roles.ab-verify-thing] should be [roles.${step}]`,
+      )
+    })
+  }
+
+  test('a check step named `constructor` is still not consumable', () => {
+    // The own-property fix must not accidentally make every named table count:
+    // a check starts no session whatever it is called.
+    const parsed = withVerify(
+      `[verify]
+steps = ["constructor"]
+
+[verify.constructor]
+kind = "check"
+command = "check"
+`,
+      '[roles.constructor]\nruntime = "claude"\n',
+    )
+    const d = roleKeyDiagnostics(parsed)
+    expect(d.unconsumed).toEqual(['constructor'])
+    expect(d.valid).not.toContain('constructor')
+  })
+})
+
 describe('roleKeyDiagnostics — the reserved key', () => {
   const RESERVED_SKILL = `[verify]
 steps = ["e2e"]
