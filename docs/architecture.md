@@ -78,7 +78,12 @@ consults a snapshot in place of the append-only log.
 `src/kernel/engine.ts` the deterministic transitions;
 `src/processes/build-runner.ts` executes the decisions. Agents reach state
 only through `src/cli/` terminals, which convert artifact deposits into
-event facts atomically — the engine never reads blobs.
+event facts atomically — the engine never reads blobs. Engine crash-gap and
+exhaustion guards query the event log for a later escalation raise with the
+exact same source/class and target phase; the triggering sequence remains the
+re-arm boundary. `BuildRunner` applies the same independent targeting at the
+setup seam, where only a setup-targeted policy raise can satisfy setup
+exhaustion.
 
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
