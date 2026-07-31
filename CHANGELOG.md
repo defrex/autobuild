@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#174](https://github.com/defrex/autobuild/pull/174) — Trigger observation harvest on repository drift
+- [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
+- [#171](https://github.com/defrex/autobuild/pull/171) — Clamp dashboard detail scrolling to resume panels
 - [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views
 - [#168](https://github.com/defrex/autobuild/pull/168) — Block harvest proposals on unresolved origin tickets
 - [#167](https://github.com/defrex/autobuild/pull/167) — Keep terminal dashboard status dominant

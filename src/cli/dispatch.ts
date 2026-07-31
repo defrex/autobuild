@@ -505,7 +505,9 @@ class DispatchLoop {
     })
   }
 
-  /** Overlay only process-local presentation controls onto the projection. */
+  /** Overlay process-local presentation controls and normalize the exact model
+   * the renderer will receive. Detail bounds depend on modal control height, so
+   * composition must precede clamping rather than measuring the durable base. */
   private syncModelControls(): void {
     if (this.model === undefined) return
     const {
@@ -523,7 +525,7 @@ class DispatchLoop {
       ...this.configWarnings,
       ...(this.warningLine !== undefined ? [this.warningLine] : []),
     ]
-    this.model = {
+    let effective: DashboardModel = {
       ...base,
       ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
@@ -541,6 +543,29 @@ class DispatchLoop {
         : {}),
       ...(this.view !== undefined ? { view: this.view } : {}),
     }
+    if (this.view?.kind === 'detail') {
+      const terminal = this.opts.terminal
+      const normalized = {
+        ...this.view,
+        scroll:
+          terminal === undefined
+            ? 0
+            : Math.max(
+                0,
+                Math.min(
+                  this.view.scroll,
+                  detailScrollLimit(
+                    effective,
+                    dashboardContentWidth(terminal.columns),
+                    paintableRows(terminal.rows),
+                  ),
+                ),
+              ),
+      }
+      this.view = normalized
+      effective = { ...effective, view: normalized }
+    }
+    this.model = effective
   }
 
   private moveSelection(delta: number): void {
@@ -1721,8 +1746,7 @@ class DispatchLoop {
           sessionId: _priorSession,
           ...stableDetail
         } = detail
-        const terminal = this.opts.terminal
-        const unclamped = {
+        this.view = {
           ...stableDetail,
           ...(selected !== undefined ? { sessionId: selected } : {}),
           ...(messageStillValid && priorMessage !== undefined
@@ -1733,21 +1757,6 @@ class DispatchLoop {
                   : {}),
               }
             : {}),
-        }
-        const projectedWithView = { ...projected, view: unclamped }
-        this.view = {
-          ...unclamped,
-          scroll:
-            terminal === undefined
-              ? 0
-              : Math.min(
-                  unclamped.scroll,
-                  detailScrollLimit(
-                    projectedWithView,
-                    dashboardContentWidth(terminal.columns),
-                    paintableRows(terminal.rows),
-                  ),
-                ),
         }
       }
     }
