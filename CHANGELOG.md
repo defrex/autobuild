@@ -3,6 +3,22 @@
 ## Unreleased
 
 - [#150](https://github.com/defrex/autobuild/pull/150) — Document human guidance delivery to receiving phases
+- [#149](https://github.com/defrex/autobuild/pull/149) — Generate the README headline from dashboard capture
+- [#148](https://github.com/defrex/autobuild/pull/148) — Negotiate Kitty keyboard input for the dashboard
+- [#147](https://github.com/defrex/autobuild/pull/147) — Route read-only build queries through the store seam
+- [#146](https://github.com/defrex/autobuild/pull/146) — Give plan reviewers a concrete finding bar
+- [#145](https://github.com/defrex/autobuild/pull/145) — Stop the open-map entry boundary from narrowing what validation said
+- [#144](https://github.com/defrex/autobuild/pull/144) — Preserve every adapter name a plugin manifest declares
+- [#143](https://github.com/defrex/autobuild/pull/143) — Hold queued builds while the repository is paused
+- [#142](https://github.com/defrex/autobuild/pull/142) — Delete the orphaned headline asset and check for new ones
+- [#141](https://github.com/defrex/autobuild/pull/141) — Preserve every declared key in the plugin workspace config table
+- [#140](https://github.com/defrex/autobuild/pull/140) — Re-sync this repo's vendored ab-guide and guard it against drift
+- [#139](https://github.com/defrex/autobuild/pull/139) — Quiesce and restart a repository from a sessionless command
+- [#138](https://github.com/defrex/autobuild/pull/138) — Hold the harvest reviewer to the persistence rule
+- Add `[tickets].proposalState`, the state observation harvest files proposals into — the triage state by default, and the one supported way to waive the human grooming gate
+- [#137](https://github.com/defrex/autobuild/pull/137) — Calibrate review severity against the spec, not against certainty
+- [#136](https://github.com/defrex/autobuild/pull/136) — Narrow `persists` marking to a surviving disagreement
+- [#135](https://github.com/defrex/autobuild/pull/135) — Route agent verify steps by step name, warn on unconsumed role keys
 - [#134](https://github.com/defrex/autobuild/pull/134) — Replace the one-line resume field with a multi-line composer panel
 - [#133](https://github.com/defrex/autobuild/pull/133) — Add pause-all and resume-all to the dispatch dashboard top row
 - [#132](https://github.com/defrex/autobuild/pull/132) — Spell Autobuild as one word everywhere the repository controls

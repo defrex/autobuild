@@ -6,12 +6,72 @@
  *
  * Strictness policy (§16.1): unknown top-level keys/tables and unknown keys
  * inside known tables are ERRORS — a typo must not silently disable a
- * verifier. Open maps ([commands], [roles], and the named [verify.<step>] and
- * [finalize.<step>] table sets) are exempt by construction: their keys are
- * user-chosen names, while every value remains strictly validated.
+ * verifier. Open maps ([commands], [roles], [workspace.config], and the named
+ * [verify.<step>] and [finalize.<step>] table sets) are exempt by construction:
+ * their keys are user-chosen names, while every value remains strictly
+ * validated.
  */
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
+import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
+import { forwardIssues } from '../zod-issues'
+
+// ── Open maps ────────────────────────────────────────────────────────────────
+
+//
+// Every open map below is parsed through `../open-map`, which keeps a
+// user-chosen key intact instead of losing it to the prototype chain: the
+// perfectly valid TOML table `[roles."__proto__"]` would otherwise vanish while
+// parsing SUCCEEDS — never eagerly resolved, never dispatchable, and invisible
+// to the unconsumed-key warning that exists to catch exactly this class of dead
+// configuration (§9). A silent drop is the one outcome the strictness policy
+// above rules out.
+//
+// The TOML parser already hands us null-prototype tables with the key intact,
+// and `openMap` keeps it that way end to end.
+//
+// `[workspace.config]` is the one open map here whose keys are PLUGIN-owned
+// rather than Autobuild-owned, which makes faithful pass-through more important
+// rather than less. Autobuild cannot validate a key it does not interpret, so a
+// dropped one is undetectable downstream: the plugin sees an absent key and
+// cannot tell an operator who omitted it from one who declared it, then reports
+// its own error against a table that plainly contains it.
+
+/**
+ * A section mixing ONE known key (`steps`) with an open set of named step
+ * tables — the same preservation contract as `openMap`.
+ *
+ * Without it a valid `[verify."__proto__"]` table vanished before
+ * cross-validation, which then reported "is listed in verify.steps but has no
+ * [verify.__proto__] table" about a table sitting right there in the file. Loud
+ * rather than silent, but a diagnostic that contradicts the source is its own
+ * defect: §16.1 errors are feedback to whoever edits the file.
+ */
+function stepSection<T, C>(
+  label: string,
+  stepsSchema: z.ZodType<string[]>,
+  tableSchema: z.ZodType<T>,
+  compose: (steps: string[], stepConfigs: Record<string, T>) => C,
+) {
+  return z
+    .unknown()
+    .transform((input, ctx): C => {
+      const stepConfigs: Record<string, T> = Object.create(null)
+      let steps: string[] = []
+      for (const [key, raw] of ownEntries(input, label, ctx)) {
+        if (key === 'steps') {
+          const parsed = stepsSchema.safeParse(raw)
+          if (parsed.success) steps = parsed.data
+          else forwardIssues(parsed.error.issues, ctx, ['steps'])
+          continue
+        }
+        const table = parseEntry(tableSchema, raw, key, ctx)
+        if (table.ok) defineEntry(stepConfigs, key, table.value)
+      }
+      return compose(steps, stepConfigs)
+    })
+    .prefault({})
+}
 
 // ── [pr] / [pr.imageHost] ────────────────────────────────────────────────────
 
@@ -28,7 +88,9 @@ export type PrConfig = z.infer<typeof prSchema>
 // ── [workspace] ─────────────────────────────────────────────────────────────
 
 /** Workspace selector. The host validates the selector envelope; the nested
- * config belongs to the selected plugin factory and is intentionally open. */
+ * config belongs to the selected plugin factory and is intentionally open. The
+ * pass-through is faithful: every declared key reaches the factory verbatim,
+ * including one named for an inherited object property such as `__proto__`. */
 export const workspaceSchema = z.strictObject({
   provider: z
     .string()
@@ -37,7 +99,7 @@ export const workspaceSchema = z.strictObject({
       '[workspace].provider must be a nonblank provider name',
     )
     .default('git-worktree'),
-  config: z.record(z.string(), z.unknown()).default({}),
+  config: openMap('[workspace.config]', z.unknown(), { keys: 'any' }),
 })
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 
@@ -46,7 +108,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 // Open map of deterministic verbs the kernel may run. `setup`, `lint`,
 // `typecheck`, `test` are conventions, not required keys (§16.1).
 
-export const commandsSchema = z.record(z.string().min(1), z.string().min(1))
+export const commandsSchema = openMap('[commands]', z.string().min(1))
 export type Commands = z.infer<typeof commandsSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
@@ -136,30 +198,15 @@ export interface VerifyConfig {
 /**
  * [verify] mixes one known key (`steps`) with an open set of per-step
  * subtables, so it cannot be a strictObject; instead every non-`steps` key is
- * validated as a step table — nothing passes through loosely.
+ * validated as a step table — nothing passes through loosely, and no step name
+ * is lost to the prototype chain (see `stepSection`).
  */
-export const verifySectionSchema = z
-  .looseObject({
-    steps: z.array(z.string().min(1)).default([]),
-  })
-  .transform(({ steps, ...stepTables }, ctx): VerifyConfig => {
-    const stepConfigs: Record<string, VerifyStepConfig> = {}
-    for (const [step, table] of Object.entries(stepTables)) {
-      const parsed = verifyStepConfigSchema.safeParse(table)
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [step, ...issue.path],
-            message: issue.message,
-          })
-        }
-        continue
-      }
-      stepConfigs[step] = parsed.data
-    }
-    return { steps, stepConfigs }
-  })
+export const verifySectionSchema = stepSection(
+  '[verify]',
+  z.array(z.string().min(1)).default([]),
+  verifyStepConfigSchema,
+  (steps, stepConfigs): VerifyConfig => ({ steps, stepConfigs }),
+)
 
 // ── [finalize.<step>] ────────────────────────────────────────────────────────
 
@@ -190,30 +237,12 @@ export interface FinalizeConfig {
 }
 
 /** Like [verify], [finalize] mixes `steps` with a strict named table set. */
-export const finalizeSectionSchema = z
-  .looseObject({
-    steps: z
-      .array(z.string().min(1, 'finalize.steps entries must be nonempty step names'))
-      .default([]),
-  })
-  .transform(({ steps, ...stepTables }, ctx): FinalizeConfig => {
-    const stepConfigs: Record<string, FinalizeStepConfig> = {}
-    for (const [step, table] of Object.entries(stepTables)) {
-      const parsed = finalizeStepConfigSchema.safeParse(table)
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [step, ...issue.path],
-            message: issue.message,
-          })
-        }
-        continue
-      }
-      stepConfigs[step] = parsed.data
-    }
-    return { steps, stepConfigs }
-  })
+export const finalizeSectionSchema = stepSection(
+  '[finalize]',
+  z.array(z.string().min(1, 'finalize.steps entries must be nonempty step names')).default([]),
+  finalizeStepConfigSchema,
+  (steps, stepConfigs): FinalizeConfig => ({ steps, stepConfigs }),
+)
 
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
@@ -304,6 +333,15 @@ export const ticketsSchema = z.strictObject({
    * provider's default (Linear: Backlog; file: Triage) — resolved by
    * defaultTriageState in src/processes/dispatcher.ts. */
   triageState: z.string().min(1).optional(),
+  /** State harvest files its synthesized proposals into (§12). Absent = the
+   * triage state, which keeps the constitutional grooming gate: a proposal
+   * waits for a human before it can be dispatched. Setting it to readyState
+   * waives that gate for this repository — proposals dispatch unread — and is
+   * the only supported way to do so. Separate from triageState so the waiver
+   * does not also redirect spec-gate bounces, aborts, and closed-unmerged PRs
+   * into the ready state, where a bounce would re-dispatch itself. Resolved by
+   * defaultProposalState in src/processes/dispatcher.ts. */
+  proposalState: z.string().min(1).optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
@@ -337,13 +375,15 @@ const configRootSchema = z.strictObject({
     .default([]),
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
-  commands: commandsSchema.prefault({}),
-  verify: verifySectionSchema.prefault({}),
-  finalize: finalizeSectionSchema.prefault({}),
+  commands: commandsSchema,
+  verify: verifySectionSchema,
+  finalize: finalizeSectionSchema,
   // `default` is reserved inside this open map (§9). The schema preserves the
-  // raw map; the registry-aware eager resolver requires default.runtime and can
+  // raw map — EVERY declared key, `__proto__` included, or an entry would
+  // disappear ahead of both eager resolution and the unconsumed-key warning;
+  // the registry-aware eager resolver requires default.runtime and can
   // therefore include the complete materialized runtime list in its diagnostic.
-  roles: z.record(z.string().min(1), roleSchema).prefault({}),
+  roles: openMap('[roles]', roleSchema),
   policy: policySchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
   // ready gate. Prefault feeds the file-source identity through ticketsSchema,

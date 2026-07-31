@@ -5,8 +5,13 @@ import { loadConfig } from './load'
 test('repository installs mandatory lint and the path-scoped dashboard verifier', async () => {
   const config = await loadConfig(join(import.meta.dir, '..', '..', 'autobuild.toml'))
   expect(config.baseBranch).toBe('main')
-  expect(config.capacity).toBe(10)
+  expect(config.capacity).toBe(5)
   expect(config.policy.harvestThreshold).toBe(5)
+  // This repository runs its harvest unattended: proposals are filed straight
+  // into the ready state, while handbacks still land in Backlog.
+  expect(config.tickets.proposalState).toBe('Todo')
+  expect(config.tickets.proposalState).toBe(config.tickets.readyState)
+  expect(config.tickets.triageState).toBe('Backlog')
   expect(config.pr).toBeUndefined()
   expect(config.commands.lint).toBe('bun run check')
   expect(config.verify.steps).toEqual(['lint', 'types', 'unit', 'dashboard'])

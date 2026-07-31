@@ -84,6 +84,20 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   back through `verify:*`. This can repeat. The build terminates **merged** or
   **closed**.
 
+**Review severity is proportion to the spec.** Both review loops rate a
+finding by what the defect costs against the spec's acceptance criteria and
+the realistic operating conditions of the work under review, not by how
+certainly it is a defect: `blocking` names an acceptance criterion the defect
+defeats, `important` names a criterion or stated invariant it puts at material
+risk. A true defect that puts no acceptance criterion at risk, breaks no
+stated invariant, and is unreachable under realistic input is `ab observe`,
+not a finding, and work carrying such observations is approvable. A reviewer
+does not raise a bar the spec set: where the spec bounds a failure model or an
+operating condition, a stricter model is not a defect, and hostile or
+pathological input that the surface's contract does not promise to handle is
+`minor` or an observation, unless a security boundary, an acceptance
+criterion, or a stated invariant makes it material.
+
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
 autobuild by configuring verify and finalize steps, never by inventing stages.
@@ -94,7 +108,8 @@ If a request seems to need a new phase, say so rather than improvising one.
 dispatch
 runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
-spec-standard proposals are created directly in Triage. A repository journal,
+spec-standard proposals are created, in `[tickets].proposalState` — the triage
+state unless this repository has named another one. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
 crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
@@ -307,6 +322,28 @@ verifySteps = ["types", "e2e"]
 Names must already exist in `[verify].steps` with matching tables; duplicates,
 blanks, unknown names, malformed metadata, and omission of an `always = true`
 step make the planner's `ab done` fail before `plan.completed` is appended.
+
+An agent verify step selects `[roles.<step>]` by its **logical step name** —
+the name in `[verify].steps`, not the skill it runs. An agent finalize
+post-step follows the same rule.
+
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+```
+
+The step's configured skill name remains a deprecated alias for existing
+configurations and will be removed in a future release. It applies only when
+`[roles.<step>]` is undeclared, so the step name always wins when both are
+present, and `ab dispatch` reports the alias with the step name to rename it to.
 Written order never reorders execution: the event records the canonical config
 order. No front matter means all configured steps, preserving old plans and
 logs; an explicit empty list is valid only when all steps are optional. The
@@ -375,7 +412,36 @@ kind = "agent"
 skill = "ab-release-notes"
 ```
 
-The logical step name still selects `[roles.<step>]` for agent routing. Checks
+The logical step name selects `[roles.<step>]` for agent routing — the same
+rule an agent verify step follows, so one convention covers both:
+
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
+[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+runtime = "pi"
+
+[roles.release-notes]    # finalize step name
+runtime = "pi"
+```
+
+For an agent *verify* step, the step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. Finalize has never had such an alias.
+
+Checks
 write their completion and any follow-up with kernel attribution; agents retain
 their session actor and transcript. Nonzero command exits, execution/launch
 exceptions, and structured agent failures all produce `ok = false` plus a
@@ -408,14 +474,26 @@ declares `kimi-coding/k3`. Trusted plugins may register additional runtime names
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 
-The pipeline resolves `plan`, `plan-review`, `implement`, and `code-review`,
-plus each verify/finalize step by name. The repository workflow resolves
-`harvest` and `harvest-review`. Two non-phase judgments use the same
-runtime/model resolver: `slug` optionally proposes pre-build naming, and
-`upgrade` proposes a resolution only when a vendored skill merge conflicts.
-Both are tool-free one-shots with extensions disabled. Missing slug capability
-uses the deterministic title fallback; unavailable upgrade judgment retains the
-conflict for manual resolution.
+The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
+`finalize`, and `reconcile`, plus each **agent** verify and finalize step by
+its logical step name. A verify step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. The repository workflow resolves `harvest` and `harvest-review`. Two
+non-phase judgments use the same runtime/model resolver: `slug` optionally
+proposes pre-build naming, and `upgrade` proposes a resolution only when a
+vendored skill merge conflicts. Both are tool-free one-shots with extensions
+disabled. Missing slug capability uses the deterministic title fallback;
+unavailable upgrade judgment retains the conflict for manual resolution.
+
+A declared key that none of those routes requests is resolved and validated
+like any other, and then never used — `ab dispatch` reports it at startup,
+naming the key and the keys valid for this configuration, and reports a
+deprecated skill-name key with the step name to rename it to. Both stay
+warnings; neither blocks a session or changes which runtime and model run. A
+`kind = "check"` step starts no session and so is not a route: naming a role
+after one does not make it consumed. It is reported only when that check step is
+its sole apparent route — a check step named `plan` leaves `[roles.plan]`
+consumed by the core `plan` phase, and nothing is reported.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -454,6 +532,15 @@ Every field is a **positive integer**.
 | `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 
+`stallRounds` counts *persistence chains*, which reviewers mark and the kernel
+only follows. A finding's `persists` ids name prior-round findings whose defect
+is still present in the work under review; a new instance of a defect class
+whose reported instance was fixed is fresh work and starts its own chain,
+however closely it resembles its predecessor. So the counter measures a
+producer/reviewer stalemate rather than a defect category the loop keeps
+converging on, and the kernel decides only whether a marked chain has survived
+the threshold — never whether two findings are the same disagreement.
+
 Harvest is driven by back-pressure inside `ab dispatch`, not by a wall clock,
 and remains independent of build `capacity` and repository intake. Once the
 threshold is reached, the run claims the whole current accumulation. Dispatch
@@ -477,6 +564,7 @@ state eligible.
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -489,6 +577,12 @@ as follows:
 | plugin | `[]` — no host-imposed label convention |
 
 An explicit `readyLabels` value always wins for every source.
+
+`proposalState` is the one supported way to waive the grooming gate, and it is
+deliberately not `triageState`. Do not suggest pointing `triageState` at the
+ready state to get auto-dispatched proposals: `triageState` is also where a
+spec-gate bounce lands, so a nonconforming ticket would be claimed, bounced,
+and reclaimed on every tick. `proposalState` moves only what harvest files.
 
 Cross-field rules, each an **error**:
 
@@ -772,18 +866,56 @@ Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
 contextual: every row offers navigation and quit; global offers `h harvest`,
-`m auto-merge`, and `i intake`; `Harvest` offers `p resume` for ordinary
+`m auto-merge`, `i intake`, `p pause all`, and `r resume all`; `Harvest` offers `p resume` for ordinary
 failure or `p acknowledge` for exhaustion/escalation only when that action is
-available; runner-attached builds offer `m auto-merge` and `p pause`, while
-queued builds offer `d discard`. `m` on `Harvest` is an explanatory build-only
-no-op.
+available; runner-attached builds offer `m auto-merge` plus the state-specific
+`p pause`, `p cancel pause`, or `r resume` action, while queued builds offer
+`d discard`. `m` on `Harvest` is an explanatory build-only no-op.
+
+A running build reads `PAUSING` after `p` appends its pause request and before
+the kernel acknowledges it at a safe boundary. During that window `p` appends
+the opposing resume request, cancels the stale pause, and projects the build
+back to `RUNNING`. An acknowledged paused build offers only `r resume` and reads
+`RESUMING` until the kernel acknowledges that request; there is no gesture to
+cancel a pending resume. Blocked takes visual precedence, including when the
+build is also operator-paused, and `r` opens the existing feedback field. Keys
+that are not offered for the current build state are no-ops and append no
+control event.
+
+Global-row `p` is the repository-wide version — the same walk `ab pause --all`
+runs sessionless: it durably holds every `QUEUED` build, turns intake off, and
+appends `build.pause-requested` to every `RUNNING` build, so the repository
+comes to rest before a machine, terminal, or dispatcher restart. The hold is the `dispatcher.pause-set` repository fact, written before
+the intake fact; while it is set no dispatcher tick attaches a runner to a
+queued build, whether through interrupted-dispatch recovery, startup resume, or
+the lease sweep. The per-build walk skips `PAUSING` — the bulk control never
+cancels a pending pause, unlike build-row `p` — and skips `QUEUED`, `PAUSED`,
+`RESUMING`, and `BLOCKED` without error; queued builds are covered by the hold
+instead. Global-row `r` reverses all of it: the hold released,
+`build.resume-requested` on every `PAUSED` build (including builds paused by
+hand beforehand), and intake back on. A released queued build becomes
+launchable again on the next ordinary tick, with no further operator action. `r`
+does not touch `BLOCKED` builds, whose blockers still need the per-build `r`
+feedback field. Both report the affected build count, the hold, and the new
+intake value on the notice row. One carve-out remains: the harvest gate is
+independent, so a harvest session can still start after a bulk pause (`h` stops
+it). The janitor is likewise ungated, so an abort or discard on a held build is
+still settled. Build work in this repository is otherwise genuinely at rest.
 
 `--intake` and `--no-intake` are mutually exclusive durable repository setters.
 Omitting both reuses stored state, falling back to ON only when no intake fact
 exists. Global-row `i` re-reads current state and appends the opposite value.
 Intake off skips only new ticket claims while janitor, stale-runner, harvest,
-and in-flight work continue. Every dispatcher samples the current value on each
-tick, so a change in one process gates all dispatchers for that repository.
+and in-flight work continue — it deliberately does **not** set the repository
+hold, so a build the repository has already accepted still starts and finishes.
+Every dispatcher samples the current value on each tick, so a change in one
+process gates all dispatchers for that repository.
+
+The repository hold has no launch flag and no setter of its own: `p` and `r` on
+the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
+they share are the only ways to set or clear it, and each of those moves intake
+with it. Each dispatcher tick reads the hold from the repository journal itself,
+so it survives a restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
 claim-time default; omission reuses stored state, falling back to OFF only when
@@ -836,12 +968,29 @@ to the build's event log and apply the same write-time checks.
 | Intent | CLI | Dashboard | Durable event(s) |
 |---|---|---|---|
 | Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
-| Pause | `ab pause <slug> [--store <ref>]` | Select the build and press `p` while it is not paused or blocked. | `build.pause-requested` |
-| Resume | `ab resume <slug> [--store <ref>]` | Select a paused build and press `p`. | `build.resume-requested` |
+| Pause | `ab pause <slug> [--store <ref>]` | Select a `RUNNING` build and press `p`; press `p` again while `PAUSING` to cancel the pending pause. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
+| Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
+| Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
+| Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
-| Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `p`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
-| Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `p` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
+| Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
+| Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
+
+The two `--all` forms and the global-row keys are one walk behind two surfaces.
+The repository pause is written first and intake second, both absolutely —
+setters, not toggles, so the values the command names are the values the
+repository holds afterwards — and each per-build request is a compare-and-set
+against a freshly reduced log, so a rerun adds no second pending pause and
+never cancels one already in flight. Pause first is what makes every surviving
+prefix of a failed walk at least as quiesced as asked: once it lands, no queued
+build is launchable, whatever else fails after it. Output names every build that
+received a request, the hold, and the intake value written; `--json` emits that
+same summary for a script. A walk that fails partway exits nonzero and reports
+which of the two repository facts landed, which builds were requested, which one
+failed, and which were never attempted. Neither form starts a dispatcher, so
+reaching for one to quiesce the repository does not launch the work it is trying
+to park.
 
 Discard is dashboard-only and queued-only. The dispatcher releases any partial
 workspace and lease, returns the ticket to `[tickets].readyState`, and completes
@@ -857,10 +1006,19 @@ return the ticket to configured Triage before completing as `abandoned`. Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.
 
-On the dashboard, `p` on a blocked build replaces the bottom legend with the
-optional feedback field while the blocker stays visible. All printable keys
-edit the field instead of triggering dashboard actions; Backspace deletes,
-Enter submits, and Escape cancels.
+On the dashboard, `r` on a blocked build replaces the bottom legend with a
+multi-line composer panel: the build being resumed, a note that guidance is
+optional, the build's unresolved blocker questions, the field itself, and its
+key bindings. All printable keys edit the field instead of triggering dashboard
+actions. `Enter` submits (an empty field resumes without guidance), `Ctrl-J`
+inserts a line break — as does `Shift+Enter` in terminals that report it
+distinctly — `Backspace` deletes at the caret, `Left`/`Right`/`Up`/`Down` and
+`Home`/`End` move the caret rather than the dashboard's row selection, and
+`Escape` cancels without writing. Line breaks survive submission, so the
+guidance the agent receives keeps the operator's line structure. Pasting
+multi-line text inserts all of it in one step in terminals that support
+bracketed paste; where they do not, a paste still submits at its first line
+break.
 
 `ab answer` answers every escalation that is open when the command runs,
 regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
@@ -871,6 +1029,26 @@ submission; Escape cancels without writing. If the build is also paused, both
 surfaces append all answers first and `build.resume-requested` last. A plain
 `ab resume` does not answer blockers; use `ab answer` for a blocked build.
 
+An answer is not only recorded — it is delivered to the agent that can act on
+it. An escalation from `plan` or `plan-review` feeds the next `plan` round.
+An escalation from `implement` or `code-review` feeds the next `implement`
+round. When a failed verify report exhausts policy, guidance answering that
+policy escalation also feeds the next `implement` round and takes precedence
+over the failed report. `finalize` and `reconcile` receive their own answers on
+their next attempt. In each of these routed cases, `ab context` writes the
+answer to `.ab/guidance.json` in the build's workspace, and the receiving skill
+treats it as authoritative feedback for that round.
+A round's feedback is exclusive: on a guidance round `.ab/guidance.json`
+replaces the reviewer's findings or a routed-back verify failure, so the answer
+has to carry what the agent needs. A bare retry writes no `.ab/guidance.json` and
+displaces nothing: the resumed round still gets whatever the loop was already
+routing, such as the last review round's findings.
+
+A direct verifier escalation is a known gap: answering it resolves the blocker
+and reruns the verify step, but the answer is not materialized for that rerun.
+The answer still needs a phase that can act on it. That delivery remains
+tracked follow-up work.
+
 Every command requires the target to exist in this repository and be active
 (`running`, `paused`, or `blocked`), except abort also accepts `queued`;
 `ab answer` additionally requires an open escalation. A stale, missing, done,
@@ -879,7 +1057,10 @@ same stable fallback on both surfaces. All five commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
 local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
 caller's own phase build, the command refuses it; a phase cannot pause, resume,
-auto-merge, answer, or abort itself.
+auto-merge, answer, or abort itself. `ab pause --all` and `ab resume --all`
+accept `--store` on the same precedence and are refused for the same reason
+whenever `AB_SESSION` and `AB_BUILD` are both nonblank — the caller's own build
+is inside the walk.
 
 These commands request normal kernel work; they do not wake a runner, operate
 the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
@@ -890,7 +1071,12 @@ escalation set and never invents guidance.
 Durable repository intake and the claim-time auto-merge default have launch-flag
 setters and global-row toggles but no standalone sessionless control commands.
 Abort is available through both its CLI command and the confirmed build-row/detail
-`a` key. Global-row `h` owns the durable harvest gate, and global-row `p` is a no-op. On the optional repository-scoped
+`a` key. Global-row `h` owns the durable harvest gate. Global-row `p`/`r` and
+`ab pause --all` / `ab resume --all` are two surfaces over the one walk described
+above: from the same repository state they write the same events. Neither the
+repository hold nor intake has a standalone sessionless setter of its own, but
+the bulk commands write both as part of quiescing — the hold first. On the
+optional repository-scoped
 `Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
 and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
 rows, `i` and `h` are also no-ops.

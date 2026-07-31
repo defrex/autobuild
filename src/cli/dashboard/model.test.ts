@@ -496,7 +496,7 @@ describe('projectBuild: the nonterminal-build filter', () => {
       defaultAutoMerge: false,
       harvestPaused: false,
     })
-    expect(model.warningLine).toBeUndefined()
+    expect(model.warningLines).toBeUndefined()
     expect('mode' in model).toBe(false)
 
     const alpha = projectBuild({ ...RECORD, slug: 'alpha' }, active, CONFIG, activeLog)
@@ -545,7 +545,7 @@ describe('projectBuild: the nonterminal-build filter', () => {
     expect(settings.defaultAutoMerge).toBe(true)
   })
 
-  test('a process-local warning is optional header state, not a reserved blank row', () => {
+  test('process-local warnings are optional header state, not a reserved blank row', () => {
     const clean = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
@@ -555,10 +555,21 @@ describe('projectBuild: the nonterminal-build filter', () => {
       repo: '/repos/app',
       queued: 0,
       observationCount: 0,
-      warningLine: 'store unavailable',
+      warningLines: ['store unavailable', 'autobuild.toml: [roles.ghost] is declared'],
     })
-    expect(clean.warningLine).toBeUndefined()
-    expect(warned.warningLine).toBe('store unavailable')
+    // An empty array is the same absence as an omitted field: no chrome.
+    const empty = buildDashboard([], CONFIG, {
+      repo: '/repos/app',
+      queued: 0,
+      observationCount: 0,
+      warningLines: [],
+    })
+    expect(clean.warningLines).toBeUndefined()
+    expect(empty.warningLines).toBeUndefined()
+    expect(warned.warningLines).toEqual([
+      'store unavailable',
+      'autobuild.toml: [roles.ghost] is declared',
+    ])
   })
 
   test('the header gate follows acknowledgements, not pending commands or a synthetic row', async () => {

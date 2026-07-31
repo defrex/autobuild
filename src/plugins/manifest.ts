@@ -1,5 +1,7 @@
 import semver from 'semver'
 import { z } from 'zod'
+import { openMap } from '../open-map'
+import { forwardIssues } from '../zod-issues'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import type { AgentRunnerContractFactory } from '../ports/runner/contract'
 import type { RuntimeRegistration } from '../ports/runner/runtime'
@@ -147,12 +149,28 @@ const registrationSchema = z.unknown().transform((value, ctx) => {
   if (typeof value === 'function') return value
   const parsed = registrationObjectSchema.safeParse(value)
   if (parsed.success) return parsed.data
-  for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
-  }
+  // No prefix: this transform already sits at the value's own path.
+  forwardIssues(parsed.error.issues, ctx)
   return z.NEVER
 })
-const registrationMapSchema = z.record(nonblank, registrationSchema)
+
+/**
+ * Adapter maps are keyed by names the PLUGIN AUTHOR chooses, so they go through
+ * the same key-preservation contract as autobuild.toml's open maps: a declared
+ * name reaches the registry verbatim, `__proto__` included, instead of being
+ * lost to `z.record`'s assignment-built result. A dropped registration here is
+ * pure misdirection — the operator selecting that adapter is told it is not
+ * registered, and the list of available adapters omits the name their manifest
+ * plainly declares.
+ *
+ * Names are `nonblank` rather than merely nonempty: an adapter is addressed from
+ * configuration by name, and a name made only of whitespace cannot be.
+ */
+const ADAPTER_MAP = {
+  keys: 'nonblank',
+  shape: 'an object of named adapter registrations',
+} as const
+const registrationMap = (label: string) => openMap(label, registrationSchema, ADAPTER_MAP)
 
 const requiredEnvSchema = z.array(nonblank).superRefine((names, ctx) => {
   const seen = new Set<string>()
@@ -174,19 +192,37 @@ const ticketSourceDescriptorSchema = z.strictObject({
   contract: contractSchema.optional(),
 })
 
-const ticketSourceMapSchema = z.record(
-  nonblank,
-  z.union([factorySchema, ticketSourceDescriptorSchema]),
-)
+/**
+ * The ticket-source counterpart of `registrationSchema`. A `z.union` would be
+ * the obvious spelling, and the boundary would now carry its branch detail
+ * through — `openMap` forwards issues verbatim and the loader expands a union's
+ * branches, so nothing is dropped either way. This stays a transform for what it
+ * REPORTS, not for what a union would lose: once the value is known not to be a
+ * function, committing to the descriptor branch says
+ * `ticketSources.acme.factory: must be a factory function`, where a union offers
+ * an alternatives list that includes the already-rejected function branch. It
+ * also matches its three sibling maps. Do not copy this shape as a workaround —
+ * there is nothing left here to work around.
+ */
+const ticketSourceRegistrationSchema = z.unknown().transform((value, ctx) => {
+  if (typeof value === 'function') return value
+  const parsed = ticketSourceDescriptorSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  forwardIssues(parsed.error.issues, ctx)
+  return z.NEVER
+})
 
-/** Strict runtime contract for a plugin module's default export. */
+/** Strict runtime contract for a plugin module's default export.
+ *
+ * `.optional()` stays outermost, so an undeclared port remains `undefined`
+ * rather than becoming `openMap`'s prefaulted `{}`. */
 export const pluginManifestSchema = z.strictObject({
   name: nonblank,
   apiVersion: nonblank,
-  ticketSources: ticketSourceMapSchema.optional(),
-  agentRuntimes: registrationMapSchema.optional(),
-  workspaceProviders: registrationMapSchema.optional(),
-  forges: registrationMapSchema.optional(),
+  ticketSources: openMap('ticketSources', ticketSourceRegistrationSchema, ADAPTER_MAP).optional(),
+  agentRuntimes: registrationMap('agentRuntimes').optional(),
+  workspaceProviders: registrationMap('workspaceProviders').optional(),
+  forges: registrationMap('forges').optional(),
 })
 
 /** Validate shape and API compatibility before any registration is committed. */

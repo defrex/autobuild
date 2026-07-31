@@ -141,6 +141,12 @@ export const harvestEventPayloadSchemas = {
 export const dispatcherSettingEventPayloadSchemas = {
   /** Current repository-wide intake gate sampled by every dispatcher tick. */
   'dispatcher.intake-set': setting,
+  /** Repository-wide quiescence flag: pause-all sets it, resume-all clears it,
+   * and while it is set no dispatcher tick attaches a runner to a queued build.
+   * Deliberately independent of intake — intake governs new ticket intake, and
+   * an operator who only turns intake off is declining new work, not disowning
+   * work the repository has already accepted. */
+  'dispatcher.pause-set': setting,
   /** Claim-time auto-merge default sampled by every dispatcher tick. */
   'dispatcher.auto-merge-default-set': setting,
 } as const
@@ -209,6 +215,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.escalated': ['kernel', 'agent'],
   'harvest.failed': ['kernel'],
   'dispatcher.intake-set': ['human'],
+  'dispatcher.pause-set': ['human'],
   'dispatcher.auto-merge-default-set': ['human'],
 }
 

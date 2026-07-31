@@ -17,7 +17,8 @@ disagree, the code is authoritative.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    current build; each phase resumes as a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
-   Triage without a human grooming it to Ready.
+   Triage without a human grooming it to Ready, unless the repository waives
+   that gate explicitly with `[tickets].proposalState`.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## Pipeline
@@ -33,7 +34,8 @@ adjacent, never a build phase:
 
 ```
 K unclaimed observation.recorded events
-  → scan → synthesize ⇄ review → file approved proposals in Triage
+  → scan → synthesize ⇄ review → file approved proposals in proposalState
+                                  (Triage by default)
 ```
 
 ## Layout
@@ -52,7 +54,7 @@ K unclaimed observation.recorded events
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
-| `src/config/` | `autobuild.toml` parsing and strict validation; user reference in `docs/configuration.md` | §16.1 |
+| `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
 | `src/integration/` | End-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
@@ -255,7 +257,9 @@ optional API 1.2 capabilities so older plugins load but leave cleanup visibly du
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
-frames; `live.ts` owns the alternate-screen region and teardown; `poll.ts` is a
+frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
+decoding, while `live.ts` sequences its push and pop with the alternate-screen
+region because the terminal's keyboard flag stack is per-screen; `poll.ts` is a
 display-only incremental cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —

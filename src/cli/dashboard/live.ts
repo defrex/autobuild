@@ -12,6 +12,7 @@
  * in-place replacement and cursor restoration. Routine notices never enter
  * the live region, and nothing may print through it into dashboard scrollback.
  */
+import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
 
 const ENTER_ALTERNATE_SCREEN = '\x1b[?1049h'
@@ -69,7 +70,10 @@ export class LiveRegion {
   private bracketedPaste = false
   private finished = false
 
-  constructor(private readonly term: TerminalOut) {}
+  constructor(
+    private readonly term: TerminalOut,
+    private readonly keyboard?: KeyboardProtocol,
+  ) {}
 
   /**
    * Repaint the region in place.
@@ -95,6 +99,9 @@ export class LiveRegion {
       this.hidden = true
       this.term.write(ENABLE_BRACKETED_PASTE)
       this.bracketedPaste = true
+      // Kitty keyboard mode stacks are per-screen, so negotiate only after
+      // the alternate screen is active.
+      this.keyboard?.screenEntered()
     }
 
     this.term.write(CLEAR_DISPLAY + CURSOR_POSITION(1))
@@ -124,6 +131,9 @@ export class LiveRegion {
       this.term.write(DISABLE_BRACKETED_PASTE)
       this.bracketedPaste = false
     }
+    // Balance an outstanding keyboard push before returning to the normal
+    // screen. Calling this even when no frame painted also latches late replies.
+    this.keyboard?.screenLeaving()
     if (this.alternate) {
       this.term.write(LEAVE_ALTERNATE_SCREEN)
       this.alternate = false

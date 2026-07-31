@@ -62,14 +62,54 @@ Findings are structured JSON (the CLI validates and stamps ids):
 ]
 ```
 
-- `severity`: `blocking` (plan cannot be approved with this), `important`
-  (should fix, wouldn't sink the build), `minor` (worth noting).
+- `severity`: `blocking` | `important` | `minor`, calibrated below.
 - `persists`: if a prior round's finding (see `.ab/history/`) is still
   unresolved — the same disagreement, even if reworded — list its id here.
-  This is judgment only you can apply; the kernel mechanically escalates
-  chains that persist too long, so mark honestly: neither re-litigate
-  resolved findings nor let a dodged one look fresh.
+  This is judgment only you can apply.
+
+`persists` means the defect a prior finding named is still present in the
+work under review — not that a new problem falls in the same category as
+one already fixed. Test it that way: if the exact defect the prior finding
+named is gone, the chain ends there, however closely your new finding
+resembles it. A new instance of a defect class whose reported instance was
+fixed is fresh work and starts its own chain — raise it with no `persists`
+link. Mark honestly in both directions: neither re-litigate a resolved
+finding nor let a dodged one look fresh, because the kernel mechanically
+escalates a chain that persists too long, and a stalemate is the only
+thing that counter can usefully measure.
+
+Each finding must name a concrete failure, not a preference. "This could be
+sequenced differently" is not a finding; "Step 3 uses the new parser before
+any step adds it, so the plan cannot be executed in order" is.
+
+Severity measures proportion, not certainty. Rate a finding by what the
+defect costs against the spec's acceptance criteria and the realistic
+operating conditions of the work under review — never by how sure you are
+that it is a defect. Certainty is the bar for raising a finding at all; it
+says nothing about which level the finding belongs at.
+
+- `blocking` — name the acceptance criterion the defect defeats. Approving
+  would deliver work the spec does not accept.
+- `important` — name the acceptance criterion or stated invariant the defect
+  puts at material risk under realistic conditions, short of defeating it
+  outright.
+- `minor` — real and in scope, but nothing above turns on it.
+
+`blocking` and `important` both cost the producer a revision round, so if you
+cannot name that criterion or invariant, the finding does not belong at
+either level. A true defect that puts no acceptance criterion at risk, breaks
+no stated invariant, and is unreachable under realistic input is `ab observe`,
+not a finding — the same disposition an out-of-scope discovery gets.
+
+Do not raise a bar the spec set: where the spec bounds a failure model or an
+operating condition, conformance is measured against that bound, and a
+stricter model you would have chosen is not a defect. Hostile or pathological
+input that the surface's contract does not promise to handle is `minor` or an
+observation, unless a security boundary, an acceptance criterion, or a stated
+invariant makes it material.
 
 Approve when the plan would satisfy the spec — not when it matches how you
-would have written it. Escalate when the *spec* is the problem (contradictory
-or unbuildable); revise when the plan is.
+would have written it. Known immaterial defects are not a reason to withhold
+approval — record them with `ab observe` and approve. Escalate when the
+*spec* is the problem (contradictory or unbuildable); revise when the plan
+is.

@@ -24,6 +24,7 @@
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
+import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -53,6 +54,7 @@ import { parseTranscript } from './dashboard/transcript'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
+import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -340,6 +342,7 @@ class DispatchLoop {
    * untouched and makes plain the default rather than a mode.
    */
   private readonly dashboard: boolean
+  private readonly keyboard: KeyboardProtocol | undefined
   private readonly region: LiveRegion | undefined
   /** One display-only incremental build cache for this dispatch process. */
   private readonly dashboardBuilds: DashboardBuildPollCache
@@ -365,6 +368,11 @@ class DispatchLoop {
   /** Read-only nested UI state. Omission is the top-level list. */
   private view: DashboardView | undefined
   private warningLine: string | undefined
+  /** Startup, configuration-level notices — constant for the life of the
+   * process. Rendered ABOVE the transient warning line and never overwritten by
+   * it: `setWarning` replaces the transient slot outright, so sharing it would
+   * let the first tick's janitor notice erase a startup diagnostic for good. */
+  private configWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
   /** Last successfully measured unclaimed observation count. Sampling failures
@@ -390,14 +398,20 @@ class DispatchLoop {
     resolver: RuntimeResolver,
   ) {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
+    this.keyboard =
+      this.dashboard && opts.terminal !== undefined && opts.input !== undefined
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        : undefined
     this.region =
-      this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
+      this.dashboard && opts.terminal !== undefined
+        ? new LiveRegion(opts.terminal, this.keyboard)
+        : undefined
     this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, opts.targetRepo, config)
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
     // the dispatcher take its deterministic title fallback.
-    const resolvedSlug = resolver.resolve('slug')
+    const resolvedSlug = resolver.resolve(SLUG_ROLE)
     const oneShot = wiring.runtimes[resolvedSlug.runtime]?.oneShot
     const nameSlug =
       oneShot === undefined
@@ -486,15 +500,22 @@ class DispatchLoop {
     if (this.model === undefined) return
     const {
       selection: _oldSelection,
-      warningLine: _oldWarningLine,
+      warningLines: _oldWarningLines,
       resumeInput: _oldResumeInput,
       abortConfirmation: _oldAbortConfirmation,
       view: _oldView,
       ...base
     } = this.model
+    // Composed at PROJECTION time, on every projection, so the sticky config
+    // diagnostic reaches the first painted frame and every frame after it with
+    // no dependence on emission order relative to `startRendering()`.
+    const warningLines = [
+      ...this.configWarnings,
+      ...(this.warningLine !== undefined ? [this.warningLine] : []),
+    ]
     this.model = {
       ...base,
-      ...(this.warningLine !== undefined ? { warningLine: this.warningLine } : {}),
+      ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
       ...(this.resumePrompt !== undefined
         ? {
@@ -1221,7 +1242,11 @@ class DispatchLoop {
   private startInput(): void {
     if (!this.dashboard || this.opts.input === undefined) return
     this.acceptingKeys = true
-    this.cleanupInput = this.opts.input.start((input) => this.onInput(input))
+    this.cleanupInput = this.opts.input.start((input) => this.onInput(input), {
+      onListening: () => this.keyboard?.query(),
+      onKeyboardFlags: (flags) => this.keyboard?.reported(flags),
+      onDeviceAttributes: () => this.keyboard?.deviceAttributes(),
+    })
   }
 
   private stopInput(): void {
@@ -1464,6 +1489,24 @@ class DispatchLoop {
    * dashboard, so line-oriented behavior is unchanged while routine
    * interactive chatter disappears.
    */
+  /**
+   * A startup, configuration-level notice (§9 role-key consumability) — never a
+   * tick outcome, never blocking. Both surfaces get the SAME strings in full:
+   * stderr writes each one, the dashboard wraps them into its warning region.
+   * No surface gets a digest, a cap, or a truncated tail.
+   */
+  private reportRoleDiagnostics(): void {
+    const lines = roleKeyWarnings(this.config)
+    if (lines.length === 0) return
+    if (this.dashboard) {
+      this.configWarnings = lines
+      this.syncModelControls()
+      this.paint()
+    } else {
+      for (const line of lines) this.opts.stderr(line)
+    }
+  }
+
   private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>, printIdle = true): boolean {
     // `queued` is a standing depth, not a tick action — the header owns it;
     // repeating it in the notice would make every saturated tick look busy.
@@ -1724,6 +1767,8 @@ class DispatchLoop {
   }
 
   async run(): Promise<void> {
+    // Before the `--once` branch, so both modes report it exactly once.
+    this.reportRoleDiagnostics()
     const capacity = this.config.capacity
     if (this.opts.once) {
       if (!this.dashboard) {

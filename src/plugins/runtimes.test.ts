@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { createRuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistration, RuntimeRegistry } from '../ports/runner/runtime'
+import { parsePluginManifest } from './manifest'
 import { createPluginRegistry } from './registry'
 import { materializePluginRuntimes } from './runtimes'
 
@@ -213,5 +214,28 @@ describe('materializePluginRuntimes', () => {
       'agent runtime "custom" from plugin "custom-pack" collides with an existing runtime registration',
     )
     expect(calls).toBe(0)
+  })
+
+  test('materializes a runtime whose declared name collides with an inherited member', async () => {
+    // The one downstream mechanism that is not a Map: runtimes merge into a
+    // plain (null-prototype) registry object, so the name has to survive an
+    // assignment as well as a manifest.
+    const plugins = createPluginRegistry()
+    plugins.register(
+      parsePluginManifest({
+        name: 'proto-pack',
+        apiVersion: '^1.0.0',
+        agentRuntimes: { ['__proto__']: () => registration('proto-adapter') },
+      }),
+    )
+    const merged = await materializePluginRuntimes(builtins(), plugins, {
+      repoRoot: '/repo',
+      env: {},
+    })
+
+    expect(Object.getOwnPropertyNames(merged)).toEqual(['builtin', '__proto__'])
+    expect(
+      createRuntimeResolver(merged, { default: { runtime: '__proto__' } }).resolve('plan'),
+    ).toMatchObject({ runtime: '__proto__' })
   })
 })
