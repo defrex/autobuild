@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#153](https://github.com/defrex/autobuild/pull/153) — Teach dashboard verification to consume escalation guidance
 - [#149](https://github.com/defrex/autobuild/pull/149) — Generate the README headline from dashboard capture
 - [#147](https://github.com/defrex/autobuild/pull/147) — Route read-only build queries through the store seam
 - [#146](https://github.com/defrex/autobuild/pull/146) — Give plan reviewers a concrete finding bar
