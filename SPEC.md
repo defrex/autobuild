@@ -1262,8 +1262,12 @@ failure appends only a new failure fact; success appends `runner.attached
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
 `setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
 answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
-policy raises, independently of phase-policy exhaustion. This target belongs
-only to escalation metadata and is not a pipeline `Phase`.
+policy raises, independently of phase-policy exhaustion. After claiming the lease,
+however, a runner honors an engine-selected pause or abort acknowledgement before
+setup-failure gating, even while that escalation is open. This control-only path
+executes no setup, appends no `runner.attached`, and starts no phase or session.
+Resume and all decisions that use the workspace still require successful setup.
+The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#191](https://github.com/defrex/autobuild/pull/191) — Honor stop controls before workspace setup
 - [#190](https://github.com/defrex/autobuild/pull/190) — Restore split indexes after failed upgrade commits
 - [#189](https://github.com/defrex/autobuild/pull/189) — Retain live config across source-file deletion
 - [#188](https://github.com/defrex/autobuild/pull/188) — Simplify dashboard observation reporting

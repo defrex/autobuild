@@ -795,6 +795,51 @@ describe('setup command (§16.1)', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
+  test('a pre-existing pause bypasses broken setup and parks without workspace work', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      failCommands: ['bun install'],
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+
+    const state = await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(state.status).toBe('paused')
+    expect(h.execCalls).toEqual([])
+    expect(ofType(events, 'build.paused')).toHaveLength(1)
+    expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
+    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
+    expect(h.runner.sessions.size).toBe(0)
+  })
+
+  test('a pre-existing abort bypasses broken setup and releases the lease without workspace work', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      failCommands: ['bun install'],
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop before setup' },
+    })
+
+    const state = await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(state.status).toBe('aborted')
+    expect(h.execCalls).toEqual([])
+    expect(ofType(events, 'build.aborted')).toHaveLength(1)
+    expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
+    expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
+    expect(h.runner.sessions.size).toBe(0)
+    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
+  })
+
   test('bounds repeated setup failures, raises once, and parks further attaches', async () => {
     const h = await makeHarness({
       configToml: TOML_WITH_SETUP,
@@ -819,6 +864,34 @@ describe('setup command (§16.1)', () => {
     })
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('bun install')
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
+  })
+
+  test('an abort bypasses an open setup exhaustion without consuming another attempt', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      failCommands: ['bun install'],
+    })
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    }
+    const before = await h.store.getEvents(SLUG)
+    expect(ofType(before, 'escalation.raised')).toHaveLength(1)
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'environment remains broken' },
+    })
+
+    const state = await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(state.status).toBe('aborted')
+    expect(h.execCalls).toHaveLength(3)
+    expect(ofType(events, 'runner.setup-failed')).toHaveLength(3)
+    expect(ofType(events, 'runner.attached')).toHaveLength(1)
+    expect(ofType(events, 'escalation.raised')).toHaveLength(1)
+    expect(events.at(-1)?.type).toBe('build.aborted')
+    expect(h.runner.sessions.size).toBe(0)
+    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
   })
 
   test('repairs setup exhaustion despite a later answered policy raise for another target', async () => {
@@ -3433,7 +3506,7 @@ describe('operator commands (D2)', () => {
     })
     const state = await h.br.run()
     expect(state.status).toBe('aborted')
-    expect((await typesOf(h.store)).slice(-2)).toEqual(['runner.attached', 'build.aborted'])
+    expect((await typesOf(h.store)).slice(-2)).toEqual(['build.abort-requested', 'build.aborted'])
     expect(h.runner.sessions.size).toBe(0) // no phase ever ran
   })
 

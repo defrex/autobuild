@@ -289,10 +289,13 @@ and retry facts remain dispatcher janitor duty.
 
 **Abort control and cleanup.** CLI and dashboard call the same
 `src/cli/build-control.ts` service. A confirmed dashboard `a` action appends only
-the durable abort request. `build-runner.ts` observes that request through the
-BuildStore subscription, forwards an `AbortSignal` to the current AgentRunner
-turn, deposits/ends the session without a phase failure, acknowledges abort, and
-releases its lease. `dispatcher.ts` then resumes an event-checkpointed saga that
+the durable abort request. After claiming the build lease, `build-runner.ts`
+acknowledges an already-pending pause or abort before workspace setup, without
+appending `runner.attached`; resume and workspace-using decisions stay behind
+successful setup. For a request arriving during an AgentRunner turn, the runner
+observes the BuildStore subscription, forwards an `AbortSignal`, deposits/ends
+the session without a phase failure, acknowledges abort, and releases its lease.
+`dispatcher.ts` then resumes the unchanged event-checkpointed janitor saga that
 closes an unmerged PR, releases the workspace, deletes exact remote/local branch
 refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
 Triage, and appends abandoned completion last. Forge close/delete operations are
