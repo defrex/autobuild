@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#164](https://github.com/defrex/autobuild/pull/164) — Show repository pauses in the dispatch dashboard
 - [#159](https://github.com/defrex/autobuild/pull/159) — Keep escalation guidance durable until session launch
 - [#158](https://github.com/defrex/autobuild/pull/158) — Make pending abort intent dominate bulk pause
 - [#157](https://github.com/defrex/autobuild/pull/157) — Carry harvest prerequisites into ticket dependencies
