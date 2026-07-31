@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#187](https://github.com/defrex/autobuild/pull/187) — Suppress unsafe cross-version upgrade commits
 - [#183](https://github.com/defrex/autobuild/pull/183) — Point bounce guidance at the installed spec standard
 - [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
 - [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
