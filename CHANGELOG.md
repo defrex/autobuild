@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views
 - [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment
 - [#164](https://github.com/defrex/autobuild/pull/164) — Show repository pauses in the dispatch dashboard
 - [#163](https://github.com/defrex/autobuild/pull/163) — Add sessionless repository settings status
