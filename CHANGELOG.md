@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#155](https://github.com/defrex/autobuild/pull/155) — Add operator paths for escalation resolutions
 - [#154](https://github.com/defrex/autobuild/pull/154) — Preserve union detail in validation renderers
 - [#153](https://github.com/defrex/autobuild/pull/153) — Teach dashboard verification to consume escalation guidance
 - [#152](https://github.com/defrex/autobuild/pull/152) — Document workspace config as an open map

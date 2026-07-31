@@ -14,7 +14,8 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md` (latest revision),
    and `.ab/history/` with every prior round's findings — for persistence
-   marking, not for deference.
+   marking, not for deference. When present, `.ab/dismissed-findings.json`
+   lists finding ids a human explicitly dismissed.
 2. Judge the plan on exactly these axes:
    - **Spec conformance** — does executing this plan satisfy every
      acceptance criterion? Does anything in it exceed the spec's scope?
@@ -78,6 +79,11 @@ link. Mark honestly in both directions: neither re-litigate a resolved
 finding nor let a dodged one look fresh, because the kernel mechanically
 escalates a chain that persists too long, and a stalemate is the only
 thing that counter can usefully measure.
+
+A human-dismissed id is settled: do not re-raise that finding. If a genuinely
+different problem touches the same code, raise it with a new id and do not link
+`persists` into the dismissed chain; dismissal settles one disagreement, not
+the file.
 
 Each finding must name a concrete failure, not a preference. "This could be
 sequenced differently" is not a finding; "Step 3 uses the new parser before

@@ -594,6 +594,13 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
         ...wrappedText(`! ${blocker}`, width, '  ').map((line) => paint(line, 'red', color)),
       )
     }
+    for (const note of [
+      'The r field records guidance, or a bare retry when empty.',
+      `CLI only: ab answer ${build.slug} --dismiss`,
+      `CLI only: ab answer ${build.slug} --revise-spec <file>`,
+    ]) {
+      body.push(...wrappedText(note, width, '  ').map((line) => paint(line, 'dim', color)))
+    }
   }
   body.push('', paint('Sessions', 'bold', color))
   const sessions = build.sessions ?? []
