@@ -164,9 +164,6 @@ interface GuidanceStart {
 interface LogIndex {
   /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3). */
   restartSeq: number
-  /** seq of the latest `build.aborted`, else 0 — an escalation answered with
-   * resolution 'abort' after this seq is an unacknowledged abort. */
-  lastAbortedSeq: number
   plan: LoopIndex
   code: LoopIndex
   /** Post-restart `verify.completed` facts with seq, for the same sequence-based
@@ -240,16 +237,6 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   }
 
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
-  // An answered abort-resolution without a subsequent build.aborted: the
-  // instruction arrived through the escalation channel rather than
-  // build.abort-requested, but it ends the build the same way (§15.3).
-  if (
-    state.answeredEscalations.some(
-      (e) => e.resolution === 'abort' && e.answeredSeq > log.lastAbortedSeq,
-    )
-  ) {
-    return { kind: 'acknowledge', command: 'abort' }
-  }
   // blocked ≡ any open (unanswered) escalation (§15.5).
   if (state.openEscalations.length > 0) return { kind: 'wait', reason: 'blocked' }
   // revise-spec: park until the human lands spec rev N+1 (§6.3); the
@@ -699,7 +686,6 @@ function indexLog(events: AbEvent[]): LogIndex {
   let finalizeCompleted = false
   let lastConflict: { seq: number } | undefined
   let conflictReconcileStarted: { attempt: number } | undefined
-  let lastAbortedSeq = 0
 
   /** Track a loop round: maxRoundEver over the full log; the per-round record
    * only for post-restart events (returns undefined pre-restart). */
@@ -845,10 +831,6 @@ function indexLog(events: AbEvent[]): LogIndex {
         conflictReconcileStarted = undefined
         break
 
-      case 'build.aborted':
-        lastAbortedSeq = event.seq
-        break
-
       default:
         break
     }
@@ -856,7 +838,6 @@ function indexLog(events: AbEvent[]): LogIndex {
 
   return {
     restartSeq,
-    lastAbortedSeq,
     plan,
     code,
     verifyCompleted,

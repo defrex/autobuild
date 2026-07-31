@@ -807,25 +807,75 @@ describe('reduceBuild: native auto-merge intent and application facts', () => {
   })
 })
 
-describe('reduceBuild: abort — requested vs acknowledged (D2)', () => {
-  const log = toLog([
+describe('reduceBuild: abort — accepted intent vs acknowledged (D2)', () => {
+  const explicitLog = toLog([
     ...prelude(),
     ev('build.abort-requested', { reason: 'wrong ticket' }),
     ev('build.aborted', {}),
   ])
+  const escalationLog = toLog([
+    ...prelude(),
+    ev('build.pause-requested', { reason: 'older hold' }),
+    ev('escalation.raised', {
+      id: 'e_abort',
+      phase: 'plan',
+      source: 'agent',
+      question: 'Continue with the wrong ticket?',
+    }),
+    ev('escalation.answered', {
+      id: 'e_abort',
+      answer: 'Abort this build.',
+      resolution: 'abort',
+    }),
+    ev('build.aborted', {}),
+  ])
 
-  test('abort-requested is pending, not aborted', () => {
-    const requested = stateAfter(log, 'build.abort-requested')
-    expect(requested.status).toBe('running')
-    expect(requested.pendingCommands).toEqual([
+  test('explicit and escalation-based aborts expose equivalent pending intent', () => {
+    const explicit = stateAfter(explicitLog, 'build.abort-requested')
+    expect(explicit.status).toBe('running')
+    expect(explicit.pendingCommands).toEqual([
       { command: 'abort', seq: 5, reason: 'wrong ticket', actor: humanActor('aron') },
     ])
+
+    const escalation = stateAfter(escalationLog, 'escalation.answered')
+    expect(escalation.status).toBe('running')
+    expect(escalation.pendingCommands).toEqual([
+      { command: 'pause', seq: 5, reason: 'older hold', actor: humanActor('aron') },
+      { command: 'abort', seq: 7, reason: 'Abort this build.', actor: humanActor('aron') },
+    ])
+    expect(escalation.pendingCommands.filter((command) => command.command === 'abort')).toEqual([
+      {
+        command: 'abort',
+        seq: 7,
+        reason: 'Abort this build.',
+        actor: humanActor('aron'),
+      },
+    ])
+    expect(escalation.pendingCommands.at(-1)?.command).toBe(explicit.pendingCommands[0]?.command)
+    expect(escalation.pendingCommands.at(-1)?.actor).toEqual(explicit.pendingCommands[0]?.actor)
   })
 
-  test('build.aborted acknowledges: status aborted, pending cleared', () => {
-    const aborted = reduceBuild(log)
-    expect(aborted.status).toBe('aborted')
-    expect(aborted.pendingCommands).toEqual([])
+  test('only an answer matched to an open escalation creates abort intent', () => {
+    const state = reduceBuild(
+      toLog([
+        ...prelude(),
+        ev('escalation.answered', {
+          id: 'unknown',
+          answer: 'Abort this build.',
+          resolution: 'abort',
+        }),
+      ]),
+    )
+    expect(state.pendingCommands).toEqual([])
+    expect(state.status).toBe('running')
+  })
+
+  test('build.aborted acknowledges either pathway and clears all pending abort intent', () => {
+    for (const log of [explicitLog, escalationLog]) {
+      const aborted = reduceBuild(log)
+      expect(aborted.status).toBe('aborted')
+      expect(aborted.pendingCommands.some((command) => command.command === 'abort')).toBe(false)
+    }
   })
 
   test('terminal statuses: latest wins in either order (§15.5)', () => {

@@ -62,14 +62,16 @@ export interface PhaseContext {
   seq: number
 }
 
-/** An operator `*-requested` event the kernel has not yet acknowledged with
- * its fact event (D2, §15.2.7). A dead runner receives these on resume.
- * Commands are ordered events (§15.2.7): a request supersedes any earlier
- * pending request of the OPPOSING kind (pause vs resume) — the operator's
- * latest command wins, and a countermanded request is never delivered. */
+/** An accepted operator command the kernel has not yet acknowledged with its
+ * fact event (D2, §15.2.7). Most come from `*-requested`; an escalation answer
+ * with the abort resolution is the equivalent accepted abort intent. A dead
+ * runner receives these on resume. Commands are ordered events (§15.2.7): a
+ * request supersedes any earlier pending request of the OPPOSING kind (pause
+ * vs resume) — the operator's latest command wins, and a countermanded request
+ * is never delivered. */
 export interface PendingCommand {
   command: 'pause' | 'resume' | 'abort'
-  /** seq of the `*-requested` event. */
+  /** seq of the event that accepted the command. */
   seq: number
   reason?: string
   actor: Actor
@@ -604,6 +606,18 @@ export function reduceBuild(events: AbEvent[]): BuildState {
             resolution: event.payload.resolution,
             answeredSeq: event.seq,
           })
+          // Abort is accepted through either supported operator surface. Keep
+          // the answer as the audit reason and project its event identity as
+          // the same pending command an explicit abort request creates; the
+          // kernel's one build.aborted fact acknowledges both pathways.
+          if (event.payload.resolution === 'abort') {
+            pending.abort.push({
+              command: 'abort',
+              seq: event.seq,
+              reason: event.payload.answer,
+              actor: event.actor,
+            })
+          }
         }
         break
       }
