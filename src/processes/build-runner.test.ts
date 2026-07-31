@@ -821,6 +821,49 @@ describe('setup command (§16.1)', () => {
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
   })
 
+  test('repairs setup exhaustion despite a later answered policy raise for another target', async () => {
+    const h = await makeHarness({ configToml: TOML_WITH_SETUP })
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'runner.setup-failed',
+        payload: {
+          command: 'bun install',
+          attempt,
+          exitStatus: 1,
+          output: `setup failure ${attempt}`,
+        },
+      })
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_other',
+        phase: 'code-review',
+        source: 'policy',
+        question: 'review policy exhausted',
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_other',
+        answer: 'continue review',
+        resolution: 'guidance',
+      },
+    })
+
+    await expect(h.br.attach()).rejects.toBeInstanceOf(SetupFailureError)
+    expect(h.execCalls).toHaveLength(0)
+    const setupRaises = ofType(await h.store.getEvents(SLUG), 'escalation.raised').filter(
+      (event) => event.payload.phase === 'setup',
+    )
+    expect(setupRaises).toHaveLength(1)
+    expect(setupRaises[0]?.payload.source).toBe('policy')
+  })
+
   test('a transient failure recovers with one delayed attachment and no stale error', async () => {
     const h = await makeHarness({
       configToml: TOML_WITH_SETUP,
