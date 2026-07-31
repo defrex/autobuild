@@ -724,19 +724,30 @@ describe('parseConfig — [tickets]', () => {
 })
 
 describe('parseConfig — roles and strictness', () => {
-  test('[roles.default] and per-role overrides accept the three axes', () => {
+  test('[roles.default] and per-role overrides accept the axes and alternate list', () => {
     const config = parseConfig(`${READY}
 [roles.default]
 runtime = "pi"
 model = "kimi-k3"
 extensions = ["web-access"]
+alternates = [{ runtime = "claude", model = "claude-opus", extensions = [] }]
 [roles.plan]
 extensions = []
+alternates = []
 `)
     expect(config.roles).toEqual({
-      default: { runtime: 'pi', model: 'kimi-k3', extensions: ['web-access'] },
-      plan: { extensions: [] },
+      default: {
+        runtime: 'pi',
+        model: 'kimi-k3',
+        extensions: ['web-access'],
+        alternates: [{ runtime: 'claude', model: 'claude-opus', extensions: [] }],
+      },
+      plan: { extensions: [], alternates: [] },
     })
+    expect(
+      parseError(`${READY}[roles.default]\nruntime = "pi"\nalternates = [{ extra = true }]\n`)
+        .message,
+    ).toContain('extra')
   })
 
   test('unknown root/table/step keys are rejected', () => {

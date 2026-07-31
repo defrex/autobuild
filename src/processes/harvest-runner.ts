@@ -7,7 +7,7 @@
  */
 import { HARVEST_REVIEW_ROLE, HARVEST_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
-import type { RepositoryEvent } from '../events/repository'
+import type { HarvestEventPayload, RepositoryEvent } from '../events/repository'
 import { KERNEL } from '../events/envelope'
 import type { IdSource, UuidSource } from '../ids'
 import { occurrenceKey, type HarvestDisposition } from '../harvest/schema'
@@ -23,9 +23,20 @@ import {
   type HarvestRunState,
 } from '../kernel/harvest'
 import type { ArtifactRef, Feedback, Verdict } from '../ontology'
-import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
+import {
+  createRuntimeResolver,
+  type ResolvedRuntime,
+  type RuntimeResolver,
+} from '../ports/runner/routing'
+import { isAlternateEligible, mayRetryPhase } from '../ports/runner/provider-error'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type { AgentRunner, AgentSessionHandle, AgentTurnResult, TicketSource } from '../ports/types'
+import type {
+  AgentRunner,
+  AgentSessionHandle,
+  AgentTurnFailure,
+  AgentTurnResult,
+  TicketSource,
+} from '../ports/types'
 import { installedSkillName } from '../skills'
 import { defaultProposalState } from './dispatcher'
 import {
@@ -86,6 +97,10 @@ interface ProducerSession {
   handle: AgentSessionHandle
   runner: AgentRunner
 }
+
+type HarvestProviderAttempt = NonNullable<
+  HarvestEventPayload<'harvest.failed'>['providerAttempts']
+>[number]
 
 class SessionFailure extends Error {
   constructor(message: string) {
@@ -468,6 +483,232 @@ export class HarvestRunner {
   }
 
   private async executeSession(spec: {
+    run: string
+    role: 'harvest' | 'harvest-review'
+    skill: string
+    step: 'synthesize' | 'review'
+    round: number
+    producer: boolean
+    terminal: (event: RepositoryEvent, session: string) => boolean
+  }): Promise<void> {
+    const resolved = this.resolver.resolve(spec.role)
+    if (resolved.alternates.length === 0) return this.executeSingleSession(spec)
+    return this.executeSessionChain(spec, resolved, resolved.alternates)
+  }
+
+  private async executeSessionChain(
+    spec: {
+      run: string
+      role: 'harvest' | 'harvest-review'
+      skill: string
+      step: 'synthesize' | 'review'
+      round: number
+      producer: boolean
+      terminal: (event: RepositoryEvent, session: string) => boolean
+    },
+    primary: ResolvedRuntime,
+    alternates: readonly ResolvedRuntime[],
+  ): Promise<void> {
+    const { store, repo, ids, workspacePath } = this.deps
+    await this.ensureLease()
+    const events = await store.getRepoEvents(repo)
+    const matchingFailures = events.filter(
+      (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
+        event.type === 'harvest.failed' &&
+        event.payload.run === spec.run &&
+        event.payload.step === spec.step &&
+        event.payload.round === spec.round,
+    )
+    const failures = matchingFailures.length
+    const latestFailure = matchingFailures.at(-1)
+    const current = reduceHarvest(events).runs.find((candidate) => candidate.run === spec.run)
+    const resumedAfterTerminalFailure =
+      latestFailure?.payload.willRetry === false &&
+      current?.status === 'running' &&
+      current.failure === undefined &&
+      events.some((event) => event.type === 'harvest.resumed' && event.seq > latestFailure.seq)
+    if (failures >= this.maxSessionAttempts && !resumedAfterTerminalFailure) {
+      throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
+    }
+
+    const targets = [primary, ...alternates]
+    const attempts: HarvestProviderAttempt[] = []
+    let substitution: HarvestProviderAttempt | undefined
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index]!
+      const session = ids('hs')
+      // A pause requested while a provider failed is honored before another
+      // provider starts; the incomplete step safely restarts at the primary.
+      if (index > 0) await this.controlBoundary(spec.run)
+      else await this.ensureLease()
+      const started = await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.session.started',
+        payload: {
+          run: spec.run,
+          session,
+          role: spec.role,
+          runner: target.runtime,
+          ...(target.model !== undefined ? { model: target.model } : {}),
+          step: spec.step,
+          round: spec.round,
+          ...(substitution !== undefined
+            ? { substitution: { failed: substitution, selectedIndex: index } }
+            : {}),
+        },
+      })
+
+      let handle: AgentSessionHandle | undefined
+      let result: AgentTurnResult | undefined
+      let turnError: unknown
+      const live = index === 0 && spec.producer ? this.producer : undefined
+      try {
+        if (live !== undefined) {
+          handle = live.handle
+          result = await live.runner.continue(
+            live.handle,
+            `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
+            { env: this.sessionEnv(spec.run, spec.step, spec.round, session) },
+          )
+        } else {
+          const turn = await target.runner.start({
+            skill: spec.skill,
+            invocation: spec.run,
+            workspacePath,
+            ...(target.model !== undefined ? { model: target.model } : {}),
+            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+          })
+          handle = turn.session
+          result = turn.result
+        }
+      } catch (error) {
+        turnError = error
+      }
+
+      try {
+        await this.ensureLease()
+      } catch (error) {
+        if (handle !== undefined && live === undefined) {
+          try {
+            await target.runner.end(handle)
+          } catch {
+            // A dead session may have nothing left to close.
+          }
+        }
+        throw error
+      }
+
+      const since = await store.getRepoEvents(repo, started.seq)
+      const terminal =
+        turnError === undefined && since.some((event) => spec.terminal(event, session))
+      const owner = live?.runner ?? target.runner
+      if (terminal && handle !== undefined && result !== undefined) {
+        if (spec.producer && index === 0) {
+          this.producer = { handle, runner: owner }
+          await this.depositTranscript(
+            spec,
+            session,
+            JSON.stringify(
+              {
+                session,
+                run: spec.run,
+                step: spec.step,
+                round: spec.round,
+                turn: result,
+                note: 'producer session kept live for convergence continuation',
+              },
+              null,
+              2,
+            ),
+            result.usage,
+            target.model,
+          )
+        } else {
+          const transcript = await owner.end(handle)
+          await this.depositTranscript(
+            spec,
+            session,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+          if (spec.producer) this.producer = undefined
+        }
+        return
+      }
+
+      if (handle !== undefined) {
+        try {
+          const transcript = await owner.end(handle)
+          await this.depositTranscript(
+            spec,
+            session,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+        } catch (error) {
+          if (error instanceof HarvestLeaseLostError) throw error
+        }
+      }
+      if (spec.producer) this.producer = undefined
+
+      const failure: AgentTurnFailure =
+        turnError !== undefined
+          ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
+          : result?.kind === 'failed'
+            ? result.failure
+            : { message: 'no-terminal', permanent: false }
+      const attempt: HarvestProviderAttempt = {
+        index,
+        session,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        error: failure.message,
+        ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+      }
+      attempts.push(attempt)
+      const eligibleForAlternate =
+        turnError !== undefined ||
+        (result?.kind === 'failed' && isAlternateEligible(result.failure))
+      if (index + 1 < targets.length && eligibleForAlternate) {
+        substitution = attempt
+        continue
+      }
+
+      const attemptNumber = failures + 1
+      await this.ensureLease()
+      await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.failed',
+        payload: {
+          run: spec.run,
+          step: spec.step,
+          round: spec.round,
+          attempt: attemptNumber,
+          error: failure.message,
+          willRetry: mayRetryPhase(failure) && attemptNumber < this.maxSessionAttempts,
+          providerAttempts: attempts,
+        },
+      })
+      await this.ensureLease()
+      await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.step.completed',
+        payload: {
+          run: spec.run,
+          step: spec.step,
+          round: spec.round,
+          outcome: 'failed',
+          detail: failure.message,
+        },
+      })
+      throw new SessionFailure(`${spec.step}@${spec.round} failed: ${failure.message}`)
+    }
+  }
+
+  private async executeSingleSession(spec: {
     run: string
     role: 'harvest' | 'harvest-review'
     skill: string
