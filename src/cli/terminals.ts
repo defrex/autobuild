@@ -42,6 +42,7 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
+import { expandIssues } from '../zod-issues'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import type { CliEnv } from './env'
@@ -712,6 +713,17 @@ async function reviewVerdict(
 }
 
 /**
+ * Render findings-schema issues without discarding an untagged union's branch
+ * detail. Kept separate from parsing because the current accepted findings
+ * schema has no such union; this is the presentation contract for future ones.
+ */
+export function renderFindingsIssues(issues: readonly z.core.$ZodIssue[]): string {
+  return expandIssues(issues)
+    .map((issue) => `  ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+    .join('\n')
+}
+
+/**
  * Parse, validate (D6: failures return the schema shape and the precise
  * issue), check `persists` against prior rounds' finding ids for this loop,
  * and stamp kernel-assigned ids (§15.4 — agents never self-assign).
@@ -734,9 +746,7 @@ async function parseFindings(
   }
   const parsed = z.array(findingDraftSchema).safeParse(json)
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((issue) => `  ${issue.path.join('.') || '(root)'}: ${issue.message}`)
-      .join('\n')
+    const issues = renderFindingsIssues(parsed.error.issues)
     throw new Error(
       `--findings ${path} does not match the finding schema (D6):\n${issues}\n` +
         `Expected shape:\n${FINDING_DRAFT_SHAPE}`,

@@ -14,7 +14,8 @@ goes nowhere.
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`, the commit range
    (`base`/`head` in `.ab/context.json`), `.ab/implement-notes.md`, and
-   `.ab/history/` with prior rounds' findings.
+   `.ab/history/` with prior rounds' findings. When present,
+   `.ab/dismissed-findings.json` lists finding ids a human explicitly dismissed.
 2. Read the actual diff (`git diff <base>..<head>`), then the surrounding
    code. Review what changed *and* what the change touches.
 3. Judge on exactly these axes, in this order:
@@ -56,6 +57,11 @@ link. Mark honestly in both directions: neither re-litigate a resolved
 finding nor let a dodged one look fresh, because the kernel mechanically
 escalates a chain that persists too long, and a stalemate is the only
 thing that counter can usefully measure.
+
+A human-dismissed id is settled: do not re-raise that finding. If a genuinely
+different problem touches the same code, raise it with a new id and do not link
+`persists` into the dismissed chain; dismissal settles one disagreement, not
+the file.
 
 Each finding must name a concrete failure, not a preference. "This could be
 cleaner" is not a finding; "a sixth login attempt bypasses the limiter

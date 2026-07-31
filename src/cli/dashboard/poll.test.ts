@@ -79,6 +79,11 @@ async function addTerminal(
       type: 'build.aborted',
       payload: {},
     })
+    await store.append(slug, {
+      actor: { kind: 'dispatcher' },
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
   }
 }
 
@@ -212,6 +217,52 @@ describe('DashboardBuildPollCache', () => {
     const pruned = await cache.refresh()
     expect(pruned.builds).toEqual([])
     expect(pruned.states.size).toBe(0)
+    expect(reader.eventCalls).toEqual([])
+    await store.close()
+  })
+
+  test('retains abort request, acknowledgement, and cleanup checkpoints until completion', async () => {
+    const store = new MemoryBuildStore()
+    await addRunning(store, 'aborting')
+    const reader = new CountingReader(store)
+    const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+    await cache.refresh()
+
+    await store.append('aborting', {
+      actor: { kind: 'human', user: 'cli-operator' },
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    let snapshot = await cache.refresh()
+    expect(row(snapshot, 'aborting')?.status).toBe('aborting')
+    expect(snapshot.states.get('aborting')?.status).toBe('running')
+
+    await store.append('aborting', { actor: KERNEL, type: 'build.aborted', payload: {} })
+    snapshot = await cache.refresh()
+    expect(row(snapshot, 'aborting')?.status).toBe('cleaning')
+    expect(snapshot.states.get('aborting')?.status).toBe('aborted')
+
+    await store.append('aborting', {
+      actor: { kind: 'dispatcher' },
+      type: 'abort.remote-branch-deleted',
+      payload: { branch: 'ab/aborting' },
+    })
+    reader.resetCalls()
+    snapshot = await cache.refresh()
+    expect(reader.eventCalls).toEqual([{ slug: 'aborting', since: 3 }])
+    expect(row(snapshot, 'aborting')?.status).toBe('cleaning')
+
+    await store.append('aborting', {
+      actor: { kind: 'dispatcher' },
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    snapshot = await cache.refresh()
+    expect(snapshot.builds).toEqual([])
+    expect(snapshot.states.size).toBe(0)
+
+    reader.resetCalls()
+    await cache.refresh()
     expect(reader.eventCalls).toEqual([])
     await store.close()
   })

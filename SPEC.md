@@ -358,12 +358,13 @@ and falls back to a deterministic title-derived name on any absence, invalid
 output, error, or timeout. Naming failure never prevents build creation. The
 slug and its `ab/<slug>` branch are recorded once and never renamed.
 
-**Immutability:** the spec cannot change during a build. Every downstream
-reviewer approves conformance *to it*; a drifting spec silently converts
-approvals into approvals-of-something-else. A phase discovering the spec
-itself is wrong raises an `escalation`; a human answers, the spec gets rev
-N+1, and the build restarts from `plan` (cheap — downstream was invalidated
-anyway).
+**Immutability:** the spec cannot change during a build except through the
+explicit escalation revision protocol. Every downstream reviewer approves
+conformance *to it*; a drifting spec silently converts approvals into
+approvals-of-something-else. A phase discovering the spec itself is wrong
+raises an `escalation`; a human uses `ab answer --revise-spec` (or
+`--revise-spec-from-ticket`), the spec gets rev N+1, and the build restarts
+from `plan` (cheap — downstream was invalidated anyway).
 
 ## 7. The build store
 
@@ -1176,9 +1177,12 @@ guidance. A bare retry reruns the verifier with no feedback.
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 `escalation.raised {source: "stall", refs: [chain]}`; status → `blocked`.
-`escalation.answered {resolution: "guidance"}` feeds the answer into the next
-producer round as authoritative feedback; `dismiss-finding` marks the chain
-human-resolved and the next reviewer round is told so.
+`escalation.answered` uses the resolution vocabulary `guidance`,
+`dismiss-finding`, `revise-spec`, `abort`, or `retry`. Operators produce
+`dismiss-finding` and `revise-spec` through `ab answer`; a `revise-spec` answer
+names the exact replacement artifact it authorizes. `guidance` feeds the answer
+into the next producer round as authoritative feedback; `dismiss-finding`
+marks the chain human-resolved and the next reviewer round is told so.
 
 **C — setup failure:** the first attach retains the normal `runner.attached`
 fact, then a failed setup appends `runner.setup-failed

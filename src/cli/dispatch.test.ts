@@ -5287,6 +5287,100 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
+  test('external abort progress persists through acknowledgement and cleanup with inert row controls', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-abort-progress', { title: 'Abort progress' }),
+      happyHandlers(),
+    )
+    const input = fakeInput()
+    const term = fakeTerminal(true, { columns: 160, rows: 40 })
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const record = (await fx.store.listBuilds())[0]!
+      const slug = record.slug
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'dashboard-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes(slug))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes(`Build  ${slug}`))
+
+      // A process-local prompt must disappear when a different process records
+      // durable abort intent; the same repaint shows the first progress stage.
+      input.press('letter-a')
+      await waitFor(() => latestPaintedFrame(term).includes(`Abort ${slug}`))
+      await fx.store.append(slug, {
+        actor: humanActor('cli-operator'),
+        type: 'build.abort-requested',
+        payload: {},
+      })
+      await waitFor(() => {
+        const frame = latestPaintedFrame(term)
+        return frame.includes('status ABORTING') && !frame.includes(`Abort ${slug} and delete`)
+      })
+      let frame = latestPaintedFrame(term)
+      expect(frame).toContain('waiting for running work to stop')
+      expect(frame).not.toMatch(/\b[prda] (?:pause|cancel pause|resume|discard|abort)\b/)
+
+      const afterRequest = await fx.store.getEvents(slug)
+      input.press('pause')
+      input.press('resume')
+      input.press('letter-d')
+      input.press('letter-a')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(await fx.store.getEvents(slug)).toEqual(afterRequest)
+      expect(latestPaintedFrame(term)).not.toContain(`Abort ${slug} and delete`)
+
+      await fx.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+      await waitFor(() => latestPaintedFrame(term).includes('status CLEANING'))
+      frame = latestPaintedFrame(term)
+      expect(frame).toContain(`Build  ${slug}`)
+      expect(frame).toContain('abort cleanup pending or in progress')
+
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'abort.remote-branch-deleted',
+        payload: { branch: record.branch! },
+      })
+      await waitFor(() => latestPaintedFrame(term).includes('status CLEANING'))
+      expect(latestPaintedFrame(term)).toContain(`Build  ${slug}`)
+
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'abandoned' },
+      })
+      await waitFor(() => !latestPaintedFrame(term).includes(slug))
+      expect(latestPaintedFrame(term)).toContain('active 0/1')
+
+      input.press('interrupt')
+      await run
+      run = undefined
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('d discards the selected queued row with dashboard attribution', async () => {
     const ticket = readyTicket('T-discard-key', { title: 'Discard key' })
     const fx = await makeFixture(ticket, {})

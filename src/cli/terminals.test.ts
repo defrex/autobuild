@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod'
 import { agentActor, humanActor, KERNEL } from '../events/envelope'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { FakeForge } from '../ports/forge/fake'
@@ -16,7 +17,7 @@ import type { Finding } from '../ontology'
 import type { MemoryBuildStore } from '../store/memory'
 import { textContent } from '../store/types'
 import { buildContext } from './context'
-import { done, escalate, verdict } from './terminals'
+import { done, escalate, renderFindingsIssues, verdict } from './terminals'
 import {
   BRANCH,
   BUILD,
@@ -1567,6 +1568,31 @@ describe('ab verdict — vocabulary enforcement (§8.2)', () => {
 // ── ab verdict — review phases (D6) ──────────────────────────────────────────
 
 describe('ab verdict — review phases', () => {
+  test('findings issue rendering expands a synthetic untagged union with complete paths', () => {
+    // Renderer-contract seam only: `findingDraftSchema` cannot currently
+    // produce this union issue, and this fixture does not widen that schema.
+    const fixture = z.strictObject({
+      reviews: z.array(
+        z.strictObject({
+          detail: z.union([
+            z.object({ left: z.custom(() => false, 'left alternative rejected') }),
+            z.object({ right: z.custom(() => false, 'right alternative rejected') }),
+          ]),
+        }),
+      ),
+    })
+    const result = fixture.safeParse({ reviews: [{ detail: { left: 1, right: 2 } }] })
+    if (result.success) throw new Error('renderer fixture must fail')
+
+    const rendered = renderFindingsIssues(result.error.issues)
+
+    expect(rendered).toBe(
+      '  reviews.0.detail.left: option 1 of 2: left alternative rejected\n' +
+        '  reviews.0.detail.right: option 2 of 2: right alternative rejected',
+    )
+    expect(rendered).not.toContain('Invalid input')
+  })
+
   test('--notes is required (deposited as the phase artifact)', async () => {
     const deps = makeDeps({ store, env: makeEnv({ phase: 'code-review' }) })
     await expect(verdict(deps, { verdict: 'approve' })).rejects.toThrow(
