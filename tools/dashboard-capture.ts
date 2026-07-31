@@ -3,6 +3,7 @@ import { join, relative, resolve, sep } from 'node:path'
 import { abDispatch } from '../src/cli/dispatch'
 import { bulkControlRepository } from '../src/cli/bulk-control'
 import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
+import { cellWidth } from '../src/cli/dashboard/cells'
 import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
 import { createTerminalModeController } from '../src/cli/terminal-restore'
@@ -30,13 +31,16 @@ interface FrameSpec {
   resume?: { slug: string; value: string; cursor: number }
   /** Overlay the existing build-detail kind at a scripted scroll offset. */
   detail?: { slug: string; scroll: number }
+  /** Overlay a transcript presentation containing fixed Unicode evidence. */
+  transcript?: { slug: string; sessionId: string }
   /** Frame-specific evidence this capture exists to show. */
   requires?: readonly string[]
 }
 
-const RESUME_GUIDANCE = 'Use the manual merge path.\nRe-run verify:test afterwards.'
+const UNICODE_EVIDENCE = 'naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦'
+const RESUME_GUIDANCE = `Use the manual merge path.\nRe-run verify:test afterwards — ${UNICODE_EVIDENCE}.`
 const SCRIPTED_BLOCKER = [
-  'The scripted plan scenario is intentionally blocked for dashboard capture.',
+  `The scripted plan scenario is intentionally blocked for dashboard capture. Unicode: ${UNICODE_EVIDENCE}.`,
   '',
   'THE CONFLICT',
   'The preview must preserve this paragraph structure.',
@@ -61,6 +65,13 @@ const FRAME_SPECS: readonly FrameSpec[] = [
     requires: [...HELD_EVIDENCE, 'more rows - Enter details'],
   },
   {
+    id: 'unicode-transcript',
+    columns: 100,
+    rows: 20,
+    transcript: { slug: 'complete-dashboard-evidence', sessionId: 's_unicode_capture' },
+    requires: ['Transcript  complete-dashboard-evidence', `Agent: ${UNICODE_EVIDENCE}`],
+  },
+  {
     id: 'resume-prompt',
     columns: 100,
     rows: 30,
@@ -77,6 +88,7 @@ const FRAME_SPECS: readonly FrameSpec[] = [
       'Enter submit',
       'The scripted plan scenario is intentionally blocked for dashboard capture.',
       'EXPANDED FINAL LINE: dashboard message preview complete.',
+      UNICODE_EVIDENCE,
     ],
   },
 ]
@@ -300,17 +312,20 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   }
   const plain = lines.map(stripAnsi)
   for (const [index, line] of plain.entries()) {
-    if (line.length > columns) {
+    const cells = cellWidth(line)
+    if (cells > columns) {
       throw new Error(
-        `dashboard capture ${id}: line ${index + 1} is ${line.length} cells, wider than ${columns}`,
+        `dashboard capture ${id}: line ${index + 1} is ${cells} cells, wider than ${columns}`,
       )
     }
   }
   const text = plain.join('\n')
   const commonEvidence =
-    spec.detail === undefined
-      ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-      : ['Build  plan-blocked-dashboard', 'BLOCKED']
+    spec.transcript !== undefined
+      ? ['Transcript', 'complete-dashboard-evidence']
+      : spec.detail === undefined
+        ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+        : ['Build  plan-blocked-dashboard', 'BLOCKED']
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
@@ -349,12 +364,29 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
     resolveDashboardRenderer: () => (model, options) => {
       const presented = {
         ...model,
+        ...(spec.detail === undefined && spec.transcript === undefined
+          ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
+          : {}),
         ...(spec.detail !== undefined
           ? {
               view: {
                 kind: 'detail' as const,
                 slug: spec.detail.slug,
                 scroll: spec.detail.scroll,
+              },
+            }
+          : {}),
+        ...(spec.transcript !== undefined
+          ? {
+              view: {
+                kind: 'transcript' as const,
+                slug: spec.transcript.slug,
+                sessionId: spec.transcript.sessionId,
+                scroll: 0,
+                transcript: {
+                  kind: 'turns' as const,
+                  turns: [{ prompt: `Review ${UNICODE_EVIDENCE}`, text: UNICODE_EVIDENCE }],
+                },
               },
             }
           : {}),
@@ -440,6 +472,8 @@ export async function captureDashboardFrames(
         '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
         '- [ ] The narrow frame truncates deliberately without clipping.',
         '- [ ] Colour emphasis is present and literal statuses remain readable.',
+        '- [ ] Unicode samples in the warning, blocker, composer, and transcript are readable, unsplit,',
+        '      non-overlapping, and are not code-point escapes.',
         '- [ ] The resume-prompt frame shows the composer panel in place of the',
         '      key legend over the existing scrolled detail view: build name,',
         '      complete blocker through its unique final line, optional-guidance',

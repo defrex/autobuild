@@ -474,8 +474,8 @@ step as failed and file an observation while the green build continues.
 
 ### `[roles]`
 
-An **open map** of role name → `{ runtime?, model?, extensions? }` on the three
-agent configuration axes. The reserved `default` role must explicitly name a
+An **open map** of role name → `{ runtime?, model?, extensions?, alternates? }`.
+The three primary axes and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
 with a copyable fix and all registered runtime names. Three runtimes ship:
@@ -513,6 +513,7 @@ consumed by the core `plan` phase, and nothing is reported.
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
+| `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. |
 
 Inheritance is mechanical and **independent per field**: merge each configured
 role over the raw `default` entry, then validate the exact runtime/model pair.
@@ -526,6 +527,17 @@ aggregated by one eager resolver construction before judgment runs. Dispatch
 constructs it before any build launches; upgrade constructs it lazily on the
 first conflict and converts a construction failure to the safe `conflicted`
 outcome.
+
+Each attempt starts from the primary. Overload, rate-limit, 5xx, timeout,
+transport, unknown provider failures, and quota/usage/billing exhaustion try
+alternates in order without consuming extra phase attempts. Authentication,
+permission, and local runtime-configuration failures do not. Every target has
+its own session/transcript; a continuation fallback starts fresh from durable
+context. Selection is not sticky, so the next phase, continuation, or retry
+starts from the primary. Only chain exhaustion writes the phase failure, and
+the final failure controls retry behavior. Substitution starts and exhausted
+failures retain the targets and verbatim errors durably. Core phases, agent
+verify/finalize, and Harvest use the chain; tool-free one-shots do not.
 
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed

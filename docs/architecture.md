@@ -47,7 +47,7 @@ K unclaimed observation.recorded events
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §15.4–15.5 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
@@ -277,6 +277,9 @@ closes an unmerged PR, releases the workspace, deletes exact remote/local branch
 refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
 Triage, and appends abandoned completion last. Forge close/delete operations are
 optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.
+AgentRunner failure causes and the exhaustion contract fixture are additive
+plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
+behavior.
 
 **Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
 `detail.ts` projects chronological session history from the same retained log,
@@ -345,9 +348,16 @@ behavioral assertions against every implementation:
 - `src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
   branch deletion with merged-race preservation;
 - `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
-  transcript metadata and usage, typed failure permanence, per-turn ambient
-  environment refresh and cancellation, distribution-managed `ab` resolution,
-  and the optional tool-free one-shot capability.
+  transcript metadata and usage, typed failure permanence/cause, per-turn
+  ambient environment refresh and cancellation, distribution-managed `ab`
+  resolution, and the optional tool-free one-shot capability.
+
+`src/ports/runner/routing.ts` eagerly resolves every role's primary and ordered
+alternate targets. `build-runner.ts` and `harvest-runner.ts` own the deterministic
+primary-first attempt loop: each substitution opens a new session bracket,
+records provenance on its start, and only complete-chain exhaustion consumes an
+existing phase/session attempt. This keeps runtime availability routing out of
+agent judgment while preserving transcript and artifact actor attribution.
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and

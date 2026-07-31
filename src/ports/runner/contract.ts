@@ -10,6 +10,7 @@ export type AgentRunnerContractScenario =
   | 'success'
   | 'retryable-failure'
   | 'permanent-failure'
+  | 'exhaustion-failure'
   | 'cancel-start'
   | 'cancel-continue'
 
@@ -18,6 +19,7 @@ export const CONTRACT_SKILL = 'ab-runner-contract'
 export const CONTRACT_FOLLOW_UP = 'contract follow-up turn'
 export const CONTRACT_RETRYABLE_FAILURE = 'contract worker exited unexpectedly'
 export const CONTRACT_PERMANENT_FAILURE = 'contract authentication failed'
+export const CONTRACT_EXHAUSTION_FAILURE = 'contract usage quota exhausted'
 export const CONTRACT_ONE_SHOT_PROMPT = 'contract one-shot prompt'
 export const CONTRACT_ONE_SHOT_TEXT = 'contract-one-shot-result'
 
@@ -329,7 +331,7 @@ export function describeAgentRunnerContract(
       })
     })
 
-    test('positive authentication/permission/quota evidence is the only permanent fixture', async () => {
+    test('positive authentication/permission evidence is a permanent credential failure', async () => {
       await withHarness(factory, 'permanent-failure', async (harness) => {
         const started = await harness.runner.start({
           skill: CONTRACT_SKILL,
@@ -344,6 +346,31 @@ export function describeAgentRunnerContract(
             failure: {
               message: CONTRACT_PERMANENT_FAILURE,
               permanent: true,
+              cause: 'credentials',
+            },
+          })
+          expectUsage(started.result.usage)
+        })
+        expectTranscript(transcript, harness.runner, harness.model)
+      })
+    })
+
+    test('quota evidence is permanent for retry policy but identified as provider exhaustion', async () => {
+      await withHarness(factory, 'exhaustion-failure', async (harness) => {
+        const started = await harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+        })
+        const { transcript } = await withEndedSession(harness.runner, started.session, async () => {
+          expect(started.result).toMatchObject({
+            kind: 'failed',
+            failure: {
+              message: CONTRACT_EXHAUSTION_FAILURE,
+              permanent: true,
+              cause: 'exhaustion',
             },
           })
           expectUsage(started.result.usage)

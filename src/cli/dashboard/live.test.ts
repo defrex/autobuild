@@ -168,6 +168,19 @@ describe('LiveRegion: terminal resize', () => {
 })
 
 describe('LiveRegion: an identical frame writes nothing', () => {
+  test('wide-cluster frames no-op unchanged and clear before a shorter repaint', () => {
+    const term = fakeTerm()
+    const region = new LiveRegion(term)
+    const wide = ['日本語 🇺🇸', 'family 👨‍👩‍👧‍👦 tail']
+    region.update(wide)
+    const before = term.writes.length
+    region.update([...wide])
+    expect(term.writes).toHaveLength(before)
+
+    region.update(['日本'])
+    expect(term.writes.slice(before)).toEqual([CLEAR_DISPLAY + CURSOR_POSITION(1), '日本\n'])
+  })
+
   test('a repeat update at the same height is a no-op', () => {
     const term = fakeTerm()
     const region = new LiveRegion(term)

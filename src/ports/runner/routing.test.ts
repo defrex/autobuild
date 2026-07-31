@@ -113,6 +113,66 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
   })
 })
 
+describe('createRuntimeResolver — ordered alternates', () => {
+  test('inherits the default list and overlays each entry on the concrete primary', () => {
+    const r = resolver({
+      default: {
+        runtime: 'pi',
+        model: 'gpt-5.6-sol',
+        extensions: ['web-access'],
+        alternates: [{ runtime: 'gemini', extensions: [] }],
+      },
+      plan: { model: 'gpt-plan', extensions: ['subagents'] },
+    })
+
+    expect(r.resolve('plan').alternates).toEqual([
+      expect.objectContaining({
+        runner: gemini,
+        runtime: 'gemini',
+        model: 'gpt-plan',
+        extensions: [],
+      }),
+    ])
+  })
+
+  test('a role list replaces the default wholesale, including explicit []', () => {
+    const r = resolver({
+      default: { runtime: 'pi', alternates: [{ runtime: 'claude' }] },
+      plan: { alternates: [] },
+      implement: {
+        alternates: [
+          { runtime: 'gemini', model: 'gpt-first' },
+          { runtime: 'claude', model: 'claude-second' },
+        ],
+      },
+    })
+    expect(r.resolve('plan').alternates).toEqual([])
+    expect(
+      r.resolve('implement').alternates.map(({ runtime, model }) => ({ runtime, model })),
+    ).toEqual([
+      { runtime: 'gemini', model: 'gpt-first' },
+      { runtime: 'claude', model: 'claude-second' },
+    ])
+  })
+
+  test('all indexed alternate problems join the eager aggregate', () => {
+    try {
+      resolver({
+        default: { runtime: 'pi' },
+        plan: {
+          alternates: [{ runtime: 'ghost' }, { runtime: 'claude', model: 'kimi-k3' }],
+        },
+      })
+      throw new Error('expected a RuntimeConfigError')
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeConfigError)
+      expect((error as RuntimeConfigError).problems).toHaveLength(2)
+      expect(String(error)).toContain('[roles.plan].alternates[0]')
+      expect(String(error)).toContain('[roles.plan].alternates[1]')
+    }
+  })
+})
+
 describe('createRuntimeResolver — exact compatibility', () => {
   test('an explicit runtime/model pair resolves exactly', () => {
     expect(

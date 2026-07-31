@@ -14,9 +14,15 @@ paths are not API.
 | CLI port | Manifest map | Factory result | Required semantics |
 |---|---|---|---|
 | `ticket-source` | `ticketSources` | `TicketSource` | Initiates a build by listing/getting/claiming tickets and receives comments/transitions/creates/updates. It owns lifecycle names, dependency completion, idempotent creation, and partial-list diagnostics. It is never consulted mid-build and is not artifact storage. |
-| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed retryable/permanent failures, and the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
+| `agent-runtime` | `agentRuntimes` | `RuntimeRegistration` | Wrap an `AgentRunner` that supports start/continue/end, complete transcripts and usage, per-turn environment refresh and cancellation, typed failures with verbatim messages, the retry-compatible `permanent` bit, and optional `cause: availability | exhaustion | credentials | configuration` routing evidence, plus the distribution-managed `ab` launcher. A cancelled turn must retain an endable handle for transcript deposition. Declare served model prefixes/default; optional tool-free `oneShot` is a capability beside the runner interface. |
 | `workspace-provider` | `workspaceProviders` | `WorkspaceProvider` | Provision an absolute, writable working copy for the requested branch, return durable base evidence, resume an intact branch non-destructively, rematerialize a lost copy, and make release idempotent. Never silently re-cut resumed work from a newer base. |
 | `forge` | `forges` | `Forge` | Implement kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated/ungated auto-merge behavior, head-guarded squash merge, and comments. API 1.2 adds optional idempotent `closePr` and `deleteBranch` abort-cleanup capabilities; `closePr` must preserve a racing merge. Without them abort cleanup remains visibly pending. Agents never receive forge credentials or push. `prAttachments` is an optional image-hosting capability; absence must preserve the supported text-only path. |
+
+Plugin API 1.3 adds the optional AgentRunner failure `cause` and the
+`exhaustion-failure` shared-contract scenario. Legacy failures without `cause`
+remain supported: `permanent: false` is eligible for a configured alternate,
+while `permanent: true` stops the chain. A runtime plugin that emits/depends on
+the richer cause should declare an API range containing `^1.3.0`.
 
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the

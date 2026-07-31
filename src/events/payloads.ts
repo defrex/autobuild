@@ -39,6 +39,53 @@ const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
 
+export const agentFailureCauseSchema = z.enum([
+  'availability',
+  'exhaustion',
+  'credentials',
+  'configuration',
+])
+
+/** One configured execution target that failed within a single phase attempt. */
+export const providerAttemptSchema = z.strictObject({
+  index: z.number().int().nonnegative(),
+  session: z.string().min(1),
+  runner: z.string().min(1),
+  model: z.string().optional(),
+  error: z.string().min(1),
+  cause: agentFailureCauseSchema.optional(),
+})
+
+export const providerAttemptsSchema = z
+  .array(providerAttemptSchema)
+  .min(1)
+  .superRefine((attempts, ctx) => {
+    attempts.forEach((attempt, index) => {
+      if (attempt.index !== index) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, 'index'],
+          message: `provider attempt index must be ${index} at this ordered position`,
+        })
+      }
+    })
+  })
+
+export const providerSubstitutionSchema = z
+  .strictObject({
+    failed: providerAttemptSchema,
+    selectedIndex: z.number().int().positive(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.selectedIndex !== value.failed.index + 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['selectedIndex'],
+        message: 'selectedIndex must name the configured entry immediately after failed.index',
+      })
+    }
+  })
+
 const verifyStepSelectionSchema = z
   .array(
     z
@@ -211,6 +258,8 @@ export const eventPayloadSchemas = {
     model: z.string().optional(),
     phase: phaseSchema,
     round: round.optional(),
+    /** Present only when this target substituted for the preceding failed one. */
+    substitution: providerSubstitutionSchema.optional(),
   }),
   'session.ended': z.strictObject({
     session: z.string().min(1),
@@ -348,6 +397,8 @@ export const eventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
     willRetry: z.boolean(),
+    /** Ordered configured targets tried inside this one phase attempt. */
+    providerAttempts: providerAttemptsSchema.optional(),
   }),
 } as const
 
