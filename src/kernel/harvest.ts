@@ -613,6 +613,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
         // Session facts remain individually queryable but add no transition.
         break
       case 'dispatcher.intake-set':
+      case 'dispatcher.pause-set':
       case 'dispatcher.auto-merge-default-set':
         // Dispatcher controls share the repository journal but are projected
         // independently; they never alter harvest workflow state.
