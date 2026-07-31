@@ -1,11 +1,12 @@
 /**
  * autobuild.toml loading (SPEC §16.1, D9).
  *
- * Config is read from the build's *branch* at workspace provision (D9), so
- * every build sees one consistent config — the caller typically has the file
- * content (e.g. `git show <branch>:autobuild.toml`), not a checked-out path.
- * `parseConfig(text)` is therefore the primary API; `loadConfig(path)` is the
- * disk convenience for the CLI and local tooling.
+ * Branch-owned worktree config and supplied immutable text are parsed as
+ * one-shot inputs: `parseConfig(text)` is the primary API, while
+ * `loadConfig(path)` is a disk convenience for scoped CLI and local tooling.
+ * The running dispatcher has a separate live-reload context: `LiveConfig`
+ * reads the main checkout, retains its last valid snapshot across rejected
+ * candidates, and lets each action capture the current snapshot at its boundary.
  */
 import { parse as parseToml, TomlError } from 'smol-toml'
 import type { z } from 'zod'
