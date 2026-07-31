@@ -94,8 +94,9 @@ exists. `.ab/findings.json` is the reviewer's findings against your previous
 revision: address every one — change the plan, or state in the plan why the
 finding is wrong (the reviewer sees your revision next round).
 `.ab/guidance.json` is a human operator's answer to the escalation that blocked
-this build — yours, the reviewer's, or one the stall guard raised — carrying the
-escalation id and the answer text.
+this build. It may have been raised by you or the reviewer, or by the kernel's
+plan-loop stall or policy guards. The file carries the escalation id and the
+answer text.
 
 Guidance is authoritative feedback for the round: the revised plan must act on
 it. The spec stays the contract your plan is measured against, so when the

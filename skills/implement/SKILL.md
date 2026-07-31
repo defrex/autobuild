@@ -54,9 +54,11 @@ You never push — the push is plumbing that happens when you finish.
   the reviewer marks dodged findings as persisting, and persistent chains
   escalate to a human. `verify` → make the named step's report in `.ab/verify/`
   pass. `guidance` → `.ab/guidance.json` holds a human operator's answer to the
-  escalation that blocked this build, raised by you, the reviewer, or a verify
-  step; it carries the escalation id and the answer text, it is authoritative
-  for the round, and the code must act on it. The spec stays the contract this
+  escalation that blocked this build. It may have been raised by you or the
+  reviewer, by the kernel's code-loop stall or policy guards, or by the
+  verify-attempt policy guard after a failed report. The file carries the
+  escalation id and the answer text, it is authoritative for the round, and the
+  code must act on it. The spec stays the contract this
   phase is measured against, so if the answer and the spec cannot both be
   satisfied, escalate rather than choose silently. On a guidance round
   `.ab/findings.json` does not exist and no verify step is routed back — the
