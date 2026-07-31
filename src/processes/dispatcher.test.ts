@@ -3,11 +3,15 @@
  * all fakes, sequentialIds + manualClock — deterministic and offline.
  */
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { bulkControlRepository } from '../cli/bulk-control'
 import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
-import { reduceBuild } from '../kernel/reducer'
+import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -15,13 +19,16 @@ import type { Ticket } from '../ports/types'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { textContent } from '../store/types'
+import { textContent, type BuildStore } from '../store/types'
+import { openLocalStore } from '../store/local/store'
 import { manualClock } from '../testing/fixed'
+import { withFailingRepoAppend } from '../testing/store-failures'
 import {
   Dispatcher,
   analyzeDependencies,
   emptyTickReport,
   fallbackSlug,
+  heldByRepositoryPause,
   kebab,
   readyCriteria,
   specConformance,
@@ -86,15 +93,18 @@ function harness(
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
     launchResult?: LaunchRunnerResult
-    onLaunch?: (slug: string, store: MemoryBuildStore) => Promise<void> | void
+    onLaunch?: (slug: string, store: BuildStore) => Promise<void> | void
     workspaceBase?: WorkspaceBase
     prAttachments?: boolean
     forge?: FakeForge
     exec?: Exec
+    /** A store to dispatch over instead of a fresh in-memory one — the seam
+     * the restart tests use to hand a second Dispatcher a reopened store. */
+    store?: BuildStore
   } = {},
 ) {
   const clock = manualClock()
-  const store = new MemoryBuildStore({ clock })
+  const store = opts.store ?? new MemoryBuildStore({ clock })
   const fakeTickets = new FakeTicketSource(opts.tickets ?? [])
   const tickets = opts.wrapTickets ? opts.wrapTickets(fakeTickets) : fakeTickets
   const workspaces = new FakeWorkspaceProvider({
@@ -276,6 +286,35 @@ async function seedLoopsApproved(h: Harness, slug: string): Promise<void> {
       verdict: 'approve',
       findings: [],
       artifact: { kind: 'code-review', rev: 0 },
+    },
+  })
+}
+
+/** A build whose dispatch was interrupted after `build.created`: a record and
+ * a ticket, no workspace, no spec, no runner. Exactly what the recovery stage
+ * exists to complete — and, because the recovery stage runs second in every
+ * tick, the first thing to reach a queued build. */
+async function seedInterrupted(
+  h: Harness,
+  slug = 'interrupted-dispatch',
+  autoMergeRequestedBy?: string,
+): Promise<void> {
+  const ticket = (await h.tickets.get('T-recover'))!
+  await h.tickets.claim(ticket.ref.id)
+  await h.store.createBuild({
+    slug,
+    repo: REPO,
+    ticket: ticket.ref,
+    branch: `ab/${slug}`,
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: ticket.ref,
+      repo: REPO,
+      baseBranch: 'main',
+      ...(autoMergeRequestedBy !== undefined ? { autoMergeRequestedBy } : {}),
     },
   })
 }
@@ -1514,6 +1553,255 @@ describe('Dispatcher tick-time intake gate', () => {
   })
 })
 
+// ── Repository-wide pause hold ───────────────────────────────────────────────
+
+/** Write the repository-wide quiescence fact the dashboard's pause-all writes. */
+async function pauseRepo(store: BuildStore, enabled: boolean, repo = REPO): Promise<void> {
+  await store.ensureRepo(repo)
+  await store.appendRepo(repo, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.pause-set',
+    payload: { enabled },
+  })
+}
+
+describe('heldByRepositoryPause', () => {
+  test('holds queued builds only, and only while the repository is paused', () => {
+    const statuses: BuildState['status'][] = [
+      'queued',
+      'running',
+      'blocked',
+      'paused',
+      'done',
+      'aborted',
+    ]
+    for (const status of statuses) {
+      const state = { status } as BuildState
+      expect(heldByRepositoryPause(state, true)).toBe(status === 'queued')
+      expect(heldByRepositoryPause(state, false)).toBe(false)
+    }
+  })
+})
+
+describe('Dispatcher repository pause hold', () => {
+  test('recovery does not complete an interrupted dispatch while the repository is paused', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'held-recovery')
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+    // Nothing durable happened either: no workspace, no dispatched comment.
+    const types = (await h.store.getEvents('held-recovery')).map((event) => event.type)
+    expect(types).toEqual(['build.created'])
+
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
+    expect(h.launches).toEqual(['held-recovery'])
+  })
+
+  test('startup resume does not attach a runner to a queued build while paused', async () => {
+    const h = harness()
+    // No ticket on the record, so recovery skips it; a healthy lease, so the
+    // sweep skips it. Startup resume is the only stage that can reach it.
+    const slug = await seedBuild(h, { attached: false })
+    await h.store.claimLease(slug, 'runner-1', 3_600_000)
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
+      ...emptyTickReport(),
+      resumed: 1,
+    })
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('the lease sweep leaves a queued build with an expired lease held', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { attached: false })
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('a running build with a dead runner is still swept — the hold never strands command delivery', async () => {
+    const h = harness()
+    const slug = await seedBuild(h)
+    await h.store.claimLease(slug, 'runner-1', 1000)
+    h.clock.advance(2000)
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('an abort on a queued build is still honored while paused', async () => {
+    const h = harness({ tickets: [readyTicket('T-queued-abort', { labels: [] })] })
+    const slug = await seedBuild(h, {
+      slug: 'paused-abort',
+      ticketId: 'T-queued-abort',
+      attached: false,
+    })
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.abort-requested',
+      payload: { reason: 'cancel queued work' },
+    })
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+    expect(reduceBuild(await h.store.getEvents(slug))).toMatchObject({
+      status: 'done',
+      outcome: 'abandoned',
+    })
+  })
+
+  test('a discard on a queued build is still honored while paused', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'paused-discard')
+    await h.store.append('paused-discard', {
+      actor: humanActor('operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+    await pauseRepo(h.store, true)
+
+    // The discard returns the ticket to Ready, and the ready scan still runs
+    // while paused, so the standing queue-depth report picks it straight back
+    // up — it is simply not claimed into a new build until the resume.
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      discarded: 1,
+      queued: 1,
+    })
+    expect(reduceBuild(await h.store.getEvents('paused-discard'))).toMatchObject({
+      status: 'done',
+      outcome: 'discarded',
+    })
+    // …and no second build was created from it while the pause holds.
+    expect(await h.store.listBuilds()).toHaveLength(1)
+  })
+
+  test('intake off on its own leaves an already-queued build launchable', async () => {
+    // The spec's settled decision: intake governs new ticket intake, not work
+    // the repository has already accepted. No pause fact is written here.
+    const swept = harness()
+    const slug = await seedBuild(swept, { attached: false })
+    expect(await swept.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      swept: 1,
+    })
+    expect(swept.launches).toEqual([slug])
+
+    const recovered = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(recovered, 'intake-off-recovery')
+    expect(await recovered.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      recovered: 1,
+    })
+    expect(recovered.launches).toEqual(['intake-off-recovery'])
+  })
+
+  test('the dispatch stage claims no ticket while paused, but still reports queue depth', async () => {
+    // Reachable only when intake is back on without a resume (or when the
+    // intake write failed after the pause write landed).
+    const h = harness({ tickets: [readyTicket('T-held')] })
+    await pauseRepo(h.store, true)
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), queued: 1 })
+    expect(h.tickets.claims).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+
+    await pauseRepo(h.store, false)
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+    expect(h.tickets.claims).toEqual(['T-held'])
+  })
+
+  test('the hold survives a dispatcher restart and is not defeated by re-running dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-pause-hold-'))
+    try {
+      const first = openLocalStore(root, { clock: manualClock() })
+      const seeded = harness({ tickets: [readyTicket('T-recover')], store: first })
+      await seedInterrupted(seeded, 'restart-held')
+      await pauseRepo(first, true)
+      await first.close()
+
+      // A brand-new store handle AND a brand-new Dispatcher: nothing but the
+      // durable journal carries the hold across the restart.
+      const second = openLocalStore(root, { clock: manualClock() })
+      try {
+        const h = harness({ tickets: [readyTicket('T-recover')], store: second })
+        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+        expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+        expect(h.launches).toEqual([])
+
+        await pauseRepo(second, false)
+        expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), recovered: 1 })
+        expect(h.launches).toEqual(['restart-held'])
+      } finally {
+        await second.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a bulk pause whose intake write fails still leaves queued work unlaunchable', async () => {
+    // The composed proof that the write order is load-bearing: under the
+    // reverse order the pause fact never lands and this tick launches.
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    await seedInterrupted(h, 'partial-pause')
+    const failing = withFailingRepoAppend(h.store, 'dispatcher.intake-set')
+
+    await expect(
+      bulkControlRepository({
+        store: failing,
+        repo: REPO,
+        env: { USER: 'operator' },
+        direction: 'pause',
+      }),
+    ).rejects.toThrow(/dispatcher.intake-set/)
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.launches).toEqual([])
+  })
+
+  test('another repository’s pause does not hold this one, and vice versa', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { attached: false })
+    await pauseRepo(h.store, true, '/repos/elsewhere')
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
+
+    // With THIS repo paused, a foreign build record is likewise untouched —
+    // it was never this dispatcher's to launch.
+    const foreign = harness()
+    await seedBuild(foreign, { slug: 'foreign-build', repo: '/repos/elsewhere', attached: false })
+    await pauseRepo(foreign.store, true)
+    expect(await foreign.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(foreign.launches).toEqual([])
+    expect(reduceBuild(await foreign.store.getEvents('foreign-build')).status).toBe('queued')
+  })
+
+  test('a store where no repository row exists ticks normally', async () => {
+    const h = harness()
+    expect(await h.store.getRepo(REPO)).toBeNull()
+    const slug = await seedBuild(h, { attached: false })
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+    expect(h.launches).toEqual([slug])
+  })
+})
+
 describe('Dispatcher dependency gate', () => {
   /** readyState pins the candidate set to Ready tickets, so a blocker parked
    * in another state is a dependency and not itself dispatchable work — the
@@ -1799,31 +2087,6 @@ describe('Dispatcher dependency gate', () => {
 })
 
 describe('Dispatcher interrupted-dispatch recovery', () => {
-  async function seedInterrupted(
-    h: Harness,
-    slug = 'interrupted-dispatch',
-    autoMergeRequestedBy?: string,
-  ): Promise<void> {
-    const ticket = (await h.tickets.get('T-recover'))!
-    await h.tickets.claim(ticket.ref.id)
-    await h.store.createBuild({
-      slug,
-      repo: REPO,
-      ticket: ticket.ref,
-      branch: `ab/${slug}`,
-    })
-    await h.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: ticket.ref,
-        repo: REPO,
-        baseBranch: 'main',
-        ...(autoMergeRequestedBy !== undefined ? { autoMergeRequestedBy } : {}),
-      },
-    })
-  }
-
   test('records increasing provisioning failures, then resumes workspace/spec/launch on an ordinary tick', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
     await seedInterrupted(h)
