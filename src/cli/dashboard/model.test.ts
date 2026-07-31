@@ -891,6 +891,24 @@ describe('projectBuild: blockers', () => {
     )
     expect(build.blockers).toEqual(['second question', 'third question'])
   })
+
+  test('projection preserves escalation bytes across newlines, controls, and non-ASCII', () => {
+    const question = 'first line\n\nfinal café\u001b[2J'
+    const log = toLog([
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('escalation.raised', {
+        id: 'e_exact',
+        phase: 'plan',
+        round: 1,
+        source: 'agent',
+        question,
+      }),
+    ])
+    const source = log.find((event) => event.type === 'escalation.raised')!
+    expect(source.payload.question).toBe(question)
+    expect(project(log).blockers).toEqual([question])
+  })
 })
 
 describe('projectBuild: the plan loop', () => {

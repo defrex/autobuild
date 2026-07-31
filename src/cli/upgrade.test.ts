@@ -27,6 +27,7 @@ import { parseConfig } from '../config/load'
 import { runCli } from './main'
 import { abUpgrade } from './upgrade'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
+import { createTerminalModeController } from './terminal-restore'
 
 const BODY = [
   '# alpha',
@@ -1013,11 +1014,15 @@ describe('runCli routing — ab upgrade outside a session', () => {
       },
     }
     const raw: string[] = []
+    const write = (chunk: string): void => {
+      raw.push(chunk)
+    }
     const terminal: TerminalOut = {
       interactive: true,
       columns: 100,
       rows: 24,
-      write: (chunk) => raw.push(chunk),
+      write,
+      modes: createTerminalModeController(write),
     }
     const calls: string[] = []
     let cancelledSignal: AbortSignal | undefined

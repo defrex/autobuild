@@ -16,6 +16,7 @@ import {
   type TerminalInputEvent,
   type TerminalInputHooks,
 } from './terminal'
+import { ALTERNATE_SCREEN_MODE } from './terminal-restore'
 
 function stream(props: { isTTY?: boolean; columns?: number; rows?: number }): NodeJS.WriteStream {
   const writes: string[] = []
@@ -99,6 +100,14 @@ describe('processTerminal: write', () => {
     const s = stream({ isTTY: true, columns: 80 })
     processTerminal(s).write('frame')
     expect((s as unknown as { writes: string[] }).writes).toEqual(['frame'])
+  })
+
+  test('the mode ledger uses the injected synchronous emergency writer', () => {
+    const emergency: string[] = []
+    const term = processTerminal(stream({ isTTY: true }), (chunk) => emergency.push(chunk))
+    term.modes.enter(ALTERNATE_SCREEN_MODE)
+    term.modes.restoreAll()
+    expect(emergency).toEqual([ALTERNATE_SCREEN_MODE.restore])
   })
 })
 

@@ -344,26 +344,14 @@ function renderBuild(
       ),
     )
   }
-  // Durable setup errors belong to the build row, not the process-global
-  // warning line. Keep them visible across polls until attachment proves
-  // recovery, escaping control-heavy command output before wrapping.
+  // Setup failures and blocker questions are dense-list previews. Their model
+  // strings remain untouched; newline-aware wrapping and capping happen only
+  // at this presentation seam.
   if (build.setupError !== undefined) {
-    const [first, ...rest] = packLines(displayText(build.setupError).split(/\s+/), width - 4, '')
-    if (first !== undefined) {
-      lines.push(truncate(paint(`  ! ${first}`, 'red', color), width))
-      for (const line of rest) lines.push(truncate(paint(`    ${line}`, 'red', color), width))
-    }
+    lines.push(...prefixedMessagePreview(build.setupError, width, 'red', color, true))
   }
-  // Blockers wrap too — "every unresolved blocker message is displayed" is not
-  // satisfied by its first 80 characters, and a policy escalation's question
-  // is routinely longer than that. Escape external text before tokenization so
-  // the visible code-point escapes participate in width accounting, then paint
-  // each line so no ANSI escape is ever split across a wrap.
   for (const blocker of build.blockers) {
-    const [first, ...rest] = packLines(displayText(blocker).split(/\s+/), width - 4, '')
-    if (first === undefined) continue
-    lines.push(truncate(paint(`  ! ${first}`, 'red', color), width))
-    for (const line of rest) lines.push(truncate(paint(`    ${line}`, 'red', color), width))
+    lines.push(...prefixedMessagePreview(blocker, width, 'red', color, true))
   }
   return lines
 }
@@ -394,12 +382,7 @@ function renderHarvest(
     ),
   )
   if (harvest.detail !== undefined) {
-    const wrapped = packLines(displayText(harvest.detail).split(/\s+/), width - 4, '')
-    for (const [index, line] of wrapped.entries()) {
-      lines.push(
-        truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, statusColor, color), width),
-      )
-    }
+    lines.push(...prefixedMessagePreview(harvest.detail, width, statusColor, color, false))
   }
   return lines
 }
@@ -460,32 +443,60 @@ function buildLegend(build: DashboardBuild, detail: boolean): string {
   const control = dashboardBuildControl(build.status)
   const action = control === undefined ? '' : `  ${control.key} ${control.label}`
   return detail
-    ? `Keys: Up/Down select session  Enter transcript  m auto-merge${action}  a abort  Esc back  Ctrl-C quit`
+    ? `Keys: Up/Down scroll  Left/Right select session  Enter transcript  m auto-merge${action}  a abort  Esc back  Ctrl-C quit`
     : `Keys: Up/Down select  Enter details  m auto-merge${action}  a abort  Ctrl-C quit`
 }
 
-/**
- * A warning notice's required detail — a deprecated role key's replacement, the
- * valid-key list — can be longer than the frame is wide, and truncation drops
- * exactly the tail the operator needs. Wrap instead: `packLines` keeps both hard
- * invariants (one rendered line is one physical row; no row exceeds the width)
- * while nothing falls off the right edge.
- *
- * `displayText` runs FIRST so a newline in external text becomes an escape
- * rather than a row break — the frame's row structure stays ours, which is what
- * the old one-row rule was really protecting. That is also why this splits on
- * `' '` alone rather than `\s`, as `wrappedText` does: every other whitespace
- * character is already a printable escape by the time we get here.
- */
+const MESSAGE_PREVIEW_ROWS = 3
+
+/** Preserve authored line structure while limiting display-only blank runs to
+ * one row. Two newline separators make one paragraph row; longer runs do not
+ * consume more dense-list space. */
+function messageDisplayRows(value: string, width: number, collapseBlankRuns: boolean): string[] {
+  if (width <= 0) return []
+  const logical = value.split(/\r?\n/)
+  const normalized: string[] = []
+  let previousBlank = false
+  for (const line of logical) {
+    const blank = line.trim().length === 0
+    if (!collapseBlankRuns || !blank || !previousBlank) normalized.push(line)
+    previousBlank = blank
+  }
+  return normalized.flatMap((line) => wrapDisplay(line, width))
+}
+
+function previewMessageRows(value: string, width: number, expandable: boolean): string[] {
+  const rows = messageDisplayRows(value, width, true)
+  if (rows.length <= MESSAGE_PREVIEW_ROWS) return rows
+  const remaining = rows.length - MESSAGE_PREVIEW_ROWS
+  const noun = remaining === 1 ? 'row' : 'rows'
+  const hint = expandable ? ' - Enter details' : ''
+  return [
+    ...rows.slice(0, MESSAGE_PREVIEW_ROWS),
+    ...wrapDisplay(`... ${remaining} more ${noun}${hint}`, width),
+  ]
+}
+
+function prefixedMessagePreview(
+  value: string,
+  width: number,
+  colorName: ColorName,
+  color: boolean,
+  expandable: boolean,
+): string[] {
+  const contentWidth = Math.max(0, width - 4)
+  return previewMessageRows(value, contentWidth, expandable).map((line, index) =>
+    truncate(paint(`${index === 0 ? '  ! ' : '    '}${line}`, colorName, color), width),
+  )
+}
+
+/** Each process warning is independently capped. Unlike build-owned messages,
+ * the warning slot has no selectable row, so its notice promises no expansion
+ * action. */
 function warningRows(lines: readonly string[], width: number): string[] {
+  const contentWidth = Math.max(0, width - 2)
   return lines.flatMap((line) =>
-    packLines(
-      displayText(line)
-        .split(' ')
-        .filter((token) => token !== ''),
-      width,
-      '  ',
-    ),
+    previewMessageRows(line, contentWidth, false).map((row) => truncate(`  ${row}`, width)),
   )
 }
 
@@ -565,32 +576,27 @@ function viewport(lines: string[], capacity: number, focus: number, scroll = 0):
   return lines.slice(start, start + capacity)
 }
 
-function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
-  const view = model.view
-  if (view?.kind !== 'detail') return []
-  const build = model.builds.find((candidate) => candidate.slug === view.slug)
-  if (build === undefined) return []
-  const { color, width, height } = opts
-  const paused = build.alsoPaused ? ' (also paused)' : ''
-  const top = [
-    truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
-    truncate(
-      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
-      width,
-    ),
-  ]
+interface DetailBodyLayout {
+  body: string[]
+  focus: number
+}
+
+function detailBody(
+  build: DashboardBuild,
+  view: Extract<NonNullable<DashboardModel['view']>, { kind: 'detail' }>,
+  opts: RenderOpts,
+): DetailBodyLayout {
+  const { color, width } = opts
   const body: string[] = []
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
   body.push(`  auto merge ${build.autoMerge}`)
-  if (build.pr !== undefined) {
+  if (build.pr !== undefined)
     body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
-  }
   if (build.abortProgress !== undefined) {
     body.push('', paint('Abort progress', 'bold', color))
     body.push(...wrappedText(build.abortProgress, width, '  '))
   } else if (build.dispatch !== undefined) {
-    body.push('', paint('Dispatch', 'bold', color))
-    body.push(...wrappedText(build.dispatch, width, '  '))
+    body.push('', paint('Dispatch', 'bold', color), ...wrappedText(build.dispatch, width, '  '))
   } else {
     body.push('', paint('Pipeline', 'bold', color))
     body.push(...build.steps.map((item) => `  ${detailStep(item, opts)}`))
@@ -598,14 +604,14 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   if (build.setupError !== undefined) {
     body.push('', paint('Setup failure', 'bold', color))
     body.push(
-      ...wrappedText(build.setupError, width, '  ').map((line) => paint(line, 'red', color)),
+      ...wrapDisplay(build.setupError, width, '  ').map((line) => paint(line, 'red', color)),
     )
   }
   if (build.blockers.length > 0) {
     body.push('', paint('Unresolved blockers', 'bold', color))
     for (const blocker of build.blockers) {
       body.push(
-        ...wrappedText(`! ${blocker}`, width, '  ').map((line) => paint(line, 'red', color)),
+        ...wrapDisplay(`! ${blocker}`, width, '  ').map((line) => paint(line, 'red', color)),
       )
     }
     for (const note of [
@@ -631,22 +637,96 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
       ...wrappedText(view.message, width, '  ').map((line) => paint(line, 'yellow', color)),
     )
   }
+  return { body, focus }
+}
+
+interface DetailGeometry extends DetailBodyLayout {
+  capacity: number
+  limit: number
+}
+
+function detailGeometry(
+  model: DashboardModel,
+  width: number,
+  height: number,
+): DetailGeometry | undefined {
+  const view = model.view
+  if (view?.kind !== 'detail') return undefined
+  const build = model.builds.find((candidate) => candidate.slug === view.slug)
+  if (build === undefined) return undefined
+  const layout = detailBody(build, view, { color: false, width, height, now: 0 })
+  const controls =
+    model.resumeInput !== undefined || model.abortConfirmation !== undefined
+      ? dashboardControls(model, false, width, controlsCapacity(height, 2))
+      : [buildLegend(build, true)]
+  const capacity = Math.max(0, height - 2 - 2 - controls.length)
+  return { ...layout, capacity, limit: Math.max(0, layout.body.length - capacity) }
+}
+
+export function detailScrollLimit(model: DashboardModel, width: number, height: number): number {
+  return detailGeometry(model, width, height)?.limit ?? 0
+}
+
+export function moveDetailScroll(
+  model: DashboardModel,
+  width: number,
+  height: number,
+  current: number,
+  delta: number,
+): number {
+  const limit = detailScrollLimit(model, width, height)
+  return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
+}
+
+/** Keep the current detail focus (a selected session or transient message)
+ * inside the explicit viewport without otherwise recentering operator scroll. */
+export function revealDetailFocus(
+  model: DashboardModel,
+  width: number,
+  height: number,
+  current: number,
+): number {
+  const geometry = detailGeometry(model, width, height)
+  if (geometry === undefined) return 0
+  const scroll = Math.max(0, Math.min(geometry.limit, current))
+  if (geometry.focus < scroll) return geometry.focus
+  if (geometry.focus >= scroll + geometry.capacity) {
+    return Math.min(geometry.limit, geometry.focus - Math.max(0, geometry.capacity - 1))
+  }
+  return scroll
+}
+
+function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
+  const view = model.view
+  if (view?.kind !== 'detail') return []
+  const build = model.builds.find((candidate) => candidate.slug === view.slug)
+  if (build === undefined) return []
+  const { color, width, height } = opts
+  const paused = build.alsoPaused ? ' (also paused)' : ''
+  const top = [
+    truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
+    truncate(
+      `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
+      width,
+    ),
+  ]
+  const { body } = detailBody(build, view, opts)
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, color, width, controlsCapacity(height, top.length))
       : [truncate(paint(buildLegend(build, true), 'dim', color), width)]
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
-  // Mirror the list view's boundary branches so the panel is the last thing
-  // the detail view drops as height disappears.
   if (height !== undefined && height === top.length + 1) return [...top, ...controls]
   if (height !== undefined && height === top.length + 2) return [...top, '', ...controls]
   const capacity =
     height === undefined ? body.length : Math.max(0, height - top.length - 2 - controls.length)
+  const limit = Math.max(0, body.length - capacity)
+  const start = Math.max(0, Math.min(limit, view.scroll))
   return [
     ...top,
     '',
-    ...viewport(body, capacity, focus).map((line) => truncate(line, width)),
+    ...body.slice(start, start + capacity).map((line) => truncate(line, width)),
     '',
     ...controls,
   ].slice(0, height === undefined ? Number.POSITIVE_INFINITY : height)
