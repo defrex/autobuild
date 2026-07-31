@@ -59,6 +59,15 @@ export const harvestCreateProposalSchema = z.strictObject({
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
   /** Explicit even when there is little to exclude. */
   outOfScope: z.array(z.string().min(1)).min(1),
+  /** Source-local ticket ids that must complete before this work can start. */
+  blockedBy: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .refine((id) => id.trim().length > 0, 'blocker id must be nonblank'),
+    )
+    .optional(),
   observations: proposalMembers,
 })
 
