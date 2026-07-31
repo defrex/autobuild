@@ -279,6 +279,25 @@ describe('docs/configuration.md — schema coverage', () => {
     }
   })
 
+  test('pins the main-checkout boundary and last-valid reload recovery contract', () => {
+    const surfaces = [
+      ['docs/configuration.md', headingSection(doc, 2, 'Reloading a running dispatcher')],
+      ['skills/guide/SKILL.md', paragraphContaining(guide, '**Live configuration**')],
+    ] as const
+
+    for (const [location, section] of surfaces) {
+      expect(section, `${location} live-config contract is missing`).toBeDefined()
+      expect(section).toMatch(/main checkout/)
+      expect(section).toMatch(/(?:action|start) boundary/)
+      expect(section).toMatch(/pipeline step/)
+      expect(section).toMatch(/(?:missing|unreadable)/)
+      expect(section).toMatch(/last valid (?:configuration )?snapshot/)
+      expect(section).toMatch(/restor(?:e|ing)[\s\S]*valid[\s\S]*resume/i)
+      expect(section).toMatch(/(?:not interrupted|without interrupting)/)
+      expect(section).toMatch(/build worktree/)
+    }
+  })
+
   test('documents every nested [pr.imageHost] field structurally', () => {
     expectRows(
       'docs/configuration.md / [pr.imageHost]',
