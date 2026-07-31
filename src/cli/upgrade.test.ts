@@ -859,6 +859,66 @@ describe('abUpgrade — fixed retired skills', () => {
     expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
   })
 
+  test('surfaces and preserves a distinct Claude directory while retiring an exact canonical tree', async () => {
+    await installOldDistribution()
+    const name = 'ab-setup'
+    const discovery = join(target, '.claude', 'skills', name)
+    const sentinel = Buffer.from('user-owned Claude bytes\n')
+    await rm(discovery, { recursive: true, force: true })
+    await mkdir(discovery, { recursive: true })
+    await writeFile(join(discovery, 'sentinel.bin'), sentinel)
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.exitCode).toBe(1)
+    expect(first.skills.find((entry) => entry.skill === name)).toEqual({
+      skill: name,
+      action: 'kept',
+      detail:
+        'retired canonical tree matched pristine and was removed; distinct user-owned Claude discovery directory remains',
+    })
+    expect(first.discoveryConflicts).toHaveLength(1)
+    expect(first.discoveryConflicts[0]?.skill).toBe(name)
+    expect(first.discoveryConflicts[0]?.message).toContain('.claude/skills/ab-setup')
+    expect(existsSync(installedSkillPath(target, name))).toBe(false)
+    expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(false)
+    expect(await readFile(join(discovery, 'sentinel.bin'))).toEqual(sentinel)
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second).toEqual({
+      skills: [{ skill: 'ab-alpha', action: 'current' }],
+      discoveryConflicts: [],
+      exitCode: 0,
+    })
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(false)
+    expect(await readFile(join(discovery, 'sentinel.bin'))).toEqual(sentinel)
+  })
+
+  test('cleans surviving provenance and an owned dangling link when the live tree is missing', async () => {
+    await installOldDistribution()
+    const name = 'ab-setup'
+    const discovery = join(target, '.claude', 'skills', name)
+    await rm(dirname(installedSkillPath(target, name)), { recursive: true, force: true })
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(true)
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.exitCode).toBe(0)
+    expect(first.skills.find((entry) => entry.skill === name)).toEqual({
+      skill: name,
+      action: 'removed',
+      detail: 'retired distribution skill; installed tree was already missing',
+    })
+    expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    await expect(lstat(discovery)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+    expect(second.exitCode).toBe(0)
+    await expect(lstat(discovery)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   test('keeps edited trees and local support files, then relinquishes pristine ownership', async () => {
     await installOldDistribution()
     await writeFile(

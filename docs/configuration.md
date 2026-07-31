@@ -873,13 +873,17 @@ upgrade merge as every other vendored file.
 
 Upgrade has two one-time retirement classifications for the former
 `ab-setup` and `ab-verify-e2e` defaults. `removed` means pristine provenance
-existed, the complete live tree still matched it, and no agent verify or
-finalize step referenced the skill, so upgrade removed the live/pristine trees
-and owned discovery link. `kept` means the tree was customized, still
-configured, or could not be proved safe to remove; upgrade preserves it and
-clears obsolete pristine ownership so later runs treat it as a quiet local
-skill. A same-named repository-authored skill with no pristine provenance is
-never removed, and a second upgrade neither resurrects nor re-reports either
+existed and either the unreferenced live tree matched it and was removed with
+its owned discovery link, or the canonical live tree was already missing and
+upgrade cleared provenance plus any owned dangling link. `kept` normally means
+the tree was customized, still configured, or could not be proved safe to
+remove; upgrade preserves it and clears obsolete pristine ownership. It also
+means an otherwise removable canonical tree was deleted while a distinct
+user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
+remains discoverable. That directory enters the ordinary structured discovery
+conflict report, so upgrade exits nonzero. A same-named repository-authored
+skill with no pristine provenance is never removed, and a second upgrade
+neither recreates a dangling link nor resurrects or re-reports either
 retirement.
 
 ## Durable settings outside TOML
