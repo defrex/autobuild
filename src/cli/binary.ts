@@ -10,7 +10,8 @@ import { createUpgradeAgentResolver } from './upgrade-agent'
 import { loadDotEnv } from './dotenv'
 import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
 import { openProductionStore } from './store-opening'
-import { processTerminal, processTerminalInput } from './terminal'
+import { processTerminal, processTerminalInput, type TerminalOut } from './terminal'
+import { installTerminalRestoreHook, type TerminalRestoreProcess } from './terminal-restore'
 import type { DashboardRendererResolver } from './dashboard/render'
 import { loadConfig } from '../config/load'
 import { loadPlugins } from '../plugins/load'
@@ -24,6 +25,22 @@ import { resolveMainRepo } from './repo-state'
  * else its process must retain Node's ordinary immediate SIGINT termination. */
 export function usesGenericSessionlessSigintHandler(command: string | undefined): boolean {
   return command !== 'upgrade'
+}
+
+/** Install the dispatch-only process fallback around the exact CLI lifetime. */
+export async function withDispatchTerminalRestore<T>(
+  command: string | undefined,
+  terminal: TerminalOut,
+  run: () => Promise<T>,
+  boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
+): Promise<T> {
+  const hook =
+    command === 'dispatch' ? installTerminalRestoreHook(terminal.modes, boundary) : undefined
+  try {
+    return await run()
+  } finally {
+    hook?.close()
+  }
 }
 
 export async function runBinary(
@@ -58,21 +75,24 @@ export async function runBinary(
     const controller = new AbortController()
     const onSigint = (): void => controller.abort()
     const ownsSigint = usesGenericSessionlessSigintHandler(command)
+    const terminal = processTerminal(process.stdout)
     if (ownsSigint) process.once('SIGINT', onSigint)
     try {
-      return await runCli(argv, {
-        ...unscopedDeps,
-        ...(ownsSigint ? { signal: controller.signal } : {}),
-        // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
-        // TTY, so a pipe or redirect silently gets plain output.
-        terminal: processTerminal(process.stdout),
-        input: processTerminalInput(process.stdin),
-        ...(command === 'init'
-          ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
-          : {}),
-        upgradeResolverFactory: createUpgradeAgentResolver,
-        ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
-      })
+      return await withDispatchTerminalRestore(command, terminal, () =>
+        runCli(argv, {
+          ...unscopedDeps,
+          ...(ownsSigint ? { signal: controller.signal } : {}),
+          // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
+          // TTY, so a pipe or redirect silently gets plain output.
+          terminal,
+          input: processTerminalInput(process.stdin),
+          ...(command === 'init'
+            ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
+            : {}),
+          upgradeResolverFactory: createUpgradeAgentResolver,
+          ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
+        }),
+      )
     } finally {
       if (ownsSigint) process.removeListener('SIGINT', onSigint)
     }

@@ -271,9 +271,13 @@ optional API 1.2 capabilities so older plugins load but leave cleanup visibly du
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
 frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
-decoding, while `live.ts` sequences its push and pop with the alternate-screen
-region because the terminal's keyboard flag stack is per-screen; `poll.ts` is a
-display-only incremental cache (the logs remain authoritative — cache loss just
+decoding, while `live.ts` owns normal teardown and sequences its push and pop
+with the alternate-screen region because the terminal's keyboard flag stack is
+per-screen. Every mode enters and leaves through the declarations and active
+ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
+process-boundary fallback over that same ledger for faults and terminating
+signals that bypass normal teardown. `poll.ts` is a display-only incremental
+cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —
 display-cell wrapping, caret placement, and code-point motions — as pure,
