@@ -54,6 +54,7 @@ import { parseTranscript } from './dashboard/transcript'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
+import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -341,6 +342,7 @@ class DispatchLoop {
    * untouched and makes plain the default rather than a mode.
    */
   private readonly dashboard: boolean
+  private readonly keyboard: KeyboardProtocol | undefined
   private readonly region: LiveRegion | undefined
   /** One display-only incremental build cache for this dispatch process. */
   private readonly dashboardBuilds: DashboardBuildPollCache
@@ -396,8 +398,14 @@ class DispatchLoop {
     resolver: RuntimeResolver,
   ) {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
+    this.keyboard =
+      this.dashboard && opts.terminal !== undefined && opts.input !== undefined
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        : undefined
     this.region =
-      this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
+      this.dashboard && opts.terminal !== undefined
+        ? new LiveRegion(opts.terminal, this.keyboard)
+        : undefined
     this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, opts.targetRepo, config)
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
@@ -1234,7 +1242,11 @@ class DispatchLoop {
   private startInput(): void {
     if (!this.dashboard || this.opts.input === undefined) return
     this.acceptingKeys = true
-    this.cleanupInput = this.opts.input.start((input) => this.onInput(input))
+    this.cleanupInput = this.opts.input.start((input) => this.onInput(input), {
+      onListening: () => this.keyboard?.query(),
+      onKeyboardFlags: (flags) => this.keyboard?.reported(flags),
+      onDeviceAttributes: () => this.keyboard?.deviceAttributes(),
+    })
   }
 
   private stopInput(): void {

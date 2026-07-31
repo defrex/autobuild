@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { LiveRegion, paintableRows } from './live'
+import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
 
 interface FakeTerm extends TerminalOut {
@@ -217,6 +218,57 @@ describe('LiveRegion: finish() leaves the last frame on the normal screen', () =
     )
     region.finish()
     expect(term.writes.filter((chunk) => chunk === DISABLE_BRACKETED_PASTE)).toHaveLength(1)
+  })
+
+  test('keyboard mode is entered after alternate-screen entry and left before exit', () => {
+    const term = fakeTerm()
+    let pushed = false
+    const keyboard: KeyboardProtocol = {
+      query: () => {},
+      reported: () => {},
+      deviceAttributes: () => {},
+      screenEntered: () => {
+        pushed = true
+        term.write('<keyboard-push>')
+      },
+      screenLeaving: () => {
+        pushed = false
+        term.write('<keyboard-pop>')
+      },
+      get pushed() {
+        return pushed
+      },
+    }
+    const region = new LiveRegion(term, keyboard)
+    region.update(['frame'])
+    region.update(['other'])
+    region.finish()
+    region.finish()
+
+    expect(term.writes.filter((chunk) => chunk === '<keyboard-push>')).toHaveLength(1)
+    expect(term.writes.filter((chunk) => chunk === '<keyboard-pop>')).toHaveLength(1)
+    expect(term.writes.indexOf(ENTER_ALTERNATE_SCREEN)).toBeLessThan(
+      term.writes.indexOf('<keyboard-push>'),
+    )
+    expect(term.writes.indexOf('<keyboard-pop>')).toBeLessThan(
+      term.writes.indexOf(LEAVE_ALTERNATE_SCREEN),
+    )
+  })
+
+  test('an unpainted region still latches keyboard teardown without writing terminal escapes', () => {
+    const term = fakeTerm()
+    let leaving = 0
+    const keyboard: KeyboardProtocol = {
+      query: () => {},
+      reported: () => {},
+      deviceAttributes: () => {},
+      screenEntered: () => {},
+      screenLeaving: () => (leaving += 1),
+      pushed: false,
+    }
+    new LiveRegion(term, keyboard).finish()
+    expect(leaving).toBe(1)
+    expect(term.all()).toBe('')
   })
 
   test('an unpainted region never touches paste mode', () => {
