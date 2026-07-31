@@ -956,14 +956,19 @@ untracked work remains untouched.
 Use `ab upgrade --no-commit` to leave all output uncommitted for manual review.
 The flag is forwarded when self-update hands off to the replacement binary, and
 the default path likewise carries its pre-update Git baseline through that
-handoff. Upgrade suppresses the whole commit and names why when any skill or
-Claude discovery path conflicts, an owned path was already dirty, the target
-is not a Git repository, HEAD/worktree identity changes, or Git is mid-merge,
-mid-rebase, or mid-cherry-pick. If upgrade cannot snapshot the worktree's Git
-index, it warns and declines to stage. A failed staging or commit attempt
-restores that exact pre-attempt index and reports the original Git failure;
-merged worktree files remain in place and the merge's exit status is unchanged.
-Upgrade never pushes or rewrites history.
+handoff. If a replacement child receives the handoff marker without that
+baseline — possible when an older parent launches a newer child — it suppresses
+the entire automatic commit, names the cross-version compatibility reason, and
+leaves all upgrade-owned changes uncommitted for the operator. Skill-upgrade
+results and the merge-derived exit status remain unchanged. Upgrade likewise
+suppresses the whole commit and names why when any skill or Claude discovery
+path conflicts, an owned path was already dirty, the target is not a Git
+repository, HEAD/worktree identity changes, or Git is mid-merge, mid-rebase, or
+mid-cherry-pick. If upgrade cannot snapshot the worktree's Git index, it warns
+and declines to stage. A failed staging or commit attempt restores that exact
+pre-attempt index and reports the original Git failure; merged worktree files
+remain in place and the merge's exit status is unchanged. Upgrade never pushes
+or rewrites history.
 
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
 are model-invocable. The setup reference is an ordinary support file in the

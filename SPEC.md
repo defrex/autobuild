@@ -1574,12 +1574,18 @@ unstaged.
 
 The baseline is captured before self-update and carried to the replacement
 binary. `--no-commit` also survives that handoff and leaves the merge exactly as
-written. Any content conflict, Claude discovery conflict, pre-existing dirt in
-an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
-merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
-If upgrade cannot snapshot the worktree's Git index, it warns and declines to
-stage. A staging or commit failure restores that exact pre-attempt index without
-touching the merged worktree files, and warns with the original Git failure.
+written. A replacement child marked as a handoff but missing that pre-update
+baseline — as when an older parent launches a newer child without the newer
+context — suppresses the entire automatic commit, names the cross-version
+compatibility reason, and leaves all upgrade-owned changes uncommitted for the
+operator. The skill-upgrade results and merge-derived exit status are unchanged.
+Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
+path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
+rebase, or cherry-pick likewise suppresses the whole commit and prints the
+reason. If upgrade cannot snapshot the worktree's Git index, it warns and
+declines to stage. A staging or commit failure restores that exact pre-attempt
+index without touching the merged worktree files, and warns with the original
+Git failure.
 Commit suppression or failure never changes the merge-derived exit status:
 content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
 never pushes or rewrites existing history.

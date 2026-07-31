@@ -468,18 +468,24 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const handoff = deps.processEnv?.[SELF_UPDATE_HANDOFF_ENV] === '1'
       let commitContext: UpgradeCommitContext | undefined
       if (!noCommit) {
-        try {
-          const handoffPath = handoff ? deps.processEnv?.[UPGRADE_COMMIT_CONTEXT_ENV] : undefined
-          commitContext =
-            handoffPath === undefined
-              ? await createUpgradeCommitContext(targetRepo)
-              : await loadUpgradeCommitContext(handoffPath, targetRepo)
-        } catch (error) {
+        const handoffPath = handoff ? deps.processEnv?.[UPGRADE_COMMIT_CONTEXT_ENV] : undefined
+        if (handoff && handoffPath === undefined) {
           stderr(
-            `ab upgrade did not commit: could not capture or restore the pre-upgrade Git baseline: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            'ab upgrade did not commit: automatic commit suppressed for cross-version compatibility because the parent binary did not provide a pre-self-update Git baseline; all upgrade-owned changes remain uncommitted for the operator',
           )
+        } else {
+          try {
+            commitContext =
+              handoffPath === undefined
+                ? await createUpgradeCommitContext(targetRepo)
+                : await loadUpgradeCommitContext(handoffPath, targetRepo)
+          } catch (error) {
+            stderr(
+              `ab upgrade did not commit: could not capture or restore the pre-upgrade Git baseline: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            )
+          }
         }
       }
 

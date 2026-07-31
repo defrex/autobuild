@@ -25,6 +25,7 @@ import {
 } from './init'
 import { parseConfig } from '../config/load'
 import { runCli } from './main'
+import { SELF_UPDATE_HANDOFF_ENV } from './self-update'
 import { abUpgrade } from './upgrade'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
@@ -1390,6 +1391,71 @@ describe('runCli routing — ab upgrade outside a session', () => {
         ).toContain('- ab-alpha: adopted')
       }
     }
+  })
+
+  test('a replacement child without the pre-update handoff baseline leaves every upgrade change uncommitted', async () => {
+    const oldDist = join(root, 'handoff-old')
+    const nextDist = join(root, 'handoff-next')
+    const repo = join(root, 'handoff-repo')
+    await writeDist(oldDist, { alpha: BODY })
+    await writeDist(nextDist, {
+      alpha: BODY.replace('middle line two', 'middle line two upgraded'),
+    })
+    await mkdir(repo)
+    await abInit({ targetRepo: repo, distRoot: oldDist })
+    await writeFile(join(repo, 'package.json'), '{"dependencies":{"autobuild":"old"}}\n')
+    await writeFile(join(repo, 'bun.lock'), '{"lock":"old"}\n')
+    await writeFile(join(repo, 'staged.txt'), 'old staged\n')
+    await writeFile(join(repo, 'unstaged.txt'), 'old unstaged\n')
+    await spawnExec(['git', 'init', '-q'], { cwd: repo })
+    await spawnExec(['git', 'config', 'user.name', 'Upgrade Test'], { cwd: repo })
+    await spawnExec(['git', 'config', 'user.email', 'upgrade@example.test'], { cwd: repo })
+    await spawnExec(['git', 'add', '.'], { cwd: repo })
+    await spawnExec(['git', 'commit', '-qm', 'initial'], { cwd: repo })
+    const before = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+
+    // Simulate an older parent that updated its local Bun owner project, then
+    // launched the newer child with the handoff marker but no commit context.
+    await writeFile(join(repo, 'package.json'), '{"dependencies":{"autobuild":"new"}}\n')
+    await writeFile(join(repo, 'bun.lock'), '{"lock":"new"}\n')
+    await writeFile(join(repo, 'staged.txt'), 'operator staged\n')
+    await spawnExec(['git', 'add', 'staged.txt'], { cwd: repo })
+    await writeFile(join(repo, 'unstaged.txt'), 'operator unstaged\n')
+    await writeFile(join(repo, 'untracked.txt'), 'operator untracked\n')
+
+    const out: string[] = []
+    const err: string[] = []
+    const code = await runCli(['upgrade', repo], {
+      workspacePath: repo,
+      distributionRoot: nextDist,
+      processEnv: { [SELF_UPDATE_HANDOFF_ENV]: '1' },
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    })
+
+    expect(code).toBe(0)
+    expect((await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()).toBe(
+      before,
+    )
+    expect(out).toContain('ab-alpha: adopted')
+    expect(out).not.toContain('ab upgrade: committed upgrade-owned changes')
+    expect(err.join('\n')).toContain('automatic commit suppressed for cross-version compatibility')
+    expect(err.join('\n')).toContain('parent binary did not provide a pre-self-update Git baseline')
+    expect(err.join('\n')).toContain(
+      'all upgrade-owned changes remain uncommitted for the operator',
+    )
+    expect(await readFile(join(repo, 'package.json'), 'utf8')).toContain('"autobuild":"new"')
+    expect(await readFile(join(repo, 'bun.lock'), 'utf8')).toContain('"lock":"new"')
+    expect(await readFile(installedSkillPath(repo, 'ab-alpha'), 'utf8')).toContain(
+      'middle line two upgraded',
+    )
+    const status = (await spawnExec(['git', 'status', '--porcelain'], { cwd: repo })).stdout
+    expect(status).toContain(' M .agents/skills/ab-alpha/SKILL.md')
+    expect(status).toContain(' M package.json')
+    expect(status).toContain(' M bun.lock')
+    expect(status).toContain('M  staged.txt')
+    expect(status).toContain(' M unstaged.txt')
+    expect(status).toContain('?? untracked.txt')
   })
 
   test('ab upgrade rejects extra arguments with usage feedback', async () => {
