@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_FOLLOW_UP,
   CONTRACT_ONE_SHOT_PROMPT,
   CONTRACT_ONE_SHOT_TEXT,
@@ -164,6 +165,15 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
           is_error: true,
           result: CONTRACT_PERMANENT_FAILURE,
           api_error_status: 401,
+        }),
+      ])
+    }
+    if (scenario === 'exhaustion-failure') {
+      return output([
+        result('contract-session', 0, 0, {
+          is_error: true,
+          result: CONTRACT_EXHAUSTION_FAILURE,
+          api_error_status: 402,
         }),
       ])
     }
@@ -339,7 +349,7 @@ describe('ClaudeAgentRunner failures', () => {
       kind: 'failed',
       text: message,
       usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
-      failure: { message, permanent: true },
+      failure: { message, permanent: true, cause: 'credentials' },
     })
     await runner.end(session)
   })

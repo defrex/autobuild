@@ -8,6 +8,7 @@
 import {
   agentInvocation,
   type AgentContinueOpts,
+  type AgentFailureCause,
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
@@ -43,12 +44,17 @@ export function defaultTurnResult(text = ''): AgentTurnResult {
 
 /** Script a provider/runner-declared failure while preserving the same endable
  * fake session and transcript behavior as a real adapter. */
-export function failedTurnResult(message: string, permanent: boolean, text = ''): AgentTurnResult {
+export function failedTurnResult(
+  message: string,
+  permanent: boolean,
+  text = '',
+  cause?: AgentFailureCause,
+): AgentTurnResult {
   return {
     kind: 'failed',
     text,
     usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
-    failure: { message, permanent },
+    failure: { message, permanent, ...(cause !== undefined ? { cause } : {}) },
   }
 }
 

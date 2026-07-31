@@ -18,7 +18,7 @@ import {
   type AgentTurnResult,
   type Transcript,
 } from '../types'
-import { classifyProviderError } from './provider-error'
+import { classifyProviderError, configurationFailure } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
@@ -282,7 +282,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
       return {
         text: '',
         usage: { inputTokens: 0, outputTokens: 0 },
-        failure: missing ? { message, permanent: true } : classifyProviderError(message),
+        failure: missing ? configurationFailure(message) : classifyProviderError(message),
         cli: {
           stdout: '',
           stderr: errorText(error),
