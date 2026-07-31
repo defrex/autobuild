@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   abInit,
   defaultDistRoot,
@@ -833,8 +833,17 @@ describe('abUpgrade — fixed retired skills', () => {
     await writeDist(distV2, { alpha: BODY })
   }
 
-  test('removes exact pristine copies and discovery links once', async () => {
+  test('removes exact pristine copies and Autobuild-owned discovery links once', async () => {
     await installOldDistribution()
+    const ownedLinks = new Map<string, string>()
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      const discovery = join(target, '.claude', 'skills', name)
+      const linkText = await readlink(discovery)
+      expect(resolve(dirname(discovery), linkText)).toBe(
+        resolve(dirname(installedSkillPath(target, name))),
+      )
+      ownedLinks.set(name, linkText)
+    }
 
     const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
 
@@ -852,13 +861,57 @@ describe('abUpgrade — fixed retired skills', () => {
       },
     ])
     for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      expect(ownedLinks.get(name)).toBeDefined()
       expect(existsSync(installedSkillPath(target, name))).toBe(false)
       expect(existsSync(pristineSkillPath(target, name))).toBe(false)
-      expect(existsSync(join(target, '.claude', 'skills', name))).toBe(false)
+      await expect(lstat(join(target, '.claude', 'skills', name))).rejects.toMatchObject({
+        code: 'ENOENT',
+      })
     }
 
     const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
     expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+  })
+
+  test('surfaces and preserves a foreign Claude symlink while retiring an exact canonical tree', async () => {
+    await installOldDistribution()
+    const name = 'ab-setup'
+    const discovery = join(target, '.claude', 'skills', name)
+    const foreignTarget = join(target, 'user-skills', 'retired-setup')
+    const foreignLinkText = '../../user-skills/retired-setup'
+    const sentinel = Buffer.from('user-owned symlink target bytes\n')
+    await rm(discovery, { force: true })
+    await mkdir(foreignTarget, { recursive: true })
+    await writeFile(join(foreignTarget, 'sentinel.bin'), sentinel)
+    await symlink(foreignLinkText, discovery, 'dir')
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.exitCode).toBe(1)
+    expect(first.skills.find((entry) => entry.skill === name)).toEqual({
+      skill: name,
+      action: 'kept',
+      detail:
+        'retired canonical tree matched pristine and was removed; user-owned Claude discovery entry remains',
+    })
+    expect(first.discoveryConflicts).toHaveLength(1)
+    expect(first.discoveryConflicts[0]?.skill).toBe(name)
+    expect(first.discoveryConflicts[0]?.message).toContain('is a foreign symlink')
+    expect(existsSync(installedSkillPath(target, name))).toBe(false)
+    expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(true)
+    expect(await readlink(discovery)).toBe(foreignLinkText)
+    expect(await readFile(join(foreignTarget, 'sentinel.bin'))).toEqual(sentinel)
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second).toEqual({
+      skills: [{ skill: 'ab-alpha', action: 'current' }],
+      discoveryConflicts: [],
+      exitCode: 0,
+    })
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(true)
+    expect(await readlink(discovery)).toBe(foreignLinkText)
+    expect(await readFile(join(foreignTarget, 'sentinel.bin'))).toEqual(sentinel)
   })
 
   test('surfaces and preserves a distinct Claude directory while retiring an exact canonical tree', async () => {
@@ -877,7 +930,7 @@ describe('abUpgrade — fixed retired skills', () => {
       skill: name,
       action: 'kept',
       detail:
-        'retired canonical tree matched pristine and was removed; distinct user-owned Claude discovery directory remains',
+        'retired canonical tree matched pristine and was removed; user-owned Claude discovery entry remains',
     })
     expect(first.discoveryConflicts).toHaveLength(1)
     expect(first.discoveryConflicts[0]?.skill).toBe(name)

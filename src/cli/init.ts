@@ -305,16 +305,24 @@ async function prepareAliasedSkillRoots(targetRepo: string): Promise<boolean> {
   return false
 }
 
-/** An actionable collision with a distinct, user-owned Claude skill directory. */
+/** An actionable collision with a distinct, user-owned Claude discovery entry. */
 export class ClaudeSkillDiscoveryConflict extends Error {
   readonly skill: string
 
-  constructor(targetRepo: string, installName: string) {
+  constructor(
+    targetRepo: string,
+    installName: string,
+    kind: 'directory' | 'foreign-symlink' = 'directory',
+  ) {
     const claude = relative(targetRepo, claudeSkillPath(targetRepo, installName))
     const canonical = relative(targetRepo, dirname(installedSkillPath(targetRepo, installName)))
+    const conflict =
+      kind === 'foreign-symlink'
+        ? `${claude} is a foreign symlink rather than an Autobuild-owned link to ${canonical}`
+        : `${claude} is a distinct real directory from ${canonical}`
     super(
-      `cannot create Claude discovery link for "${installName}": ${claude} is a distinct ` +
-        `real directory from ${canonical}; move or remove ${claude}, then rerun the command`,
+      `cannot create Claude discovery link for "${installName}": ${conflict}; ` +
+        `move or remove ${claude}, then rerun the command`,
     )
     this.name = 'ClaudeSkillDiscoveryConflict'
     this.skill = installName
@@ -570,7 +578,7 @@ export interface InitReport {
   config: InitConfigAction
   /** Per-skill outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: InitSkillAction }>
-  /** Distinct Claude directories that prevented discovery-link maintenance. */
+  /** User-owned Claude entries that prevented discovery-link maintenance. */
   discoveryConflicts: SkillDiscoveryConflict[]
   /** Interactive setup child status, or one when discovery conflicts remain. */
   exitCode: number
