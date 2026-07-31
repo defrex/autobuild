@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#179](https://github.com/defrex/autobuild/pull/179) — Align dashboard Unicode geometry contracts
 - [#176](https://github.com/defrex/autobuild/pull/176) — Guard runtime registry lookups against inherited properties
 - [#175](https://github.com/defrex/autobuild/pull/175) — Make retired-skill reports match discovery state
 - [#174](https://github.com/defrex/autobuild/pull/174) — Trigger observation harvest on repository drift
