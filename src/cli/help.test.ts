@@ -134,6 +134,7 @@ describe('layered CLI help catalog', () => {
         'bun.lock',
         'Three-way merge',
         'Unrelated staged',
+        'missing its pre-update baseline',
         'merge-derived exit status',
         'outside sessions',
       ],

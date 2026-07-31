@@ -1574,13 +1574,18 @@ unstaged.
 
 The baseline is captured before self-update and carried to the replacement
 binary. `--no-commit` also survives that handoff and leaves the merge exactly as
-written. Any content conflict, Claude discovery conflict, pre-existing dirt in
-an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
-merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
-A staging or commit failure warns and leaves the merged files in place. Commit
-suppression or failure never changes the merge-derived exit status: content
-conflicts remain zero and discovery conflicts remain nonzero. Upgrade never
-pushes or rewrites existing history.
+written. A replacement child marked as a handoff but missing that pre-update
+baseline — as when an older parent launches a newer child without the newer
+context — suppresses the entire automatic commit, names the cross-version
+compatibility reason, and leaves all upgrade-owned changes uncommitted for the
+operator. The skill-upgrade results and merge-derived exit status are unchanged.
+Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
+path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
+rebase, or cherry-pick likewise suppresses the whole commit and prints the
+reason. A staging or commit failure warns and leaves the merged files in place.
+Commit suppression or failure never changes the merge-derived exit status:
+content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
+never pushes or rewrites existing history.
 
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine
