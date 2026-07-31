@@ -5064,7 +5064,8 @@ describe('abDispatch interactive keyboard controls', () => {
         'esc_paste',
       )
 
-      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      const pasted =
+        'rebase onto main — “safe”\nkeep 日本語 and naïve intact\nre-run verify:test 🇺🇸 👨‍👩‍👧‍👦'
       input.paste(pasted)
       await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
       // No part of the paste is interpreted as submit, however many line
