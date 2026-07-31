@@ -8,6 +8,7 @@ const COMMANDS = [
   'upgrade',
   'dispatch',
   'ticket',
+  'repository',
   'builds',
   'build',
   'pause',
@@ -165,6 +166,16 @@ describe('layered CLI help catalog', () => {
         'same ready criteria as dispatch',
         'first id is always the ticket being changed',
       ],
+      repository: [
+        'repository status [--json] [--store <ref>]',
+        'ticket-intake setting',
+        'repository-wide pause',
+        'auto-merge default',
+        'intake on, repository pause off, and auto-merge default off',
+        '--store overrides AB_STORE',
+        'starts no dispatcher',
+        'writes no state',
+      ],
       builds: ['--queued', '--all', '--json', '--store', 'running, paused, blocked'],
       build: ['build status', '--events <n>', 'escalations', 'lease'],
       pause: [
@@ -282,6 +293,7 @@ describe('layered CLI help catalog', () => {
     ]) {
       expect(isSessionlessInvocation([command, '--help'])).toBe(true)
     }
+    expect(isSessionlessInvocation(['repository', 'status'])).toBe(true)
     expect(isSessionlessInvocation(['context'])).toBe(false)
     expect(isSessionlessInvocation(['context', '--help', 'extra'])).toBe(false)
     expect(isSessionlessInvocation(['artifact', 'put'])).toBe(false)

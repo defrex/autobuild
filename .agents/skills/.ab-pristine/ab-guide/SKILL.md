@@ -1132,10 +1132,21 @@ rows, `i` and `h` are also no-ops.
 
 ## Checking build status
 
-Two read-only commands answer "what is happening?" without inspecting SQLite,
-worktrees, or OS processes. Both run *outside* build sessions, need no `AB_*`
-environment, and never mutate a build — they append no events, take no leases,
-and are safe to run at any time.
+The read-only status commands answer "what is happening?" without inspecting
+SQLite, worktrees, or OS processes. They run *outside* build sessions, need no
+phase-session `AB_*` identity, append no events, take no leases, and are safe to
+run at any time.
+
+**`ab repository status [--json] [--store <ref>]`** reports the three durable
+dispatcher settings in one answer: ticket intake (`intake`, default `true`), the
+repository-wide pause (`paused`, default `false`), and the claim-time auto-merge
+default (`defaultAutoMerge`, default `false`). Those defaults also describe a
+repository with no journal row; the read does not create one. Human output is
+the default. `--json` emits one bare object with those exact fields plus the
+canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` >
+repository-local precedence. The command uses the same reducer as the
+dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
+and starts no dispatcher work.
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those

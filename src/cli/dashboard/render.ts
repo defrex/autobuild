@@ -1214,11 +1214,12 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       .join('  ')}`,
     width,
   )
-  // Warnings are conditional chrome, not a reserved log slot. The region is
-  // wrapped and UNCAPPED: a notice's tail must never be unreachable and no
-  // notice may be dropped by count. Its only bound is the frame height, i.e.
-  // the `top.slice` degradation below — which `controlsCapacity` also reads, so
-  // a taller warning region leaves the controls proportionally fewer rows.
+  // Warnings are conditional chrome, not a reserved log slot. Each notice is
+  // capped to the configured three-row content preview, followed by the
+  // overflow/count notice when content remains; notices are not dropped by
+  // count. The resulting rows join `top`, so `top.slice` limits what short
+  // frames paint and `controlsCapacity` budgets proportionally fewer controls
+  // rows as warnings increase `top.length`.
   const top = [summary, toggles, ...warningRows(model.warningLines ?? [], width)]
   const controls = dashboardControls(model, color, width, controlsCapacity(height, top.length))
 

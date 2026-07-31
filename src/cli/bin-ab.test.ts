@@ -18,7 +18,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DISPATCHER, KERNEL } from '../events/envelope'
+import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 
@@ -372,6 +372,81 @@ test('artifact put --attach uses the real binary grammar and records the assigne
   })
   expect((await reopened.getArtifact('attached', 'visual:evidence', 0))?.content).toEqual(bytes)
   await reopened.close()
+})
+
+test('repository status reads paused and unpaused stores without changing either stream', async () => {
+  const repo = await realpath(tmp)
+  const unpausedPath = join(tmp, 'repository-unpaused-store')
+  const pausedPath = join(tmp, 'repository-paused-store')
+  const unpaused = openLocalStore(unpausedPath)
+  await unpaused.ensureRepo(repo)
+  await unpaused.appendRepo(repo, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.pause-set',
+    payload: { enabled: false },
+  })
+  const unpausedBefore = await unpaused.getRepoEvents(repo)
+  await unpaused.close()
+
+  const paused = openLocalStore(pausedPath)
+  await paused.ensureRepo(repo)
+  await paused.appendRepo(repo, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.intake-set',
+    payload: { enabled: false },
+  })
+  await paused.appendRepo(repo, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.auto-merge-default-set',
+    payload: { enabled: true },
+  })
+  await paused.appendRepo(repo, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.pause-set',
+    payload: { enabled: true },
+  })
+  await paused.createBuild({ slug: 'unrelated-repository-status-build', repo })
+  const pausedBefore = await paused.getRepoEvents(repo)
+  const buildsBefore = await paused.listBuilds()
+  await paused.close()
+
+  const unpausedResult = await runBinWithoutAb([
+    'repository',
+    'status',
+    '--json',
+    '--store',
+    unpausedPath,
+  ])
+  const pausedResult = await runBinWithoutAb([
+    'repository',
+    'status',
+    '--json',
+    '--store',
+    pausedPath,
+  ])
+
+  expect(unpausedResult).toMatchObject({ code: 0, stderr: '' })
+  expect(JSON.parse(unpausedResult.stdout)).toEqual({
+    repo,
+    intake: true,
+    paused: false,
+    defaultAutoMerge: false,
+  })
+  expect(pausedResult).toMatchObject({ code: 0, stderr: '' })
+  expect(JSON.parse(pausedResult.stdout)).toEqual({
+    repo,
+    intake: false,
+    paused: true,
+    defaultAutoMerge: true,
+  })
+
+  const reopenedUnpaused = openLocalStore(unpausedPath)
+  expect(await reopenedUnpaused.getRepoEvents(repo)).toEqual(unpausedBefore)
+  await reopenedUnpaused.close()
+  const reopenedPaused = openLocalStore(pausedPath)
+  expect(await reopenedPaused.getRepoEvents(repo)).toEqual(pausedBefore)
+  expect(await reopenedPaused.listBuilds()).toEqual(buildsBefore)
+  await reopenedPaused.close()
 })
 
 test('harvest status remains sessionless with no ambient AB_* values', async () => {
