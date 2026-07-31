@@ -6,7 +6,9 @@ import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
+  detailScrollLimit,
   formatDuration,
+  moveDetailScroll,
   moveTranscriptScroll,
   renderDashboard,
   resumeHintRows,
@@ -134,12 +136,12 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const warned = rd(
       {
         ...model([build()]),
-        warningLines: [`warning\n${'x'.repeat(30)} ${'y'.repeat(30)} café`],
+        warningLines: [`warning\ncafé\n${'x'.repeat(30)}\n${'y'.repeat(30)}`],
       },
       { color: true, width: 40 },
     )
-    // Wrapped, not truncated: the notice takes several rows and every one of
-    // them still honours the two redraw invariants.
+    // Newline-aware and capped: three content rows plus a count notice, all
+    // honouring the two redraw invariants.
     const rows = warned.slice(2, warned.length - (clean.length - 2))
     expect(rows.length).toBeGreaterThan(1)
     for (const row of rows) {
@@ -147,15 +149,16 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       expect(row).not.toContain('\n')
     }
     const region = rows.map(stripAnsi).join('\n')
-    expect(region).toContain('warning\\u{a}')
-    // The tail — the part truncation always dropped — is now reachable.
+    expect(region).toContain('warning')
+    expect(region).not.toContain('\\u{a}')
     expect(region).toContain('caf\\u{e9}')
+    expect(region).toContain('... 1 more row')
     // Continuation rows keep the first row's indent (2 in content coordinates,
     // plus `renderDashboard`'s one-column left gutter).
     for (const row of rows) expect(stripAnsi(row).search(/\S/)).toBe(3)
   })
 
-  test('a multi-notice warning region is wrapped, uncapped, and never elided', () => {
+  test('multiple short warning notices wrap independently without dropping later notices', () => {
     const notices = [
       'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
       'Valid role keys: code-review, dashboard, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
@@ -164,10 +167,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const lines = rd({ ...model([build()]), warningLines: notices }, { color: false, width: 80 })
     const frame = lines.join('\n')
 
-    // Uncapped: no elision marker anywhere in the frame.
-    expect(frame).not.toContain('+N more')
-    expect(frame).not.toMatch(/\+\d+ more/)
-    // Every notice survives whole, including the last one's final word.
+    // Each of these notices fits within its own three-row cap, so every notice
+    // survives whole, including the last one's final word.
     expect(frame).toContain('[roles.ghost]')
     expect(frame).toContain('[roles.typo]')
     expect(frame).toContain('upgrade')
@@ -343,12 +344,12 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       {
         ...model([build()]),
         selection: { kind: 'build', slug: 'auth-rate-limit' },
-        view: { kind: 'detail', slug: 'auth-rate-limit' },
+        view: { kind: 'detail', slug: 'auth-rate-limit', scroll: 0 },
       },
       WIDE,
     )
     expect(detailLines.at(-1)).toBe(
-      ' Keys: Up/Down select session  Enter transcript  m auto-merge  p pause  a abort  Esc back  Ctrl-C quit',
+      ' Keys: Up/Down scroll  Left/Right select session  Enter transcript  m auto-merge  p pause  a abort  Esc back  Ctrl-C quit',
     )
 
     for (const controls of [
@@ -405,7 +406,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
         {
           ...model([selected]),
           selection: { kind: 'build', slug: selected.slug },
-          view: { kind: 'detail', slug: selected.slug },
+          view: { kind: 'detail', slug: selected.slug, scroll: 0 },
         },
         WIDE,
       ).map(stripAnsi)
@@ -515,7 +516,10 @@ describe('renderDashboard: blocked-resume input', () => {
     const opts = { color: false, width: 100, height: 24 }
     const list = rd(answering('typed guidance'), opts)
     const detail = rd(
-      { ...answering('typed guidance'), view: { kind: 'detail', slug: 'auth-rate-limit' } },
+      {
+        ...answering('typed guidance'),
+        view: { kind: 'detail', slug: 'auth-rate-limit', scroll: 0 },
+      },
       opts,
     )
     expect(panelOf(detail)).toEqual(panelOf(list))
@@ -888,7 +892,10 @@ describe('renderDashboard: the resume panel obeys the frame budget', () => {
   })
 
   test('the detail view drops the panel last too', () => {
-    const m = { ...answering('typed'), view: { kind: 'detail' as const, slug: 'auth-rate-limit' } }
+    const m = {
+      ...answering('typed'),
+      view: { kind: 'detail' as const, slug: 'auth-rate-limit', scroll: 0 },
+    }
     for (const height of [3, 4, 5, 8]) {
       const lines = rd(m, { color: false, width: 100, height })
       expect(lines.length).toBeLessThanOrEqual(height)
@@ -1061,7 +1068,7 @@ describe('renderDashboard: emphasis', () => {
       {
         ...model([blocked]),
         selection: { kind: 'build', slug: blocked.slug },
-        view: { kind: 'detail', slug: blocked.slug },
+        view: { kind: 'detail', slug: blocked.slug, scroll: 0 },
       },
       { color: false, width: 160 },
     ).join('\n')
@@ -1096,6 +1103,80 @@ describe('renderDashboard: emphasis', () => {
       .split('\n')
       .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
     expect(stripAnsi(offRow)).not.toContain('auto merge')
+  })
+})
+
+describe('renderDashboard: message previews', () => {
+  const frame = (overrides: Partial<DashboardBuild>, width = 80): string[] =>
+    rd(model([build({ status: 'blocked', pr: undefined, ...overrides })]), {
+      color: false,
+      width,
+    })
+
+  test('authored rows cap after three and name the build detail key', () => {
+    const short = frame({ blockers: ['one\ntwo\nthree'] }).join('\n')
+    expect(short).toContain('one\n     two\n     three')
+    expect(short).not.toContain('more row')
+
+    const long = frame({ blockers: ['one\ntwo\nthree\nfour\nfive'] }).join('\n')
+    expect(long).toContain('one\n     two\n     three\n     ... 2 more rows - Enter details')
+    expect(long).not.toContain('four')
+    expect(long).not.toContain('\\u{a}')
+  })
+
+  test('one paragraph row survives and longer blank runs collapse to it', () => {
+    const twoNewlines = frame({ blockers: ['first\n\nsecond'] })
+    const manyNewlines = frame({ blockers: ['first\n\n\n\nsecond'] })
+    expect(manyNewlines).toEqual(twoNewlines)
+    const first = twoNewlines.findIndex((line) => line.includes('first'))
+    const second = twoNewlines.findIndex((line) => line.includes('second'))
+    expect(second - first).toBe(2)
+    expect(twoNewlines[first + 1]!.trim()).toBe('')
+  })
+
+  test('soft wraps count as rows and separate messages get separate notices', () => {
+    const lines = frame(
+      {
+        blockers: [
+          Array.from({ length: 18 }, (_, index) => `alpha${index}`).join(' '),
+          Array.from({ length: 18 }, (_, index) => `beta${index}`).join(' '),
+        ],
+      },
+      44,
+    )
+    const notices = lines.filter((line) => line.includes('Enter details'))
+    expect(notices).toHaveLength(2)
+    expect(notices.every((line) => /\.\.\. \d+ more rows? - Enter details/.test(line))).toBe(true)
+  })
+
+  test('setup, Harvest, and process warnings use the same cap and count', () => {
+    const message = 'one\ntwo\nthree\nfour'
+    expect(frame({ setupError: message }).join('\n')).toContain('... 1 more row - Enter details')
+    const harvestFrame = rd(
+      { ...model([]), harvest: harvest({ status: 'failed', detail: message }) },
+      { color: false, width: 80 },
+    ).join('\n')
+    expect(harvestFrame).toContain('... 1 more row')
+    expect(harvestFrame).not.toContain('Enter details')
+
+    const warningFrame = rd(
+      { ...model([]), warningLines: [message] },
+      { color: false, width: 80 },
+    ).join('\n')
+    expect(warningFrame).toContain('... 1 more row')
+    expect(warningFrame).not.toContain('Enter details')
+  })
+
+  test('plain fixed-size repaints are identical and every row stays bounded', () => {
+    const dashboard = {
+      ...model([build({ blockers: ['one\ntwo\nthree\nfour café'] })]),
+      warningLines: ['warn one\nwarn two\nwarn three\nwarn four'],
+    }
+    const opts = { color: false, width: 42, height: 20 }
+    const first = rd(dashboard, opts)
+    expect(rd(dashboard, opts)).toEqual(first)
+    expect(first.join('\n')).not.toContain('\x1b')
+    for (const line of first) expect(line.length).toBeLessThanOrEqual(opts.width)
   })
 })
 
@@ -1707,26 +1788,25 @@ describe('renderDashboard: the progress row WRAPS rather than truncating', () =>
     }
   })
 
-  test('a long blocker message wraps instead of losing its tail', () => {
-    // "Every unresolved blocker message is displayed" is not satisfied by its
-    // first 80 characters, and a policy escalation's question routinely runs
-    // longer than that.
+  test('a long blocker message is capped in the row and complete in details', () => {
     const blocker =
       'maxVerifyAttempts (3) exhausted: verify:test is still failing after three ' +
       'attempts and the implementer keeps reintroducing the same regression'
-    const lines = rd(model([build({ status: 'blocked', blockers: [blocker] })]), {
-      color: false,
-      width: 50,
-    })
-    for (const line of lines) expect(line.length).toBeLessThanOrEqual(50)
-    // Reassembled, the whole message is there.
-    const text = lines
-      .filter((l) => l.trimStart().startsWith('!') || /^\s{5}\S/.test(l))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .replace('! ', '')
-      .trim()
-    expect(text).toBe(blocker)
+    const blocked = build({ status: 'blocked', blockers: [blocker] })
+    const list = rd(model([blocked]), { color: false, width: 50 })
+    for (const line of list) expect(line.length).toBeLessThanOrEqual(50)
+    expect(list.join('\n')).toContain('... 1 more row - Enter details')
+    expect(list.join('\n')).not.toContain('same regression')
+
+    const detail = rd(
+      {
+        ...model([blocked]),
+        view: { kind: 'detail', slug: blocked.slug, scroll: 0 },
+      },
+      { color: false, width: 50 },
+    ).join('\n')
+    expect(detail.replace(/\s+/g, ' ')).toContain('same regression')
+    expect(detail).not.toContain('more row')
   })
 })
 
@@ -1910,7 +1990,7 @@ describe('renderDashboard: build detail and transcript views', () => {
       {
         ...model([detailedBuild]),
         selection: { kind: 'build', slug: detailedBuild.slug },
-        view: { kind: 'detail', slug: detailedBuild.slug, sessionId: 's_plan' },
+        view: { kind: 'detail', slug: detailedBuild.slug, sessionId: 's_plan', scroll: 0 },
       },
       { color: false, width: 200 },
     ).join('\n')
@@ -1924,6 +2004,47 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(out).toContain('tokens 90 in/30 out, 2 turns')
     expect(out).toContain('plan-review phase plan-review round 1 runtime claude open')
     expect(out).not.toContain('Autobuild')
+  })
+
+  test('detail keeps complete multiline messages and scroll reaches both ends', () => {
+    const atomic = 'Z'.repeat(90)
+    const message = `blocker first\n\nblocker middle\n${atomic}\nblocker final`
+    const withMessages = {
+      ...detailedBuild,
+      setupError: 'setup first\nsetup final',
+      blockers: [message],
+    }
+    const base = {
+      ...model([withMessages]),
+      view: { kind: 'detail' as const, slug: withMessages.slug, scroll: 0 },
+    }
+    const full = rd(base, { color: false, width: 42 }).join('\n')
+    expect(full).toContain('setup first\n   setup final')
+    expect(full).toContain('blocker first')
+    expect(full).toContain('blocker final')
+    expect(full).toContain(atomic.slice(0, 30))
+    const messageRegion = full.slice(full.indexOf('! blocker first'), full.indexOf('The r field'))
+    expect(messageRegion).not.toContain('~')
+    expect(messageRegion.replace(/\s+/g, '')).toContain(atomic)
+    expect(full).not.toContain('more row')
+
+    const width = 40 // renderDashboard reserves the two outer gutters.
+    const height = 12
+    const limit = detailScrollLimit(base, width, height)
+    expect(limit).toBeGreaterThan(0)
+    expect(moveDetailScroll(base, width, height, 999, -1)).toBe(limit - 1)
+    const seen = new Set<string>()
+    for (let scroll = 0; scroll <= limit; scroll += 1) {
+      for (const line of rd(
+        { ...base, view: { ...base.view, scroll } },
+        { color: false, width: 42, height },
+      )) {
+        seen.add(line.trim())
+      }
+    }
+    expect([...seen].some((line) => line.includes('ticket ENG-42'))).toBe(true)
+    expect([...seen].some((line) => line.includes('blocker final'))).toBe(true)
+    expect([...seen].some((line) => line.includes('plan-review phase'))).toBe(true)
   })
 
   test('structured and producer-boundary transcripts render prompts, text, failures, usage, and notice', () => {

@@ -4467,7 +4467,7 @@ describe('abDispatch interactive keyboard controls', () => {
         },
       })
 
-      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      const term = fakeTerminal(true, { columns: 160, rows: 16 })
       run = abDispatch({
         targetRepo: fx.origin,
         env: {},
@@ -4483,7 +4483,18 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Build  session-close'))
-      for (let index = 0; index < 20; index += 1) input.press('down')
+      expect(latestPaintedFrame(term)).toContain('Pipeline')
+      const beforeNavigation = await fx.store.getEvents('session-close')
+      for (let index = 0; index < 30; index += 1) input.press('down')
+      await waitFor(() => latestPaintedFrame(term).includes('Sessions'))
+      for (let index = 0; index < 30; index += 1) input.press('up')
+      await waitFor(() => latestPaintedFrame(term).includes('Pipeline'))
+      expect(await fx.store.getEvents('session-close')).toEqual(beforeNavigation)
+      Object.assign(term, { rows: 60 })
+
+      // Detail Up/Down scrolls; Left/Right retains session selection and brings
+      // the selected session back into the viewport.
+      for (let index = 0; index < 20; index += 1) input.press('right')
       await waitFor(() =>
         latestPaintedFrame(term).includes('code-review phase code-review round 2'),
       )

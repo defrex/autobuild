@@ -165,6 +165,8 @@ export type DashboardView =
   | {
       kind: 'detail'
       slug: string
+      /** Process-local offset into the fully wrapped detail body. */
+      scroll: number
       sessionId?: string
       message?: string
       /** Message validity fence for facts that can change on the next poll. */
