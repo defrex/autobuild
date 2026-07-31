@@ -822,23 +822,26 @@ Use `ab upgrade --no-self-update` for merge-only behavior.
 
 ## Durable settings outside TOML
 
-Three repository-wide operator choices intentionally live as facts in the
+Four repository-wide operator choices intentionally live as facts in the
 BuildStore repository journal, not in `autobuild.toml`. They are latest-write
 wins, survive process restarts, and are sampled by every dispatcher on its
 poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
+| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row | While on, no dispatcher tick attaches a runner to a queued build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same keypress writes; the janitor still settles aborts and discards. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
 Omitting both writes nothing and reuses the durable value. Per-build
 pause/resume and auto-merge controls are separate facts and do not alter these
-repository defaults. The current release has no TOML field or standalone
-sessionless command for the harvest gate; use the dashboard and inspect it with
-`ab harvest status`.
+repository defaults. Pause all and resume all write two facts each — the
+repository pause first, then intake — so a partial failure still leaves the
+repository at least as quiesced as asked. The current release has no TOML field
+or standalone sessionless command for the harvest gate or the repository pause;
+use the dashboard, and inspect the harvest gate with `ab harvest status`.
 
 ## Environment and credentials
 
@@ -932,17 +935,21 @@ action. Check the gates in this order:
 1. **Durable intake:** the dashboard header must show intake on, or explicitly
    run a future dispatcher with `--intake`. Intake off skips the ready scan
    even when tickets exist.
-2. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
+2. **Repository pause:** a pause all holds every queued build, so an existing
+   build sits at `QUEUED` and no ticket is claimed. It always turns intake off
+   too, so a failing step 1 is the practical signal; `r` on the dashboard's
+   global row releases both.
+3. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
    is case-sensitive; file tickets must physically be in the corresponding
    state directory.
-3. **Labels:** the ticket must carry every effective `readyLabels` value,
+4. **Labels:** the ticket must carry every effective `readyLabels` value,
    including Linear's default `autobuild` label when the field is omitted.
-4. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
+5. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
    same source. Plain dispatch output reports unresolved ids and cycles.
-5. **Capacity:** every nonterminal build for this repository—including paused
+6. **Capacity:** every nonterminal build for this repository—including paused
    and blocked builds—uses a slot. Inspect `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.
-6. **Duplicate work:** a ready ticket already represented by an active build is
+7. **Duplicate work:** a ready ticket already represented by an active build is
    deliberately excluded from the queue.
 
 If the expected work is observation harvesting instead of a ticket, also check

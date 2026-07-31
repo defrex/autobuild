@@ -860,26 +860,39 @@ build is also operator-paused, and `r` opens the existing feedback field. Keys
 that are not offered for the current build state are no-ops and append no
 control event.
 
-Global-row `p` is the repository-wide version: it appends
-`build.pause-requested` to every `RUNNING` build and durably turns intake off,
-so the repository comes to rest before a machine, terminal, or dispatcher
-restart. It skips `PAUSING` — the bulk control never cancels a pending pause,
-unlike build-row `p` — and skips `QUEUED`, `PAUSED`, `RESUMING`, and `BLOCKED`
-without error. Global-row `r` reverses it: `build.resume-requested` on every
-`PAUSED` build, including builds paused by hand beforehand, and intake back on.
-It does not touch `BLOCKED` builds, whose blockers still need the per-build `r`
-feedback field. Both report the affected build count and the new intake value on
-the notice row. Two carve-outs: the harvest gate is independent, so a harvest
-session can still start after a bulk pause (`h` stops it), and a `QUEUED` build
-can still be launched by the lease sweep regardless of intake. This is
-quiescence, not a global stop.
+Global-row `p` is the repository-wide version: it durably holds every `QUEUED`
+build, turns intake off, and appends `build.pause-requested` to every `RUNNING`
+build, so the repository comes to rest before a machine, terminal, or dispatcher
+restart. The hold is the `dispatcher.pause-set` repository fact, written before
+the intake fact; while it is set no dispatcher tick attaches a runner to a
+queued build, whether through interrupted-dispatch recovery, startup resume, or
+the lease sweep. The per-build walk skips `PAUSING` — the bulk control never
+cancels a pending pause, unlike build-row `p` — and skips `QUEUED`, `PAUSED`,
+`RESUMING`, and `BLOCKED` without error; queued builds are covered by the hold
+instead. Global-row `r` reverses all of it: the hold released,
+`build.resume-requested` on every `PAUSED` build (including builds paused by
+hand beforehand), and intake back on. A released queued build becomes
+launchable again on the next ordinary tick, with no further operator action. `r`
+does not touch `BLOCKED` builds, whose blockers still need the per-build `r`
+feedback field. Both report the affected build count, the hold, and the new
+intake value on the notice row. One carve-out remains: the harvest gate is
+independent, so a harvest session can still start after a bulk pause (`h` stops
+it). The janitor is likewise ungated, so an abort or discard on a held build is
+still settled. Build work in this repository is otherwise genuinely at rest.
 
 `--intake` and `--no-intake` are mutually exclusive durable repository setters.
 Omitting both reuses stored state, falling back to ON only when no intake fact
 exists. Global-row `i` re-reads current state and appends the opposite value.
 Intake off skips only new ticket claims while janitor, stale-runner, harvest,
-and in-flight work continue. Every dispatcher samples the current value on each
-tick, so a change in one process gates all dispatchers for that repository.
+and in-flight work continue — it deliberately does **not** set the repository
+hold, so a build the repository has already accepted still starts and finishes.
+Every dispatcher samples the current value on each tick, so a change in one
+process gates all dispatchers for that repository.
+
+The repository hold has no launch flag and no sessionless command: `p` and `r`
+on the dashboard's global row are the only way to set or clear it. Each
+dispatcher tick reads it from the repository journal itself, so it survives a
+restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
 claim-time default; omission reuses stored state, falling back to OFF only when
@@ -934,8 +947,8 @@ to the build's event log and apply the same write-time checks.
 | Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
 | Pause | `ab pause <slug> [--store <ref>]` | Select a `RUNNING` build and press `p`; press `p` again while `PAUSING` to cancel the pending pause. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
 | Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
-| Pause all | — | Select the global row and press `p`. | One `build.pause-requested` per `RUNNING` build, plus `dispatcher.intake-set` |
-| Resume all | — | Select the global row and press `r`. | One `build.resume-requested` per `PAUSED` build, plus `dispatcher.intake-set` |
+| Pause all | — | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
+| Resume all | — | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |

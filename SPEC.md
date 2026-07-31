@@ -947,10 +947,12 @@ displays is a reduction of the logs, and anything it does is an event — so
 every frontend (terminal today, web later) is the same adapter pattern
 against the same store, and a dead runner still receives commands on resume.
 
-Durable operator settings (intake, the claim-time auto-merge default, the
-harvest gate) are repository-journal facts: they survive restarts, propagate
-between dispatchers by ordinary polling, and are never optimistically
-rendered — the UI shows acknowledged state.
+Durable operator settings (intake, the repository-wide pause, the claim-time
+auto-merge default, the harvest gate) are repository-journal facts: they
+survive restarts, propagate between dispatchers by ordinary polling, and are
+never optimistically rendered — the UI shows acknowledged state. The
+repository-wide pause holds every queued build: while it is set, no dispatcher
+tick may attach a runner to a build that does not have one yet.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
