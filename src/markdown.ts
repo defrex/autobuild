@@ -34,15 +34,20 @@ export function withoutFencedCode(markdown: string): string {
 
 /**
  * Inline link and image targets, in source order. Angle brackets are unwrapped
- * and a `"title"` suffix is dropped, so `[a](<b.md> "T")` yields `b.md`.
+ * and a title suffix is dropped, so `[a](<b.md> "T")` yields `b.md`.
  */
 export function markdownTargets(markdown: string): string[] {
   const targets: string[] = []
   for (const match of markdown.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
-    let target = match[1]!.trim()
-    if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1)
-    target = target.split(/\s+["']/u, 1)[0]!
-    targets.push(target)
+    const inline = match[1]!.trim()
+    // An angle-bracketed destination runs to its closing `>`, and whatever
+    // follows is the title. The two must be read together: unwrapping first
+    // fails whenever a title is present (the text no longer ends in `>`), and
+    // splitting the title off first would truncate a bracketed destination that
+    // legitimately contains whitespace and a quote. A `<` with no closing `>`
+    // is malformed, and falls through to the unbracketed reading.
+    const closing = inline.startsWith('<') ? inline.indexOf('>') : -1
+    targets.push(closing === -1 ? inline.split(/\s+["']/u, 1)[0]! : inline.slice(1, closing))
   }
   return targets
 }

@@ -153,6 +153,17 @@ describe('findDocsAssetProblems', () => {
     expect(findings).toEqual([])
   })
 
+  test('an angle-bracketed destination with a title is a reference, not an orphan', () => {
+    // The whole point of the check is that a rendered image is not reported.
+    // Standard destination-plus-title syntax must not read as an orphan.
+    const findings = findDocsAssetProblems(
+      ['docs/assets/x.png'],
+      [{ path: 'README.md', contents: '![a frame](<docs/assets/x.png> "The dashboard")\n' }],
+    )
+
+    expect(findings).toEqual([])
+  })
+
   test('schemes and bare fragments are ignored rather than resolved', () => {
     const findings = findDocsAssetProblems(
       [],

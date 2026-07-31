@@ -43,6 +43,24 @@ describe('markdownTargets', () => {
     expect(markdownTargets("[a](docs/a.md 'The title')")).toEqual(['docs/a.md'])
   })
 
+  test('unwraps an angle-bracketed target that also carries a title', () => {
+    expect(markdownTargets('[a](<docs/a.md> "The title")')).toEqual(['docs/a.md'])
+    expect(markdownTargets("[a](<docs/a file.md> 'The title')")).toEqual(['docs/a file.md'])
+    expect(markdownTargets('![a](<docs/assets/x.png> "The dashboard")')).toEqual([
+      'docs/assets/x.png',
+    ])
+  })
+
+  test('a quote inside an angle-bracketed target is part of the destination', () => {
+    // Reading the destination to its closing `>` is what makes this work;
+    // stripping the title first would truncate at the space before the quote.
+    expect(markdownTargets('[a](<docs/a "b".md>)')).toEqual(['docs/a "b".md'])
+  })
+
+  test('an angle-bracketed target with no closing bracket falls back, not crashes', () => {
+    expect(markdownTargets('[a](<docs/a.md "The title")')).toEqual(['<docs/a.md'])
+  })
+
   test('keeps schemes and fragments verbatim for the caller to classify', () => {
     const source = '[site](https://example.com) [anchor](#why) [both](docs/a.md#why)'
 
