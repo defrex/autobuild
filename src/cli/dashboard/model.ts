@@ -215,9 +215,10 @@ export interface DashboardModel {
   harvestPaused: boolean
   /** Stable row identity, never a row index. */
   selection?: DashboardSelection
-  /** Latest process-local warning/error. Routine dispatcher notices never
-   * enter the interactive model; absence means the warning row is omitted. */
-  warningLine?: string
+  /** Process-local warnings/errors, in render order. Routine dispatcher
+   * notices never enter the interactive model; absence (or an empty array)
+   * means the warning chrome is omitted. */
+  warningLines?: readonly string[]
   /** Ephemeral blocked-resume field; never derived from or stored in events. */
   resumeInput?: ResumeInputView
   /** Ephemeral destructive-action confirmation; the first `a` writes nothing. */
@@ -1020,7 +1021,7 @@ interface DashboardFrameHeader {
   queued: number
   observationCount: number
   selection?: DashboardSelection
-  warningLine?: string
+  warningLines?: readonly string[]
   resumeInput?: ResumeInputView
 }
 
@@ -1053,7 +1054,9 @@ export function buildDashboardFromProjected(
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
-    ...(header.warningLine !== undefined ? { warningLine: header.warningLine } : {}),
+    ...(header.warningLines !== undefined && header.warningLines.length > 0
+      ? { warningLines: header.warningLines }
+      : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
     ...(harvestProjection.harvest !== undefined ? { harvest: harvestProjection.harvest } : {}),

@@ -29,8 +29,23 @@ not author proposals or touch tickets.
    ab harvest verdict escalate --notes .ab/harvest-review.md --reason "the human question"
    ```
 
+Use `escalate` only when evidence or product intent requires human judgment,
+not as a substitute for a precise revision finding.
+
+## Writing findings
+
 For `revise`, `.ab/findings.json` is an array of the normal finding drafts:
 `severity`, `summary`, optional `detail`, and `persists` containing ids from
-prior harvest review rounds when the same defect survives. Use `escalate` only
-when evidence or product intent requires human judgment, not as a substitute
-for a precise revision finding.
+prior harvest review rounds. The work under review is this round's proposal
+set.
+
+`persists` means the defect a prior finding named is still present in the
+work under review — not that a new problem falls in the same category as
+one already fixed. Test it that way: if the exact defect the prior finding
+named is gone, the chain ends there, however closely your new finding
+resembles it. A new instance of a defect class whose reported instance was
+fixed is fresh work and starts its own chain — raise it with no `persists`
+link. Mark honestly in both directions: neither re-litigate a resolved
+finding nor let a dodged one look fresh, because the kernel mechanically
+escalates a chain that persists too long, and a stalemate is the only
+thing that counter can usefully measure.

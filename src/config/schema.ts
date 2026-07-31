@@ -13,6 +13,124 @@
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
 
+// ── Open maps ────────────────────────────────────────────────────────────────
+
+//
+// Every open map below is parsed WITHOUT losing an entry to the prototype
+// chain. `z.record` and `z.looseObject` build their result by assignment, so
+// the perfectly valid TOML table `[roles."__proto__"]` invokes the legacy
+// `Object.prototype.__proto__` setter instead of creating an own key. Parsing
+// SUCCEEDS and the entry vanishes: never eagerly resolved, never dispatchable,
+// and invisible to the unconsumed-key warning that exists to catch exactly this
+// class of dead configuration (§9). A silent drop is the one outcome the
+// strictness policy above rules out.
+//
+// The TOML parser already hands us null-prototype tables with the key intact,
+// so these keep it that way end to end: own descriptors in, `defineProperty`
+// out, null prototype on the result. Consumers can then read a user-chosen key
+// off these maps without `Object.hasOwn` ceremony.
+
+type Ctx = { addIssue: (issue: { code: 'custom'; path?: PropertyKey[]; message: string }) => void }
+
+/** The own entries of a parsed TOML table, read BY DESCRIPTOR. `table[key]` is
+ * wrong here: on any object that has a prototype, reading `"__proto__"` answers
+ * that prototype rather than the declared entry. */
+function ownEntries(input: unknown, section: string, ctx: Ctx): [string, unknown][] {
+  if (input === undefined || input === null) return []
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    ctx.addIssue({ code: 'custom', message: `[${section}] must be a table of named entries` })
+    return []
+  }
+  return Object.getOwnPropertyNames(input).map((key) => [
+    key,
+    Object.getOwnPropertyDescriptor(input, key)?.value,
+  ])
+}
+
+/** Record a named entry so the key survives verbatim. Plain assignment is what
+ * loses `__proto__`; `defineProperty` on a null-prototype target cannot. */
+function defineEntry<T>(entries: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(entries, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+}
+
+/** Validate one open-map value, forwarding every issue under its own key. */
+function parseEntry<T>(schema: z.ZodType<T>, raw: unknown, key: string, ctx: Ctx): T | undefined {
+  const parsed = schema.safeParse(raw)
+  if (parsed.success) return parsed.data
+  for (const issue of parsed.error.issues) {
+    ctx.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message })
+  }
+  return undefined
+}
+
+/** An open map: user-chosen keys → strictly validated values, keys preserved. */
+function openMap<T>(section: string, valueSchema: z.ZodType<T>) {
+  return z
+    .unknown()
+    .transform((input, ctx): Record<string, T> => {
+      const entries: Record<string, T> = Object.create(null)
+      for (const [key, raw] of ownEntries(input, section, ctx)) {
+        if (key.length === 0) {
+          ctx.addIssue({ code: 'custom', message: `[${section}] entry names must be nonempty` })
+          continue
+        }
+        const value = parseEntry(valueSchema, raw, key, ctx)
+        if (value !== undefined) defineEntry(entries, key, value)
+      }
+      return entries
+    })
+    .prefault({})
+}
+
+/**
+ * A section mixing ONE known key (`steps`) with an open set of named step
+ * tables — the same preservation contract as `openMap`.
+ *
+ * Without it a valid `[verify."__proto__"]` table vanished before
+ * cross-validation, which then reported "is listed in verify.steps but has no
+ * [verify.__proto__] table" about a table sitting right there in the file. Loud
+ * rather than silent, but a diagnostic that contradicts the source is its own
+ * defect: §16.1 errors are feedback to whoever edits the file.
+ */
+function stepSection<T, C>(
+  section: string,
+  stepsSchema: z.ZodType<string[]>,
+  tableSchema: z.ZodType<T>,
+  compose: (steps: string[], stepConfigs: Record<string, T>) => C,
+) {
+  return z
+    .unknown()
+    .transform((input, ctx): C => {
+      const stepConfigs: Record<string, T> = Object.create(null)
+      let steps: string[] = []
+      for (const [key, raw] of ownEntries(input, section, ctx)) {
+        if (key === 'steps') {
+          const parsed = stepsSchema.safeParse(raw)
+          if (parsed.success) steps = parsed.data
+          else {
+            for (const issue of parsed.error.issues) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['steps', ...issue.path],
+                message: issue.message,
+              })
+            }
+          }
+          continue
+        }
+        const table = parseEntry(tableSchema, raw, key, ctx)
+        if (table !== undefined) defineEntry(stepConfigs, key, table)
+      }
+      return compose(steps, stepConfigs)
+    })
+    .prefault({})
+}
+
 // ── [pr] / [pr.imageHost] ────────────────────────────────────────────────────
 
 /** Optional public GitHub release used for review-window image copies.
@@ -46,7 +164,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 // Open map of deterministic verbs the kernel may run. `setup`, `lint`,
 // `typecheck`, `test` are conventions, not required keys (§16.1).
 
-export const commandsSchema = z.record(z.string().min(1), z.string().min(1))
+export const commandsSchema = openMap('commands', z.string().min(1))
 export type Commands = z.infer<typeof commandsSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
@@ -136,30 +254,15 @@ export interface VerifyConfig {
 /**
  * [verify] mixes one known key (`steps`) with an open set of per-step
  * subtables, so it cannot be a strictObject; instead every non-`steps` key is
- * validated as a step table — nothing passes through loosely.
+ * validated as a step table — nothing passes through loosely, and no step name
+ * is lost to the prototype chain (see `stepSection`).
  */
-export const verifySectionSchema = z
-  .looseObject({
-    steps: z.array(z.string().min(1)).default([]),
-  })
-  .transform(({ steps, ...stepTables }, ctx): VerifyConfig => {
-    const stepConfigs: Record<string, VerifyStepConfig> = {}
-    for (const [step, table] of Object.entries(stepTables)) {
-      const parsed = verifyStepConfigSchema.safeParse(table)
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [step, ...issue.path],
-            message: issue.message,
-          })
-        }
-        continue
-      }
-      stepConfigs[step] = parsed.data
-    }
-    return { steps, stepConfigs }
-  })
+export const verifySectionSchema = stepSection(
+  'verify',
+  z.array(z.string().min(1)).default([]),
+  verifyStepConfigSchema,
+  (steps, stepConfigs): VerifyConfig => ({ steps, stepConfigs }),
+)
 
 // ── [finalize.<step>] ────────────────────────────────────────────────────────
 
@@ -190,30 +293,12 @@ export interface FinalizeConfig {
 }
 
 /** Like [verify], [finalize] mixes `steps` with a strict named table set. */
-export const finalizeSectionSchema = z
-  .looseObject({
-    steps: z
-      .array(z.string().min(1, 'finalize.steps entries must be nonempty step names'))
-      .default([]),
-  })
-  .transform(({ steps, ...stepTables }, ctx): FinalizeConfig => {
-    const stepConfigs: Record<string, FinalizeStepConfig> = {}
-    for (const [step, table] of Object.entries(stepTables)) {
-      const parsed = finalizeStepConfigSchema.safeParse(table)
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [step, ...issue.path],
-            message: issue.message,
-          })
-        }
-        continue
-      }
-      stepConfigs[step] = parsed.data
-    }
-    return { steps, stepConfigs }
-  })
+export const finalizeSectionSchema = stepSection(
+  'finalize',
+  z.array(z.string().min(1, 'finalize.steps entries must be nonempty step names')).default([]),
+  finalizeStepConfigSchema,
+  (steps, stepConfigs): FinalizeConfig => ({ steps, stepConfigs }),
+)
 
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
@@ -304,6 +389,15 @@ export const ticketsSchema = z.strictObject({
    * provider's default (Linear: Backlog; file: Triage) — resolved by
    * defaultTriageState in src/processes/dispatcher.ts. */
   triageState: z.string().min(1).optional(),
+  /** State harvest files its synthesized proposals into (§12). Absent = the
+   * triage state, which keeps the constitutional grooming gate: a proposal
+   * waits for a human before it can be dispatched. Setting it to readyState
+   * waives that gate for this repository — proposals dispatch unread — and is
+   * the only supported way to do so. Separate from triageState so the waiver
+   * does not also redirect spec-gate bounces, aborts, and closed-unmerged PRs
+   * into the ready state, where a bounce would re-dispatch itself. Resolved by
+   * defaultProposalState in src/processes/dispatcher.ts. */
+  proposalState: z.string().min(1).optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
@@ -337,13 +431,15 @@ const configRootSchema = z.strictObject({
     .default([]),
   pr: prSchema.optional(),
   workspace: workspaceSchema.prefault({}),
-  commands: commandsSchema.prefault({}),
-  verify: verifySectionSchema.prefault({}),
-  finalize: finalizeSectionSchema.prefault({}),
+  commands: commandsSchema,
+  verify: verifySectionSchema,
+  finalize: finalizeSectionSchema,
   // `default` is reserved inside this open map (§9). The schema preserves the
-  // raw map; the registry-aware eager resolver requires default.runtime and can
+  // raw map — EVERY declared key, `__proto__` included, or an entry would
+  // disappear ahead of both eager resolution and the unconsumed-key warning;
+  // the registry-aware eager resolver requires default.runtime and can
   // therefore include the complete materialized runtime list in its diagnostic.
-  roles: z.record(z.string().min(1), roleSchema).prefault({}),
+  roles: openMap('roles', roleSchema),
   policy: policySchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
   // ready gate. Prefault feeds the file-source identity through ticketsSchema,

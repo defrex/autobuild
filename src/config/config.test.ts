@@ -576,7 +576,7 @@ describe('parseConfig — [tickets]', () => {
 
   test('readiness labels and lifecycle states retain their surface', () => {
     const config = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\ndir = "tickets"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\nproposalState = "ready"\ndir = "tickets"\n',
     )
     expect(config.tickets).toEqual({
       source: 'file',
@@ -584,6 +584,7 @@ describe('parseConfig — [tickets]', () => {
       readyLabels: [],
       createState: 'Triage',
       triageState: 'Triage',
+      proposalState: 'ready',
       dir: 'tickets',
     })
   })
