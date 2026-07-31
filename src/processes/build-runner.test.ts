@@ -2063,6 +2063,154 @@ describe('session memory (§10)', () => {
 // ── Provider/runner failures (§8.4, §9) ──────────────────────────────────────
 
 describe('structured provider failure policy', () => {
+  const alternateConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+
+[roles.default]
+runtime = "scripted"
+[roles.plan]
+runtime = "scripted"
+model = "m-plan"
+alternates = [{ runtime = "pi", model = "kimi-alt" }]
+`
+
+  test('an eligible primary failure substitutes in-order inside one attempt with durable attribution', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table.plan!
+        table.plan = (ctx) =>
+          ctx.opts.model === 'm-plan'
+            ? failedTurnResult('primary quota exhausted', true, '', 'exhaustion')
+            : happyPlan(ctx)
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const starts = events.filter((event) => event.type === 'session.started')
+    const planStarts = starts.filter(
+      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+    )
+    expect(planStarts).toHaveLength(2)
+    expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
+    expect(planStarts[1]?.payload).toMatchObject({
+      runner: 'pi',
+      model: 'kimi-alt',
+      substitution: {
+        failed: {
+          index: 0,
+          runner: 'scripted',
+          model: 'm-plan',
+          error: 'primary quota exhausted',
+          cause: 'exhaustion',
+        },
+        selectedIndex: 1,
+      },
+    })
+    expect(
+      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+    ).toHaveLength(0)
+    const planCompleted = events.find((event) => event.type === 'plan.completed')
+    expect(planCompleted?.actor).toMatchObject({
+      kind: 'agent',
+      session: planStarts[1]?.payload.session,
+    })
+    expect(starts[2]?.payload.runner).toBe('scripted')
+  })
+
+  test('a completed turn with no typed terminal does not engage alternates', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = () => defaultTurnResult('agent omitted its terminal')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const starts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(starts).toHaveLength(2)
+    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
+    expect(
+      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+    ).toHaveLength(2)
+  })
+
+  test('an exhausted chain writes one phase failure and escalation names every target', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = (ctx) =>
+          ctx.opts.model === 'm-plan'
+            ? failedTurnResult('primary overloaded', false, '', 'availability')
+            : failedTurnResult('alternate quota exhausted', true, '', 'exhaustion')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const failures = events.filter(
+      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+    )
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.payload).toMatchObject({
+      attempt: 1,
+      error: 'alternate quota exhausted',
+      willRetry: false,
+      providerAttempts: [
+        { index: 0, runner: 'scripted', error: 'primary overloaded' },
+        { index: 1, runner: 'pi', error: 'alternate quota exhausted' },
+      ],
+    })
+    const escalation = ofType(events, 'escalation.raised').find(
+      (event) => event.payload.source === 'policy',
+    )
+    expect(escalation?.payload.question).toContain('primary overloaded')
+    expect(escalation?.payload.question).toContain('alternate quota exhausted')
+  })
+
+  test('credential rejection bypasses a declared alternate and parks immediately', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = () => failedTurnResult('invalid API key', true, '', 'credentials')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const planStarts = events.filter(
+      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+    )
+    expect(planStarts).toHaveLength(1)
+    const failed = events.find(
+      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+    )
+    expect(failed?.payload).toMatchObject({
+      error: 'invalid API key',
+      willRetry: false,
+      providerAttempts: [{ index: 0, error: 'invalid API key', cause: 'credentials' }],
+    })
+  })
   test('AUT-28 quota rejection fails attempt 1 verbatim, deposits the transcript, and escalates without attempt 2', async () => {
     let calls = 0
     const h = await makeHarness({

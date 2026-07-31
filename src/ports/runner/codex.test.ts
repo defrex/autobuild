@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_FOLLOW_UP,
   CONTRACT_ONE_SHOT_PROMPT,
   CONTRACT_ONE_SHOT_TEXT,
@@ -113,6 +114,12 @@ const codexContractFactory: AgentRunnerContractFactory = (scenario) => {
       return output([
         thread('contract-thread'),
         { type: 'turn.failed', error: { message: CONTRACT_PERMANENT_FAILURE, status: 401 } },
+      ])
+    }
+    if (scenario === 'exhaustion-failure') {
+      return output([
+        thread('contract-thread'),
+        { type: 'turn.failed', error: { message: CONTRACT_EXHAUSTION_FAILURE, status: 402 } },
       ])
     }
     const text = prompt === CONTRACT_FOLLOW_UP ? 'contract continued' : 'contract started'
