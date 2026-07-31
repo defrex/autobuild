@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#142](https://github.com/defrex/autobuild/pull/142) — Delete the orphaned headline asset and check for new ones
 - [#141](https://github.com/defrex/autobuild/pull/141) — Preserve every declared key in the plugin workspace config table
 - [#140](https://github.com/defrex/autobuild/pull/140) — Re-sync this repo's vendored ab-guide and guard it against drift
 - [#139](https://github.com/defrex/autobuild/pull/139) — Quiesce and restart a repository from a sessionless command
