@@ -29,22 +29,37 @@
  * - in the distribution but not installed → installed fresh, like init
  *   (`installed`).
  * - installed ab-* skills absent from the distribution → left alone
- *   (`unknown`); local skill additions are legitimate.
+ *   (`unknown`); local skill additions are legitimate. The only exception is
+ *   the fixed, pristine-provenance retirement of `ab-setup` and
+ *   `ab-verify-e2e`: exact unreferenced trees are `removed`, while customized,
+ *   configured, or unsafe trees are `kept` and relinquish pristine ownership.
  *
  * Like init, upgrade runs OUTSIDE build sessions — no AB_* environment.
  */
 import { randomUUID } from 'node:crypto'
-import type { Dirent } from 'node:fs'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import type { Dirent, Stats } from 'node:fs'
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { parseConfig } from '../config/load'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   ClaudeSkillDiscoveryConflict,
+  claudeSkillPath,
   defaultDistRoot,
   ensureClaudeSkillLink,
   installedSkillFilePath,
+  installedSkillPath,
   listInstalledSkills,
   migrateLegacyAgentSkills,
   migrateLegacySkill,
@@ -63,6 +78,8 @@ export type UpgradeSkillAction =
   | 'resolved'
   | 'conflicted'
   | 'installed'
+  | 'removed'
+  | 'kept'
   | 'unknown'
 
 export interface UpgradeReport {
@@ -377,6 +394,116 @@ function errorMessage(error: unknown): string {
   )
 }
 
+/** The only product-owned skill retirements. Ordinary absent skills stay local. */
+const RETIRED_SKILLS = ['ab-setup', 'ab-verify-e2e'] as const
+
+type TreeEntry = { kind: 'directory' } | { kind: 'file'; content: Buffer }
+
+interface InspectedTree {
+  exists: boolean
+  entries: Map<string, TreeEntry>
+  unsafe?: string
+}
+
+/** Inspect every path without following links; retirements require a plain tree. */
+async function inspectTree(root: string): Promise<InspectedTree> {
+  let rootStat: Stats
+  try {
+    rootStat = await lstat(root)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { exists: false, entries: new Map() }
+    }
+    throw error
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    return {
+      exists: true,
+      entries: new Map(),
+      unsafe: 'skill root is not a plain directory',
+    }
+  }
+
+  const entries = new Map<string, TreeEntry>()
+  const visit = async (dir: string, prefix = ''): Promise<string | undefined> => {
+    const children = await readdir(dir, { withFileTypes: true })
+    for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = prefix === '' ? child.name : `${prefix}/${child.name}`
+      const absolute = join(dir, child.name)
+      if (child.isDirectory()) {
+        entries.set(path, { kind: 'directory' })
+        const unsafe = await visit(absolute, path)
+        if (unsafe !== undefined) return unsafe
+      } else if (child.isFile()) {
+        entries.set(path, { kind: 'file', content: await readFile(absolute) })
+      } else {
+        return `${path} is not a regular file or directory`
+      }
+    }
+    return undefined
+  }
+
+  const unsafe = await visit(root)
+  return { exists: true, entries, ...(unsafe === undefined ? {} : { unsafe }) }
+}
+
+function treeMismatch(live: InspectedTree, pristine: InspectedTree): string | undefined {
+  if (!live.exists) return 'the installed skill tree is missing'
+  if (live.unsafe !== undefined) return live.unsafe
+  if (pristine.unsafe !== undefined) return `the pristine record is unsafe: ${pristine.unsafe}`
+  if (pristine.entries.get('SKILL.md')?.kind !== 'file') {
+    return 'the pristine record has no regular SKILL.md'
+  }
+
+  const paths = [...new Set([...live.entries.keys(), ...pristine.entries.keys()])].sort()
+  for (const path of paths) {
+    const local = live.entries.get(path)
+    const base = pristine.entries.get(path)
+    if (local === undefined) return `${path} is missing from the installed tree`
+    if (base === undefined) return `${path} is a repository-local addition`
+    if (local.kind !== base.kind) return `${path} changed file type`
+    if (local.kind === 'file' && base.kind === 'file' && !local.content.equals(base.content)) {
+      return `${path} has local edits`
+    }
+  }
+  return undefined
+}
+
+async function configuredAgentSkills(
+  targetRepo: string,
+): Promise<{ skills: Set<string> } | { error: string }> {
+  const path = join(targetRepo, 'autobuild.toml')
+  try {
+    const source = await readIfExists(path)
+    if (source === undefined) return { skills: new Set() }
+    const config = parseConfig(source, path)
+    const skills = new Set<string>()
+    for (const step of Object.values(config.verify.stepConfigs)) {
+      if (step.kind === 'agent') skills.add(step.skill)
+    }
+    for (const step of Object.values(config.finalize.stepConfigs)) {
+      if (step.kind === 'agent') skills.add(step.skill)
+    }
+    return { skills }
+  } catch (error) {
+    return { error: errorMessage(error) }
+  }
+}
+
+/** Remove only the per-skill link created by init; root aliases are untouched. */
+async function removeOwnedClaudeLink(targetRepo: string, installName: string): Promise<void> {
+  const link = claudeSkillPath(targetRepo, installName)
+  try {
+    const linkStat = await lstat(link)
+    if (!linkStat.isSymbolicLink()) return
+    const target = resolve(dirname(link), await readlink(link))
+    const canonical = resolve(dirname(installedSkillPath(targetRepo, installName)))
+    if (target === canonical) await unlink(link)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+}
+
 export async function abUpgrade(opts: {
   targetRepo: string
   distRoot?: string
@@ -593,8 +720,64 @@ export async function abUpgrade(opts: {
   }
 
   const distNames = new Set(dist.map((skill) => skill.installName))
-  for (const name of await listInstalledSkills(targetRepo)) {
+  const configured = await configuredAgentSkills(targetRepo)
+  for (const name of RETIRED_SKILLS) {
+    // A distribution that still ships the name owns it through the ordinary
+    // merge path. Retirement begins only once the incoming distribution drops it.
     if (distNames.has(name)) continue
+
+    await migrateLegacySkill(targetRepo, name, stdout)
+    const liveRoot = dirname(installedSkillPath(targetRepo, name))
+    const pristineRoot = dirname(pristineSkillFilePath(targetRepo, name, 'SKILL.md'))
+    let pristine: InspectedTree
+    let live: InspectedTree
+    try {
+      ;[pristine, live] = await Promise.all([inspectTree(pristineRoot), inspectTree(liveRoot)])
+    } catch (error) {
+      // If provenance itself cannot be inspected, leave all bytes and surface
+      // the infrastructure error rather than guessing that deletion is safe.
+      report(name, 'kept', `could not inspect retirement candidate safely: ${errorMessage(error)}`)
+      stdout(`${name}: kept (could not inspect retirement candidate safely)`)
+      continue
+    }
+    // No pristine provenance means this is repository-authored (or a prior
+    // retirement already cleared ownership). It is intentionally silent.
+    if (!pristine.exists) continue
+
+    const mismatch = treeMismatch(live, pristine)
+    const reason =
+      'error' in configured
+        ? `could not safely inspect autobuild.toml references: ${configured.error}`
+        : configured.skills.has(name)
+          ? `still referenced by autobuild.toml as an agent step skill`
+          : mismatch === undefined
+            ? undefined
+            : `locally customized: ${mismatch}`
+
+    if (reason !== undefined) {
+      // Relinquish obsolete ownership. The live tree is now an ordinary local
+      // skill, so later upgrades neither repeat this report nor remove it.
+      await rm(pristineRoot, { recursive: true, force: true })
+      try {
+        await ensureClaudeSkillLink(targetRepo, name)
+      } catch (error) {
+        containDiscoveryConflict(error)
+      }
+      report(name, 'kept', reason)
+      stdout(`${name}: kept (${reason})`)
+      continue
+    }
+
+    await removeOwnedClaudeLink(targetRepo, name)
+    await rm(liveRoot, { recursive: true, force: true })
+    await rm(pristineRoot, { recursive: true, force: true })
+    report(name, 'removed', 'retired distribution skill; installed tree matched pristine')
+    stdout(`${name}: removed (retired distribution skill; installed tree matched pristine)`)
+  }
+
+  const retiredNames = new Set<string>(RETIRED_SKILLS)
+  for (const name of await listInstalledSkills(targetRepo)) {
+    if (distNames.has(name) || retiredNames.has(name)) continue
     try {
       await ensureClaudeSkillLink(targetRepo, name)
     } catch (error) {

@@ -12,10 +12,14 @@ You never push — the push is plumbing that happens when you finish.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md` (approved), your
-   own prior-round notes, and your feedback for this round: either
-   `.ab/findings.json` (code-review findings) or `.ab/verify/` (a failed
-   verify step's report).
+1. Run `ab context`. You get `.ab/context.json` (the manifest), `.ab/spec.md`,
+   `.ab/plan.md` (approved), your own prior-round notes, every verify report
+   deposited so far under `.ab/verify/`, and this round's feedback when the
+   round has any — at most one of `.ab/findings.json` (code-review findings), a
+   failed verify step's report in `.ab/verify/`, or `.ab/guidance.json` (a human
+   operator's answer to the escalation that blocked this build). The manifest's
+   `feedback` field names which one this round is, and is absent when the round
+   carries none.
 2. Execute the plan. Commit in coherent increments with real messages —
    the commit history is part of the paper trail.
 3. Run the repo's checks yourself before finishing (the config's typecheck /
@@ -45,10 +49,22 @@ You never push — the push is plumbing that happens when you finish.
   ab observe --kind followup "…"
   ```
 
-- **Feedback rounds** — address every finding in `.ab/findings.json`, or a
-  failed verify report in `.ab/verify/`, before anything else. The reviewer
-  marks dodged findings as persisting, and persistent chains escalate to a
-  human.
+- **Feedback rounds** — a round that carries feedback carries exactly one kind,
+  and it comes before anything else you do. `.ab/context.json`'s `feedback`
+  field says which: `findings` → address every finding in `.ab/findings.json`;
+  the reviewer marks dodged findings as persisting, and persistent chains
+  escalate to a human. `verify` → make the named step's report in `.ab/verify/`
+  pass. `guidance` → `.ab/guidance.json` holds a human operator's answer to the
+  escalation that blocked this build. It may have been raised by you or the
+  reviewer, by the kernel's code-loop stall or policy guards, or by the
+  verify-attempt policy guard after a failed report. The file carries the
+  escalation id and the answer text, it is authoritative for the round, and the
+  code must act on it. The spec stays the contract this
+  phase is measured against, so if the answer and the spec cannot both be
+  satisfied, escalate rather than choose silently. On a guidance round
+  `.ab/findings.json` does not exist and no verify step is routed back — the
+  answer is the whole of your feedback. With no `feedback` field at all, this
+  round has none: build the plan.
 - **Never rebase, never force-push, never touch the remote.** Local commits
   only; the boundary push is not yours.
 - If the plan is unimplementable as written (the code contradicts its

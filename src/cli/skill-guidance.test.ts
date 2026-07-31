@@ -47,15 +47,19 @@ function receivesGuidance(spec: PhaseSpec): boolean {
 const guidancePhases = Object.values(PHASE_SPECS).filter(receivesGuidance)
 const skills = await readDistSkills(DIST_ROOT)
 const byInstallName = new Map(skills.map((skill) => [skill.installName, skill]))
+const guide = byInstallName.get('ab-guide')
+const setupReference = guide?.files.find((file) => file.path === 'references/setup.md')
 
-/** Verify's skill is config-selected; every shipped `verify-*` sample must
- * document the input that any configured verifier skill is responsible for. */
-function skillNamesFor(spec: PhaseSpec): string[] {
-  if (spec.kind !== 'agent-verify') return [spec.skill]
-  return skills
-    .filter((skill) => skill.name.startsWith('verify-'))
-    .map((skill) => skill.installName)
-    .sort()
+/** Verify's skill is repository-selected. Its authoring contract lives in the
+ * installed setup reference rather than in a generic shipped verifier. */
+function guidanceDocumentsFor(spec: PhaseSpec): Array<{ name: string; content: string }> {
+  if (spec.kind === 'agent-verify') {
+    return setupReference === undefined
+      ? []
+      : [{ name: 'ab-guide/references/setup.md', content: setupReference.content }]
+  }
+  const skill = byInstallName.get(spec.skill)
+  return skill === undefined ? [] : [{ name: spec.skill, content: skill.content }]
 }
 
 describe('guidance delivery — every receiving phase documents the file', () => {
@@ -72,24 +76,28 @@ describe('guidance delivery — every receiving phase documents the file', () =>
   test('each receiving phase ships a skill naming `.ab/guidance.json`', () => {
     const missing: string[] = []
     for (const spec of guidancePhases) {
-      const skillNames = skillNamesFor(spec)
-      if (skillNames.length === 0) {
-        missing.push(`${spec.name} (no matching skill in the distribution)`)
+      const documents = guidanceDocumentsFor(spec)
+      if (documents.length === 0) {
+        missing.push(`${spec.name} (no matching guidance in the distribution)`)
         continue
       }
-      for (const skillName of skillNames) {
-        const skill = byInstallName.get(skillName)
-        if (skill === undefined) {
-          missing.push(`${skillName} (no such skill in the distribution)`)
-          continue
-        }
-        if (!skill.content.includes('.ab/guidance.json')) missing.push(skillName)
+      for (const document of documents) {
+        if (!document.content.includes('.ab/guidance.json')) missing.push(document.name)
       }
     }
     expect(
       missing,
       `phases that can receive human guidance without a skill naming .ab/guidance.json: ${missing.join(', ')}`,
     ).toEqual([])
+  })
+
+  test('the repository-authored verifier authority retains context and verdict terminals', () => {
+    expect(setupReference).toBeDefined()
+    expect(setupReference?.content).toContain('Run `ab context`')
+    expect(setupReference?.content).toContain('`.ab/guidance.json`')
+    expect(setupReference?.content).toContain('ab verdict pass --notes')
+    expect(setupReference?.content).toContain('ab verdict fail --report')
+    expect(setupReference?.content).toContain('ab verdict skip --reason')
   })
 
   test('no instruction points at `.ab/findings.json` without the guidance alternative', () => {

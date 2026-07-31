@@ -37,6 +37,15 @@ async function fixture() {
         kind: 'latent-bug' as const,
         summary: 'bug',
         ts: '2026-07-15T00:00:00.000Z',
+        ticket: { source: 'fake', id: 'origin-1' },
+      },
+    ],
+    originatingTickets: [
+      {
+        ticket: { source: 'fake', id: 'origin-1' },
+        sourceMatches: true,
+        exists: true,
+        resolved: false,
       },
     ],
     ledger: [],
@@ -263,6 +272,7 @@ describe('harvest status', () => {
         run: 'h_1',
         proposalKey: 'cluster-1',
         ticket: { source: 'fake', id: 'T-1' },
+        blockers: { declared: ['T-0'], derived: ['T-origin'] },
       },
     })
     await deps.store.appendRepo('/repo', {
@@ -292,9 +302,13 @@ describe('harvest status', () => {
         {
           proposalKey: 'cluster-1',
           ticket: { source: 'fake', id: 'T-1' },
+          blockers: { declared: ['T-0'], derived: ['T-origin'] },
         },
       ],
     })
+    const rendered = renderHarvestStatus(before).join('\n')
+    expect(rendered).toContain('declared blockers: T-0')
+    expect(rendered).toContain('originating blockers: T-origin')
 
     await deps.store.appendRepo('/repo', {
       actor: humanActor('operator'),
@@ -535,6 +549,18 @@ describe('harvest CLI', () => {
     expect(
       JSON.parse(await readFile(join(deps.workspacePath, '.ab', 'observations.json'), 'utf8')),
     ).toHaveLength(1)
+    expect(
+      JSON.parse(
+        await readFile(join(deps.workspacePath, '.ab', 'originating-tickets.json'), 'utf8'),
+      ),
+    ).toEqual([
+      {
+        ticket: { source: 'fake', id: 'origin-1' },
+        sourceMatches: true,
+        exists: true,
+        resolved: false,
+      },
+    ])
 
     const bad = join(deps.workspacePath, 'bad.json')
     await writeFile(

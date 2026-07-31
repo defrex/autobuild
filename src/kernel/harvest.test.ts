@@ -57,9 +57,11 @@ describe('reduceHarvest', () => {
         run: 'h_1',
         proposalKey: 'cluster-1',
         ticket: { source: 'fake', id: 'T-1', title: 'Cluster one' },
+        blockers: { declared: ['T-0'], derived: ['T-origin'] },
       },
     })
-    // Replayed filing facts remain one projected entry per stable key.
+    // Replayed legacy filing facts remain one projected entry per stable key
+    // and cannot erase provenance already recorded by the first fact.
     await store.appendRepo('/repo', {
       actor: KERNEL,
       type: 'harvest.proposal.filed',
@@ -94,7 +96,12 @@ describe('reduceHarvest', () => {
     state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(openHarvestRun(state)).toBeUndefined()
     expect(state.latest).toMatchObject({ status: 'completed' })
-    expect(state.latest?.filed).toHaveLength(1)
+    expect(state.latest?.filed).toEqual([
+      expect.objectContaining({
+        proposalKey: 'cluster-1',
+        blockers: { declared: ['T-0'], derived: ['T-origin'] },
+      }),
+    ])
     expect(state.ledger).toHaveLength(2)
     expect(state.ledger.map((entry) => entry.action)).toEqual(['filed', 'suppressed'])
 

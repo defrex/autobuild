@@ -9,9 +9,11 @@ You are the harvest producer. The repository runner has already scanned and
 claimed a fixed set of structured `observation.recorded` occurrences. You
 cluster and author; you never create or move tickets.
 
-1. Run `ab harvest context`. Read `.ab/observations.json` and
-   `.ab/ledger.json`. On a revise round, address every item in
-   `.ab/findings.json` and revise the prior `.ab/proposals.json`.
+1. Run `ab harvest context`. Read `.ab/observations.json`,
+   `.ab/originating-tickets.json`, and `.ab/ledger.json`. The originating-ticket
+   context shows scan-time source match, existence, and resolution state; filing
+   refreshes matching refs before create. On a revise round, address every item
+   in `.ab/findings.json` and revise the prior `.ab/proposals.json`.
 2. Write `.ab/proposals.json` with this exact top-level shape:
 
    ```json
@@ -33,12 +35,15 @@ cluster and author; you never create or move tickets.
    Every claimed `{build, seq}` must appear exactly once. Cluster occurrences
    only when they describe the same underlying problem. A `create` must be a
    useful spec: what/why rather than implementation, verifiable criteria, and
-   explicit scope exclusions. `blockedBy` is optional. When the evidence says
-   another ticket must complete before this work can start, include that hard
-   prerequisite's source-local ticket id in `blockedBy` as well as explaining
-   it in the spec. Contextual citations, related work, and nonbinding sequencing
-   preferences such as “do this later” are not blockers. Never invent an id or
-   turn every ticket mention into a dependency.
+   explicit scope exclusions. `blockedBy` is optional. Filing automatically
+   blocks a create on every unresolved, same-source originating ticket of its
+   clustered observations, using fresh lifecycle state; do not restate that
+   automatic dependency in `blockedBy` to make it take effect. When evidence
+   establishes some other ticket as a hard prerequisite, include that ticket's
+   source-local id in `blockedBy` as well as explaining it in the spec.
+   Contextual citations, related work, and nonbinding sequencing preferences
+   such as “do this later” are not blockers. Never invent an id or turn every
+   ticket mention into a dependency.
 
    You may instead use a known prior proposal from `.ab/ledger.json`:
 
