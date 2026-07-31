@@ -60,6 +60,8 @@ export interface HarvestRunnerDeps {
   store: BuildStore
   tickets: TicketSource
   config: Config
+  /** Current dispatcher snapshot, sampled only at workflow/session boundaries. */
+  getConfig?: () => Config
   runtimes: RuntimeRegistry
   repo: string
   workspacePath: string
@@ -84,6 +86,7 @@ export type HarvestRunnerResult =
 interface ProducerSession {
   handle: AgentSessionHandle
   runner: AgentRunner
+  route: string
 }
 
 class SessionFailure extends Error {
@@ -134,7 +137,6 @@ export class HarvestRunner {
   private readonly heartbeatMs: number
   private readonly maxSessionAttempts: number
   private readonly maxRecoveryAttempts: number
-  private readonly resolver: RuntimeResolver
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   /** Set only when the store positively reports a lapsed/stolen lease. A
    * rejected heartbeat is an outage; later beats retry until one can decide. */
@@ -150,7 +152,16 @@ export class HarvestRunner {
     if (!Number.isInteger(this.maxRecoveryAttempts) || this.maxRecoveryAttempts <= 0) {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+    // Preserve eager validation for static callers and startup failures.
+    createRuntimeResolver(deps.runtimes, deps.config.roles)
+  }
+
+  private currentConfig(): Config {
+    return this.deps.getConfig?.() ?? this.deps.config
+  }
+
+  private currentResolver(): RuntimeResolver {
+    return createRuntimeResolver(this.deps.runtimes, this.currentConfig().roles)
   }
 
   async run(): Promise<HarvestRunnerResult> {
@@ -183,7 +194,7 @@ export class HarvestRunner {
         // boundary even when the threshold is not met, so a request arriving
         // during the read is acknowledged before this runner returns idle.
         await this.controlBoundary()
-        if (scan.observations.length < this.deps.config.policy.harvestThreshold) {
+        if (scan.observations.length < this.currentConfig().policy.harvestThreshold) {
           return { outcome: 'idle' }
         }
         const runId = this.deps.ids('harvest')
@@ -324,7 +335,7 @@ export class HarvestRunner {
       .sort((a, b) => a.round - b.round)
     const stalled = stalledChains(
       reviseRounds.map((review) => review.findings),
-      this.deps.config.policy.stallRounds,
+      this.currentConfig().policy.stallRounds,
     )
     if (stalled.length > 0) {
       const chain = stalled.reduce((deepest, candidate) =>
@@ -351,9 +362,9 @@ export class HarvestRunner {
       startRound,
       priorRounds: reviseRounds.map((review) => review.findings),
       initialFeedback,
-      policy: {
-        maxRounds: this.deps.config.policy.maxReviewRounds,
-        stallRounds: this.deps.config.policy.stallRounds,
+      policy: () => {
+        const policy = this.currentConfig().policy
+        return { maxRounds: policy.maxReviewRounds, stallRounds: policy.stallRounds }
       },
       produce: async (_feedback, round) => {
         run = await this.refreshRun(run.run)
@@ -502,7 +513,22 @@ export class HarvestRunner {
     }
 
     const session = ids('hs')
-    const resolved = this.resolver.resolve(spec.role)
+    const resolved = this.currentResolver().resolve(spec.role)
+    const route = JSON.stringify({
+      runtime: resolved.runtime,
+      model: resolved.model,
+      extensions: resolved.extensions,
+    })
+    let live = spec.producer ? this.producer : undefined
+    if (live !== undefined && (live.runner !== resolved.runner || live.route !== route)) {
+      try {
+        await live.runner.end(live.handle)
+      } catch {
+        // Best-effort cleanup after the old round reached a durable boundary.
+      }
+      this.producer = undefined
+      live = undefined
+    }
     await this.ensureLease()
     const started = await store.appendRepo(repo, {
       actor: KERNEL,
@@ -521,7 +547,6 @@ export class HarvestRunner {
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
     let turnError: unknown
-    const live = spec.producer ? this.producer : undefined
     try {
       if (live !== undefined) {
         handle = live.handle
@@ -570,6 +595,7 @@ export class HarvestRunner {
         this.producer = {
           handle,
           runner: live?.runner ?? resolved.runner,
+          route,
         }
         await this.depositTranscript(
           spec,
@@ -699,7 +725,8 @@ export class HarvestRunner {
   }
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
-    const { store, repo, tickets, config, uuids } = this.deps
+    const { store, repo, tickets, uuids } = this.deps
+    const config = this.currentConfig()
     // Filing is one deterministic side-effecting unit: settle pause before it,
     // then leave reservation/create/adoption bookkeeping uninterrupted.
     await this.controlBoundary(run.run)

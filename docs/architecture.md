@@ -150,6 +150,17 @@ cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
+**Live configuration.** `src/config/live.ts` owns the running dispatcher's
+immutable effective snapshot, exhaustive hot/restart field classification, and
+eager role resolver. The watch loop refreshes it before each serialized tick
+and publishes the exact accepted TOML atomically with a
+`dispatcher.config-reloaded` repository fact before making the snapshot
+visible. Dispatcher ticks, build/harvest actions, and dashboard projections each
+capture one snapshot at their own boundary. Startup-built plugin, forge, ticket,
+and workspace adapter fields stay pinned; changed values are durable restart
+notices rather than partial adapter swaps. `--once` retains static startup
+configuration.
+
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
 source-aware originating-ticket lifecycle projection, filing-time blocker

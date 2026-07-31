@@ -112,6 +112,9 @@ export interface BuildRunnerOpts {
 export interface BuildRunnerDeps {
   store: BuildStore
   config: Config
+  /** Current dispatcher snapshot. It is sampled once for setup and once for
+   * each engine/action boundary; omission preserves static runner callers. */
+  getConfig?: () => Config
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
@@ -148,6 +151,7 @@ type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 interface ProducerSession {
   handle: AgentSessionHandle
   runner: AgentRunner
+  route: string
 }
 
 /** One bracketed agent run (§15.3 sessions). */
@@ -305,16 +309,24 @@ export class BuildRunner {
   /** §10 producer session memory — in-memory by design: a new sandbox resumes
    * with fresh sessions rehydrated from the store (§7.4, §9). */
   private readonly producerSessions = new Map<CorePhase, ProducerSession>()
-  /** The role resolver (§9), built EAGERLY: a bad config (unregistered runtime
-   * or an incompatible merged runtime/model pair) throws here — the per-build
-   * loud-failure site — before any session launches. */
-  private readonly resolver: RuntimeResolver
+  /** Captured only at setup/step boundaries. Async work below a boundary never
+   * consults the mutable owner again. */
+  private boundaryConfig: Config
+  private boundaryResolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+    this.boundaryConfig = deps.config
+    this.boundaryResolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+  }
+
+  private captureConfig(): Config {
+    const config = this.deps.getConfig?.() ?? this.deps.config
+    this.boundaryConfig = config
+    this.boundaryResolver = createRuntimeResolver(this.deps.runtimes, config.roles)
+    return config
   }
 
   /** Consecutive durable setup failures since the latest successful attachment
@@ -339,7 +351,7 @@ export class BuildRunner {
     const status =
       failure.exitStatus === null ? 'exit status unavailable' : `exit status ${failure.exitStatus}`
     return (
-      `maxSetupAttempts (${this.deps.config.policy.maxSetupAttempts}) exhausted: ` +
+      `maxSetupAttempts (${this.boundaryConfig.policy.maxSetupAttempts}) exhausted: ` +
       `[commands].setup ${JSON.stringify(failure.command)} failed with ${status}. ` +
       `Output: ${failure.output || '(no output)'}`
     )
@@ -378,6 +390,7 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<void> {
+    const config = this.captureConfig()
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!claimed) throw new LeaseHeldError(slug, instance)
@@ -393,7 +406,7 @@ export class BuildRunner {
     // Crash-safe exhaustion: the final failure and escalation are separate
     // appends. If only the failure landed, raise the blocker before another
     // command execution can buy an extra attempt.
-    if (currentFailure !== undefined && streak >= this.deps.config.policy.maxSetupAttempts) {
+    if (currentFailure !== undefined && streak >= config.policy.maxSetupAttempts) {
       if (!openSetupEscalation) await this.raiseSetupEscalation(currentFailure)
       throw new SetupFailureError(slug, currentFailure, true)
     }
@@ -421,7 +434,7 @@ export class BuildRunner {
     }, this.heartbeatMs)
     this.heartbeatTimer.unref?.()
 
-    const setup = this.deps.config.commands.setup
+    const setup = config.commands.setup
     if (setup !== undefined) {
       let failure: EventPayload<'runner.setup-failed'> | undefined
       try {
@@ -452,7 +465,7 @@ export class BuildRunner {
             type: 'runner.setup-failed',
             payload: failure,
           } satisfies EventWrite<'runner.setup-failed'>)
-          const exhausted = failure.attempt >= this.deps.config.policy.maxSetupAttempts
+          const exhausted = failure.attempt >= config.policy.maxSetupAttempts
           if (exhausted) await this.raiseSetupEscalation(failure)
           throw new SetupFailureError(slug, failure, exhausted)
         } finally {
@@ -480,7 +493,8 @@ export class BuildRunner {
    * decision it executed; `wait` decisions execute nothing.
    */
   async step(): Promise<Decision> {
-    const { store, config, slug } = this.deps
+    const config = this.captureConfig()
+    const { store, slug } = this.deps
     const events = await store.getEvents(slug)
     const decision = decideNext(events, config)
     switch (decision.kind) {
@@ -924,7 +938,7 @@ export class BuildRunner {
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
+    const { runner, runtime: runnerName, model, extensions } = this.boundaryResolver.resolve(step)
 
     const started = await store.append(slug, {
       actor: KERNEL,
@@ -1100,7 +1114,22 @@ export class BuildRunner {
       runtime: runnerName,
       model,
       extensions,
-    } = this.resolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    } = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const route = JSON.stringify({ runtime: runnerName, model, extensions })
+    let live =
+      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
+    if (live !== undefined && (live.runner !== runner || live.route !== route)) {
+      // A completed old round may keep provider continuation state, but a new
+      // route must begin a new provider session. The old round itself was not
+      // interrupted; it reached this boundary before being closed.
+      try {
+        await live.runner.end(live.handle)
+      } catch {
+        // Best-effort provider cleanup; route adoption must still proceed.
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      live = undefined
+    }
 
     const startedEnvelope = await store.append(slug, {
       actor: KERNEL,
@@ -1115,9 +1144,6 @@ export class BuildRunner {
       },
     } satisfies EventWrite<'session.started'>)
     const preSeq = startedEnvelope.seq
-
-    const live =
-      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
 
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
@@ -1220,6 +1246,7 @@ export class BuildRunner {
         this.producerSessions.set(spec.producerPhase, {
           handle,
           runner: live?.runner ?? runner,
+          route,
         })
         const content = JSON.stringify(
           {

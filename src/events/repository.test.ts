@@ -89,6 +89,44 @@ describe('repository event catalog', () => {
     ).toThrow(/invalid payload/)
   })
 
+  test('config reload facts are dispatcher-only and strict', () => {
+    const payload = {
+      artifact: { kind: 'dispatcher-config', rev: 2 },
+      restartRequired: ['forge', 'tickets.source'] as Array<'forge' | 'tickets.source'>,
+      effectiveChanged: true,
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.config-reloaded',
+        payload,
+      }),
+    ).toEqual({ actor: DISPATCHER, type: 'dispatcher.config-reloaded', payload })
+
+    for (const actor of [KERNEL, humanActor('operator'), agentActor('harvest', 'hs_1')]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor,
+          type: 'dispatcher.config-reloaded',
+          payload,
+        }),
+      ).toThrow(/may not emit/)
+    }
+    for (const badPayload of [
+      { ...payload, extra: true },
+      { ...payload, restartRequired: ['unknown'] },
+      { ...payload, restartRequired: ['forge', 'forge'] },
+    ]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor: DISPATCHER,
+          type: 'dispatcher.config-reloaded',
+          payload: badPayload,
+        }),
+      ).toThrow(/invalid payload/)
+    }
+  })
+
   test('dispatcher setting facts require strict booleans and human actors', () => {
     for (const type of [
       'dispatcher.intake-set',

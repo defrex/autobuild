@@ -82,10 +82,12 @@ export class DashboardBuildPollCache {
   private committedRevision = 0
   private refreshTail: Promise<void> = Promise.resolve()
 
+  private configRevision = 0
+
   constructor(
     private readonly reader: DashboardBuildReader,
     private readonly repo: string,
-    private readonly config: Config,
+    private config: Config,
   ) {}
 
   /** True only while no later refresh has committed. */
@@ -93,8 +95,11 @@ export class DashboardBuildPollCache {
     return snapshot.revision === this.committedRevision
   }
 
-  refresh(): Promise<DashboardPollSnapshot> {
-    const result = this.refreshTail.then(() => this.refreshNow())
+  refresh(
+    config: Config = this.config,
+    configRevision = this.configRevision,
+  ): Promise<DashboardPollSnapshot> {
+    const result = this.refreshTail.then(() => this.refreshNow(config, configRevision))
     this.refreshTail = result.then(
       () => undefined,
       () => undefined,
@@ -102,7 +107,8 @@ export class DashboardBuildPollCache {
     return result
   }
 
-  private async refreshNow(): Promise<DashboardPollSnapshot> {
+  private async refreshNow(config: Config, configRevision: number): Promise<DashboardPollSnapshot> {
+    const configChanged = configRevision !== this.configRevision || config !== this.config
     const records = (await this.reader.listBuilds()).filter((record) => record.repo === this.repo)
     const next = new Map<string, PollEntry>()
 
@@ -118,10 +124,19 @@ export class DashboardBuildPollCache {
       validateDelta(record.slug, sinceSeq, delta)
 
       if (current !== undefined && delta.length === 0) {
-        // BuildRecord liveness fields may change without events. Keep the
-        // newest record for a future projection, but preserve the expensive
-        // event reduction and projected row by identity.
-        next.set(record.slug, { ...current, record })
+        // BuildRecord liveness fields may change without events. A config-only
+        // revision still reprojects rows immediately; otherwise preserve the
+        // expensive reduction/projected row by identity.
+        next.set(
+          record.slug,
+          configChanged
+            ? {
+                ...current,
+                record,
+                build: projectBuild(record, current.state, config, current.events),
+              }
+            : { ...current, record },
+        )
         continue
       }
 
@@ -136,13 +151,15 @@ export class DashboardBuildPollCache {
         record,
         events,
         state,
-        build: projectBuild(record, state, this.config, events),
+        build: projectBuild(record, state, config, events),
       })
     }
 
     // Constructing `next` only from the latest listing also prunes records that
     // disappeared. Publish once, after every read/reduction succeeded.
     this.entries = next
+    this.config = config
+    this.configRevision = configRevision
     this.committedRevision += 1
     return this.snapshot()
   }
