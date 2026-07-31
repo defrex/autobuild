@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bulkControlRepository } from '../cli/bulk-control'
 import { parseConfig } from '../config/load'
+import type { Config } from '../config/schema'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
@@ -100,6 +101,8 @@ function harness(
     prAttachments?: boolean
     forge?: FakeForge
     exec?: Exec
+    /** Mutable dispatcher snapshot used by hot-reload boundary tests. */
+    getConfig?: () => Config
     /** A store to dispatch over instead of a fresh in-memory one — the seam
      * the restart tests use to hand a second Dispatcher a reopened store. */
     store?: BuildStore
@@ -137,6 +140,7 @@ function harness(
     workspaces,
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
+    ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
     repo: REPO,
     exec,
     launchRunner: async (slug) => {
@@ -1029,6 +1033,52 @@ releaseId = 42
       'second-feature',
     ])
     expect(h2.launches).toEqual(['first-feature', 'second-feature'])
+  })
+
+  test('captures reloaded capacity once per tick without terminating work above a lowered limit', async () => {
+    const configAt = (capacity: number): Config =>
+      parseConfig(`
+capacity = ${capacity}
+[tickets]
+source = "file"
+readyState = "Ready"
+`)
+    let current = configAt(1)
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'First feature' }),
+        readyTicket('T-2', { title: 'Second feature' }),
+        readyTicket('T-3', { title: 'Third feature' }),
+      ],
+      getConfig: () => current,
+      onLaunch: async (slug, store) => {
+        const events = await store.getEvents(slug)
+        if (!events.some((event) => event.type === 'runner.attached')) {
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'runner.attached',
+            payload: { instance: `runner-${slug}`, host: 'test' },
+          })
+        }
+        await store.claimLease(slug, `runner-${slug}`, 60_000)
+      },
+    })
+
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    current = configAt(3)
+    expect((await h.dispatcher.tick()).dispatched).toBe(2)
+    expect(h.launches).toHaveLength(3)
+
+    current = configAt(1)
+    await h.tickets.create(
+      { title: 'Fourth feature', body: CONFORMING_BODY, labels: [] },
+      { state: 'Ready' },
+    )
+    const lowered = await h.dispatcher.tick()
+    expect(lowered.dispatched).toBe(0)
+    expect(lowered.queued).toBe(1)
+    expect(h.launches).toHaveLength(3)
+    expect(await h.store.listBuilds()).toHaveLength(3)
   })
 
   test('capacity counts blocked and paused builds as occupying slots', async () => {

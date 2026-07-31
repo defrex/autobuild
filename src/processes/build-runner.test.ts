@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { buildContext } from '../cli/context'
 import { parseAbPhase } from '../cli/env'
 import { parseConfig } from '../config/load'
+import type { Config } from '../config/schema'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
@@ -323,6 +324,8 @@ interface HarnessOptions {
   /** Replaces the module config (parseConfig of this TOML) — e.g. to add a
    * [commands].setup for the §16.1 attach tests. */
   configToml?: string
+  /** Mutable dispatcher snapshot used by hot-reload boundary tests. */
+  getConfig?: () => Config
 }
 
 let nextHarnessWorkspace = 0
@@ -497,6 +500,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const br = new BuildRunner({
     store,
     config: selectedConfig,
+    ...(options.getConfig !== undefined ? { getConfig: options.getConfig } : {}),
     runtimes: {
       // `scripted` (the default runtime) serves the `m-` family so the routed
       // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
@@ -1683,6 +1687,71 @@ function reviseThenApproveHandlers(store: BuildStore): Record<string, SkillHandl
 }
 
 describe('session memory (§10)', () => {
+  test('an in-flight producer keeps its route, then the next round restarts under the new model', async () => {
+    let current = parseConfig(CONFIG_TOML)
+    current.roles.default = { runtime: 'scripted' }
+    let entered!: () => void
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const handlers = (store: BuildStore): Record<string, SkillHandler> => {
+      const base = happyHandlers(store)
+      return {
+        ...base,
+        plan: async (ctx) => {
+          if (roundOf(ctx) === 1) {
+            entered()
+            await gate
+          }
+          return base.plan!(ctx)
+        },
+        'plan-review': async (ctx) => {
+          const round = roundOf(ctx)
+          await reviewVerdict(
+            store,
+            ctx,
+            'plan-review',
+            round === 1 ? 'revise' : 'approve',
+            round === 1 ? [FINDING] : [],
+          )
+          return defaultTurnResult(`reviewed r${round}`)
+        },
+      }
+    }
+    const h = await makeHarness({ handlers, getConfig: () => current })
+
+    const first = h.br.step()
+    await inFlight
+    current = parseConfig(CONFIG_TOML.replace('model = "m-plan"', 'model = "m-plan-next"'))
+    current.roles.default = { runtime: 'scripted' }
+    const openStarts = ofType(await h.store.getEvents(SLUG), 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(openStarts.map((event) => event.payload.model)).toEqual(['m-plan'])
+    expect(
+      [...h.runner.sessions.values()].filter((journal) => journal.opts.skill === 'ab-plan'),
+    ).toHaveLength(1)
+    release()
+    await first
+    await h.br.step() // review r1 -> revise, using the new snapshot only after r1 finished
+    await h.br.step() // plan r2 must start fresh on the new route
+
+    const starts = ofType(await h.store.getEvents(SLUG), 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(starts.map((event) => event.payload.model)).toEqual(['m-plan', 'm-plan-next'])
+    const journals = [...h.runner.sessions.values()].filter(
+      (journal) => journal.opts.skill === 'ab-plan',
+    )
+    expect(journals).toHaveLength(2)
+    expect(journals.every((journal) => journal.turns.length === 1)).toBe(true)
+    expect(journals.every((journal) => journal.messages.length === 0)).toBe(true)
+  })
+
   test('implement r2 continues the SAME producer session; the message names the findings and .ab/', async () => {
     const h = await makeHarness({ handlers: reviseThenApproveHandlers })
     const state = await h.br.run()
@@ -2727,6 +2796,26 @@ describe('crash-gap repair', () => {
 // ── Deterministic checks (§8.2) ──────────────────────────────────────────────
 
 describe('checks', () => {
+  test('resolves a reloaded command at the next verify decision boundary', async () => {
+    const current = parseConfig(
+      CONFIG_TOML.replace(
+        'typecheck = "bun tsc --noEmit"',
+        'typecheck = "bun tsc --noEmit --pretty false"',
+      ),
+    )
+    current.roles.default = { runtime: 'scripted' }
+    const h = await makeHarness({ getConfig: () => current })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+
+    expect(await h.br.step()).toMatchObject({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun tsc --noEmit --pretty false',
+    })
+    expect(h.execCalls.at(-1)?.cmd).toEqual(['sh', '-c', 'bun tsc --noEmit --pretty false'])
+  })
+
   test('a failing check deposits the exec output as the verify report (D6) and completes outcome:fail', async () => {
     const h = await makeHarness({ failCommands: ['bun tsc --noEmit'] })
     await seedPlanApproved(h.store)

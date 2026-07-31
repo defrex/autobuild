@@ -48,7 +48,9 @@ export type ConvergeOutcome<A> =
 export async function converge<A>(opts: {
   produce: (feedback: Feedback | null, round: number) => Promise<A>
   review: (artifact: A, round: number, priorRounds: Finding[][]) => Promise<Verdict>
-  policy: ConvergePolicy
+  /** Static policy for ordinary callers, or a boundary accessor for a
+   * long-running repository workflow that hot-reloads policy between rounds. */
+  policy: ConvergePolicy | (() => ConvergePolicy)
   /** Chains a human already resolved via dismiss-finding (§15.6-B). */
   dismissedIds?: ReadonlySet<string>
   /** Durable callers may resume after prior revise rounds. Defaults preserve
@@ -57,16 +59,19 @@ export async function converge<A>(opts: {
   priorRounds?: Finding[][]
   initialFeedback?: Feedback | null
 }): Promise<ConvergeOutcome<A>> {
-  const { produce, review, policy, dismissedIds } = opts
+  const { produce, review, dismissedIds } = opts
+  const currentPolicy = (): ConvergePolicy =>
+    typeof opts.policy === 'function' ? opts.policy() : opts.policy
   const roundFindings: Finding[][] = (opts.priorRounds ?? []).map((round) => [...round])
   let feedback: Feedback | null = opts.initialFeedback ?? null
 
   for (let round = opts.startRound ?? 1; ; round += 1) {
-    if (round > policy.maxRounds) {
+    const openingPolicy = currentPolicy()
+    if (round > openingPolicy.maxRounds) {
       return {
         outcome: 'escalated',
         source: 'policy',
-        reason: `maxRounds (${policy.maxRounds}) exhausted without approval`,
+        reason: `maxRounds (${openingPolicy.maxRounds}) exhausted without approval`,
         rounds: round - 1,
       }
     }
@@ -91,7 +96,7 @@ export async function converge<A>(opts: {
     // The kernel applies the stall threshold after every revise, BEFORE
     // burning another produce round (§15.4). Deepest chain reported; first
     // in root order on ties.
-    const stalled = stalledChains(roundFindings, policy.stallRounds, dismissedIds)
+    const stalled = stalledChains(roundFindings, currentPolicy().stallRounds, dismissedIds)
     if (stalled.length > 0) {
       const chain = stalled.reduce((deepest, candidate) =>
         candidate.rounds > deepest.rounds ? candidate : deepest,

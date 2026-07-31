@@ -25,6 +25,7 @@ import {
   workspaceSchema,
 } from './schema'
 import { parseConfig } from './load'
+import { CONFIG_RELOAD_CLASSIFICATION, RESTART_REQUIRED_CONFIG_PATHS } from './live'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
@@ -244,6 +245,38 @@ describe('docs/configuration.md — schema coverage', () => {
       )
     }
     expect(tableSection('commands')).toMatch(/^\| `<name>` \|/m)
+  })
+
+  test('keeps the hot/restart contract exhaustive and documented', () => {
+    const section = headingSection(doc, 2, 'Reloading a running dispatcher')
+    expect(section).toBeDefined()
+    const classifiedRoots = Object.keys(CONFIG_RELOAD_CLASSIFICATION)
+    expect(classifiedRoots.sort()).toEqual([...TOP_LEVEL_KEYS].sort())
+
+    const classified: Array<{ path: string; behavior: 'hot' | 'restart' }> = []
+    const visit = (value: unknown, path: string[] = []): void => {
+      if (value === 'hot' || value === 'restart') {
+        classified.push({ path: path.join('.'), behavior: value })
+        return
+      }
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        visit(child, [...path, key])
+      }
+    }
+    visit(CONFIG_RELOAD_CLASSIFICATION)
+    const hotTokens = classified
+      .filter((entry) => entry.behavior === 'hot')
+      .map((entry) =>
+        !entry.path.includes('.') && !(TOP_LEVEL_SCALARS as readonly string[]).includes(entry.path)
+          ? `[${entry.path}]`
+          : entry.path,
+      )
+    expect(
+      classified.filter((entry) => entry.behavior === 'restart').map((entry) => entry.path),
+    ).toEqual([...RESTART_REQUIRED_CONFIG_PATHS])
+    for (const token of [...hotTokens, ...RESTART_REQUIRED_CONFIG_PATHS]) {
+      expect(section, `reload documentation is missing ${token}`).toContain(`\`${token}\``)
+    }
   })
 
   test('documents every nested [pr.imageHost] field structurally', () => {

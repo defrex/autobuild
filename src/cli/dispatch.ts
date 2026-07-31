@@ -23,14 +23,15 @@
  */
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig } from '../config/load'
+import { parseConfig } from '../config/load'
+import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
 import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { AbEvent } from '../events/catalog'
-import { humanActor } from '../events/envelope'
+import { DISPATCHER, humanActor } from '../events/envelope'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
@@ -62,7 +63,6 @@ import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
-import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
@@ -400,11 +400,11 @@ class DispatchLoop {
   private readonly inputStop = new AbortController()
 
   constructor(
-    private readonly config: Config,
+    private readonly liveConfig: LiveConfig,
     private readonly wiring: DispatchWiring,
     private readonly opts: DispatchOpts,
-    resolver: RuntimeResolver,
   ) {
+    const config = liveConfig.current().config
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
@@ -419,21 +419,19 @@ class DispatchLoop {
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
     // the dispatcher take its deterministic title fallback.
-    const resolvedSlug = resolver.resolve(SLUG_ROLE)
-    const oneShot = wiring.runtimes[resolvedSlug.runtime]?.oneShot
-    const nameSlug =
-      oneShot === undefined
-        ? undefined
-        : async (spec: string, signal: AbortSignal): Promise<string> => {
-            const result = await oneShot.complete({
-              prompt: slugNamingPrompt(spec),
-              cwd: opts.targetRepo,
-              env: definedEnv(opts.env),
-              signal,
-              ...(resolvedSlug.model !== undefined ? { model: resolvedSlug.model } : {}),
-            })
-            return result.text
-          }
+    const nameSlug = async (spec: string, signal: AbortSignal): Promise<string | null> => {
+      const resolvedSlug = this.liveConfig.current().resolver.resolve(SLUG_ROLE)
+      const oneShot = wiring.runtimes[resolvedSlug.runtime]?.oneShot
+      if (oneShot === undefined) return null
+      const result = await oneShot.complete({
+        prompt: slugNamingPrompt(spec),
+        cwd: opts.targetRepo,
+        env: definedEnv(opts.env),
+        signal,
+        ...(resolvedSlug.model !== undefined ? { model: resolvedSlug.model } : {}),
+      })
+      return result.text
+    }
 
     this.dispatcher = new Dispatcher({
       store: wiring.store,
@@ -441,17 +439,44 @@ class DispatchLoop {
       workspaces: wiring.workspaces,
       forge: wiring.forge,
       config,
+      getConfig: () => this.liveConfig.current().config,
       repo: opts.targetRepo,
       exec: opts.exec,
       launchRunner: (slug) => this.launchRunner(slug),
       startHarvest: () => this.launchHarvest(),
-      ...(nameSlug !== undefined ? { nameSlug } : {}),
+      nameSlug,
       ids: wiring.ids,
       clock: wiring.clock,
       opts: {
         maxHarvestRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
     })
+  }
+
+  private currentConfig(): ConfigSnapshot {
+    return this.liveConfig.current()
+  }
+
+  private async refreshConfig(): Promise<void> {
+    if (this.opts.once === true) return
+    const outcome = await this.liveConfig.refreshFromDisk()
+    if (outcome.kind === 'unchanged') return
+    if (outcome.kind === 'rejected') {
+      if (outcome.notify) this.warn(`config reload rejected: ${outcome.error}`)
+      return
+    }
+    if (outcome.kind === 'publication-failed') {
+      this.warn(`config reload not applied because its durable trace failed: ${outcome.error}`)
+      return
+    }
+
+    this.announce(`autobuild.toml reloaded (revision ${outcome.snapshot.revision})`)
+    if (outcome.restartRequired.length > 0) {
+      this.warn(
+        `autobuild.toml reload requires dispatch restart for: ${outcome.restartRequired.join(', ')}`,
+      )
+    }
+    this.reportRoleDiagnostics()
   }
 
   /** Append one operation after every previously observed tick/key action. */
@@ -471,13 +496,17 @@ class DispatchLoop {
 
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
     return this.serialize(async () => {
+      // Refresh before every watch decision. The owner publishes atomically;
+      // everything below captures the resulting one snapshot for this tick.
+      await this.refreshConfig()
+
       // Observation pressure is display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace
       // the last complete measurement with a fabricated zero.
       if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
-          const pressure = evaluateHarvestPressure(scan, this.config.policy)
+          const pressure = evaluateHarvestPressure(scan, this.currentConfig().config.policy)
           this.observationCount = pressure.observationCount
           this.driftCount = pressure.drift
         } catch (error) {
@@ -1381,7 +1410,8 @@ class DispatchLoop {
     const runner = new HarvestRunner({
       store,
       tickets,
-      config: this.config,
+      config: this.currentConfig().config,
+      getConfig: () => this.currentConfig().config,
       runtimes,
       repo: this.opts.targetRepo,
       workspacePath: this.opts.targetRepo,
@@ -1484,7 +1514,8 @@ class DispatchLoop {
 
       const runner = new BuildRunner({
         store,
-        config: this.config,
+        config: this.currentConfig().config,
+        getConfig: () => this.currentConfig().config,
         runtimes,
         workspacePath,
         branch: record.branch ?? `ab/${slug}`,
@@ -1609,8 +1640,7 @@ class DispatchLoop {
    * No surface gets a digest, a cap, or a truncated tail.
    */
   private reportRoleDiagnostics(): void {
-    const lines = roleKeyWarnings(this.config)
-    if (lines.length === 0) return
+    const lines = roleKeyWarnings(this.currentConfig().config)
     if (this.dashboard) {
       this.configWarnings = lines
       this.syncModelControls()
@@ -1665,7 +1695,11 @@ class DispatchLoop {
   private async renderOnce(): Promise<void> {
     const { terminal } = this.opts
     if (this.region === undefined || terminal === undefined) return
-    const buildSnapshot = await this.dashboardBuilds.refresh()
+    const configSnapshot = this.currentConfig()
+    const buildSnapshot = await this.dashboardBuilds.refresh(
+      configSnapshot.config,
+      configSnapshot.revision,
+    )
     const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
     const repositoryEvents =
       repoRecord === null ? [] : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
@@ -1712,11 +1746,11 @@ class DispatchLoop {
         activeCount: [...buildSnapshot.states.values()].filter(
           (state) => state.status !== 'done' && state.status !== 'aborted',
         ).length,
-        capacity: this.config.capacity,
+        capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,
         driftCount: this.driftCount,
-        harvestThreshold: this.config.policy.harvestThreshold,
-        harvestMaxDrift: this.config.policy.harvestMaxDrift,
+        harvestThreshold: configSnapshot.config.policy.harvestThreshold,
+        harvestMaxDrift: configSnapshot.config.policy.harvestMaxDrift,
       },
       repositoryEvents,
     )
@@ -1889,7 +1923,7 @@ class DispatchLoop {
   async run(): Promise<void> {
     // Before the `--once` branch, so both modes report it exactly once.
     this.reportRoleDiagnostics()
-    const capacity = this.config.capacity
+    const capacity = this.currentConfig().config.capacity
     if (this.opts.once) {
       if (!this.dashboard) {
         this.say(`ab dispatch — one pass over ${this.opts.targetRepo} (capacity ${capacity})`)
@@ -1976,9 +2010,11 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     storeRef: state.storeRef,
   }
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
+  let configContent: string
   let config: Config
   try {
-    config = await loadConfig(configPath)
+    configContent = await Bun.file(configPath).text()
+    config = parseConfig(configContent, configPath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(
@@ -2006,12 +2042,40 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     runtimes,
     plugins: wired.plugins ?? plugins,
   }
-  // §9: resolve the whole config against the registry ONCE, at startup — a
-  // config naming an unregistered runtime or an incompatible merged
-  // runtime/model pair fails `ab dispatch` loudly here, before any build
-  // launches, never as a silent per-build fallback. The per-build BuildRunner
-  // re-resolves too (its own construction is the second guard).
-  const resolver = createRuntimeResolver(wiring.runtimes, config.roles)
+  // Construction eagerly validates every startup role before repository
+  // settings or runner work can mutate durable state. The publisher is used
+  // only by later watch refreshes.
+  const liveConfig = new LiveConfig(
+    configPath,
+    config,
+    configContent,
+    wiring.runtimes,
+    async ({ content, restartRequired, effectiveChanged }) => {
+      await wiring.store.appendRepoWithArtifacts(
+        resolvedOpts.targetRepo,
+        [
+          {
+            kind: DISPATCHER_CONFIG_ARTIFACT,
+            content,
+            metadata: { restartRequired: [...restartRequired], effectiveChanged },
+          },
+        ],
+        (deposited) => {
+          const artifact = deposited[0]
+          if (artifact === undefined) throw new Error('config reload deposit returned no artifact')
+          return {
+            actor: DISPATCHER,
+            type: 'dispatcher.config-reloaded',
+            payload: {
+              artifact: { kind: artifact.kind, rev: artifact.revision },
+              restartRequired: [...restartRequired],
+              effectiveChanged,
+            },
+          }
+        },
+      )
+    },
+  )
 
   // Launch flags are durable repository setters. Omission writes nothing, so
   // another dispatcher cannot clobber the latest operator choice with a value
@@ -2033,6 +2097,6 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     })
   }
 
-  const loop = new DispatchLoop(config, wiring, resolvedOpts, resolver)
+  const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts)
   await loop.run()
 }
