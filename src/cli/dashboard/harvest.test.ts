@@ -83,6 +83,7 @@ describe('dashboard harvest row', () => {
           queued: 1,
           active: { current: 0, limit: 1 },
           observations: { current: 0, limit: 5 },
+          drift: { current: 0, limit: 3 },
           drained: false,
           repositoryPaused: false,
           defaultAutoMerge: false,
@@ -221,6 +222,7 @@ describe('dashboard harvest row', () => {
           queued: 1,
           active: { current: 0, limit: 1 },
           observations: { current: 0, limit: 5 },
+          drift: { current: 0, limit: 3 },
           drained: false,
           repositoryPaused: false,
           defaultAutoMerge: false,
@@ -295,6 +297,7 @@ describe('dashboard harvest row', () => {
           queued: 1,
           active: { current: 0, limit: 1 },
           observations: { current: 0, limit: 5 },
+          drift: { current: 0, limit: 3 },
           drained: false,
           repositoryPaused: false,
           defaultAutoMerge: false,
@@ -342,7 +345,11 @@ describe('dashboard harvest row', () => {
       await store.appendRepo('/repo', {
         actor: KERNEL,
         type: 'harvest.step.started',
-        payload: { run: 'h_1', step, ...(step === 'synthesize' ? { round: 2 } : {}) },
+        payload: {
+          run: 'h_1',
+          step,
+          ...(step === 'synthesize' ? { round: 2 } : {}),
+        },
       })
       await store.appendRepo('/repo', {
         actor: KERNEL,
@@ -371,6 +378,7 @@ describe('dashboard harvest row', () => {
         queued: 2,
         active: { current: 0, limit: 1 },
         observations: { current: 0, limit: 5 },
+        drift: { current: 0, limit: 3 },
         drained: false,
         repositoryPaused: false,
         defaultAutoMerge: false,

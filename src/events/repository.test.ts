@@ -27,6 +27,37 @@ const exhausted = {
 }
 
 describe('repository event catalog', () => {
+  test('harvest start accepts durable trigger provenance and historical omission', () => {
+    const base = {
+      run: 'h_1',
+      observations: [{ build: 'a', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    }
+    for (const trigger of ['count', 'drift', 'both'] as const) {
+      expect(
+        validateRepositoryEventWrite({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: { ...base, trigger },
+        }).payload,
+      ).toEqual({ ...base, trigger })
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: base,
+      }).payload,
+    ).toEqual(base)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: { ...base, trigger: 'age' },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
   test('harvest automatic request and exhaustion facts are kernel-only', () => {
     expect(
       validateRepositoryEventWrite({

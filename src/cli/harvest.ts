@@ -404,6 +404,7 @@ export interface HarvestRunStatusView {
   startedSeq: number
   startedAt: string
   observations: number
+  trigger?: HarvestRunState['trigger']
   steps: HarvestRunState['steps']
   rounds: number
   filed: HarvestFiledStatusView[]
@@ -429,6 +430,7 @@ export interface HarvestStatusView {
   /** Backward-compatible primary-run fields. `runs` is authoritative when
    * more than one workflow needs to be reported. */
   observations: number
+  trigger?: HarvestRunState['trigger']
   steps: HarvestRunState['steps']
   rounds: number
   filed: HarvestFiledStatusView[]
@@ -486,6 +488,7 @@ function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
     startedSeq: run.startedSeq,
     startedAt: run.startedAt,
     observations: run.observations.length,
+    ...(run.trigger !== undefined ? { trigger: run.trigger } : {}),
     steps: run.steps,
     rounds: Math.max(0, ...run.reviews.map((review) => review.round)),
     filed: run.filed.map((entry) => ({
@@ -555,6 +558,7 @@ function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): str
   const lines = [
     `harvest ${run.run} — ${displayStatus}${paused ? ` (run ${run.status})` : ''}`,
     `observations: ${run.observations}`,
+    ...(run.trigger !== undefined ? [`trigger: ${run.trigger}`] : []),
     `review rounds: ${run.rounds}`,
     'steps:',
   ]

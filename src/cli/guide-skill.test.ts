@@ -172,7 +172,10 @@ describe('ab-guide — worked config examples actually work', () => {
       // A fragment need not carry [roles.default]; supply the product default
       // so the per-field merge has a base, exactly as a real file would.
       expect(() =>
-        createRuntimeResolver(registry, { default: { runtime: 'claude' }, ...roles }),
+        createRuntimeResolver(registry, {
+          default: { runtime: 'claude' },
+          ...roles,
+        }),
       ).not.toThrow()
     }
   })
@@ -198,7 +201,9 @@ describe('ab-guide — dispatch dashboard summary', () => {
     const section = headingSection('## Dispatch dashboard')
     expect(section).toBeDefined()
     const compact = section?.replace(/\s+/g, ' ') ?? ''
-    expect(compact).toContain('`queue <depth> | active <current>/<limit> | obs <current>/<limit>`')
+    expect(compact).toContain(
+      '`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`',
+    )
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
     expect(compact).toContain(
       '`active` is the current nonterminal-build count against root `capacity`',
@@ -206,6 +211,10 @@ describe('ab-guide — dispatch dashboard summary', () => {
     expect(compact).toContain(
       '`obs` is the current count of recorded observation occurrences not yet claimed by a Harvest snapshot against `[policy].harvestThreshold`',
     )
+    expect(compact).toContain(
+      '`drift` is distinct other builds merged after the oldest such observation against `[policy].harvestMaxDrift`',
+    )
+    expect(compact).toContain('A drift limit of zero renders as `/0`')
     expect(compact).toContain('conditional yellow `repository PAUSED` segment')
     expect(compact).toContain('only queued rows gain a yellow `(held)` modifier beside `QUEUED`')
     expect(compact).toContain(
@@ -310,12 +319,24 @@ describe('ab-guide — finalize publication boundary', () => {
 })
 
 describe('ab-guide — shipped-skill coverage (AC10)', () => {
-  test('canonical guide tree remains deterministic while repo-vendored copies may diverge', async () => {
+  test('canonical guide tree is deterministic and its vendored bodies stay equivalent', async () => {
     const canonical = (await readDistSkills(DIST_ROOT)).find((skill) => skill.name === 'guide')
     expect(canonical).toBeDefined()
     expect(canonical!.files.map((file) => file.path)).toEqual(
       canonical!.files.map((file) => file.path).sort((a, b) => a.localeCompare(b)),
     )
+
+    const body = (source: string) => source.replace(/^---\n[\s\S]*?\n---\n/, '')
+    const live = await readFile(
+      join(DIST_ROOT, '.agents', 'skills', 'ab-guide', 'SKILL.md'),
+      'utf8',
+    )
+    const pristine = await readFile(
+      join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-guide', 'SKILL.md'),
+      'utf8',
+    )
+    expect(body(live)).toBe(body(guide))
+    expect(body(pristine)).toBe(body(guide))
   })
 
   test('every skill in the distribution has a row in the skills rundown', async () => {
