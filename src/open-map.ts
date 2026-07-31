@@ -1,0 +1,203 @@
+/**
+ * The open-map preservation contract: author-chosen keys → strictly validated
+ * values, with EVERY declared key surviving validation verbatim.
+ *
+ * `z.record` and `z.looseObject` build their result by assignment, so a
+ * perfectly valid entry named `__proto__` invokes the legacy
+ * `Object.prototype.__proto__` setter instead of creating an own key. Parsing
+ * SUCCEEDS and the entry vanishes — never resolved, never selectable, and
+ * invisible to whatever diagnostic exists to catch dead configuration. A silent
+ * drop is the one outcome an otherwise strict validator must never produce.
+ *
+ * So these keep the key intact end to end: own descriptors in, `defineProperty`
+ * out, null prototype on the result. Consumers can then read an author-chosen
+ * key off these maps without `Object.hasOwn` ceremony, and a name nobody
+ * declared answers `undefined` rather than an inherited object member.
+ *
+ * The entry boundary keeps the other half of the same promise: it must not
+ * narrow what the value schema said. A value that validates *to* nothing is
+ * kept — success is carried in the result's `ok`, never inferred from the value,
+ * or a legitimately absent value would be read as a rejection and produce the
+ * silent drop above from the other direction. And a rejection reaches the map's
+ * caller as validation reported it — every issue forwarded whole, with only its
+ * path prefixed — because re-encoding an issue as prose discards the structure a
+ * diagnostic needs to say what was actually wrong (see `../zod-issues`).
+ *
+ * Two surfaces consume this. `autobuild.toml`'s open maps ([commands],
+ * [roles], [workspace.config], and the named [verify.<step>] / [finalize.<step>]
+ * table sets) are one; the plugin manifest's adapter maps (`ticketSources`,
+ * `agentRuntimes`, `workspaceProviders`, `forges`) are the other, whose keys are
+ * likewise author-chosen — there, by the plugin author rather than the operator.
+ */
+import { z } from 'zod'
+import { forwardIssues, type IssueSink } from './zod-issues'
+
+/** How an entry name is validated. Autobuild-owned maps must be able to address
+ * every entry, so a nameless one is dead configuration; a map whose names belong
+ * to a plugin is not Autobuild's to narrow. */
+export type OpenMapKeyPolicy = 'nonempty' | 'nonblank' | 'any'
+
+export interface OpenMapOptions {
+  keys?: OpenMapKeyPolicy
+  /** What the container is called when the input is not one. */
+  shape?: string
+}
+
+const DEFAULT_SHAPE = 'a table of named entries'
+
+function keyIsValid(key: string, policy: OpenMapKeyPolicy): boolean {
+  switch (policy) {
+    case 'nonempty':
+      return key.length > 0
+    case 'nonblank':
+      return key.trim().length > 0
+    case 'any':
+      return true
+  }
+}
+
+/**
+ * Whether a container is a plain record of named entries — a parsed TOML table
+ * (null prototype), an object literal, or any object built on top of those.
+ *
+ * The exclusions are load-bearing rather than pedantic. A `Map`, a `Set`, a
+ * `Date`, an array, or a class instance has no own string-keyed entries to
+ * collect, so accepting one would produce an EMPTY map from an input that
+ * plainly meant to declare something — the same silent drop this module exists
+ * to prevent, just arrived at from the other direction. `null` is rejected for
+ * the same reason: absence is spelled by omission, which `openMap`'s
+ * `.prefault({})` turns into `{}` before this ever runs.
+ *
+ * The decision itself is `z.record`'s, deliberately: this module replaced that
+ * schema on the manifest surface, and a container it accepted must keep
+ * parsing. Hence "was it built by something other than a plain-object
+ * constructor" rather than an identity test against the local `Object` — which
+ * would turn away a record whose prototype declares a non-function
+ * `constructor`, one whose constructor prototype owns `isPrototypeOf`, and
+ * every plain object arriving from another realm.
+ *
+ * The one departure: `constructor` is read off the PROTOTYPE, never off
+ * `input`. Reading it off the input is what `z.record` does, and it is the same
+ * prototype hazard this module exists to close — a map declaring an adapter
+ * named `constructor` shadows the property the check depends on, and the whole
+ * container is rejected over an entry that is merely unusually named. Starting
+ * one link up cannot be shadowed by any declared entry, and answers identically
+ * for every container that does not declare that name.
+ */
+function isRecord(input: unknown): input is object {
+  if (typeof input !== 'object' || input === null) return false
+  const prototype = Object.getPrototypeOf(input)
+  if (prototype === null) return true
+  const builder = (prototype as { constructor?: unknown }).constructor
+  if (typeof builder !== 'function') return true
+  const builderPrototype: unknown = (builder as { prototype?: unknown }).prototype
+  if (typeof builderPrototype !== 'object' || builderPrototype === null) return false
+  return Object.hasOwn(builderPrototype, 'isPrototypeOf')
+}
+
+/**
+ * The own ENUMERABLE STRING entries of a parsed container, read BY DESCRIPTOR.
+ * `input[key]` is wrong here: on any object that has a prototype, reading
+ * `"__proto__"` answers that prototype rather than the declared entry.
+ *
+ * The key set is `z.record`'s — own and enumerable — because a container that
+ * schema collected must still be collected the same way. Non-enumerable
+ * properties are internal bookkeeping rather than declarations, and are skipped
+ * in both.
+ *
+ * An own enumerable SYMBOL is an error rather than a skip. `z.record` ran every
+ * own key through its string key schema, so a symbol failed validation and the
+ * whole container was invalid; passing over it silently instead would be the
+ * exact drop this module exists to prevent, applied to the one key shape that
+ * can never name an entry in the map it produces.
+ *
+ * `label` is rendered verbatim into the diagnostic — `'[roles]'` for a TOML
+ * table, `'forges'` for a manifest map.
+ */
+export function ownEntries(
+  input: unknown,
+  label: string,
+  ctx: IssueSink,
+  shape?: string,
+): [string, unknown][] {
+  if (!isRecord(input)) {
+    ctx.addIssue({ code: 'custom', message: `${label} must be ${shape ?? DEFAULT_SHAPE}` })
+    return []
+  }
+  for (const symbol of Object.getOwnPropertySymbols(input)) {
+    if (Object.getOwnPropertyDescriptor(input, symbol)?.enumerable !== true) continue
+    ctx.addIssue({
+      code: 'custom',
+      message: `${label} entry names must be strings; ${String(symbol)} cannot name an entry`,
+    })
+  }
+  const entries: [string, unknown][] = []
+  for (const key of Object.getOwnPropertyNames(input)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key)
+    if (descriptor === undefined || !descriptor.enumerable) continue
+    // TOML only ever produces data properties, but a manifest is real
+    // JavaScript: `forges: { get acme() { … } }` is a valid declaration, and
+    // `descriptor.value` is `undefined` for it. Invoking the getter still never
+    // consults the prototype chain.
+    entries.push([key, 'value' in descriptor ? descriptor.value : descriptor.get?.call(input)])
+  }
+  return entries
+}
+
+/** Record a named entry so the key survives verbatim. Plain assignment is what
+ * loses `__proto__`; `defineProperty` on a null-prototype target cannot. */
+export function defineEntry<T>(entries: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(entries, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+}
+
+/** Whether one entry's value validated, and what it validated to. Success is
+ * explicit rather than read off the value: a schema may legitimately validate to
+ * `undefined`, and that entry is kept like any other. */
+export type ParsedEntry<T> = { ok: true; value: T } | { ok: false }
+
+/** Validate one open-map value, forwarding every issue under its own key. */
+export function parseEntry<T>(
+  schema: z.ZodType<T>,
+  raw: unknown,
+  key: string,
+  ctx: IssueSink,
+): ParsedEntry<T> {
+  const parsed = schema.safeParse(raw)
+  if (parsed.success) return { ok: true, value: parsed.data }
+  forwardIssues(parsed.error.issues, ctx, [key])
+  return { ok: false }
+}
+
+/**
+ * An open map: author-chosen keys → strictly validated values, keys preserved.
+ *
+ * Preservation is the shared contract; the key vocabulary is not. An
+ * Autobuild-owned map names entries Autobuild itself must be able to address —
+ * a role to dispatch, a command to run — so a nameless entry there is dead
+ * configuration and an error. A plugin-owned pass-through map is not
+ * Autobuild's to narrow, and a map of adapter names is narrower still: a name
+ * made only of whitespace is unaddressable from configuration.
+ */
+export function openMap<T>(label: string, valueSchema: z.ZodType<T>, opts: OpenMapOptions = {}) {
+  const keys = opts.keys ?? 'nonempty'
+  return z
+    .unknown()
+    .transform((input, ctx): Record<string, T> => {
+      const entries: Record<string, T> = Object.create(null)
+      for (const [key, raw] of ownEntries(input, label, ctx, opts.shape)) {
+        if (!keyIsValid(key, keys)) {
+          ctx.addIssue({ code: 'custom', message: `${label} entry names must be ${keys}` })
+          continue
+        }
+        const parsed = parseEntry(valueSchema, raw, key, ctx)
+        if (parsed.ok) defineEntry(entries, key, parsed.value)
+      }
+      return entries
+    })
+    .prefault({})
+}

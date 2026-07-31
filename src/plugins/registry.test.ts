@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AutobuildPluginManifest } from './manifest'
+import { parsePluginManifest } from './manifest'
 import { PluginRegistry } from './registry'
 
 const factory = (() => ({})) as never
@@ -119,5 +120,63 @@ describe('PluginRegistry', () => {
       ),
     ).toThrow(/github/)
     expect(registry.ticketSources.has('jira')).toBe(false)
+  })
+})
+
+// Driven through `parsePluginManifest` rather than a hand-built manifest
+// object on purpose: validation is the step that used to lose the name, so a
+// literal `{ forges: { ['__proto__']: fn } }` handed straight to `register`
+// would pass while the real path stayed broken.
+function parsedPlugin(
+  name: string,
+  registrations: Record<string, unknown>,
+): AutobuildPluginManifest {
+  return parsePluginManifest({ name, apiVersion: '^1.0.0', ...registrations })
+}
+
+describe('PluginRegistry with a preserved adapter name', () => {
+  test('registers a name that collides with an inherited object member on every port', () => {
+    const registry = new PluginRegistry()
+    registry.register(
+      parsedPlugin('proto-plugin', {
+        ticketSources: { ['__proto__']: factory },
+        agentRuntimes: { ['__proto__']: factory },
+        workspaceProviders: { ['__proto__']: factory },
+        forges: { ['__proto__']: factory },
+      }),
+    )
+
+    for (const port of [
+      registry.ticketSources,
+      registry.agentRuntimes,
+      registry.workspaceProviders,
+      registry.forges,
+    ]) {
+      expect(port.get('__proto__')?.owner).toEqual({ kind: 'plugin', name: 'proto-plugin' })
+      expect(port.get('__proto__')?.factory).toBe(factory)
+    }
+  })
+
+  test('the projection ab plugin list prints carries the name verbatim', () => {
+    const registry = new PluginRegistry()
+    registry.register(parsedPlugin('proto-plugin', { forges: { ['__proto__']: factory } }))
+    expect(registry.adapters('forge')).toContainEqual(
+      expect.objectContaining({ port: 'forge', name: '__proto__' }),
+    )
+    expect(registry.registration('forge', '__proto__')?.factory).toBe(factory)
+  })
+
+  test('collision rules still hold for such a name, per port', () => {
+    const registry = new PluginRegistry()
+    registry.register(parsedPlugin('first', { forges: { ['__proto__']: factory } }))
+    expect(() =>
+      registry.register(parsedPlugin('second', { forges: { ['__proto__']: factory } })),
+    ).toThrow(/forge.*__proto__.*second.*first/)
+    // The same name on a different port remains a distinct registration.
+    registry.register(parsedPlugin('second', { agentRuntimes: { ['__proto__']: factory } }))
+    expect(registry.agentRuntimes.get('__proto__')?.owner).toEqual({
+      kind: 'plugin',
+      name: 'second',
+    })
   })
 })

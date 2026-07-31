@@ -33,7 +33,7 @@ import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
-import { systemClock, textContent, type Clock } from '../store/types'
+import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
@@ -1853,6 +1853,19 @@ function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
     [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Autobuild')) ?? '',
   )
+}
+
+/** The repository-setting facts a dashboard action durably wrote, in journal
+ * order — `[type, payload]` pairs, so both the values and their ORDER are
+ * assertable. Order matters: the pause fact is the quiescence boundary and must
+ * precede intake (src/cli/bulk-control.ts). */
+async function settingWrites(
+  store: BuildStore,
+  repo: string,
+): Promise<[string, { enabled: boolean }][]> {
+  return (await store.getRepoEvents(repo))
+    .filter((event) => event.type.startsWith('dispatcher.'))
+    .map((event) => [event.type, event.payload as { enabled: boolean }])
 }
 
 function latestPaintedFrame(term: { frames: string[] }): string {
@@ -4004,8 +4017,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.pause-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: pause requested for 2 builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+        ),
       )
+      // The wiring assertion: the fact the dashboard writes is the one the
+      // dispatcher reads, and it lands before intake.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
 
       // No live runner in this fixture, so the kernel's acknowledgement — the
       // thing that actually settles a pause — is written explicitly.
@@ -4020,8 +4041,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.resume-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('resume all: resume requested for 2 builds; intake ON'),
+        latestDashboardFrame(term).includes(
+          'resume all: resume requested for 2 builds; queued builds released; intake ON',
+        ),
       )
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+        ['dispatcher.pause-set', { enabled: false }],
+        ['dispatcher.intake-set', { enabled: true }],
+      ])
 
       await ack('alpha-work', 'build.resumed')
       await ack('beta-work', 'build.resumed')
@@ -4093,15 +4122,22 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('pause')
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: no pausable builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: no pausable builds; queued builds held; intake OFF',
+        ),
       )
       expect(latestDashboardFrame(term)).toContain('intake OFF')
-      const intakeWrites = (await fx.store.getRepoEvents(fx.origin)).filter(
-        (event) => event.type === 'dispatcher.intake-set',
+      // With nothing pausable, the repository facts are the whole action.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
+      const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
+        event.type.startsWith('dispatcher.'),
       )
-      expect(intakeWrites).toHaveLength(1)
-      expect(intakeWrites[0]?.payload).toEqual({ enabled: false })
-      expect(intakeWrites[0]?.actor).toEqual({ kind: 'human', user: 'quiet-op' })
+      expect(
+        settings.every((event) => event.actor.kind === 'human' && event.actor.user === 'quiet-op'),
+      ).toBe(true)
 
       input.press('interrupt')
       await run
@@ -5386,4 +5422,173 @@ describe('abDispatch interactive keyboard controls', () => {
       await fx.cleanup()
     }
   }, 30_000)
+})
+
+/**
+ * Startup role-key diagnostics (SPEC §9). These reach the operator through the
+ * seam `ab dispatch` already uses for configuration-level notices, and both
+ * surfaces get the IDENTICAL strings in full — stderr writes them verbatim, the
+ * dashboard wraps them into its warning region. No fixture here dispatches a
+ * build: the diagnostic is emitted before the first tick and is what is under
+ * test.
+ */
+describe('abDispatch: unconsumed and deprecated [roles] keys', () => {
+  /** A stray key plus a deprecated skill-name alias for a real agent step. */
+  const BROKEN_ROLES_TOML = DISPATCH_CONFIG_TOML.replace(
+    'steps = ["unit"]',
+    'steps = ["unit", "e2e"]',
+  ).replace(
+    '[policy]',
+    `[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.ghost]
+runtime = "claude"
+
+[roles.typo]
+runtime = "claude"
+
+[roles.ab-verify-e2e]
+runtime = "claude"
+
+[policy]`,
+  )
+
+  /** Every detail an operator needs to act, on either surface. */
+  const DETAILS = [
+    '[roles.ghost]',
+    '[roles.typo]',
+    '[roles.ab-verify-e2e]',
+    '[roles.e2e]',
+    'harvest-review',
+    'plan-review',
+    'reconcile',
+  ]
+
+  test('a `[roles."__proto__"]` entry reaches the operator like any other stray key', async () => {
+    // The sharpest open-map key: legal TOML, but assigning it into a normal
+    // object invokes the legacy prototype setter instead of creating an own
+    // key. It used to parse fine and then be invisible to every surface —
+    // never resolved, never dispatchable, never warned about. Driven through
+    // a real autobuild.toml on disk, so nothing about the config path is faked.
+    const toml = DISPATCH_CONFIG_TOML.replace(
+      '[policy]',
+      '[roles."__proto__"]\nruntime = "claude"\n\n[policy]',
+    )
+    const fx = await makeFixture([], happyHandlers(), toml)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime and model never reach a session.',
+        'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      ])
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('line-oriented mode writes every notice to stderr, in full, and leaves stdout clean', async () => {
+    const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+        'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+        'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
+      ])
+      // Scripted stdout consumers stay clean.
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  for (const size of [
+    { columns: 120, rows: 40 },
+    { columns: 80, rows: 24 },
+  ]) {
+    test(`the painted frame carries every detail at ${size.columns}x${size.rows}`, async () => {
+      const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+      const term = fakeTerminal(true, size)
+      try {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          terminal: term,
+        })
+
+        // The whole frame, because details legitimately land on continuation
+        // rows — that is what wrapping means.
+        const frame = latestDashboardFrame(term)
+        for (const detail of DETAILS) expect(frame).toContain(detail)
+        // Uncapped: no notice is dropped by count. (`~` is deliberately NOT
+        // asserted absent — packLines truncating an over-wide single token is
+        // an inherited invariant this change does not own.)
+        expect(frame).not.toMatch(/\+\d+ more/)
+        // The interactive frame is the only surface: stderr stays silent.
+        expect(fx.err).toEqual([])
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
+
+  test('a later transient warning does not erase the config diagnostic', async () => {
+    const fx = await makeFixture(readyTicket('T-sticky'), happyHandlers(), BROKEN_ROLES_TOML)
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    const transient = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [transient] }
+    }
+    const term = fakeTerminal()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      // `setWarning` replaces the transient slot outright, so sharing it would
+      // have let this tick's ticket diagnostic erase the startup notice for the
+      // life of the process. The final frame carries BOTH.
+      const frame = latestDashboardFrame(term)
+      for (const detail of DETAILS) expect(frame).toContain(detail)
+      expect(frame).toContain('invalid frontmatter')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 60_000)
 })

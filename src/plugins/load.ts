@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ZodError } from 'zod'
+import { expandIssues } from '../zod-issues'
 import {
   parsePluginManifest,
   pluginApiCompatibility,
@@ -133,7 +134,7 @@ export async function attemptPlugin(
   } catch (error) {
     const detail =
       error instanceof ZodError
-        ? error.issues
+        ? expandIssues(error.issues)
             .map((issue) => `${issue.path.join('.') || '(manifest)'}: ${issue.message}`)
             .join('; ')
         : reason(error)

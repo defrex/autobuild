@@ -12,6 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { humanActor } from '../../events/envelope'
+import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { manualClock } from '../../testing/fixed'
 import {
   buildCreatedWrite,
@@ -63,6 +64,11 @@ describe('SqliteBuildStore durability', () => {
         type: 'dispatcher.auto-merge-default-set',
         payload: { enabled: true },
       })
+      await first.appendRepo('acme/rate-limiter', {
+        actor: humanActor('operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: true },
+      })
       await first.close()
 
       const second = openLocalStore(root, { clock })
@@ -102,7 +108,26 @@ describe('SqliteBuildStore durability', () => {
             type: 'dispatcher.auto-merge-default-set',
             payload: { enabled: true },
           },
+          {
+            seq: 3,
+            type: 'dispatcher.pause-set',
+            payload: { enabled: true },
+          },
         ])
+
+        // The repository-wide hold is durable across a real file-level reopen,
+        // and is releasable afterwards through the reopened store.
+        expect(reduceDispatchSettings(await second.getRepoEvents('acme/rate-limiter')).paused).toBe(
+          true,
+        )
+        await second.appendRepo('acme/rate-limiter', {
+          actor: humanActor('operator'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: false },
+        })
+        expect(reduceDispatchSettings(await second.getRepoEvents('acme/rate-limiter')).paused).toBe(
+          false,
+        )
 
         // The reopened store keeps assigning seq where the log left off.
         const next = await second.append('persist', sampleEventWrite('after reopen'))

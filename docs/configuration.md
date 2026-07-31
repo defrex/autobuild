@@ -238,9 +238,13 @@ writableCache = true
 
 The builtin `git-worktree` provider needs no table and accepts no adapter
 configuration. A plugin factory receives exactly `[workspace.config]`, the
-process environment, and the absolute repository root. Factory invocation is
-lazy: registering an unselected provider constructs nothing. An unknown name
-fails before claims and lists every available builtin and plugin provider.
+process environment, and the absolute repository root. Every declared key
+reaches the factory verbatim, including names such as `__proto__` that collide
+with inherited object properties; the map has a null prototype, so reading an
+undeclared key answers `undefined` rather than an inherited member. Factory
+invocation is lazy: registering an unselected provider constructs nothing. An
+unknown name fails before claims and lists every available builtin and plugin
+provider.
 
 Every provider must satisfy the exported `WorkspaceProvider` contract and
 return a locally reachable absolute working-copy `path`. Its provider-scoped
@@ -329,6 +333,31 @@ Cross-field validation rejects:
 `always = true` does not make malformed `paths` acceptable: all supplied
 selectors are validated even though the mandatory step will not use them for
 applicability.
+
+### Role routing for an agent verify step
+
+An agent verify step selects `[roles.<step>]` by its **logical step name** —
+the name in `[verify].steps`, not the skill it runs. This is the same rule an
+agent finalize post-step follows.
+
+<!-- config-fragment:verify-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+```
+
+The step's configured skill name remains a deprecated alias for existing
+configurations and will be removed in a future release. It is consulted only
+when `[roles.<step>]` is undeclared, so the step name always wins when both are
+present, and `ab dispatch` reports the alias with the step name to rename it to.
 
 ### Plan-selected steps
 
@@ -426,7 +455,37 @@ kind = "agent"
 skill = "ab-release-notes"
 ```
 
-The logical step name selects `[roles.<step>]` for an agent post-step. Both
+The logical step name selects `[roles.<step>]` for an agent post-step — the
+same rule an agent verify step follows, so one convention covers both:
+
+<!-- config-fragment:finalize-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
+[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+runtime = "pi"
+
+[roles.release-notes]    # finalize step name
+runtime = "pi"
+```
+
+For an agent *verify* step, the step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. Finalize has never had such an alias.
+
+Both
 kinds are failure-tolerant: nonzero commands, launch/execution errors, and
 structured agent failures record `ok = false` plus a follow-up observation,
 then the sequence continues. A post-step cannot turn an otherwise green build
@@ -495,12 +554,23 @@ opt-in:
 `AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test src/ports/runner/codex.live.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
-`code-review`, `finalize`, and `reconcile`). Agent verify sessions route by
-their configured `skill` name; agent finalize post-steps route by logical step
-name. Repository judgments use `harvest` and `harvest-review`; `slug` and
-`upgrade` configure tool-free one-shot judgments. Arbitrary additional role
-keys are accepted, but only a name selected by one of these routes affects a
-session.
+`code-review`, `finalize`, and `reconcile`). Agent verify steps and agent
+finalize post-steps both route by their logical step name. The verify step's
+configured skill name remains a deprecated alias for existing configurations
+and will be removed in a future release. Repository judgments use `harvest` and
+`harvest-review`; `slug` and `upgrade` configure tool-free one-shot judgments.
+Arbitrary additional role keys are accepted, but only a name selected by one of
+these routes affects a session.
+
+A declared key that no route requests is resolved and validated like any other,
+and then never used — `ab dispatch` reports it at startup, naming the key and
+the keys valid for this configuration, and reports a deprecated skill-name key
+with the step name to rename it to. Both stay warnings; neither blocks a
+session or changes which runtime and model run. `kind = "check"` steps start no
+session and so are not a route: naming a role after one does not make it
+consumed. It is reported only when that check step is its sole apparent route —
+a check step named `plan` leaves `[roles.plan]` consumed by the core `plan`
+phase, and nothing is reported.
 
 Resolver construction validates `default` and every declared role eagerly and
 aggregates all unknown-runtime and incompatible-model problems. Unknown-runtime
@@ -541,6 +611,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
 When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
@@ -555,8 +626,8 @@ Source-specific validation is strict:
 
 - Linear requires `teamKey` and rejects `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
-- `createState` and `triageState` are valid for every source, but the named
-  state must exist in that provider when used.
+- `createState`, `triageState`, and `proposalState` are valid for every source,
+  but the named state must exist in that provider when used.
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
@@ -567,6 +638,16 @@ the selected source, which owns its workflow vocabulary and rejects unknown
 states before creating anything. An omitted Linear `triageState` uses `Backlog`,
 because every team has it while the optional Linear triage feature may be
 disabled. The file source uses `Triage`.
+
+`proposalState` names the one state observation harvest files proposals into,
+and defaults to the resolved `triageState` — proposals wait for a human, which
+is the grooming gate the pipeline is built around. Naming `readyState` here
+waives that gate for this repository: every proposal the harvest loop approves
+becomes dispatchable without being read, protected only by that loop's own
+review and by the spec gate at dispatch. It is a separate field precisely so
+the waiver stays narrow. Redirecting `triageState` instead would also send
+spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
+a bounced ticket is reclaimed and bounced again on every tick.
 
 The default file directory follows a selected local `AB_STORE` root and writes
 its own self-excluding `.gitignore`. An explicitly configured `dir` belongs to
@@ -692,6 +773,7 @@ readyState = "ready"
 readyLabels = []
 createState = "Triage"
 triageState = "Triage"
+proposalState = "Triage"
 dir = "tickets"
 ```
 
@@ -756,23 +838,28 @@ Use `ab upgrade --no-self-update` for merge-only behavior.
 
 ## Durable settings outside TOML
 
-Three repository-wide operator choices intentionally live as facts in the
+Four repository-wide operator choices intentionally live as facts in the
 BuildStore repository journal, not in `autobuild.toml`. They are latest-write
 wins, survive process restarts, and are sampled by every dispatcher on its
 poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
+| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, no dispatcher tick attaches a runner to a queued build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
 Omitting both writes nothing and reuses the durable value. Per-build
 pause/resume and auto-merge controls are separate facts and do not alter these
-repository defaults. The current release has no TOML field or standalone
-sessionless command for the harvest gate; use the dashboard and inspect it with
-`ab harvest status`.
+repository defaults. Pause all and resume all write two facts each — the
+repository pause first, then intake — so a partial failure still leaves the
+repository at least as quiesced as asked; `ab pause --all` reports on stderr
+which of them landed when a walk stops partway. The current release has no TOML
+field for either the harvest gate or the repository pause, and no command that
+sets the repository pause on its own without also moving intake; inspect the
+harvest gate with `ab harvest status`.
 
 ## Environment and credentials
 
@@ -866,17 +953,21 @@ action. Check the gates in this order:
 1. **Durable intake:** the dashboard header must show intake on, or explicitly
    run a future dispatcher with `--intake`. Intake off skips the ready scan
    even when tickets exist.
-2. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
+2. **Repository pause:** a pause all holds every queued build, so an existing
+   build sits at `QUEUED` and no ticket is claimed. It always turns intake off
+   too, so a failing step 1 is the practical signal; `r` on the dashboard's
+   global row or `ab resume --all` releases both.
+3. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
    is case-sensitive; file tickets must physically be in the corresponding
    state directory.
-3. **Labels:** the ticket must carry every effective `readyLabels` value,
+4. **Labels:** the ticket must carry every effective `readyLabels` value,
    including Linear's default `autobuild` label when the field is omitted.
-4. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
+5. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
    same source. Plain dispatch output reports unresolved ids and cycles.
-5. **Capacity:** every nonterminal build for this repository—including paused
+6. **Capacity:** every nonterminal build for this repository—including paused
    and blocked builds—uses a slot. Inspect `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.
-6. **Duplicate work:** a ready ticket already represented by an active build is
+7. **Duplicate work:** a ready ticket already represented by an active build is
    deliberately excluded from the queue.
 
 If the expected work is observation harvesting instead of a ticket, also check

@@ -5,6 +5,7 @@
  */
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
+import { UPGRADE_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -107,7 +108,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
         repoRoot: opts.targetRepo,
         env: opts.env,
       })
-      const selected = createRuntimeResolver(runtimes, config.roles).resolve('upgrade')
+      const selected = createRuntimeResolver(runtimes, config.roles).resolve(UPGRADE_ROLE)
       const oneShot = runtimes[selected.runtime]?.oneShot
       if (oneShot === undefined) {
         throw new Error(

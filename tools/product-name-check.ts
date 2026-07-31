@@ -1,6 +1,6 @@
 import { lstat, readFile, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { gitTrackedPaths, repoRoot } from './git-tracked'
 
 /**
  * Fails when a tracked file spells the product's name as two words or with a
@@ -191,25 +191,6 @@ export async function runProductNameCheck(
   }
   output.stderr(`${convention}\n${describeTally(report.tally)}\n`)
   return 1
-}
-
-const repoRoot = fileURLToPath(new URL('..', import.meta.url))
-
-export const gitTrackedPaths = async (): Promise<readonly string[]> => {
-  const processHandle = Bun.spawn(['git', 'ls-files', '-z'], {
-    cwd: repoRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(processHandle.stdout).text(),
-    new Response(processHandle.stderr).text(),
-    processHandle.exited,
-  ])
-  if (exitCode !== 0) {
-    throw new Error(`git ls-files exited with status ${exitCode}: ${stderr.trim()}`)
-  }
-  return stdout.split('\0').filter((path) => path.length > 0)
 }
 
 const absolute = (path: string): string => join(repoRoot, path)

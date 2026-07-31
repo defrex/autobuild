@@ -74,6 +74,14 @@ Every module must default-export one strict `AutobuildPluginManifest`:
   and host version; invalid or incompatible ranges fail loading.
 - The only registration keys are `ticketSources`, `agentRuntimes`,
   `workspaceProviders`, and `forges`. Unknown manifest fields fail validation.
+  Adapter names are yours to choose: every declared name is registered
+  verbatim, including one such as `__proto__` that collides with an inherited
+  object property — declare that one computed, `{ ['__proto__']: factory }`,
+  since a plain `__proto__:` key in an object literal sets the prototype
+  instead of declaring an adapter. The parsed maps have a null prototype, so
+  reading an undeclared name answers `undefined` rather than an inherited
+  member. A blank or whitespace-only name is rejected: an adapter is selected
+  from configuration by name.
 - A registration may be a bare adapter factory, or
   `{ factory, contract: { factory, live? } }`. The first factory returns the
   adapter; the contract factory returns that port suite's fixture factory.

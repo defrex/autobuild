@@ -5,6 +5,7 @@
  * journal, so a replacement process resumes the claimed snapshot rather than
  * starting a duplicate run.
  */
+import { HARVEST_REVIEW_ROLE, HARVEST_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import type { RepositoryEvent } from '../events/repository'
 import { KERNEL } from '../events/envelope'
@@ -26,7 +27,7 @@ import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/rou
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { AgentRunner, AgentSessionHandle, AgentTurnResult, TicketSource } from '../ports/types'
 import { installedSkillName } from '../skills'
-import { defaultTriageState } from './dispatcher'
+import { defaultProposalState } from './dispatcher'
 import {
   artifactRef,
   HARVEST_REPORT_ARTIFACT,
@@ -406,7 +407,7 @@ export class HarvestRunner {
     await this.startStep(run.run, 'synthesize', round)
     await this.executeSession({
       run: run.run,
-      role: 'harvest',
+      role: HARVEST_ROLE,
       skill: installedSkillName('harvest'),
       step: 'synthesize',
       round,
@@ -431,7 +432,7 @@ export class HarvestRunner {
     await this.startStep(run.run, 'review', round)
     await this.executeSession({
       run: run.run,
-      role: 'harvest-review',
+      role: HARVEST_REVIEW_ROLE,
       skill: installedSkillName('harvest-review'),
       step: 'review',
       round,
@@ -746,7 +747,7 @@ export class HarvestRunner {
             await tickets.create(
               { title: proposal.title, body, labels: [HARVEST_PROPOSAL_LABEL] },
               {
-                state: defaultTriageState(config),
+                state: defaultProposalState(config),
                 idempotencyKey: reservedId,
               },
             )

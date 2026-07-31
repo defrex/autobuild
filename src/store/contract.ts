@@ -226,6 +226,11 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             type: 'dispatcher.auto-merge-default-set',
             payload: { enabled: true },
           })
+          await store.appendRepo('acme/settings', {
+            actor: humanActor('operator'),
+            type: 'dispatcher.pause-set',
+            payload: { enabled: true },
+          })
 
           for (const invalid of [
             {
@@ -236,6 +241,11 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             {
               actor: humanActor('operator'),
               type: 'dispatcher.auto-merge-default-set',
+              payload: { enabled: 'yes' },
+            },
+            {
+              actor: humanActor('operator'),
+              type: 'dispatcher.pause-set',
               payload: { enabled: 'yes' },
             },
           ] as const) {
@@ -256,6 +266,12 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               seq: 2,
               actor: humanActor('operator'),
               type: 'dispatcher.auto-merge-default-set',
+              payload: { enabled: true },
+            },
+            {
+              seq: 3,
+              actor: humanActor('operator'),
+              type: 'dispatcher.pause-set',
               payload: { enabled: true },
             },
           ])

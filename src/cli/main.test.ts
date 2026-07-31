@@ -11,7 +11,10 @@ import { join } from 'node:path'
 import { KERNEL, agentActor } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
-import type { MemoryBuildStore } from '../store/memory'
+import { MemoryBuildStore } from '../store/memory'
+import type { BuildStore } from '../store/types'
+import { steppingClock } from '../testing/fixed'
+import { bulkControlRepository } from './bulk-control'
 import { isSessionlessInvocation, runCli, SESSIONLESS_COMMANDS } from './main'
 import {
   BRANCH,
@@ -23,6 +26,7 @@ import {
   makeEnv,
   runGit,
   seedStore,
+  withFailingAppend,
   type TestDeps,
 } from './testkit'
 
@@ -472,6 +476,110 @@ describe('runCli — builds / build status routing', () => {
     expect(d.out.join('\n')).toContain('no builds for')
   })
 
+  function injectedQueryDeps(queryStore: MemoryBuildStore) {
+    const d = sessionlessDeps()
+    const opened: Array<{ ref: string; token: string | undefined }> = []
+    let closeCount = 0
+    queryStore.close = async () => {
+      closeCount += 1
+    }
+    return {
+      deps: {
+        ...d,
+        processEnv: { AB_STORE: 'injected-query-store' },
+        openStore: (ref: string, token?: string): BuildStore => {
+          opened.push({ ref, token })
+          return queryStore
+        },
+      },
+      opened,
+      closeCount: () => closeCount,
+    }
+  }
+
+  test('all read-only query routes use and close the injected store', async () => {
+    const queryStore = new MemoryBuildStore()
+    await queryStore.createBuild({ slug: 'query-build', repo: tmp })
+    await queryStore.append('query-build', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner-1', host: 'host-1', resumedFromSeq: 0 },
+    })
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 9])
+    await queryStore.putArtifact('query-build', { kind: 'visual:query', content: bytes })
+    const tracked = injectedQueryDeps(queryStore)
+
+    expect(await runCli(['builds'], tracked.deps)).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out.join('\n')).toContain('query-build')
+    expect(tracked.closeCount()).toBe(1)
+
+    tracked.deps.out.length = 0
+    expect(await runCli(['build', 'status', 'query-build'], tracked.deps)).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out[0]).toBe('build query-build')
+    expect(tracked.closeCount()).toBe(2)
+
+    tracked.deps.out.length = 0
+    const output = join(tmp, 'query-output', 'visual.png')
+    expect(
+      await runCli(
+        ['artifact', 'download', 'query-build', 'visual:query@0', '--output', output],
+        tracked.deps,
+      ),
+    ).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out).toEqual([`downloaded visual:query@0 to ${output}`])
+    expect(new Uint8Array(await Bun.file(output).bytes())).toEqual(bytes)
+    expect(tracked.closeCount()).toBe(3)
+    expect(tracked.opened).toEqual([
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+    ])
+  })
+
+  test('status and artifact failures keep exact diagnostics and close injected stores', async () => {
+    const queryStore = new MemoryBuildStore()
+    await queryStore.createBuild({ slug: 'foreign-build', repo: '/other/repository' })
+    const tracked = injectedQueryDeps(queryStore)
+
+    const runFailure = async (argv: string[], diagnostic: string): Promise<void> => {
+      tracked.deps.out.length = 0
+      tracked.deps.err.length = 0
+      const closesBefore = tracked.closeCount()
+      expect(await runCli(argv, tracked.deps)).toBe(1)
+      expect(tracked.deps.out).toEqual([])
+      expect(tracked.deps.err).toEqual([diagnostic])
+      expect(tracked.closeCount()).toBe(closesBefore + 1)
+    }
+
+    await runFailure(
+      ['build', 'status', 'missing-status'],
+      'no build "missing-status" in this store — run \'ab builds --all\' to list ' +
+        "this repo's builds, or pass --store <ref> if it lives in another store",
+    )
+    await runFailure(
+      ['build', 'status', 'foreign-build'],
+      `build "foreign-build" belongs to repository "/other/repository", not "${tmp}"`,
+    )
+
+    const missingOutput = join(tmp, 'missing-artifact.bin')
+    await runFailure(
+      ['artifact', 'download', 'missing-artifact', 'plan', '--output', missingOutput],
+      'no build "missing-artifact" in this store — run \'ab builds --all\' or pass --store <ref>',
+    )
+    expect(existsSync(missingOutput)).toBe(false)
+
+    const foreignOutput = join(tmp, 'foreign-artifact.bin')
+    await runFailure(
+      ['artifact', 'download', 'foreign-build', 'plan', '--output', foreignOutput],
+      `build "foreign-build" belongs to repository "/other/repository", not "${tmp}"`,
+    )
+    expect(existsSync(foreignOutput)).toBe(false)
+    expect(tracked.opened).toHaveLength(4)
+  })
+
   test('an unknown slug exits 1 and names the slug and how to list builds', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['build', 'status', 'no-such-build'], d)).toBe(1)
@@ -765,6 +873,375 @@ describe('runCli — sessionless build controls', () => {
       expect(d.err.join('\n')).toContain('usage: ab')
       expect(d.out).toEqual([])
     }
+  })
+})
+
+describe('runCli — sessionless repository-wide controls', () => {
+  type BulkSeed = 'queued' | 'running' | 'pausing' | 'paused' | 'blocked' | 'paused-and-blocked'
+
+  /** Seeds are expressed only in events, so the reduced status is the store's
+   * answer rather than the test's — as in bulk-control.test.ts. */
+  async function seedBulkBuilds(store: BuildStore, seeds: Record<string, BulkSeed>): Promise<void> {
+    for (const [slug, seed] of Object.entries(seeds)) {
+      await store.createBuild({ slug, repo: tmp })
+      if (seed === 'queued') continue
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: `runner-${slug}`, host: 'host-1', resumedFromSeq: 0 },
+      })
+      if (seed === 'blocked' || seed === 'paused-and-blocked') {
+        await store.append(slug, {
+          actor: agentActor('implement', `session-${slug}`),
+          type: 'escalation.raised',
+          payload: {
+            id: `esc-${slug}`,
+            phase: 'implement',
+            round: 1,
+            source: 'agent',
+            question: 'Which way?',
+          },
+        })
+      }
+      if (seed === 'pausing' || seed === 'paused' || seed === 'paused-and-blocked') {
+        await store.append(slug, {
+          actor: { kind: 'human', user: 'someone-else' },
+          type: 'build.pause-requested',
+          payload: {},
+        })
+      }
+      if (seed === 'paused' || seed === 'paused-and-blocked') {
+        await store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      }
+    }
+  }
+
+  async function seedBulkStore(storeRef: string, seeds: Record<string, BulkSeed>): Promise<void> {
+    const local = openLocalStore(storeRef)
+    await seedBulkBuilds(local, seeds)
+    await local.close()
+  }
+
+  async function memoryBulkStore(seeds: Record<string, BulkSeed>): Promise<MemoryBuildStore> {
+    const memory = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBulkBuilds(memory, seeds)
+    return memory
+  }
+
+  function bulkDeps(storeRef: string, env: Record<string, string | undefined> = {}) {
+    const out: string[] = []
+    const err: string[] = []
+    return {
+      workspacePath: tmp,
+      stdout: (line: string) => out.push(line),
+      stderr: (line: string) => err.push(line),
+      exec: async () => ({ stdout: '', stderr: 'not a git repo', exitCode: 128 }),
+      processEnv: { AB_STORE: storeRef, USER: 'cli-op', ...env },
+      out,
+      err,
+    }
+  }
+
+  async function eventTypes(storeRef: string): Promise<Record<string, string[]>> {
+    const local = openLocalStore(storeRef)
+    const shot: Record<string, string[]> = {}
+    for (const record of await local.listBuilds()) {
+      shot[record.slug] = (await local.getEvents(record.slug)).map((event) => event.type)
+    }
+    await local.close()
+    return shot
+  }
+
+  async function intakeWrites(storeRef: string): Promise<boolean[]> {
+    const local = openLocalStore(storeRef)
+    const events = await local.getRepoEvents(tmp)
+    await local.close()
+    return events.flatMap((event) =>
+      event.type === 'dispatcher.intake-set' ? [event.payload.enabled] : [],
+    )
+  }
+
+  /** The repository hold the walk wrote, in write order. */
+  async function pauseWrites(storeRef: string): Promise<boolean[]> {
+    const local = openLocalStore(storeRef)
+    const events = await local.getRepoEvents(tmp)
+    await local.close()
+    return events.flatMap((event) =>
+      event.type === 'dispatcher.pause-set' ? [event.payload.enabled] : [],
+    )
+  }
+
+  test('pause --all requests every running build and durably turns intake off', async () => {
+    const storeRef = join(tmp, 'bulk-pause-store')
+    await seedBulkStore(storeRef, {
+      'a-running': 'running',
+      'b-pausing': 'pausing',
+      'c-paused': 'paused',
+      'd-queued': 'queued',
+      'e-running': 'running',
+    })
+
+    const d = bulkDeps(storeRef)
+    expect(await runCli(['pause', '--all'], d)).toBe(0)
+    expect(d.err).toEqual([])
+    expect(d.out).toEqual([
+      'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+      'build a-running: pause requested',
+      'build e-running: pause requested',
+    ])
+
+    const local = openLocalStore(storeRef)
+    for (const slug of ['a-running', 'e-running']) {
+      const last = (await local.getEvents(slug)).at(-1)
+      expect(last?.type).toBe('build.pause-requested')
+      expect(last?.actor).toEqual({ kind: 'human', user: 'cli-op' })
+    }
+    // A build already on its way to paused keeps exactly one pending pause.
+    const pausing = await local.getEvents('b-pausing')
+    expect(pausing.filter((event) => event.type === 'build.pause-requested')).toHaveLength(1)
+    expect(pausing.filter((event) => event.type === 'build.resume-requested')).toHaveLength(0)
+    // Both repository facts, the hold first — the sessionless surface writes the
+    // same quiescence boundary in the same order as the dashboard walk, and the
+    // queued build (`d-queued`) is covered by that hold rather than by a
+    // per-build request.
+    const repoEvents = await local.getRepoEvents(tmp)
+    expect(repoEvents.map((event) => event.type)).toEqual([
+      'dispatcher.pause-set',
+      'dispatcher.intake-set',
+    ])
+    for (const event of repoEvents) {
+      expect(event.actor).toEqual({ kind: 'human', user: 'cli-op' })
+    }
+    expect((await local.getEvents('d-queued')).map((event) => event.type)).not.toContain(
+      'build.pause-requested',
+    )
+    await local.close()
+    expect(await pauseWrites(storeRef)).toEqual([true])
+    expect(await intakeWrites(storeRef)).toEqual([false])
+  })
+
+  test('resume --all requests every cleanly paused build and turns intake back on', async () => {
+    const storeRef = join(tmp, 'bulk-resume-store')
+    await seedBulkStore(storeRef, {
+      'a-paused': 'paused',
+      'b-running': 'running',
+      'c-paused-blocked': 'paused-and-blocked',
+      'd-paused': 'paused',
+    })
+
+    const d = bulkDeps(storeRef)
+    expect(await runCli(['resume', '--all'], d)).toBe(0)
+    expect(d.err).toEqual([])
+    expect(d.out).toEqual([
+      'resume all: resume requested for 2 builds; queued builds released; intake ON',
+      'build a-paused: resume requested',
+      'build d-paused: resume requested',
+    ])
+
+    const local = openLocalStore(storeRef)
+    for (const slug of ['a-paused', 'd-paused']) {
+      const last = (await local.getEvents(slug)).at(-1)
+      expect(last?.type).toBe('build.resume-requested')
+      expect(last?.actor).toEqual({ kind: 'human', user: 'cli-op' })
+    }
+    // A blocked build is left to `ab answer`, not resumed by the walk.
+    expect((await local.getEvents('c-paused-blocked')).at(-1)?.type).toBe('build.paused')
+    await local.close()
+    expect(await pauseWrites(storeRef)).toEqual([false])
+    expect(await intakeWrites(storeRef)).toEqual([true])
+  })
+
+  test('--json emits the summary as one parseable object and no human lines', async () => {
+    const storeRef = join(tmp, 'bulk-json-store')
+    await seedBulkStore(storeRef, { 'a-running': 'running', 'b-queued': 'queued' })
+
+    const d = bulkDeps(storeRef)
+    expect(await runCli(['pause', '--all', '--json'], d)).toBe(0)
+    expect(d.err).toEqual([])
+    expect(d.out).toHaveLength(1)
+    expect(JSON.parse(d.out.join('\n'))).toEqual({
+      direction: 'pause',
+      slugs: ['a-running'],
+      paused: true,
+      intake: false,
+    })
+    expect(d.out.join('\n')).not.toContain('pause all:')
+  })
+
+  test('the CLI and the dashboard walk write the same durable state (AC2)', async () => {
+    const seeds: Record<string, BulkSeed> = {
+      'a-queued': 'queued',
+      'b-running': 'running',
+      'c-pausing': 'pausing',
+      'd-paused': 'paused',
+      'e-blocked': 'blocked',
+      'f-paused-blocked': 'paused-and-blocked',
+      'g-running': 'running',
+    }
+
+    for (const direction of ['pause', 'resume'] as const) {
+      const viaCli = join(tmp, `equivalence-cli-${direction}`)
+      const viaWalk = join(tmp, `equivalence-walk-${direction}`)
+      await seedBulkStore(viaCli, seeds)
+      await seedBulkStore(viaWalk, seeds)
+
+      const d = bulkDeps(viaCli)
+      expect(await runCli([direction, '--all'], d)).toBe(0)
+
+      const walkStore = openLocalStore(viaWalk)
+      await bulkControlRepository({
+        store: walkStore,
+        repo: tmp,
+        env: { USER: 'cli-op' },
+        direction,
+      })
+      await walkStore.close()
+
+      expect(await eventTypes(viaCli)).toEqual(await eventTypes(viaWalk))
+      expect(await pauseWrites(viaCli)).toEqual(await pauseWrites(viaWalk))
+      expect(await intakeWrites(viaCli)).toEqual(await intakeWrites(viaWalk))
+    }
+  })
+
+  test('re-running against an already quiesced repository changes nothing further (AC4)', async () => {
+    const storeRef = join(tmp, 'bulk-idempotent-store')
+    await seedBulkStore(storeRef, { 'a-running': 'running', 'b-running': 'running' })
+
+    const first = bulkDeps(storeRef)
+    expect(await runCli(['pause', '--all'], first)).toBe(0)
+    const after = await eventTypes(storeRef)
+
+    const second = bulkDeps(storeRef)
+    expect(await runCli(['pause', '--all'], second)).toBe(0)
+    expect(second.out).toEqual(['pause all: no pausable builds; queued builds held; intake OFF'])
+
+    // No build gains a second pending pause; the only new events anywhere are
+    // the two repository setters re-asserting the values the repository already
+    // holds. Both are absolute, so a rerun is idempotent in effect.
+    expect(await eventTypes(storeRef)).toEqual(after)
+    for (const types of Object.values(after)) {
+      expect(types.filter((type) => type === 'build.pause-requested')).toHaveLength(1)
+    }
+    expect(await pauseWrites(storeRef)).toEqual([true, true])
+    expect(await intakeWrites(storeRef)).toEqual([false, false])
+  })
+
+  test('--all is refused from a phase session in both directions and appends nothing', async () => {
+    const storeRef = join(tmp, 'bulk-self-store')
+    await seedBulkStore(storeRef, { 'a-running': 'running', 'b-paused': 'paused' })
+    const before = await eventTypes(storeRef)
+
+    for (const direction of ['pause', 'resume']) {
+      const d = bulkDeps(storeRef, { AB_SESSION: 'phase-session', AB_BUILD: 'a-running' })
+      expect(await runCli([direction, '--all'], d)).toBe(1)
+      expect(d.out).toEqual([])
+      expect(d.err.join('\n')).toContain('own phase session')
+      expect(d.err.join('\n')).toContain('AB_SESSION/AB_BUILD conflict')
+    }
+
+    expect(await eventTypes(storeRef)).toEqual(before)
+    // The refusal precedes even `ensureRepo`, so no repository row was created.
+    const local = openLocalStore(storeRef)
+    expect(await local.getRepo(tmp)).toBeNull()
+    await local.close()
+  })
+
+  test('the --all grammar rejects slugs, bare --json, and abort', async () => {
+    const storeRef = join(tmp, 'bulk-grammar-store')
+    await seedBulkStore(storeRef, { 'a-running': 'running' })
+
+    for (const argv of [
+      ['pause', '--all', 'some-slug'],
+      ['pause', '--json'],
+      ['abort', '--all'],
+      ['resume', '--all', '--unknown'],
+    ]) {
+      const d = bulkDeps(storeRef)
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.out).toEqual([])
+      expect(d.err.join('\n')).toContain('usage: ab')
+    }
+
+    // Splitting abort out of the shared case block left its grammar intact.
+    const abort = bulkDeps(storeRef)
+    expect(await runCli(['abort', 'a-running'], abort)).toBe(0)
+    expect(abort.out).toEqual(['build a-running: abort requested'])
+  })
+
+  test('--store beats AB_STORE for the repository-wide form too', async () => {
+    const explicit = join(tmp, 'bulk-explicit-store')
+    await seedBulkStore(explicit, { 'a-running': 'running' })
+
+    const d = bulkDeps(join(tmp, 'bulk-wrong-store'))
+    expect(await runCli(['pause', '--all', '--store', explicit], d)).toBe(0)
+    expect(d.out).toContain('build a-running: pause requested')
+    expect(await intakeWrites(explicit)).toEqual([false])
+  })
+
+  test('a walk that fails partway reports its progress on stderr and exits 1 (AC5)', async () => {
+    const memory = await memoryBulkStore({
+      'a-run': 'running',
+      'b-run': 'running',
+      'c-run': 'running',
+    })
+    const wrapped = withFailingAppend(memory, 'b-run', new Error('store write rejected'))
+    const d = { ...bulkDeps(join(tmp, 'injected-store')), openStore: () => wrapped }
+
+    expect(await runCli(['pause', '--all'], d)).toBe(1)
+    // Nothing partial reaches stdout: a script reading stdout sees no success.
+    expect(d.out).toEqual([])
+    const err = d.err.join('\n')
+    expect(err).toContain('pause all: failed; queued builds held; intake OFF written')
+    expect(err).toContain('store write rejected')
+    expect(err).toContain('requested: a-run')
+    expect(err).toContain('failed at: b-run')
+    expect(err).toContain('not attempted: c-run')
+
+    expect((await memory.getEvents('a-run')).at(-1)?.type).toBe('build.pause-requested')
+    expect((await memory.getEvents('c-run')).map((event) => event.type)).not.toContain(
+      'build.pause-requested',
+    )
+    await memory.close()
+  })
+
+  test('a failed walk with --json emits parseable progress on stderr and exits 1 (AC5)', async () => {
+    const memory = await memoryBulkStore({
+      'a-run': 'running',
+      'b-run': 'running',
+      'c-run': 'running',
+    })
+    const wrapped = withFailingAppend(memory, 'b-run', new Error('store write rejected'))
+    const d = { ...bulkDeps(join(tmp, 'injected-json-store')), openStore: () => wrapped }
+
+    expect(await runCli(['pause', '--all', '--json'], d)).toBe(1)
+    expect(d.out).toEqual([])
+    expect(JSON.parse(d.err.join('\n'))).toEqual({
+      direction: 'pause',
+      paused: true,
+      pausedWritten: true,
+      intake: false,
+      intakeWritten: true,
+      slugs: ['a-run'],
+      failedSlug: 'b-run',
+      remaining: ['c-run'],
+      error: 'store write rejected',
+    })
+    await memory.close()
+  })
+
+  test('the failure branch stays silent when the walk succeeds', async () => {
+    const memory = await memoryBulkStore({ 'a-run': 'running', 'z-queued': 'queued' })
+    // The wrapped slug is never eligible, so its append is never attempted.
+    const wrapped = withFailingAppend(memory, 'z-queued', new Error('store write rejected'))
+    const d = { ...bulkDeps(join(tmp, 'injected-ok-store')), openStore: () => wrapped }
+
+    expect(await runCli(['pause', '--all'], d)).toBe(0)
+    expect(d.err).toEqual([])
+    expect(d.out).toEqual([
+      'pause all: pause requested for 1 build; queued builds held; intake OFF',
+      'build a-run: pause requested',
+    ])
+    await memory.close()
   })
 })
 
