@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#184](https://github.com/defrex/autobuild/pull/184) — Report accurate recovery for merged or closed PRs
+- [#183](https://github.com/defrex/autobuild/pull/183) — Point bounce guidance at the installed spec standard
+- [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
+- [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
 - [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
 - [#179](https://github.com/defrex/autobuild/pull/179) — Align dashboard Unicode geometry contracts
 - [#178](https://github.com/defrex/autobuild/pull/178) — Correct plugin resolution root guidance

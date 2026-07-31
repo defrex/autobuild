@@ -877,6 +877,13 @@ and attempts the build from durable state. This unattended startup path is an
 explicit process-restart retry boundary; agent and stall escalations remain
 human judgment gates until an operator answers them.
 
+Crash-gap and exhaustion deduplication is exact to the escalation's source/class
+and target. A triggering event is considered acknowledged only by a later
+`escalation.raised` with that same `source` and `phase`; a raise for another
+class or target cannot suppress it. The triggering event's sequence is the
+boundary, so newer qualifying failure, verdict, or conflict evidence re-arms
+that exact condition after an answer.
+
 ## 12. The outer loop
 
 ```
@@ -1254,8 +1261,9 @@ failure appends only a new failure fact; success appends `runner.attached
 {resumedFromSeq}` and clears the current error projection. After
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
 `setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
-answer re-arms the setup budget. This target belongs only to escalation
-metadata and is not a pipeline `Phase`.
+answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
+policy raises, independently of phase-policy exhaustion. This target belongs
+only to escalation metadata and is not a pipeline `Phase`.
 
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
@@ -1551,6 +1559,28 @@ operator-selected `--version <semver>`, indeterminate mechanism, resolution, or
 install failure is fatal and does not merge against the wrong defaults.
 `--no-self-update` always selects merge-only
 behavior. An exact version may be older than the installed version.
+
+Upgrade records its successful work in one local commit on the target's current
+HEAD by default. The exact ownership boundary is the reported skills' canonical
+`.agents` trees, pristine records, and `.claude` discovery paths, plus
+`package.json` and `bun.lock` only when this run's successful local Bun update
+wrote those files inside the target repository. A global update contributes no
+repository path. Additions, modifications, symlinks, and deletions all
+participate; a run with no owned Git change creates no commit. The message
+identifies `ab upgrade` and lists every skill with an owned byte change together
+with its reported outcome. It supplies no authorship or attribution trailers.
+Unrelated staged, unstaged, and untracked work is neither committed nor
+unstaged.
+
+The baseline is captured before self-update and carried to the replacement
+binary. `--no-commit` also survives that handoff and leaves the merge exactly as
+written. Any content conflict, Claude discovery conflict, pre-existing dirt in
+an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
+merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
+A staging or commit failure warns and leaves the merged files in place. Commit
+suppression or failure never changes the merge-derived exit status: content
+conflicts remain zero and discovery conflicts remain nonzero. Upgrade never
+pushes or rewrites existing history.
 
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine

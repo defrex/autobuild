@@ -364,7 +364,11 @@ export class BuildRunner {
     let boundary = 0
     for (const event of events) {
       if (event.type === 'runner.attached') boundary = event.seq
-      else if (event.type === 'escalation.raised' && event.payload.phase === 'setup') {
+      else if (
+        event.type === 'escalation.raised' &&
+        event.payload.phase === 'setup' &&
+        event.payload.source === 'policy'
+      ) {
         setupEscalations.add(event.payload.id)
       } else if (event.type === 'escalation.answered' && setupEscalations.has(event.payload.id)) {
         boundary = event.seq
@@ -426,7 +430,7 @@ export class BuildRunner {
     const state = reduceBuild(events)
     const currentFailure = state.setupFailure
     const openSetupEscalation = state.openEscalations.some(
-      (escalation) => escalation.phase === 'setup',
+      (escalation) => escalation.phase === 'setup' && escalation.source === 'policy',
     )
     const streak = this.setupStreak(events)
 

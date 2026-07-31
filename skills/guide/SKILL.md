@@ -727,9 +727,10 @@ install failure stops before skill merge. No other command checks for or
 installs a release.
 
 A local Bun update changes the dependency in its owning project's
-`package.json` and the matching `bun.lock` resolution, potentially leaving that
-project dirty. An existing global install changes Bun's global package-manager
-state instead.
+`package.json` and the matching `bun.lock` resolution. An existing global
+install changes Bun's global package-manager state instead. Before either can
+write, upgrade captures the target repository's Git baseline and carries it to
+the replacement binary.
 
 After that distribution decision, upgrade three-way merges every distributed
 skill file as *pristine base × local edits × new default*, with a standing bias
@@ -762,6 +763,22 @@ the corresponding canonical/pristine trees are retired. Every terminal
 classification clears obsolete pristine ownership, making the retirement
 report one-time and preventing later link recreation, resurrection, or
 re-reporting.
+
+After a conflict-free merge, upgrade makes one local commit by default. It
+includes only each reported skill's canonical tree, pristine record, and Claude
+discovery path, plus `package.json` and `bun.lock` when this run's local Bun
+update wrote those files inside the target repository. A global update adds no
+path, and no owned change means no commit. Additions, modifications, links, and
+deletions are included; unrelated staged, unstaged, and untracked work remains
+untouched. The message identifies `ab upgrade` and lists every byte-changing
+skill with its reported outcome. `--no-commit` disables this behavior and is
+preserved through self-update handoff.
+
+Any content conflict, discovery conflict, pre-existing dirt in an owned path,
+non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
+cherry-pick suppresses the whole commit with a named warning. Staging and commit
+failures are also warning-only. Files stay as merged and the report's existing
+exit code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
