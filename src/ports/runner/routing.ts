@@ -18,7 +18,7 @@
  * which `ab dispatch` warns about from the declaration side (`src/config/roles.ts`).
  */
 import type { AgentRunner } from '../types'
-import { serves, type RuntimeRegistry } from './runtime'
+import { serves, type RuntimeRegistration, type RuntimeRegistry } from './runtime'
 
 /** A resolved runtime/model pair plus the adapter to run it (§9). */
 export interface ResolvedRuntime {
@@ -77,8 +77,8 @@ function runtimeNames(registry: RuntimeRegistry): string {
 }
 
 /** The declared model families for one runtime, for error messages. */
-function servedModels(registry: RuntimeRegistry, runtime: string): string {
-  return registry[runtime]!.servesModels.join(', ') || 'no models'
+function servedModels(registration: RuntimeRegistration): string {
+  return registration.servesModels.join(', ') || 'no models'
 }
 
 /**
@@ -107,14 +107,14 @@ function resolveSpec(
     )
     return undefined
   }
-  const reg = registry[runtime]
-  if (reg === undefined) {
+  if (!Object.hasOwn(registry, runtime)) {
     problems.push(
       `${label} resolves to runtime "${runtime}", which is not registered ` +
         `(registered runtimes: ${runtimeNames(registry)})`,
     )
     return undefined
   }
+  const reg = registry[runtime]!
 
   // The sole implicit fill-in: once the merged runtime is known, an entirely
   // absent configured model uses that runtime's own default. `undefined` keeps
@@ -123,7 +123,7 @@ function resolveSpec(
   if (model !== undefined && !serves(reg, model)) {
     problems.push(
       `${label} resolves runtime "${runtime}" with model "${model}", but ` +
-        `"${runtime}" serves only [${servedModels(registry, runtime)}]`,
+        `"${runtime}" serves only [${servedModels(reg)}]`,
     )
     return undefined
   }
