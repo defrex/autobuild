@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#152](https://github.com/defrex/autobuild/pull/152) — Document workspace config as an open map
 - [#149](https://github.com/defrex/autobuild/pull/149) — Generate the README headline from dashboard capture
 - [#148](https://github.com/defrex/autobuild/pull/148) — Negotiate Kitty keyboard input for the dashboard
 - [#147](https://github.com/defrex/autobuild/pull/147) — Route read-only build queries through the store seam
