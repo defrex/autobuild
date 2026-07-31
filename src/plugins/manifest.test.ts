@@ -258,14 +258,41 @@ describe('plugin manifest adapter-name preservation', () => {
     }
   })
 
-  test('both record shapes a manifest can produce are accepted', () => {
+  // Every plain-record shape the replaced `z.record` accepted, so that
+  // narrowing the container above cannot narrow what a manifest may declare.
+  // The custom-prototype cases are the ones a plugin reaches for when it
+  // composes its adapter map instead of writing one literal.
+  test.each([
+    ['an object literal', () => ({ acme: factory })],
+    ['a null-prototype record', () => Object.assign(Object.create(null), { acme: factory })],
+    [
+      'a record built on a plain prototype',
+      () => Object.assign(Object.create({ shared: factory }), { acme: factory }),
+    ],
+    [
+      'a record built on a null-prototype one',
+      () => Object.assign(Object.create(Object.create(null)), { acme: factory }),
+    ],
+  ])('%s registers its own ordinary adapter', (_label, build) => {
     for (const map of ADAPTER_MAPS) {
-      // An object literal, and the null-prototype form a plugin may build by
-      // hand — the two shapes `z.record` accepted before this change.
-      expect(read(parseAdapters(map, { acme: factory }), 'acme')).toBe(factory)
-      const bare: Record<string, unknown> = Object.create(null)
-      bare.acme = factory
-      expect(read(parseAdapters(map, bare), 'acme')).toBe(factory)
+      const parsed = parseAdapters(map, build() as Record<string, unknown>)
+      expect(read(parsed, 'acme')).toBe(factory)
+      // Only what the container declares as its OWN entry: an inherited member
+      // is not a declared adapter, however plain the prototype it sits on.
+      expect(Object.getOwnPropertyNames(parsed)).toEqual(['acme'])
+      expect(read(parsed, 'shared')).toBeUndefined()
+    }
+  })
+
+  // `z.record` reads `constructor` off the container to decide it is a record,
+  // so an adapter named `constructor` shadowed that read and the whole map was
+  // rejected — the module's own hazard, applied to the shape check. The name
+  // is registered here instead; `preservation is general` pins the lookup.
+  test('an adapter named constructor does not disqualify its container', () => {
+    for (const map of ADAPTER_MAPS) {
+      expect(Object.getOwnPropertyNames(parseAdapters(map, { constructor: factory }))).toEqual([
+        'constructor',
+      ])
     }
   })
 })

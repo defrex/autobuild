@@ -49,9 +49,8 @@ function keyIsValid(key: string, policy: OpenMapKeyPolicy): boolean {
 }
 
 /**
- * The two container shapes an open map accepts: a parsed TOML table, which the
- * TOML parser hands over with a null prototype, and a plain JavaScript object
- * literal. Nothing else is a map of named entries.
+ * Whether a container is a plain record of named entries — a parsed TOML table
+ * (null prototype), an object literal, or any object built on top of those.
  *
  * The exclusions are load-bearing rather than pedantic. A `Map`, a `Set`, a
  * `Date`, an array, or a class instance has no own string-keyed entries to
@@ -60,11 +59,21 @@ function keyIsValid(key: string, policy: OpenMapKeyPolicy): boolean {
  * to prevent, just arrived at from the other direction. `null` is rejected for
  * the same reason: absence is spelled by omission, which `openMap`'s
  * `.prefault({})` turns into `{}` before this ever runs.
+ *
+ * `constructor` is read off the PROTOTYPE, never off `input`. Reading it off
+ * the input is what `z.record` does, and it is the same prototype hazard this
+ * module exists to close: a map declaring an adapter named `constructor`
+ * shadows the property the check depends on, and the whole container is
+ * rejected over an entry that is merely unusually named. Starting one link up
+ * cannot be shadowed by any declared entry, and still answers `Object` for a
+ * record whose prototype is itself a plain object.
  */
 function isRecord(input: unknown): input is object {
   if (typeof input !== 'object' || input === null) return false
   const prototype = Object.getPrototypeOf(input)
-  return prototype === null || prototype === Object.prototype
+  if (prototype === null) return true
+  const builder = (prototype as { constructor?: unknown }).constructor
+  return builder === undefined || builder === Object
 }
 
 /** The own entries of a parsed container, read BY DESCRIPTOR. `input[key]` is
