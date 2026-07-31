@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
 - [#177](https://github.com/defrex/autobuild/pull/177) — Add provider alternates for agent roles
 - [#176](https://github.com/defrex/autobuild/pull/176) — Guard runtime registry lookups against inherited properties
 - [#175](https://github.com/defrex/autobuild/pull/175) — Make retired-skill reports match discovery state
