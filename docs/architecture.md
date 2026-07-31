@@ -233,7 +233,9 @@ optional API 1.2 capabilities so older plugins load but leave cleanup visibly du
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
-frames; `live.ts` owns the alternate-screen region and teardown; `poll.ts` is a
+frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
+decoding, while `live.ts` sequences its push and pop with the alternate-screen
+region because the terminal's keyboard flag stack is per-screen; `poll.ts` is a
 display-only incremental cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —

@@ -1,4 +1,13 @@
 import { emitKeypressEvents } from 'node:readline'
+import {
+  decodeCsi,
+  endsCsi,
+  INTERRUPT_WATCH_MAX,
+  isCsiParameterByte,
+  isInterruptSequence,
+  MAX_CSI_PARAM_DIGITS,
+  type CsiReport,
+} from './keyboard'
 
 /**
  * The output seam for interactive rendering (SPEC §14).
@@ -32,9 +41,15 @@ export type TerminalInputEvent =
    * buffer has to hold what the operator actually pasted. */
   | { type: 'paste'; text: string }
 
+export interface TerminalInputHooks {
+  onListening?(): void
+  onKeyboardFlags?(flags: number): void
+  onDeviceAttributes?(): void
+}
+
 /** Injectable keyboard seam. Starting returns an idempotent cleanup. */
 export interface TerminalInput {
-  start(onInput: (input: TerminalInputEvent) => void): () => void
+  start(onInput: (input: TerminalInputEvent) => void, hooks?: TerminalInputHooks): () => void
 }
 
 export interface TerminalOut {
@@ -101,89 +116,11 @@ interface Keypress {
   sequence?: string
 }
 
-/**
- * Lock modifiers in the CSI-u / `modifyOtherKeys` modifier bitfield.
- *
- * Per Kitty's keyboard-protocol reference the parameter is `1 + bitfield` over
- * `shift 1, alt 2, ctrl 4, super 8, hyper 16, meta 32, caps_lock 64,
- * num_lock 128`, and the LOCK bits ARE reported for every key once "report all
- * keys as escape codes" is on - which is exactly the mode that makes Return
- * arrive as CSI-u in the first place. So an unmodified Enter with caps lock on
- * is `ESC[13;65u`, and with num lock on `ESC[13;129u`.
- *
- * That is why the decision below MASKS rather than compares. A `mod >= 2` test
- * reads correct and would make Enter insert a line break instead of submitting
- * for every operator with a lock key engaged - invisible to anyone reading the
- * arithmetic cold. xterm's `modifyOtherKeys` parameter is also `1 + bitfield`
- * but defines only bits 1-8, so the same mask is a no-op there and one decoder
- * serves both. Treat any change to this comparison as requiring a re-read of
- * the protocol reference, not a reasoned edit.
- */
-const MODIFIER_LOCK_MASK = 0b1100_0000
-
-/** A malformed or unsupported CSI run is abandoned past this many characters.
- * Bounded in practice by the parser itself: every ASCII letter is a CSI final
- * byte, so only a run of digits and `;:<=>?` can extend a buffer at all. */
-const CSI_MAX = 32
-
-/** CSI sequences end at a byte in 0x40-0x7E. The leading `ESC[` never counts:
- * `[` is 0x5B and would otherwise terminate every sequence at birth. */
-function endsCsi(sequence: string): boolean {
-  if (sequence.length <= 2) return false
-  const code = sequence.charCodeAt(sequence.length - 1)
-  return code >= 0x40 && code <= 0x7e
-}
-
-/** Decode a `1 + bitfield` modifier parameter into submit-versus-newline. */
-function modifiedReturn(mod: number | undefined): TerminalInputEvent {
-  if (mod === undefined) return { type: 'enter' }
-  const bits = Math.max(0, mod - 1)
-  return (bits & ~MODIFIER_LOCK_MASK) === 0 ? { type: 'enter' } : { type: 'newline' }
-}
-
-function parseParam(value: string | undefined): number | undefined {
-  if (value === undefined || value === '') return undefined
-  const parsed = Number.parseInt(value, 10)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
-/**
- * Interpret ONE complete CSI sequence - a Return disambiguator, not a second
- * keymap. Only key code 13 is acted on; every other report yields `undefined`,
- * so the named-key normalization stays authoritative.
- *
- * Two encodings reach us: Kitty's
- * `ESC[<key>[:<alt>][;<mod>[:<event>]][;<text>]u`, and xterm's
- * `modifyOtherKeys` `ESC[27;<mod>;<key>~`. The dashboard does not REQUEST
- * either - that would be scope this change does not ask for - but a terminal
- * already configured for one must have its Return decoded rather than injected
- * as text.
- */
-export function interpretCsi(sequence: string): TerminalInputEvent | undefined {
-  if (!sequence.startsWith('\u001b[') || !endsCsi(sequence)) return undefined
-  const final = sequence.at(-1)
-  const params = sequence.slice(2, -1).split(';')
-  if (final === 'u') {
-    if (parseParam(params[0]?.split(':')[0]) !== 13) return undefined
-    const [modRaw, eventRaw] = (params[1] ?? '').split(':')
-    // Event 1 is a press and 2 a repeat; 3 is a RELEASE and is not a
-    // keystroke - emitting it would double every Shift+Enter. Absent is press.
-    const event = parseParam(eventRaw) ?? 1
-    if (event !== 1 && event !== 2) return undefined
-    return modifiedReturn(parseParam(modRaw))
-  }
-  if (final === '~') {
-    if (params[0] !== '27' || parseParam(params[2]) !== 13) return undefined
-    return modifiedReturn(parseParam(params[1]))
-  }
-  return undefined
-}
-
 /** A keyboard decoder holding the small amount of state a composer needs:
  * bracketed-paste accumulation and CSI reassembly. One per `start()`. */
 export interface TerminalInputDecoder {
   press(text: string | undefined, key: Keypress): TerminalInputEvent | undefined
-  /** Drop any partial paste or CSI run when the region tears down. */
+  /** Drop any partial paste, CSI run, or interrupt watch when the region tears down. */
   cleanup(): void
 }
 
@@ -203,51 +140,111 @@ export interface TerminalInputDecoder {
  * recalled, shape the state this holds:
  *
  * - `key.name` for an unrecognized CSI is the literal STRING `'undefined'`.
- * - The parser gives up at the first `:` in a parameter list, and at a
- *   two-digit parameter, emitting the partial sequence plus the remaining
- *   bytes as ordinary printable text. `ESC[13;2:1u` arrives as THREE events
- *   and `ESC[13;65u` as two.
+ * - The parser gives up at the first `:` in a parameter list and during longer
+ *   numeric parameters, emitting the partial sequence plus the remaining bytes
+ *   as ordinary printable text. Lock-bearing arrows, associated text, and
+ *   alternate-layout chords therefore all require reassembly.
  *
  * So a partial CSI opens a reassembly buffer and later fragments are appended
  * rather than delivered, which is what stops a Kitty Shift+Enter from
  * injecting `1u` into the operator's guidance.
  */
-export function createTerminalInputDecoder(): TerminalInputDecoder {
-  let csi: string | undefined
+export function createTerminalInputDecoder(hooks: TerminalInputHooks = {}): TerminalInputDecoder {
+  type CsiState = { buffer: string; digitRun: number; draining: boolean }
+  let csi: CsiState | undefined
   let paste: string | undefined
+  let watch: string | undefined
+
+  const reportEvent = (report: CsiReport): TerminalInputEvent | undefined => {
+    if (report.kind === 'input') return report.event
+    if (report.kind === 'keyboard-flags') hooks.onKeyboardFlags?.(report.flags)
+    if (report.kind === 'device-attributes') hooks.onDeviceAttributes?.()
+    return undefined
+  }
+
+  /** Consume one parser fragment. `false` lets a malformed fragment reach the keymap. */
+  const consumeCsi = (
+    fragment: string,
+    restart: boolean,
+  ): { consumed: boolean; event?: TerminalInputEvent } => {
+    if (restart) csi = { buffer: '\x1b[', digitRun: 0, draining: false }
+    if (csi === undefined) return { consumed: false }
+    const payload = restart ? fragment.slice(2) : fragment
+
+    for (let index = 0; index < payload.length; index += 1) {
+      const ch = payload[index] ?? ''
+      if (isCsiParameterByte(ch)) {
+        if (ch >= '0' && ch <= '9') csi.digitRun += 1
+        else csi.digitRun = 0
+        if (csi.digitRun > MAX_CSI_PARAM_DIGITS) {
+          csi.draining = true
+          csi.buffer = ''
+        } else if (!csi.draining) {
+          csi.buffer += ch
+        }
+        continue
+      }
+
+      const code = ch.charCodeAt(0)
+      const final = code >= 0x40 && code <= 0x7e
+      if (final && index === payload.length - 1) {
+        const completed = csi.draining ? undefined : csi.buffer + ch
+        csi = undefined
+        return {
+          consumed: true,
+          ...(completed === undefined ? {} : { event: reportEvent(decodeCsi(completed)) }),
+        }
+      }
+
+      csi = undefined
+      return { consumed: false }
+    }
+    return { consumed: true }
+  }
 
   return {
     cleanup(): void {
       csi = undefined
       paste = undefined
+      watch = undefined
     },
     press(text: string | undefined, key: Keypress): TerminalInputEvent | undefined {
-      // Interrupt FIRST, always. Ctrl-C arrives mid-fragment as a plain
-      // `\u0003`, which is not a CSI final byte and would otherwise be
-      // swallowed into the reassembly buffer. Quitting must never depend on
-      // the terminal's keyboard protocol.
+      const fragment = key.sequence ?? text ?? ''
+      // Interrupt FIRST in every state. The parallel watch never consumes a
+      // byte; it only adds an interrupt, including inside bracketed paste. A
+      // pasted literal CSI-u Ctrl-C therefore interrupts, matching the existing
+      // and deliberate behavior of a literal ETX in a paste.
       if ((key.ctrl === true && key.name === 'c') || key.sequence === '\u0003') {
         csi = undefined
         paste = undefined
+        watch = undefined
         return { type: 'interrupt' }
+      }
+      if (fragment.startsWith('\x1b[')) watch = fragment
+      else if (watch !== undefined) watch += fragment
+      if (watch !== undefined && watch.length > INTERRUPT_WATCH_MAX) watch = undefined
+      if (watch !== undefined && endsCsi(watch)) {
+        const completed = watch
+        watch = undefined
+        if (isInterruptSequence(completed)) {
+          csi = undefined
+          paste = undefined
+          return { type: 'interrupt' }
+        }
       }
 
       // Inside a bracketed paste every byte is content, so this precedes both
       // reassembly and the keymap. Line endings normalize to `\n` and other
-      // control characters are dropped, but the text is never SHORTENED and
-      // there is no size cap: the buffer must hold what the operator pasted.
+      // control characters are dropped, but the text is never shortened.
       if (paste !== undefined) {
         if (key.name === 'paste-end') {
-          // Normalize ONCE, over the whole accumulation: a CRLF arrives as two
-          // separate keypresses, so per-event normalization would turn one line
-          // break into two.
           const pasted = paste
             .replace(/\r\n?/gu, '\n')
             .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/gu, '')
           paste = undefined
           return { type: 'paste', text: pasted }
         }
-        paste += key.sequence ?? text ?? ''
+        paste += fragment
         return undefined
       }
       if (key.name === 'paste-start') {
@@ -256,19 +253,10 @@ export function createTerminalInputDecoder(): TerminalInputDecoder {
         return undefined
       }
 
-      if (csi !== undefined) {
-        csi += key.sequence ?? text ?? ''
-        if (endsCsi(csi)) {
-          const completed = csi
-          csi = undefined
-          return interpretCsi(completed)
-        }
-        if (csi.length > CSI_MAX) csi = undefined
-        // The fragment is CONSUMED either way - never emitted as text, which
-        // is what keeps a stray `1u` out of the guidance buffer. Discarding an
-        // abandoned run discards CONTROL traffic, categorically unlike the
-        // operator content a paste carries.
-        return undefined
+      const restart = fragment.startsWith('\x1b[')
+      if (csi !== undefined || (key.name === 'undefined' && restart)) {
+        const consumed = consumeCsi(fragment, restart)
+        if (consumed.consumed) return consumed.event
       }
 
       if (key.name === 'up') return { type: 'up' }
@@ -277,8 +265,6 @@ export function createTerminalInputDecoder(): TerminalInputDecoder {
       if (key.name === 'right') return { type: 'right' }
       if (key.name === 'home') return { type: 'home' }
       if (key.name === 'end') return { type: 'end' }
-      // Meta+Return is Alt+Enter, and is also what a terminal configured to
-      // send "Shift+Enter" emits (`ESC` `CR`).
       if (key.name === 'return' || key.sequence === '\r') {
         return key.meta === true ? { type: 'newline' } : { type: 'enter' }
       }
@@ -286,20 +272,9 @@ export function createTerminalInputDecoder(): TerminalInputDecoder {
       if (key.name === 'backspace' || key.sequence === '\b' || key.sequence === '\u007f') {
         return { type: 'backspace' }
       }
-      if (key.name === 'escape' || key.sequence === '\u001b') {
-        return { type: 'escape' }
-      }
-
-      // An unrecognized CSI: a complete one is interpreted now, a partial one
-      // opens the reassembly buffer.
-      if (key.name === 'undefined' && key.sequence?.startsWith('\u001b[') === true) {
-        if (endsCsi(key.sequence)) return interpretCsi(key.sequence)
-        csi = key.sequence
-        return undefined
-      }
+      if (key.name === 'escape' || key.sequence === '\u001b') return { type: 'escape' }
 
       if (key.ctrl === true || key.meta === true) return undefined
-
       const printable =
         text ??
         (key.name?.length === 1 ? key.name : key.sequence !== undefined ? key.sequence : undefined)
@@ -322,7 +297,7 @@ export function createTerminalInputDecoder(): TerminalInputDecoder {
  */
 export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin): TerminalInput {
   return {
-    start(onKey): () => void {
+    start(onKey, hooks = {}): () => void {
       if (stream.isTTY !== true || typeof stream.setRawMode !== 'function') {
         return () => {}
       }
@@ -332,7 +307,7 @@ export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin):
       let cleaned = false
       // One decoder per activation: its paste and CSI state belongs to this
       // region's lifetime, and an unterminated paste dies with it.
-      const decoder = createTerminalInputDecoder()
+      const decoder = createTerminalInputDecoder(hooks)
       const listener = (text: string | undefined, key: Keypress = {}): void => {
         const normalized = decoder.press(text, key)
         if (normalized !== undefined) onKey(normalized)
@@ -358,6 +333,7 @@ export function processTerminalInput(stream: NodeJS.ReadStream = process.stdin):
         listening = true
         stream.setRawMode(true)
         stream.resume()
+        hooks.onListening?.()
         return cleanup
       } catch (error) {
         try {

@@ -19,7 +19,7 @@ import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
 import { renderDashboard, stripAnsi, type DashboardRenderer } from './dashboard/render'
-import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
+import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -1757,16 +1757,21 @@ function fakeInput(
   press: (key: FakeInputKey) => void
   text: (text: string) => void
   paste: (text: string) => void
+  listening: () => void
+  keyboardFlags: (flags: number) => void
+  deviceAttributes: () => void
   starts: number
   cleanups: number
 } {
   let onInput: ((input: TerminalInputEvent) => void) | undefined
+  let inputHooks: TerminalInputHooks | undefined
   const input = {
     starts: 0,
     cleanups: 0,
-    start(handler: (event: TerminalInputEvent) => void): () => void {
+    start(handler: (event: TerminalInputEvent) => void, hooks?: TerminalInputHooks): () => void {
       input.starts += 1
       onInput = handler
+      inputHooks = hooks
       for (const key of initial) handler(fakeInputEvent(key))
       let cleaned = false
       return () => {
@@ -1774,6 +1779,7 @@ function fakeInput(
         cleaned = true
         input.cleanups += 1
         onInput = undefined
+        inputHooks = undefined
         onCleanup()
       }
     },
@@ -1787,6 +1793,15 @@ function fakeInput(
      * with its line structure, and never split into keystrokes. */
     paste(text: string): void {
       onInput?.({ type: 'paste', text })
+    },
+    listening(): void {
+      inputHooks?.onListening?.()
+    },
+    keyboardFlags(flags: number): void {
+      inputHooks?.onKeyboardFlags?.(flags)
+    },
+    deviceAttributes(): void {
+      inputHooks?.onDeviceAttributes?.()
     },
   }
   return input
@@ -1898,6 +1913,64 @@ describe('abDispatch --once with an interactive terminal', () => {
       await fx.cleanup()
     }
   }, 30_000)
+
+  for (const response of ['accept', 'partial', 'device-attributes'] as const) {
+    test(`negotiates keyboard mode around the alternate screen: ${response}`, async () => {
+      const fx = await makeFixture([], happyHandlers())
+      const base = fakeTerminal()
+      let hooks: TerminalInputHooks | undefined
+      let cleanup = 0
+      const input: TerminalInput = {
+        start: (_handler, nextHooks) => {
+          hooks = nextHooks
+          // The query is unlocked by the real input seam, not dashboard paint.
+          expect(base.all()).not.toContain('\x1b[?u')
+          hooks?.onListening?.()
+          hooks?.onKeyboardFlags?.(0)
+          return () => {
+            cleanup += 1
+          }
+        },
+      }
+      const terminal: TerminalOut & { frames: string[]; all: () => string } = {
+        ...base,
+        write: (chunk) => {
+          base.write(chunk)
+          if (chunk === '\x1b[>29u\x1b[?u\x1b[c') {
+            queueMicrotask(() => {
+              if (response === 'accept') hooks?.onKeyboardFlags?.(29)
+              else if (response === 'partial') hooks?.onKeyboardFlags?.(25)
+              else hooks?.onDeviceAttributes?.()
+            })
+          }
+        },
+      }
+      try {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          terminal,
+          input,
+        })
+
+        const writes = base.frames
+        expect(cleanup).toBe(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[?u')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[>29u\x1b[?u\x1b[c')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[<1u')).toHaveLength(1)
+        expect(writes.indexOf('\x1b[?u')).toBeLessThan(writes.indexOf('\x1b[?1049h'))
+        expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u\x1b[?u\x1b[c'))
+        expect(writes.indexOf('\x1b[<1u')).toBeLessThan(writes.indexOf('\x1b[?1049l'))
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
 
   test('shows configured capacity and unclaimed observation pressure even for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
