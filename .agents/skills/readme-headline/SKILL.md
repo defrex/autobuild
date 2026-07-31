@@ -34,7 +34,9 @@ source must produce the same bytes.
 Open `docs/assets/headline-wide.png` and inspect it at approximately the
 README's content width. Confirm the labels remain legible and the dashboard
 shows the plan-blocked, implement-blocked, completed/merge-waiting, and Harvest
-rows at their distinct pipeline stages.
+rows at their distinct pipeline stages. Also confirm the controls line shows
+`repository PAUSED` and the `CAP-QUEUED` row remains visibly `(held)` and
+`QUEUED` without crowding its neighbours.
 
 Then run the read-only comparison:
 

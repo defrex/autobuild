@@ -280,6 +280,7 @@ function rightPinnedLine(prefix: string, flexible: string, right: string, width:
 
 function renderBuild(
   build: DashboardBuild,
+  repositoryPaused: boolean,
   opts: RenderOpts,
   widths: Widths,
   selected: boolean,
@@ -312,6 +313,11 @@ function renderBuild(
     rightTokens.push(paint('auto merge', autoColor, color))
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
+  // A repository hold changes no build lifecycle state. Keep QUEUED literal
+  // and annotate only the rows the hold prevents from launching.
+  if (repositoryPaused && build.status === 'queued') {
+    rightTokens.push(paint('(held)', 'yellow', color))
+  }
   // Blocked overrides paused visually, but the pause is still a fact the
   // operator needs — so it rides along rather than being overwritten.
   if (build.alsoPaused) rightTokens.push(paint('(paused)', 'yellow', color))
@@ -1183,6 +1189,9 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   const harvestGate = model.harvestPaused
     ? paint('harvest OFF', 'yellow', color)
     : paint('harvest ON', 'green', color)
+  const repositoryPause = model.repositoryPaused
+    ? paint('repository PAUSED', 'yellow', color)
+    : undefined
   const summary = truncate(
     `${marker}${[
       paint('Autobuild', 'bold', color),
@@ -1199,7 +1208,12 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // The global controls live on their own mandatory line. Its fixed blank
   // marker prefix aligns the first toggle with the title while keeping the
   // selection lane empty.
-  const toggles = truncate(`  ${[intake, autoMergeDefault, harvestGate].join('  ')}`, width)
+  const toggles = truncate(
+    `  ${[intake, autoMergeDefault, harvestGate, repositoryPause]
+      .filter((token): token is string => token !== undefined)
+      .join('  ')}`,
+    width,
+  )
   // Warnings are conditional chrome, not a reserved log slot. Each notice is
   // capped to the configured three-row content preview, followed by the
   // overflow/count notice when content remains; notices are not dropped by
@@ -1252,6 +1266,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
           selection,
           lines: renderBuild(
             build,
+            model.repositoryPaused,
             opts,
             widths,
             sameSelection(selection, model.selection),

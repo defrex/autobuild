@@ -224,6 +224,8 @@ export interface DashboardModel {
   observations: DashboardCounter
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
+  /** Durable repository-wide hold (`true` means queued builds cannot launch). */
+  repositoryPaused: boolean
   /** Durable repository claim-time default for newly claimed builds. */
   defaultAutoMerge: boolean
   /** Durable repository gate reduced from acknowledged journal facts. Pending
@@ -1099,6 +1101,7 @@ export function buildDashboardFromProjected(
     active: { current: header.activeCount, limit: header.capacity },
     observations: { current: header.observationCount, limit: header.harvestThreshold },
     drained: !settings.intake,
+    repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),

@@ -1,6 +1,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { abDispatch } from '../src/cli/dispatch'
+import { bulkControlRepository } from '../src/cli/bulk-control'
 import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
 import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
@@ -44,9 +45,21 @@ const SCRIPTED_BLOCKER = [
   'EXPANDED FINAL LINE: dashboard message preview complete.',
 ].join('\n')
 
+const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'QUEUED'] as const
+
 const FRAME_SPECS: readonly FrameSpec[] = [
-  { id: 'mixed-wide', columns: 140, rows: 40, requires: ['more rows - Enter details'] },
-  { id: 'mixed-narrow', columns: 64, rows: 50, requires: ['more rows - Enter details'] },
+  {
+    id: 'mixed-wide',
+    columns: 140,
+    rows: 40,
+    requires: [...HELD_EVIDENCE, 'more rows - Enter details'],
+  },
+  {
+    id: 'mixed-narrow',
+    columns: 64,
+    rows: 50,
+    requires: [...HELD_EVIDENCE, 'more rows - Enter details'],
+  },
   {
     id: 'resume-prompt',
     columns: 100,
@@ -68,7 +81,7 @@ const FRAME_SPECS: readonly FrameSpec[] = [
   },
 ]
 
-const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 3')
+const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
 
 export interface CapturedDashboardFrame {
   id: string
@@ -133,11 +146,25 @@ async function prepareScenario(): Promise<E2eHarness> {
       readyTicket('CAP-PLAN', { title: 'Plan blocked dashboard' }),
       readyTicket('CAP-IMPLEMENT', { title: 'Implement blocked dashboard' }),
       readyTicket('CAP-COMPLETE', { title: 'Complete dashboard evidence' }),
+      readyTicket('CAP-QUEUED', { title: 'Queued dashboard evidence' }),
     ],
   })
 
   try {
-    const report = await harness.dispatcher.tick()
+    const provision = harness.workspaces.provision.bind(harness.workspaces)
+    harness.workspaces.provision = async (opts) => {
+      if (opts.branch === 'ab/queued-dashboard-evidence') {
+        throw new Error('dashboard capture intentionally leaves this build queued')
+      }
+      return provision(opts)
+    }
+    const report = await (async () => {
+      try {
+        return await harness.dispatcher.tick()
+      } finally {
+        harness.workspaces.provision = provision
+      }
+    })()
     if (report.dispatched !== 3 || harness.launched.length !== 3) {
       throw new Error(
         `dashboard capture expected three dispatched builds, got ${report.dispatched} dispatches and ${harness.launched.length} runners`,
@@ -159,6 +186,27 @@ async function prepareScenario(): Promise<E2eHarness> {
       }
       await launched.runner.run()
     }
+
+    // The fourth ticket's first workspace provision failed through the real
+    // dispatcher, leaving a durable queued build. Once the three launched
+    // builds have reached their scripted states, use the shared bulk control
+    // to establish the repository hold and its paired intake state.
+    const queued = (await harness.store.listBuilds()).find(
+      (record) => record.ticket?.id === 'CAP-QUEUED',
+    )
+    if (queued === undefined) {
+      throw new Error('dashboard capture did not create the CAP-QUEUED build')
+    }
+    const queuedEvents = await harness.events(queued.slug)
+    if (queuedEvents.some((event) => event.type === 'runner.attached')) {
+      throw new Error('dashboard capture CAP-QUEUED unexpectedly attached a runner')
+    }
+    await bulkControlRepository({
+      store: harness.store,
+      repo: harness.origin,
+      env: { USER: 'dashboard-capture' },
+      direction: 'pause',
+    })
 
     const completeEvents = await harness.events('complete-dashboard-evidence')
     const observation = completeEvents.find((event) => event.type === 'observation.recorded')
@@ -261,7 +309,7 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   const text = plain.join('\n')
   const commonEvidence =
     spec.detail === undefined
-      ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'RUNNING', 'Harvest', 'PAUSED']
+      ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
       : ['Build  plan-blocked-dashboard', 'BLOCKED']
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
@@ -389,6 +437,7 @@ export async function captureDashboardFrames(
         '- [ ] Every PNG opens and is non-empty.',
         '- [ ] Rows, statuses, progress, and separators do not overlap.',
         '- [ ] The Harvest row remains legible and long list messages show a three-row preview/count.',
+        '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
         '- [ ] The narrow frame truncates deliberately without clipping.',
         '- [ ] Colour emphasis is present and literal statuses remain readable.',
         '- [ ] The resume-prompt frame shows the composer panel in place of the',

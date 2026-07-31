@@ -90,6 +90,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     active: { current: builds.length, limit: 5 },
     observations: { current: 5, limit: 7 },
     drained: false,
+    repositoryPaused: false,
     defaultAutoMerge: false,
     harvestPaused: false,
     builds,
@@ -112,6 +113,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggles).toContain('intake ON')
     expect(toggles).toContain('auto merge OFF')
     expect(toggles).toContain('harvest ON')
+    expect(toggles).not.toContain('repository PAUSED')
     expect(summary.indexOf('Autobuild')).toBe(3)
     expect(toggles.search(/\S/)).toBe(summary.indexOf('Autobuild'))
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
@@ -259,6 +261,11 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1]).toContain('auto merge ON')
     expect(rd(model([]), WIDE)[1]).toContain('harvest ON')
     expect(rd({ ...model([]), harvestPaused: true }, WIDE)[1]).toContain('harvest OFF')
+    expect(rd({ ...model([]), drained: true }, WIDE)[1]).not.toContain('repository PAUSED')
+    expect(rd({ ...model([]), repositoryPaused: true }, WIDE)[1]).toContain('repository PAUSED')
+    expect(rd({ ...model([]), repositoryPaused: true, drained: false }, WIDE)[1]).toContain(
+      'intake ON',
+    )
     const defaults = rd(model([]), { color: true, width: 200 })[1]!
     expect(defaults).toContain('\x1b[32mintake ON\x1b[0m')
     expect(defaults).toContain('\x1b[33mauto merge OFF\x1b[0m')
@@ -268,6 +275,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       {
         ...model([]),
         drained: true,
+        repositoryPaused: true,
         defaultAutoMerge: true,
         harvestPaused: true,
       },
@@ -276,6 +284,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggled).toContain('\x1b[33mintake OFF\x1b[0m')
     expect(toggled).toContain('\x1b[32mauto merge ON\x1b[0m')
     expect(toggled).toContain('\x1b[33mharvest OFF\x1b[0m')
+    expect(toggled).toContain('\x1b[33mrepository PAUSED\x1b[0m')
   })
 
   test('the summary is the selected global row even with no harvest or builds', () => {
@@ -507,12 +516,34 @@ describe('renderDashboard: queued dispatch rows', () => {
     const lines = rd(frame, WIDE).map(stripAnsi)
     const text = lines.join('\n')
     expect(text).toContain('QUEUED')
+    expect(text).not.toContain('(held)')
     expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
     expect(text).toContain('d discard')
     expect(text).not.toContain('[ ] plan')
     expect(lines.at(-1)).toBe(
       ' Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit',
     )
+  })
+
+  test('a repository pause marks only queued rows held while preserving lifecycle status', () => {
+    const queued = build({
+      slug: 'held-queue',
+      status: 'queued',
+      steps: [],
+      dispatch: 'runner attachment pending',
+      pr: undefined,
+    })
+    const running = build({ slug: 'free-running', pr: undefined })
+    const lines = rd(
+      { ...model([queued, running]), repositoryPaused: true },
+      { color: true, width: 200 },
+    )
+    const queuedLine = lines.find((line) => stripAnsi(line).includes('held-queue'))!
+    const runningLine = lines.find((line) => stripAnsi(line).includes('free-running'))!
+    expect(stripAnsi(queuedLine)).toMatch(/\(held\)\s+QUEUED$/)
+    expect(queuedLine).toContain('\x1b[33m(held)\x1b[0m')
+    expect(stripAnsi(runningLine)).not.toContain('(held)')
+    expect(stripAnsi(runningLine)).toMatch(/RUNNING$/)
   })
 })
 
@@ -1404,6 +1435,32 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
         expect(line.endsWith('RUNNING')).toBe(true)
       }
     }
+  })
+
+  test('a held queued row and paused controls fit deliberately at 64 columns', () => {
+    const queued = build({
+      slug: 'queued-dashboard-evidence-with-a-long-name',
+      ticketId: 'CAP-QUEUED',
+      status: 'queued',
+      steps: [],
+      dispatch: 'runner attachment pending',
+      pr: undefined,
+    })
+    const lines = rd(
+      {
+        ...model([queued]),
+        drained: true,
+        repositoryPaused: true,
+        harvestPaused: true,
+      },
+      { color: true, width: 64 },
+    )
+    expectInsideGutters(lines, 64)
+    const controls = stripAnsi(lines.find((line) => stripAnsi(line).includes('intake OFF'))!)
+    expect(controls).toContain('repository PAUSED')
+    const queuedLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('CAP-QUEUED'))!)
+    expect(queuedLine).toContain('~')
+    expect(queuedLine).toMatch(/\(held\)\s+QUEUED$/)
   })
 
   test('normal and narrow frames never paint either terminal edge or exceed their width', () => {
