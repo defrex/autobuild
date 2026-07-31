@@ -982,6 +982,7 @@ class DispatchLoop {
               nextModel,
               dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
+              'session',
               next.scroll,
             ),
     }
@@ -1011,6 +1012,7 @@ class DispatchLoop {
               nextModel,
               dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
+              'message',
               next.scroll,
             ),
     }

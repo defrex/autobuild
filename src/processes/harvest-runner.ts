@@ -39,8 +39,8 @@ import {
   parseApprovedProposalSet,
   partitionHarvestExhaustion,
   renderHarvestProposal,
+  resolveHarvestCreateBlockers,
   scanUnclaimedObservations,
-  validateHarvestCreateBlockers,
 } from './harvest'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -720,7 +720,7 @@ export class HarvestRunner {
     const knownLedger = new Map(
       packet.ledger.map((entry) => [`${entry.ticket.source}:${entry.ticket.id}`, entry]),
     )
-    const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry.ticket]))
+    const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry]))
     const reservations = new Map(current.reservations.map((entry) => [entry.proposalKey, entry.id]))
     const dispositions: HarvestDisposition[] = []
     const report: Array<Record<string, unknown>> = []
@@ -729,12 +729,12 @@ export class HarvestRunner {
       await this.ensureLease()
       if (proposal.action === 'create') {
         const proposalKey = harvestProposalKey(proposal)
-        let ticket = alreadyFiled.get(proposalKey)
-        if (ticket === undefined) {
-          // Validation must precede even the durable reservation: an invalid
-          // prerequisite cannot leave behind the start of a ready-ticket
-          // create path.
-          const blockedBy = await validateHarvestCreateBlockers(proposal, tickets)
+        let filed = alreadyFiled.get(proposalKey)
+        if (filed === undefined) {
+          // Resolution must precede even the durable reservation: an invalid
+          // declared prerequisite cannot leave behind the start of a ready-
+          // ticket create path, while origins are refreshed at this boundary.
+          const blockers = await resolveHarvestCreateBlockers(proposal, observations, tickets)
           let reservedId = reservations.get(proposalKey)
           if (reservedId === undefined) {
             reservedId = uuids()
@@ -748,13 +748,13 @@ export class HarvestRunner {
             reservations.set(proposalKey, reservedId)
           }
           const body = renderHarvestProposal(proposal, observations)
-          ticket = (
+          const ticket = (
             await tickets.create(
               {
                 title: proposal.title,
                 body,
                 labels: [HARVEST_PROPOSAL_LABEL],
-                ...(blockedBy.length > 0 ? { blockedBy } : {}),
+                ...(blockers.blockedBy.length > 0 ? { blockedBy: blockers.blockedBy } : {}),
               },
               {
                 state: defaultProposalState(config),
@@ -766,22 +766,38 @@ export class HarvestRunner {
           // reservation. If it stops after create but before this filing fact,
           // it sends the same reserved id and adopts the external ticket.
           await this.ensureLease()
-          await store.appendRepo(repo, {
+          const filedEvent = await store.appendRepo(repo, {
             actor: KERNEL,
             type: 'harvest.proposal.filed',
-            payload: { run: run.run, proposalKey, ticket },
+            payload: {
+              run: run.run,
+              proposalKey,
+              ticket,
+              blockers: blockers.provenance,
+            },
           })
-          alreadyFiled.set(proposalKey, ticket)
+          filed = {
+            proposalKey,
+            ticket,
+            blockers: blockers.provenance,
+            seq: filedEvent.seq,
+          }
+          alreadyFiled.set(proposalKey, filed)
         }
         for (const occurrence of proposal.observations) {
           dispositions.push({
             occurrence,
             action: 'filed',
             proposalKey,
-            ticket,
+            ticket: filed.ticket,
           })
         }
-        report.push({ action: 'filed', proposalKey, ticket })
+        report.push({
+          action: 'filed',
+          proposalKey,
+          ticket: filed.ticket,
+          ...(filed.blockers !== undefined ? { blockers: filed.blockers } : {}),
+        })
       } else if (proposal.action === 'join') {
         const known = knownLedger.get(`${proposal.ticket.source}:${proposal.ticket.id}`)
         if (!known) {

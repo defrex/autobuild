@@ -164,7 +164,7 @@ export async function ensureLocalStateIgnored(targetRepo: string): Promise<boole
  * invocation is precisely the point. Keep this set small; widening it needs the
  * §16.3 criterion, not convenience.
  */
-export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide', 'setup'])
+export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide'])
 
 /**
  * Rewrite a canonical skill's YAML frontmatter for installation (§16.3):
@@ -576,22 +576,14 @@ export interface InitReport {
   exitCode: number
 }
 
-function skillBody(source: string): string {
-  const lines = source.split('\n')
-  if (lines[0] !== '---') throw new Error('installed ab-setup skill has no YAML frontmatter')
-  const close = lines.indexOf('---', 1)
-  if (close === -1) throw new Error('installed ab-setup skill has unterminated YAML frontmatter')
-  return lines
-    .slice(close + 1)
-    .join('\n')
-    .trim()
-}
-
-function setupPrompt(configExists: boolean, source: string): string {
+function setupPrompt(configExists: boolean): string {
   const preface = configExists
     ? 'Review and improve the existing autobuild.toml. Preserve intentional repository choices; do not replace it with a generic template.'
     : 'Complete the new minimal autobuild.toml skeleton using this repository and the user as your sources of truth.'
-  return `${preface}\n\n${skillBody(source)}\n`
+  return (
+    `${preface}\n\n` +
+    'Read .agents/skills/ab-guide/references/setup.md and follow it to configure Autobuild for this repository.\n'
+  )
 }
 
 function renderSkeleton(template: string, runtime: string): string {
@@ -727,11 +719,10 @@ export async function abInit(opts: {
     return { config, skills, discoveryConflicts, exitCode: 1 }
   }
 
-  const setupSource = await readIfExists(installedSkillPath(opts.targetRepo, 'ab-setup'))
-  // Pre-agent-driven fixture distributions can still exercise init/upgrade's
-  // vendoring contract. Current distributions always ship ab-setup.
-  if (setupSource === undefined) return { config, skills, discoveryConflicts, exitCode: 0 }
-  const prompt = setupPrompt(configExists, setupSource)
+  // The handoff is deliberately a stable pointer rather than embedded guide
+  // content. Installation remains successful for an older or partial
+  // distribution whose guide tree does not contain the reference yet.
+  const prompt = setupPrompt(configExists)
   if (selectedRuntime !== undefined && opts.interactive === true) {
     stdout('')
     stdout(`Starting setup agent with ${selectedRuntime}…`)

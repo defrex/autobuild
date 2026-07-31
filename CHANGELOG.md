@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#171](https://github.com/defrex/autobuild/pull/171) — Clamp dashboard detail scrolling to resume panels
+- [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views
+- [#168](https://github.com/defrex/autobuild/pull/168) — Block harvest proposals on unresolved origin tickets
 - [#167](https://github.com/defrex/autobuild/pull/167) — Keep terminal dashboard status dominant
 - [#166](https://github.com/defrex/autobuild/pull/166) — Use dashboard content width for transcript scrolling
 - [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment

@@ -186,7 +186,10 @@ describe('ab-guide — init behavior', () => {
     expect(commands).toContain('deterministic init code never guesses')
     expect(setup).toContain('`claude`, `codex`, then `pi`')
     expect(setup).toContain('with empty\n  `[commands]`')
-    expect(setup).toContain('creates no\n  build, session, event, transcript, or BuildStore record')
+    expect(setup).toContain('[repository setup reference](references/setup.md)')
+    expect(setup).toContain('Vendors 11 skills before handoff')
+    expect(setup).toContain('(`ab-spec`, `ab-tickets`, `ab-guide`)')
+    expect(setup).toContain('creates no build, session, event,\n  transcript, or BuildStore record')
   })
 })
 
@@ -317,7 +320,7 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
 
   test('every skill in the distribution has a row in the skills rundown', async () => {
     const skills = await readDistSkills(DIST_ROOT)
-    expect(skills.length).toBeGreaterThan(1)
+    expect(skills).toHaveLength(11)
     const missing = skills
       .map((skill) => skill.installName)
       // The closing backtick is what stops `ab-plan` from being satisfied by

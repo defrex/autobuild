@@ -5,9 +5,11 @@ import {
   harvestProposalSetSchema,
   harvestScanPacketSchema,
   occurrenceKey,
+  type HarvestBlockerProvenance,
   type HarvestDisposition,
   type HarvestLedgerTicket,
   type HarvestObservation,
+  type HarvestOriginatingTicket,
   type HarvestPendingProposal,
   type HarvestProposal,
   type HarvestProposalSet,
@@ -123,6 +125,38 @@ export async function reconcileHarvestLedger(
   return out
 }
 
+/** Distinct observation-origin tickets in first-seen order. Lifecycle state is
+ * informational at scan time; filing refreshes matching refs before create. */
+export async function reconcileOriginatingTickets(
+  observations: HarvestObservation[],
+  tickets: TicketSource,
+): Promise<HarvestOriginatingTicket[]> {
+  const distinct = new Map<string, NonNullable<HarvestObservation['ticket']>>()
+  for (const observation of observations) {
+    if (observation.ticket === undefined) continue
+    const key = `${observation.ticket.source}:${observation.ticket.id}`
+    if (!distinct.has(key)) distinct.set(key, structuredClone(observation.ticket))
+  }
+
+  const refs = [...distinct.values()]
+  const matchingIds = refs
+    .filter((ticket) => ticket.source === tickets.name)
+    .map((ticket) => ticket.id)
+  const states = matchingIds.length > 0 ? await tickets.dependencyStates(matchingIds) : []
+  const byId = new Map(states.map((state) => [state.id, state]))
+
+  return refs.map((ticket) => {
+    const sourceMatches = ticket.source === tickets.name
+    const state = sourceMatches ? byId.get(ticket.id) : undefined
+    return {
+      ticket,
+      sourceMatches,
+      exists: state?.exists ?? false,
+      resolved: state?.resolved ?? false,
+    }
+  })
+}
+
 export async function makeHarvestScanPacket(opts: {
   store: BuildStore
   tickets: TicketSource
@@ -135,6 +169,7 @@ export async function makeHarvestScanPacket(opts: {
     repo: opts.repo,
     run: opts.run,
     observations: opts.observations,
+    originatingTickets: await reconcileOriginatingTickets(opts.observations, opts.tickets),
     ledger: await reconcileHarvestLedger(opts.state, opts.tickets),
   })
 }
@@ -210,37 +245,75 @@ export function harvestProposalKey(proposal: HarvestProposal): string {
   return `harvest-${contentHash(toBytes(members)).slice(0, 24)}`
 }
 
-/** Validate create-time blockers through the configured source before filing
- * allocates an external-create reservation. The source owns identifier and
- * cross-source validity; harvest only requires every requested id to exist. */
-export async function validateHarvestCreateBlockers(
+/** Resolve the authoritative blocker union immediately before create. Agent
+ * declarations retain strict validation; observation origins are best-effort
+ * prerequisites and contribute only while they still exist and are unresolved. */
+export interface HarvestCreateBlockers {
+  blockedBy: string[]
+  provenance: HarvestBlockerProvenance
+}
+
+export async function resolveHarvestCreateBlockers(
   proposal: Extract<HarvestProposal, { action: 'create' }>,
+  observations: HarvestObservation[],
   tickets: TicketSource,
-): Promise<string[]> {
-  const blockedBy = [...new Set(proposal.blockedBy ?? [])]
-  if (blockedBy.length === 0) return []
+): Promise<HarvestCreateBlockers> {
+  const declared = [...new Set(proposal.blockedBy ?? [])]
+  const byOccurrence = new Map(
+    observations.map((observation) => [occurrenceKey(observation.occurrence), observation]),
+  )
+  const originIds: string[] = []
+  const seenOrigins = new Set<string>()
+  for (const occurrence of proposal.observations) {
+    const observation = byOccurrence.get(occurrenceKey(occurrence))
+    if (observation === undefined) {
+      throw new Error(
+        `cannot resolve blockers for harvest proposal "${proposal.title}": ` +
+          `missing scan observation ${occurrenceKey(occurrence)}`,
+      )
+    }
+    const origin = observation.ticket
+    if (origin === undefined || origin.source !== tickets.name || seenOrigins.has(origin.id)) {
+      continue
+    }
+    seenOrigins.add(origin.id)
+    originIds.push(origin.id)
+  }
+
+  const candidates = [...new Set([...declared, ...originIds])]
+  if (candidates.length === 0) {
+    return { blockedBy: [], provenance: { declared, derived: [] } }
+  }
 
   let states: Awaited<ReturnType<TicketSource['dependencyStates']>>
   try {
-    states = await tickets.dependencyStates(blockedBy)
+    states = await tickets.dependencyStates(candidates)
   } catch (error) {
     throw new Error(
       `cannot file harvest proposal "${proposal.title}" through ticket source ` +
-        `"${tickets.name}": blocker validation failed for ${blockedBy.map((id) => `"${id}"`).join(', ')}: ` +
+        `"${tickets.name}": blocker validation failed for ${candidates.map((id) => `"${id}"`).join(', ')}: ` +
         `${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     )
   }
 
   const byId = new Map(states.map((state) => [state.id, state]))
-  const invalid = blockedBy.filter((id) => byId.get(id)?.exists !== true)
+  const invalid = declared.filter((id) => byId.get(id)?.exists !== true)
   if (invalid.length > 0) {
     throw new Error(
       `cannot file harvest proposal "${proposal.title}" through ticket source ` +
         `"${tickets.name}": unknown or invalid blocker ${invalid.map((id) => `"${id}"`).join(', ')}`,
     )
   }
-  return blockedBy
+
+  const derived = originIds.filter((id) => {
+    const state = byId.get(id)
+    return state?.exists === true && !state.resolved
+  })
+  return {
+    blockedBy: [...new Set([...declared, ...derived])],
+    provenance: { declared, derived },
+  }
 }
 
 export interface HarvestExhaustionPartition {

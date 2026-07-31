@@ -152,8 +152,10 @@ may never close.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
-occurrence identity, the exhaustion partition), `harvest-runner.ts` executes
-the staged workflow under the heartbeated repository lease, and
+source-aware originating-ticket lifecycle projection, filing-time blocker
+resolution, occurrence identity, and the exhaustion partition),
+`harvest-runner.ts` executes the staged workflow under the heartbeated
+repository lease, records declared/derived blocker provenance, and
 `src/kernel/harvest.ts` reduces runs, claims, recovery history, and the
 committed ledger with ordered parked/exhaustion/open selectors. The recovery
 invariants are SPEC §12; the mechanics live in the reducer and its tests.
@@ -299,12 +301,14 @@ never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
 **Init and upgrade.** `src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
-launches the installed non-phase `ab-setup` judgment surface directly in an
-interactive agent CLI, or prints the identical prompt; this bypasses all build
-and BuildStore session plumbing. Existing config is never reconciled, even with
-`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge
-and all writes: agent output is an untrusted proposal validated before anything
-touches disk, and every failure path leaves live and pristine byte-untouched.
+launches an interactive agent CLI, or prints the identical short prompt, telling
+the setup agent to read the installed
+`.agents/skills/ab-guide/references/setup.md`; this bypasses all build and
+BuildStore session plumbing. Existing config is never reconciled, even with
+`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge,
+the provenance-safe fixed retirement of obsolete defaults, and all writes:
+agent output is an untrusted proposal validated before anything touches disk,
+and every failure path leaves live and pristine byte-untouched.
 
 ## Development
 

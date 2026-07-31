@@ -263,15 +263,16 @@ mechanically:
 | `plan-review` | `/plan-review <build>` | `plan-review.verdict` | `plan-review` (rev N) |
 | `implement` | `/implement <build>` | `implement.completed` | diff + `implement-notes` |
 | `code-review` | `/code-review <build>` | `code-review.verdict` | `code-review` (rev N) |
-| `verify:e2e` | `/verify-e2e <build>` | `verify.completed {step, outcome}` | `verify-report:e2e` on pass/fail when present |
+| `verify:e2e` | `/verify-app-e2e <build>` (repository-authored) | `verify.completed {step, outcome}` | `verify-report:e2e` on pass/fail when present |
 | `finalize` | `/finalize <build>` | `finalize.completed` | PR ref, summary |
 | `reconcile` | `/reconcile <build>` | `reconcile.started`, `reconcile.completed` | `reconcile-notes` + merge commit |
 
 Every phase skill takes **only the build slug**; everything else it needs
 comes from the store via the `ab` CLI (§8).
 
-Installed into a repo, skill names carry the `ab-` namespace prefix
-(§16.3): `/ab-plan`, `/ab-code-review`, `/ab-verify-e2e`. This spec uses
+Canonical skills installed into a repo carry the `ab-` namespace prefix
+(§16.3), for example `/ab-plan` and `/ab-code-review`. Repository-authored
+extension skills use their own names, such as `/verify-app-e2e`. This spec uses
 the bare phase names throughout.
 
 ## 5. Pipeline grammar
@@ -760,9 +761,9 @@ deterministic fail-safe.
   ```toml
   [verify.e2e]
   kind = "agent"
-  skill = "ab-verify-e2e"
+  skill = "verify-app-e2e" # repository-authored skill
 
-  [roles.e2e]        # the STEP name — not "ab-verify-e2e"
+  [roles.e2e]        # the STEP name — not "verify-app-e2e"
   runtime = "pi"
   ```
 
@@ -882,19 +883,26 @@ ticks stay responsive.
 The fixed workflow is:
 
 1. **scan (deterministic)** — subtract all claimed occurrences, reconcile
-   prior proposal tickets through TicketSource lifecycle facts, and
-   atomically store the scan packet with the run's claim.
+   prior proposal tickets through TicketSource lifecycle facts, expose each
+   distinct observation-origin ticket's source match, existence, and resolution
+   state, and atomically store the scan packet with the run's claim.
 2. **synthesize ⇄ review (judgment through `converge`)** — the continuing
    producer clusters same-problem records and authors typed
    create/join/suppress proposals. A create may carry source-local `blockedBy`
-   ids when its evidence establishes a hard prerequisite; contextual references
-   and nonbinding ordering do not become blockers. A fresh reviewer checks
+   ids when its evidence establishes a hard prerequisite other than the
+   automatic observation-origin relationship; contextual references and
+   nonbinding ordering do not become blockers. A fresh reviewer checks
    coverage, semantic dedup, spec quality, evidence, and both directions of
    that prerequisite rule. Only approval advances.
-3. **file (deterministic)** — validate every create blocker through the selected
-   TicketSource, render creates to the spec standard, and file them with those
-   native relationships into `[tickets].proposalState`, Triage by default,
-   with the reserved `autobuild:proposal` provenance label.
+3. **file (deterministic)** — refresh the selected TicketSource lifecycle for
+   every declared blocker and same-source ticket that originated a create's
+   clustered observations. Unknown agent-declared ids fail filing; missing,
+   resolved, foreign-source, and absent origins contribute nothing. The created
+   ticket receives the first-seen deduplicated union of declared blockers and
+   still-existing unresolved origins. The filing fact and report preserve those
+   two provenance sets separately. Creates are rendered to the spec standard
+   and filed into `[tickets].proposalState`, Triage by default, with the reserved
+   `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -963,10 +971,13 @@ creation or later. The source owns representation (how a blocker is stored)
 and completion semantics (what "done" means); the dispatcher owns the
 decision — an unresolved blocker means the ticket is not claimed and creates
 no build. Dependencies are written during grooming or by an approved harvest
-create whose evidence establishes a hard prerequisite, then read at dispatch
-time. Harvest validates those source-local ids through the configured source
-before creating the proposal ticket. Both paths remain initiation, so the
-never-consulted-mid-build rule is untouched. A dependency-blocked ticket stays
+create, then read at dispatch time. Harvest validates agent-declared source-local ids
+and automatically derives unresolved same-source observation origins through
+fresh configured-source lifecycle reads before creating the proposal ticket.
+The scan packet exposes the earlier informational lifecycle view to producer
+and reviewer, while the filing read is authoritative. Both paths remain
+initiation, so the never-consulted-mid-build rule is untouched. A
+dependency-blocked ticket stays
 queued source work rather than becoming a blocked build: the runtime `blocked`
 status is for builds awaiting a human.
 
@@ -1363,7 +1374,7 @@ kind = "check"
 command = "test"
 [verify.e2e]
 kind = "agent"                  # agent-verify: skill + pass|fail|skip verdict
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e"       # repository-authored agent verifier
 paths = ["web/**"]              # optional changed-path applicability
 
 [finalize]
@@ -1437,9 +1448,11 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
 
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 
-This project ships the canonical default skills for every phase plus the
-non-phase surfaces (`spec`, `tickets`, `guide`, `setup`, and the outer-loop
-skills). `ab init` installs into a repo:
+This project ships 11 canonical default skills for the fixed phases, the
+non-phase surfaces (`spec`, `tickets`, and `guide`), and the outer-loop skills.
+Repository setup guidance ships as `guide/references/setup.md`, not as a skill;
+agent verifier skills are authored by each repository when needed. `ab init`
+installs into a repo:
 
 - **A stack-neutral `autobuild.toml` skeleton**, rendered only when absent. It
   declares no setup command or verify step and inspects no language or package
@@ -1450,22 +1463,28 @@ skills). `ab init` installs into a repo:
   using the product-fixed `claude`, `codex`, `pi` preference order. The launcher
   choice does not constrain the pipeline's final roles or models. On an
   interactive terminal, init starts that coding-agent CLI directly in the
-  target repository with inherited terminal I/O and no `AB_*` session identity;
-  its exit status is init's. This direct process creates no build, session,
+  target repository with inherited terminal I/O, no `AB_*` session identity,
+  and a short prompt pointing to the installed editable
+  `.agents/skills/ab-guide/references/setup.md`. The prompt carries the
+  new-config or existing-config preface but does not embed the reference body.
+  Its exit status is init's. This direct process creates no build, session,
   transcript, event, or BuildStore record. Without a usable shipped runtime or
   an interactive terminal, installation still succeeds and init prints the
-  exact setup prompt for the user to run in a coding agent. On rerun, the prompt
-  asks the agent to review and improve the preserved existing config.
-- **Copies** of the default skills into the project skills directory,
+  exact same pointer prompt for the user to run in a coding agent. A missing
+  setup reference in an older or partial distribution does not fail init. On
+  rerun, the prompt asks the agent to review and improve the preserved existing
+  config.
+- **Copies** of the 11 default skills into the project skills directory,
   namespaced `ab-*`. Copies, not references — per-repo customization is the
-  point: this repo's code-review standards and e2e driving instructions live
-  in the vendored skill. Harness-specific discovery paths are symlinks to the
-  one canonical editable copy.
+  point: this repo's code-review standards and setup reference live in the
+  vendored trees. Harness-specific discovery paths are symlinks to the one
+  canonical editable copy. Setup directs the repository to author and configure
+  its own agent verifier when judgment-driven end-to-end coverage is warranted.
 - **Model-invocation discipline.** Phase skills are installed
   non-agent-invocable: they are invoked explicitly by the runner or a human,
   never auto-triggered by a model pattern-matching a description — a model
   must not start a pipeline phase by accident. The model-invocable exceptions
-  (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-setup`) are exactly the skills that
+  (`ab-spec`, `ab-tickets`, `ab-guide`) are exactly the three skills that
   **drive no phase**; membership is decided by that criterion, not taste.
 
 When `.agents/skills` and `.claude/skills` resolve to the same filesystem
@@ -1505,7 +1524,21 @@ behavior. An exact version may be older than the installed version.
 
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine
-base × local edits × new default). A conflict may be resolved by the optional
+base × local edits × new default). Two fixed former defaults, `ab-setup` and
+`ab-verify-e2e`, additionally have one-time retirement handling when absent
+from the incoming distribution. A pristine record is required to prove
+Autobuild provenance; without it, a same-named repository-authored skill is
+untouched and unreported. Upgrade removes and reports `removed` only when the
+complete live and pristine trees match byte-for-byte and no configured agent
+verify or finalize step names the skill. Any customization, config reference,
+or inability to inspect config safely preserves the live tree and reports
+`kept`; its obsolete pristine ownership is removed, so later upgrades treat it
+as a quiet local skill. Exact removals also clear only Autobuild-owned discovery
+links. Consequently a second upgrade neither resurrects nor re-reports either
+retirement. All other installed skills absent from the distribution retain the
+`unknown` local-addition classification.
+
+A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local
 customization**. The agent output is only an untrusted proposal — deterministic
 validation verifies skill identity and exact preservation of every already-clean
