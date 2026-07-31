@@ -103,10 +103,15 @@ points. There are no custom phases, no DAGs, no reordering — a repo extends
 autobuild by configuring verify and finalize steps, never by inventing stages.
 If a request seems to need a new phase, say so rather than improvising one.
 
-**Observation harvest is not a build phase.** On each dispatch tick, once
-`[policy].harvestThreshold` new structured observations have accumulated,
-dispatch
-runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
+**Observation harvest is not a build phase.** On each dispatch tick, dispatch
+measures both unclaimed observation count and drift: distinct other builds
+merged after the oldest unclaimed observation. It starts when count reaches
+`[policy].harvestThreshold` **or** drift reaches
+`[policy].harvestMaxDrift`; zero disables drift. The originating build is
+excluded even if it later merges, and only durable same-repository `pr.merged`
+facts count. Either trigger claims the whole current accumulation and records
+`count`, `drift`, or `both` on `harvest.started`, then dispatch runs one
+repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created, in `[tickets].proposalState` — the triage
 state unless this repository has named another one. The scan context exposes
@@ -529,7 +534,8 @@ users to move its fields to `[roles.default]`.
 
 ### `[policy]`
 
-Every field is a **positive integer**.
+Every field is a **positive integer** except `harvestMaxDrift`, which is a
+nonnegative integer so zero can disable that trigger.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
@@ -539,6 +545,7 @@ Every field is a **positive integer**.
 | `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
 | `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
+| `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect
@@ -549,9 +556,13 @@ producer/reviewer stalemate rather than a defect category the loop keeps
 converging on, and the kernel decides only whether a marked chain has survived
 the threshold — never whether two findings are the same disagreement.
 
-Harvest is driven by back-pressure inside `ab dispatch`, not by a wall clock,
-and remains independent of build `capacity` and repository intake. Once the
-threshold is reached, the run claims the whole current accumulation. Dispatch
+Harvest is driven by pressure inside `ab dispatch`, not by a wall clock, and
+remains independent of build `capacity` and repository intake. Count reaching
+`harvestThreshold` or drift reaching `harvestMaxDrift` starts a run. Drift is
+measured from the oldest unclaimed observation and counts distinct later
+same-repository merges from other builds; aborted and closed-unmerged builds do
+not count. Once either limit is reached, the run claims the whole current
+accumulation. Dispatch
 tracks it without blocking watch ticks; a repository lease provides
 cross-process single-flight. Recovery has its fixed per-run two-attempt budget,
 separate from the configurable policy fields above.
@@ -859,11 +870,13 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | obs <current>/<limit>`.
+`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`.
 `queue` is the ready-ticket queue depth; `active` is the current
-nonterminal-build count against root `capacity`; and `obs` is the current count
-of recorded observation occurrences not yet claimed by a Harvest snapshot
-against `[policy].harvestThreshold`. An indented controls line follows for
+nonterminal-build count against root `capacity`; `obs` is the current count of
+recorded observation occurrences not yet claimed by a Harvest snapshot against
+`[policy].harvestThreshold`; and `drift` is distinct other builds merged after
+the oldest such observation against `[policy].harvestMaxDrift`. A drift limit
+of zero renders as `/0` and means drift triggering is disabled. An indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title

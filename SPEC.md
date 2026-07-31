@@ -870,15 +870,23 @@ signals (telemetry, observations)
 
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
-threshold-driven: the dispatcher counts unclaimed structured observations
-across the repository each tick, and at `[policy].harvestThreshold` it claims
-the whole current accumulation as one immutable snapshot and starts one staged
-run. Occurrence identity is
-`{build slug, event seq}` — never payload id or a scalar high-water mark,
+pressure-driven: on the existing one-pass scan of repository build streams, the
+dispatcher measures both unclaimed observation count and repository drift. A run
+starts when count reaches `[policy].harvestThreshold` **or** when the number of
+same-repository `pr.merged` facts strictly after the oldest unclaimed
+observation reaches `[policy].harvestMaxDrift`, whichever happens first. Drift
+counts distinct other builds only: the build that recorded the oldest
+observation is excluded even if it later merges, and aborted or closed-unmerged
+builds contribute no `pr.merged` fact. The drift limit defaults to `3`; zero
+disables that condition and restores count-only gating. Empty accumulations
+never trigger. Either condition claims the whole current accumulation as one
+immutable snapshot, including newer observations, and `harvest.started` records
+`count`, `drift`, or `both` as durable trigger provenance. Occurrence identity
+is `{build slug, event seq}` — never payload id or a scalar high-water mark,
 because event sequences are per build. Harvest state lives in the repository
-journal, separate from build streams; the repository lease is the
-cross-process exclusivity gate, and harvest runs fire-and-forget so dispatch
-ticks stay responsive.
+journal, separate from build streams; the repository lease is the cross-process
+exclusivity gate, and harvest runs fire-and-forget so dispatch ticks stay
+responsive.
 
 The fixed workflow is:
 
@@ -1399,7 +1407,8 @@ maxVerifyAttempts = 3
 maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
-harvestThreshold = 5            # observation-count back-pressure in dispatch
+harvestThreshold = 5            # observation-count pressure in dispatch
+harvestMaxDrift = 3             # merged builds since oldest observation; 0 disables
 
 [tickets]
 source = "file"
