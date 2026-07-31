@@ -25,8 +25,9 @@
   "scripts": {
     "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
+    "capture:readme-headline": "bun tools/readme-headline.ts",
     "release": "bun tools/release.ts",
-    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts",
+    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
     "test": "bun test",
