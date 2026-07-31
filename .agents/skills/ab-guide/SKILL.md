@@ -864,6 +864,16 @@ including `queued` builds that have not attached a runner. A queued row shows
 its ticket, slug, literal `QUEUED` status, and either the pending dispatch
 boundary or the latest durable `dispatch.failed` stage, attempt, and error.
 
+A build row previews each unresolved blocker and setup error as at most three
+rendered rows, preserving authored newlines and one blank row between
+paragraphs. Longer messages add the withheld-row count and name `Enter details`;
+that existing detail view shows the setup error and every blocker in full.
+Up/Down scrolls detail content, Left/Right selects a session, and Enter opens the
+selected transcript. Harvest failure detail and each process warning use the
+same three-row cap and count but advertise no unavailable expansion action.
+These are display-only transformations: stored event and status text is
+unchanged.
+
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
