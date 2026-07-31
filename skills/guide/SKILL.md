@@ -163,9 +163,15 @@ The distinctions that change an administrator's answer:
   from each build stream; dispatcher settings and harvest state are reduced
   independently from the repository journal. Snapshots are never authoritative.
   Events record facts, never derived state.
-- **Workspaces** are provisioned per build. Config is read from **the build's
-  branch** at provision — so a config change flows through the pipeline like
-  any other change, and every phase of one build sees one consistent config.
+- **Live configuration** has two explicit contexts. A running dispatcher owns
+  the last valid snapshot from the **main checkout**; dispatch, setup, and each
+  pipeline step capture it at their action boundary, without interrupting an
+  agent turn or command already running. Missing, unreadable, malformed, and
+  routing-invalid candidates retain that snapshot with deduplicated operator
+  notice, and restoring a valid file resumes reload. Scoped phase CLI processes
+  still read the build worktree's branch-owned file.
+- **Workspaces** are provisioned per build and remain the locally reachable
+  execution context for that build.
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
@@ -727,9 +733,10 @@ install failure stops before skill merge. No other command checks for or
 installs a release.
 
 A local Bun update changes the dependency in its owning project's
-`package.json` and the matching `bun.lock` resolution, potentially leaving that
-project dirty. An existing global install changes Bun's global package-manager
-state instead.
+`package.json` and the matching `bun.lock` resolution. An existing global
+install changes Bun's global package-manager state instead. Before either can
+write, upgrade captures the target repository's Git baseline and carries it to
+the replacement binary.
 
 After that distribution decision, upgrade three-way merges every distributed
 skill file as *pristine base × local edits × new default*, with a standing bias
@@ -748,20 +755,44 @@ Outcomes:
 | `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Both sides of that file stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `removed` | A fixed retired distribution skill had pristine provenance and either its unreferenced live tree matched pristine and was removed with its owned discovery link, or its canonical live tree was already missing and obsolete provenance plus any owned dangling link were removed. |
-| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a distinct user-owned Claude discovery directory was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
+| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a user-owned Claude discovery entry was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
 The `removed`/`kept` classifications apply only to the fixed retirements
 `ab-setup` and `ab-verify-e2e`. A pristine record proves Autobuild provenance;
 a same-named repository-authored skill without one is untouched. Upgrade keeps
 a retired skill named by an agent verify or finalize step, and parses config
-conservatively so an inspection failure also keeps it. A distinct real
-`.claude/skills/<name>` directory is preserved byte-for-byte, enters the
-structured discovery-conflict report, and makes upgrade exit nonzero even when
-the corresponding canonical/pristine trees are retired. Every terminal
-classification clears obsolete pristine ownership, making the retirement
-report one-time and preventing later link recreation, resurrection, or
-re-reporting.
+conservatively so an inspection failure also keeps it. A user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — is preserved byte-for-byte, enters the structured discovery-conflict
+report, and makes upgrade exit nonzero even when the corresponding
+canonical/pristine trees are retired. A preserved symlink keeps its exact link
+text and target. Every terminal classification clears obsolete pristine
+ownership, making the retirement report one-time and preventing later link
+recreation, resurrection, or re-reporting.
+
+After a conflict-free merge, upgrade makes one local commit by default. It
+includes only each reported skill's canonical tree, pristine record, and Claude
+discovery path, plus `package.json` and `bun.lock` when this run's local Bun
+update wrote those files inside the target repository. A global update adds no
+path, and no owned change means no commit. Additions, modifications, links, and
+deletions are included; unrelated staged, unstaged, and untracked work remains
+untouched. The message identifies `ab upgrade` and lists every byte-changing
+skill with its reported outcome. `--no-commit` disables this behavior and is
+preserved through self-update handoff. If a replacement child receives the
+handoff marker without the pre-self-update baseline — possible when an older
+parent launches a newer child — it suppresses the entire automatic commit,
+names the cross-version compatibility reason, and leaves all upgrade-owned
+changes uncommitted for the operator. Skill-upgrade results and the report's
+existing exit code remain unchanged.
+
+Any content conflict, discovery conflict, pre-existing dirt in an owned path,
+non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
+cherry-pick likewise suppresses the whole commit with a named warning. If upgrade
+cannot snapshot the worktree's Git index, it warns and declines to stage. A
+staging or commit failure restores that exact pre-attempt index and reports the
+original Git failure without touching merged worktree files. The report's
+existing exit code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -886,13 +917,11 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`.
+`queue <depth> | active <current>/<limit> | observations <count>`.
 `queue` is the ready-ticket queue depth; `active` is the current
-nonterminal-build count against root `capacity`; `obs` is the current count of
-recorded observation occurrences not yet claimed by a Harvest snapshot against
-`[policy].harvestThreshold`; and `drift` is distinct other builds merged after
-the oldest such observation against `[policy].harvestMaxDrift`. A drift limit
-of zero renders as `/0` and means drift triggering is disabled. An indented controls line follows for
+nonterminal-build count against root `capacity`; and `observations` is the count
+of recorded observation occurrences not yet claimed by a Harvest snapshot. An
+indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title
@@ -1258,12 +1287,13 @@ forever. That gap is exactly why the lease column is reported separately.
 | Lease | Meaning |
 |---|---|
 | `held` | A live runner holds an unexpired lease. Work is genuinely in flight. |
-| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. The dispatcher's lease sweep is what re-attaches it. |
+| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
 | `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with `updated`, not alone. |
 
-So `running` + `held` is healthy; `running` + `expired` means wait for the
-sweep, not that the build is progressing; and `no-lease` on a build updated
-seconds ago is almost certainly a runner still starting up.
+So `running` + `held` is healthy; for `running` + `expired`, inspect the build
+detail to distinguish actionable work that will return through the lease sweep
+from an ended PR awaiting repository-level completion. `no-lease` on a build
+updated seconds ago is almost certainly a runner still starting up.
 
 ## The installed skills
 

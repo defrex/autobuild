@@ -11,7 +11,7 @@
  * in one pass.
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -1386,6 +1386,135 @@ model = "gpt-slug-name"
 })
 
 describe('abDispatch watch build-runner coordination', () => {
+  test('retains the accepted config across deletion and reloads after restoration', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    const out: string[] = []
+    const restored = DISPATCH_CONFIG_TOML.replace('readyState = "Ready"', 'readyState = "Queued"')
+    let sleeps = 0
+    let claimsDuringAbsence: string[] = []
+    let reloadsDuringAbsence = -1
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await unlink(join(fx.origin, 'autobuild.toml'))
+            fx.tickets.add(readyTicket('T-retained-ready', { body: 'not a complete spec' }))
+          } else if (sleeps === 2) {
+            claimsDuringAbsence = [...fx.tickets.claims]
+            reloadsDuringAbsence = (await fx.store.getRepoEvents(fx.origin)).filter(
+              (event) => event.type === 'dispatcher.config-reloaded',
+            ).length
+          } else if (sleeps === 3) {
+            await writeFile(join(fx.origin, 'autobuild.toml'), restored)
+            fx.tickets.add(
+              readyTicket('T-restored-queued', {
+                body: 'not a complete spec',
+                state: 'Queued',
+              }),
+            )
+          } else {
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      const missingWarnings = fx.err.filter((line) =>
+        line.includes('is missing during live reload'),
+      )
+      expect(missingWarnings).toHaveLength(1)
+      expect(missingWarnings[0]).toContain('the last valid configuration snapshot remains active')
+      expect(missingWarnings[0]).toContain('restore a valid autobuild.toml to resume live reload')
+      expect(claimsDuringAbsence).toEqual(['T-retained-ready'])
+      expect(reloadsDuringAbsence).toBe(0)
+      expect(fx.tickets.claims).toEqual(['T-retained-ready', 'T-restored-queued'])
+      expect(out).toContain('autobuild.toml reloaded (revision 1)')
+
+      const reloads = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.config-reloaded',
+      )
+      expect(reloads).toHaveLength(1)
+      expect(reloads[0]?.payload).toMatchObject({
+        restartRequired: [],
+        effectiveChanged: true,
+      })
+      const artifact = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.artifact.kind,
+        reloads[0]!.payload.artifact.rev,
+      )
+      expect(new TextDecoder().decode(artifact?.content)).toBe(restored)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('rejects an invalid save, then adopts and durably records a mixed hot/restart save', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    const out: string[] = []
+    const valid = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2\nforge = "local-git"')
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await writeFile(
+              join(fx.origin, 'autobuild.toml'),
+              DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 0'),
+            )
+          } else if (sleeps === 2) {
+            await writeFile(join(fx.origin, 'autobuild.toml'), valid)
+          } else {
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      expect(fx.err.some((line) => line.includes('config reload rejected'))).toBe(true)
+      expect(fx.err.some((line) => line.includes('requires dispatch restart for: forge'))).toBe(
+        true,
+      )
+      expect(out).toContain('autobuild.toml reloaded (revision 1)')
+      const reloads = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.config-reloaded',
+      )
+      expect(reloads).toHaveLength(1)
+      expect(reloads[0]?.payload).toMatchObject({
+        restartRequired: ['forge'],
+        effectiveChanged: true,
+      })
+      const artifact = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.artifact.kind,
+        reloads[0]!.payload.artifact.rev,
+      )
+      expect(new TextDecoder().decode(artifact?.content)).toBe(valid)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('stale-lease polling cannot open competing sessions for one phase attempt', async () => {
     const handlers = happyHandlers()
     const happyCodeReview = handlers['code-review']!
@@ -1999,7 +2128,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }, 30_000)
   }
 
-  test('shows configured capacity and both pressure dimensions even for queued/non-row work and a paused gate', async () => {
+  test('shows configured capacity and unclaimed observations for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 1',
@@ -2050,7 +2179,9 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7 | drift 1/1')
+      expect(firstFrame).toContain('queue 0 | active 1/5 | observations 5')
+      expect(firstFrame).not.toMatch(/\bdrift\b/i)
+      expect(firstFrame).not.toContain('observations 5/')
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
       expect(firstFrame).toContain('QUEUED')
@@ -2092,7 +2223,9 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7 | drift 0/1')
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | observations 0')
+      expect(claimedFrame).not.toMatch(/\bdrift\b/i)
+      expect(claimedFrame).not.toContain('observations 0/')
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
     } finally {
@@ -2615,7 +2748,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch retains the last complete pressure measurement when a later tick cannot scan', async () => {
+  test('watch retains the last complete observation measurement when a later tick cannot scan', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
@@ -2667,7 +2800,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            await waitFor(() => latestDashboardFrame(term).includes('obs 2/7'))
+            await waitFor(() => latestDashboardFrame(term).includes('observations 2'))
             failReads = true
             return
           }
@@ -2678,8 +2811,10 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('obs 2/7 | drift 1/3')
-      expect(frame).not.toContain('obs 0/7 | drift 0/3')
+      expect(frame).toContain('observations 2')
+      expect(frame).not.toContain('observations 0')
+      expect(frame).not.toContain('observations 2/')
+      expect(frame).not.toMatch(/\bdrift\b/i)
       expect(frame).toContain('pressure scan unavailable')
       expect(fx.err).toEqual([])
     } finally {

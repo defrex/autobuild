@@ -1,6 +1,7 @@
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { defaultDistRoot } from './init'
+import { addUpgradeSelfUpdatePaths, UPGRADE_COMMIT_CONTEXT_ENV } from './upgrade-commit'
 import {
   inspectInstallation,
   readDistributionIdentity,
@@ -32,6 +33,10 @@ export interface SelfUpdateOptions {
   stdout: (line: string) => void
   stderr: (line: string) => void
   command?: SelfUpdateCommand
+  /** Baseline captured before this function may rewrite a local owner project. */
+  upgradeCommitContextPath?: string
+  /** Forward the operator's commit opt-out to the replacement binary. */
+  noCommit?: boolean
 }
 
 const processCommand: SelfUpdateCommand = async (command, options) => {
@@ -238,16 +243,42 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
     return { kind: 'failed' }
   }
 
+  let handoffCommitContextPath = options.upgradeCommitContextPath
+  let handoffNoCommit = options.noCommit === true
   if (install.scope === 'global') {
     options.stdout(`Installed Autobuild v${resolved} in Bun's global package-manager scope.`)
   } else {
     options.stdout(
       `Installed Autobuild v${resolved}; Bun updated ${install.ownerManifest} and ${install.ownerLock}.`,
     )
+    if (options.upgradeCommitContextPath !== undefined) {
+      try {
+        await addUpgradeSelfUpdatePaths(options.upgradeCommitContextPath, [
+          install.ownerManifest,
+          install.ownerLock,
+        ])
+      } catch (error) {
+        options.stderr(
+          `ab upgrade did not commit: could not preserve the pre-update Git baseline for handoff: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+        handoffCommitContextPath = undefined
+        handoffNoCommit = true
+      }
+    }
   }
 
-  const child = await invoke(['bun', updated.binaryPath, 'upgrade', options.targetRepo], {
-    env: { ...options.env, [SELF_UPDATE_HANDOFF_ENV]: '1' },
+  const childArgs = ['bun', updated.binaryPath, 'upgrade', options.targetRepo]
+  if (handoffNoCommit) childArgs.push('--no-commit')
+  const child = await invoke(childArgs, {
+    env: {
+      ...options.env,
+      [SELF_UPDATE_HANDOFF_ENV]: '1',
+      ...(handoffCommitContextPath === undefined
+        ? {}
+        : { [UPGRADE_COMMIT_CONTEXT_ENV]: handoffCommitContextPath }),
+    },
   })
   forward(child.stdout, options.stdout)
   forward(child.stderr, options.stderr)

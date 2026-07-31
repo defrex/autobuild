@@ -3,6 +3,18 @@
 ## Unreleased
 
 - [#191](https://github.com/defrex/autobuild/pull/191) — Honor stop controls before workspace setup
+- [#190](https://github.com/defrex/autobuild/pull/190) — Restore split indexes after failed upgrade commits
+- [#189](https://github.com/defrex/autobuild/pull/189) — Retain live config across source-file deletion
+- [#188](https://github.com/defrex/autobuild/pull/188) — Simplify dashboard observation reporting
+- [#187](https://github.com/defrex/autobuild/pull/187) — Suppress unsafe cross-version upgrade commits
+- [#186](https://github.com/defrex/autobuild/pull/186) — Preserve foreign discovery symlinks during skill retirement
+- [#185](https://github.com/defrex/autobuild/pull/185) — Restore index after failed upgrade commits
+- [#184](https://github.com/defrex/autobuild/pull/184) — Report accurate recovery for merged or closed PRs
+- [#183](https://github.com/defrex/autobuild/pull/183) — Point bounce guidance at the installed spec standard
+- [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
+- [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
+- [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
+- [#179](https://github.com/defrex/autobuild/pull/179) — Align dashboard Unicode geometry contracts
 - [#178](https://github.com/defrex/autobuild/pull/178) — Correct plugin resolution root guidance
 - [#177](https://github.com/defrex/autobuild/pull/177) — Add provider alternates for agent roles
 - [#176](https://github.com/defrex/autobuild/pull/176) — Guard runtime registry lookups against inherited properties

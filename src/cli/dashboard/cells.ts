@@ -55,23 +55,9 @@ export function padEndCells(value: string, width: number): string {
 }
 
 /**
- * Return the longest whole-cluster prefix that fits. A cluster wider than the
- * complete budget is omitted rather than fragmented or allowed to overflow.
+ * Split into cell-bounded rows without splitting a grapheme cluster. A cluster
+ * wider than the complete row budget is omitted, and later clusters resume.
  */
-export function fitCells(value: string, width: number): string {
-  if (width <= 0) return ''
-  let result = ''
-  let used = 0
-  for (const cluster of graphemes(value)) {
-    if (cluster.width > width) continue
-    if (used + cluster.width > width) break
-    result += cluster.text
-    used += cluster.width
-  }
-  return result
-}
-
-/** Split into cell-bounded rows without splitting a grapheme cluster. */
 export function splitCells(value: string, width: number): string[] {
   if (width <= 0) return []
   const rows: string[] = []

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   abInit,
   defaultDistRoot,
@@ -25,9 +25,11 @@ import {
 } from './init'
 import { parseConfig } from '../config/load'
 import { runCli } from './main'
+import { SELF_UPDATE_HANDOFF_ENV } from './self-update'
 import { abUpgrade } from './upgrade'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
+import { spawnExec } from '../ports/workspace/git-worktree'
 
 const BODY = [
   '# alpha',
@@ -831,8 +833,17 @@ describe('abUpgrade — fixed retired skills', () => {
     await writeDist(distV2, { alpha: BODY })
   }
 
-  test('removes exact pristine copies and discovery links once', async () => {
+  test('removes exact pristine copies and Autobuild-owned discovery links once', async () => {
     await installOldDistribution()
+    const ownedLinks = new Map<string, string>()
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      const discovery = join(target, '.claude', 'skills', name)
+      const linkText = await readlink(discovery)
+      expect(resolve(dirname(discovery), linkText)).toBe(
+        resolve(dirname(installedSkillPath(target, name))),
+      )
+      ownedLinks.set(name, linkText)
+    }
 
     const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
 
@@ -850,13 +861,57 @@ describe('abUpgrade — fixed retired skills', () => {
       },
     ])
     for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      expect(ownedLinks.get(name)).toBeDefined()
       expect(existsSync(installedSkillPath(target, name))).toBe(false)
       expect(existsSync(pristineSkillPath(target, name))).toBe(false)
-      expect(existsSync(join(target, '.claude', 'skills', name))).toBe(false)
+      await expect(lstat(join(target, '.claude', 'skills', name))).rejects.toMatchObject({
+        code: 'ENOENT',
+      })
     }
 
     const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
     expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+  })
+
+  test('surfaces and preserves a foreign Claude symlink while retiring an exact canonical tree', async () => {
+    await installOldDistribution()
+    const name = 'ab-setup'
+    const discovery = join(target, '.claude', 'skills', name)
+    const foreignTarget = join(target, 'user-skills', 'retired-setup')
+    const foreignLinkText = '../../user-skills/retired-setup'
+    const sentinel = Buffer.from('user-owned symlink target bytes\n')
+    await rm(discovery, { force: true })
+    await mkdir(foreignTarget, { recursive: true })
+    await writeFile(join(foreignTarget, 'sentinel.bin'), sentinel)
+    await symlink(foreignLinkText, discovery, 'dir')
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.exitCode).toBe(1)
+    expect(first.skills.find((entry) => entry.skill === name)).toEqual({
+      skill: name,
+      action: 'kept',
+      detail:
+        'retired canonical tree matched pristine and was removed; user-owned Claude discovery entry remains',
+    })
+    expect(first.discoveryConflicts).toHaveLength(1)
+    expect(first.discoveryConflicts[0]?.skill).toBe(name)
+    expect(first.discoveryConflicts[0]?.message).toContain('is a foreign symlink')
+    expect(existsSync(installedSkillPath(target, name))).toBe(false)
+    expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(true)
+    expect(await readlink(discovery)).toBe(foreignLinkText)
+    expect(await readFile(join(foreignTarget, 'sentinel.bin'))).toEqual(sentinel)
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second).toEqual({
+      skills: [{ skill: 'ab-alpha', action: 'current' }],
+      discoveryConflicts: [],
+      exitCode: 0,
+    })
+    expect((await lstat(discovery)).isSymbolicLink()).toBe(true)
+    expect(await readlink(discovery)).toBe(foreignLinkText)
+    expect(await readFile(join(foreignTarget, 'sentinel.bin'))).toEqual(sentinel)
   })
 
   test('surfaces and preserves a distinct Claude directory while retiring an exact canonical tree', async () => {
@@ -875,7 +930,7 @@ describe('abUpgrade — fixed retired skills', () => {
       skill: name,
       action: 'kept',
       detail:
-        'retired canonical tree matched pristine and was removed; distinct user-owned Claude discovery directory remains',
+        'retired canonical tree matched pristine and was removed; user-owned Claude discovery entry remains',
     })
     expect(first.discoveryConflicts).toHaveLength(1)
     expect(first.discoveryConflicts[0]?.skill).toBe(name)
@@ -1069,7 +1124,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     const err: string[] = []
     let factoryCalls = 0
 
-    const code = await runCli(['upgrade', repo], {
+    const code = await runCli(['upgrade', repo, '--no-commit'], {
       workspacePath: target,
       processEnv: { UPGRADE_TOKEN: 'secret' },
       upgradeResolverFactory: (opts) => {
@@ -1276,7 +1331,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     // reports unknown — enough to prove sessionless routing end to end.
     const out: string[] = []
     const err: string[] = []
-    const code = await runCli(['upgrade', target], {
+    const code = await runCli(['upgrade', target, '--no-commit'], {
       workspacePath: target,
       stdout: (line) => out.push(line),
       stderr: (line) => err.push(line),
@@ -1291,6 +1346,116 @@ describe('runCli routing — ab upgrade outside a session', () => {
     expect(out).toContain('ab-plan: installed')
     // The fixture's own skill is not in the real distribution → unknown.
     expect(out.some((line) => line.startsWith('ab-alpha: unknown'))).toBe(true)
+  })
+
+  test('commits a clean target by default and --no-commit leaves the same merge dirty', async () => {
+    const oldDist = join(root, 'commit-old')
+    const nextDist = join(root, 'commit-next')
+    await writeDist(oldDist, { alpha: BODY })
+    await writeDist(nextDist, {
+      alpha: BODY.replace('middle line two', 'middle line two upgraded'),
+    })
+
+    for (const noCommit of [false, true]) {
+      const repo = join(root, noCommit ? 'commit-off' : 'commit-on')
+      await mkdir(repo)
+      await abInit({ targetRepo: repo, distRoot: oldDist })
+      await spawnExec(['git', 'init', '-q'], { cwd: repo })
+      await spawnExec(['git', 'config', 'user.name', 'Upgrade Test'], { cwd: repo })
+      await spawnExec(['git', 'config', 'user.email', 'upgrade@example.test'], { cwd: repo })
+      await spawnExec(['git', 'add', '.'], { cwd: repo })
+      await spawnExec(['git', 'commit', '-qm', 'initial'], { cwd: repo })
+      const before = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+
+      const code = await runCli(
+        ['upgrade', repo, '--no-self-update', ...(noCommit ? ['--no-commit'] : [])],
+        {
+          workspacePath: repo,
+          distributionRoot: nextDist,
+          stdout: () => {},
+          stderr: () => {},
+        },
+      )
+
+      expect(code).toBe(0)
+      const after = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+      const status = (await spawnExec(['git', 'status', '--porcelain'], { cwd: repo })).stdout
+      if (noCommit) {
+        expect(after).toBe(before)
+        expect(status).toContain('.agents/skills/ab-alpha/SKILL.md')
+      } else {
+        expect(after).not.toBe(before)
+        expect(status).toBe('')
+        expect(
+          (await spawnExec(['git', 'log', '-1', '--format=%B'], { cwd: repo })).stdout,
+        ).toContain('- ab-alpha: adopted')
+      }
+    }
+  })
+
+  test('a replacement child without the pre-update handoff baseline leaves every upgrade change uncommitted', async () => {
+    const oldDist = join(root, 'handoff-old')
+    const nextDist = join(root, 'handoff-next')
+    const repo = join(root, 'handoff-repo')
+    await writeDist(oldDist, { alpha: BODY })
+    await writeDist(nextDist, {
+      alpha: BODY.replace('middle line two', 'middle line two upgraded'),
+    })
+    await mkdir(repo)
+    await abInit({ targetRepo: repo, distRoot: oldDist })
+    await writeFile(join(repo, 'package.json'), '{"dependencies":{"autobuild":"old"}}\n')
+    await writeFile(join(repo, 'bun.lock'), '{"lock":"old"}\n')
+    await writeFile(join(repo, 'staged.txt'), 'old staged\n')
+    await writeFile(join(repo, 'unstaged.txt'), 'old unstaged\n')
+    await spawnExec(['git', 'init', '-q'], { cwd: repo })
+    await spawnExec(['git', 'config', 'user.name', 'Upgrade Test'], { cwd: repo })
+    await spawnExec(['git', 'config', 'user.email', 'upgrade@example.test'], { cwd: repo })
+    await spawnExec(['git', 'add', '.'], { cwd: repo })
+    await spawnExec(['git', 'commit', '-qm', 'initial'], { cwd: repo })
+    const before = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+
+    // Simulate an older parent that updated its local Bun owner project, then
+    // launched the newer child with the handoff marker but no commit context.
+    await writeFile(join(repo, 'package.json'), '{"dependencies":{"autobuild":"new"}}\n')
+    await writeFile(join(repo, 'bun.lock'), '{"lock":"new"}\n')
+    await writeFile(join(repo, 'staged.txt'), 'operator staged\n')
+    await spawnExec(['git', 'add', 'staged.txt'], { cwd: repo })
+    await writeFile(join(repo, 'unstaged.txt'), 'operator unstaged\n')
+    await writeFile(join(repo, 'untracked.txt'), 'operator untracked\n')
+
+    const out: string[] = []
+    const err: string[] = []
+    const code = await runCli(['upgrade', repo], {
+      workspacePath: repo,
+      distributionRoot: nextDist,
+      processEnv: { [SELF_UPDATE_HANDOFF_ENV]: '1' },
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    })
+
+    expect(code).toBe(0)
+    expect((await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()).toBe(
+      before,
+    )
+    expect(out).toContain('ab-alpha: adopted')
+    expect(out).not.toContain('ab upgrade: committed upgrade-owned changes')
+    expect(err.join('\n')).toContain('automatic commit suppressed for cross-version compatibility')
+    expect(err.join('\n')).toContain('parent binary did not provide a pre-self-update Git baseline')
+    expect(err.join('\n')).toContain(
+      'all upgrade-owned changes remain uncommitted for the operator',
+    )
+    expect(await readFile(join(repo, 'package.json'), 'utf8')).toContain('"autobuild":"new"')
+    expect(await readFile(join(repo, 'bun.lock'), 'utf8')).toContain('"lock":"new"')
+    expect(await readFile(installedSkillPath(repo, 'ab-alpha'), 'utf8')).toContain(
+      'middle line two upgraded',
+    )
+    const status = (await spawnExec(['git', 'status', '--porcelain'], { cwd: repo })).stdout
+    expect(status).toContain(' M .agents/skills/ab-alpha/SKILL.md')
+    expect(status).toContain(' M package.json')
+    expect(status).toContain(' M bun.lock')
+    expect(status).toContain('M  staged.txt')
+    expect(status).toContain(' M unstaged.txt')
+    expect(status).toContain('?? untracked.txt')
   })
 
   test('ab upgrade rejects extra arguments with usage feedback', async () => {

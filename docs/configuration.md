@@ -2,9 +2,10 @@
 
 Autobuild reads one declarative `autobuild.toml` from the repository root.
 Commands in the file are shell strings; the file itself is never evaluated as
-code. A build uses the configuration from its own branch when its workspace is
-provisioned, so configuration changes move through review like any other
-change.
+code. A running dispatcher owns an accepted snapshot from the main checkout,
+while scoped phase commands read the build worktree's branch-owned file.
+Configuration changes therefore move through review like any other change and,
+once merged, can be adopted by the running dispatcher.
 
 This document covers the complete accepted TOML surface. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
@@ -41,6 +42,57 @@ so run it only when one intake/janitor tick is acceptable.
 TOML does not return to the root after entering a table. Put root scalars before
 the first table header; otherwise a value such as `capacity` becomes an unknown
 field in whichever table precedes it.
+
+## Reloading a running dispatcher
+
+A long-running `ab dispatch` watches the main checkout's `autobuild.toml` and
+checks it before every dispatch tick. A valid save is adopted within that tick.
+Each dispatch, build, check, or agent action captures the accepted configuration
+snapshot at its start boundary: work already running is not interrupted, while
+the next setup or pipeline step of the same in-flight build uses the new
+snapshot. Raising capacity can fill the new slots immediately; lowering it
+prevents new claims without terminating builds already above the limit. `ab
+dispatch --once` performs one pass and does not watch or reload.
+
+Every accepted revision is deposited verbatim as a `dispatcher-config`
+repository artifact and referenced by a `dispatcher.config-reloaded` repository
+event. The dashboard reports the reload and reprojects values such as capacity;
+plain watch mode writes the reload notice to stdout. A missing or unreadable
+file, invalid syntax or schema, or invalid runtime routing is a rejected
+candidate: it cannot replace or partially modify the last valid snapshot. The
+dispatcher keeps that snapshot active, reports an actionable notice in the
+dashboard notice row or on plain-mode stderr, and suppresses repeats while the
+same failure remains. Restoring `autobuild.toml` with valid configuration clears
+the rejection and ordinary live reload resumes without a dispatcher restart.
+
+These fields hot-reload:
+
+| Field or table | Boundary where a new value applies |
+|---|---|
+| `baseBranch` | Next dispatch or base fallback decision; existing `build.created` facts remain immutable. |
+| `capacity` | Next dispatcher tick. |
+| `[pr]` | Next build creation. |
+| `[commands]` | Next setup, verify check, or finalize check selected. |
+| `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
+| `[roles]` | Next agent session for that role. Runtime, model, and extensions are captured together. |
+| `[policy]` | Next policy or convergence gate evaluation. Prior evaluations are not revisited. |
+| `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
+| `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
+
+Adapter selectors and factory inputs are constructed once and require a
+restart. A valid save may still apply its hot fields, but these changed paths
+remain pinned to their startup values and are reported explicitly:
+
+| Restart-required field | Reason |
+|---|---|
+| `plugins` | Plugin modules and registration catalogs load before wiring. |
+| `forge` | Selects the constructed Forge adapter. |
+| `workspace.provider`, `workspace.config` | Select and configure the constructed workspace provider. |
+| `tickets.source`, `tickets.teamKey`, `tickets.claimedState`, `tickets.createState`, `tickets.dir` | Select or configure the constructed TicketSource. |
+
+The dispatch process reads the main checkout because it owns repository intake.
+Scoped phase commands still read the build worktree's `autobuild.toml`; this is
+the existing build-context boundary and is not unified by hot reload.
 
 ## Root scalars
 
@@ -636,10 +688,10 @@ uses the oldest unclaimed observation, counts only later same-repository
 builds. Whichever trigger fires, Harvest claims the complete current
 accumulation and records `count`, `drift`, or `both` on the durable start fact.
 The dashboard header reports
-`queue … | active … | obs <current>/<limit> | drift <current>/<limit>`; `/0`
-means drift triggering is disabled. The repository lease and fixed per-run
-recovery budget are implementation invariants, not additional configuration
-fields.
+`queue <depth> | active <current>/<limit> | observations <count>`. The
+observation figure is the current unclaimed occurrence count; trigger thresholds
+are not dashboard state. The repository lease and fixed per-run recovery budget
+are implementation invariants, not additional configuration fields.
 
 ## `[tickets]`
 
@@ -895,6 +947,33 @@ vendored skills from that distribution. For a local install, Bun may update the
 package-manager side effect is separate from target-repository configuration.
 Use `ab upgrade --no-self-update` for merge-only behavior.
 
+By default, upgrade makes one local commit on the target's current HEAD after a
+successful merge. It stages only paths it owns: each reported skill's canonical
+`.agents` tree, `.ab-pristine` record, and `.claude` discovery path, plus the
+target repository's `package.json` and `bun.lock` when this run's local Bun
+self-update wrote them. A global Bun update changes no target path, and a no-op
+skill merge creates no commit. Additions, modifications, links, and deletions
+are included. The message identifies `ab upgrade` and pairs every skill whose
+bytes changed with its reported outcome; unrelated staged, unstaged, and
+untracked work remains untouched.
+
+Use `ab upgrade --no-commit` to leave all output uncommitted for manual review.
+The flag is forwarded when self-update hands off to the replacement binary, and
+the default path likewise carries its pre-update Git baseline through that
+handoff. If a replacement child receives the handoff marker without that
+baseline — possible when an older parent launches a newer child — it suppresses
+the entire automatic commit, names the cross-version compatibility reason, and
+leaves all upgrade-owned changes uncommitted for the operator. Skill-upgrade
+results and the merge-derived exit status remain unchanged. Upgrade likewise
+suppresses the whole commit and names why when any skill or Claude discovery
+path conflicts, an owned path was already dirty, the target is not a Git
+repository, HEAD/worktree identity changes, or Git is mid-merge, mid-rebase, or
+mid-cherry-pick. If upgrade cannot snapshot the worktree's Git index, it warns
+and declines to stage. A failed staging or commit attempt restores that exact
+pre-attempt index and reports the original Git failure; merged worktree files
+remain in place and the merge's exit status is unchanged. Upgrade never pushes
+or rewrites history.
+
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
 are model-invocable. The setup reference is an ordinary support file in the
 editable/pristine `ab-guide` tree and participates in the same three-way
@@ -907,13 +986,14 @@ its owned discovery link, or the canonical live tree was already missing and
 upgrade cleared provenance plus any owned dangling link. `kept` normally means
 the tree was customized, still configured, or could not be proved safe to
 remove; upgrade preserves it and clears obsolete pristine ownership. It also
-means an otherwise removable canonical tree was deleted while a distinct
-user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
-remains discoverable. That directory enters the ordinary structured discovery
-conflict report, so upgrade exits nonzero. A same-named repository-authored
-skill with no pristine provenance is never removed, and a second upgrade
-neither recreates a dangling link nor resurrects or re-reports either
-retirement.
+means an otherwise removable canonical tree was deleted while a user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — was preserved byte-for-byte and remains discoverable. For a symlink,
+its link text and target are unchanged. That entry enters the ordinary
+structured discovery conflict report, so upgrade exits nonzero. A same-named
+repository-authored skill with no pristine provenance is never removed, and a
+second upgrade neither recreates a dangling link nor resurrects or re-reports
+either retirement.
 
 ## Durable settings outside TOML
 
@@ -1051,12 +1131,13 @@ action. Check the gates in this order:
 7. **Duplicate work:** a ready ticket already represented by an active build is
    deliberately excluded from the queue.
 
-If the expected work is observation harvesting instead of a ticket, also check
-the acknowledged harvest gate and both dashboard pressure counters. Harvest
-starts when `policy.harvestThreshold` unclaimed observations exist or when
-`policy.harvestMaxDrift` other builds have merged since the oldest one; a drift
-limit of zero disables the second condition. Harvest does not consume build
-capacity.
+If the expected work is observation harvesting instead of a ticket, check the
+acknowledged harvest gate, the dashboard's unclaimed `observations` count, and
+the configured triggers. Harvest starts when `policy.harvestThreshold`
+unclaimed observations exist or when `policy.harvestMaxDrift` other builds have
+merged since the oldest one; a drift limit of zero disables the second
+condition. Trigger progress is not shown in the dashboard. Harvest does not
+consume build capacity.
 
 ### Authentication failures
 

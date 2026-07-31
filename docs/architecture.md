@@ -78,7 +78,12 @@ consults a snapshot in place of the append-only log.
 `src/kernel/engine.ts` the deterministic transitions;
 `src/processes/build-runner.ts` executes the decisions. Agents reach state
 only through `src/cli/` terminals, which convert artifact deposits into
-event facts atomically — the engine never reads blobs.
+event facts atomically — the engine never reads blobs. Engine crash-gap and
+exhaustion guards query the event log for a later escalation raise with the
+exact same source/class and target phase; the triggering sequence remains the
+re-arm boundary. `BuildRunner` applies the same independent targeting at the
+setup seam, where only a setup-targeted policy raise can satisfy setup
+exhaustion.
 
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
@@ -149,6 +154,21 @@ launches per slug within one process; the BuildStore lease remains the
 cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
+
+**Live configuration.** `src/config/live.ts` owns the running dispatcher's
+immutable last-valid main-checkout snapshot, exhaustive hot/restart field
+classification, and eager role resolver. The watch loop refreshes it before
+each serialized tick and publishes the exact accepted TOML atomically with a
+`dispatcher.config-reloaded` repository fact before making the snapshot
+visible. Missing, unreadable, malformed, and routing-invalid candidates retain
+that snapshot with deduplicated operator notice; restoring a valid file resumes
+ordinary reload. Dispatcher ticks, build/harvest actions, and dashboard
+projections each capture one snapshot at their own boundary, so an in-progress
+turn or command is never interrupted. Scoped phase CLI processes retain their
+separate build-worktree config boundary. Startup-built plugin, forge, ticket,
+and workspace adapter fields stay pinned; changed values are durable restart
+notices rather than partial adapter swaps. `--once` retains static startup
+configuration.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
@@ -287,19 +307,20 @@ behavior.
 **Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
-raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
-frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
-decoding, while `live.ts` owns normal teardown and sequences its push and pop
-with the alternate-screen region because the terminal's keyboard flag stack is
-per-screen. Every mode enters and leaves through the declarations and active
-ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
+raw fallback. `render.ts` composes the list, build-detail, and transcript as
+cell-honest Unicode frames; `keyboard.ts` owns Kitty keyboard-protocol
+negotiation and CSI-u decoding, while `live.ts` owns normal teardown and
+sequences its push and pop with the alternate-screen region because the
+terminal's keyboard flag stack is per-screen. Every mode enters and leaves through
+the declarations and active ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
 process-boundary fallback over that same ledger for faults and terminating
 signals that bypass normal teardown. `poll.ts` is a display-only incremental
 cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —
-display-cell wrapping, caret placement, and code-point motions — as pure,
-ANSI-free arithmetic shared by `render.ts` and `dispatch.ts`.
+display-cell wrapping and caret layout, plus cursor motions expressed as UTF-16
+string offsets normalized to extended-grapheme boundaries — as pure, ANSI-free
+arithmetic shared by `render.ts` and `dispatch.ts`.
 Nested navigation, session selection, and pinned artifact retrieval are
 read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,

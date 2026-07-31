@@ -10,11 +10,6 @@ import {
 
 export { displayText } from './cells'
 
-/** Compatibility helper: one entry per displayed grapheme cluster. */
-export function displayCells(value: string): string[] {
-  return displayGraphemes(value.replaceAll('\n', '')).map((cluster) => cluster.text)
-}
-
 /** Wrap prose in terminal cells without splitting a grapheme cluster. */
 export function wrapDisplay(value: string, width: number, indent = ''): string[] {
   if (width <= 0) return []

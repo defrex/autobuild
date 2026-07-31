@@ -32,9 +32,9 @@
  *   (`unknown`); local skill additions are legitimate. The only exception is
  *   the fixed, pristine-provenance retirement of `ab-setup` and
  *   `ab-verify-e2e`: exact unreferenced or already-missing canonical trees are
- *   `removed`, while customized, configured, unsafe, or distinctly discoverable
- *   Claude trees are `kept`; every terminal classification relinquishes pristine
- *   ownership.
+ *   `removed`, while customized, configured, unsafe, or user-owned Claude
+ *   discovery entries are `kept`; every terminal classification relinquishes
+ *   pristine ownership.
  *
  * Like init, upgrade runs OUTSIDE build sessions — no AB_* environment.
  */
@@ -87,7 +87,7 @@ export type UpgradeSkillAction =
 export interface UpgradeReport {
   /** Per-skill content outcome, keyed by the namespaced install name. */
   skills: Array<{ skill: string; action: UpgradeSkillAction; detail?: string }>
-  /** Distinct Claude directories that prevented discovery-link maintenance. */
+  /** User-owned Claude entries that prevented discovery-link maintenance. */
   discoveryConflicts: SkillDiscoveryConflict[]
   /** Nonzero only for discovery conflicts; content conflicts remain exit zero. */
   exitCode: number
@@ -492,17 +492,30 @@ async function configuredAgentSkills(
   }
 }
 
-/** Remove only the per-skill link created by init; root aliases are untouched. */
-async function removeOwnedClaudeLink(targetRepo: string, installName: string): Promise<void> {
+type ClaudeLinkOwnership = 'owned' | 'foreign'
+
+/** Inspect a per-skill link without following or mutating the discovery entry. */
+async function claudeLinkOwnership(
+  targetRepo: string,
+  installName: string,
+): Promise<ClaudeLinkOwnership | undefined> {
   const link = claudeSkillPath(targetRepo, installName)
   try {
     const linkStat = await lstat(link)
-    if (!linkStat.isSymbolicLink()) return
+    if (!linkStat.isSymbolicLink()) return undefined
     const target = resolve(dirname(link), await readlink(link))
     const canonical = resolve(dirname(installedSkillPath(targetRepo, installName)))
-    if (target === canonical) await unlink(link)
+    return target === canonical ? 'owned' : 'foreign'
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+/** Remove only the per-skill link created by init; root aliases are untouched. */
+async function removeOwnedClaudeLink(targetRepo: string, installName: string): Promise<void> {
+  if ((await claudeLinkOwnership(targetRepo, installName)) === 'owned') {
+    await unlink(claudeSkillPath(targetRepo, installName))
   }
 }
 
@@ -757,13 +770,23 @@ export async function abUpgrade(opts: {
     }
     // No pristine provenance means this is repository-authored (or a prior
     // retirement already cleared ownership). Do not migrate a surviving
-    // user-owned Claude directory back into the canonical tree on a later run.
+    // user-owned Claude entry back into the canonical tree on a later run.
     if (!pristine.exists) continue
 
+    // Ownership is an input to retirement, never something retirement may
+    // establish. In particular, ordinary link maintenance replaces foreign
+    // symlinks, so inspect before either legacy migration or link repair.
+    const foreignClaudeLink = (await claudeLinkOwnership(targetRepo, name)) === 'foreign'
+    if (foreignClaudeLink) {
+      containDiscoveryConflict(
+        new ClaudeSkillDiscoveryConflict(targetRepo, name, 'foreign-symlink'),
+      )
+    }
+
     // Preserve legacy migration for complete canonical installations, but a
-    // missing canonical tree must be classified before discovery maintenance
-    // can create a dangling link or move a distinct Claude directory.
-    if (live.exists) {
+    // missing canonical tree or foreign discovery symlink must be classified
+    // before discovery maintenance can move or replace the user-owned entry.
+    if (live.exists && !foreignClaudeLink) {
       await migrateLegacySkill(targetRepo, name, stdout)
       try {
         ;[pristine, live] = await Promise.all([inspectTree(pristineRoot), inspectTree(liveRoot)])
@@ -786,21 +809,24 @@ export async function abUpgrade(opts: {
       await removeOwnedClaudeLink(targetRepo, name)
       await rm(pristineRoot, { recursive: true, force: true })
 
-      const action: UpgradeSkillAction = distinctClaudeDirectory ? 'kept' : 'removed'
-      const detail = distinctClaudeDirectory
-        ? 'retired canonical tree was already missing; distinct user-owned Claude discovery directory remains'
+      const userOwnedDiscoveryEntry = foreignClaudeLink || distinctClaudeDirectory
+      const action: UpgradeSkillAction = userOwnedDiscoveryEntry ? 'kept' : 'removed'
+      const detail = userOwnedDiscoveryEntry
+        ? 'retired canonical tree was already missing; user-owned Claude discovery entry remains'
         : 'retired distribution skill; installed tree was already missing'
       report(name, action, detail)
       stdout(`${name}: ${action} (${detail})`)
       continue
     }
 
-    let distinctClaudeDirectory = false
-    try {
-      await ensureClaudeSkillLink(targetRepo, name)
-    } catch (error) {
-      if (error instanceof ClaudeSkillDiscoveryConflict) distinctClaudeDirectory = true
-      containDiscoveryConflict(error)
+    let userOwnedDiscoveryEntry = foreignClaudeLink
+    if (!foreignClaudeLink) {
+      try {
+        await ensureClaudeSkillLink(targetRepo, name)
+      } catch (error) {
+        if (error instanceof ClaudeSkillDiscoveryConflict) userOwnedDiscoveryEntry = true
+        containDiscoveryConflict(error)
+      }
     }
 
     const mismatch = treeMismatch(live, pristine)
@@ -825,9 +851,9 @@ export async function abUpgrade(opts: {
     await removeOwnedClaudeLink(targetRepo, name)
     await rm(liveRoot, { recursive: true, force: true })
     await rm(pristineRoot, { recursive: true, force: true })
-    if (distinctClaudeDirectory) {
+    if (userOwnedDiscoveryEntry) {
       const detail =
-        'retired canonical tree matched pristine and was removed; distinct user-owned Claude discovery directory remains'
+        'retired canonical tree matched pristine and was removed; user-owned Claude discovery entry remains'
       report(name, 'kept', detail)
       stdout(`${name}: kept (${detail})`)
     } else {

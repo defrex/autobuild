@@ -877,6 +877,13 @@ and attempts the build from durable state. This unattended startup path is an
 explicit process-restart retry boundary; agent and stall escalations remain
 human judgment gates until an operator answers them.
 
+Crash-gap and exhaustion deduplication is exact to the escalation's source/class
+and target. A triggering event is considered acknowledged only by a later
+`escalation.raised` with that same `source` and `phase`; a raise for another
+class or target cannot suppress it. The triggering event's sequence is the
+boundary, so newer qualifying failure, verdict, or conflict evidence re-arms
+that exact condition after an answer.
+
 ## 12. The outer loop
 
 ```
@@ -1254,12 +1261,13 @@ failure appends only a new failure fact; success appends `runner.attached
 {resumedFromSeq}` and clears the current error projection. After
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
 `setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
-answer re-arms the setup budget. After claiming the lease, however, a runner
-honors an engine-selected pause or abort acknowledgement before setup-failure
-gating, even while that escalation is open. This control-only path executes no
-setup, appends no `runner.attached`, and starts no phase or session. Resume and
-all decisions that use the workspace still require successful setup. The setup
-target belongs only to escalation metadata and is not a pipeline `Phase`.
+answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
+policy raises, independently of phase-policy exhaustion. After claiming the lease,
+however, a runner honors an engine-selected pause or abort acknowledgement before
+setup-failure gating, even while that escalation is open. This control-only path
+executes no setup, appends no `runner.attached`, and starts no phase or session.
+Resume and all decisions that use the workspace still require successful setup.
+The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
@@ -1370,10 +1378,22 @@ Decisions here continue the series: **[D9]** declarative repo config and
 
 ### 16.1 `autobuild.toml` [D9]
 
-One declarative file at the repo root. It is read **from the build's
-branch** at workspace provision, so every build sees one consistent config —
-and because it is repo-versioned, changes to it flow through the pipeline
-itself: the system can retune its own configuration via a ticket and a PR.
+One declarative file at the repo root. A running dispatcher owns an accepted
+snapshot read from the **main checkout** and refreshes it before each dispatch
+tick. Dispatcher and build-runner orchestration capture that snapshot at each
+action boundary — dispatch, setup, and pipeline step — so a valid change may
+affect the next action of an in-flight build but never interrupts an agent turn
+or deterministic command already running. Scoped phase CLI processes separately
+read the build worktree's branch-owned file. Because the file is repo-versioned,
+changes still flow through the pipeline itself: once merged, the system can
+adopt a retuned configuration without restarting the dispatcher.
+
+A missing or unreadable file and a malformed or routing-invalid candidate are
+rejected atomically: the last valid snapshot, resolver, and revision remain in
+force, and no action starts under missing, partial, or defaulted configuration.
+The dispatcher emits an actionable operator notice without repeating it for the
+same failure. Restoring a valid `autobuild.toml` clears the rejection and
+ordinary boundary reload resumes.
 
 ```toml
 baseBranch = "main"
@@ -1556,6 +1576,36 @@ install failure is fatal and does not merge against the wrong defaults.
 `--no-self-update` always selects merge-only
 behavior. An exact version may be older than the installed version.
 
+Upgrade records its successful work in one local commit on the target's current
+HEAD by default. The exact ownership boundary is the reported skills' canonical
+`.agents` trees, pristine records, and `.claude` discovery paths, plus
+`package.json` and `bun.lock` only when this run's successful local Bun update
+wrote those files inside the target repository. A global update contributes no
+repository path. Additions, modifications, symlinks, and deletions all
+participate; a run with no owned Git change creates no commit. The message
+identifies `ab upgrade` and lists every skill with an owned byte change together
+with its reported outcome. It supplies no authorship or attribution trailers.
+Unrelated staged, unstaged, and untracked work is neither committed nor
+unstaged.
+
+The baseline is captured before self-update and carried to the replacement
+binary. `--no-commit` also survives that handoff and leaves the merge exactly as
+written. A replacement child marked as a handoff but missing that pre-update
+baseline — as when an older parent launches a newer child without the newer
+context — suppresses the entire automatic commit, names the cross-version
+compatibility reason, and leaves all upgrade-owned changes uncommitted for the
+operator. The skill-upgrade results and merge-derived exit status are unchanged.
+Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
+path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
+rebase, or cherry-pick likewise suppresses the whole commit and prints the
+reason. If upgrade cannot snapshot the worktree's Git index, it warns and
+declines to stage. A staging or commit failure restores that exact pre-attempt
+index without touching the merged worktree files, and warns with the original
+Git failure.
+Commit suppression or failure never changes the merge-derived exit status:
+content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
+never pushes or rewrites existing history.
+
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine
 base × local edits × new default). Two fixed former defaults, `ab-setup` and
@@ -1564,19 +1614,21 @@ from the incoming distribution. A pristine record is required to prove
 Autobuild provenance; without it, a same-named repository-authored skill is
 untouched and unreported. Upgrade reports `removed` when the complete live and
 pristine trees match byte-for-byte, no configured agent verify or finalize step
-names the skill, and no distinct user-owned Claude discovery directory remains;
-it also reports `removed` when the canonical live tree is already missing. In
-the latter state it clears obsolete provenance and removes only an
-Autobuild-owned dangling discovery link. Any customization, config reference,
-or inability to inspect config safely preserves the live tree and reports
-`kept`. When an otherwise removable canonical tree is shadowed by a distinct
-real `.claude/skills/<name>` directory, upgrade reports `kept`, removes only the
-canonical/pristine Autobuild-owned trees, preserves the Claude directory
-byte-for-byte, and includes it in the existing structured discovery-conflict
-report and nonzero exit behavior. Every terminal classification clears obsolete
-pristine ownership, so a second upgrade neither recreates a dangling link nor
-resurrects or re-reports the retirement. All other installed skills absent from
-the distribution retain the `unknown` local-addition classification.
+names the skill, and no user-owned Claude discovery entry remains; it also
+reports `removed` when the canonical live tree is already missing. In the latter
+state it clears obsolete provenance and removes only an Autobuild-owned dangling
+discovery link. Any customization, config reference, or inability to inspect
+config safely preserves the live tree and reports `kept`. When an otherwise
+removable canonical tree is shadowed by a user-owned
+`.claude/skills/<name>` discovery entry — either a distinct real directory or a
+foreign symlink — upgrade reports `kept`, removes only the canonical/pristine
+Autobuild-owned trees, preserves the entry byte-for-byte (including a symlink's
+link text and target), and includes it in the existing structured
+discovery-conflict report and nonzero exit behavior. Every terminal
+classification clears obsolete pristine ownership, so a second upgrade neither
+recreates a dangling link nor resurrects or re-reports the retirement. All
+other installed skills absent from the distribution retain the `unknown`
+local-addition classification.
 
 A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local

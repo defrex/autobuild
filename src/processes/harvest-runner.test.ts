@@ -204,6 +204,38 @@ async function seedOpenRun(opts: {
 }
 
 describe('HarvestRunner', () => {
+  test('samples the current harvest threshold instead of the constructor config', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-live-config-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedObservation(store, 'one', 'below the reloaded threshold')
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('a below-threshold run must not launch an agent')
+      },
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      getConfig: () => config(2),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect(result).toEqual({ outcome: 'idle' })
+    expect(scripted.sessions.size).toBe(0)
+    expect(
+      (await store.getRepoEvents('/repo')).some((event) => event.type === 'harvest.started'),
+    ).toBe(false)
+  })
+
   test('revise continues one producer session and starts a fresh reviewer each round', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-revise-'))
     roots.push(workspace)

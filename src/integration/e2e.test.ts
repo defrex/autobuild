@@ -1717,7 +1717,8 @@ test('d. nonconforming ticket bounces back to Triage citing the standard (§6.3)
   expect(h.tickets.comments).toHaveLength(1)
   const comment = h.tickets.comments[0]!
   expect(comment.id).toBe('T-9')
-  expect(comment.body).toContain('docs/spec-standard.md')
+  expect(comment.body).toContain('.agents/skills/ab-guide/references/spec-standard.md')
+  expect(comment.body).not.toContain('docs/spec-standard.md')
   expect(comment.body).toContain("an '## Acceptance criteria' heading")
   expect(comment.body).toContain("an '## Out of scope' heading")
   // The transition out of the claimed state restores provider claimability;

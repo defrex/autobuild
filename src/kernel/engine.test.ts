@@ -745,6 +745,32 @@ describe('decideNext: rule 5 — plan loop', () => {
     })
   })
 
+  test('an unrelated later policy raise does not suppress agent crash-gap repair', () => {
+    const verdict = planRound(1, 'escalate', [], 'spec assumes a missing endpoint')
+    expect(
+      decide([
+        ...prelude(),
+        ...verdict,
+        ev(
+          'escalation.raised',
+          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_setup',
+          answer: 'retry setup',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'agent',
+      phase: 'plan-review',
+      round: 1,
+      question: 'spec assumes a missing endpoint',
+    })
+  })
+
   test('escalate verdict without a reason gets the default question', () => {
     expect(decide([...prelude(), ...planRound(1, 'escalate')])).toEqual({
       kind: 'raise-escalation',
@@ -1064,6 +1090,40 @@ describe('decideNext: rule 5 — plan loop', () => {
     })
   })
 
+  test('a different source at the same target does not suppress a due stall escalation', () => {
+    const stalled = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_p1')]),
+      ...planRound(2, 'revise', [finding('f_p2', ['f_p1'])]),
+      ...planRound(3, 'revise', [finding('f_p3', ['f_p2'])]),
+    ]
+    expect(
+      decide([
+        ...stalled,
+        ev(
+          'escalation.raised',
+          {
+            id: 'e_policy',
+            phase: 'plan-review',
+            source: 'policy',
+            question: 'another policy condition',
+          },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_policy',
+          answer: 'continue',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toMatchObject({
+      kind: 'raise-escalation',
+      source: 'stall',
+      phase: 'plan-review',
+      round: 3,
+    })
+  })
+
   test('maxReviewRounds exhausted (fresh findings each round) → policy escalation', () => {
     const throughFive = [
       ...prelude(),
@@ -1075,13 +1135,30 @@ describe('decideNext: rule 5 — plan loop', () => {
     ]
     expect(decide(throughFive)).toEqual(runPhase('plan', 6, { findings: ['f_e'] }))
 
-    expect(decide([...throughFive, ...planRound(6, 'revise', [finding('f_f')])])).toEqual({
+    const exhausted = [...throughFive, ...planRound(6, 'revise', [finding('f_f')])]
+    const expected: Decision = {
       kind: 'raise-escalation',
       source: 'policy',
       phase: 'plan-review',
       round: 6,
       question: 'maxReviewRounds (6) exhausted without approval',
-    })
+    }
+    expect(decide(exhausted)).toEqual(expected)
+    expect(
+      decide([
+        ...exhausted,
+        ev(
+          'escalation.raised',
+          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_setup',
+          answer: 'environment repaired',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual(expected)
   })
 
   test('policy escalation dedupes after raising; answered guidance burns another round', () => {
@@ -1120,6 +1197,23 @@ describe('decideNext: rule 5 — plan loop', () => {
         guidance: { escalation: 'e_1', answer: 'One more round: drop scope X.' },
       }),
     )
+    expect(
+      decide([
+        ...writes,
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'One more round: drop scope X.',
+          resolution: 'guidance',
+        }),
+        ...planRound(7, 'revise', [finding('f_g')]),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'plan-review',
+      round: 7,
+      question: 'maxReviewRounds (6) exhausted without approval',
+    })
   })
 })
 
@@ -1678,6 +1772,29 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     ).toEqual(wait('blocked'))
   })
 
+  test('a later answered setup exhaustion does not mask verify crash-gap repair', () => {
+    expect(
+      decide([
+        ...exhausted,
+        ev(
+          'escalation.raised',
+          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_setup',
+          answer: 'environment repaired',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'verify:unit',
+      question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
+    })
+  })
+
   test('guidance after exhaustion outranks the verify report (feedback priority)', () => {
     expect(
       decide([
@@ -1698,6 +1815,34 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         guidance: { escalation: 'e_1', answer: 'Skip the flaky asserts.' },
       }),
     )
+  })
+
+  test('new failure evidence after an answered exhaustion re-arms that verify target', () => {
+    const guidance = { guidance: { escalation: 'e_1', answer: 'Fix and retry.' } }
+    expect(
+      decide([
+        ...exhausted,
+        ev(
+          'escalation.raised',
+          { id: 'e_1', phase: 'verify:unit', source: 'policy', question: 'stuck' },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_1',
+          answer: 'Fix and retry.',
+          resolution: 'guidance',
+        }),
+        ...implementRound(4, 'sha-r4', guidance),
+        ...codeReview(4, 'approve'),
+        ...verifyRun('types', 4, true),
+        ...verifyRun('unit', 4, false, { kind: 'verify-report:unit', rev: 3 }),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'verify:unit',
+      question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
+    })
   })
 
   test('newer cross-phase code guidance supersedes older guidance before delivery', () => {
@@ -2398,6 +2543,36 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         ),
       ]),
     ).toEqual(wait('blocked'))
+  })
+
+  test('a later answered setup exhaustion does not mask reconcile crash-gap repair', () => {
+    const thrash = [
+      ...throughFinalize,
+      ...reconcileCycle(1, 'sha-main-2'),
+      ...reconcileCycle(2, 'sha-main-3'),
+      ...reconcileCycle(3, 'sha-main-4'),
+      ev('pr.conflicted', { baseSha: 'sha-main-5' }),
+    ]
+    expect(
+      decide([
+        ...thrash,
+        ev(
+          'escalation.raised',
+          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_setup',
+          answer: 'environment repaired',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'reconcile',
+      question: 'maxReconcileAttempts (3) exhausted',
+    })
   })
 
   test('an answered escalation lets reconcile proceed past the cap', () => {
