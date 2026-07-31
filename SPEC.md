@@ -877,6 +877,13 @@ and attempts the build from durable state. This unattended startup path is an
 explicit process-restart retry boundary; agent and stall escalations remain
 human judgment gates until an operator answers them.
 
+Crash-gap and exhaustion deduplication is exact to the escalation's source/class
+and target. A triggering event is considered acknowledged only by a later
+`escalation.raised` with that same `source` and `phase`; a raise for another
+class or target cannot suppress it. The triggering event's sequence is the
+boundary, so newer qualifying failure, verdict, or conflict evidence re-arms
+that exact condition after an answer.
+
 ## 12. The outer loop
 
 ```
@@ -1254,8 +1261,9 @@ failure appends only a new failure fact; success appends `runner.attached
 {resumedFromSeq}` and clears the current error projection. After
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
 `setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
-answer re-arms the setup budget. This target belongs only to escalation
-metadata and is not a pipeline `Phase`.
+answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
+policy raises, independently of phase-policy exhaustion. This target belongs
+only to escalation metadata and is not a pipeline `Phase`.
 
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
