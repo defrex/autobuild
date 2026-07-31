@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#139](https://github.com/defrex/autobuild/pull/139) — Quiesce and restart a repository from a sessionless command
 - [#138](https://github.com/defrex/autobuild/pull/138) — Hold the harvest reviewer to the persistence rule
 - Add `[tickets].proposalState`, the state observation harvest files proposals into — the triage state by default, and the one supported way to waive the human grooming gate
 - [#137](https://github.com/defrex/autobuild/pull/137) — Calibrate review severity against the spec, not against certainty

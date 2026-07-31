@@ -8,12 +8,15 @@
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER } from '../events/envelope'
+import type { EventType } from '../events/payloads'
 import type { PrImageHostTarget } from '../ontology'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
+import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import type { CliEnv } from './env'
 import type { CliDeps } from './main'
@@ -96,6 +99,26 @@ export function makeDeps(opts: {
     out,
     err,
   }
+}
+
+/**
+ * Wrap a store so ONE build's compare-and-set append fails outright, to drive
+ * the bulk walk's partial-progress path. Prototype-proxy idiom, as
+ * `withRacingAppend` in bulk-control.test.ts; every other build and every other
+ * operation delegates untouched, so the walk's real bookkeeping is what the
+ * failure report is built from.
+ */
+export function withFailingAppend(store: MemoryBuildStore, slug: string, error: Error): BuildStore {
+  const proxy = Object.create(store) as MemoryBuildStore
+  proxy.appendIfCurrent = async <T extends EventType>(
+    target: string,
+    expectedSeq: number,
+    event: EventWrite<T>,
+  ): Promise<EventEnvelope<T> | null> => {
+    if (target === slug) throw error
+    return store.appendIfCurrent(target, expectedSeq, event)
+  }
+  return proxy
 }
 
 // ── Real-git fixtures (identity pinned per invocation, like git-worktree.test) ─
