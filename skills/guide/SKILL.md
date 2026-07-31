@@ -176,11 +176,13 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps (`[commands]`, `[roles]`, and the named
-`[verify.<step>]` / `[finalize.<step>]` table sets) admit user-chosen names,
-but every value in them remains strictly validated. The removed
-`[dashboardFrames]`, `[project]`, `[dispatcher]`, `[harvest]`, and `[outer]`
-tables have no aliases or migration
+verifier. The open maps are `[commands]`, `[roles]`, `[workspace.config]`,
+`[verify.<step>]`, and `[finalize.<step>]`. Autobuild strictly validates the
+repository-defined command, role, and step entries. `[workspace.config]` is
+instead plugin-owned and passed through unchanged to the selected provider;
+the builtin `git-worktree` provider requires it to be empty. Every other known
+table is closed to unknown keys. The removed `[dashboardFrames]`, `[project]`,
+`[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
 shims; they fail as ordinary unknown top-level keys.
 
 ### Root scalars
