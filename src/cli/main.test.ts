@@ -476,6 +476,110 @@ describe('runCli — builds / build status routing', () => {
     expect(d.out.join('\n')).toContain('no builds for')
   })
 
+  function injectedQueryDeps(queryStore: MemoryBuildStore) {
+    const d = sessionlessDeps()
+    const opened: Array<{ ref: string; token: string | undefined }> = []
+    let closeCount = 0
+    queryStore.close = async () => {
+      closeCount += 1
+    }
+    return {
+      deps: {
+        ...d,
+        processEnv: { AB_STORE: 'injected-query-store' },
+        openStore: (ref: string, token?: string): BuildStore => {
+          opened.push({ ref, token })
+          return queryStore
+        },
+      },
+      opened,
+      closeCount: () => closeCount,
+    }
+  }
+
+  test('all read-only query routes use and close the injected store', async () => {
+    const queryStore = new MemoryBuildStore()
+    await queryStore.createBuild({ slug: 'query-build', repo: tmp })
+    await queryStore.append('query-build', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner-1', host: 'host-1', resumedFromSeq: 0 },
+    })
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 9])
+    await queryStore.putArtifact('query-build', { kind: 'visual:query', content: bytes })
+    const tracked = injectedQueryDeps(queryStore)
+
+    expect(await runCli(['builds'], tracked.deps)).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out.join('\n')).toContain('query-build')
+    expect(tracked.closeCount()).toBe(1)
+
+    tracked.deps.out.length = 0
+    expect(await runCli(['build', 'status', 'query-build'], tracked.deps)).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out[0]).toBe('build query-build')
+    expect(tracked.closeCount()).toBe(2)
+
+    tracked.deps.out.length = 0
+    const output = join(tmp, 'query-output', 'visual.png')
+    expect(
+      await runCli(
+        ['artifact', 'download', 'query-build', 'visual:query@0', '--output', output],
+        tracked.deps,
+      ),
+    ).toBe(0)
+    expect(tracked.deps.err).toEqual([])
+    expect(tracked.deps.out).toEqual([`downloaded visual:query@0 to ${output}`])
+    expect(new Uint8Array(await Bun.file(output).bytes())).toEqual(bytes)
+    expect(tracked.closeCount()).toBe(3)
+    expect(tracked.opened).toEqual([
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+      { ref: join(tmp, 'injected-query-store'), token: undefined },
+    ])
+  })
+
+  test('status and artifact failures keep exact diagnostics and close injected stores', async () => {
+    const queryStore = new MemoryBuildStore()
+    await queryStore.createBuild({ slug: 'foreign-build', repo: '/other/repository' })
+    const tracked = injectedQueryDeps(queryStore)
+
+    const runFailure = async (argv: string[], diagnostic: string): Promise<void> => {
+      tracked.deps.out.length = 0
+      tracked.deps.err.length = 0
+      const closesBefore = tracked.closeCount()
+      expect(await runCli(argv, tracked.deps)).toBe(1)
+      expect(tracked.deps.out).toEqual([])
+      expect(tracked.deps.err).toEqual([diagnostic])
+      expect(tracked.closeCount()).toBe(closesBefore + 1)
+    }
+
+    await runFailure(
+      ['build', 'status', 'missing-status'],
+      'no build "missing-status" in this store — run \'ab builds --all\' to list ' +
+        "this repo's builds, or pass --store <ref> if it lives in another store",
+    )
+    await runFailure(
+      ['build', 'status', 'foreign-build'],
+      `build "foreign-build" belongs to repository "/other/repository", not "${tmp}"`,
+    )
+
+    const missingOutput = join(tmp, 'missing-artifact.bin')
+    await runFailure(
+      ['artifact', 'download', 'missing-artifact', 'plan', '--output', missingOutput],
+      'no build "missing-artifact" in this store — run \'ab builds --all\' or pass --store <ref>',
+    )
+    expect(existsSync(missingOutput)).toBe(false)
+
+    const foreignOutput = join(tmp, 'foreign-artifact.bin')
+    await runFailure(
+      ['artifact', 'download', 'foreign-build', 'plan', '--output', foreignOutput],
+      `build "foreign-build" belongs to repository "/other/repository", not "${tmp}"`,
+    )
+    expect(existsSync(foreignOutput)).toBe(false)
+    expect(tracked.opened).toHaveLength(4)
+  })
+
   test('an unknown slug exits 1 and names the slug and how to list builds', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['build', 'status', 'no-such-build'], d)).toBe(1)
