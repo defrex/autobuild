@@ -80,6 +80,29 @@ consults a snapshot in place of the append-only log.
 only through `src/cli/` terminals, which convert artifact deposits into
 event facts atomically — the engine never reads blobs.
 
+**Human guidance delivery.** The routing fact is an `escalation.answered`
+event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
+answer` and the dashboard's blocked-build resume control are two surfaces over
+the one `src/cli/build-control.ts` operation that appends it, so delivery is
+identical whichever a human used.
+`src/kernel/engine.ts` routes answers from `plan` and `plan-review` to the next
+`plan` round, and answers from `implement` and `code-review` to the next
+`implement` round. An agent verifier's own escalation is the deliberate
+exception to producer routing: its answer returns to that same step on
+`verify.started.feedback`, and `PHASE_SPECS.inputs.currentFeedback` makes `ab
+context` the delivery channel. When a failed verify report instead exhausts
+policy, guidance answering that policy escalation takes precedence over the
+pending report as the failure routes to the next `implement` round. `finalize`
+and `reconcile` have no producer round, so
+`PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
+for the latest answer addressed to that phase. On every receiving path,
+`src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
+answer text. A producer round's feedback is a discriminated union — findings, a
+failed verify report, or guidance — and a round may carry none, so a round with
+guidance writes no `.ab/findings.json`. The receiving skills document their
+corresponding input, and `src/cli/skill-guidance.test.ts` derives that
+requirement from the phase table.
+
 **Finalize publication.** Content-producing `finalize:*` checks or agents
 select and commit files locally and leave a clean worktree. `build-runner.ts`
 derives the last published head from event facts, rejects a non-descendant

@@ -176,11 +176,13 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps (`[commands]`, `[roles]`, and the named
-`[verify.<step>]` / `[finalize.<step>]` table sets) admit user-chosen names,
-but every value in them remains strictly validated. The removed
-`[dashboardFrames]`, `[project]`, `[dispatcher]`, `[harvest]`, and `[outer]`
-tables have no aliases or migration
+verifier. The open maps are `[commands]`, `[roles]`, `[workspace.config]`,
+`[verify.<step>]`, and `[finalize.<step>]`. Autobuild strictly validates the
+repository-defined command, role, and step entries. `[workspace.config]` is
+instead plugin-owned and passed through unchanged to the selected provider;
+the builtin `git-worktree` provider requires it to be empty. Every other known
+table is closed to unknown keys. The removed `[dashboardFrames]`, `[project]`,
+`[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
 shims; they fail as ordinary unknown top-level keys.
 
 ### Root scalars
@@ -1034,6 +1036,22 @@ answers only those still open at submission; Escape cancels without writing. If
 the build is also paused, both surfaces append all answers first and
 `build.resume-requested` last. A plain
 `ab resume` does not answer blockers; use `ab answer` for a blocked build.
+
+An answer is not only recorded — it is delivered to the agent that can act on
+it. An escalation from `plan` or `plan-review` feeds the next `plan` round.
+An escalation from `implement` or `code-review` feeds the next `implement`
+round. An agent verifier's own escalation feeds the next run of that same
+`verify:<step>`. When a failed verify report exhausts policy, guidance answering
+that policy escalation instead feeds the next `implement` round and takes
+precedence over the failed report. `finalize` and `reconcile` receive their own
+answers on their next attempt. In each of these routed cases, `ab context`
+writes the answer to `.ab/guidance.json` in the build's workspace, and the
+receiving skill treats it as authoritative feedback for that round or attempt.
+A producer round's feedback is exclusive: on a guidance round
+`.ab/guidance.json` replaces the reviewer's findings or a routed-back verify
+failure, so the answer has to carry what the agent needs. A bare retry writes no
+`.ab/guidance.json` and displaces nothing: the resumed round still gets whatever
+the loop was already routing, such as the last review round's findings.
 
 Every command requires the target to exist in this repository and be active
 (`running`, `paused`, or `blocked`), except abort also accepts `queued`;

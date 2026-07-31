@@ -386,6 +386,25 @@ describe('ab-guide — durable build-control coverage', () => {
       expect(guide).toContain(`\`${event}\``)
     }
   })
+
+  // The operator-side account of `ab answer` has to join up with the agent-side
+  // contract the receiving skills state, or the guide teaches a mechanism that
+  // appears to end at the event log.
+  test('says where an answer lands for the agent and which phase consumes it', () => {
+    const section = headingSection('### Durable build controls: CLI and dashboard')
+    expect(section).toBeDefined()
+    for (const claim of [
+      '`.ab/guidance.json`',
+      'feeds the next `plan` round',
+      'An escalation from `implement` or `code-review`',
+      "An agent verifier's own escalation feeds the next run of that same",
+      'policy escalation instead feeds the next `implement` round and takes',
+      "A producer round's feedback is exclusive",
+    ]) {
+      expect(section ?? '').toContain(claim)
+    }
+    expect(section ?? '').not.toContain('A direct verifier escalation is a known gap')
+  })
 })
 
 describe('ab-guide — source-agnostic ticket operations', () => {

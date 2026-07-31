@@ -14,9 +14,12 @@ example](#complete-example) is valid on its own.
 
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
-command references are errors. The only open maps are `[commands]`, `[roles]`,
-and the named `[verify.<step>]` and `[finalize.<step>]` tables. Their keys are
-repository-defined, but every value inside them is still validated.
+command references are errors. The open maps are `[commands]`, `[roles]`,
+`[workspace.config]`, `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
+validates the repository-defined command, role, and step entries.
+`[workspace.config]` is instead plugin-owned and passed through unchanged to
+the selected provider; the builtin `git-worktree` provider requires it to be
+empty. Every other known table is closed to unknown keys.
 
 There are three validation layers:
 
