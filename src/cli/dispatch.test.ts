@@ -33,7 +33,7 @@ import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
-import { systemClock, textContent, type Clock } from '../store/types'
+import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
@@ -1838,6 +1838,19 @@ function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
     [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Autobuild')) ?? '',
   )
+}
+
+/** The repository-setting facts a dashboard action durably wrote, in journal
+ * order — `[type, payload]` pairs, so both the values and their ORDER are
+ * assertable. Order matters: the pause fact is the quiescence boundary and must
+ * precede intake (src/cli/bulk-control.ts). */
+async function settingWrites(
+  store: BuildStore,
+  repo: string,
+): Promise<[string, { enabled: boolean }][]> {
+  return (await store.getRepoEvents(repo))
+    .filter((event) => event.type.startsWith('dispatcher.'))
+    .map((event) => [event.type, event.payload as { enabled: boolean }])
 }
 
 function latestPaintedFrame(term: { frames: string[] }): string {
@@ -3931,8 +3944,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.pause-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: pause requested for 2 builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+        ),
       )
+      // The wiring assertion: the fact the dashboard writes is the one the
+      // dispatcher reads, and it lands before intake.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
 
       // No live runner in this fixture, so the kernel's acknowledgement — the
       // thing that actually settles a pause — is written explicitly.
@@ -3947,8 +3968,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.resume-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('resume all: resume requested for 2 builds; intake ON'),
+        latestDashboardFrame(term).includes(
+          'resume all: resume requested for 2 builds; queued builds released; intake ON',
+        ),
       )
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+        ['dispatcher.pause-set', { enabled: false }],
+        ['dispatcher.intake-set', { enabled: true }],
+      ])
 
       await ack('alpha-work', 'build.resumed')
       await ack('beta-work', 'build.resumed')
@@ -4020,15 +4049,22 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('pause')
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: no pausable builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: no pausable builds; queued builds held; intake OFF',
+        ),
       )
       expect(latestDashboardFrame(term)).toContain('intake OFF')
-      const intakeWrites = (await fx.store.getRepoEvents(fx.origin)).filter(
-        (event) => event.type === 'dispatcher.intake-set',
+      // With nothing pausable, the repository facts are the whole action.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
+      const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
+        event.type.startsWith('dispatcher.'),
       )
-      expect(intakeWrites).toHaveLength(1)
-      expect(intakeWrites[0]?.payload).toEqual({ enabled: false })
-      expect(intakeWrites[0]?.actor).toEqual({ kind: 'human', user: 'quiet-op' })
+      expect(
+        settings.every((event) => event.actor.kind === 'human' && event.actor.user === 'quiet-op'),
+      ).toBe(true)
 
       input.press('interrupt')
       await run
