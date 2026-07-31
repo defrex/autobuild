@@ -10,6 +10,7 @@ import {
   type CsiReport,
 } from './keyboard'
 import type { TerminalInputEvent } from './terminal'
+import { createTerminalModeController } from './terminal-restore'
 
 const event = (type: string, text?: string): CsiReport => ({
   kind: 'input',
@@ -85,7 +86,11 @@ describe('decodeCsi', () => {
 describe('createKeyboardProtocol', () => {
   const setup = () => {
     const writes: string[] = []
-    return { writes, protocol: createKeyboardProtocol((chunk) => writes.push(chunk)) }
+    const write = (chunk: string): void => {
+      writes.push(chunk)
+    }
+    const modes = createTerminalModeController(write)
+    return { writes, modes, protocol: createKeyboardProtocol(write, modes) }
   }
   const verification = PUSH_KEYBOARD_FLAGS + QUERY_KEYBOARD_FLAGS + DEVICE_ATTRIBUTES_QUERY
 
@@ -160,16 +165,33 @@ describe('createKeyboardProtocol', () => {
   }
 
   test('teardown while verifying pops and latches late replies', () => {
-    const { writes, protocol } = setup()
+    const { writes, modes, protocol } = setup()
     protocol.query()
     protocol.reported(0)
     protocol.screenEntered()
+    expect(modes.activeModes.map((mode) => mode.name)).toEqual(['kitty-keyboard-flags'])
     protocol.screenLeaving()
     const count = writes.length
     protocol.reported(29)
     protocol.deviceAttributes()
     expect(writes).toHaveLength(count)
     expect(writes.at(-1)).toBe(POP_KEYBOARD_FLAGS)
+    expect(modes.activeModes).toEqual([])
+  })
+
+  test('an outstanding push participates in emergency restoration exactly once', () => {
+    const { writes, modes, protocol } = setup()
+    protocol.query()
+    protocol.reported(0)
+    protocol.screenEntered()
+
+    modes.restoreAll()
+    modes.restoreAll()
+    protocol.screenLeaving()
+
+    expect(writes.filter((chunk) => chunk === PUSH_KEYBOARD_FLAGS)).toHaveLength(1)
+    expect(writes.filter((chunk) => chunk === POP_KEYBOARD_FLAGS)).toHaveLength(1)
+    expect(modes.activeModes).toEqual([])
   })
 
   test('device attributes outside verification are inert', () => {

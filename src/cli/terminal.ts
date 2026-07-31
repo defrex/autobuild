@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs'
 import { emitKeypressEvents } from 'node:readline'
 import {
   decodeCsi,
@@ -8,6 +9,7 @@ import {
   MAX_CSI_PARAM_DIGITS,
   type CsiReport,
 } from './keyboard'
+import { createTerminalModeController, type TerminalModeController } from './terminal-restore'
 
 /**
  * The output seam for interactive rendering (SPEC §14).
@@ -55,6 +57,8 @@ export interface TerminalInput {
 export interface TerminalOut {
   /** Raw write — no newline appended (unlike the line-oriented stdout dep). */
   write(chunk: string): void
+  /** Shared ledger for ordinary teardown and synchronous process restoration. */
+  modes: TerminalModeController
   /** Terminal width in columns; a sane fallback when unknown. */
   columns: number
   /** Terminal height in rows; a sane fallback when unknown. The live region
@@ -94,11 +98,20 @@ function dimension(value: number | undefined, fallback: number): number {
  * `columns` and `rows` are getters, not snapshots: a resized window is picked
  * up on the next frame without anyone subscribing to SIGWINCH.
  */
-export function processTerminal(stream: NodeJS.WriteStream = process.stdout): TerminalOut {
+export function processTerminal(
+  stream: NodeJS.WriteStream = process.stdout,
+  emergencyWrite: (chunk: string) => void = (chunk) => {
+    const fd = (stream as unknown as { fd?: number }).fd
+    if (fd === undefined) throw new Error('terminal stream has no synchronous file descriptor')
+    writeSync(fd, chunk)
+  },
+): TerminalOut {
+  const write = (chunk: string): void => {
+    stream.write(chunk)
+  }
   return {
-    write: (chunk: string) => {
-      stream.write(chunk)
-    },
+    write,
+    modes: createTerminalModeController(write, emergencyWrite),
     get columns(): number {
       return dimension(stream.columns, FALLBACK_COLUMNS)
     },
