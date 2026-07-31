@@ -31,8 +31,13 @@ import { createRuntimeResolver } from '../ports/runner/routing'
 
 const ROOT = resolve(import.meta.dir, '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
+const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
 const README_PATH = join(ROOT, 'README.md')
-const [doc, readme] = await Promise.all([readFile(DOC_PATH, 'utf8'), readFile(README_PATH, 'utf8')])
+const [doc, guide, readme] = await Promise.all([
+  readFile(DOC_PATH, 'utf8'),
+  readFile(GUIDE_PATH, 'utf8'),
+  readFile(README_PATH, 'utf8'),
+])
 
 function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -70,6 +75,32 @@ function headingSection(markdown: string, level: number, heading: string): strin
     end += 1
   }
   return lines.slice(start + 1, end).join('\n')
+}
+
+function paragraphContaining(markdown: string, text: string): string | undefined {
+  return markdown.split(/\n\s*\n/).find((paragraph) => paragraph.includes(text))
+}
+
+function openMapEnumeration(summary: string): string[] {
+  const marker = 'The open maps are '
+  const start = summary.indexOf(marker)
+  if (start === -1) return []
+
+  let inCode = false
+  let end = summary.length
+  for (let index = start + marker.length; index < summary.length; index += 1) {
+    const character = summary[index]
+    if (character === '`') {
+      inCode = !inCode
+    } else if (character === '.' && !inCode) {
+      end = index
+      break
+    }
+  }
+
+  return [...summary.slice(start + marker.length, end).matchAll(/`(\[[^`\n]+\])`/g)].map(
+    (match) => match[1]!,
+  )
 }
 
 function unique(fields: readonly string[]): string[] {
@@ -160,6 +191,34 @@ const MINIMAL_TICKETS = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 function hasTicketsTable(source: string): boolean {
   return /(?:^|\n)\[tickets\](?:\n|$)/.test(source)
 }
+
+describe('configuration strictness summaries', () => {
+  test('enumerate the same complete open-map surface and its workspace exception', () => {
+    const expectedSurfaces = [
+      '[commands]',
+      '[roles]',
+      '[workspace.config]',
+      '[verify.<step>]',
+      '[finalize.<step>]',
+    ]
+    const summaries = [
+      ['docs/configuration.md', paragraphContaining(doc, 'The open maps are')],
+      ['skills/guide/SKILL.md', paragraphContaining(guide, 'The open maps are')],
+    ] as const
+
+    for (const [location, summary] of summaries) {
+      expect(summary, `${location} strictness summary is missing`).toBeDefined()
+      if (summary === undefined) continue
+      expect(openMapEnumeration(summary), `${location} open-map enumeration drifted`).toEqual(
+        expectedSurfaces,
+      )
+      expect(summary).toContain('plugin-owned')
+      expect(summary).toContain('passed through unchanged')
+      expect(summary).toMatch(/builtin `git-worktree` provider requires it to be\s+empty/)
+      expect(summary).toMatch(/other known\s+table(?: is|s are) closed to unknown keys/)
+    }
+  })
+})
 
 describe('docs/configuration.md — schema coverage', () => {
   test('the explicit scalar/table maps cover exactly the root schema', () => {
