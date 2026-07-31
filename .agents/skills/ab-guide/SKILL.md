@@ -1023,31 +1023,33 @@ break.
 `ab answer` answers every escalation that is open when the command runs,
 regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
 and delivered as authoritative guidance. With no text (or only whitespace), it
-requests a bare retry and supplies no agent guidance. The dashboard captures
-the blocker ids when its field opens, then answers only those still open at
-submission; Escape cancels without writing. If the build is also paused, both
-surfaces append all answers first and `build.resume-requested` last. A plain
+requests a bare retry and supplies no agent guidance. Verify has two explicit
+answer routes: guidance answering an agent verifier's own `ab escalate` returns
+to that same `verify:<step>` on `verify.started.feedback` and materializes as
+`.ab/guidance.json`; the cited start consumes it once. Guidance answering the
+policy escalation after exhausted failed verify reports instead goes to
+`implement` and outranks the pending report. A bare retry on either path carries
+no guidance. The dashboard captures the blocker ids when its field opens, then
+answers only those still open at submission; Escape cancels without writing. If
+the build is also paused, both surfaces append all answers first and
+`build.resume-requested` last. A plain
 `ab resume` does not answer blockers; use `ab answer` for a blocked build.
 
 An answer is not only recorded — it is delivered to the agent that can act on
 it. An escalation from `plan` or `plan-review` feeds the next `plan` round.
 An escalation from `implement` or `code-review` feeds the next `implement`
-round. When a failed verify report exhausts policy, guidance answering that
-policy escalation also feeds the next `implement` round and takes precedence
-over the failed report. `finalize` and `reconcile` receive their own answers on
-their next attempt. In each of these routed cases, `ab context` writes the
-answer to `.ab/guidance.json` in the build's workspace, and the receiving skill
-treats it as authoritative feedback for that round.
-A round's feedback is exclusive: on a guidance round `.ab/guidance.json`
-replaces the reviewer's findings or a routed-back verify failure, so the answer
-has to carry what the agent needs. A bare retry writes no `.ab/guidance.json` and
-displaces nothing: the resumed round still gets whatever the loop was already
-routing, such as the last review round's findings.
-
-A direct verifier escalation is a known gap: answering it resolves the blocker
-and reruns the verify step, but the answer is not materialized for that rerun.
-The answer still needs a phase that can act on it. That delivery remains
-tracked follow-up work.
+round. An agent verifier's own escalation feeds the next run of that same
+`verify:<step>`. When a failed verify report exhausts policy, guidance answering
+that policy escalation instead feeds the next `implement` round and takes
+precedence over the failed report. `finalize` and `reconcile` receive their own
+answers on their next attempt. In each of these routed cases, `ab context`
+writes the answer to `.ab/guidance.json` in the build's workspace, and the
+receiving skill treats it as authoritative feedback for that round or attempt.
+A producer round's feedback is exclusive: on a guidance round
+`.ab/guidance.json` replaces the reviewer's findings or a routed-back verify
+failure, so the answer has to carry what the agent needs. A bare retry writes no
+`.ab/guidance.json` and displaces nothing: the resumed round still gets whatever
+the loop was already routing, such as the last review round's findings.
 
 Every command requires the target to exist in this repository and be active
 (`running`, `paused`, or `blocked`), except abort also accepts `queued`;

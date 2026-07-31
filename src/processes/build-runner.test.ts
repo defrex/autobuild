@@ -2439,6 +2439,70 @@ paths = ["web/**"]
     expect(ofType(await h.store.getEvents(SLUG), 'session.started')).toEqual([])
   })
 
+  test('matching agent steps persist routed guidance through the wrapped action', async () => {
+    const h = await makeHarness({
+      configToml: `
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = ["e2e"]
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+paths = ["web/**"]
+`,
+      verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
+    })
+    await seedApproved(h.store)
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'e2e', attempt: 1 },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('e2e', 's_old'),
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_verify',
+        phase: 'verify:e2e',
+        source: 'agent',
+        question: 'Which account should the verifier use?',
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_verify',
+        answer: 'Use the seeded admin account.',
+        resolution: 'guidance',
+      },
+    })
+
+    const feedback = {
+      guidance: { escalation: 'esc_verify', answer: 'Use the seeded admin account.' },
+    }
+    expect(await h.br.step()).toEqual({
+      kind: 'evaluate-verify',
+      step: 'e2e',
+      attempt: 1,
+      paths: ['web/**'],
+      action: {
+        kind: 'run-agent-verify',
+        step: 'e2e',
+        skill: 'ab-verify-e2e',
+        attempt: 1,
+        feedback,
+      },
+    })
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.started').at(-1)?.payload).toEqual({
+      step: 'e2e',
+      attempt: 1,
+      feedback,
+    })
+  })
+
   test('matching agent steps retain normal session execution', async () => {
     const h = await makeHarness({
       configToml: `

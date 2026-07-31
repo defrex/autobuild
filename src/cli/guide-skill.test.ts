@@ -360,6 +360,20 @@ describe('ab-guide — durable build-control coverage', () => {
     ).toEqual([])
   })
 
+  test('states both verify escalation guidance routes and bare retry behavior', () => {
+    const compact = guide.replace(/\s+/g, ' ')
+    for (const contract of [
+      "guidance answering an agent verifier's own `ab escalate` returns to that same `verify:<step>`",
+      '`verify.started.feedback`',
+      'materializes as `.ab/guidance.json`',
+      'the cited start consumes it once',
+      'policy escalation after exhausted failed verify reports instead goes to `implement` and outranks the pending report',
+      'A bare retry on either path carries no guidance',
+    ]) {
+      expect(compact).toContain(contract)
+    }
+  })
+
   test('names the durable event behind every control', () => {
     for (const event of [
       'build.pause-requested',
@@ -374,8 +388,8 @@ describe('ab-guide — durable build-control coverage', () => {
   })
 
   // The operator-side account of `ab answer` has to join up with the agent-side
-  // contract the four receiving skills state, or the guide teaches a mechanism
-  // that appears to end at the event log.
+  // contract the receiving skills state, or the guide teaches a mechanism that
+  // appears to end at the event log.
   test('says where an answer lands for the agent and which phase consumes it', () => {
     const section = headingSection('### Durable build controls: CLI and dashboard')
     expect(section).toBeDefined()
@@ -383,14 +397,13 @@ describe('ab-guide — durable build-control coverage', () => {
       '`.ab/guidance.json`',
       'feeds the next `plan` round',
       'An escalation from `implement` or `code-review`',
-      'policy escalation also feeds the next `implement` round and takes precedence',
-      'A direct verifier escalation is a known gap',
-      'the answer is not materialized for that rerun',
-      "A round's feedback is exclusive",
+      "An agent verifier's own escalation feeds the next run of that same",
+      'policy escalation instead feeds the next `implement` round and takes',
+      "A producer round's feedback is exclusive",
     ]) {
       expect(section ?? '').toContain(claim)
     }
-    expect(section ?? '').not.toContain('any `verify:*` step')
+    expect(section ?? '').not.toContain('A direct verifier escalation is a known gap')
   })
 })
 

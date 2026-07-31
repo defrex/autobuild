@@ -30,7 +30,6 @@ import {
   type ArtifactRef,
   type CorePhase,
   type EscalationSource,
-  type EscalationTarget,
   type Feedback,
   type Finding,
   type Phase,
@@ -51,6 +50,7 @@ export type VerifyAction =
       step: string
       skill: string
       attempt: number
+      feedback?: Feedback
     }
 
 export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
@@ -206,11 +206,10 @@ interface LogIndex {
   conflictReconcileStarted?: { attempt: number }
   /** Every `*.started` carrying feedback.guidance — consumption markers: a
    * guidance answer is consumed once a started event after it cites it.
-   * `plan.started` and `implement.started` both carry feedback (§15.3,
-   * symmetric by design), so both loops' consumption is observed the same
-   * way: only a started event that actually CITES the answer consumes it —
-   * a start that failed to carry it leaves the answer deliverable (§15.6-B:
-   * a human answer is authoritative and must never be silently dropped). */
+   * Plan, implement, and agent-verify starts may carry feedback (§15.3). Only
+   * a started event that actually CITES the answer consumes it — a start that
+   * failed to carry it leaves the answer deliverable (§15.6-B: a human answer
+   * is authoritative and must never be silently dropped). */
   guidanceStarts: GuidanceStart[]
 }
 
@@ -287,16 +286,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   const raisedAfter = (seq: number, source?: EscalationSource): boolean =>
     allRaised.some((e) => e.seq > seq && (source === undefined || e.source === source))
 
-  // Unconsumed guidance for a loop (§15.6-B): guidance feeds the producer of
-  // the loop the escalation came from (plan loop → plan; code loop, including
-  // verify:* escalations → implement). Consumed once a *.started after the
-  // answer carries feedback.guidance.escalation === the id — both producers'
-  // started payloads carry feedback (§15.3, symmetric by design). Latest
-  // answer wins when several are unconsumed.
-  const guidanceFeedback = (loop: 'plan' | 'code'): Feedback | undefined => {
+  // Unconsumed guidance for an explicit destination (§15.6-B). Plan/code
+  // escalations feed their producer; an agent verifier's own escalation feeds
+  // that exact verifier occurrence; policy verify guidance keeps its existing
+  // implement destination. A cited *.started payload consumes the answer.
+  const guidanceFeedback = (destination: GuidanceDestination): Feedback | undefined => {
     let latest: AnsweredEscalation | undefined
     for (const e of state.answeredEscalations) {
-      if (e.resolution !== 'guidance' || loopOfPhase(e.phase) !== loop) continue
+      if (e.resolution !== 'guidance' || guidanceDestination(e) !== destination) continue
       const consumed = log.guidanceStarts.some(
         (g) => g.escalation === e.id && g.seq > e.answeredSeq,
       )
@@ -442,6 +439,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
       }
     }
 
+    const verifierFeedback = guidanceFeedback(verifyPhase(step))
     const action: VerifyAction =
       stepConfig.kind === 'check'
         ? {
@@ -457,6 +455,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
             step,
             skill: stepConfig.skill,
             attempt,
+            ...(verifierFeedback !== undefined ? { feedback: verifierFeedback } : {}),
           }
 
     // Omitted paths preserve the historical unconditional behavior. Explicit
@@ -648,18 +647,22 @@ function liveChains(
   return chains.filter((chain) => chain.ids.some((id) => current.has(id)))
 }
 
+type GuidanceDestination = 'plan' | 'code' | `verify:${string}` | 'other'
+
 /**
- * Which loop an escalation feeds guidance into (§15.6-B): producer-phase,
- * reviewer-phase, and stall/policy escalations all feed the loop's producer.
- * verify:* escalations belong to the code loop (§15.6-A routes verify
- * failures to implement). finalize/reconcile escalations have no producer
- * round to feed — their guidance travels via `ab context`, not engine
- * feedback (PHASE_SPECS.inputs.answeredGuidance materializes the latest
- * answer as .ab/guidance.json for those phases).
+ * Where an escalation answer is delivered (§15.6-B). Producer/reviewer and
+ * policy/stall routes retain their loop producer. The deliberate exception is
+ * an agent verifier's own `ab escalate`: its answer returns to the exact
+ * verifier that asked, while a policy escalation after verify failures still
+ * feeds implement. Finalize/reconcile guidance travels through `ab context`.
  */
-function loopOfPhase(phase: EscalationTarget): 'plan' | 'code' | 'other' {
+function guidanceDestination(
+  escalation: Pick<AnsweredEscalation, 'phase' | 'source'>,
+): GuidanceDestination {
+  const { phase, source } = escalation
   if (phase === 'plan' || phase === 'plan-review') return 'plan'
-  if (phase === 'implement' || phase === 'code-review' || isVerifyPhase(phase)) return 'code'
+  if (phase === 'implement' || phase === 'code-review') return 'code'
+  if (isVerifyPhase(phase)) return source === 'agent' ? phase : 'code'
   return 'other'
 }
 
@@ -796,10 +799,15 @@ function indexLog(events: AbEvent[]): LogIndex {
         noteVerdict(code, event.payload, event.seq, post)
         break
 
-      case 'verify.started':
+      case 'verify.started': {
+        const feedback = event.payload.feedback
+        if (feedback !== undefined && 'guidance' in feedback) {
+          guidanceStarts.push({ escalation: feedback.guidance.escalation, seq: event.seq })
+        }
         maxVerifyAttemptEver = Math.max(maxVerifyAttemptEver, event.payload.attempt)
         if (post) verifyStarted.push({ seq: event.seq, attempt: event.payload.attempt })
         break
+      }
       case 'verify.completed': {
         const result = normalizeVerifyCompletion(event.payload)
         maxVerifyAttemptEver = Math.max(maxVerifyAttemptEver, result.attempt)
