@@ -959,8 +959,10 @@ the default path likewise carries its pre-update Git baseline through that
 handoff. Upgrade suppresses the whole commit and names why when any skill or
 Claude discovery path conflicts, an owned path was already dirty, the target
 is not a Git repository, HEAD/worktree identity changes, or Git is mid-merge,
-mid-rebase, or mid-cherry-pick. A failed staging or commit attempt is warning
-only: merged files remain in place and the merge's exit status is unchanged.
+mid-rebase, or mid-cherry-pick. If upgrade cannot snapshot the worktree's Git
+index, it warns and declines to stage. A failed staging or commit attempt
+restores that exact pre-attempt index and reports the original Git failure;
+merged worktree files remain in place and the merge's exit status is unchanged.
 Upgrade never pushes or rewrites history.
 
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`

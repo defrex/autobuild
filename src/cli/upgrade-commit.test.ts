@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import type { UpgradeReport } from './upgrade'
 import {
   addUpgradeSelfUpdatePaths,
@@ -233,27 +233,59 @@ describe('upgrade commit coordinator', () => {
     await cleanupUpgradeCommitContext(operationContext)
   })
 
-  test('a commit failure warns and leaves the merge-derived result untouched', async () => {
-    const repo = await repository()
-    const context = await createUpgradeCommitContext(repo)
+  test('a rejecting commit hook restores the exact linked-worktree index and keeps output', async () => {
+    const primary = await repository()
+    const repo = join(root!, 'linked')
+    await git(primary, 'worktree', 'add', '-qb', 'upgrade-test', repo)
+    const operator = join(repo, 'operator.txt')
     const skill = join(repo, '.agents', 'skills', 'ab-plan', 'SKILL.md')
+    const support = join(repo, '.agents', 'skills', 'ab-plan', 'new-support.md')
     await mkdir(dirname(skill), { recursive: true })
-    await writeFile(skill, 'new\n')
-    const before = (await git(repo, 'rev-parse', 'HEAD')).trim()
-    const errors: string[] = []
-    const failingCommit: Exec = async (command, options) =>
-      command[0] === 'git' && command[1] === 'commit'
-        ? { stdout: '', stderr: 'hook rejected commit', exitCode: 1 }
-        : spawnExec(command, options)
+    await writeFile(operator, 'operator base\n')
+    await writeFile(skill, 'old skill\n')
+    await git(repo, 'add', '.')
+    await git(repo, 'commit', '-qm', 'fixture')
 
-    await finishUpgradeCommit(context, report([{ skill: 'ab-plan', action: 'installed' }]), {
-      exec: failingCommit,
+    await writeFile(operator, 'operator staged\n')
+    await git(repo, 'add', 'operator.txt')
+    await writeFile(operator, 'operator worktree\n')
+    const context = await createUpgradeCommitContext(repo)
+    await writeFile(skill, 'upgraded skill\n')
+    await writeFile(support, 'new upgrade support\n')
+
+    const gitDir = (await git(repo, 'rev-parse', '--absolute-git-dir')).trim()
+    const primaryGitDir = (await git(primary, 'rev-parse', '--absolute-git-dir')).trim()
+    const hook = join(primaryGitDir, 'hooks', 'pre-commit')
+    await writeFile(hook, '#!/bin/sh\necho "hook rejected commit" >&2\nexit 1\n', {
+      mode: 0o755,
+    })
+    const cachedBefore = await git(repo, 'diff', '--cached', '--binary')
+    const indexBefore = await readFile(join(gitDir, 'index'))
+    const primaryIndexBefore = await readFile(join(primaryGitDir, 'index'))
+    const headBefore = (await git(repo, 'rev-parse', 'HEAD')).trim()
+    const errors: string[] = []
+    const upgradeReport = report([{ skill: 'ab-plan', action: 'merged' }])
+
+    await finishUpgradeCommit(context, upgradeReport, {
       stderr: (line) => errors.push(line),
     })
 
-    expect((await git(repo, 'rev-parse', 'HEAD')).trim()).toBe(before)
+    expect(Buffer.compare(await readFile(join(gitDir, 'index')), indexBefore)).toBe(0)
+    expect(Buffer.compare(await readFile(join(primaryGitDir, 'index')), primaryIndexBefore)).toBe(0)
+    expect((await git(repo, 'rev-parse', 'HEAD')).trim()).toBe(headBefore)
+    expect(upgradeReport.exitCode).toBe(0)
+    expect(errors.join('\n')).toContain('ab upgrade could not commit its changes')
+    expect(errors.join('\n')).toContain('committing upgrade-owned paths failed (exit 1)')
     expect(errors.join('\n')).toContain('hook rejected commit')
-    expect(await git(repo, 'status', '--porcelain')).toContain('A  .agents/skills/ab-plan/SKILL.md')
+    expect(await git(repo, 'diff', '--cached', '--binary')).toBe(cachedBefore)
+    expect(await git(repo, 'status', '--porcelain')).toBe(
+      ' M .agents/skills/ab-plan/SKILL.md\n' +
+        'MM operator.txt\n' +
+        '?? .agents/skills/ab-plan/new-support.md\n',
+    )
+    expect(await readFile(operator, 'utf8')).toBe('operator worktree\n')
+    expect(await readFile(skill, 'utf8')).toBe('upgraded skill\n')
+    expect(await readFile(support, 'utf8')).toBe('new upgrade support\n')
     await cleanupUpgradeCommitContext(context)
   })
 })
