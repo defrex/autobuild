@@ -773,15 +773,20 @@ path, and no owned change means no commit. Additions, modifications, links, and
 deletions are included; unrelated staged, unstaged, and untracked work remains
 untouched. The message identifies `ab upgrade` and lists every byte-changing
 skill with its reported outcome. `--no-commit` disables this behavior and is
-preserved through self-update handoff.
+preserved through self-update handoff. If a replacement child receives the
+handoff marker without the pre-self-update baseline — possible when an older
+parent launches a newer child — it suppresses the entire automatic commit,
+names the cross-version compatibility reason, and leaves all upgrade-owned
+changes uncommitted for the operator. Skill-upgrade results and the report's
+existing exit code remain unchanged.
 
 Any content conflict, discovery conflict, pre-existing dirt in an owned path,
 non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
-cherry-pick suppresses the whole commit with a named warning. If upgrade cannot
-snapshot the worktree's Git index, it warns and declines to stage. A staging or
-commit failure restores that exact pre-attempt index and reports the original
-Git failure without touching merged worktree files. The report's existing exit
-code is unchanged; upgrade never pushes or rewrites history.
+cherry-pick likewise suppresses the whole commit with a named warning. If upgrade
+cannot snapshot the worktree's Git index, it warns and declines to stage. A
+staging or commit failure restores that exact pre-attempt index and reports the
+original Git failure without touching merged worktree files. The report's
+existing exit code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
