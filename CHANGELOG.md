@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
 - [#167](https://github.com/defrex/autobuild/pull/167) — Keep terminal dashboard status dominant
 - [#166](https://github.com/defrex/autobuild/pull/166) — Use dashboard content width for transcript scrolling
 - [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment
