@@ -503,6 +503,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       active: { current: 3, limit: 1 },
       observations: { current: 4, limit: 5 },
       drained: false,
+      repositoryPaused: false,
       defaultAutoMerge: false,
       harvestPaused: false,
     })
@@ -552,7 +553,68 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       ],
     )
     expect(settings.drained).toBe(true)
+    expect(settings.repositoryPaused).toBe(false)
     expect(settings.defaultAutoMerge).toBe(true)
+
+    const paused = buildDashboard(
+      [],
+      CONFIG,
+      { repo: '/repos/app', queued: 1, observationCount: 0 },
+      [
+        {
+          repo: '/repos/app',
+          seq: 1,
+          ts: '2026-07-20T00:00:00.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: true },
+        },
+        {
+          repo: '/repos/app',
+          seq: 2,
+          ts: '2026-07-20T00:00:01.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        },
+        {
+          repo: '/repos/app',
+          seq: 3,
+          ts: '2026-07-20T00:00:02.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.auto-merge-default-set',
+          payload: { enabled: true },
+        },
+      ],
+    )
+    expect(paused.repositoryPaused).toBe(true)
+    expect(paused.drained).toBe(false)
+    expect(paused.defaultAutoMerge).toBe(true)
+
+    const resumed = buildDashboard(
+      [],
+      CONFIG,
+      { repo: '/repos/app', queued: 1, observationCount: 0 },
+      [
+        {
+          repo: '/repos/app',
+          seq: 1,
+          ts: '2026-07-20T00:00:00.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: true },
+        },
+        {
+          repo: '/repos/app',
+          seq: 2,
+          ts: '2026-07-20T00:00:01.000Z',
+          actor: humanActor('operator'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: false },
+        },
+      ],
+    )
+    expect(resumed.repositoryPaused).toBe(false)
   })
 
   test('process-local warnings are optional header state, not a reserved blank row', () => {
@@ -804,6 +866,69 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
       expect(row?.abortProgress).toContain('abort requested')
       expect(row?.steps).toEqual([])
       expect(dashboardBuildControl(row!.status)).toBeUndefined()
+    }
+  })
+
+  test('terminal outcomes outrank later explicit and escalation-answer abort intent', () => {
+    const cases = [
+      { terminal: 'aborted' as const, source: 'explicit' as const },
+      { terminal: 'aborted' as const, source: 'answer' as const },
+      { terminal: 'done' as const, source: 'explicit' as const },
+      { terminal: 'done' as const, source: 'answer' as const },
+    ]
+
+    for (const { terminal, source } of cases) {
+      const escalation =
+        source === 'answer'
+          ? [
+              ev('plan.started', { round: 1 }),
+              ev('escalation.raised', {
+                id: `e_terminal_${terminal}`,
+                phase: 'plan' as const,
+                round: 1,
+                source: 'agent' as const,
+                question: 'Should this build stop?',
+              }),
+            ]
+          : []
+      const terminalEvent =
+        terminal === 'aborted'
+          ? ev('build.aborted', {})
+          : ev('build.completed', { outcome: 'merged' })
+      const lateAbort =
+        source === 'explicit'
+          ? ev('build.abort-requested', {})
+          : ev('escalation.answered', {
+              id: `e_terminal_${terminal}`,
+              answer: 'Abort this build.',
+              resolution: 'abort',
+            })
+      const log = toLog([...prelude(), ...escalation, terminalEvent, lateAbort])
+      const state = reduceBuild(log)
+
+      expect(state.status).toBe(terminal)
+      expect(state.pendingCommands.some((command) => command.command === 'abort')).toBe(true)
+      expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: terminal })
+
+      const row = projectBuild(RECORD, state, CONFIG, log)
+      const dashboard = buildDashboard([{ record: RECORD, state, events: log }], CONFIG, {
+        repo: '/repos/app',
+        queued: 0,
+        observationCount: 0,
+      })
+      expect(dashboard.active.current).toBe(0)
+
+      if (terminal === 'aborted') {
+        expect(row?.status).toBe('cleaning')
+        expect(row?.abortProgress).toBe(
+          'running work stopped; abort cleanup pending or in progress',
+        )
+        expect(row?.abortProgress).not.toContain('waiting')
+        expect(dashboardBuildControl(row!.status)).toBeUndefined()
+      } else {
+        expect(row).toBeNull()
+        expect(dashboard.builds).toEqual([])
+      }
     }
   })
 

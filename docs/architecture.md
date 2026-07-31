@@ -249,7 +249,10 @@ conflict.
 
 `src/cli/repo-state.ts` owns repository identity and store precedence
 (`--store` > `AB_STORE` > `.autobuild/`); `src/cli/store-opening.ts` is the
-production store composition boundary;
+production store composition boundary shared by finite sessionless queries.
+`src/cli/repository-status.ts` consumes that boundary and the kernel's
+`reduceDispatchSettings` projection to report journal-backed dispatcher
+controls without ensuring a repository stream or starting dispatcher work.
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
 classifies build/harvest session tuples and routes sessionless invocations, so
 phase-only commands report their complete runner context when run by hand.
@@ -298,12 +301,14 @@ never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
 **Init and upgrade.** `src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
-launches the installed non-phase `ab-setup` judgment surface directly in an
-interactive agent CLI, or prints the identical prompt; this bypasses all build
-and BuildStore session plumbing. Existing config is never reconciled, even with
-`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge
-and all writes: agent output is an untrusted proposal validated before anything
-touches disk, and every failure path leaves live and pristine byte-untouched.
+launches an interactive agent CLI, or prints the identical short prompt, telling
+the setup agent to read the installed
+`.agents/skills/ab-guide/references/setup.md`; this bypasses all build and
+BuildStore session plumbing. Existing config is never reconciled, even with
+`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge,
+the provenance-safe fixed retirement of obsolete defaults, and all writes:
+agent output is an untrusted proposal validated before anything touches disk,
+and every failure path leaves live and pristine byte-untouched.
 
 ## Development
 

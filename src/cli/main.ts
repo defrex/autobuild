@@ -43,6 +43,7 @@ import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
+import { abRepositoryStatus } from './repository-status'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
@@ -84,6 +85,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'dispatch',
   'builds',
   'build',
+  'repository',
   'pause',
   'resume',
   'auto-merge',
@@ -613,9 +615,32 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return 0
     }
 
-    // builds/build status run OUTSIDE build sessions (§16.3) like dispatch:
-    // they query a repo's builds, so they route before any store/env
-    // requirement and resolve their own store (--store > AB_STORE > default).
+    // Read-only status commands run OUTSIDE build sessions (§16.3) like
+    // dispatch: they resolve their own store (--store > AB_STORE > default).
+    case 'repository': {
+      const usage = 'usage: ab repository status [--json] [--store <ref>] (§8.2)'
+      const [sub, ...more] = rest
+      if (sub !== 'status') throw new Error(usage)
+      const parsed = parseArgs(more, { json: 'boolean', store: 'value' }, usage)
+      if (parsed.positionals.length > 0) throw new Error(usage)
+      if (deps.exec === undefined) {
+        throw new Error(
+          "'ab repository status' needs an exec seam — this is a wiring bug in the ab binary",
+        )
+      }
+      const storeRef = stringFlag(parsed, 'store')
+      await abRepositoryStatus({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        json: parsed.flags.has('json'),
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+      })
+      return 0
+    }
+
     case 'builds': {
       const usage = 'usage: ab builds [--queued] [--all] [--json] [--store <ref>] (§8.2)'
       const parsed = parseArgs(

@@ -322,9 +322,12 @@ always = true
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 paths = ["web/**", "src/routes/**"]
 ```
+
+Autobuild does not ship a generic agent verifier. `verify-app-e2e` above is a
+skill authored by the repository for its own running application.
 
 Cross-field validation rejects:
 
@@ -350,9 +353,9 @@ steps = ["e2e"]
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 
-[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+[roles.e2e]        # the STEP name — not "verify-app-e2e"
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
 ```
@@ -468,7 +471,7 @@ steps = ["e2e"]
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 
 [finalize]
 steps = ["release-notes"]
@@ -477,7 +480,7 @@ steps = ["release-notes"]
 kind = "agent"
 skill = "ab-release-notes"
 
-[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+[roles.e2e]              # verify STEP name — not "verify-app-e2e"
 runtime = "pi"
 
 [roles.release-notes]    # finalize step name
@@ -746,7 +749,7 @@ command = "test"
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 paths = ["web/**", "src/routes/**"]
 
 [finalize]
@@ -807,18 +810,21 @@ setup; the temporary `[roles.default].runtime` skeleton value does not constrain
 the role runtimes or models the setup agent ultimately configures. When a
 shipped runtime is usable, no Claude discovery conflict remains, and both stdin
 and stdout are attached to a TTY, init starts the selected coding-agent CLI in
-the target repository with the installed `ab-setup` prompt. The user can answer its repository- and
-team-specific questions directly. When launched, the child exit status is
-init's exit status, and the direct handoff creates no build or BuildStore data.
+the target repository with a short prompt pointing to the locally editable
+`.agents/skills/ab-guide/references/setup.md` guide reference. The user can
+answer its repository- and team-specific questions directly. When launched,
+the child exit status is init's exit status, and the direct handoff creates no
+build or BuildStore data.
 
 When no discovery conflict exists but no shipped runtime is usable or either
 terminal stream is non-interactive, init still completes deterministic
-installation and exits successfully. It prints the same setup prompt verbatim
+installation and exits successfully. It prints the same setup pointer prompt verbatim
 with instructions to run it in a coding agent; unusable runtime reports include
-their reasons. The setup agent derives
+their reasons. The setup agent reads the installed guide reference, derives
 commands and verification from the actual repository, chooses pipeline roles,
 configures ticket workflow and environment-only credentials, arranges suitable
-end-to-end verification, and leaves one groomed dispatchable ticket.
+end-to-end verification (authoring a repository-owned agent verifier when
+needed), and leaves one groomed dispatchable ticket.
 
 After installation, init reports `autobuild.toml: written|skipped`, counts all
 skill outcomes, names attention-worthy local edits, and prints runtime probe
@@ -849,6 +855,22 @@ vendored skills from that distribution. For a local install, Bun may update the
 package-manager side effect is separate from target-repository configuration.
 Use `ab upgrade --no-self-update` for merge-only behavior.
 
+Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
+are model-invocable. The setup reference is an ordinary support file in the
+editable/pristine `ab-guide` tree and participates in the same three-way
+upgrade merge as every other vendored file.
+
+Upgrade has two one-time retirement classifications for the former
+`ab-setup` and `ab-verify-e2e` defaults. `removed` means pristine provenance
+existed, the complete live tree still matched it, and no agent verify or
+finalize step referenced the skill, so upgrade removed the live/pristine trees
+and owned discovery link. `kept` means the tree was customized, still
+configured, or could not be proved safe to remove; upgrade preserves it and
+clears obsolete pristine ownership so later runs treat it as a quiet local
+skill. A same-named repository-authored skill with no pristine provenance is
+never removed, and a second upgrade neither resurrects nor re-reports either
+retirement.
+
 ## Durable settings outside TOML
 
 Four repository-wide operator choices intentionally live as facts in the
@@ -859,7 +881,7 @@ poll. Editing TOML cannot change them.
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
 | Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
-| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, no dispatcher tick attaches a runner to a queued build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
+| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` while retaining its literal `QUEUED` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
@@ -966,10 +988,11 @@ action. Check the gates in this order:
 1. **Durable intake:** the dashboard header must show intake on, or explicitly
    run a future dispatcher with `--intake`. Intake off skips the ready scan
    even when tickets exist.
-2. **Repository pause:** a pause all holds every queued build, so an existing
-   build sits at `QUEUED` and no ticket is claimed. It always turns intake off
-   too, so a failing step 1 is the practical signal; `r` on the dashboard's
-   global row or `ab resume --all` releases both.
+2. **Repository pause:** a pause all holds every queued build, so the dashboard
+   controls line shows `repository PAUSED` and an existing held build shows
+   `(held)` beside its literal `QUEUED` status. Intake off alone shows neither
+   pause indication. `r` on the dashboard's global row or `ab resume --all`
+   releases the hold and restores intake.
 3. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
    is case-sensitive; file tickets must physically be in the corresponding
    state directory.

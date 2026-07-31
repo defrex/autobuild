@@ -819,6 +819,149 @@ describe('abUpgrade — distribution vs local skill sets', () => {
   )
 })
 
+describe('abUpgrade — fixed retired skills', () => {
+  const retiredBodies = {
+    setup: '# setup\n\nold setup guidance\n',
+    'verify-e2e': '# verify e2e\n\nold sample verifier\n',
+  }
+
+  async function installOldDistribution(): Promise<void> {
+    await writeDist(distV1, { alpha: BODY, ...retiredBodies })
+    await install()
+    await writeDist(distV2, { alpha: BODY })
+  }
+
+  test('removes exact pristine copies and discovery links once', async () => {
+    await installOldDistribution()
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.skills).toEqual([
+      { skill: 'ab-alpha', action: 'current' },
+      {
+        skill: 'ab-setup',
+        action: 'removed',
+        detail: 'retired distribution skill; installed tree matched pristine',
+      },
+      {
+        skill: 'ab-verify-e2e',
+        action: 'removed',
+        detail: 'retired distribution skill; installed tree matched pristine',
+      },
+    ])
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      expect(existsSync(installedSkillPath(target, name))).toBe(false)
+      expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+      expect(existsSync(join(target, '.claude', 'skills', name))).toBe(false)
+    }
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+  })
+
+  test('keeps edited trees and local support files, then relinquishes pristine ownership', async () => {
+    await installOldDistribution()
+    await writeFile(
+      installedSkillPath(target, 'ab-setup'),
+      `${await readFile(installedSkillPath(target, 'ab-setup'), 'utf8')}local edit\n`,
+    )
+    const localFile = installedSkillFilePath(target, 'ab-verify-e2e', 'references/local.md')
+    await mkdir(dirname(localFile), { recursive: true })
+    await writeFile(localFile, 'repository-owned\n')
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(first.skills.find((entry) => entry.skill === 'ab-setup')).toEqual({
+      skill: 'ab-setup',
+      action: 'kept',
+      detail: 'locally customized: SKILL.md has local edits',
+    })
+    expect(first.skills.find((entry) => entry.skill === 'ab-verify-e2e')).toEqual({
+      skill: 'ab-verify-e2e',
+      action: 'kept',
+      detail: 'locally customized: references is a repository-local addition',
+    })
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      expect(existsSync(installedSkillPath(target, name))).toBe(true)
+      expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+      expect((await lstat(join(target, '.claude', 'skills', name))).isSymbolicLink()).toBe(true)
+    }
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+  })
+
+  test('keeps retired skills still referenced by verify or finalize configuration', async () => {
+    await installOldDistribution()
+    await writeFile(
+      join(target, 'autobuild.toml'),
+      [
+        'baseBranch = "main"',
+        '[commands]',
+        '[verify]',
+        'steps = ["legacy-setup"]',
+        '[verify.legacy-setup]',
+        'kind = "agent"',
+        'skill = "ab-setup"',
+        '[finalize]',
+        'steps = ["legacy-e2e"]',
+        '[finalize.legacy-e2e]',
+        'kind = "agent"',
+        'skill = "ab-verify-e2e"',
+        '[roles.default]',
+        'runtime = "claude"',
+        '[tickets]',
+        'source = "file"',
+        'readyState = "ready"',
+        '',
+      ].join('\n'),
+    )
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      expect(report.skills.find((entry) => entry.skill === name)).toEqual({
+        skill: name,
+        action: 'kept',
+        detail: 'still referenced by autobuild.toml as an agent step skill',
+      })
+      expect(existsSync(installedSkillPath(target, name))).toBe(true)
+      expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    }
+  })
+
+  test('keeps candidates when config cannot be inspected safely', async () => {
+    await installOldDistribution()
+    await writeFile(join(target, 'autobuild.toml'), '[verify\ninvalid')
+
+    const first = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    for (const name of ['ab-setup', 'ab-verify-e2e']) {
+      const entry = first.skills.find((candidate) => candidate.skill === name)
+      expect(entry?.action).toBe('kept')
+      expect(entry?.detail).toContain('could not safely inspect autobuild.toml references')
+      expect(existsSync(installedSkillPath(target, name))).toBe(true)
+      expect(existsSync(pristineSkillPath(target, name))).toBe(false)
+    }
+
+    const second = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+    expect(second.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+  })
+
+  test('never removes or reports a same-named repository-authored skill without pristine provenance', async () => {
+    await install()
+    const local = installedSkillPath(target, 'ab-setup')
+    await mkdir(dirname(local), { recursive: true })
+    await writeFile(local, '---\nname: ab-setup\n---\nrepository authored\n')
+    await writeDist(distV2, { alpha: BODY })
+
+    const report = await abUpgrade({ targetRepo: target, distRoot: distV2 })
+
+    expect(report.skills).toEqual([{ skill: 'ab-alpha', action: 'current' }])
+    expect(await readFile(local, 'utf8')).toContain('repository authored')
+  })
+})
+
 describe('runCli routing — ab upgrade outside a session', () => {
   test('returns nonzero after reporting every discovery conflict and processing later skills', async () => {
     await writeDist(distV2, {

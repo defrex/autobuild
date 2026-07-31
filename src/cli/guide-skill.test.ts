@@ -186,7 +186,10 @@ describe('ab-guide — init behavior', () => {
     expect(commands).toContain('deterministic init code never guesses')
     expect(setup).toContain('`claude`, `codex`, then `pi`')
     expect(setup).toContain('with empty\n  `[commands]`')
-    expect(setup).toContain('creates no\n  build, session, event, transcript, or BuildStore record')
+    expect(setup).toContain('[repository setup reference](references/setup.md)')
+    expect(setup).toContain('Vendors 11 skills before handoff')
+    expect(setup).toContain('(`ab-spec`, `ab-tickets`, `ab-guide`)')
+    expect(setup).toContain('creates no build, session, event,\n  transcript, or BuildStore record')
   })
 })
 
@@ -202,6 +205,14 @@ describe('ab-guide — dispatch dashboard summary', () => {
     )
     expect(compact).toContain(
       '`obs` is the current count of recorded observation occurrences not yet claimed by a Harvest snapshot against `[policy].harvestThreshold`',
+    )
+    expect(compact).toContain('conditional yellow `repository PAUSED` segment')
+    expect(compact).toContain('only queued rows gain a yellow `(held)` modifier beside `QUEUED`')
+    expect(compact).toContain(
+      'intake being off without that hold shows neither `repository PAUSED` nor `(held)`',
+    )
+    expect(compact).toContain(
+      'an already-paused repository shows `repository PAUSED` and `(held)` on its first paint',
     )
     expect(compact).not.toContain('basename, queue depth, and active-build count')
   })
@@ -309,7 +320,7 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
 
   test('every skill in the distribution has a row in the skills rundown', async () => {
     const skills = await readDistSkills(DIST_ROOT)
-    expect(skills.length).toBeGreaterThan(1)
+    expect(skills).toHaveLength(11)
     const missing = skills
       .map((skill) => skill.installName)
       // The closing backtick is what stops `ab-plan` from being satisfied by
@@ -335,6 +346,23 @@ describe('ab-guide — ticket grooming coverage', () => {
     expect(guide).toContain('the first id is the ticket being changed')
     expect(guide).toContain('`transition()` remains its sole owner')
     expect(guide).toContain("`--labels ''`)")
+  })
+})
+
+describe('ab-guide — repository settings status', () => {
+  test('documents the sessionless form, all settings, and empty-journal defaults', () => {
+    const compact = guide.replace(/\s+/g, ' ')
+    for (const contract of [
+      '`ab repository status [--json] [--store <ref>]`',
+      'ticket intake (`intake`, default `true`)',
+      'repository-wide pause (`paused`, default `false`)',
+      'claim-time auto-merge default (`defaultAutoMerge`, default `false`)',
+      'repository with no journal row',
+      'writes no state',
+      'starts no dispatcher work',
+    ]) {
+      expect(compact).toContain(contract)
+    }
   })
 })
 

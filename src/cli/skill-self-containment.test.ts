@@ -65,6 +65,17 @@ describe('shipped skill self-containment', () => {
     expect(violations, `source-checkout skill authorities:\n${violations.join('\n')}`).toEqual([])
   })
 
+  test('the setup authority is delivered inside the installed guide tree', async () => {
+    const skills = await readDistSkills(DIST_ROOT)
+    const guide = skills.find((skill) => skill.installName === 'ab-guide')
+    const setup = guide?.files.find((file) => file.path === 'references/setup.md')
+
+    expect(setup).toBeDefined()
+    expect(setup?.content).toContain('author a repository-owned\n   agent-verify skill')
+    expect(setup?.content).toContain('Run `ab context`')
+    expect(setup?.content).not.toContain('skills/verify-e2e')
+  })
+
   test('installed guide references are exact copies of their public documents', async () => {
     const skills = await readDistSkills(DIST_ROOT)
     const guide = skills.find((skill) => skill.installName === 'ab-guide')

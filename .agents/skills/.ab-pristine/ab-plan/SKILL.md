@@ -13,10 +13,13 @@ write product code in this phase.
 ## Session shape
 
 1. Run `ab context` first. It hydrates `.ab/` with everything you may see:
-   `.ab/context.json` (the manifest — your required deposits and allowed
-   terminal commands), `.ab/spec.md` (the contract you plan against),
-   `.ab/ticket.md`, and on round > 1 your prior plan revision plus
-   `.ab/findings.json` (the reviewer's feedback).
+   `.ab/context.json` (the manifest — your required deposits, allowed terminal
+   commands, and this round's `feedback` when the round has any), `.ab/spec.md`
+   (the contract you plan against), `.ab/ticket.md`, your prior plan revision
+   once you have one, and this round's feedback: `.ab/findings.json` (the
+   reviewer's findings) or `.ab/guidance.json` (a human operator's answer to
+   the escalation that blocked this build). A round never carries both, and a
+   round may carry neither.
 2. Read the spec, then the codebase. The spec says what and why; you decide
    how. Explore enough of the code to name real files and real seams. When an
    approach touches a third-party service, ground it in the provider's own
@@ -85,12 +88,28 @@ it instead of planning it:
 ab observe --kind followup "…"
 ```
 
-## Round 2+
+## Feedback rounds
 
-`.ab/findings.json` holds the reviewer's findings against your previous
-revision. Address every finding: change the plan, or state in the plan why
-the finding is wrong (the reviewer sees your revision next round). Deposit a
-fresh `ab artifact put plan` — revisions accumulate; never edit history.
+A round that carries feedback carries exactly one kind, and only that file
+exists. `.ab/findings.json` is the reviewer's findings against your previous
+revision: address every one — change the plan, or state in the plan why the
+finding is wrong (the reviewer sees your revision next round).
+`.ab/guidance.json` is a human operator's answer to the escalation that blocked
+this build. It may have been raised by you or the reviewer, or by the kernel's
+plan-loop stall or policy guards. The file carries the escalation id and the
+answer text.
+
+Guidance is authoritative feedback for the round: the revised plan must act on
+it. The spec stays the contract your plan is measured against, so when the
+answer and the spec cannot both be satisfied, escalate instead of choosing
+silently.
+
+Some rounds carry no feedback at all — the loop's first round, and the first
+round after the spec is revised. Then neither file is there and the manifest
+has no `feedback` field; plan from the spec.
+
+Deposit a fresh `ab artifact put plan` on any round — revisions accumulate;
+never edit history.
 
 ## If the spec is the problem
 

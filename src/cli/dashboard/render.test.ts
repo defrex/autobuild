@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
+  dashboardContentWidth,
   detailScrollLimit,
   formatDuration,
   moveDetailScroll,
@@ -90,6 +91,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     active: { current: builds.length, limit: 5 },
     observations: { current: 5, limit: 7 },
     drained: false,
+    repositoryPaused: false,
     defaultAutoMerge: false,
     harvestPaused: false,
     builds,
@@ -112,6 +114,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggles).toContain('intake ON')
     expect(toggles).toContain('auto merge OFF')
     expect(toggles).toContain('harvest ON')
+    expect(toggles).not.toContain('repository PAUSED')
     expect(summary.indexOf('Autobuild')).toBe(3)
     expect(toggles.search(/\S/)).toBe(summary.indexOf('Autobuild'))
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
@@ -259,6 +262,11 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(rd({ ...model([]), defaultAutoMerge: true }, WIDE)[1]).toContain('auto merge ON')
     expect(rd(model([]), WIDE)[1]).toContain('harvest ON')
     expect(rd({ ...model([]), harvestPaused: true }, WIDE)[1]).toContain('harvest OFF')
+    expect(rd({ ...model([]), drained: true }, WIDE)[1]).not.toContain('repository PAUSED')
+    expect(rd({ ...model([]), repositoryPaused: true }, WIDE)[1]).toContain('repository PAUSED')
+    expect(rd({ ...model([]), repositoryPaused: true, drained: false }, WIDE)[1]).toContain(
+      'intake ON',
+    )
     const defaults = rd(model([]), { color: true, width: 200 })[1]!
     expect(defaults).toContain('\x1b[32mintake ON\x1b[0m')
     expect(defaults).toContain('\x1b[33mauto merge OFF\x1b[0m')
@@ -268,6 +276,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       {
         ...model([]),
         drained: true,
+        repositoryPaused: true,
         defaultAutoMerge: true,
         harvestPaused: true,
       },
@@ -276,6 +285,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(toggled).toContain('\x1b[33mintake OFF\x1b[0m')
     expect(toggled).toContain('\x1b[32mauto merge ON\x1b[0m')
     expect(toggled).toContain('\x1b[33mharvest OFF\x1b[0m')
+    expect(toggled).toContain('\x1b[33mrepository PAUSED\x1b[0m')
   })
 
   test('the summary is the selected global row even with no harvest or builds', () => {
@@ -507,12 +517,34 @@ describe('renderDashboard: queued dispatch rows', () => {
     const lines = rd(frame, WIDE).map(stripAnsi)
     const text = lines.join('\n')
     expect(text).toContain('QUEUED')
+    expect(text).not.toContain('(held)')
     expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
     expect(text).toContain('d discard')
     expect(text).not.toContain('[ ] plan')
     expect(lines.at(-1)).toBe(
       ' Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit',
     )
+  })
+
+  test('a repository pause marks only queued rows held while preserving lifecycle status', () => {
+    const queued = build({
+      slug: 'held-queue',
+      status: 'queued',
+      steps: [],
+      dispatch: 'runner attachment pending',
+      pr: undefined,
+    })
+    const running = build({ slug: 'free-running', pr: undefined })
+    const lines = rd(
+      { ...model([queued, running]), repositoryPaused: true },
+      { color: true, width: 200 },
+    )
+    const queuedLine = lines.find((line) => stripAnsi(line).includes('held-queue'))!
+    const runningLine = lines.find((line) => stripAnsi(line).includes('free-running'))!
+    expect(stripAnsi(queuedLine)).toMatch(/\(held\)\s+QUEUED$/)
+    expect(queuedLine).toContain('\x1b[33m(held)\x1b[0m')
+    expect(stripAnsi(runningLine)).not.toContain('(held)')
+    expect(stripAnsi(runningLine)).toMatch(/RUNNING$/)
   })
 })
 
@@ -1406,6 +1438,32 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     }
   })
 
+  test('a held queued row and paused controls fit deliberately at 64 columns', () => {
+    const queued = build({
+      slug: 'queued-dashboard-evidence-with-a-long-name',
+      ticketId: 'CAP-QUEUED',
+      status: 'queued',
+      steps: [],
+      dispatch: 'runner attachment pending',
+      pr: undefined,
+    })
+    const lines = rd(
+      {
+        ...model([queued]),
+        drained: true,
+        repositoryPaused: true,
+        harvestPaused: true,
+      },
+      { color: true, width: 64 },
+    )
+    expectInsideGutters(lines, 64)
+    const controls = stripAnsi(lines.find((line) => stripAnsi(line).includes('intake OFF'))!)
+    expect(controls).toContain('repository PAUSED')
+    const queuedLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('CAP-QUEUED'))!)
+    expect(queuedLine).toContain('~')
+    expect(queuedLine).toMatch(/\(held\)\s+QUEUED$/)
+  })
+
   test('normal and narrow frames never paint either terminal edge or exceed their width', () => {
     const complex = {
       ...model([
@@ -2174,7 +2232,57 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(boundary).toContain('Producer boundary record')
   })
 
-  test('scroll limits track wrapped content and viewport size', () => {
+  test('terminal width and gutter width share one clamped geometry contract', () => {
+    expect(dashboardContentWidth(80)).toBe(78)
+    expect(dashboardContentWidth(3)).toBe(1)
+    expect(dashboardContentWidth(2)).toBe(0)
+    expect(dashboardContentWidth(1)).toBe(0)
+    expect(dashboardContentWidth(-1)).toBe(0)
+  })
+
+  test('maximum scroll reaches width-sensitive structured and raw transcript tails', () => {
+    const terminalWidth = 20
+    const height = 8
+    const cases = [
+      {
+        tail: 'S_TAIL',
+        presentation: {
+          kind: 'turns' as const,
+          turns: [
+            { prompt: 'alpha beta', text: 'alpha beta' },
+            { prompt: 'ok', text: 'S_TAIL' },
+          ],
+        },
+      },
+      {
+        tail: 'R_TAIL',
+        presentation: {
+          kind: 'raw' as const,
+          text: ['alpha betaa gamma', 'alpha betaa gamma', 'R_TAIL'].join('\n'),
+        },
+      },
+    ]
+
+    for (const { presentation, tail } of cases) {
+      const scroll = transcriptScrollLimit(presentation, terminalWidth, height)
+      const lines = rd(
+        {
+          ...model([detailedBuild]),
+          view: {
+            kind: 'transcript',
+            slug: detailedBuild.slug,
+            sessionId: 's_plan',
+            scroll,
+            transcript: presentation,
+          },
+        },
+        { color: false, width: terminalWidth, height },
+      )
+      expect(lines.join('\n')).toContain(tail)
+    }
+  })
+
+  test('scroll limits track wrapped content and clamp offsets after resize', () => {
     const presentation = {
       kind: 'raw' as const,
       text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
@@ -2183,7 +2291,12 @@ describe('renderDashboard: build detail and transcript views', () => {
     const narrow = transcriptScrollLimit(presentation, 12, 12)
     expect(roomy).toBeGreaterThan(0)
     expect(narrow).toBeGreaterThan(roomy)
-    expect(transcriptScrollLimit(presentation, 80, 40)).toBe(0)
+
+    const taller = transcriptScrollLimit(presentation, 12, 40)
+    expect(taller).toBeLessThan(narrow)
+    expect(moveTranscriptScroll(presentation, 80, 12, narrow, 0)).toBe(roomy)
+    expect(moveTranscriptScroll(presentation, 12, 40, narrow, 0)).toBe(taller)
+
     // An overshot legacy/resize value is clamped before movement, so Up moves
     // off the bottom immediately rather than silently unwinding hidden offset.
     expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)

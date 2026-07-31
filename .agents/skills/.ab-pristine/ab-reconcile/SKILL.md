@@ -15,10 +15,12 @@ provenance, so it is banned in this system.
 ## Session shape
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`,
-   `.ab/implement-notes.md`, and the conflict info (`baseSha` in
-   `.ab/context.json`). Kernel plumbing fetched the PR's configured base and
-   resolved this SHA immediately before your session, so the commit already
-   exists locally; it is not the older conflict-detection snapshot.
+   `.ab/implement-notes.md`, the conflict info (`baseSha` in
+   `.ab/context.json`), and — when a human answered an escalation a previous
+   attempt raised — `.ab/guidance.json`, their answer to it. Kernel plumbing
+   fetched the PR's configured base and resolved this SHA immediately before
+   your session, so the commit already exists locally; it is not the older
+   conflict-detection snapshot.
 2. `git merge <baseSha>` in the workspace and resolve every conflict with
    the explicit charge to **regress against neither side**:
    - The spec and plan tell you what this branch's changes are *for* — a
@@ -49,6 +51,13 @@ sides is impossible — escalates rather than guesses:
 ```
 ab escalate "main's abc123 changed the session-token format; this build's rate limiter keys on the old format. Adopt the new format (touches spec criterion 3) or key differently?" --refs src/auth.ts
 ```
+
+When an earlier attempt escalated and a human answered, `.ab/guidance.json`
+carries the escalation id and their answer. It is authoritative feedback for
+this attempt — resolve the way it says — while the spec remains the contract
+this phase is measured against; if the two cannot both be satisfied, escalate
+again rather than guess. Reconcile has no review round, so guidance is the only
+feedback it ever receives.
 
 A wrong guess here lands directly on main. Exactly one terminal command:
 `ab done` or `ab escalate`.

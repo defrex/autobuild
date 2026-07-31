@@ -224,6 +224,8 @@ export interface DashboardModel {
   observations: DashboardCounter
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
+  /** Durable repository-wide hold (`true` means queued builds cannot launch). */
+  repositoryPaused: boolean
   /** Durable repository claim-time default for newly claimed builds. */
   defaultAutoMerge: boolean
   /** Durable repository gate reduced from acknowledged journal facts. Pending
@@ -258,11 +260,13 @@ export interface DashboardModel {
  * exactly as today.
  */
 export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState['status'] {
-  // Abort intent outranks every lifecycle and visual override from the moment
-  // the request is durable. Acknowledgement clears the pending command and
-  // moves the reducer to `aborted`, which is the cleanup display stage.
-  if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
+  // Terminal outcomes outrank every pending command and visual override. An
+  // acknowledged abort remains in its cleanup display stage, while `done`
+  // stays filterable as terminal. Only nonterminal abort intent projects as
+  // `aborting`; blocked and pause/resume overrides follow it.
+  if (state.status === 'done') return 'done'
   if (state.status === 'aborted') return 'cleaning'
+  if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
   if (
     (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
@@ -1099,6 +1103,7 @@ export function buildDashboardFromProjected(
     active: { current: header.activeCount, limit: header.capacity },
     observations: { current: header.observationCount, limit: header.harvestThreshold },
     drained: !settings.intake,
+    repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),

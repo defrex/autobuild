@@ -297,10 +297,11 @@ human answer re-arms the budget, and a later successful `runner.attached` clears
 the current error. Values are never evaluated as config — they are handed to a
 shell as written.
 
-Fresh init config deliberately leaves this map empty. The non-phase `ab-setup`
-agent derives commands from the repository's actual toolchain and asks the user
-about choices source cannot answer; deterministic init code never guesses a
-language or package manager.
+Fresh init config deliberately leaves this map empty. The setup agent follows
+the installed [repository setup reference](references/setup.md), derives commands
+from the repository's actual toolchain, and asks the user about choices source
+cannot answer; deterministic init code never guesses a language or package
+manager.
 
 ### `[verify]`
 
@@ -313,7 +314,7 @@ subtables are part of this section — their fields are listed here.
 | `steps` | `[]` | array of nonempty strings | Ordered configured universe of verify phases. Each name must have a matching `[verify.<step>]` table. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
-| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. `"ab-verify-e2e"`). |
+| `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-app-e2e"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
 
@@ -340,9 +341,9 @@ steps = ["e2e"]
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 
-[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+[roles.e2e]        # the STEP name — not "verify-app-e2e"
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
 ```
@@ -428,7 +429,7 @@ steps = ["e2e"]
 
 [verify.e2e]
 kind = "agent"
-skill = "ab-verify-e2e"
+skill = "verify-app-e2e" # repository-authored skill
 
 [finalize]
 steps = ["release-notes"]
@@ -437,7 +438,7 @@ steps = ["release-notes"]
 kind = "agent"
 skill = "ab-release-notes"
 
-[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+[roles.e2e]              # verify STEP name — not "verify-app-e2e"
 runtime = "pi"
 
 [roles.release-notes]    # finalize step name
@@ -640,18 +641,21 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   `[commands]`, no verify or finalize steps, a valid local ticket gate, and one
   explicit runtime solely as a schema placeholder. It reads no package or
   language manifest and invents no command.
-- Vendors skills before handoff, then reads the locally editable `ab-setup`
-  skill. On an interactive terminal it starts the selected coding-agent CLI in
-  the target repository and propagates that process's exit status. The direct
-  child inherits terminal I/O but no ambient `AB_*` identity, and creates no
-  build, session, event, transcript, or BuildStore record.
+- Vendors 11 skills before handoff, including the locally editable
+  [repository setup reference](references/setup.md) in the installed `ab-guide`
+  tree. On an interactive terminal it starts the selected coding-agent CLI in
+  the target repository with a short prompt to read that reference and
+  propagates that process's exit status. The direct child inherits terminal I/O
+  but no ambient `AB_*` identity, and creates no build, session, event,
+  transcript, or BuildStore record.
 - Without an interactive terminal or usable shipped runtime, deterministic
   installation still succeeds. Init prints every probe reason and the exact
   setup prompt for the user to run in a coding agent.
 - The setup agent inspects the repository, configures real commands and verify
   steps, independently chooses pipeline role runtimes/models, configures the
   ticket source and environment-only credentials, arranges repository-specific
-  end-to-end verification, and files one groomed dispatchable ticket.
+  end-to-end verification (authoring a repository-owned agent verifier when
+  judgment is warranted), and files one groomed dispatchable ticket.
 - It never overwrites config once the file exists, even with `--force`; a rerun
   launches or prints a prompt that asks the agent to review and improve it.
 - Idempotently adds the exact `.autobuild/` rule to the target's `.gitignore`,
@@ -670,7 +674,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
-  set (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-setup`).
+  set (`ab-spec`, `ab-tickets`, `ab-guide`).
 
 The final report states `autobuild.toml: written|skipped`, aggregates all skill
 counts, names only attention-worthy `kept` and `overwritten` skills, and reports
@@ -720,7 +724,17 @@ Outcomes:
 | `resolved` | Merge conflicted; a local-biased agent proposal passed deterministic validation, so that live file was resolved and its pristine base advanced to incoming. |
 | `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Both sides of that file stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
+| `removed` | A fixed retired distribution skill had pristine provenance, was unreferenced by config, and its complete live tree still matched pristine, so live/pristine copies and the owned discovery link were removed. |
+| `kept` | A fixed retired skill was customized, still configured, or could not be proven safe to remove. Its live copy remains local and obsolete pristine ownership is cleared. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
+
+The `removed`/`kept` classifications apply only to the fixed retirements
+`ab-setup` and `ab-verify-e2e`. A pristine record proves Autobuild provenance;
+a same-named repository-authored skill without one is untouched. Upgrade keeps
+a retired skill named by an agent verify or finalize step, and parses config
+conservatively so an inspection failure also keeps it. A kept copy has its
+obsolete pristine record removed and becomes a quiet local skill, making the
+retirement report one-time and preventing later resurrection or re-reporting.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -851,11 +865,13 @@ nonterminal-build count against root `capacity`; and `obs` is the current count
 of recorded observation occurrences not yet claimed by a Harvest snapshot
 against `[policy].harvestThreshold`. An indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
-ON`/`harvest OFF`. The controls start in the title column. From the top
-of the frame through the body, the two-column marker lane stays empty except for
-the selected row's `> ` marker. All three controls are durable repository
-projections and converge across dispatchers on the existing poll; harvest
-specifically reflects its acknowledged gate, not pending intent. Routine tick
+ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
+the durable repository-wide hold is set. The controls start in the title
+column. From the top of the frame through the body, the two-column marker lane
+stays empty except for the selected row's `> ` marker. These controls and the
+pause segment are durable repository projections and converge across
+dispatchers on the existing poll; harvest specifically reflects its
+acknowledged gate, not pending intent. Routine tick
 counts, dependency diagnostics, parked-build notices, harvest outcomes, and
 action confirmations are suppressed in the interactive frame. The latest true
 warning or error instead appears on a conditional row below the header, aligned
@@ -868,6 +884,9 @@ distinct from a pass without color. Every nonterminal build has a row,
 including `queued` builds that have not attached a runner. A queued row shows
 its ticket, slug, literal `QUEUED` status, and either the pending dispatch
 boundary or the latest durable `dispatch.failed` stage, attempt, and error.
+While the repository hold is set, only queued rows gain a yellow `(held)`
+modifier beside `QUEUED`; intake being off without that hold shows neither
+`repository PAUSED` nor `(held)`.
 
 A build row previews each unresolved blocker and setup error as at most three
 rendered rows, preserving authored newlines and one blank row between
@@ -931,8 +950,10 @@ process gates all dispatchers for that repository.
 The repository hold has no launch flag and no setter of its own: `p` and `r` on
 the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
 they share are the only ways to set or clear it, and each of those moves intake
-with it. Each dispatcher tick reads the hold from the repository journal itself,
-so it survives a restart and is not defeated by re-running `ab dispatch`.
+with it. Each dispatcher frame reads the hold from the repository journal
+itself, so an already-paused repository shows `repository PAUSED` and `(held)`
+on its first paint; clearing the hold removes both on the next poll. The hold
+survives a restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
 claim-time default; omission reuses stored state, falling back to OFF only when
@@ -1130,10 +1151,21 @@ rows, `i` and `h` are also no-ops.
 
 ## Checking build status
 
-Two read-only commands answer "what is happening?" without inspecting SQLite,
-worktrees, or OS processes. Both run *outside* build sessions, need no `AB_*`
-environment, and never mutate a build — they append no events, take no leases,
-and are safe to run at any time.
+The read-only status commands answer "what is happening?" without inspecting
+SQLite, worktrees, or OS processes. They run *outside* build sessions, need no
+phase-session `AB_*` identity, append no events, take no leases, and are safe to
+run at any time.
+
+**`ab repository status [--json] [--store <ref>]`** reports the three durable
+dispatcher settings in one answer: ticket intake (`intake`, default `true`), the
+repository-wide pause (`paused`, default `false`), and the claim-time auto-merge
+default (`defaultAutoMerge`, default `false`). Those defaults also describe a
+repository with no journal row; the read does not create one. Human output is
+the default. `--json` emits one bare object with those exact fields plus the
+canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` >
+repository-local precedence. The command uses the same reducer as the
+dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
+and starts no dispatcher work.
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
@@ -1214,23 +1246,21 @@ default, when you need to know what this repo's version says).
 |---|---|---|
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
 | `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
-| `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. **Model-invocable.** |
-| `ab-setup` | Outside the pipeline | Repository-aware first configuration and rerun review, launched directly by `ab init` or copied as its fallback prompt. **Model-invocable.** |
+| `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
 | `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
 | `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
-| `ab-verify-e2e` | a `verify:<step>` phase | **Sample** agent-verify skill: drive the running app and check acceptance criteria. Runs only if a `[verify.<step>]` table names it. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
 
-Everything except `ab-spec`, `ab-tickets`, `ab-guide`, and `ab-setup` is
-**runner-invoked** by the kernel and carries `disable-model-invocation: true` —
-do not invoke a phase skill yourself, and do not remove that key to make one
-convenient to call. A model starting a pipeline phase by pattern-matching a
-description is exactly what the flag prevents. The four exceptions drive no
-phase, which is the criterion for membership (§16.3): `ab-spec` and
-`ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is read-only
-reference, and `ab-setup` configures a repository without a build session.
+Autobuild installs 11 skills. Everything except `ab-spec`, `ab-tickets`, and
+`ab-guide` is **runner-invoked** by the kernel and carries
+`disable-model-invocation: true` — do not invoke a phase skill yourself, and do
+not remove that key to make one convenient to call. A model starting a pipeline
+phase by pattern-matching a description is exactly what the flag prevents. The
+three exceptions drive no phase, which is the criterion for membership (§16.3):
+`ab-spec` and `ab-tickets` are human/agent-facing pre-build surfaces, and
+`ab-guide` is read-only reference including the setup handoff guidance.
