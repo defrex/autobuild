@@ -71,6 +71,7 @@ maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 7
+harvestMaxDrift = 9
 
 [tickets]
 source = "file"
@@ -143,6 +144,7 @@ describe('parseConfig — complete flattened surface', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 4,
         harvestThreshold: 7,
+        harvestMaxDrift: 9,
       },
       tickets: {
         source: 'file',
@@ -178,6 +180,7 @@ describe('parseConfig — defaults', () => {
         maxReconcileAttempts: 3,
         maxReviewRounds: 6,
         harvestThreshold: 5,
+        harvestMaxDrift: 3,
       },
       tickets: { source: 'file', readyState: 'ready' },
     })
@@ -333,6 +336,17 @@ harvestThreshold = 2
     expect(config.baseBranch).toBe('trunk')
     expect(config.capacity).toBe(4)
     expect(config.policy.harvestThreshold).toBe(2)
+    expect(config.policy.harvestMaxDrift).toBe(3)
+  })
+
+  test('harvest drift accepts zero as disabled and rejects invalid values', () => {
+    expect(parseConfig(`${READY}[policy]\nharvestMaxDrift = 0\n`).policy.harvestMaxDrift).toBe(0)
+    expect(parseConfig(`${READY}[policy]\nharvestMaxDrift = 8\n`).policy.harvestMaxDrift).toBe(8)
+    for (const value of ['-1', '1.5']) {
+      expect(() => parseConfig(`${READY}[policy]\nharvestMaxDrift = ${value}\n`)).toThrow(
+        /policy\.harvestMaxDrift/,
+      )
+    }
   })
 
   test('root and policy numeric values must be positive integers', () => {
@@ -371,6 +385,7 @@ skill = "ab-verify-e2e"
       maxReconcileAttempts: 3,
       maxReviewRounds: 6,
       harvestThreshold: 5,
+      harvestMaxDrift: 3,
     })
   })
 })
@@ -552,7 +567,10 @@ skill = "ab-verify-e2e"
         keys: ['bogus'],
         path: ['verify', 'unit'],
       }),
-      expect.objectContaining({ code: 'invalid_union', path: ['verify', 'e2e', 'kind'] }),
+      expect.objectContaining({
+        code: 'invalid_union',
+        path: ['verify', 'e2e', 'kind'],
+      }),
     ])
   })
 })
@@ -639,7 +657,10 @@ ${body}
 
 describe('parseConfig — [tickets]', () => {
   test('valid file and Linear sources parse', () => {
-    expect(parseConfig(READY).tickets).toEqual({ source: 'file', readyState: 'ready' })
+    expect(parseConfig(READY).tickets).toEqual({
+      source: 'file',
+      readyState: 'ready',
+    })
     expect(
       parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n').tickets,
     ).toEqual({

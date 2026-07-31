@@ -15,6 +15,7 @@ import {
   harvestDispositionSchema,
   harvestPendingProposalSchema,
   harvestStepSchema,
+  harvestTriggerSchema,
   occurrenceKeySchema,
 } from '../harvest/schema'
 import { actorSchema, type Actor, type ActorKind } from './envelope'
@@ -56,6 +57,8 @@ export const harvestEventPayloadSchemas = {
     run: z.string().min(1),
     observations: z.array(occurrenceKeySchema).min(1),
     scan: artifactRefSchema,
+    /** Optional only so historical repository journals replay without migration. */
+    trigger: harvestTriggerSchema.optional(),
   }),
   'harvest.step.started': z.strictObject({
     run: z.string().min(1),

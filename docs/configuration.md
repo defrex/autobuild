@@ -586,7 +586,8 @@ configuration inconsistency.
 
 ## `[policy]`
 
-Optional. Every field is a positive integer and receives its own default.
+Optional. Every field receives its own default. All are positive integers except
+`harvestMaxDrift`, which is nonnegative so zero can disable that trigger.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
@@ -596,11 +597,20 @@ Optional. Every field is a positive integer and receives its own default.
 | `maxReconcileAttempts` | `3` | positive integer | Bound conflict-reconciliation cycles. |
 | `maxReviewRounds` | `6` | positive integer | Bound each plan/review and implement/review convergence loop. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
+| `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
 
-Harvest is driven by observation back-pressure during dispatcher ticks, not a
-wall clock, and is independent of build `capacity`. Its repository lease and
-fixed per-run recovery budget are implementation invariants, not additional
-configuration fields.
+Harvest is driven by repository pressure during dispatcher ticks, not a wall
+clock, and is independent of build `capacity`. A run starts when observation
+count reaches `harvestThreshold` **or** drift reaches `harvestMaxDrift`. Drift
+uses the oldest unclaimed observation, counts only later same-repository
+`pr.merged` facts from other builds, and ignores aborted and closed-unmerged
+builds. Whichever trigger fires, Harvest claims the complete current
+accumulation and records `count`, `drift`, or `both` on the durable start fact.
+The dashboard header reports
+`queue … | active … | obs <current>/<limit> | drift <current>/<limit>`; `/0`
+means drift triggering is disabled. The repository lease and fixed per-run
+recovery budget are implementation invariants, not additional configuration
+fields.
 
 ## `[tickets]`
 
@@ -782,6 +792,7 @@ maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5
+harvestMaxDrift = 3
 
 [tickets]
 source = "file"
@@ -862,13 +873,17 @@ upgrade merge as every other vendored file.
 
 Upgrade has two one-time retirement classifications for the former
 `ab-setup` and `ab-verify-e2e` defaults. `removed` means pristine provenance
-existed, the complete live tree still matched it, and no agent verify or
-finalize step referenced the skill, so upgrade removed the live/pristine trees
-and owned discovery link. `kept` means the tree was customized, still
-configured, or could not be proved safe to remove; upgrade preserves it and
-clears obsolete pristine ownership so later runs treat it as a quiet local
-skill. A same-named repository-authored skill with no pristine provenance is
-never removed, and a second upgrade neither resurrects nor re-reports either
+existed and either the unreferenced live tree matched it and was removed with
+its owned discovery link, or the canonical live tree was already missing and
+upgrade cleared provenance plus any owned dangling link. `kept` normally means
+the tree was customized, still configured, or could not be proved safe to
+remove; upgrade preserves it and clears obsolete pristine ownership. It also
+means an otherwise removable canonical tree was deleted while a distinct
+user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
+remains discoverable. That directory enters the ordinary structured discovery
+conflict report, so upgrade exits nonzero. A same-named repository-authored
+skill with no pristine provenance is never removed, and a second upgrade
+neither recreates a dangling link nor resurrects or re-reports either
 retirement.
 
 ## Durable settings outside TOML
@@ -1008,8 +1023,11 @@ action. Check the gates in this order:
    deliberately excluded from the queue.
 
 If the expected work is observation harvesting instead of a ticket, also check
-the acknowledged harvest gate and whether at least `policy.harvestThreshold`
-new unclaimed observations exist. Harvest does not consume build capacity.
+the acknowledged harvest gate and both dashboard pressure counters. Harvest
+starts when `policy.harvestThreshold` unclaimed observations exist or when
+`policy.harvestMaxDrift` other builds have merged since the oldest one; a drift
+limit of zero disables the second condition. Harvest does not consume build
+capacity.
 
 ### Authentication failures
 

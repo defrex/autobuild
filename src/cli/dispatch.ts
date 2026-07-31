@@ -70,7 +70,7 @@ import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
-import { scanUnclaimedObservations } from '../processes/harvest'
+import { evaluateHarvestPressure, scanUnclaimedObservations } from '../processes/harvest'
 import {
   Dispatcher,
   emptyTickReport,
@@ -384,6 +384,8 @@ class DispatchLoop {
   /** Last successfully measured unclaimed observation count. Sampling failures
    * retain this factual value rather than inventing a zero. */
   private observationCount = 0
+  /** Last successfully measured repository drift; retained atomically with observationCount. */
+  private driftCount = 0
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -475,7 +477,9 @@ class DispatchLoop {
       if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
-          this.observationCount = scan.observations.length
+          const pressure = evaluateHarvestPressure(scan, this.config.policy)
+          this.observationCount = pressure.observationCount
+          this.driftCount = pressure.drift
         } catch (error) {
           this.warn(
             `dashboard observation pressure failed: ${
@@ -1710,7 +1714,9 @@ class DispatchLoop {
         ).length,
         capacity: this.config.capacity,
         observationCount: this.observationCount,
+        driftCount: this.driftCount,
         harvestThreshold: this.config.policy.harvestThreshold,
+        harvestMaxDrift: this.config.policy.harvestMaxDrift,
       },
       repositoryEvents,
     )

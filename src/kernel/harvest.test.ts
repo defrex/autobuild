@@ -43,6 +43,7 @@ describe('reduceHarvest', () => {
 
     let state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(openHarvestRun(state)?.run).toBe('h_1')
+    expect(state.latest?.trigger).toBeUndefined() // historical starts replay without provenance
     expect(state.latest).toMatchObject({
       status: 'running',
       failure: { attempt: 1, willRetry: true },

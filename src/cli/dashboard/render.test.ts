@@ -92,6 +92,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     queued: 2,
     active: { current: builds.length, limit: 5 },
     observations: { current: 5, limit: 7 },
+    drift: { current: 2, limit: 3 },
     drained: false,
     repositoryPaused: false,
     defaultAutoMerge: false,
@@ -110,7 +111,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
-    expect(summary).toContain('queue 2 | active 1/5 | obs 5/7')
+    expect(summary).toContain('queue 2 | active 1/5 | obs 5/7 | drift 2/3')
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
     expect(toggles).toContain('intake ON')
@@ -240,20 +241,22 @@ describe('renderDashboard: two-line header and conditional warning', () => {
         ...model([]),
         active: { current: 0, limit: 5 },
         observations: { current: 0, limit: 7 },
+        drift: { current: 0, limit: 0 },
       },
       WIDE,
     )
-    expect(empty).toContain('queue 2 | active 0/5 | obs 0/7')
+    expect(empty).toContain('queue 2 | active 0/5 | obs 0/7 | drift 0/0')
 
     const [saturated] = rd(
       {
         ...model([]),
         active: { current: 5, limit: 5 },
         observations: { current: 7, limit: 7 },
+        drift: { current: 3, limit: 3 },
       },
       WIDE,
     )
-    expect(saturated).toContain('queue 2 | active 5/5 | obs 7/7')
+    expect(saturated).toContain('queue 2 | active 5/5 | obs 7/7 | drift 3/3')
     expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
   })
 

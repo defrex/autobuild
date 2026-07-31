@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#175](https://github.com/defrex/autobuild/pull/175) — Make retired-skill reports match discovery state
+- [#174](https://github.com/defrex/autobuild/pull/174) — Trigger observation harvest on repository drift
 - [#173](https://github.com/defrex/autobuild/pull/173) — Render dashboard Unicode by terminal cells
 - [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
 - [#171](https://github.com/defrex/autobuild/pull/171) — Clamp dashboard detail scrolling to resume panels
