@@ -1031,9 +1031,10 @@ and delivered as authoritative guidance. With no text (or only whitespace), it
 requests a bare retry and supplies no agent guidance. Verify has two explicit
 answer routes: guidance answering an agent verifier's own `ab escalate` returns
 to that same `verify:<step>` on `verify.started.feedback` and materializes as
-`.ab/guidance.json`; the cited start consumes it once. Guidance answering the
-policy escalation after exhausted failed verify reports instead goes to
-`implement` and outranks the pending report. A bare retry on either path carries
+`.ab/guidance.json`; the cited start carries it durably across any pre-launch
+recovery, and the matching `session.started` consumes it once after launch.
+Guidance answering the policy escalation after exhausted failed verify reports
+instead goes to `implement` and outranks the pending report. A bare retry on either path carries
 no guidance. The dashboard captures the blocker ids when its field opens, then
 answers only those still open at submission; Escape cancels without writing. If
 the build is also paused, both surfaces append all answers first and

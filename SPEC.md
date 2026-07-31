@@ -831,10 +831,13 @@ like everything else. An answer carries either bare `retry` or free-text
 `guidance` that feeds the parked phase's next run; answering is an attempt,
 not a forced success — an unresolved condition may escalate again. For an
 agent verifier's own `ab escalate`, that next run is the same `verify:<step>`:
-`verify.started.feedback` cites the answer, `ab context` materializes it as
-`.ab/guidance.json`, and the citation consumes it once. A bare retry reruns the
-step without guidance. The intentionally different policy escalation after an
-exhausted failed verify report feeds `implement`, where its guidance outranks
+`verify.started.feedback` cites the answer and `ab context` materializes it as
+`.ab/guidance.json`. The citation remains the durable carrier across any crash
+before launch; only a later `session.started` with the same phase and attempt
+consumes it. Producer guidance uses the same phase-and-round launch boundary. A
+bare retry reruns the step without guidance. The intentionally different policy
+escalation after an exhausted failed verify report feeds `implement`, where its
+guidance outranks
 the pending report.
 
 Policy escalations caused by an exhausted bounded retry/round budget are the
@@ -1170,9 +1173,11 @@ exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
 policy escalation routes to `implement` and outranks the pending report. By
 contrast, when the agent verifier itself uses `ab escalate`, guidance answering
 it reruns that same step with `verify.started {feedback: {guidance}}`; `ab context`
-writes `.ab/guidance.json`. The start citation consumes the answer
-once, so a later failure routes its report to `implement` without stale
-guidance. A bare retry reruns the verifier with no feedback.
+writes `.ab/guidance.json`. The start citation remains pending through repeated
+pre-launch recovery. A later `session.started` for that same verifier and
+attempt consumes the answer once, so a later failure routes its report to
+`implement` without stale guidance. Producer starts use the same exact-phase,
+round-matched rule. A bare retry reruns the verifier with no feedback.
 
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
@@ -1185,11 +1190,13 @@ into the next producer round as authoritative feedback; `dismiss-finding`
 marks the chain human-resolved and the next reviewer round is told so. Engine-routed
 guidance is latest-only per destination (`plan`, `code`, or one exact agent
 verifier): a newer answer durably supersedes every older answer for that
-destination before delivery. Once a producer or verifier start cites the
-winner, no shadowed answer can surface on a later round; an answer appended
-after that citation is a new eligible winner. Destinations remain independent,
-and the kernel derives both the winner and its delivery from the event history
-so replay and restart preserve the result.
+destination before delivery. A guidance-bearing producer or verifier start is
+the durable carrier, and only its later matching `session.started` launch
+consumes the winner; until then the winner remains eligible across recovery.
+After that delivery, no shadowed answer can surface on a later round, while an
+answer appended after delivery is a new eligible winner. Destinations remain
+independent, and the kernel derives both the winner and its delivery from the
+event history so replay and restart preserve the result.
 
 **C — setup failure:** the first attach retains the normal `runner.attached`
 fact, then a failed setup appends `runner.setup-failed

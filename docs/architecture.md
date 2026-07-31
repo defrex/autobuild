@@ -94,16 +94,22 @@ context` the delivery channel. When a failed verify report instead exhausts
 policy, guidance answering that policy escalation takes precedence over the
 pending report as the failure routes to the next `implement` round. For these
 engine-routed destinations, `engine.ts` chooses the newest answered guidance
-for the requested destination before checking whether a later start cited it.
-That ordering makes supersession durable: citing the winner cannot reveal an
-older same-destination answer, while plan, code, and exact-verifier destinations
-remain independent and a new answer after delivery remains eligible. The
-projection uses only event history, so restart and decision replay agree.
+for the requested destination before checking whether its durable carrier
+reached a matching session launch. That ordering makes supersession durable:
+delivering the winner cannot reveal an older same-destination answer, while
+plan, code, and exact-verifier destinations remain independent and a new answer
+after delivery remains eligible. The projection uses only event history, so
+restart and decision replay agree.
 `finalize` and `reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
 `src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
-answer text. A producer round's feedback is a discriminated union — findings, a
+answer text. For producer and verifier feedback routes, `src/kernel/engine.ts`
+indexes each guidance-bearing phase start as a durable carrier and pairs only
+the latest carrier for an exact phase plus round/attempt with a subsequent
+matching `session.started`. An unpaired carrier remains deliverable across
+recovery; the matching launch consumes it once without process-local state. A
+producer round's feedback is a discriminated union — findings, a
 failed verify report, or guidance — and a round may carry none, so a round with
 guidance writes no `.ab/findings.json`. The receiving skills document their
 corresponding input, and `src/cli/skill-guidance.test.ts` derives that
@@ -132,9 +138,10 @@ queryable skipped outcome; Git failure is infrastructure and fails closed,
 never a synthetic skip. Verify escalation routing is also explicit in the
 engine: guidance answering an agent verifier's own `ab escalate` returns to the
 same step on `verify.started.feedback`, which `ab context` materializes as
-`.ab/guidance.json`; that cited start consumes the answer once. Guidance
-answering the policy escalation after failed-report exhaustion instead routes
-to `implement` and outranks the pending report. A bare retry carries no
+`.ab/guidance.json`; that cited start remains recoverable before launch, and the
+matching `session.started` for the same step and attempt consumes the answer
+once. Guidance answering the policy escalation after failed-report exhaustion
+instead routes to `implement` and outranks the pending report. A bare retry carries no
 feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
