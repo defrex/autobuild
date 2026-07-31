@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#186](https://github.com/defrex/autobuild/pull/186) — Preserve foreign discovery symlinks during skill retirement
 - [#185](https://github.com/defrex/autobuild/pull/185) — Restore index after failed upgrade commits
 - [#184](https://github.com/defrex/autobuild/pull/184) — Report accurate recovery for merged or closed PRs
 - [#183](https://github.com/defrex/autobuild/pull/183) — Point bounce guidance at the installed spec standard
