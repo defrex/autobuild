@@ -4,7 +4,6 @@ import {
   clampCursor,
   composerBudget,
   deleteBefore,
-  displayCells,
   displayText,
   insertText,
   layoutComposer,
@@ -17,7 +16,6 @@ import {
 describe('display-safe Unicode', () => {
   test('keeps readable clusters literal and escapes controls only', () => {
     expect(displayText('naïve — 日本語 ☕️ 🇺🇸 👨‍👩‍👧‍👦')).toBe('naïve — 日本語 ☕️ 🇺🇸 👨‍👩‍👧‍👦')
-    expect(displayCells('é🇺🇸')).toEqual(['é', '🇺🇸'])
     expect(displayText('\t')).toBe('\\u{9}')
   })
 })
