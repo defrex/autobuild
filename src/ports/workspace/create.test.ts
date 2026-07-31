@@ -4,6 +4,7 @@ import type { WorkspaceProvider } from '../types'
 import { FakeWorkspaceProvider } from './fake'
 import { GitWorktreeProvider } from './git-worktree'
 import { createPluginRegistry } from '../../plugins/registry'
+import { parseConfig } from '../../config/load'
 import { createWorkspaceProvider } from './create'
 
 const baseOpts = () => ({
@@ -55,6 +56,47 @@ describe('createWorkspaceProvider', () => {
         repoRoot: resolve('./repo'),
       },
     ])
+  })
+
+  test('a config key named for an inherited property survives parsing into the factory', async () => {
+    // The end-to-end claim, and it must start at `parseConfig`: every other
+    // test in this file hands `createWorkspaceProvider` a config object built
+    // by hand, which bypasses the parse step that used to eat the entry.
+    const opts = baseOpts()
+    const selected = new FakeWorkspaceProvider({ mode: 'logical' })
+    const calls: { config: Record<string, unknown> }[] = []
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.0.0',
+      workspaceProviders: {
+        podman: (context) => {
+          calls.push(context)
+          return selected
+        },
+      },
+    })
+
+    const parsed = parseConfig(
+      `[workspace]
+provider = "podman"
+
+[workspace.config]
+"__proto__" = "kept"
+image = "bun:latest"
+
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    await createWorkspaceProvider(parsed.workspace, opts)
+
+    const received = calls[0]?.config as Record<string, unknown>
+    expect(Object.getOwnPropertyDescriptor(received, '__proto__')?.value).toBe('kept')
+    expect(received.image).toBe('bun:latest')
+    // Nothing between the parse and the factory clones the map, so the
+    // inherited-read guarantee holds where the plugin actually reads it.
+    expect(Object.getPrototypeOf(received)).toBeNull()
   })
 
   test('unknown selectors list every available provider deterministically', async () => {
