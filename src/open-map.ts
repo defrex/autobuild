@@ -48,6 +48,25 @@ function keyIsValid(key: string, policy: OpenMapKeyPolicy): boolean {
   }
 }
 
+/**
+ * The two container shapes an open map accepts: a parsed TOML table, which the
+ * TOML parser hands over with a null prototype, and a plain JavaScript object
+ * literal. Nothing else is a map of named entries.
+ *
+ * The exclusions are load-bearing rather than pedantic. A `Map`, a `Set`, a
+ * `Date`, an array, or a class instance has no own string-keyed entries to
+ * collect, so accepting one would produce an EMPTY map from an input that
+ * plainly meant to declare something — the same silent drop this module exists
+ * to prevent, just arrived at from the other direction. `null` is rejected for
+ * the same reason: absence is spelled by omission, which `openMap`'s
+ * `.prefault({})` turns into `{}` before this ever runs.
+ */
+function isRecord(input: unknown): input is object {
+  if (typeof input !== 'object' || input === null) return false
+  const prototype = Object.getPrototypeOf(input)
+  return prototype === null || prototype === Object.prototype
+}
+
 /** The own entries of a parsed container, read BY DESCRIPTOR. `input[key]` is
  * wrong here: on any object that has a prototype, reading `"__proto__"` answers
  * that prototype rather than the declared entry.
@@ -60,8 +79,7 @@ export function ownEntries(
   ctx: Ctx,
   shape?: string,
 ): [string, unknown][] {
-  if (input === undefined || input === null) return []
-  if (typeof input !== 'object' || Array.isArray(input)) {
+  if (!isRecord(input)) {
     ctx.addIssue({ code: 'custom', message: `${label} must be ${shape ?? DEFAULT_SHAPE}` })
     return []
   }

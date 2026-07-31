@@ -230,4 +230,42 @@ describe('plugin manifest adapter-name preservation', () => {
       expect(parsed.acme).toBe(factory)
     }
   })
+
+  // Preserving every declared name must not come at the cost of accepting a
+  // container that declares nothing. A `Map` is the case that stings: it looks
+  // like a map of named adapters, has no own string-keyed entries, and would
+  // otherwise parse to an empty registration set — the same silent drop this
+  // change exists to eliminate, reached from the other side.
+  test.each([
+    ['null', null],
+    ['a string', 'forges'],
+    ['a number', 1],
+    ['an array', [factory]],
+    ['a Map', new Map([['acme', factory]])],
+    ['a Set', new Set([factory])],
+    ['a Date', new Date(0)],
+    [
+      'a class instance',
+      new (class AdapterBag {
+        acme = factory
+      })(),
+    ],
+  ])('%s is rejected as an adapter map, not read as an empty one', (_label, container) => {
+    for (const map of ADAPTER_MAPS) {
+      expect(() =>
+        parsePluginManifest({ name: 'p', apiVersion: '^1.0.0', [map]: container }),
+      ).toThrow(new RegExp(`${map} must be an object of named adapter registrations`))
+    }
+  })
+
+  test('both record shapes a manifest can produce are accepted', () => {
+    for (const map of ADAPTER_MAPS) {
+      // An object literal, and the null-prototype form a plugin may build by
+      // hand — the two shapes `z.record` accepted before this change.
+      expect(read(parseAdapters(map, { acme: factory }), 'acme')).toBe(factory)
+      const bare: Record<string, unknown> = Object.create(null)
+      bare.acme = factory
+      expect(read(parseAdapters(map, bare), 'acme')).toBe(factory)
+    }
+  })
 })
