@@ -238,9 +238,13 @@ writableCache = true
 
 The builtin `git-worktree` provider needs no table and accepts no adapter
 configuration. A plugin factory receives exactly `[workspace.config]`, the
-process environment, and the absolute repository root. Factory invocation is
-lazy: registering an unselected provider constructs nothing. An unknown name
-fails before claims and lists every available builtin and plugin provider.
+process environment, and the absolute repository root. Every declared key
+reaches the factory verbatim, including names such as `__proto__` that collide
+with inherited object properties; the map has a null prototype, so reading an
+undeclared key answers `undefined` rather than an inherited member. Factory
+invocation is lazy: registering an unselected provider constructs nothing. An
+unknown name fails before claims and lists every available builtin and plugin
+provider.
 
 Every provider must satisfy the exported `WorkspaceProvider` contract and
 return a locally reachable absolute working-copy `path`. Its provider-scoped
