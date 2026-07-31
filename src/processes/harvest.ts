@@ -210,6 +210,39 @@ export function harvestProposalKey(proposal: HarvestProposal): string {
   return `harvest-${contentHash(toBytes(members)).slice(0, 24)}`
 }
 
+/** Validate create-time blockers through the configured source before filing
+ * allocates an external-create reservation. The source owns identifier and
+ * cross-source validity; harvest only requires every requested id to exist. */
+export async function validateHarvestCreateBlockers(
+  proposal: Extract<HarvestProposal, { action: 'create' }>,
+  tickets: TicketSource,
+): Promise<string[]> {
+  const blockedBy = [...new Set(proposal.blockedBy ?? [])]
+  if (blockedBy.length === 0) return []
+
+  let states: Awaited<ReturnType<TicketSource['dependencyStates']>>
+  try {
+    states = await tickets.dependencyStates(blockedBy)
+  } catch (error) {
+    throw new Error(
+      `cannot file harvest proposal "${proposal.title}" through ticket source ` +
+        `"${tickets.name}": blocker validation failed for ${blockedBy.map((id) => `"${id}"`).join(', ')}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    )
+  }
+
+  const byId = new Map(states.map((state) => [state.id, state]))
+  const invalid = blockedBy.filter((id) => byId.get(id)?.exists !== true)
+  if (invalid.length > 0) {
+    throw new Error(
+      `cannot file harvest proposal "${proposal.title}" through ticket source ` +
+        `"${tickets.name}": unknown or invalid blocker ${invalid.map((id) => `"${id}"`).join(', ')}`,
+    )
+  }
+  return blockedBy
+}
+
 export interface HarvestExhaustionPartition {
   releasedObservations: OccurrenceKey[]
   committedDispositions: HarvestDisposition[]

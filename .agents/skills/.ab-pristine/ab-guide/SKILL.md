@@ -1041,9 +1041,10 @@ and delivered as authoritative guidance. With no text (or only whitespace), it
 requests a bare retry and supplies no agent guidance. Verify has two explicit
 answer routes: guidance answering an agent verifier's own `ab escalate` returns
 to that same `verify:<step>` on `verify.started.feedback` and materializes as
-`.ab/guidance.json`; the cited start consumes it once. Guidance answering the
-policy escalation after exhausted failed verify reports instead goes to
-`implement` and outranks the pending report. A bare retry on either path carries
+`.ab/guidance.json`; the cited start carries it durably across any pre-launch
+recovery, and the matching `session.started` consumes it once after launch.
+Guidance answering the policy escalation after exhausted failed verify reports
+instead goes to `implement` and outranks the pending report. A bare retry on either path carries
 no guidance. The dashboard captures the blocker ids when its field opens, then
 answers only those still open at submission; Escape cancels without writing. If
 the build is also paused, both surfaces append all answers first and
@@ -1056,8 +1057,13 @@ An escalation from `implement` or `code-review` feeds the next `implement`
 round. An agent verifier's own escalation feeds the next run of that same
 `verify:<step>`. When a failed verify report exhausts policy, guidance answering
 that policy escalation instead feeds the next `implement` round and takes
-precedence over the failed report. `finalize` and `reconcile` receive their own
-answers on their next attempt. In each of these routed cases, `ab context`
+precedence over the failed report. When several answers are waiting for one
+engine-routed destination (`plan`, `code`, or the same exact verifier), only the
+newest is eligible: it durably supersedes older answers, which do not resurface
+after the winner is delivered. Destinations remain independent, and a new
+answer recorded after an earlier delivery is eligible for the next appropriate
+run. `finalize` and `reconcile` receive their own answers on their next attempt.
+In each of these routed cases, `ab context`
 writes the answer to `.ab/guidance.json` in the build's workspace, and the
 receiving skill treats it as authoritative feedback for that round or attempt.
 A producer round's feedback is exclusive: on a guidance round

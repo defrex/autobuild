@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
+import { createTerminalModeController } from './terminal-restore'
 import type { ResolveConflict } from './upgrade'
 import { UPGRADE_RESOLUTION_CANCELLED_MESSAGE } from './upgrade'
 import { withUpgradeProgress } from './upgrade-progress'
@@ -40,14 +41,17 @@ function fakeInput(): TerminalInput & {
 }
 
 function fakeTerminal(interactive = true): TerminalOut & { writes: string[] } {
+  const writes: string[] = []
+  const write = (chunk: string): void => {
+    writes.push(chunk)
+  }
   return {
     interactive,
     columns: 100,
     rows: 24,
-    writes: [],
-    write(chunk: string): void {
-      this.writes.push(chunk)
-    },
+    writes,
+    write,
+    modes: createTerminalModeController(write),
   }
 }
 

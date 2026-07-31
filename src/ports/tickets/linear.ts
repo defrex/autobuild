@@ -136,15 +136,19 @@ function blockerRecordingError(
   requested: string[],
   recorded: string[],
   cause: unknown,
+  retryableById: boolean,
 ): Error {
   const recordedSet = new Set(recorded)
   const unrecorded = requested.filter((id) => !recordedSet.has(id))
+  const guidance = retryableById
+    ? 'Retry with the same idempotency key; Linear will adopt this ticket and reconcile only missing blockers. '
+    : 'Do not rerun ticket creation; repair the blockers on the existing ticket. '
   return new Error(
-    `linear create: ticket "${issue.identifier}" was created at ${issue.url}, ` +
+    `linear create: ticket "${issue.identifier}" ${retryableById ? 'already exists' : 'was created'} at ${issue.url}, ` +
       'but its blockers were not all recorded. ' +
       `Blockers recorded: ${blockerList(recorded)}. ` +
       `Blockers not recorded: ${blockerList(unrecorded)}. ` +
-      'Do not rerun ticket creation; repair the blockers on the existing ticket. ' +
+      guidance +
       `Underlying failure: ${errorMessage(cause)}`,
     { cause },
   )
@@ -328,64 +332,33 @@ export class LinearTicketSource implements TicketSource {
     }
     if (reservedId !== undefined) input.id = reservedId
 
-    let data: { issueCreate: { success: boolean; issue: GqlIssue | null } }
+    let issue: GqlIssue | null = null
+    let createError: unknown
     try {
-      data = await this.gql<{
+      const data = await this.gql<{
         issueCreate: { success: boolean; issue: GqlIssue | null }
       }>('create', CREATE_ISSUE_MUTATION, { input })
+      if (data.issueCreate.success && data.issueCreate.issue !== null) {
+        issue = data.issueCreate.issue
+      }
     } catch (error) {
       if (reservedId === undefined) throw error
-      // The create may have committed before the caller/store crashed. Query
-      // the durably reserved UUID and adopt it; if it is absent, preserve the
-      // original error rather than hiding a real outage.
-      const adopted = await this.adoptCreatedIssue(reservedId)
-      if (adopted !== null) return adopted
-      throw error
+      createError = error
     }
-    if (!data.issueCreate.success || !data.issueCreate.issue) {
-      if (reservedId !== undefined) {
-        const adopted = await this.adoptCreatedIssue(reservedId)
-        if (adopted !== null) return adopted
-      }
+
+    if (issue === null && reservedId !== undefined) {
+      // The create may have committed before the caller/store crashed, or a
+      // prior attempt may have stopped while recording relations. Adopt the
+      // exact reserved issue and send it through the same blocker completion
+      // path as a fresh create.
+      issue = await this.adoptCreatedIssue(reservedId)
+    }
+    if (issue === null) {
+      if (createError !== undefined) throw createError
       throw new Error(`linear create: issueCreate failed for "${draft.title}"`)
     }
-    const issue = data.issueCreate.issue
-    const blockedBy = [...new Set(draft.blockedBy ?? [])]
-    if (blockedBy.length > 0) {
-      const recorded: string[] = []
-      try {
-        const createdId = issue.id
-        if (createdId === undefined) {
-          throw new Error('linear create: issueCreate returned no id — cannot record blockers')
-        }
-        this.issueIds.set(issue.identifier, createdId)
-        for (const blockerId of blockedBy) {
-          // Direction matters and is the inverse of how it reads aloud: the
-          // BLOCKER is `issueId` and the new issue is `relatedIssueId`, because
-          // Linear's `blocks` relation reads "issueId blocks relatedIssueId".
-          // Transposing these silently records the exact opposite relationship.
-          const blockerUuid = await this.resolveIssueId('create', blockerId)
-          const relation = await this.gql<{
-            issueRelationCreate: { success: boolean }
-          }>('create', CREATE_RELATION_MUTATION, {
-            issueId: blockerUuid,
-            relatedIssueId: createdId,
-          })
-          if (!relation.issueRelationCreate.success) {
-            throw new Error(
-              `linear create: issueRelationCreate failed — "${blockerId}" was ` +
-                `not recorded as blocking "${issue.identifier}"`,
-            )
-          }
-          recorded.push(blockerId)
-        }
-      } catch (error) {
-        throw blockerRecordingError(issue, blockedBy, recorded, error)
-      }
-      // The create response predates the relations; report what we recorded.
-      return { ...this.toTicket(issue), blockedBy }
-    }
-    return this.toTicket(issue)
+
+    return this.completeCreateBlockers(issue, draft.blockedBy ?? [], reservedId !== undefined)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
@@ -556,12 +529,68 @@ export class LinearTicketSource implements TicketSource {
     return issue.id
   }
 
-  private async adoptCreatedIssue(id: string): Promise<Ticket | null> {
+  /** `issueCreate` and relation writes are separate mutations. Both a fresh
+   * response and a reserved-id adoption must leave this method only after all
+   * requested blockers are present; retries skip relations already observed. */
+  private async completeCreateBlockers(
+    issue: GqlIssue,
+    requestedIds: string[],
+    retryableById: boolean,
+  ): Promise<Ticket> {
+    const requested = [...new Set(requestedIds)]
+    if (requested.length === 0) return this.toTicket(issue)
+
+    const existing = blockerRelationsOf(issue)
+    const recorded = requested.filter((id) =>
+      existing.some((relation) => relation.issue?.identifier === id || relation.issue?.id === id),
+    )
+    try {
+      const createdId = issue.id
+      if (createdId === undefined) {
+        throw new Error('linear create: issueCreate returned no id — cannot record blockers')
+      }
+      this.issueIds.set(issue.identifier, createdId)
+      for (const relation of existing) {
+        if (relation.issue?.id !== undefined) {
+          this.issueIds.set(relation.issue.identifier, relation.issue.id)
+        }
+      }
+      for (const blockerId of requested) {
+        if (recorded.includes(blockerId)) continue
+        // Direction matters and is the inverse of how it reads aloud: the
+        // BLOCKER is `issueId` and the new issue is `relatedIssueId`, because
+        // Linear's `blocks` relation reads "issueId blocks relatedIssueId".
+        const blockerUuid = await this.resolveIssueId('create', blockerId)
+        const relation = await this.gql<{
+          issueRelationCreate: { success: boolean }
+        }>('create', CREATE_RELATION_MUTATION, {
+          issueId: blockerUuid,
+          relatedIssueId: createdId,
+        })
+        if (!relation.issueRelationCreate.success) {
+          throw new Error(
+            `linear create: issueRelationCreate failed — "${blockerId}" was ` +
+              `not recorded as blocking "${issue.identifier}"`,
+          )
+        }
+        recorded.push(blockerId)
+      }
+    } catch (error) {
+      throw blockerRecordingError(issue, requested, recorded, error, retryableById)
+    }
+
+    // The issue projection predates newly created relations. Preserve native
+    // existing blockers and report the requested set now known to be recorded.
+    const blockedBy = [...new Set([...blockersOf(issue), ...requested])]
+    return { ...this.toTicket(issue), ...(blockedBy.length > 0 ? { blockedBy } : {}) }
+  }
+
+  private async adoptCreatedIssue(id: string): Promise<GqlIssue | null> {
     try {
       const adopted = await this.gql<{ issue: GqlIssue | null }>('create-adopt', GET_ISSUE_QUERY, {
         id,
       })
-      return adopted.issue ? this.toTicket(adopted.issue) : null
+      return adopted.issue
     } catch {
       // Preserve the original create failure; an adoption probe is recovery,
       // not a reason to hide the operation that actually failed.

@@ -255,6 +255,8 @@ const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status']
   paused: 'yellow',
   resuming: 'cyan',
   blocked: 'red',
+  aborting: 'red',
+  cleaning: 'yellow',
   escalated: 'yellow',
   failed: 'red',
 }
@@ -323,7 +325,11 @@ function renderBuild(
   // narrower than the fixed columns.
   const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
 
-  if (build.dispatch !== undefined) {
+  if (build.abortProgress !== undefined) {
+    for (const line of wrappedText(build.abortProgress, width - 4, '')) {
+      lines.push(truncate(paint(`  ! ${line}`, STATUS_COLOR[build.status], color), width))
+    }
+  } else if (build.dispatch !== undefined) {
     for (const line of wrappedText(build.dispatch, width - 4, '')) {
       lines.push(truncate(paint(`  ! ${line}`, STATUS_COLOR[build.status], color), width))
     }
@@ -424,6 +430,11 @@ export const DASHBOARD_QUEUED_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
 
 function buildLegend(build: DashboardBuild, detail: boolean): string {
+  if (build.status === 'aborting' || build.status === 'cleaning') {
+    return detail
+      ? 'Keys: Up/Down select session  Enter transcript  Esc back  Ctrl-C quit'
+      : 'Keys: Up/Down select  Enter details  Ctrl-C quit'
+  }
   if (build.status === 'queued') {
     return detail
       ? 'Keys: d discard  a abort  Esc back  Ctrl-C quit'
@@ -581,7 +592,10 @@ function detailBody(
   body.push(`  auto merge ${build.autoMerge}`)
   if (build.pr !== undefined)
     body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
-  if (build.dispatch !== undefined) {
+  if (build.abortProgress !== undefined) {
+    body.push('', paint('Abort progress', 'bold', color))
+    body.push(...wrappedText(build.abortProgress, width, '  '))
+  } else if (build.dispatch !== undefined) {
     body.push('', paint('Dispatch', 'bold', color), ...wrappedText(build.dispatch, width, '  '))
   } else {
     body.push('', paint('Pipeline', 'bold', color))

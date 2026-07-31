@@ -92,12 +92,24 @@ exception to producer routing: its answer returns to that same step on
 `verify.started.feedback`, and `PHASE_SPECS.inputs.currentFeedback` makes `ab
 context` the delivery channel. When a failed verify report instead exhausts
 policy, guidance answering that policy escalation takes precedence over the
-pending report as the failure routes to the next `implement` round. `finalize`
-and `reconcile` have no producer round, so
+pending report as the failure routes to the next `implement` round. For these
+engine-routed destinations, `engine.ts` chooses the newest answered guidance
+for the requested destination before checking whether its durable carrier
+reached a matching session launch. That ordering makes supersession durable:
+delivering the winner cannot reveal an older same-destination answer, while
+plan, code, and exact-verifier destinations remain independent and a new answer
+after delivery remains eligible. The projection uses only event history, so
+restart and decision replay agree.
+`finalize` and `reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
 `src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
-answer text. A producer round's feedback is a discriminated union — findings, a
+answer text. For producer and verifier feedback routes, `src/kernel/engine.ts`
+indexes each guidance-bearing phase start as a durable carrier and pairs only
+the latest carrier for an exact phase plus round/attempt with a subsequent
+matching `session.started`. An unpaired carrier remains deliverable across
+recovery; the matching launch consumes it once without process-local state. A
+producer round's feedback is a discriminated union — findings, a
 failed verify report, or guidance — and a round may carry none, so a round with
 guidance writes no `.ab/findings.json`. The receiving skills document their
 corresponding input, and `src/cli/skill-guidance.test.ts` derives that
@@ -126,9 +138,10 @@ queryable skipped outcome; Git failure is infrastructure and fails closed,
 never a synthetic skip. Verify escalation routing is also explicit in the
 engine: guidance answering an agent verifier's own `ab escalate` returns to the
 same step on `verify.started.feedback`, which `ab context` materializes as
-`.ab/guidance.json`; that cited start consumes the answer once. Guidance
-answering the policy escalation after failed-report exhaustion instead routes
-to `implement` and outranks the pending report. A bare retry carries no
+`.ab/guidance.json`; that cited start remains recoverable before launch, and the
+matching `session.started` for the same step and attempt consumes the answer
+once. Guidance answering the policy escalation after failed-report exhaustion
+instead routes to `implement` and outranks the pending report. A bare retry carries no
 feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
@@ -265,9 +278,13 @@ optional API 1.2 capabilities so older plugins load but leave cleanup visibly du
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
 frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
-decoding, while `live.ts` sequences its push and pop with the alternate-screen
-region because the terminal's keyboard flag stack is per-screen; `poll.ts` is a
-display-only incremental cache (the logs remain authoritative — cache loss just
+decoding, while `live.ts` owns normal teardown and sequences its push and pop
+with the alternate-screen region because the terminal's keyboard flag stack is
+per-screen. Every mode enters and leaves through the declarations and active
+ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
+process-boundary fallback over that same ledger for faults and terminating
+signals that bypass normal teardown. `poll.ts` is a display-only incremental
+cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —
 display-cell wrapping, caret placement, and code-point motions — as pure,

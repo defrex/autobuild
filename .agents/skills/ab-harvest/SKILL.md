@@ -24,6 +24,7 @@ cluster and author; you never create or move tickets.
          "whatWhy": "...",
          "acceptanceCriteria": ["..."],
          "outOfScope": ["..."],
+         "blockedBy": ["SOURCE-123"],
          "observations": [{"build": "slug", "seq": 12}]
        }
      ]
@@ -33,7 +34,12 @@ cluster and author; you never create or move tickets.
    Every claimed `{build, seq}` must appear exactly once. Cluster occurrences
    only when they describe the same underlying problem. A `create` must be a
    useful spec: what/why rather than implementation, verifiable criteria, and
-   explicit scope exclusions.
+   explicit scope exclusions. `blockedBy` is optional. When the evidence says
+   another ticket must complete before this work can start, include that hard
+   prerequisite's source-local ticket id in `blockedBy` as well as explaining
+   it in the spec. Contextual citations, related work, and nonbinding sequencing
+   preferences such as “do this later” are not blockers. Never invent an id or
+   turn every ticket mention into a dependency.
 
    You may instead use a known prior proposal from `.ab/ledger.json`:
 

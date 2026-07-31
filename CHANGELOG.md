@@ -3,6 +3,12 @@
 ## Unreleased
 
 - [#162](https://github.com/defrex/autobuild/pull/162) — Preview long dashboard messages
+- [#161](https://github.com/defrex/autobuild/pull/161) — Prevent superseded guidance from replaying
+- [#160](https://github.com/defrex/autobuild/pull/160) — Restore dashboard terminal modes after abnormal exits
+- [#159](https://github.com/defrex/autobuild/pull/159) — Keep escalation guidance durable until session launch
+- [#158](https://github.com/defrex/autobuild/pull/158) — Make pending abort intent dominate bulk pause
+- [#157](https://github.com/defrex/autobuild/pull/157) — Carry harvest prerequisites into ticket dependencies
+- [#156](https://github.com/defrex/autobuild/pull/156) — Show abort progress through dashboard cleanup
 - [#155](https://github.com/defrex/autobuild/pull/155) — Add operator paths for escalation resolutions
 - [#154](https://github.com/defrex/autobuild/pull/154) — Preserve union detail in validation renderers
 - [#153](https://github.com/defrex/autobuild/pull/153) — Teach dashboard verification to consume escalation guidance

@@ -4,6 +4,7 @@ import { abDispatch } from '../src/cli/dispatch'
 import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
 import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
+import { createTerminalModeController } from '../src/cli/terminal-restore'
 import { humanActor, KERNEL } from '../src/events/envelope'
 import { spawnExec } from '../src/ports/workspace/git-worktree'
 import {
@@ -228,6 +229,7 @@ async function prepareScenario(): Promise<E2eHarness> {
 class CaptureTerminal implements TerminalOut {
   readonly interactive = true
   readonly writes: string[] = []
+  readonly modes = createTerminalModeController((chunk) => this.write(chunk))
 
   constructor(
     readonly columns: number,

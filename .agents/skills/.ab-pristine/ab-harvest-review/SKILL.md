@@ -18,6 +18,12 @@ not author proposals or touch tickets.
      overlap;
    - create proposals meet the spec standard (what/why, verifiable acceptance
      criteria, explicit out-of-scope, evidence-supported claims);
+   - evidence-supported prose saying another ticket must complete before work
+     can start has the same source-local id in `blockedBy`; a prose-only hard
+     prerequisite is not approvable;
+   - every `blockedBy` id is justified by evidence as a hard start gate;
+     contextual citations, related work, and nonbinding preferences such as
+     “do this later” must not become blockers, and ticket ids are never invented;
    - joins name only an unresolved ledger proposal and resolved/missing ledger
      tickets are tombstones, not recreated work;
    - suppression has a concrete evidence-backed reason;

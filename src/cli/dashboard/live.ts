@@ -14,14 +14,15 @@
  */
 import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
+import {
+  ALTERNATE_SCREEN_MODE,
+  BRACKETED_PASTE_MODE,
+  HIDDEN_CURSOR_MODE,
+} from '../terminal-restore'
 
-const ENTER_ALTERNATE_SCREEN = '\x1b[?1049h'
-const LEAVE_ALTERNATE_SCREEN = '\x1b[?1049l'
 /** Clear the entire active display. */
 const CLEAR_DISPLAY = '\x1b[2J'
 const CURSOR_POSITION = (row: number): string => `\x1b[${row};1H`
-const HIDE_CURSOR = '\x1b[?25l'
-const SHOW_CURSOR = '\x1b[?25h'
 /**
  * Bracketed paste (DEC mode 2004): the terminal brackets pasted text in
  * `ESC[200~` … `ESC[201~`, which is the only way the input seam can tell a
@@ -33,9 +34,6 @@ const SHOW_CURSOR = '\x1b[?25h'
  * Nothing in the codebase can detect that, so it is documented rather than
  * worked around.
  */
-const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
-const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
-
 /**
  * How many lines a region may paint on a `rows`-row screen: **one fewer than
  * the screen has**.
@@ -93,11 +91,11 @@ export class LiveRegion {
     if (this.paintedRows === rows && sameFrame(this.painted, lines)) return
 
     if (!this.alternate) {
-      this.term.write(ENTER_ALTERNATE_SCREEN)
+      this.term.modes.enter(ALTERNATE_SCREEN_MODE)
       this.alternate = true
-      this.term.write(HIDE_CURSOR)
+      this.term.modes.enter(HIDDEN_CURSOR_MODE)
       this.hidden = true
-      this.term.write(ENABLE_BRACKETED_PASTE)
+      this.term.modes.enter(BRACKETED_PASTE_MODE)
       this.bracketedPaste = true
       // Kitty keyboard mode stacks are per-screen, so negotiate only after
       // the alternate screen is active.
@@ -128,20 +126,20 @@ export class LiveRegion {
     // normal screen back: a mode left on outlives the process and would
     // bracket the operator's next shell paste.
     if (this.bracketedPaste) {
-      this.term.write(DISABLE_BRACKETED_PASTE)
+      this.term.modes.leave(BRACKETED_PASTE_MODE)
       this.bracketedPaste = false
     }
     // Balance an outstanding keyboard push before returning to the normal
     // screen. Calling this even when no frame painted also latches late replies.
     this.keyboard?.screenLeaving()
     if (this.alternate) {
-      this.term.write(LEAVE_ALTERNATE_SCREEN)
+      this.term.modes.leave(ALTERNATE_SCREEN_MODE)
       this.alternate = false
       const frame = this.painted.map((line) => `${line}\n`).join('')
       if (frame.length > 0) this.term.write(frame)
     }
     if (this.hidden) {
-      this.term.write(SHOW_CURSOR)
+      this.term.modes.leave(HIDDEN_CURSOR_MODE)
       this.hidden = false
     }
     this.painted = []

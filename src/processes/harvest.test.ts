@@ -9,6 +9,7 @@ import {
   makeHarvestScanPacket,
   partitionHarvestExhaustion,
   scanUnclaimedObservations,
+  validateHarvestCreateBlockers,
 } from './harvest'
 
 async function observation(store: MemoryBuildStore, build: string, id: string): Promise<void> {
@@ -38,6 +39,60 @@ async function claim(
     }),
   )
 }
+
+describe('harvest blocker validation', () => {
+  const proposal = {
+    action: 'create' as const,
+    title: 'Dependent work',
+    whatWhy: 'The work requires an existing prerequisite.',
+    acceptanceCriteria: ['The work is complete.'],
+    outOfScope: ['Unrelated work.'],
+    observations: [{ build: 'build-a', seq: 1 }],
+  }
+
+  test('deduplicates valid source-local ids in first-seen order', async () => {
+    const tickets = new FakeTicketSource([
+      {
+        ref: { source: 'fake', id: 'fake-8' },
+        title: 'Eight',
+        body: 'body',
+        state: 'Ready',
+        labels: [],
+      },
+      {
+        ref: { source: 'fake', id: 'fake-9' },
+        title: 'Nine',
+        body: 'body',
+        state: 'Done',
+        labels: [],
+      },
+    ])
+
+    expect(
+      await validateHarvestCreateBlockers(
+        { ...proposal, blockedBy: ['fake-9', 'fake-8', 'fake-9'] },
+        tickets,
+      ),
+    ).toEqual(['fake-9', 'fake-8'])
+    expect(tickets.dependencyQueries).toEqual([['fake-9', 'fake-8']])
+  })
+
+  test('an absent or empty set performs no source read', async () => {
+    const tickets = new FakeTicketSource()
+    expect(await validateHarvestCreateBlockers(proposal, tickets)).toEqual([])
+    expect(await validateHarvestCreateBlockers({ ...proposal, blockedBy: [] }, tickets)).toEqual([])
+    expect(tickets.dependencyQueries).toEqual([])
+  })
+
+  test('rejects an unknown id with proposal, source, and blocker context', async () => {
+    const tickets = new FakeTicketSource()
+    await expect(
+      validateHarvestCreateBlockers({ ...proposal, blockedBy: ['other-404'] }, tickets),
+    ).rejects.toThrow(
+      'cannot file harvest proposal "Dependent work" through ticket source "fake": unknown or invalid blocker "other-404"',
+    )
+  })
+})
 
 describe('harvest deterministic scan and ledger', () => {
   test('per-build seq collisions are distinct; a started snapshot claims only its immutable members', async () => {

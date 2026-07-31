@@ -198,6 +198,17 @@ function implementRound(
 ): EventWrite[] {
   return [
     ev('implement.started', { round, feedback }),
+    ...(feedback !== undefined && 'guidance' in feedback
+      ? [
+          ev('session.started', {
+            session: `s_implement_${round}`,
+            role: 'implement',
+            runner: 'scripted',
+            phase: 'implement',
+            round,
+          }),
+        ]
+      : []),
     ev('implement.completed', {
       round,
       commits: { base: 'sha-base', head },
@@ -463,15 +474,25 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
     ).toEqual(runPhase('plan', 1))
   })
 
-  test('abort-request wins over pause requests and open escalations', () => {
-    expect(
-      decide([
-        ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
-        ev('build.pause-requested', {}),
-        ev('build.abort-requested', { reason: 'wrong ticket' }),
-      ]),
-    ).toEqual({ kind: 'acknowledge', command: 'abort' })
+  test('explicit and escalation-based abort intent win over pause and open escalations', () => {
+    const explicit = [
+      ...prelude(),
+      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+      ev('build.pause-requested', {}),
+      ev('build.abort-requested', { reason: 'wrong ticket' }),
+    ]
+    const answered = [
+      ...prelude(),
+      ev('build.pause-requested', {}),
+      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
+      ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'agent', question: 'two?' }),
+      ev('escalation.answered', { id: 'e_1', answer: 'Kill it.', resolution: 'abort' }),
+    ]
+
+    for (const writes of [explicit, answered]) {
+      expect(decide(writes)).toEqual({ kind: 'acknowledge', command: 'abort' })
+      expect(decide([...writes, ev('build.aborted', {})])).toEqual(wait('aborted'))
+    }
   })
 
   test('abort-request wins while paused', () => {
@@ -626,17 +647,6 @@ describe('decideNext: rule 3 — escalation gating', () => {
     ).toEqual(wait('blocked'))
   })
 
-  test('answered abort-resolution without build.aborted → acknowledge abort, even with other escalations open', () => {
-    const writes = [
-      ...prelude(),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
-      ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'agent', question: 'two?' }),
-      ev('escalation.answered', { id: 'e_1', answer: 'Kill it.', resolution: 'abort' }),
-    ]
-    expect(decide(writes)).toEqual({ kind: 'acknowledge', command: 'abort' })
-    expect(decide([...writes, ev('build.aborted', {})])).toEqual(wait('aborted'))
-  })
-
   test('answered revise-spec → wait/awaiting-spec until spec.revised lands', () => {
     const writes = [
       ...prelude(),
@@ -785,8 +795,9 @@ describe('decideNext: rule 5 — plan loop', () => {
     ).toEqual(runPhase('plan', 1, { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }))
   })
 
-  test('plan-loop guidance is consumed once plan.started CARRIES it (§15.6-B delivery)', () => {
-    const writes = [
+  test('plan-loop guidance remains pending until its exact phase occurrence launches', () => {
+    const guidance = { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }
+    const cited = [
       ...prelude(),
       ev('plan.started', { round: 1 }),
       ev('escalation.raised', {
@@ -797,18 +808,45 @@ describe('decideNext: rule 5 — plan loop', () => {
         question: 'Which auth flow?',
       }),
       ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
-      // The guidance-fed re-run starts, citing the answer in its payload —
-      // symmetric with implement.started (§15.3); this is what consumes it.
-      ev('plan.started', {
-        round: 1,
-        feedback: { guidance: { escalation: 'e_1', answer: 'OAuth only.' } },
-      }),
+      ev('plan.started', { round: 1, feedback: guidance }),
+      ev('plan.started', { round: 1, feedback: guidance }), // repeated pre-launch recovery
     ]
-    // consumed at the citing start: the crash re-run recomputes without it
-    expect(decide(writes)).toEqual(runPhase('plan', 1))
+
+    expect(decide(cited)).toEqual(runPhase('plan', 1, guidance))
     expect(
       decide([
-        ...writes,
+        ...cited,
+        ev('session.started', {
+          session: 's_wrong_round',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 2,
+        }),
+        ev('session.started', {
+          session: 's_wrong_phase',
+          role: 'implement',
+          runner: 'scripted',
+          phase: 'implement',
+          round: 1,
+        }),
+      ]),
+    ).toEqual(runPhase('plan', 1, guidance))
+
+    const launched = [
+      ...cited,
+      ev('session.started', {
+        session: 's_plan_1',
+        role: 'plan',
+        runner: 'scripted',
+        phase: 'plan',
+        round: 1,
+      }),
+    ]
+    expect(decide(launched)).toEqual(runPhase('plan', 1))
+    expect(
+      decide([
+        ...launched,
         ev('plan.completed', { round: 1, artifact: { kind: 'plan', rev: 0 } }),
         ev('plan-review.started', { round: 1 }),
         ev('plan-review.verdict', {
@@ -818,7 +856,161 @@ describe('decideNext: rule 5 — plan loop', () => {
           artifact: { kind: 'plan-review', rev: 0 },
         }),
       ]),
-    ).toEqual(runPhase('plan', 2, { findings: ['f_p1'] })) // not the stale guidance
+    ).toEqual(runPhase('plan', 2, { findings: ['f_p1'] }))
+  })
+
+  test('newer plan guidance durably supersedes older guidance before delivery', () => {
+    const beforeDelivery = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_p1')]),
+      ev('escalation.raised', {
+        id: 'e_old',
+        phase: 'plan-review',
+        round: 1,
+        source: 'agent',
+        question: 'Keep the compatibility layer?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_old',
+        answer: 'Keep it.',
+        resolution: 'guidance',
+      }),
+      ev('escalation.raised', {
+        id: 'e_new',
+        phase: 'plan',
+        round: 2,
+        source: 'agent',
+        question: 'Keep the compatibility layer after reviewing the constraints?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_new',
+        answer: 'Remove it.',
+        resolution: 'guidance',
+      }),
+    ]
+    const latestGuidance = {
+      guidance: { escalation: 'e_new', answer: 'Remove it.' },
+    }
+
+    expect(decide(beforeDelivery)).toEqual(runPhase('plan', 2, latestGuidance))
+
+    const afterNextReview = [
+      ...beforeDelivery,
+      ev('plan.started', { round: 2, feedback: latestGuidance }),
+      ev('session.started', {
+        session: 's_plan_2',
+        role: 'plan',
+        runner: 'scripted',
+        phase: 'plan',
+        round: 2,
+      }),
+      ev('plan.completed', { round: 2, artifact: { kind: 'plan', rev: 1 } }),
+      ev('plan-review.started', { round: 2 }),
+      ev('plan-review.verdict', {
+        round: 2,
+        verdict: 'revise',
+        findings: [finding('f_p2')],
+        artifact: { kind: 'plan-review', rev: 1 },
+      }),
+    ]
+    const ordinaryFeedback = runPhase('plan', 3, { findings: ['f_p2'] })
+    expect(decide(afterNextReview)).toEqual(ordinaryFeedback)
+    expect(decide([...afterNextReview])).toEqual(ordinaryFeedback) // stable on replay
+
+    expect(
+      decide([
+        ...beforeDelivery,
+        ev('plan.started', { round: 2, feedback: latestGuidance }),
+        ev('session.started', {
+          session: 's_plan_2',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 2,
+        }),
+        ev('escalation.raised', {
+          id: 'e_after',
+          phase: 'plan',
+          round: 2,
+          source: 'agent',
+          question: 'What about the replacement?',
+        }),
+        ev('escalation.answered', {
+          id: 'e_after',
+          answer: 'Use the native path.',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual(
+      runPhase('plan', 2, {
+        guidance: { escalation: 'e_after', answer: 'Use the native path.' },
+      }),
+    )
+  })
+
+  test('plan and code guidance destinations remain independent', () => {
+    const beforePlanDelivery = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_p1')]),
+      ev('escalation.raised', {
+        id: 'e_plan',
+        phase: 'plan-review',
+        round: 1,
+        source: 'agent',
+        question: 'Which plan shape?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_plan',
+        answer: 'Use the narrow plan.',
+        resolution: 'guidance',
+      }),
+      ev('escalation.raised', {
+        id: 'e_code',
+        phase: 'code-review',
+        round: 1,
+        source: 'agent',
+        question: 'Which implementation shape?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_code',
+        answer: 'Use the adapter.',
+        resolution: 'guidance',
+      }),
+    ]
+    const planGuidance = {
+      guidance: { escalation: 'e_plan', answer: 'Use the narrow plan.' },
+    }
+
+    // The globally newer code answer does not suppress the plan destination.
+    expect(decide(beforePlanDelivery)).toEqual(runPhase('plan', 2, planGuidance))
+
+    // Once plan is approved, its cited answer does not suppress the still-pending
+    // code answer either.
+    expect(
+      decide([
+        ...beforePlanDelivery,
+        ev('plan.started', { round: 2, feedback: planGuidance }),
+        ev('session.started', {
+          session: 's_plan_2',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 2,
+        }),
+        ev('plan.completed', { round: 2, artifact: { kind: 'plan', rev: 1 } }),
+        ev('plan-review.started', { round: 2 }),
+        ev('plan-review.verdict', {
+          round: 2,
+          verdict: 'approve',
+          findings: [],
+          artifact: { kind: 'plan-review', rev: 1 },
+        }),
+      ]),
+    ).toEqual(
+      runPhase('implement', 1, {
+        guidance: { escalation: 'e_code', answer: 'Use the adapter.' },
+      }),
+    )
   })
 
   test('a plan.started that fails to carry the answer does NOT consume it (crash gap)', () => {
@@ -838,7 +1030,18 @@ describe('decideNext: rule 5 — plan loop', () => {
           question: 'Which auth flow?',
         }),
         ev('escalation.answered', { id: 'e_1', answer: 'OAuth only.', resolution: 'guidance' }),
-        ev('plan.started', { round: 1 }), // crashed before `ab context` — no feedback carried
+        ev('plan.started', {
+          round: 1,
+          feedback: { guidance: { escalation: 'e_1', answer: 'OAuth only.' } },
+        }),
+        ev('plan.started', { round: 1 }), // latest carrier is guidance-free
+        ev('session.started', {
+          session: 's_plan_1',
+          role: 'plan',
+          runner: 'scripted',
+          phase: 'plan',
+          round: 1,
+        }),
       ]),
     ).toEqual(runPhase('plan', 1, { guidance: { escalation: 'e_1', answer: 'OAuth only.' } }))
   })
@@ -1035,15 +1238,24 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
     ).toEqual(runPhase('implement', 4, { guidance: { escalation: 'e_1', answer: GUIDANCE } }))
   })
 
-  test('guidance is consumed once implement.started carries it (crash re-run falls back to findings)', () => {
+  test('implement guidance is consumed only after the matching session launch', () => {
+    const guidance = { guidance: { escalation: 'e_1', answer: GUIDANCE } }
+    const cited = [
+      ...threeReviseRounds,
+      stallRaised,
+      ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
+      ev('implement.started', { round: 4, feedback: guidance }),
+    ]
+    expect(decide(cited)).toEqual(runPhase('implement', 4, guidance))
     expect(
       decide([
-        ...threeReviseRounds,
-        stallRaised,
-        ev('escalation.answered', { id: 'e_1', answer: GUIDANCE, resolution: 'guidance' }),
-        ev('implement.started', {
+        ...cited,
+        ev('session.started', {
+          session: 's_implement_4',
+          role: 'implement',
+          runner: 'scripted',
+          phase: 'implement',
           round: 4,
-          feedback: { guidance: { escalation: 'e_1', answer: GUIDANCE } },
         }),
       ]),
     ).toEqual(runPhase('implement', 4, { findings: ['f_3'] }))
@@ -1287,11 +1499,55 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       feedback: guidance,
     })
 
-    const delivered = [
+    const cited = [
       ...beforeAnswer,
       ev('verify.started', { step: 'e2e', attempt: 1, feedback: guidance }),
+      ev('verify.started', { step: 'e2e', attempt: 1, feedback: guidance }),
     ]
-    expect(decide(delivered)).toEqual({
+    expect(decide(cited)).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+      feedback: guidance,
+    })
+    expect(
+      decide([
+        ...cited,
+        ev('session.started', {
+          session: 's_other_verifier',
+          role: 'smoke',
+          runner: 'scripted',
+          phase: 'verify:smoke',
+          round: 1,
+        }),
+        ev('session.started', {
+          session: 's_other_attempt',
+          role: 'e2e',
+          runner: 'scripted',
+          phase: 'verify:e2e',
+          round: 2,
+        }),
+      ]),
+    ).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+      feedback: guidance,
+    })
+
+    const launched = [
+      ...cited,
+      ev('session.started', {
+        session: 's_e2e_1',
+        role: 'e2e',
+        runner: 'scripted',
+        phase: 'verify:e2e',
+        round: 1,
+      }),
+    ]
+    expect(decide(launched)).toEqual({
       kind: 'run-agent-verify',
       step: 'e2e',
       skill: 'ab-verify-e2e',
@@ -1301,7 +1557,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     const e2eReport = { kind: 'verify-report:e2e', rev: 0 }
     expect(
       decide([
-        ...delivered,
+        ...launched,
         ev('verify.completed', {
           step: 'e2e',
           attempt: 1,
@@ -1440,6 +1696,83 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     ).toEqual(
       runPhase('implement', 4, {
         guidance: { escalation: 'e_1', answer: 'Skip the flaky asserts.' },
+      }),
+    )
+  })
+
+  test('newer cross-phase code guidance supersedes older guidance before delivery', () => {
+    const beforeDelivery = [
+      ...failAtUnit,
+      ev('escalation.raised', {
+        id: 'e_review',
+        phase: 'code-review',
+        round: 1,
+        source: 'agent',
+        question: 'Change the implementation?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_review',
+        answer: 'Keep the existing implementation.',
+        resolution: 'guidance',
+      }),
+      ev(
+        'escalation.raised',
+        {
+          id: 'e_verify',
+          phase: 'verify:unit',
+          source: 'policy',
+          question: 'How should the failed verification be handled?',
+        },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_verify',
+        answer: 'Fix the failing boundary assertion.',
+        resolution: 'guidance',
+      }),
+    ]
+    const latestGuidance = {
+      guidance: { escalation: 'e_verify', answer: 'Fix the failing boundary assertion.' },
+    }
+
+    expect(decide(beforeDelivery)).toEqual(runPhase('implement', 2, latestGuidance))
+
+    const afterDelivery = [
+      ...beforeDelivery,
+      ev('implement.started', { round: 2, feedback: latestGuidance }),
+      ev('session.started', {
+        session: 's_implement_2',
+        role: 'implement',
+        runner: 'scripted',
+        phase: 'implement',
+        round: 2,
+      }),
+    ]
+    const verifyFeedback = runPhase('implement', 2, {
+      verify: { step: 'unit', report: report0 },
+    })
+    expect(decide(afterDelivery)).toEqual(verifyFeedback)
+    expect(decide([...afterDelivery])).toEqual(verifyFeedback) // stable on replay
+
+    expect(
+      decide([
+        ...afterDelivery,
+        ev('escalation.raised', {
+          id: 'e_after',
+          phase: 'implement',
+          round: 2,
+          source: 'agent',
+          question: 'Which assertion semantics?',
+        }),
+        ev('escalation.answered', {
+          id: 'e_after',
+          answer: 'Assert the public result.',
+          resolution: 'guidance',
+        }),
+      ]),
+    ).toEqual(
+      runPhase('implement', 2, {
+        guidance: { escalation: 'e_after', answer: 'Assert the public result.' },
       }),
     )
   })

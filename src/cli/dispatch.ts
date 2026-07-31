@@ -115,8 +115,8 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
 }
 
 /** Dashboard store-read cadence. `listBuilds` remains the discovery read;
- * the process-local display cache then polls only nonterminal streams with
- * `getEvents(lastSeq)`, suppresses terminal streams, and reuses unchanged
+ * the process-local display cache then polls dashboard-visible streams with
+ * `getEvents(lastSeq)`, retaining abort cleanup until final completion and reusing unchanged
  * reductions/timing projections. Repository controls and Harvest are still
  * read fresh. The identical-frame check in `live.ts` makes an unchanged paint
  * cost zero terminal writes. */
@@ -405,7 +405,7 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
-        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk), opts.terminal.modes)
         : undefined
     this.region =
       this.dashboard && opts.terminal !== undefined
@@ -1303,7 +1303,9 @@ class DispatchLoop {
         const slug =
           this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
         const build = this.model?.builds.find((candidate) => candidate.slug === slug)
-        if (build === undefined) return
+        if (build === undefined || build.status === 'aborting' || build.status === 'cleaning') {
+          return
+        }
         this.abortConfirmation = { slug: build.slug }
         this.syncModelControls()
         this.paint()
@@ -1622,8 +1624,8 @@ class DispatchLoop {
   // ── The live region ───────────────────────────────────────────────────────
 
   /**
-   * The store READ half of a frame: discover builds, incrementally refresh only
-   * nonterminal streams, combine their cached projections with a fresh
+   * The store READ half of a frame: discover builds, incrementally refresh
+   * dashboard-visible streams, combine their cached projections with a fresh
    * repository-journal projection, then paint. Read-only — it appends nothing
    * and decides nothing. Paint is split out so the watch-mode tick timer can
    * repaint cached timing against a moving clock without re-reading.
@@ -1660,8 +1662,11 @@ class DispatchLoop {
       const state = buildSnapshot.states.get(this.abortConfirmation.slug)
       if (
         state === undefined ||
-        !['queued', 'running', 'paused', 'blocked'].includes(state.status)
+        !['queued', 'running', 'paused', 'blocked'].includes(state.status) ||
+        state.pendingCommands.some((command) => command.command === 'abort')
       ) {
+        // Another process may have durably requested the abort while this
+        // process-local prompt was open. Never leave a stale confirmation up.
         this.abortConfirmation = undefined
       }
     }
@@ -1672,7 +1677,9 @@ class DispatchLoop {
       {
         repo: this.opts.targetRepo,
         queued: this.queuedCount,
-        activeCount: buildSnapshot.states.size,
+        activeCount: [...buildSnapshot.states.values()].filter(
+          (state) => state.status !== 'done' && state.status !== 'aborted',
+        ).length,
         capacity: this.config.capacity,
         observationCount: this.observationCount,
         harvestThreshold: this.config.policy.harvestThreshold,
@@ -1685,8 +1692,8 @@ class DispatchLoop {
     if (this.view !== undefined) {
       const build = projected.builds.find((candidate) => candidate.slug === this.view!.slug)
       if (build === undefined) {
-        // Detail is intentionally active-only. Terminal compaction removes the
-        // row and returns the operator to the list rather than showing stale data.
+        // Detail follows dashboard visibility: acknowledged abort cleanup stays
+        // open, and final completion returns the operator to the list.
         this.view = undefined
       } else if (this.view.kind === 'detail') {
         const detail = this.view
