@@ -163,9 +163,19 @@ export class LiveConfig {
     try {
       content = await Bun.file(this.source).text()
     } catch (error) {
-      const message = `${this.source}: ${error instanceof Error ? error.message : String(error)}`
-      const notify = this.rejectedContent !== `\0${message}`
-      this.rejectedContent = `\0${message}`
+      const code = (error as NodeJS.ErrnoException).code
+      const detail =
+        code === 'ENOENT'
+          ? 'is missing during live reload'
+          : `could not be read during live reload: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+      const message =
+        `${this.source} ${detail}; the last valid configuration snapshot remains active — ` +
+        'restore a valid autobuild.toml to resume live reload'
+      const rejectedRead = `\0${message}`
+      const notify = this.rejectedContent !== rejectedRead
+      this.rejectedContent = rejectedRead
       return { kind: 'rejected', error: message, notify }
     }
     return this.refresh(content)

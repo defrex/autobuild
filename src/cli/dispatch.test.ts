@@ -11,7 +11,7 @@
  * in one pass.
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -1386,6 +1386,79 @@ model = "gpt-slug-name"
 })
 
 describe('abDispatch watch build-runner coordination', () => {
+  test('retains the accepted config across deletion and reloads after restoration', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    const out: string[] = []
+    const restored = DISPATCH_CONFIG_TOML.replace('readyState = "Ready"', 'readyState = "Queued"')
+    let sleeps = 0
+    let claimsDuringAbsence: string[] = []
+    let reloadsDuringAbsence = -1
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await unlink(join(fx.origin, 'autobuild.toml'))
+            fx.tickets.add(readyTicket('T-retained-ready', { body: 'not a complete spec' }))
+          } else if (sleeps === 2) {
+            claimsDuringAbsence = [...fx.tickets.claims]
+            reloadsDuringAbsence = (await fx.store.getRepoEvents(fx.origin)).filter(
+              (event) => event.type === 'dispatcher.config-reloaded',
+            ).length
+          } else if (sleeps === 3) {
+            await writeFile(join(fx.origin, 'autobuild.toml'), restored)
+            fx.tickets.add(
+              readyTicket('T-restored-queued', {
+                body: 'not a complete spec',
+                state: 'Queued',
+              }),
+            )
+          } else {
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      const missingWarnings = fx.err.filter((line) =>
+        line.includes('is missing during live reload'),
+      )
+      expect(missingWarnings).toHaveLength(1)
+      expect(missingWarnings[0]).toContain('the last valid configuration snapshot remains active')
+      expect(missingWarnings[0]).toContain('restore a valid autobuild.toml to resume live reload')
+      expect(claimsDuringAbsence).toEqual(['T-retained-ready'])
+      expect(reloadsDuringAbsence).toBe(0)
+      expect(fx.tickets.claims).toEqual(['T-retained-ready', 'T-restored-queued'])
+      expect(out).toContain('autobuild.toml reloaded (revision 1)')
+
+      const reloads = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.config-reloaded',
+      )
+      expect(reloads).toHaveLength(1)
+      expect(reloads[0]?.payload).toMatchObject({
+        restartRequired: [],
+        effectiveChanged: true,
+      })
+      const artifact = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.artifact.kind,
+        reloads[0]!.payload.artifact.rev,
+      )
+      expect(new TextDecoder().decode(artifact?.content)).toBe(restored)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('rejects an invalid save, then adopts and durably records a mixed hot/restart save', async () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()

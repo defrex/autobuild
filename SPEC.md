@@ -1374,10 +1374,22 @@ Decisions here continue the series: **[D9]** declarative repo config and
 
 ### 16.1 `autobuild.toml` [D9]
 
-One declarative file at the repo root. It is read **from the build's
-branch** at workspace provision, so every build sees one consistent config —
-and because it is repo-versioned, changes to it flow through the pipeline
-itself: the system can retune its own configuration via a ticket and a PR.
+One declarative file at the repo root. A running dispatcher owns an accepted
+snapshot read from the **main checkout** and refreshes it before each dispatch
+tick. Dispatcher and build-runner orchestration capture that snapshot at each
+action boundary — dispatch, setup, and pipeline step — so a valid change may
+affect the next action of an in-flight build but never interrupts an agent turn
+or deterministic command already running. Scoped phase CLI processes separately
+read the build worktree's branch-owned file. Because the file is repo-versioned,
+changes still flow through the pipeline itself: once merged, the system can
+adopt a retuned configuration without restarting the dispatcher.
+
+A missing or unreadable file and a malformed or routing-invalid candidate are
+rejected atomically: the last valid snapshot, resolver, and revision remain in
+force, and no action starts under missing, partial, or defaulted configuration.
+The dispatcher emits an actionable operator notice without repeating it for the
+same failure. Restoring a valid `autobuild.toml` clears the rejection and
+ordinary boundary reload resumes.
 
 ```toml
 baseBranch = "main"

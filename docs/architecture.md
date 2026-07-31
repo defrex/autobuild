@@ -156,12 +156,16 @@ not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
 **Live configuration.** `src/config/live.ts` owns the running dispatcher's
-immutable effective snapshot, exhaustive hot/restart field classification, and
-eager role resolver. The watch loop refreshes it before each serialized tick
-and publishes the exact accepted TOML atomically with a
+immutable last-valid main-checkout snapshot, exhaustive hot/restart field
+classification, and eager role resolver. The watch loop refreshes it before
+each serialized tick and publishes the exact accepted TOML atomically with a
 `dispatcher.config-reloaded` repository fact before making the snapshot
-visible. Dispatcher ticks, build/harvest actions, and dashboard projections each
-capture one snapshot at their own boundary. Startup-built plugin, forge, ticket,
+visible. Missing, unreadable, malformed, and routing-invalid candidates retain
+that snapshot with deduplicated operator notice; restoring a valid file resumes
+ordinary reload. Dispatcher ticks, build/harvest actions, and dashboard
+projections each capture one snapshot at their own boundary, so an in-progress
+turn or command is never interrupted. Scoped phase CLI processes retain their
+separate build-worktree config boundary. Startup-built plugin, forge, ticket,
 and workspace adapter fields stay pinned; changed values are durable restart
 notices rather than partial adapter swaps. `--once` retains static startup
 configuration.

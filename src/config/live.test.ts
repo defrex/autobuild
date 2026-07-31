@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { parseConfig } from './load'
@@ -74,6 +77,53 @@ describe('live dispatcher config', () => {
     expect(live.current().revision).toBe(1)
     expect(live.current().config.capacity).toBe(2)
     expect(published).toHaveLength(2)
+  })
+
+  test('retains the accepted disk snapshot across deletion and resumes after restoration', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-live-config-'))
+    const source = join(dir, 'autobuild.toml')
+    const published: string[] = []
+    try {
+      await writeFile(source, base)
+      const live = new LiveConfig(
+        source,
+        parseConfig(base),
+        base,
+        runtimes,
+        async ({ content }) => {
+          published.push(content)
+        },
+      )
+      const accepted = live.current()
+
+      await unlink(source)
+      const first = await live.refreshFromDisk()
+      const duplicate = await live.refreshFromDisk()
+      expect(first).toEqual({
+        kind: 'rejected',
+        error:
+          `${source} is missing during live reload; the last valid configuration snapshot ` +
+          'remains active — restore a valid autobuild.toml to resume live reload',
+        notify: true,
+      })
+      expect(duplicate).toMatchObject({ kind: 'rejected', notify: false })
+      expect(live.current()).toBe(accepted)
+      expect(live.current().revision).toBe(0)
+      expect(live.current().config.capacity).toBe(1)
+      expect(published).toEqual([])
+
+      const restored = base.replace('capacity = 1', 'capacity = 4')
+      await writeFile(source, restored)
+      expect(await live.refreshFromDisk()).toMatchObject({
+        kind: 'adopted',
+        snapshot: { revision: 1, config: { capacity: 4 } },
+      })
+      expect(live.current().revision).toBe(1)
+      expect(live.current().config.capacity).toBe(4)
+      expect(published).toEqual([restored])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test('keeps the last valid snapshot, suppresses duplicate invalid notices, then recovers', async () => {

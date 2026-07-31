@@ -2,9 +2,10 @@
 
 Autobuild reads one declarative `autobuild.toml` from the repository root.
 Commands in the file are shell strings; the file itself is never evaluated as
-code. A build uses the configuration from its own branch when its workspace is
-provisioned, so configuration changes move through review like any other
-change.
+code. A running dispatcher owns an accepted snapshot from the main checkout,
+while scoped phase commands read the build worktree's branch-owned file.
+Configuration changes therefore move through review like any other change and,
+once merged, can be adopted by the running dispatcher.
 
 This document covers the complete accepted TOML surface. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
@@ -46,20 +47,23 @@ field in whichever table precedes it.
 
 A long-running `ab dispatch` watches the main checkout's `autobuild.toml` and
 checks it before every dispatch tick. A valid save is adopted within that tick.
-Each build, check, or agent action captures one configuration snapshot at its
-start: work already running is not interrupted, while the next action of the
-same in-flight build uses the new snapshot. Raising capacity can fill the new
-slots immediately; lowering it prevents new claims without terminating builds
-already above the limit. `ab dispatch --once` performs one pass and does not
-watch or reload.
+Each dispatch, build, check, or agent action captures the accepted configuration
+snapshot at its start boundary: work already running is not interrupted, while
+the next setup or pipeline step of the same in-flight build uses the new
+snapshot. Raising capacity can fill the new slots immediately; lowering it
+prevents new claims without terminating builds already above the limit. `ab
+dispatch --once` performs one pass and does not watch or reload.
 
 Every accepted revision is deposited verbatim as a `dispatcher-config`
 repository artifact and referenced by a `dispatcher.config-reloaded` repository
 event. The dashboard reports the reload and reprojects values such as capacity;
-plain watch mode writes the reload notice to stdout. Invalid syntax, schema, or
-runtime routing leaves the last valid snapshot in force and is reported in the
-dashboard notice row or on plain-mode stderr. An unchanged invalid file is not
-reported repeatedly, and a later valid save is adopted normally.
+plain watch mode writes the reload notice to stdout. A missing or unreadable
+file, invalid syntax or schema, or invalid runtime routing is a rejected
+candidate: it cannot replace or partially modify the last valid snapshot. The
+dispatcher keeps that snapshot active, reports an actionable notice in the
+dashboard notice row or on plain-mode stderr, and suppresses repeats while the
+same failure remains. Restoring `autobuild.toml` with valid configuration clears
+the rejection and ordinary live reload resumes without a dispatcher restart.
 
 These fields hot-reload:
 

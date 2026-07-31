@@ -163,9 +163,15 @@ The distinctions that change an administrator's answer:
   from each build stream; dispatcher settings and harvest state are reduced
   independently from the repository journal. Snapshots are never authoritative.
   Events record facts, never derived state.
-- **Workspaces** are provisioned per build. Config is read from **the build's
-  branch** at provision — so a config change flows through the pipeline like
-  any other change, and every phase of one build sees one consistent config.
+- **Live configuration** has two explicit contexts. A running dispatcher owns
+  the last valid snapshot from the **main checkout**; dispatch, setup, and each
+  pipeline step capture it at their action boundary, without interrupting an
+  agent turn or command already running. Missing, unreadable, malformed, and
+  routing-invalid candidates retain that snapshot with deduplicated operator
+  notice, and restoring a valid file resumes reload. Scoped phase CLI processes
+  still read the build worktree's branch-owned file.
+- **Workspaces** are provisioned per build and remain the locally reachable
+  execution context for that build.
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
