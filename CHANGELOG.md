@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#168](https://github.com/defrex/autobuild/pull/168) — Block harvest proposals on unresolved origin tickets
 - [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment
 - [#162](https://github.com/defrex/autobuild/pull/162) — Preview long dashboard messages
 - [#161](https://github.com/defrex/autobuild/pull/161) — Prevent superseded guidance from replaying
