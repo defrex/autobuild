@@ -202,8 +202,8 @@ export interface ResumeInputView {
   /** Full operator input, line structure included. Rendering may scroll it,
    * submission never truncates it. */
   value: string
-  /** Caret position as a CODE-POINT offset into `value` — the composer's one
-   * piece of geometry the controller owns, so the renderer stays pure. */
+  /** Caret position as a UTF-16 grapheme-boundary offset into `value` — the
+   * composer's one string coordinate the controller owns. */
   cursor: number
 }
 
@@ -224,6 +224,8 @@ export interface DashboardModel {
   active: DashboardCounter
   /** Recorded observation occurrences not claimed by a Harvest snapshot. */
   observations: DashboardCounter
+  /** Merged builds after the oldest unclaimed observation. A zero limit disables triggering. */
+  drift: DashboardCounter
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
   /** Durable repository-wide hold (`true` means queued builds cannot launch). */
@@ -1074,6 +1076,7 @@ interface DashboardFrameHeader {
   repo: string
   queued: number
   observationCount: number
+  driftCount?: number
   selection?: DashboardSelection
   warningLines?: readonly string[]
   resumeInput?: ResumeInputView
@@ -1084,6 +1087,7 @@ export interface DashboardHeader extends DashboardFrameHeader {
   activeCount: number
   capacity: number
   harvestThreshold: number
+  harvestMaxDrift: number
 }
 
 /**
@@ -1104,6 +1108,7 @@ export function buildDashboardFromProjected(
     queued: header.queued,
     active: { current: header.activeCount, limit: header.capacity },
     observations: { current: header.observationCount, limit: header.harvestThreshold },
+    drift: { current: header.driftCount ?? 0, limit: header.harvestMaxDrift },
     drained: !settings.intake,
     repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
@@ -1138,6 +1143,7 @@ export function buildDashboard(
       activeCount,
       capacity: config.capacity,
       harvestThreshold: config.policy.harvestThreshold,
+      harvestMaxDrift: config.policy.harvestMaxDrift,
     },
     repositoryEvents,
   )

@@ -14,7 +14,7 @@ import {
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
-import { classifyProviderError } from './provider-error'
+import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
@@ -323,7 +323,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       return {
         text: '',
         usage: { inputTokens: 0, outputTokens: 0 },
-        failure: missing ? { message, permanent: true } : classifyProviderError(message),
+        failure: missing ? configurationFailure(message) : classifyProviderError(message),
         cli: { stdout: '', stderr: errorText(error), exitCode: -1 },
         events: [],
         malformedLines: [],
@@ -361,7 +361,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       ...(failureMessage !== undefined
         ? {
             failure: loggedOut
-              ? { message: failureMessage, permanent: true }
+              ? credentialFailure(failureMessage)
               : classifyProviderError(failureMessage, {
                   status: parsed.statuses[0],
                   codes: parsed.codes,

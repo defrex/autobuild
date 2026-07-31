@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { agentActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import {
   artifactRef,
+  evaluateHarvestPressure,
   harvestProposalKey,
   makeHarvestScanPacket,
   partitionHarvestExhaustion,
@@ -213,7 +214,118 @@ describe('harvest blocker resolution', () => {
   })
 })
 
+describe('harvest pressure', () => {
+  const observed = (build: string, ts: string) => ({
+    occurrence: { build, seq: 1 },
+    id: `obs-${build}`,
+    kind: 'followup' as const,
+    summary: build,
+    ts,
+  })
+  const evaluate = (
+    observations: ReturnType<typeof observed>[],
+    merges: Array<{ build: string; ts: string }>,
+    harvestThreshold = 5,
+    harvestMaxDrift = 3,
+  ) => evaluateHarvestPressure({ observations, merges }, { harvestThreshold, harvestMaxDrift })
+
+  test('chooses count, drift, both, or neither independently', () => {
+    const observations = [observed('origin', '2026-01-02T00:00:00.000Z')]
+    const merges = [
+      { build: 'one', ts: '2026-01-03T00:00:00.000Z' },
+      { build: 'two', ts: '2026-01-04T00:00:00.000Z' },
+    ]
+    expect(
+      evaluate([...observations, observed('fresh', '2026-01-05T00:00:00.000Z')], [], 2, 3),
+    ).toEqual({
+      observationCount: 2,
+      drift: 0,
+      trigger: 'count',
+    })
+    expect(evaluate(observations, merges, 5, 2)).toEqual({
+      observationCount: 1,
+      drift: 2,
+      trigger: 'drift',
+    })
+    expect(
+      evaluate([...observations, observed('fresh', '2026-01-05T00:00:00.000Z')], merges, 2, 2),
+    ).toEqual({
+      observationCount: 2,
+      drift: 2,
+      trigger: 'both',
+    })
+    expect(evaluate(observations, merges, 5, 3)).toEqual({
+      observationCount: 1,
+      drift: 2,
+    })
+  })
+
+  test('handles empty and disabled drift while still measuring it', () => {
+    expect(evaluate([], [{ build: 'one', ts: '2026-01-03T00:00:00.000Z' }], 1, 1)).toEqual({
+      observationCount: 0,
+      drift: 0,
+    })
+    expect(
+      evaluate(
+        [observed('origin', '2026-01-02T00:00:00.000Z')],
+        [{ build: 'one', ts: '2026-01-03T00:00:00.000Z' }],
+        5,
+        0,
+      ),
+    ).toEqual({ observationCount: 1, drift: 1 })
+  })
+
+  test('uses the oldest observation, strict later time, distinct builds, and origin exclusion', () => {
+    const observations = [
+      observed('newer', '2026-01-05T00:00:00.000Z'),
+      observed('origin', '2026-01-02T00:00:00.000Z'),
+    ]
+    expect(
+      evaluate(
+        observations,
+        [
+          { build: 'before', ts: '2026-01-01T00:00:00.000Z' },
+          { build: 'equal', ts: '2026-01-02T00:00:00.000Z' },
+          { build: 'origin', ts: '2026-01-06T00:00:00.000Z' },
+          { build: 'later', ts: '2026-01-03T00:00:00.000Z' },
+          { build: 'later', ts: '2026-01-04T00:00:00.000Z' },
+        ],
+        5,
+        2,
+      ),
+    ).toEqual({ observationCount: 2, drift: 1 })
+  })
+})
+
 describe('harvest deterministic scan and ledger', () => {
+  test('collects merge facts without adding build or event reads', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'origin', 'oldest')
+    await store.createBuild({ slug: 'merged', repo: '/repo' })
+    await store.append('merged', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'abc123' },
+    })
+    let listReads = 0
+    let eventReads = 0
+    const listBuilds = store.listBuilds.bind(store)
+    const getEvents = store.getEvents.bind(store)
+    store.listBuilds = async () => {
+      listReads += 1
+      return listBuilds()
+    }
+    store.getEvents = async (slug) => {
+      eventReads += 1
+      return getEvents(slug)
+    }
+
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    expect(scan.merges).toHaveLength(1)
+    expect(scan.merges[0]?.build).toBe('merged')
+    expect(listReads).toBe(1)
+    expect(eventReads).toBe(2)
+  })
   test('projects distinct origin lifecycle without querying foreign sources', async () => {
     const tickets = new FakeTicketSource([
       {

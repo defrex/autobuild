@@ -43,7 +43,7 @@ import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
-import { manualClock } from '../testing/fixed'
+import { manualClock, steppingClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
   GIT_ID,
@@ -2055,12 +2055,12 @@ describe('abDispatch --once with an interactive terminal', () => {
     }, 30_000)
   }
 
-  test('shows configured capacity and unclaimed observation pressure even for queued/non-row work and a paused gate', async () => {
+  test('shows configured capacity and both pressure dimensions even for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
       'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 1',
     )
-    const fx = await makeFixture([], happyHandlers(), config)
+    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
     const source = 'pressure-source'
     const firstTerminal = fakeTerminal()
     try {
@@ -2076,6 +2076,17 @@ describe('abDispatch --once with an interactive terminal', () => {
           },
         })
       }
+      await fx.store.createBuild({ slug: 'pressure-merged', repo: fx.origin })
+      await fx.store.append('pressure-merged', {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: 'pressure-merged-sha' },
+      })
+      await fx.store.append('pressure-merged', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
       await fx.store.ensureRepo(fx.origin)
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -2095,7 +2106,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7')
+      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7 | drift 1/1')
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
       expect(firstFrame).toContain('QUEUED')
@@ -2137,7 +2148,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7')
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7 | drift 0/1')
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
     } finally {
@@ -2660,12 +2671,12 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch retains the last observation measurement when a later tick cannot scan pressure', async () => {
+  test('watch retains the last complete pressure measurement when a later tick cannot scan', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
     )
-    const fx = await makeFixture([], happyHandlers(), config)
+    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
     const term = fakeTerminal()
     const stop = new AbortController()
     const source = 'pressure-carry-over'
@@ -2689,6 +2700,17 @@ describe('abDispatch --once with an interactive terminal', () => {
           },
         })
       }
+      await fx.store.createBuild({ slug: 'carry-merged', repo: fx.origin })
+      await fx.store.append('carry-merged', {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: 'carry-merged-sha' },
+      })
+      await fx.store.append('carry-merged', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
 
       await abDispatch({
         targetRepo: fx.origin,
@@ -2712,8 +2734,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('obs 2/7')
-      expect(frame).not.toContain('obs 0/7')
+      expect(frame).toContain('obs 2/7 | drift 1/3')
+      expect(frame).not.toContain('obs 0/7 | drift 0/3')
       expect(frame).toContain('pressure scan unavailable')
       expect(fx.err).toEqual([])
     } finally {
@@ -5098,7 +5120,8 @@ describe('abDispatch interactive keyboard controls', () => {
         'esc_paste',
       )
 
-      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      const pasted =
+        'rebase onto main — “safe”\nkeep 日本語 and naïve intact\nre-run verify:test 🇺🇸 👨‍👩‍👧‍👦'
       input.paste(pasted)
       await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
       // No part of the paste is interpreted as submit, however many line

@@ -29,6 +29,10 @@ export const harvestObservationSchema = z.strictObject({
 })
 export type HarvestObservation = z.infer<typeof harvestObservationSchema>
 
+/** The durable reason a Harvest snapshot crossed repository pressure. */
+export const harvestTriggerSchema = z.enum(['count', 'drift', 'both'])
+export type HarvestTrigger = z.infer<typeof harvestTriggerSchema>
+
 /** Source-aware lifecycle visibility for distinct tickets that originated the
  * observations in a scan. Foreign-source refs remain visible but are never
  * sent to the repository's configured TicketSource. */

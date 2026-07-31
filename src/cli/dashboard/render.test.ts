@@ -3,6 +3,7 @@
  * the operator can SEE is assertable here without a terminal.
  */
 import { describe, expect, test } from 'bun:test'
+import { cellWidth } from './cells'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
@@ -91,6 +92,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     queued: 2,
     active: { current: builds.length, limit: 5 },
     observations: { current: 5, limit: 7 },
+    drift: { current: 2, limit: 3 },
     drained: false,
     repositoryPaused: false,
     defaultAutoMerge: false,
@@ -109,7 +111,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
-    expect(summary).toContain('queue 2 | active 1/5 | obs 5/7')
+    expect(summary).toContain('queue 2 | active 1/5 | obs 5/7 | drift 2/3')
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
     expect(toggles).toContain('intake ON')
@@ -149,13 +151,13 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     const rows = warned.slice(2, warned.length - (clean.length - 2))
     expect(rows.length).toBeGreaterThan(1)
     for (const row of rows) {
-      expect(stripAnsi(row).length).toBeLessThanOrEqual(40)
+      expect(cellWidth(stripAnsi(row))).toBeLessThanOrEqual(40)
       expect(row).not.toContain('\n')
     }
     const region = rows.map(stripAnsi).join('\n')
     expect(region).toContain('warning')
     expect(region).not.toContain('\\u{a}')
-    expect(region).toContain('caf\\u{e9}')
+    expect(region).toContain('café')
     expect(region).toContain('... 1 more row')
     // Continuation rows keep the first row's indent (2 in content coordinates,
     // plus `renderDashboard`'s one-column left gutter).
@@ -239,20 +241,22 @@ describe('renderDashboard: two-line header and conditional warning', () => {
         ...model([]),
         active: { current: 0, limit: 5 },
         observations: { current: 0, limit: 7 },
+        drift: { current: 0, limit: 0 },
       },
       WIDE,
     )
-    expect(empty).toContain('queue 2 | active 0/5 | obs 0/7')
+    expect(empty).toContain('queue 2 | active 0/5 | obs 0/7 | drift 0/0')
 
     const [saturated] = rd(
       {
         ...model([]),
         active: { current: 5, limit: 5 },
         observations: { current: 7, limit: 7 },
+        drift: { current: 3, limit: 3 },
       },
       WIDE,
     )
-    expect(saturated).toContain('queue 2 | active 5/5 | obs 7/7')
+    expect(saturated).toContain('queue 2 | active 5/5 | obs 7/7 | drift 3/3')
     expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
   })
 
@@ -1010,11 +1014,11 @@ describe('renderDashboard: the resume panel obeys the frame budget', () => {
     }
   })
 
-  test('plain rendering has no ANSI and escapes non-ASCII without changing the model value', () => {
+  test('plain rendering has no ANSI and preserves Unicode without changing the model value', () => {
     const m = answering('type p/m, caf\u00e9')
     const out = rd(m, { color: false, width: 100, height: 30 }).join('\n')
     expect(out).not.toContain('\x1b')
-    expect(out).toContain('type p/m, caf\\u{e9}')
+    expect(out).toContain('type p/m, café')
     expect(m.resumeInput?.value).toBe('type p/m, caf\u00e9')
   })
 
@@ -1276,14 +1280,14 @@ describe('renderDashboard: message previews', () => {
 
   test('plain fixed-size repaints are identical and every row stays bounded', () => {
     const dashboard = {
-      ...model([build({ blockers: ['one\ntwo\nthree\nfour café'] })]),
-      warningLines: ['warn one\nwarn two\nwarn three\nwarn four'],
+      ...model([build({ blockers: ['one\ntwo\nthree\nfour café 日本語 🇺🇸 👨‍👩‍👧‍👦'] })]),
+      warningLines: ['warn naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦\nwarn two\nwarn three\nwarn four'],
     }
     const opts = { color: false, width: 42, height: 20 }
     const first = rd(dashboard, opts)
     expect(rd(dashboard, opts)).toEqual(first)
     expect(first.join('\n')).not.toContain('\x1b')
-    for (const line of first) expect(line.length).toBeLessThanOrEqual(opts.width)
+    for (const line of first) expect(cellWidth(line)).toBeLessThanOrEqual(opts.width)
   })
 })
 
@@ -1557,7 +1561,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(statusLines.every((line) => line.includes('\x1b[33mPAUSED\x1b[0m'))).toBe(true)
   })
 
-  test('agent-authored blocker and harvest failure text stays visible in an ASCII PNG frame', () => {
+  test('agent-authored Unicode stays visible in a deterministic PNG frame', () => {
     const blockerQuestion = 'Should the “café” policy remain enabled?'
     const failureError = 'agent failed in naïve 💥 mode'
     const failureDetail = `stopped at synthesize r1 - automatic recovery 0/2; ${failureError}`
@@ -1576,14 +1580,14 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
 
     expect(dashboard.builds[0]!.blockers[0]).toBe(blockerQuestion)
     expect(dashboard.harvest?.detail).toBe(failureDetail)
-    expect(plain.join('\n')).toContain(
-      'Should the \\u{201c}caf\\u{e9}\\u{201d} policy remain enabled?',
-    )
-    expect(plain.join('\n')).toContain('agent failed in na\\u{ef}ve \\u{1f4a5} mode')
-    expect(plain.every((line) => /^[\x20-\x7e]*$/.test(line))).toBe(true)
+    expect(plain.join('\n')).toContain('Should the “café” policy remain enabled?')
+    expect(plain.join('\n')).toContain('agent failed in naïve 💥 mode')
+    expect(plain.every((line) => cellWidth(line) <= 120)).toBe(true)
 
-    const image = renderDashboardFrameImage(lines, { columns: 120 })
-    expect([...image.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    const first = renderDashboardFrameImage(lines, { columns: 120 })
+    const second = renderDashboardFrameImage(lines, { columns: 120 })
+    expect([...first.png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect(first.png).toEqual(second.png)
   })
 })
 
@@ -1600,6 +1604,27 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     for (const color of [false, true]) {
       const lines = rd(model([long]), { color, width: 40 })
       for (const line of lines) expect(stripAnsi(line).length).toBeLessThanOrEqual(40)
+    }
+  })
+
+  test('truncation moves or removes flags and ZWJ families whole', () => {
+    const flag = '🇺🇸'
+    const family = '👨‍👩‍👧‍👦'
+    const unicode = build({ slug: `prefix-${flag}-middle-${family}-suffix`, pr: undefined })
+    const wide = rd(model([unicode]), { color: true, width: 120 })
+      .map(stripAnsi)
+      .join('\n')
+    expect(wide).toContain(flag)
+    expect(wide).toContain(family)
+
+    for (let width = 20; width <= 80; width += 1) {
+      const lines = rd(model([unicode]), { color: true, width })
+      for (const line of lines) {
+        const plain = stripAnsi(line)
+        expect(cellWidth(plain)).toBeLessThanOrEqual(width)
+        if (plain.includes('🇺') || plain.includes('🇸')) expect(plain).toContain(flag)
+        if ([...'👨👩👧👦‍'].some((part) => plain.includes(part))) expect(plain).toContain(family)
+      }
     }
   })
 
@@ -2287,8 +2312,8 @@ describe('renderDashboard: build detail and transcript views', () => {
             kind: 'turns',
             turns: [
               {
-                prompt: '/ab-plan auth',
-                text: 'agent response',
+                prompt: '/ab-plan naïve — “日本語”',
+                text: 'agent response ☕️ 🇺🇸 👨‍👩‍👧‍👦',
                 usage: { inputTokens: 4, outputTokens: 2 },
                 failure: 'provider failed',
               },
@@ -2298,8 +2323,8 @@ describe('renderDashboard: build detail and transcript views', () => {
       },
       { color: false, width: 100 },
     ).join('\n')
-    expect(structured).toContain('Prompt: /ab-plan auth')
-    expect(structured).toContain('Agent: agent response')
+    expect(structured).toContain('Prompt: /ab-plan naïve — “日本語”')
+    expect(structured).toContain('Agent: agent response ☕️ 🇺🇸 👨‍👩‍👧‍👦')
     expect(structured).toContain('Usage: 4 input, 2 output')
     expect(structured).toContain('Failure: provider failed')
 

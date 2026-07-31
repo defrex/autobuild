@@ -3,6 +3,12 @@
 ## Unreleased
 
 - [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
+- [#178](https://github.com/defrex/autobuild/pull/178) — Correct plugin resolution root guidance
+- [#177](https://github.com/defrex/autobuild/pull/177) — Add provider alternates for agent roles
+- [#176](https://github.com/defrex/autobuild/pull/176) — Guard runtime registry lookups against inherited properties
+- [#175](https://github.com/defrex/autobuild/pull/175) — Make retired-skill reports match discovery state
+- [#174](https://github.com/defrex/autobuild/pull/174) — Trigger observation harvest on repository drift
+- [#173](https://github.com/defrex/autobuild/pull/173) — Render dashboard Unicode by terminal cells
 - [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
 - [#171](https://github.com/defrex/autobuild/pull/171) — Clamp dashboard detail scrolling to resume panels
 - [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views

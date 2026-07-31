@@ -253,13 +253,21 @@ export const finalizeSectionSchema = stepSection(
 // compatibility validation happens in the eager runtime resolver, because the
 // config loader does not know the injected runtime registry.
 
-export const roleSchema = z.strictObject({
+const runtimeAxesSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  extensions: z.array(z.string().min(1)).optional(),
+})
+
+export const roleSchema = runtimeAxesSchema.extend({
   // Per-role extension allowlist (SPEC §9). Absent ⇒ inherit
   // [roles.default].extensions; absent there too ⇒ hermetic. A set list,
   // including [], replaces the default wholesale rather than unioning with it.
   extensions: z.array(z.string().min(1)).optional(),
+  // Ordered failure-triggered execution targets. Absent ⇒ inherit the base
+  // list; a declared list (including []) replaces it wholesale. Each strict
+  // entry overlays the concrete role's resolved primary axes.
+  alternates: z.array(runtimeAxesSchema).optional(),
 })
 export type RoleConfig = z.infer<typeof roleSchema>
 
@@ -276,6 +284,8 @@ export const policySchema = z.strictObject({
   maxReviewRounds: z.number().int().positive().default(6),
   /** Unclaimed observation occurrences required to start one harvest run. */
   harvestThreshold: z.number().int().positive().default(5),
+  /** Merged builds after the oldest observation that start harvest; zero disables drift. */
+  harvestMaxDrift: z.number().int().nonnegative().default(3),
 })
 export type PolicyConfig = z.infer<typeof policySchema>
 

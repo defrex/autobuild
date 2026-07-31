@@ -14,6 +14,7 @@ import {
   type HarvestProposal,
   type HarvestProposalSet,
   type HarvestScanPacket,
+  type HarvestTrigger,
   type OccurrenceKey,
 } from '../harvest/schema'
 import {
@@ -33,9 +34,57 @@ export const HARVEST_REVIEW_ARTIFACT = 'harvest-review'
 export const HARVEST_REPORT_ARTIFACT = 'harvest-report'
 export const HARVEST_TRANSCRIPT_ARTIFACT = 'harvest-transcript'
 
+export interface HarvestMerge {
+  build: string
+  ts: string
+}
+
 export interface HarvestScanResult {
   observations: HarvestObservation[]
+  /** One durable merge fact per build, collected during the existing event-stream reads. */
+  merges: HarvestMerge[]
   state: HarvestState
+}
+
+export interface HarvestPressure {
+  observationCount: number
+  drift: number
+  trigger?: HarvestTrigger
+}
+
+/** Pure two-dimensional Harvest gate. Drift is measured from the oldest
+ * unclaimed observation and excludes that observation's own build. */
+export function evaluateHarvestPressure(
+  scan: Pick<HarvestScanResult, 'observations' | 'merges'>,
+  policy: { harvestThreshold: number; harvestMaxDrift: number },
+): HarvestPressure {
+  const observationCount = scan.observations.length
+  if (observationCount === 0) return { observationCount, drift: 0 }
+
+  const oldest = scan.observations.reduce((candidate, observation) =>
+    observation.ts < candidate.ts ? observation : candidate,
+  )
+  const mergedBuilds = new Set<string>()
+  for (const merge of scan.merges) {
+    if (merge.build === oldest.occurrence.build || merge.ts <= oldest.ts) continue
+    mergedBuilds.add(merge.build)
+  }
+  const drift = mergedBuilds.size
+  const countTriggered = observationCount >= policy.harvestThreshold
+  const driftTriggered = policy.harvestMaxDrift > 0 && drift >= policy.harvestMaxDrift
+  const trigger =
+    countTriggered && driftTriggered
+      ? 'both'
+      : countTriggered
+        ? 'count'
+        : driftTriggered
+          ? 'drift'
+          : undefined
+  return {
+    observationCount,
+    drift,
+    ...(trigger !== undefined ? { trigger } : {}),
+  }
 }
 
 /** Raw structured `observation.recorded` envelopes across this repository.
@@ -50,11 +99,16 @@ export async function scanUnclaimedObservations(
   const state = reduceHarvest(harvestEvents)
   const claimed = claimedOccurrenceKeys(state)
   const observations: HarvestObservation[] = []
+  const merges: HarvestMerge[] = []
 
   for (const record of await store.listBuilds()) {
     if (record.repo !== repo) continue
     const events = await store.getEvents(record.slug)
     for (const event of events) {
+      if (event.type === 'pr.merged') {
+        merges.push({ build: record.slug, ts: event.ts })
+        continue
+      }
       if (event.type !== 'observation.recorded') continue
       const occurrence = { build: record.slug, seq: event.seq }
       if (claimed.has(occurrenceKey(occurrence))) continue
@@ -75,7 +129,7 @@ export async function scanUnclaimedObservations(
     (a, b) =>
       a.occurrence.build.localeCompare(b.occurrence.build) || a.occurrence.seq - b.occurrence.seq,
   )
-  return { observations, state }
+  return { observations, merges, state }
 }
 
 /** Distinct previously filed/joined proposal tickets, reconciled through the

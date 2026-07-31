@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_PERMANENT_FAILURE,
   CONTRACT_RETRYABLE_FAILURE,
   describeAgentRunnerContract,
@@ -73,7 +74,10 @@ const scriptedContractFactory: AgentRunnerContractFactory = (scenario) => {
         return failedTurnResult(CONTRACT_RETRYABLE_FAILURE, false)
       }
       if (scenario === 'permanent-failure') {
-        return failedTurnResult(CONTRACT_PERMANENT_FAILURE, true)
+        return failedTurnResult(CONTRACT_PERMANENT_FAILURE, true, '', 'credentials')
+      }
+      if (scenario === 'exhaustion-failure') {
+        return failedTurnResult(CONTRACT_EXHAUSTION_FAILURE, true, '', 'exhaustion')
       }
       return defaultTurnResult(`contract turn ${ctx.turn}`)
     },

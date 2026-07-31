@@ -15,10 +15,12 @@ import {
   harvestDispositionSchema,
   harvestPendingProposalSchema,
   harvestStepSchema,
+  harvestTriggerSchema,
   occurrenceKeySchema,
 } from '../harvest/schema'
 import { actorSchema, type Actor, type ActorKind } from './envelope'
 import { EventValidationError } from './catalog'
+import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
@@ -78,6 +80,8 @@ export const harvestEventPayloadSchemas = {
     run: z.string().min(1),
     observations: z.array(occurrenceKeySchema).min(1),
     scan: artifactRefSchema,
+    /** Optional only so historical repository journals replay without migration. */
+    trigger: harvestTriggerSchema.optional(),
   }),
   'harvest.step.started': z.strictObject({
     run: z.string().min(1),
@@ -100,6 +104,7 @@ export const harvestEventPayloadSchemas = {
     model: z.string().optional(),
     step: z.enum(['synthesize', 'review']),
     round,
+    substitution: providerSubstitutionSchema.optional(),
   }),
   'harvest.session.ended': z.strictObject({
     run: z.string().min(1),
@@ -159,6 +164,7 @@ export const harvestEventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
     willRetry: z.boolean(),
+    providerAttempts: providerAttemptsSchema.optional(),
   }),
 } as const
 

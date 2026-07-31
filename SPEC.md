@@ -618,12 +618,17 @@ call is an infra failure: the runner emits
 `phase.failed {error: "no-terminal"}` and applies retry policy.
 
 Provider/runtime-declared turn failures are a separate `AgentRunner` result
-(§9), never conflated with agent silence: the runner deposits the transcript,
-then emits `phase.failed` with the provider's message verbatim. Failures
-positively classified as permanent (auth, permission, quota, billing) skip
-the retry budget and raise a policy escalation instead. If the turn already
-wrote a valid typed terminal, that terminal remains authoritative and no
-contradictory failure is appended.
+(§9), never conflated with agent silence. When the selected role has declared
+alternates, availability failures (overload, rate limit, 5xx, timeout,
+transport, and unclassified provider failure) and provider exhaustion (quota,
+usage limit, and billing) start the next target inside the same phase attempt.
+Authentication, permission, and local runtime-configuration failures do not.
+Each failed target's transcript is deposited. Only a stopped or exhausted chain
+emits one `phase.failed` with the final provider message verbatim; that final
+failure controls retry policy. Provider exhaustion skips the retry budget and
+raises a policy escalation, while availability uses the existing bounded
+budget. If the turn already wrote a valid typed terminal, that terminal remains
+authoritative and no contradictory failure is appended.
 
 This completes the sentinel-parsing replacement: success is only expressible
 through the typed channel, so "the agent rambled and exited" can never be
@@ -676,9 +681,11 @@ implementer:  ab context   (findings.json now materialized) → …
 
 - *Completed turn, no terminal* → `phase.failed {no-terminal}`, retry per
   policy [D5].
-- *Provider rejection* → transcript deposited, `phase.failed` with the
-  verbatim error; permanent auth/quota/billing signals escalate instead of
-  retrying [D5].
+- *Provider rejection* → transcript deposited; eligible failures walk the
+  role's declared alternates within one attempt. A stopped/exhausted chain
+  emits one `phase.failed` with the final verbatim error and every tried target;
+  credentials/configuration stop immediately, final exhaustion escalates
+  instead of retrying, and final availability uses bounded retry [D5].
 - *Malformed deposit* → rejected in-session with schema + error; agent
   corrects and retries [D6].
 - *Crash after deposits, before terminal* → artifacts are revisioned; the
@@ -717,7 +724,9 @@ Session-based, because review loops need memory:
 ```ts
 type Result =
   | { kind: 'completed', text, usage }
-  | { kind: 'failed', text, usage, failure: { message, permanent } }
+  | { kind: 'failed', text, usage,
+      failure: { message, permanent, cause?: 'availability' | 'exhaustion' |
+                 'credentials' | 'configuration' } }
 
 interface AgentRunner {
   start(opts: { skill, invocation, workspace, model, … }): { session, result }
@@ -728,11 +737,14 @@ interface AgentRunner {
 
 The discriminator is a port-level requirement: an SDK/provider-declared error
 must never be returned as `completed`, so every adapter inherits the
-distinction from `no-terminal`. `failure.message` preserves provider text;
-`permanent` is set only on positive evidence (authentication, permission,
-quota, billing) and means "escalate before retrying," while `false` means
-"use existing retry policy." A failed `start` still returns an endable
-session handle, guaranteeing transcript deposition.
+distinction from `no-terminal`. `failure.message` preserves provider text and
+`cause` separates availability, provider exhaustion, credential/permission,
+and local runtime configuration. `permanent` remains the retry-policy and
+legacy-plugin compatibility bit: exhaustion and credential/configuration
+failures are permanent, while availability uses existing bounded retry. A
+legacy plugin may omit `cause`; `permanent: false` remains alternate-eligible
+and `permanent: true` remains a stopping failure. A failed `start` still returns
+an endable session handle, guaranteeing transcript deposition.
 
 Narrow non-phase judgments do not widen this contract. A runtime may
 separately register an optional one-shot completion capability (tool-free,
@@ -771,21 +783,22 @@ deterministic fail-safe.
   configurations and will be removed in a future release. It is consulted only
   when `[roles.<step>]` is undeclared, so the step name always wins.
 
-  **What is and is not a fallback**, stated as three separate facts so none of
-  them is read as the others:
+  **What is and is not a fallback**, stated separately so the mechanisms are
+  not conflated:
 
-  1. A *resolved* role never has its runtime or model substituted per field.
-     Every concrete role merges over `default` independently per field; the
-     merged runtime/model pair must be compatible, and an incompatible one is
-     an error, not a substitution.
+  1. Primary field resolution never hunts for a compatible substitute. Every
+     concrete role merges runtime, model, and extensions over `default`
+     independently; an incompatible merged pair is an eager error.
   2. A **requested** role key that no `[roles.<key>]` declares resolves to
-     `[roles.default]` wholesale. That is a real fallback and not an error — a
-     pipeline whose config names no roles at all runs entirely on the default.
-  3. A **declared** key that nothing ever requests is resolved, validated, and
-     then never used. `ab dispatch` reports it at startup, naming the key and
-     the keys valid for that configuration. It stays a warning: an unmatched
-     role key is never a hard error, so upgrading with a stale or typo'd key
-     never turns a working repository red.
+     `[roles.default]` wholesale. That is undeclared-key fallback, not outage
+     routing.
+  3. A role may declare `alternates = [{ runtime?, model?, extensions? }, …]`.
+     The list is a fourth independently inherited field: a role's own list,
+     including `[]`, replaces the default list wholesale. Each entry overlays
+     that concrete role's effective primary axes and is resolved and validated
+     eagerly with indexed problems in the aggregate startup error.
+  4. A **declared** key that nothing ever requests is resolved, validated, and
+     then never used. `ab dispatch` reports it at startup as a warning.
 
   All roles
   resolve **eagerly, before any session launches**, with problems aggregated
@@ -794,9 +807,17 @@ deterministic fail-safe.
   default-model, session, and optional one-shot capability path; adding a
   runtime touches only the adapter registry, never the kernel. Mixing models
   across roles is intentional — a different reviewer catches more. The
-  resolved runtime and model are recorded on every
-  `session.started`, so an experiment's outcome is attributable to the
-  configuration that produced it.
+  Within one agent-session attempt, eligible failures try the primary then each
+  alternate in order without spending another phase attempt. Each target has a
+  fresh session bracket. A failed producer continuation may therefore continue
+  on a different runtime only by rehydrating durable context, not by inheriting
+  the failed conversation. Selection is non-sticky: every later phase, loop
+  continuation, and retry starts from the primary. The final failure controls
+  retry/permanent behavior. This applies to core phases, agent verify/finalize,
+  and Harvest, but not tool-free one-shots. Every selected runtime/model is
+  recorded on `session.started`; fallback starts cite the preceding target and
+  verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
+  the complete ordered attempt list.
 - **Transcripts come back through the interface**, not scraped from disk, so
   every adapter must produce one: the corpus is guaranteed complete,
   including turns rejected by a provider after a session handle exists.
@@ -870,15 +891,23 @@ signals (telemetry, observations)
 
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
-threshold-driven: the dispatcher counts unclaimed structured observations
-across the repository each tick, and at `[policy].harvestThreshold` it claims
-the whole current accumulation as one immutable snapshot and starts one staged
-run. Occurrence identity is
-`{build slug, event seq}` — never payload id or a scalar high-water mark,
+pressure-driven: on the existing one-pass scan of repository build streams, the
+dispatcher measures both unclaimed observation count and repository drift. A run
+starts when count reaches `[policy].harvestThreshold` **or** when the number of
+same-repository `pr.merged` facts strictly after the oldest unclaimed
+observation reaches `[policy].harvestMaxDrift`, whichever happens first. Drift
+counts distinct other builds only: the build that recorded the oldest
+observation is excluded even if it later merges, and aborted or closed-unmerged
+builds contribute no `pr.merged` fact. The drift limit defaults to `3`; zero
+disables that condition and restores count-only gating. Empty accumulations
+never trigger. Either condition claims the whole current accumulation as one
+immutable snapshot, including newer observations, and `harvest.started` records
+`count`, `drift`, or `both` as durable trigger provenance. Occurrence identity
+is `{build slug, event seq}` — never payload id or a scalar high-water mark,
 because event sequences are per build. Harvest state lives in the repository
-journal, separate from build streams; the repository lease is the
-cross-process exclusivity gate, and harvest runs fire-and-forget so dispatch
-ticks stay responsive.
+journal, separate from build streams; the repository lease is the cross-process
+exclusivity gate, and harvest runs fire-and-forget so dispatch ticks stay
+responsive.
 
 The fixed workflow is:
 
@@ -1399,7 +1428,8 @@ maxVerifyAttempts = 3
 maxSetupAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
-harvestThreshold = 5            # observation-count back-pressure in dispatch
+harvestThreshold = 5            # observation-count pressure in dispatch
+harvestMaxDrift = 3             # merged builds since oldest observation; 0 disables
 
 [tickets]
 source = "file"
@@ -1528,15 +1558,21 @@ base × local edits × new default). Two fixed former defaults, `ab-setup` and
 `ab-verify-e2e`, additionally have one-time retirement handling when absent
 from the incoming distribution. A pristine record is required to prove
 Autobuild provenance; without it, a same-named repository-authored skill is
-untouched and unreported. Upgrade removes and reports `removed` only when the
-complete live and pristine trees match byte-for-byte and no configured agent
-verify or finalize step names the skill. Any customization, config reference,
+untouched and unreported. Upgrade reports `removed` when the complete live and
+pristine trees match byte-for-byte, no configured agent verify or finalize step
+names the skill, and no distinct user-owned Claude discovery directory remains;
+it also reports `removed` when the canonical live tree is already missing. In
+the latter state it clears obsolete provenance and removes only an
+Autobuild-owned dangling discovery link. Any customization, config reference,
 or inability to inspect config safely preserves the live tree and reports
-`kept`; its obsolete pristine ownership is removed, so later upgrades treat it
-as a quiet local skill. Exact removals also clear only Autobuild-owned discovery
-links. Consequently a second upgrade neither resurrects nor re-reports either
-retirement. All other installed skills absent from the distribution retain the
-`unknown` local-addition classification.
+`kept`. When an otherwise removable canonical tree is shadowed by a distinct
+real `.claude/skills/<name>` directory, upgrade reports `kept`, removes only the
+canonical/pristine Autobuild-owned trees, preserves the Claude directory
+byte-for-byte, and includes it in the existing structured discovery-conflict
+report and nonzero exit behavior. Every terminal classification clears obsolete
+pristine ownership, so a second upgrade neither recreates a dangling link nor
+resurrects or re-reports the retirement. All other installed skills absent from
+the distribution retain the `unknown` local-addition classification.
 
 A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local
