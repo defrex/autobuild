@@ -13,100 +13,28 @@
  */
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
+import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
 //
-// Every open map below is parsed WITHOUT losing an entry to the prototype
-// chain. `z.record` and `z.looseObject` build their result by assignment, so
-// the perfectly valid TOML table `[roles."__proto__"]` invokes the legacy
-// `Object.prototype.__proto__` setter instead of creating an own key. Parsing
-// SUCCEEDS and the entry vanishes: never eagerly resolved, never dispatchable,
-// and invisible to the unconsumed-key warning that exists to catch exactly this
-// class of dead configuration (§9). A silent drop is the one outcome the
-// strictness policy above rules out.
+// Every open map below is parsed through `../open-map`, which keeps a
+// user-chosen key intact instead of losing it to the prototype chain: the
+// perfectly valid TOML table `[roles."__proto__"]` would otherwise vanish while
+// parsing SUCCEEDS — never eagerly resolved, never dispatchable, and invisible
+// to the unconsumed-key warning that exists to catch exactly this class of dead
+// configuration (§9). A silent drop is the one outcome the strictness policy
+// above rules out.
 //
 // The TOML parser already hands us null-prototype tables with the key intact,
-// so these keep it that way end to end: own descriptors in, `defineProperty`
-// out, null prototype on the result. Consumers can then read a user-chosen key
-// off these maps without `Object.hasOwn` ceremony.
+// and `openMap` keeps it that way end to end.
 //
-// `[workspace.config]` is the one open map whose keys are PLUGIN-owned rather
-// than Autobuild-owned, which makes faithful pass-through more important here
-// rather than less. Autobuild cannot validate a key it does not interpret, so
-// a dropped one is undetectable downstream: the plugin sees an absent key and
+// `[workspace.config]` is the one open map here whose keys are PLUGIN-owned
+// rather than Autobuild-owned, which makes faithful pass-through more important
+// rather than less. Autobuild cannot validate a key it does not interpret, so a
+// dropped one is undetectable downstream: the plugin sees an absent key and
 // cannot tell an operator who omitted it from one who declared it, then reports
 // its own error against a table that plainly contains it.
-
-type Ctx = { addIssue: (issue: { code: 'custom'; path?: PropertyKey[]; message: string }) => void }
-
-/** The own entries of a parsed TOML table, read BY DESCRIPTOR. `table[key]` is
- * wrong here: on any object that has a prototype, reading `"__proto__"` answers
- * that prototype rather than the declared entry. */
-function ownEntries(input: unknown, section: string, ctx: Ctx): [string, unknown][] {
-  if (input === undefined || input === null) return []
-  if (typeof input !== 'object' || Array.isArray(input)) {
-    ctx.addIssue({ code: 'custom', message: `[${section}] must be a table of named entries` })
-    return []
-  }
-  return Object.getOwnPropertyNames(input).map((key) => [
-    key,
-    Object.getOwnPropertyDescriptor(input, key)?.value,
-  ])
-}
-
-/** Record a named entry so the key survives verbatim. Plain assignment is what
- * loses `__proto__`; `defineProperty` on a null-prototype target cannot. */
-function defineEntry<T>(entries: Record<string, T>, key: string, value: T): void {
-  Object.defineProperty(entries, key, {
-    value,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  })
-}
-
-/** Validate one open-map value, forwarding every issue under its own key. */
-function parseEntry<T>(schema: z.ZodType<T>, raw: unknown, key: string, ctx: Ctx): T | undefined {
-  const parsed = schema.safeParse(raw)
-  if (parsed.success) return parsed.data
-  for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message })
-  }
-  return undefined
-}
-
-/**
- * An open map: user-chosen keys → strictly validated values, keys preserved.
- *
- * Preservation is the shared contract; the key vocabulary is not. An
- * Autobuild-owned map names entries Autobuild itself must be able to address —
- * a role to dispatch, a command to run — so a nameless entry there is dead
- * configuration and an error. A plugin-owned pass-through map is not
- * Autobuild's to narrow: it does not interpret those keys, so `allowBlankKeys`
- * lets such a map accept whatever its plugin is willing to address.
- */
-function openMap<T>(
-  section: string,
-  valueSchema: z.ZodType<T>,
-  opts: { allowBlankKeys?: boolean } = {},
-) {
-  return z
-    .unknown()
-    .transform((input, ctx): Record<string, T> => {
-      const entries: Record<string, T> = Object.create(null)
-      for (const [key, raw] of ownEntries(input, section, ctx)) {
-        if (key.length === 0 && opts.allowBlankKeys !== true) {
-          ctx.addIssue({ code: 'custom', message: `[${section}] entry names must be nonempty` })
-          continue
-        }
-        const value = parseEntry(valueSchema, raw, key, ctx)
-        if (value !== undefined) defineEntry(entries, key, value)
-      }
-      return entries
-    })
-    .prefault({})
-}
 
 /**
  * A section mixing ONE known key (`steps`) with an open set of named step
@@ -119,7 +47,7 @@ function openMap<T>(
  * defect: §16.1 errors are feedback to whoever edits the file.
  */
 function stepSection<T, C>(
-  section: string,
+  label: string,
   stepsSchema: z.ZodType<string[]>,
   tableSchema: z.ZodType<T>,
   compose: (steps: string[], stepConfigs: Record<string, T>) => C,
@@ -129,7 +57,7 @@ function stepSection<T, C>(
     .transform((input, ctx): C => {
       const stepConfigs: Record<string, T> = Object.create(null)
       let steps: string[] = []
-      for (const [key, raw] of ownEntries(input, section, ctx)) {
+      for (const [key, raw] of ownEntries(input, label, ctx)) {
         if (key === 'steps') {
           const parsed = stepsSchema.safeParse(raw)
           if (parsed.success) steps = parsed.data
@@ -178,7 +106,7 @@ export const workspaceSchema = z.strictObject({
       '[workspace].provider must be a nonblank provider name',
     )
     .default('git-worktree'),
-  config: openMap('workspace.config', z.unknown(), { allowBlankKeys: true }),
+  config: openMap('[workspace.config]', z.unknown(), { keys: 'any' }),
 })
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 
@@ -187,7 +115,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 // Open map of deterministic verbs the kernel may run. `setup`, `lint`,
 // `typecheck`, `test` are conventions, not required keys (§16.1).
 
-export const commandsSchema = openMap('commands', z.string().min(1))
+export const commandsSchema = openMap('[commands]', z.string().min(1))
 export type Commands = z.infer<typeof commandsSchema>
 
 // ── [verify.<step>] ──────────────────────────────────────────────────────────
@@ -281,7 +209,7 @@ export interface VerifyConfig {
  * is lost to the prototype chain (see `stepSection`).
  */
 export const verifySectionSchema = stepSection(
-  'verify',
+  '[verify]',
   z.array(z.string().min(1)).default([]),
   verifyStepConfigSchema,
   (steps, stepConfigs): VerifyConfig => ({ steps, stepConfigs }),
@@ -317,7 +245,7 @@ export interface FinalizeConfig {
 
 /** Like [verify], [finalize] mixes `steps` with a strict named table set. */
 export const finalizeSectionSchema = stepSection(
-  'finalize',
+  '[finalize]',
   z.array(z.string().min(1, 'finalize.steps entries must be nonempty step names')).default([]),
   finalizeStepConfigSchema,
   (steps, stepConfigs): FinalizeConfig => ({ steps, stepConfigs }),
@@ -462,7 +390,7 @@ const configRootSchema = z.strictObject({
   // disappear ahead of both eager resolution and the unconsumed-key warning;
   // the registry-aware eager resolver requires default.runtime and can
   // therefore include the complete materialized runtime list in its diagnostic.
-  roles: openMap('roles', roleSchema),
+  roles: openMap('[roles]', roleSchema),
   policy: policySchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
   // ready gate. Prefault feeds the file-source identity through ticketsSchema,
