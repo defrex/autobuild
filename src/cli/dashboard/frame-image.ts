@@ -17,13 +17,22 @@ import { graphemes } from './cells'
 const ESC = '\x1b'
 const BEL = '\x07'
 const FONT_FAMILY = 'DejaVu Sans Mono'
-const FONT_FAMILIES = `${FONT_FAMILY}, Noto Sans JP, Noto Emoji`
+const FONT_FAMILIES = [
+  FONT_FAMILY,
+  'Dashboard CJK 113',
+  'Dashboard CJK 117',
+  'Dashboard CJK 118',
+  'Dashboard Emoji Flags',
+  'Dashboard Emoji Food',
+  'Dashboard Emoji People',
+].join(', ')
 const FONT_SIZE = 16
 const CELL_WIDTH = 10
 const LINE_HEIGHT = 20
 const PADDING_X = 12
 const PADDING_Y = 10
 const BASELINE = 16
+const EMOJI_CLUSTER = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u
 
 const PALETTE = {
   background: '#0d1117',
@@ -46,6 +55,7 @@ interface Style {
 
 interface TextRun {
   column: number
+  cells: number
   text: string
   style: Style
 }
@@ -153,14 +163,15 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
     // run that follows a wide glyph.
     if (
       previous !== undefined &&
-      previous.column + previous.text.length === cells &&
+      previous.column + previous.cells === cells &&
       /^[\x20-\x7e]*$/.test(previous.text) &&
       /^[\x20-\x7e]$/.test(cluster) &&
       sameStyle(previous.style, style)
     ) {
       previous.text += cluster
+      previous.cells += width
     } else {
-      runs.push({ column: cells, text: cluster, style: cloneStyle(style) })
+      runs.push({ column: cells, cells: width, text: cluster, style: cloneStyle(style) })
     }
     text += cluster
     cells += width
@@ -259,9 +270,20 @@ function svgFor(
       const y = PADDING_Y + BASELINE + row * LINE_HEIGHT
       const opacity = run.style.dim ? ' fill-opacity="0.58"' : ''
       const weight = run.style.bold ? ' font-weight="700"' : ' font-weight="400"'
+      // DejaVu's native advance is slightly narrower than the 10 px evidence
+      // grid. Fit coalesced ASCII runs to their exact terminal cells so the
+      // error cannot accumulate into a visible gap before a pinned Unicode
+      // cluster. Emoji get the same exact fit at a slightly larger size: the
+      // monochrome fallback remains readable without crossing its cell range.
+      const emoji = EMOJI_CLUSTER.test(run.text)
+      const geometry =
+        /^[\x20-\x7e]+$/.test(run.text) || emoji
+          ? ` textLength="${run.cells * CELL_WIDTH}" lengthAdjust="spacingAndGlyphs"`
+          : ''
+      const size = emoji ? ' font-size="18"' : ''
       const node =
         `<text x="${x}" y="${y}" fill="${PALETTE[run.style.foreground]}"` +
-        `${weight}${opacity}>${xml(run.text)}</text>`
+        `${weight}${opacity}${geometry}${size}>${xml(run.text)}</text>`
       content.push(
         run.style.href === undefined ? node : `<a href="${xml(run.style.href)}">${node}</a>`,
       )

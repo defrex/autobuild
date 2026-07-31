@@ -29,10 +29,18 @@ describe('renderDashboardFrameImage', () => {
 
     expect(first.text).toBe(`${lines.join('\n')}\n`)
     expect(first.png).toEqual(second.png)
-    expect(first.svg).toContain('Noto Sans JP, Noto Emoji')
+    expect(first.svg).toContain('Dashboard CJK 113, Dashboard CJK 117, Dashboard CJK 118')
+    expect(first.svg).toContain('Dashboard Emoji Flags, Dashboard Emoji Food')
+    expect(first.svg).toContain('Dashboard Emoji People')
+    expect(first.svg).toMatch(/<text x="12"[^>]*textLength="20"[^>]*>na<\/text>/)
     expect(first.svg).toMatch(/<text x="92"[^>]*>日<\/text>/)
     expect(first.svg).toMatch(/<text x="112"[^>]*>本<\/text>/)
     expect(first.svg).toMatch(/<text x="132"[^>]*>語<\/text>/)
+    expect(first.svg).toMatch(
+      /<text x="162"[^>]*textLength="20"[^>]*font-size="18"[^>]*>☕️<\/text>/,
+    )
+    expect(first.svg).toMatch(/<text x="192"[^>]*font-size="18"[^>]*>🇺🇸<\/text>/)
+    expect(first.svg).toMatch(/<text x="222"[^>]*font-size="18"[^>]*>👨‍👩‍👧‍👦<\/text>/)
   })
 
   test('renders deterministic PNG bytes with pinned dimensions and fonts', () => {
@@ -50,7 +58,9 @@ describe('renderDashboardFrameImage', () => {
     // PNG IHDR stores width/height at byte offsets 16 and 20.
     expect(pngDimension(first.png, 16)).toBe(first.width)
     expect(pngDimension(first.png, 20)).toBe(first.height)
-    expect(first.svg).toContain('font-family="DejaVu Sans Mono, Noto Sans JP, Noto Emoji"')
+    expect(first.svg).toContain(
+      'font-family="DejaVu Sans Mono, Dashboard CJK 113, Dashboard CJK 117, Dashboard CJK 118, Dashboard Emoji Flags, Dashboard Emoji Food, Dashboard Emoji People"',
+    )
     expect(first.svg).toContain('font-weight="700"')
     expect(first.svg).toContain('fill-opacity="0.58"')
   })
