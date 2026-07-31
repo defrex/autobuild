@@ -2462,3 +2462,130 @@ test('h2. harvested hard prerequisite remains unclaimed in the ready state', asy
   expect(h.launched).toEqual([])
   expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(false)
 }, 30_000)
+
+// Originating build tickets are deterministic prerequisites even when the
+// harvest producer declares no blocker itself.
+test('h3. unresolved observation origin holds and then releases a ready proposal', async () => {
+  const configToml = CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1')
+    .replace('readyLabels = ["autobuild"]', 'readyLabels = []')
+    .replace('readyState = "Ready"', 'readyState = "Ready"\nproposalState = "Ready"')
+  const originTicket = readyTicket('ORIGIN-1', {
+    title: 'Originating implementation',
+    state: 'Doing',
+  })
+  const h = await track(makeHarness({ handlers: {}, tickets: [originTicket], configToml }))
+
+  await h.store.createBuild({
+    slug: 'originating-implementation',
+    repo: h.origin,
+    ticket: originTicket.ref,
+  })
+  await h.store.append('originating-implementation', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: originTicket.ref, repo: h.origin, baseBranch: 'main' },
+  })
+  await h.store.append('originating-implementation', {
+    actor: agentActor('implement', 'origin-observation-session'),
+    type: 'observation.recorded',
+    payload: {
+      id: 'obs-origin-followup',
+      kind: 'followup',
+      summary: 'Follow-up that depends on the originating implementation landing.',
+    },
+  })
+  await h.store.append('originating-implementation', {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+
+  const harvestAgents = new ScriptedAgentRunner({
+    script: async (ctx) => {
+      const harvestEnv = resolveHarvestCliEnv(ctx.opts.env)
+      const run = async (argv: string[]): Promise<void> => {
+        const errors: string[] = []
+        const code = await runCli(argv, {
+          store: h.store,
+          harvestEnv,
+          workspacePath: h.origin,
+          ids: h.ids,
+          stdout: () => {},
+          stderr: (line) => errors.push(line),
+        })
+        if (code !== 0) throw new Error(errors.join('\n'))
+      }
+      await run(['harvest', 'context'])
+      if (ctx.opts.skill === 'ab-harvest') {
+        const observations = JSON.parse(
+          await readFile(join(h.origin, '.ab', 'observations.json'), 'utf8'),
+        ) as Array<{ occurrence: { build: string; seq: number } }>
+        expect(
+          JSON.parse(await readFile(join(h.origin, '.ab', 'originating-tickets.json'), 'utf8')),
+        ).toEqual([
+          {
+            ticket: originTicket.ref,
+            sourceMatches: true,
+            exists: true,
+            resolved: false,
+          },
+        ])
+        const file = join(h.origin, '.ab', 'origin-derived-proposal.json')
+        await writeFile(
+          file,
+          JSON.stringify({
+            proposals: [
+              {
+                action: 'create',
+                title: 'Follow up after originating implementation',
+                whatWhy: 'The observed follow-up relies on the originating implementation.',
+                acceptanceCriteria: ['The follow-up behavior is complete.'],
+                outOfScope: ['Changes to the originating implementation.'],
+                observations: observations.map((item) => item.occurrence),
+              },
+            ],
+          }),
+        )
+        await run(['harvest', 'submit', file])
+      } else {
+        const notes = join(h.origin, '.ab', 'origin-derived-review.md')
+        await writeFile(notes, 'The automatic originating-ticket rule applies.\n')
+        await run(['harvest', 'verdict', 'approve', '--notes', notes])
+      }
+      return defaultTurnResult('harvest CLI terminal deposited')
+    },
+  })
+
+  expect(
+    await new HarvestRunner({
+      store: h.store,
+      tickets: h.tickets,
+      config: h.config,
+      runtimes: { scripted: { runner: harvestAgents, servesModels: [] } },
+      repo: h.origin,
+      workspacePath: h.origin,
+      ids: h.ids,
+      uuids: randomUuids(),
+      clock: h.clock,
+      instance: 'harvest-origin-blocker-e2e',
+      sessionEnv: { AB_STORE: 'memory' },
+      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+    }).run(),
+  ).toMatchObject({ outcome: 'completed', launch: 'started' })
+
+  expect(await h.tickets.get('fake-1')).toMatchObject({
+    state: 'Ready',
+    blockedBy: ['ORIGIN-1'],
+  })
+  expect(await h.dispatcher.tick()).toMatchObject({
+    dispatched: 0,
+    dependencyBlocked: 1,
+    dependencyDiagnostics: ['ticket fake-1 blocked by ORIGIN-1 (not complete)'],
+  })
+  expect(h.tickets.claims).not.toContain('fake-1')
+
+  await h.tickets.transition('ORIGIN-1', 'Done')
+  expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 1, dependencyBlocked: 0 })
+  expect(h.tickets.claims).toContain('fake-1')
+  expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(true)
+}, 30_000)
