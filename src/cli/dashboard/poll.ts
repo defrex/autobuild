@@ -13,9 +13,11 @@ export interface DashboardBuildReader {
 export interface DashboardPollSnapshot {
   /** Monotonic process-local cache revision. */
   revision: number
-  /** Every nonterminal row. Objects are reused while their streams are unchanged. */
+  /** Every dashboard-visible row, including acknowledged abort cleanup. Objects
+   * are reused while their streams are unchanged. */
   builds: DashboardBuild[]
-  /** Every nonterminal reduction; this map and `builds` have matching membership. */
+  /** Every dashboard-visible reduction; this map and `builds` have matching
+   * membership. `aborted` entries are visible but do not consume capacity. */
   states: ReadonlyMap<string, BuildState>
 }
 
@@ -27,7 +29,7 @@ interface LiveEntry {
   build: DashboardBuild | null
 }
 
-/** A terminal build can never become active again, so its log is discarded. */
+/** A fully completed build can never become visible again, so its log is discarded. */
 interface TerminalEntry {
   kind: 'terminal'
 }
@@ -35,7 +37,9 @@ interface TerminalEntry {
 type PollEntry = LiveEntry | TerminalEntry
 
 function isTerminal(state: BuildState): boolean {
-  return state.status === 'done' || state.status === 'aborted'
+  // `build.aborted` acknowledges cancellation but begins the checkpointed
+  // cleanup saga. Keep polling until its final `build.completed` fact.
+  return state.status === 'done'
 }
 
 /**
@@ -62,10 +66,11 @@ function validateDelta(slug: string, sinceSeq: number, events: AbEvent[]): void 
  * Process-local, display-only acceleration for the interactive dispatch frame.
  *
  * Every refresh still discovers records with `listBuilds()`. A first-seen
- * stream is hydrated from seq 0; a cached nonterminal stream is read only after
- * its reduced `lastSeq`. Empty deltas preserve the exact reduction and
- * projected row, so phase timing is not recomputed. Reducer-confirmed terminal
- * streams compact to tombstones and are never polled again.
+ * stream is hydrated from seq 0; a cached dashboard-visible stream is read only
+ * after its reduced `lastSeq`. Empty deltas preserve the exact reduction and
+ * projected row, so phase timing is not recomputed. Only fully completed
+ * streams compact to tombstones; acknowledged aborts remain live through their
+ * cleanup checkpoints and final completion.
  *
  * Refreshes are serialized and committed transactionally. A failed refresh
  * leaves every entry at its last successful sequence, while concurrent callers

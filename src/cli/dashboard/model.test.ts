@@ -391,8 +391,8 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('projectBuild: the nonterminal-build filter', () => {
-  test('queued, running, paused, and blocked are listed; terminal builds are excluded', () => {
+describe('projectBuild: the dashboard-visible build filter', () => {
+  test('lifecycle rows and abort cleanup are listed; only completed builds are excluded', () => {
     const queued = toLog(prelude().slice(0, 3)) // no runner.attached
     expect(projectBuild(RECORD, reduceBuild(queued), CONFIG, queued)).toMatchObject({
       status: 'queued',
@@ -407,7 +407,17 @@ describe('projectBuild: the nonterminal-build filter', () => {
     expect(projectBuild(RECORD, reduceBuild(done), CONFIG, done)).toBeNull()
 
     const aborted = toLog([...prelude(), ev('build.aborted', {})])
-    expect(projectBuild(RECORD, reduceBuild(aborted), CONFIG, aborted)).toBeNull()
+    expect(projectBuild(RECORD, reduceBuild(aborted), CONFIG, aborted)).toMatchObject({
+      status: 'cleaning',
+      abortProgress: 'running work stopped; abort cleanup pending or in progress',
+    })
+
+    const cleanupCompleted = toLog([
+      ...prelude(),
+      ev('build.aborted', {}),
+      ev('build.completed', { outcome: 'abandoned' }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(cleanupCompleted), CONFIG, cleanupCompleted)).toBeNull()
 
     const paused = toLog([...prelude(), ev('build.paused', {})])
     expect(projectBuild(RECORD, reduceBuild(paused), CONFIG, paused)?.status).toBe('paused')
@@ -742,6 +752,72 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     expect(dashboardBuildControl('resuming')).toBeUndefined()
     expect(dashboardBuildControl('paused')?.key).toBe('r')
     expect(dashboardBuildControl('blocked')?.key).toBe('r')
+  })
+
+  test('abort intent outranks queued, running, pause transitions, and blocked overlaps', () => {
+    const blocked = [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('escalation.raised', {
+        id: 'e_abort',
+        phase: 'plan',
+        round: 1,
+        source: 'agent',
+        question: 'still blocked?',
+      }),
+      ev('build.paused', {}),
+    ]
+    const cases: EventWrite[][] = [
+      [...prelude().slice(0, 3), ev('build.abort-requested', {})],
+      [...prelude(), ev('build.abort-requested', {})],
+      [...prelude(), ev('build.pause-requested', {}), ev('build.abort-requested', {})],
+      [...prelude(), ev('build.paused', {}), ev('build.abort-requested', {})],
+      [
+        ...prelude(),
+        ev('build.paused', {}),
+        ev('build.resume-requested', {}),
+        ev('build.abort-requested', {}),
+      ],
+      [...blocked, ev('build.abort-requested', {})],
+    ]
+
+    for (const writes of cases) {
+      const log = toLog(writes)
+      const row = projectBuild(RECORD, reduceBuild(log), CONFIG, log)
+      expect(row?.status).toBe('aborting')
+      expect(row?.abortProgress).toContain('abort requested')
+      expect(row?.steps).toEqual([])
+      expect(dashboardBuildControl(row!.status)).toBeUndefined()
+    }
+  })
+
+  test('acknowledgement changes aborting to cleaning, and cleanup visibility consumes no capacity', () => {
+    const requestedLog = toLog([...prelude(), ev('build.abort-requested', {})])
+    expect(projectBuild(RECORD, reduceBuild(requestedLog), CONFIG, requestedLog)?.status).toBe(
+      'aborting',
+    )
+
+    const cleaningLog = toLog([
+      ...prelude(),
+      ev('build.abort-requested', {}),
+      ev('build.aborted', {}),
+      ev('workspace.released', {}),
+    ])
+    const cleaningState = reduceBuild(cleaningLog)
+    const dashboard = buildDashboard(
+      [{ record: RECORD, state: cleaningState, events: cleaningLog }],
+      CONFIG,
+      { repo: '/repos/app', queued: 0, observationCount: 0 },
+    )
+    expect(dashboard.builds).toHaveLength(1)
+    expect(dashboard.builds[0]?.status).toBe('cleaning')
+    expect(dashboard.active.current).toBe(0)
+
+    const completedLog = toLog([
+      ...cleaningLog.map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('build.completed', { outcome: 'abandoned' }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(completedLog), CONFIG, completedLog)).toBeNull()
   })
 
   test('paused alone stays paused; blocked alone stays blocked', () => {
