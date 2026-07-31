@@ -424,6 +424,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       ['paused', 'PAUSED', 'r resume'],
       ['resuming', 'RESUMING', undefined],
       ['blocked', 'BLOCKED', 'r resume'],
+      ['aborting', 'ABORTING', undefined],
     ] as const
 
     for (const [status, literal, control] of cases) {
@@ -457,6 +458,38 @@ describe('renderDashboard: two-line header and conditional warning', () => {
         expect(detail.at(-1)).toContain(control)
       }
     }
+  })
+
+  test('ABORTING renders progress instead of a pipeline and advertises no build action', () => {
+    const aborting = build({
+      status: 'aborting',
+      steps: [],
+      abortProgress: 'abort requested; waiting for running work to stop',
+    })
+    const list = rd(
+      {
+        ...model([aborting]),
+        selection: { kind: 'build', slug: aborting.slug },
+      },
+      WIDE,
+    ).map(stripAnsi)
+    expect(list.join('\n')).toContain('ABORTING')
+    expect(list.join('\n')).toContain('abort requested; waiting for running work to stop')
+    expect(list.join('\n')).not.toContain('[ ] plan')
+    expect(list.at(-1)).toBe(' Keys: Up/Down select  Enter details  Ctrl-C quit')
+
+    const detail = rd(
+      {
+        ...model([aborting]),
+        selection: { kind: 'build', slug: aborting.slug },
+        view: { kind: 'detail', slug: aborting.slug },
+      },
+      WIDE,
+    ).map(stripAnsi)
+    expect(detail.join('\n')).toContain('Abort progress')
+    expect(detail.at(-1)).toBe(
+      ' Keys: Up/Down select session  Enter transcript  Esc back  Ctrl-C quit',
+    )
   })
 })
 
