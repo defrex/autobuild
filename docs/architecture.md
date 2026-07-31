@@ -92,8 +92,15 @@ exception to producer routing: its answer returns to that same step on
 `verify.started.feedback`, and `PHASE_SPECS.inputs.currentFeedback` makes `ab
 context` the delivery channel. When a failed verify report instead exhausts
 policy, guidance answering that policy escalation takes precedence over the
-pending report as the failure routes to the next `implement` round. `finalize`
-and `reconcile` have no producer round, so
+pending report as the failure routes to the next `implement` round. For these
+engine-routed destinations, `engine.ts` chooses the newest answered guidance
+for the requested destination before checking whether its durable carrier
+reached a matching session launch. That ordering makes supersession durable:
+delivering the winner cannot reveal an older same-destination answer, while
+plan, code, and exact-verifier destinations remain independent and a new answer
+after delivery remains eligible. The projection uses only event history, so
+restart and decision replay agree.
+`finalize` and `reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
 `src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and

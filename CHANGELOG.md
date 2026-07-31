@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#161](https://github.com/defrex/autobuild/pull/161) — Prevent superseded guidance from replaying
 - [#160](https://github.com/defrex/autobuild/pull/160) — Restore dashboard terminal modes after abnormal exits
 - [#159](https://github.com/defrex/autobuild/pull/159) — Keep escalation guidance durable until session launch
 - [#158](https://github.com/defrex/autobuild/pull/158) — Make pending abort intent dominate bulk pause
