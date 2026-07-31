@@ -828,7 +828,13 @@ builds with the question and an answer channel (an `escalation.answered`
 event — commands are events, §15.2.7). The durable record is in the store
 like everything else. An answer carries either bare `retry` or free-text
 `guidance` that feeds the parked phase's next run; answering is an attempt,
-not a forced success — an unresolved condition may escalate again.
+not a forced success — an unresolved condition may escalate again. For an
+agent verifier's own `ab escalate`, that next run is the same `verify:<step>`:
+`verify.started.feedback` cites the answer, `ab context` materializes it as
+`.ab/guidance.json`, and the citation consumes it once. A bare retry reruns the
+step without guidance. The intentionally different policy escalation after an
+exhausted failed verify report feeds `implement`, where its guidance outranks
+the pending report.
 
 Policy escalations caused by an exhausted bounded retry/round budget are the
 narrow exception to the human-answer rule: a fresh `ab dispatch` invocation
@@ -1053,7 +1059,7 @@ The families, with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
@@ -1149,7 +1155,13 @@ report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
 2 → approve → verify re-runs **from the first step** (implement changed the
 code; cheap checks first), `attempt: 2`. `policy.maxVerifyAttempts`
-exhausted → `escalation.raised {source: "policy"}`.
+exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
+policy escalation routes to `implement` and outranks the pending report. By
+contrast, when the agent verifier itself uses `ab escalate`, guidance answering
+it reruns that same step with `verify.started {feedback: {guidance}}`; `ab context`
+writes `.ab/guidance.json`. The start citation consumes the answer
+once, so a later failure routes its report to `implement` without stale
+guidance. A bare retry reruns the verifier with no feedback.
 
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:

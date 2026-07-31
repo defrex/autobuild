@@ -100,7 +100,13 @@ branch-cut base (or the refreshed base promoted by a completed reconcile).
 This verify-only base is deliberately independent from implementation's
 focused review range. Both narrowing mechanisms produce the ordinary
 queryable skipped outcome; Git failure is infrastructure and fails closed,
-never a synthetic skip.
+never a synthetic skip. Verify escalation routing is also explicit in the
+engine: guidance answering an agent verifier's own `ab escalate` returns to the
+same step on `verify.started.feedback`, which `ab context` materializes as
+`.ab/guidance.json`; that cited start consumes the answer once. Guidance
+answering the policy escalation after failed-report exhaustion instead routes
+to `implement` and outranks the pending report. A bare retry carries no
+feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
 launches per slug within one process; the BuildStore lease remains the

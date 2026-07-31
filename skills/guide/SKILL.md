@@ -1023,10 +1023,16 @@ break.
 `ab answer` answers every escalation that is open when the command runs,
 regardless of `agent`, `stall`, or `policy` source. Its text is joined, trimmed,
 and delivered as authoritative guidance. With no text (or only whitespace), it
-requests a bare retry and supplies no agent guidance. The dashboard captures
-the blocker ids when its field opens, then answers only those still open at
-submission; Escape cancels without writing. If the build is also paused, both
-surfaces append all answers first and `build.resume-requested` last. A plain
+requests a bare retry and supplies no agent guidance. Verify has two explicit
+answer routes: guidance answering an agent verifier's own `ab escalate` returns
+to that same `verify:<step>` on `verify.started.feedback` and materializes as
+`.ab/guidance.json`; the cited start consumes it once. Guidance answering the
+policy escalation after exhausted failed verify reports instead goes to
+`implement` and outranks the pending report. A bare retry on either path carries
+no guidance. The dashboard captures the blocker ids when its field opens, then
+answers only those still open at submission; Escape cancels without writing. If
+the build is also paused, both surfaces append all answers first and
+`build.resume-requested` last. A plain
 `ab resume` does not answer blockers; use `ab answer` for a blocked build.
 
 Every command requires the target to exist in this repository and be active

@@ -71,7 +71,7 @@ export interface ContextManifest {
   conflict?: { baseSha: string }
   /** Agent-verify: the step's config from the workspace's autobuild.toml (§16.1). */
   step?: { name: string; config: VerifyStepConfig }
-  /** The feedback this producer round was started with (§15.3, §10). */
+  /** The feedback this phase occurrence was started with (§15.3, §10). */
   feedback?: Feedback
   /** Chains a human resolved via dismiss-finding — the reviewer is told so (§15.6-B). */
   dismissedFindingIds?: string[]
@@ -97,16 +97,30 @@ function findingsById(events: AbEvent[]): Map<string, Finding> {
 }
 
 /**
- * The feedback carried by this round's `*.started` event (§15.3).
- * `implement.started` and `plan.started` both carry a feedback field
- * (symmetric by design) — the carrier that gets an answered guidance
- * escalation to a FRESH producer session after a parked build re-attaches
- * (§15.6-B). A `plan.started` without one (logs predating the field) falls
+ * The feedback carried by this occurrence's `*.started` event (§15.3).
+ * `implement.started`, `plan.started`, and agent `verify.started` may carry
+ * feedback — the carrier that gets answered guidance to a fresh session after
+ * a parked build re-attaches (§15.6-B). A `plan.started` without one (logs
+ * predating the field) falls
  * back to deriving round-N feedback from the round-(N-1)
  * `plan-review.verdict` — the plan loop's verdicts ARE its findings channel
  * (§8.3: "prior plan rev + findings").
  */
 function currentFeedback(events: AbEvent[], phase: Phase, round: number): Feedback | null {
+  if (isVerifyPhase(phase)) {
+    const step = verifyStep(phase)
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i]!
+      if (
+        event.type === 'verify.started' &&
+        event.payload.step === step &&
+        event.payload.attempt === round
+      ) {
+        return event.payload.feedback ?? null
+      }
+    }
+    return null
+  }
   if (phase === 'implement') {
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const event = events[i]!
@@ -266,7 +280,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
 
-  if (inputs.findings === 'current') {
+  if (inputs.findings === 'current' || inputs.currentFeedback === true) {
     const feedback = currentFeedback(events, phase, round)
     if (feedback !== null) {
       manifest.feedback = feedback

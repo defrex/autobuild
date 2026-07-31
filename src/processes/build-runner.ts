@@ -813,7 +813,7 @@ export class BuildRunner {
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
   private async runAgentVerify(decision: RunAgentVerifyDecision, events: AbEvent[]): Promise<void> {
     const { store, slug } = this.deps
-    const { step, skill, attempt } = decision
+    const { step, skill, attempt, feedback } = decision
     const phase = verifyPhase(step)
 
     // D5 guard, extended to agent-verify (see module doc): keyed by
@@ -831,7 +831,7 @@ export class BuildRunner {
     await store.append(slug, {
       actor: KERNEL,
       type: 'verify.started',
-      payload: { step, attempt },
+      payload: { step, attempt, ...(feedback !== undefined ? { feedback } : {}) },
     } satisfies EventWrite<'verify.started'>)
 
     await this.executeSession({

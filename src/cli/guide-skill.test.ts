@@ -360,6 +360,20 @@ describe('ab-guide — durable build-control coverage', () => {
     ).toEqual([])
   })
 
+  test('states both verify escalation guidance routes and bare retry behavior', () => {
+    const compact = guide.replace(/\s+/g, ' ')
+    for (const contract of [
+      "guidance answering an agent verifier's own `ab escalate` returns to that same `verify:<step>`",
+      '`verify.started.feedback`',
+      'materializes as `.ab/guidance.json`',
+      'the cited start consumes it once',
+      'policy escalation after exhausted failed verify reports instead goes to `implement` and outranks the pending report',
+      'A bare retry on either path carries no guidance',
+    ]) {
+      expect(compact).toContain(contract)
+    }
+  })
+
   test('names the durable event behind every control', () => {
     for (const event of [
       'build.pause-requested',

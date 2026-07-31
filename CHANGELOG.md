@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#151](https://github.com/defrex/autobuild/pull/151) — Route verifier escalation guidance back to its step
 - [#149](https://github.com/defrex/autobuild/pull/149) — Generate the README headline from dashboard capture
 - [#148](https://github.com/defrex/autobuild/pull/148) — Negotiate Kitty keyboard input for the dashboard
 - [#147](https://github.com/defrex/autobuild/pull/147) — Route read-only build queries through the store seam

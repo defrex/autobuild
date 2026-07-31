@@ -1254,6 +1254,94 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     ).toEqual(runPhase('finalize', 1))
   })
 
+  test('an answered agent-verifier escalation reruns the same step with authoritative guidance', () => {
+    const beforeAnswer = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+      ...verifyRun('unit', 1, true),
+      ev('verify.started', { step: 'e2e', attempt: 1 }),
+      ev('escalation.raised', {
+        id: 'e_verify',
+        phase: 'verify:e2e',
+        source: 'agent',
+        question: 'Which test account is authoritative?',
+      }),
+      ev('escalation.answered', {
+        id: 'e_verify',
+        answer: 'Use the seeded admin account.',
+        resolution: 'guidance',
+      }),
+    ]
+    const guidance = {
+      guidance: { escalation: 'e_verify', answer: 'Use the seeded admin account.' },
+    }
+
+    expect(decide(beforeAnswer)).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+      feedback: guidance,
+    })
+
+    const delivered = [
+      ...beforeAnswer,
+      ev('verify.started', { step: 'e2e', attempt: 1, feedback: guidance }),
+    ]
+    expect(decide(delivered)).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+    })
+
+    const e2eReport = { kind: 'verify-report:e2e', rev: 0 }
+    expect(
+      decide([
+        ...delivered,
+        ev('verify.completed', {
+          step: 'e2e',
+          attempt: 1,
+          outcome: 'fail',
+          report: e2eReport,
+        }),
+      ]),
+    ).toEqual(runPhase('implement', 2, { verify: { step: 'e2e', report: e2eReport } }))
+  })
+
+  test('a bare retry after an agent-verifier escalation reruns without guidance', () => {
+    expect(
+      decide([
+        ...prelude(),
+        ...planApproved(),
+        ...implementRound(1, 'sha-r1'),
+        ...codeReview(1, 'approve'),
+        ...verifyRun('types', 1, true),
+        ...verifyRun('unit', 1, true),
+        ev('verify.started', { step: 'e2e', attempt: 1 }),
+        ev('escalation.raised', {
+          id: 'e_verify',
+          phase: 'verify:e2e',
+          source: 'agent',
+          question: 'Retry the environment?',
+        }),
+        ev('escalation.answered', {
+          id: 'e_verify',
+          answer: 'Operator requested a bare retry with no feedback',
+          resolution: 'retry',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+    })
+  })
+
   test('a failure elsewhere in a cycle still wins over a skipped step', () => {
     expect(
       decide([

@@ -475,6 +475,49 @@ describe('buildContext — verify:<step> (§8.3: spec, step config, commit range
     expect(manifest.allowedTerminals).toEqual(['verdict', 'escalate'])
   })
 
+  test('verify.started guidance materializes once from the exact step occurrence', async () => {
+    await writeFile(join(workspace, 'autobuild.toml'), TOML)
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: {
+        step: 'e2e',
+        attempt: 1,
+        feedback: {
+          guidance: { escalation: 'esc_verify', answer: 'Use the seeded admin account.' },
+        },
+      },
+    })
+
+    let manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'verify:e2e', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.feedback).toEqual({
+      guidance: { escalation: 'esc_verify', answer: 'Use the seeded admin account.' },
+    })
+    expect(JSON.parse(await abFile('guidance.json'))).toEqual({
+      escalation: 'esc_verify',
+      answer: 'Use the seeded admin account.',
+    })
+
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'e2e', attempt: 1 },
+    })
+    manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'verify:e2e', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.feedback).toBeUndefined()
+    expect(existsSync(join(workspace, '.ab', 'guidance.json'))).toBe(false)
+  })
+
   test('an unconfigured step errors listing the configured steps', async () => {
     await writeFile(join(workspace, 'autobuild.toml'), TOML)
     await expect(
