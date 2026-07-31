@@ -13,7 +13,8 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
 
 1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md` (latest revision),
    and `.ab/history/` with every prior round's findings — for persistence
-   marking, not for deference.
+   marking, not for deference. When present, `.ab/dismissed-findings.json`
+   lists finding ids a human explicitly dismissed.
 2. Judge the plan on exactly these axes:
    - **Spec conformance** — does executing this plan satisfy every
      acceptance criterion? Does anything in it exceed the spec's scope?
@@ -68,7 +69,10 @@ Findings are structured JSON (the CLI validates and stamps ids):
   unresolved — the same disagreement, even if reworded — list its id here.
   This is judgment only you can apply; the kernel mechanically escalates
   chains that persist too long, so mark honestly: neither re-litigate
-  resolved findings nor let a dodged one look fresh.
+  resolved findings nor let a dodged one look fresh. A human-dismissed id is
+  settled: do not re-raise that finding. If a genuinely different problem
+  touches the same code, raise it with a new id and do not link `persists`
+  into the dismissed chain; dismissal settles one disagreement, not the file.
 
 Approve when the plan would satisfy the spec — not when it matches how you
 would have written it. Escalate when the *spec* is the problem (contradictory

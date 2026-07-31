@@ -105,10 +105,14 @@ describe('runCli — routing and exit codes', () => {
       'ab resume <slug>',
       'ab auto-merge <slug> <on|off>',
       'ab answer <slug>',
+      'ab answer <slug> [<text>] --dismiss',
+      'ab answer <slug> [<text>] --revise-spec <file>',
+      'ab answer <slug> [<text>] --revise-spec-from-ticket',
       'ab abort <slug>',
     ]) {
       expect(help).toContain(command)
     }
+    expect(help).toContain('restarts from plan while keeping an open PR')
   })
 
   test('plugin help documents the sessionless diagnostics and contract verb', async () => {
@@ -678,6 +682,43 @@ describe('runCli — sessionless build controls', () => {
       expect(event.payload.answer).toContain('no feedback')
     }
     await local.close()
+  })
+
+  test('routes --revise-spec lazily and confirms the new revision', async () => {
+    const storeRef = join(tmp, 'revise-store')
+    await seedControlStore(storeRef, { escalations: ['esc-spec'] })
+    const local = openLocalStore(storeRef)
+    const original = await local.putArtifact(slug, { kind: 'spec', content: 'old' })
+    await local.append(slug, {
+      actor: agentActor('spec', 'spec-session'),
+      type: 'spec.authored',
+      payload: {
+        artifact: { kind: 'spec', rev: original.revision },
+        session: 'spec-session',
+      },
+    })
+    await local.close()
+    const path = join(tmp, 'replacement.md')
+    await writeFile(
+      path,
+      '# Replacement\n\n## Acceptance criteria\n- Works.\n\n## Out of scope\n- Nothing.\n',
+    )
+    const d = controlDeps(storeRef)
+    expect(await runCli(['answer', slug, '--revise-spec', path], d)).toBe(0)
+    expect(d.out.join('\n')).toContain('with revise-spec (spec rev 1); restarting from plan')
+
+    const after = openLocalStore(storeRef)
+    expect((await after.getEvents(slug)).slice(-2).map((event) => event.type)).toEqual([
+      'escalation.answered',
+      'spec.revised',
+    ])
+    await after.close()
+  })
+
+  test('resolution flags are mutually exclusive', async () => {
+    const d = controlDeps(join(tmp, 'grammar-store'))
+    expect(await runCli(['answer', slug, '--dismiss', '--revise-spec-from-ticket'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('resolution flags are mutually exclusive')
   })
 
   test('every verb refuses an own-phase target before appending', async () => {

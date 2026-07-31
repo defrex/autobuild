@@ -569,6 +569,21 @@ describe('renderDashboard: emphasis', () => {
     expect(out.some((l) => l.includes('second question'))).toBe(true)
   })
 
+  test('blocked detail names the CLI-only dismissal and spec revision paths', () => {
+    const blocked = build({ status: 'blocked', blockers: ['operator decision required'] })
+    const out = rd(
+      {
+        ...model([blocked]),
+        selection: { kind: 'build', slug: blocked.slug },
+        view: { kind: 'detail', slug: blocked.slug },
+      },
+      { color: false, width: 160 },
+    ).join('\n')
+    expect(out).toContain(`ab answer ${blocked.slug} --dismiss`)
+    expect(out).toContain(`ab answer ${blocked.slug} --revise-spec <file>`)
+    expect(out).toContain('bare retry when empty')
+  })
+
   test('an auto-merge wait blocker preserves the complete provider detail', () => {
     const reason =
       "Auto-merge gate could not apply consent for PR #7: local merge blocked - error: Entry 'autobuild.toml' not uptodate."

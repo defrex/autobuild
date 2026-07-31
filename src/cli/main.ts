@@ -9,6 +9,8 @@
  * what was wrong and what would be accepted, so the in-session correction
  * loop is immediate and cheap.
  */
+import { readFile } from 'node:fs/promises'
+import type { TicketRef } from '../ontology'
 import type { Clock } from '../store/types'
 import type { BuildStore } from '../store/types'
 import { textContent } from '../store/types'
@@ -35,7 +37,7 @@ import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
 import { done, escalate, verdict } from './terminals'
-import { abTicket } from './ticket'
+import { abTicket, openTicketSource } from './ticket'
 import { abUpgrade, type ResolveConflict } from './upgrade'
 import { withUpgradeProgress } from './upgrade-progress'
 import { formatInstalledVersion, readDistributionIdentity } from './installation'
@@ -215,10 +217,41 @@ function buildControlConfirmation(result: BuildControlResult): string {
       }
       return `build ${result.slug}: ${outcome[result.command]}`
     }
-    case 'answered':
-      return `build ${result.slug}: answered ${result.count} open escalation${
-        result.count === 1 ? '' : 's'
-      } with ${result.resolution}${result.resumed ? '; resume requested' : ''}`
+    case 'answered': {
+      const plural = result.count === 1 ? '' : 's'
+      const terminal = result.terminalSignal
+      if (terminal !== undefined) {
+        const ending =
+          terminal.kind === 'terminal-status'
+            ? `the build ${terminal.status === 'done' ? 'completed' : 'aborted'} while the answer was recorded${
+                terminal.outcome !== undefined ? ` (${terminal.outcome})` : ''
+              }; it will not restart`
+            : terminal.kind === 'abort-requested'
+              ? 'abort was requested during the action; the build will be aborted and will not restart'
+              : `the PR ${terminal.state}; build completion is underway and it will not restart`
+        return `build ${result.slug}: answered ${result.count} escalation${plural} with ${result.resolution}; ${ending}`
+      }
+      if (result.resolution === 'revise-spec') {
+        const revision = result.specRev === undefined ? '' : ` (spec rev ${result.specRev})`
+        if (result.authorizedEarlier === true) {
+          return `build ${result.slug}: completed the spec revision recorded earlier${revision}; the body supplied now was not used${
+            result.resumed ? '; resume requested' : ''
+          }`
+        }
+        return `build ${result.slug}: answered ${result.count} escalation${plural} with revise-spec${revision}; restarting from plan${
+          result.resumed ? '; resume requested' : ''
+        }`
+      }
+      if (result.resolution === 'dismiss-finding' && (result.remainingOpen ?? 0) > 0) {
+        const remaining = result.remainingOpen ?? 0
+        return `build ${result.slug}: dismissed ${result.count} escalation${plural}; ${remaining} blocker${
+          remaining === 1 ? '' : 's'
+        } remains (cites no review findings) — answer with guidance or an empty answer to retry`
+      }
+      return `build ${result.slug}: answered ${result.count} open escalation${plural} with ${result.resolution}${
+        result.resumed ? '; resume requested' : ''
+      }`
+    }
     case 'answer-required':
       throw new Error('build-control requested interactive feedback for an explicit CLI command')
   }
@@ -229,6 +262,7 @@ async function runBuildControl(
   slug: string,
   action: BuildControlAction,
   storeRef?: string,
+  readTicketBody?: (ref: TicketRef) => Promise<string>,
 ): Promise<void> {
   if (deps.exec === undefined) {
     throw new Error(
@@ -242,6 +276,7 @@ async function runBuildControl(
     slug,
     action,
     ...(storeRef !== undefined ? { storeRef } : {}),
+    ...(readTicketBody !== undefined ? { readTicketBody } : {}),
   })
   deps.stdout(buildControlConfirmation(result))
 }
@@ -634,19 +669,96 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'answer': {
-      const usage = 'usage: ab answer <slug> [<text>] [--store <ref>]'
-      const parsed = parseArgs(rest, { store: 'value' }, usage)
+      const usage =
+        'usage: ab answer <slug> [<text>] [--dismiss | --revise-spec <file> | --revise-spec-from-ticket] [--store <ref>]'
+      const parsed = parseArgs(
+        rest,
+        {
+          store: 'value',
+          dismiss: 'boolean',
+          'revise-spec': 'value',
+          'revise-spec-from-ticket': 'boolean',
+        },
+        usage,
+      )
       const [slug, ...text] = parsed.positionals
       if (slug === undefined) throw new Error(usage)
+      const resolutionFlags = [
+        parsed.flags.has('dismiss'),
+        parsed.flags.has('revise-spec'),
+        parsed.flags.has('revise-spec-from-ticket'),
+      ].filter(Boolean).length
+      if (resolutionFlags > 1) throw new Error(`resolution flags are mutually exclusive — ${usage}`)
       const answer = text.join(' ')
+      const storeRef = stringFlag(parsed, 'store')
+      const specPath = stringFlag(parsed, 'revise-spec')
+      const resolve = parsed.flags.has('dismiss')
+        ? ({ kind: 'dismiss-finding' } as const)
+        : specPath !== undefined
+          ? ({
+              kind: 'revise-spec',
+              body: {
+                kind: 'supplied',
+                origin: `--revise-spec ${specPath}`,
+                read: async (): Promise<string> => {
+                  try {
+                    return await readFile(specPath, 'utf8')
+                  } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+                      throw new Error(
+                        `--revise-spec ${specPath}: file not found — expected a file holding the replacement spec body`,
+                      )
+                    }
+                    throw error
+                  }
+                },
+              },
+            } as const)
+          : parsed.flags.has('revise-spec-from-ticket')
+            ? ({ kind: 'revise-spec', body: { kind: 'ticket' } } as const)
+            : undefined
+      const readTicketBody =
+        resolve?.kind === 'revise-spec' && resolve.body.kind === 'ticket'
+          ? async (ref: TicketRef): Promise<string> => {
+              const { source } = await openTicketSource(
+                {
+                  targetRepo: deps.workspacePath,
+                  env: deps.processEnv ?? {},
+                  ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
+                  stdout,
+                  ...(storeRef !== undefined ? { storeRef } : {}),
+                },
+                'ab answer --revise-spec-from-ticket',
+              )
+              if (source.name !== ref.source) {
+                throw new Error(
+                  `build ticket source is "${ref.source}", but this repository is configured for "${source.name}"; refusing to read a same-id ticket from a different source`,
+                )
+              }
+              const ticket = await source.get(ref.id)
+              if (ticket === null) {
+                throw new Error(
+                  `ticket "${ref.id}" was not found in the configured ${source.name} source`,
+                )
+              }
+              if (ticket.ref.source !== ref.source || ticket.ref.id !== ref.id) {
+                throw new Error(
+                  `ticket adapter returned ${ticket.ref.source}:${ticket.ref.id}, expected ${ref.source}:${ref.id}`,
+                )
+              }
+              return ticket.body
+            }
+          : undefined
       await runBuildControl(
         deps,
         slug,
         {
           kind: 'answer',
           ...(answer !== '' ? { text: answer } : {}),
+          ...(resolve !== undefined ? { resolve } : {}),
         },
-        stringFlag(parsed, 'store'),
+        storeRef,
+        readTicketBody,
       )
       return 0
     }

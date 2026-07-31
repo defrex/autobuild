@@ -396,7 +396,7 @@ describe('buildContext — code-review (§8.3: commit range, prior findings, dis
         round: 1,
         source: 'stall',
         question: 'finding chain persisted',
-        refs: ['f_1'],
+        refs: ['f_1', 'src/not-a-finding.ts'],
       },
     })
     await store.append(BUILD, {
@@ -415,6 +415,7 @@ describe('buildContext — code-review (§8.3: commit range, prior findings, dis
     expect(await treeOf(join(workspace, '.ab'))).toEqual([
       '.gitignore',
       'context.json',
+      'dismissed-findings.json',
       'history/findings-r1.json',
       'implement-notes.md',
       'plan.md',
@@ -423,6 +424,7 @@ describe('buildContext — code-review (§8.3: commit range, prior findings, dis
     // Latest implement.completed wins (§8.3).
     expect(manifest.commitRange).toEqual({ base: 'sha-base', head: 'sha-head-2' })
     expect(manifest.dismissedFindingIds).toEqual(['f_1'])
+    expect(JSON.parse(await abFile('dismissed-findings.json'))).toEqual(['f_1'])
     expect(await abFile('implement-notes.md')).toBe('notes r2\n')
     expect(JSON.parse(await abFile('history/findings-r1.json'))).toEqual([
       finding('f_1'),

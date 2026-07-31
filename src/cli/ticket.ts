@@ -25,7 +25,7 @@ export type TicketSourceFactory = (
   plugins: PluginRegistry,
 ) => TicketSource | Promise<TicketSource>
 
-interface TicketCommandOpts {
+export interface TicketCommandOpts {
   targetRepo: string
   /** Process environment — store selection and adapter secrets. */
   env: Record<string, string | undefined>
@@ -87,16 +87,16 @@ export interface TicketMoveOpts extends TicketCommandOpts {
 
 type TicketCommandName = 'create' | 'update' | 'block' | 'unblock' | 'list' | 'show' | 'move'
 
-interface ResolvedTicketCommand {
+export interface ResolvedTicketCommand {
   config: Config
   source: TicketSource
 }
 
 /** Resolve linked-worktree identity, config, selected local state, and adapter
- * exactly once for one ticket command. */
-async function resolveTicketCommand(
-  opts: TicketCommandOpts,
-  command: TicketCommandName,
+ * exactly once for one ticket command or another sessionless caller. */
+export async function openTicketSource(
+  opts: TicketCommandOpts & { storeRef?: string },
+  label: string,
 ): Promise<ResolvedTicketCommand> {
   const targetRepo =
     opts.exec === undefined
@@ -109,7 +109,7 @@ async function resolveTicketCommand(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(
-        `${configPath}: not found — 'ab ticket ${command}' reads autobuild.toml ` +
+        `${configPath}: not found — '${label}' reads autobuild.toml ` +
           'from the resolved Git main checkout (SPEC §8.8)',
       )
     }
@@ -121,6 +121,7 @@ async function resolveTicketCommand(
   const plugins = await loadPlugins(config.plugins, targetRepo)
   const repoState = resolveRepoStatePaths({
     repo: targetRepo,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
   const factory = opts.sourceFactory ?? createTicketSource
@@ -128,6 +129,13 @@ async function resolveTicketCommand(
     config,
     source: await factory(config.tickets, opts.env, targetRepo, repoState.localStateRoot, plugins),
   }
+}
+
+async function resolveTicketCommand(
+  opts: TicketCommandOpts,
+  command: TicketCommandName,
+): Promise<ResolvedTicketCommand> {
+  return openTicketSource(opts, `ab ticket ${command}`)
 }
 
 async function readBody(path: string): Promise<string> {
