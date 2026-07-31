@@ -883,19 +883,26 @@ ticks stay responsive.
 The fixed workflow is:
 
 1. **scan (deterministic)** — subtract all claimed occurrences, reconcile
-   prior proposal tickets through TicketSource lifecycle facts, and
-   atomically store the scan packet with the run's claim.
+   prior proposal tickets through TicketSource lifecycle facts, expose each
+   distinct observation-origin ticket's source match, existence, and resolution
+   state, and atomically store the scan packet with the run's claim.
 2. **synthesize ⇄ review (judgment through `converge`)** — the continuing
    producer clusters same-problem records and authors typed
    create/join/suppress proposals. A create may carry source-local `blockedBy`
-   ids when its evidence establishes a hard prerequisite; contextual references
-   and nonbinding ordering do not become blockers. A fresh reviewer checks
+   ids when its evidence establishes a hard prerequisite other than the
+   automatic observation-origin relationship; contextual references and
+   nonbinding ordering do not become blockers. A fresh reviewer checks
    coverage, semantic dedup, spec quality, evidence, and both directions of
    that prerequisite rule. Only approval advances.
-3. **file (deterministic)** — validate every create blocker through the selected
-   TicketSource, render creates to the spec standard, and file them with those
-   native relationships into `[tickets].proposalState`, Triage by default,
-   with the reserved `autobuild:proposal` provenance label.
+3. **file (deterministic)** — refresh the selected TicketSource lifecycle for
+   every declared blocker and same-source ticket that originated a create's
+   clustered observations. Unknown agent-declared ids fail filing; missing,
+   resolved, foreign-source, and absent origins contribute nothing. The created
+   ticket receives the first-seen deduplicated union of declared blockers and
+   still-existing unresolved origins. The filing fact and report preserve those
+   two provenance sets separately. Creates are rendered to the spec standard
+   and filed into `[tickets].proposalState`, Triage by default, with the reserved
+   `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -964,10 +971,13 @@ creation or later. The source owns representation (how a blocker is stored)
 and completion semantics (what "done" means); the dispatcher owns the
 decision — an unresolved blocker means the ticket is not claimed and creates
 no build. Dependencies are written during grooming or by an approved harvest
-create whose evidence establishes a hard prerequisite, then read at dispatch
-time. Harvest validates those source-local ids through the configured source
-before creating the proposal ticket. Both paths remain initiation, so the
-never-consulted-mid-build rule is untouched. A dependency-blocked ticket stays
+create, then read at dispatch time. Harvest validates agent-declared source-local ids
+and automatically derives unresolved same-source observation origins through
+fresh configured-source lifecycle reads before creating the proposal ticket.
+The scan packet exposes the earlier informational lifecycle view to producer
+and reviewer, while the filing read is authoritative. Both paths remain
+initiation, so the never-consulted-mid-build rule is untouched. A
+dependency-blocked ticket stays
 queued source work rather than becoming a blocked build: the runtime `blocked`
 status is for builds awaiting a human.
 

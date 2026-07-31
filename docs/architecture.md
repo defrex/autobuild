@@ -152,8 +152,10 @@ may never close.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
-occurrence identity, the exhaustion partition), `harvest-runner.ts` executes
-the staged workflow under the heartbeated repository lease, and
+source-aware originating-ticket lifecycle projection, filing-time blocker
+resolution, occurrence identity, and the exhaustion partition),
+`harvest-runner.ts` executes the staged workflow under the heartbeated
+repository lease, records declared/derived blocker provenance, and
 `src/kernel/harvest.ts` reduces runs, claims, recovery history, and the
 committed ledger with ordered parked/exhaustion/open selectors. The recovery
 invariants are SPEC §12; the mechanics live in the reducer and its tests.
