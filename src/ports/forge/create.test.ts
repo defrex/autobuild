@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import type { PluginFactoryContext } from '../../plugins/manifest'
+import { parsePluginManifest } from '../../plugins/manifest'
 import { createPluginRegistry } from '../../plugins/registry'
 import { FakeForge } from './fake'
 import { GitHubForge } from './github'
@@ -101,6 +102,25 @@ describe('createForge', () => {
     })
     await expect(createForge({ name: 'broken', registry, env: {}, repoRoot: '.' })).rejects.toThrow(
       'forge adapter "broken" from plugin "broken-plugin" failed to initialize: credentials unavailable',
+    )
+  })
+
+  test('selects an adapter whose declared name collides with an inherited object member', async () => {
+    const registry = createPluginRegistry()
+    const selected = new FakeForge()
+    registry.register(
+      parsePluginManifest({
+        name: 'proto-plugin',
+        apiVersion: '^1.0.0',
+        forges: { ['__proto__']: () => selected },
+      }),
+    )
+
+    expect(await createForge({ name: '__proto__', registry, env: {}, repoRoot: '.' })).toBe(
+      selected,
+    )
+    expect(() => resolveForgeRegistration('missing', registry)).toThrow(
+      'unknown forge adapter "missing"; available forges: __proto__, github, local-git',
     )
   })
 })

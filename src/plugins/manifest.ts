@@ -1,5 +1,6 @@
 import semver from 'semver'
 import { z } from 'zod'
+import { openMap } from '../open-map'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import type { AgentRunnerContractFactory } from '../ports/runner/contract'
 import type { RuntimeRegistration } from '../ports/runner/runtime'
@@ -152,7 +153,24 @@ const registrationSchema = z.unknown().transform((value, ctx) => {
   }
   return z.NEVER
 })
-const registrationMapSchema = z.record(nonblank, registrationSchema)
+
+/**
+ * Adapter maps are keyed by names the PLUGIN AUTHOR chooses, so they go through
+ * the same key-preservation contract as autobuild.toml's open maps: a declared
+ * name reaches the registry verbatim, `__proto__` included, instead of being
+ * lost to `z.record`'s assignment-built result. A dropped registration here is
+ * pure misdirection — the operator selecting that adapter is told it is not
+ * registered, and the list of available adapters omits the name their manifest
+ * plainly declares.
+ *
+ * Names are `nonblank` rather than merely nonempty: an adapter is addressed from
+ * configuration by name, and a name made only of whitespace cannot be.
+ */
+const ADAPTER_MAP = {
+  keys: 'nonblank',
+  shape: 'an object of named adapter registrations',
+} as const
+const registrationMap = (label: string) => openMap(label, registrationSchema, ADAPTER_MAP)
 
 const requiredEnvSchema = z.array(nonblank).superRefine((names, ctx) => {
   const seen = new Set<string>()
@@ -174,19 +192,32 @@ const ticketSourceDescriptorSchema = z.strictObject({
   contract: contractSchema.optional(),
 })
 
-const ticketSourceMapSchema = z.record(
-  nonblank,
-  z.union([factorySchema, ticketSourceDescriptorSchema]),
-)
+/** The ticket-source counterpart of `registrationSchema`. A union would be the
+ * obvious spelling, but a Zod `invalid_union` issue carries the bare message
+ * "Invalid input" with the branch detail nested in `issue.errors` — detail that
+ * both `openMap` and the loader's `path: message` rendering drop. An explicit
+ * transform keeps "must be a factory function" in front of the plugin author. */
+const ticketSourceRegistrationSchema = z.unknown().transform((value, ctx) => {
+  if (typeof value === 'function') return value
+  const parsed = ticketSourceDescriptorSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  for (const issue of parsed.error.issues) {
+    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
+  }
+  return z.NEVER
+})
 
-/** Strict runtime contract for a plugin module's default export. */
+/** Strict runtime contract for a plugin module's default export.
+ *
+ * `.optional()` stays outermost, so an undeclared port remains `undefined`
+ * rather than becoming `openMap`'s prefaulted `{}`. */
 export const pluginManifestSchema = z.strictObject({
   name: nonblank,
   apiVersion: nonblank,
-  ticketSources: ticketSourceMapSchema.optional(),
-  agentRuntimes: registrationMapSchema.optional(),
-  workspaceProviders: registrationMapSchema.optional(),
-  forges: registrationMapSchema.optional(),
+  ticketSources: openMap('ticketSources', ticketSourceRegistrationSchema, ADAPTER_MAP).optional(),
+  agentRuntimes: registrationMap('agentRuntimes').optional(),
+  workspaceProviders: registrationMap('workspaceProviders').optional(),
+  forges: registrationMap('forges').optional(),
 })
 
 /** Validate shape and API compatibility before any registration is committed. */

@@ -132,3 +132,102 @@ describe('plugin manifest', () => {
     )
   })
 })
+
+// Every fixture below declares `__proto__` with a COMPUTED key. Both
+// `{ __proto__: fn }` and `{ '__proto__': fn }` in an object literal invoke the
+// special prototype-setter form and create no own key at all, so a fixture
+// written that way asserts nothing while looking correct.
+const ADAPTER_MAPS = [
+  'ticketSources',
+  'agentRuntimes',
+  'workspaceProviders',
+  'forges',
+] as const satisfies readonly (keyof AutobuildPluginManifest)[]
+
+type AdapterMap = (typeof ADAPTER_MAPS)[number]
+
+function manifestWith(map: AdapterMap, adapters: Record<string, unknown>): unknown {
+  return { name: 'proto-plugin', apiVersion: '^1.0.0', [map]: adapters }
+}
+
+function parseAdapters(
+  map: AdapterMap,
+  adapters: Record<string, unknown>,
+): Record<string, unknown> {
+  return parsePluginManifest(manifestWith(map, adapters))[map] as unknown as Record<string, unknown>
+}
+
+/** A plain property read, spelled so the name stays a runtime string: written
+ * as a literal, TypeScript would resolve `parsed.toString` against
+ * `Object.prototype` and type the very lookup this pins as a method. */
+function read(parsed: Record<string, unknown>, name: string): unknown {
+  return parsed[name]
+}
+
+describe('plugin manifest adapter-name preservation', () => {
+  test('every declared name survives, including one that names an inherited member', () => {
+    for (const map of ADAPTER_MAPS) {
+      const parsed = parseAdapters(map, { ['__proto__']: factory, ordinary: factory })
+      expect(Object.getOwnPropertyNames(parsed)).toEqual(['__proto__', 'ordinary'])
+      expect(Object.getPrototypeOf(parsed)).toBeNull()
+      expect(read(parsed, '__proto__')).toBe(factory)
+      expect(read(parsed, 'ordinary')).toBe(factory)
+    }
+  })
+
+  test('an undeclared name cannot be answered by an inherited member', () => {
+    for (const map of ADAPTER_MAPS) {
+      const parsed = parseAdapters(map, { ordinary: factory })
+      for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+        expect(read(parsed, name)).toBeUndefined()
+      }
+    }
+  })
+
+  test('preservation is general, not a __proto__ special case', () => {
+    for (const map of ADAPTER_MAPS) {
+      const parsed = parseAdapters(map, { constructor: factory, toString: factory })
+      expect(Object.getOwnPropertyNames(parsed)).toEqual(['constructor', 'toString'])
+      expect(read(parsed, 'constructor')).toBe(factory)
+      expect(read(parsed, 'toString')).toBe(factory)
+    }
+  })
+
+  test('a preserved name still carries descriptor registrations verbatim', () => {
+    const parsed = parseAdapters('ticketSources', {
+      ['__proto__']: { factory, requiredEnv: ['ACME_TOKEN'] },
+    })
+    expect(read(parsed, '__proto__')).toEqual({ factory, requiredEnv: ['ACME_TOKEN'] })
+  })
+
+  test('a blank or whitespace-only adapter name is still rejected on every map', () => {
+    for (const map of ADAPTER_MAPS) {
+      for (const name of ['', '   ', '\t']) {
+        expect(() => parseAdapters(map, { [name]: factory })).toThrow(
+          /entry names must be nonblank/,
+        )
+      }
+    }
+  })
+
+  test('a port declaring no adapters, and a manifest declaring none, stay valid', () => {
+    for (const map of ADAPTER_MAPS) {
+      const parsed = parseAdapters(map, {})
+      expect(Object.getOwnPropertyNames(parsed)).toEqual([])
+      expect(Object.getPrototypeOf(parsed)).toBeNull()
+    }
+    const bare = parsePluginManifest({ name: 'bare', apiVersion: '^1.0.0' })
+    for (const map of ADAPTER_MAPS) expect(bare[map]).toBeUndefined()
+  })
+
+  test('an own accessor entry still registers the adapter it returns', () => {
+    for (const map of ADAPTER_MAPS) {
+      const parsed = parseAdapters(map, {
+        get acme() {
+          return factory
+        },
+      })
+      expect(parsed.acme).toBe(factory)
+    }
+  })
+})

@@ -153,4 +153,21 @@ describe('loadPlugins', () => {
       /collision\.ts.*collision.*forge.*github.*builtin/,
     )
   })
+
+  test('loads an adapter whose declared name collides with an inherited object member', async () => {
+    const repo = await fixture()
+    // The computed key is load-bearing: `{ __proto__: fn }` in a module's
+    // object literal sets the prototype and declares no adapter at all.
+    await write(
+      join(repo, 'proto-plugin.ts'),
+      `export default { name: 'proto-plugin', apiVersion: '^1.0.0', forges: { ['__proto__']: () => ({}) } }\n`,
+    )
+    const diagnosis = await diagnosePlugins(['./proto-plugin.ts'], repo)
+    expect(diagnosis.healthy).toBe(true)
+    expect(diagnosis.reports[0]).toMatchObject({ module: './proto-plugin.ts', stage: 'loaded' })
+    expect(diagnosis.registry.forges.get('__proto__')?.owner).toEqual({
+      kind: 'plugin',
+      name: 'proto-plugin',
+    })
+  })
 })
