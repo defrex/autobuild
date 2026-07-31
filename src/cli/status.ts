@@ -112,13 +112,14 @@ export interface BuildObservation {
 
 export type BuildDecisionProjection =
   | { kind: 'awaiting-pr'; reason?: string }
+  | { kind: 'repository-completion'; prState: Extract<PrLifecycle, 'merged' | 'closed'> }
   | { kind: 'parked'; reason: string }
   | { kind: 'runner-work' }
   | { kind: 'unavailable'; diagnostic: string }
 
 export interface BuildDetail extends BuildSummary {
-  /** Current engine decision from the build-owned config, when an active PR
-   * makes that classification relevant. */
+  /** Current work-owner decision. Open PRs use the build-owned config; ended
+   * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
   openEscalations: OpenEscalation[]
   openSessions: OpenSession[]
@@ -419,6 +420,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       lines.push(
         '  note:     running with an expired lease — parked waiting on the PR; no runner re-attachment is pending',
       )
+    } else if (d.decision?.kind === 'repository-completion') {
+      lines.push(
+        `  note:     running with an expired lease — the PR is ${d.decision.prState}; repository-level completion is pending and no runner re-attachment is pending`,
+      )
     } else if (d.decision?.kind === 'parked') {
       lines.push(
         '  note:     running with an expired lease — the current decision is parked; no runner re-attachment is pending',
@@ -442,6 +447,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.decision?.kind === 'awaiting-pr') {
     lines.push(
       `  waiting:  on PR${d.decision.reason !== undefined ? ` — ${d.decision.reason}` : ''}`,
+    )
+  } else if (d.decision?.kind === 'repository-completion') {
+    lines.push(
+      `  waiting:  repository-level completion after the PR was ${d.decision.prState}; no runner re-attachment is pending`,
     )
   } else if (d.decision?.kind === 'unavailable') {
     lines.push(`  decision: unavailable — ${d.decision.diagnostic}`)
@@ -617,7 +626,11 @@ async function projectBuildDecision(
   const state = reduceBuild(events)
   const active =
     state.status === 'running' || state.status === 'paused' || state.status === 'blocked'
-  if (!active || state.prState !== 'open') return undefined
+  if (!active) return undefined
+  if (state.prState === 'merged' || state.prState === 'closed') {
+    return { kind: 'repository-completion', prState: state.prState }
+  }
+  if (state.prState !== 'open') return undefined
 
   const workspace = openWorkspacePath(events)
   if (workspace === undefined) {

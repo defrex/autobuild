@@ -1552,7 +1552,7 @@ export class Dispatcher {
     await this.deps.tickets.comment(
       ticket.ref.id,
       `Bounced back to ${triageState}: this ticket does not conform to ` +
-        `the spec standard (docs/spec-standard.md) and cannot be dispatched.\n` +
+        `the spec standard (.agents/skills/ab-guide/references/spec-standard.md) and cannot be dispatched.\n` +
         `Missing: ${missing.join('; ')}.`,
     )
   }
