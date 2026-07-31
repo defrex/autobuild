@@ -744,6 +744,54 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     expect(dashboardBuildControl('blocked')?.key).toBe('r')
   })
 
+  test('explicit and escalation-based abort intent project the same ABORTING state', () => {
+    const explicit = project(
+      toLog([
+        ...prelude(),
+        ev('plan.started', { round: 1 }),
+        ev('build.pause-requested', {}),
+        ev('build.abort-requested', { reason: 'wrong ticket' }),
+      ]),
+    )
+    const answered = project(
+      toLog([
+        ...prelude(),
+        ev('plan.started', { round: 1 }),
+        ev('escalation.raised', {
+          id: 'e_abort',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'Continue?',
+        }),
+        ev('escalation.answered', {
+          id: 'e_abort',
+          answer: 'Abort this build.',
+          resolution: 'abort',
+        }),
+      ]),
+    )
+
+    for (const build of [explicit, answered]) {
+      expect(build.status).toBe('aborting')
+      expect(build.steps).toEqual([])
+      expect(build.abortProgress).toBe('abort requested; waiting for running work to stop')
+      expect(dashboardBuildControl(build.status)).toBeUndefined()
+    }
+  })
+
+  test('queued abort intent outranks dispatch progress while acknowledgement is pending', () => {
+    const log = toLog([
+      ...prelude().slice(0, 3),
+      ev('build.abort-requested', { reason: 'wrong ticket' }),
+    ])
+    expect(project(log)).toMatchObject({
+      status: 'aborting',
+      steps: [],
+      abortProgress: 'abort requested; waiting for dispatcher acknowledgement',
+    })
+  })
+
   test('paused alone stays paused; blocked alone stays blocked', () => {
     const paused = project(toLog([...prelude(), ev('build.paused', {})]))
     expect(paused.status).toBe('paused')

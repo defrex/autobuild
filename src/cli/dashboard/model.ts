@@ -55,8 +55,16 @@ import {
 } from '../../kernel/harvest'
 
 /** Every nonterminal build is listed; queued dispatch work consumes capacity
- * just like runner-attached work and must never be invisible. */
-export type EffectiveStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'resuming' | 'blocked'
+ * just like runner-attached work and must never be invisible. `aborting` is a
+ * display-only projection over durable, accepted abort intent. */
+export type EffectiveStatus =
+  | 'queued'
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'resuming'
+  | 'blocked'
+  | 'aborting'
 
 export type DashboardBuildControl =
   | { key: 'p'; action: 'pause'; label: 'pause' }
@@ -76,6 +84,7 @@ export function dashboardBuildControl(status: EffectiveStatus): DashboardBuildCo
       return { key: 'r', action: 'resume', label: 'resume' }
     case 'queued':
     case 'resuming':
+    case 'aborting':
       return undefined
   }
 }
@@ -148,6 +157,9 @@ export interface DashboardBuild {
   steps: PipelineStep[]
   /** Queued-only explanation of the dispatcher boundary currently pending. */
   dispatch?: string
+  /** Explanation of accepted abort intent awaiting kernel acknowledgement.
+   * Present instead of pipeline progress; abort is not a pipeline step. */
+  abortProgress?: string
   /** Current durable setup error, attributed to this build and retained until
    * a later successful attachment proves recovery. */
   setupError?: string
@@ -242,6 +254,9 @@ export interface DashboardModel {
  * exactly as today.
  */
 export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState['status'] {
+  // Accepted abort intent outranks lifecycle and visual pause/block states
+  // until build.aborted acknowledges it and clears the pending projection.
+  if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
   if (
     (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
@@ -268,7 +283,8 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
     status === 'pausing' ||
     status === 'paused' ||
     status === 'resuming' ||
-    status === 'blocked'
+    status === 'blocked' ||
+    status === 'aborting'
   )
 }
 
@@ -456,6 +472,26 @@ export function projectBuild(
 ): DashboardBuild | null {
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
+
+  if (status === 'aborting') {
+    return {
+      slug: record.slug,
+      status,
+      alsoPaused: false,
+      ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
+      steps: [],
+      abortProgress:
+        state.status === 'queued'
+          ? 'abort requested; waiting for dispatcher acknowledgement'
+          : 'abort requested; waiting for running work to stop',
+      blockers: state.openEscalations.map((escalation) => escalation.question),
+      autoMerge: autoMergeDisplay(state),
+      ...(state.pr !== undefined && state.prState !== undefined
+        ? { pr: { url: state.pr.url, state: state.prState } }
+        : {}),
+      sessions: projectSessions(events),
+    }
+  }
 
   if (status === 'queued') {
     const created = events.findLast((event) => event.type === 'build.created')
