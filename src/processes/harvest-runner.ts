@@ -40,6 +40,7 @@ import {
   partitionHarvestExhaustion,
   renderHarvestProposal,
   scanUnclaimedObservations,
+  validateHarvestCreateBlockers,
 } from './harvest'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -730,6 +731,10 @@ export class HarvestRunner {
         const proposalKey = harvestProposalKey(proposal)
         let ticket = alreadyFiled.get(proposalKey)
         if (ticket === undefined) {
+          // Validation must precede even the durable reservation: an invalid
+          // prerequisite cannot leave behind the start of a ready-ticket
+          // create path.
+          const blockedBy = await validateHarvestCreateBlockers(proposal, tickets)
           let reservedId = reservations.get(proposalKey)
           if (reservedId === undefined) {
             reservedId = uuids()
@@ -745,7 +750,12 @@ export class HarvestRunner {
           const body = renderHarvestProposal(proposal, observations)
           ticket = (
             await tickets.create(
-              { title: proposal.title, body, labels: [HARVEST_PROPOSAL_LABEL] },
+              {
+                title: proposal.title,
+                body,
+                labels: [HARVEST_PROPOSAL_LABEL],
+                ...(blockedBy.length > 0 ? { blockedBy } : {}),
+              },
               {
                 state: defaultProposalState(config),
                 idempotencyKey: reservedId,
