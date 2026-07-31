@@ -286,23 +286,26 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   const raisedAfter = (seq: number, source?: EscalationSource): boolean =>
     allRaised.some((e) => e.seq > seq && (source === undefined || e.source === source))
 
-  // Unconsumed guidance for an explicit destination (§15.6-B). Plan/code
+  // Latest-only guidance for an explicit destination (§15.6-B). Plan/code
   // escalations feed their producer; an agent verifier's own escalation feeds
   // that exact verifier occurrence; policy verify guidance keeps its existing
-  // implement destination. A cited *.started payload consumes the answer.
+  // implement destination. Select the destination winner before checking its
+  // cited start: a newer answer durably supersedes older same-destination
+  // answers, so consuming the winner cannot reveal one of them later. An answer
+  // appended after that delivery becomes the new winner and remains eligible.
   const guidanceFeedback = (destination: GuidanceDestination): Feedback | undefined => {
     let latest: AnsweredEscalation | undefined
     for (const e of state.answeredEscalations) {
       if (e.resolution !== 'guidance' || guidanceDestination(e) !== destination) continue
-      const consumed = log.guidanceStarts.some(
-        (g) => g.escalation === e.id && g.seq > e.answeredSeq,
-      )
-      if (consumed) continue
       if (latest === undefined || e.answeredSeq > latest.answeredSeq) latest = e
     }
-    return latest === undefined
-      ? undefined
-      : { guidance: { escalation: latest.id, answer: latest.answer } }
+    if (
+      latest === undefined ||
+      log.guidanceStarts.some((g) => g.escalation === latest.id && g.seq > latest.answeredSeq)
+    ) {
+      return undefined
+    }
+    return { guidance: { escalation: latest.id, answer: latest.answer } }
   }
 
   // Verify cycle (§15.6-A): results only count after the latest of (last
