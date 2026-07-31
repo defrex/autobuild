@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#161](https://github.com/defrex/autobuild/pull/161) — Prevent superseded guidance from replaying
 - [#157](https://github.com/defrex/autobuild/pull/157) — Carry harvest prerequisites into ticket dependencies
 - [#156](https://github.com/defrex/autobuild/pull/156) — Show abort progress through dashboard cleanup
 - [#155](https://github.com/defrex/autobuild/pull/155) — Add operator paths for escalation resolutions
