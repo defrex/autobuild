@@ -3,7 +3,10 @@
 ## Unreleased
 
 - [#153](https://github.com/defrex/autobuild/pull/153) — Teach dashboard verification to consume escalation guidance
+- [#151](https://github.com/defrex/autobuild/pull/151) — Route verifier escalation guidance back to its step
+- [#150](https://github.com/defrex/autobuild/pull/150) — Document human guidance delivery to receiving phases
 - [#149](https://github.com/defrex/autobuild/pull/149) — Generate the README headline from dashboard capture
+- [#148](https://github.com/defrex/autobuild/pull/148) — Negotiate Kitty keyboard input for the dashboard
 - [#147](https://github.com/defrex/autobuild/pull/147) — Route read-only build queries through the store seam
 - [#146](https://github.com/defrex/autobuild/pull/146) — Give plan reviewers a concrete finding bar
 - [#145](https://github.com/defrex/autobuild/pull/145) — Stop the open-map entry boundary from narrowing what validation said

@@ -13,9 +13,11 @@ read the diff for style; you exercise behavior.
 ## Session shape
 
 1. Run `ab context`. You get `.ab/spec.md` (the acceptance criteria are your
-   checklist), the step config, and the commit range. If verification needs a
-   running application, arrange it through the repository's verify command or
-   the instructions vendored into this skill.
+   checklist), the step config, the commit range, and, after an escalation you
+   raised was answered with guidance, `.ab/guidance.json`. Treat that answer as
+   authoritative input for this rerun. If verification needs a running
+   application, arrange it through the repository's verify command or the
+   instructions vendored into this skill.
 2. For each acceptance criterion, drive the real flow that proves or
    disproves it — real requests, real UI paths, real data. Prefer the
    narrowest honest check that would catch a regression.
@@ -45,6 +47,8 @@ read the diff for style; you exercise behavior.
 
 ## Rules of the phase
 
+- If `.ab/guidance.json` is present but still does not let you reach a verdict,
+  a new escalation must explain why the supplied answer was insufficient.
 - If this entire configured step genuinely does not apply, use `skip` with a
   specific human-readable reason. That reason is the durable paper trail; a
   skip needs no report artifact.
