@@ -903,13 +903,11 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`.
+`queue <depth> | active <current>/<limit> | observations <count>`.
 `queue` is the ready-ticket queue depth; `active` is the current
-nonterminal-build count against root `capacity`; `obs` is the current count of
-recorded observation occurrences not yet claimed by a Harvest snapshot against
-`[policy].harvestThreshold`; and `drift` is distinct other builds merged after
-the oldest such observation against `[policy].harvestMaxDrift`. A drift limit
-of zero renders as `/0` and means drift triggering is disabled. An indented controls line follows for
+nonterminal-build count against root `capacity`; and `observations` is the count
+of recorded observation occurrences not yet claimed by a Harvest snapshot. An
+indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title
