@@ -857,6 +857,16 @@ describe('runCli — sessionless repository-wide controls', () => {
     )
   }
 
+  /** The repository hold the walk wrote, in write order. */
+  async function pauseWrites(storeRef: string): Promise<boolean[]> {
+    const local = openLocalStore(storeRef)
+    const events = await local.getRepoEvents(tmp)
+    await local.close()
+    return events.flatMap((event) =>
+      event.type === 'dispatcher.pause-set' ? [event.payload.enabled] : [],
+    )
+  }
+
   test('pause --all requests every running build and durably turns intake off', async () => {
     const storeRef = join(tmp, 'bulk-pause-store')
     await seedBulkStore(storeRef, {
@@ -871,7 +881,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     expect(await runCli(['pause', '--all'], d)).toBe(0)
     expect(d.err).toEqual([])
     expect(d.out).toEqual([
-      'pause all: pause requested for 2 builds; intake OFF',
+      'pause all: pause requested for 2 builds; queued builds held; intake OFF',
       'build a-running: pause requested',
       'build e-running: pause requested',
     ])
@@ -886,10 +896,23 @@ describe('runCli — sessionless repository-wide controls', () => {
     const pausing = await local.getEvents('b-pausing')
     expect(pausing.filter((event) => event.type === 'build.pause-requested')).toHaveLength(1)
     expect(pausing.filter((event) => event.type === 'build.resume-requested')).toHaveLength(0)
+    // Both repository facts, the hold first — the sessionless surface writes the
+    // same quiescence boundary in the same order as the dashboard walk, and the
+    // queued build (`d-queued`) is covered by that hold rather than by a
+    // per-build request.
     const repoEvents = await local.getRepoEvents(tmp)
-    expect(repoEvents.map((event) => event.type)).toEqual(['dispatcher.intake-set'])
-    expect(repoEvents[0]?.actor).toEqual({ kind: 'human', user: 'cli-op' })
+    expect(repoEvents.map((event) => event.type)).toEqual([
+      'dispatcher.pause-set',
+      'dispatcher.intake-set',
+    ])
+    for (const event of repoEvents) {
+      expect(event.actor).toEqual({ kind: 'human', user: 'cli-op' })
+    }
+    expect((await local.getEvents('d-queued')).map((event) => event.type)).not.toContain(
+      'build.pause-requested',
+    )
     await local.close()
+    expect(await pauseWrites(storeRef)).toEqual([true])
     expect(await intakeWrites(storeRef)).toEqual([false])
   })
 
@@ -906,7 +929,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     expect(await runCli(['resume', '--all'], d)).toBe(0)
     expect(d.err).toEqual([])
     expect(d.out).toEqual([
-      'resume all: resume requested for 2 builds; intake ON',
+      'resume all: resume requested for 2 builds; queued builds released; intake ON',
       'build a-paused: resume requested',
       'build d-paused: resume requested',
     ])
@@ -920,6 +943,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     // A blocked build is left to `ab answer`, not resumed by the walk.
     expect((await local.getEvents('c-paused-blocked')).at(-1)?.type).toBe('build.paused')
     await local.close()
+    expect(await pauseWrites(storeRef)).toEqual([false])
     expect(await intakeWrites(storeRef)).toEqual([true])
   })
 
@@ -934,6 +958,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     expect(JSON.parse(d.out.join('\n'))).toEqual({
       direction: 'pause',
       slugs: ['a-running'],
+      paused: true,
       intake: false,
     })
     expect(d.out.join('\n')).not.toContain('pause all:')
@@ -969,6 +994,7 @@ describe('runCli — sessionless repository-wide controls', () => {
       await walkStore.close()
 
       expect(await eventTypes(viaCli)).toEqual(await eventTypes(viaWalk))
+      expect(await pauseWrites(viaCli)).toEqual(await pauseWrites(viaWalk))
       expect(await intakeWrites(viaCli)).toEqual(await intakeWrites(viaWalk))
     }
   })
@@ -983,14 +1009,16 @@ describe('runCli — sessionless repository-wide controls', () => {
 
     const second = bulkDeps(storeRef)
     expect(await runCli(['pause', '--all'], second)).toBe(0)
-    expect(second.out).toEqual(['pause all: no pausable builds; intake OFF'])
+    expect(second.out).toEqual(['pause all: no pausable builds; queued builds held; intake OFF'])
 
-    // No build gains a second pending pause; the one new event anywhere is the
-    // intake setter re-asserting the value the repository already holds.
+    // No build gains a second pending pause; the only new events anywhere are
+    // the two repository setters re-asserting the values the repository already
+    // holds. Both are absolute, so a rerun is idempotent in effect.
     expect(await eventTypes(storeRef)).toEqual(after)
     for (const types of Object.values(after)) {
       expect(types.filter((type) => type === 'build.pause-requested')).toHaveLength(1)
     }
+    expect(await pauseWrites(storeRef)).toEqual([true, true])
     expect(await intakeWrites(storeRef)).toEqual([false, false])
   })
 
@@ -1059,7 +1087,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     // Nothing partial reaches stdout: a script reading stdout sees no success.
     expect(d.out).toEqual([])
     const err = d.err.join('\n')
-    expect(err).toContain('pause all: failed; intake OFF written')
+    expect(err).toContain('pause all: failed; queued builds held; intake OFF written')
     expect(err).toContain('store write rejected')
     expect(err).toContain('requested: a-run')
     expect(err).toContain('failed at: b-run')
@@ -1085,6 +1113,8 @@ describe('runCli — sessionless repository-wide controls', () => {
     expect(d.out).toEqual([])
     expect(JSON.parse(d.err.join('\n'))).toEqual({
       direction: 'pause',
+      paused: true,
+      pausedWritten: true,
       intake: false,
       intakeWritten: true,
       slugs: ['a-run'],
@@ -1104,7 +1134,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     expect(await runCli(['pause', '--all'], d)).toBe(0)
     expect(d.err).toEqual([])
     expect(d.out).toEqual([
-      'pause all: pause requested for 1 build; intake OFF',
+      'pause all: pause requested for 1 build; queued builds held; intake OFF',
       'build a-run: pause requested',
     ])
     await memory.close()

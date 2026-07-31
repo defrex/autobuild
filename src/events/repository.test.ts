@@ -90,7 +90,11 @@ describe('repository event catalog', () => {
   })
 
   test('dispatcher setting facts require strict booleans and human actors', () => {
-    for (const type of ['dispatcher.intake-set', 'dispatcher.auto-merge-default-set'] as const) {
+    for (const type of [
+      'dispatcher.intake-set',
+      'dispatcher.pause-set',
+      'dispatcher.auto-merge-default-set',
+    ] as const) {
       expect(
         validateRepositoryEventWrite({
           actor: humanActor('operator'),

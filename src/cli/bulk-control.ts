@@ -25,14 +25,32 @@
  * eligibility every attempt — the idiom `recordAutoMergeDeferralObservation`
  * already establishes in this codebase.
  *
- * Intake is written FIRST and ABSOLUTELY. First, because if a per-build write
- * fails midway the repository is left in the safer of the two partial states
- * (not taking on new work) and the operator's retry is naturally idempotent: a
+ * The PAUSE FACT is written FIRST and ABSOLUTELY, with intake immediately
+ * after it. `dispatcher.pause-set` is the repository's quiescence boundary —
+ * it is what holds every queued build across the dispatcher's recovery,
+ * startup-resume, lease-sweep, and dispatch stages — while intake gates only
+ * the ready-ticket scan. Ordering them this way gives the prefix property that
+ * matters: every surviving prefix of a pause-all leaves the repository at
+ * least as quiesced as the operator asked for, and no prefix can leave a
+ * queued build launchable once any write has landed. Under the reverse order,
+ * an intake write that landed before a failing pause write would leave exactly
+ * the hole this control exists to close — recovery, startup resume, and the
+ * sweep all ignore intake and would still hand a queued build a runner. Resume
+ * benefits symmetrically: a pause-cleared/intake-still-off prefix is the
+ * conservative half, where the reverse order would re-open intake while every
+ * build stayed held.
+ *
+ * Both are written ABSOLUTELY — an unconditional append rather than a
+ * read-then-write on a difference — because they are setters, not toggles:
+ * last-write-wins is race-free and is exactly what the operator asked for, at
+ * the cost of one redundant repository event when the value already held.
+ *
+ * This is ordering, not atomicity. The per-build walk that follows is still N
+ * separate CAS writes, so a partial bulk pause remains representable and a
+ * failure midway leaves some running builds un-requested. The recovery is a
+ * second keypress, which the CAS loop and the predicates make idempotent: a
  * build that already carries a pending pause fails the same predicate and is
- * skipped. Absolutely — an unconditional append rather than a read-then-write
- * on a difference — because this is a setter, not a toggle: last-write-wins is
- * race-free and is exactly what the operator asked for, at the cost of one
- * redundant repository event when intake already held the target value.
+ * skipped.
  *
  * Eligibility is expressed against `BuildState` rather than by importing
  * `effectiveStatus` from `dashboard/model.ts`, whose contract is
@@ -53,6 +71,8 @@ export interface BulkControlSummary {
   direction: BulkDirection
   /** Slugs that received a durable request, in the order written. */
   slugs: string[]
+  /** The durable repository-wide hold value this action wrote. */
+  paused: boolean
   /** The durable intake value this action wrote. */
   intake: boolean
 }
@@ -142,6 +162,9 @@ export interface BulkControlOpts {
  * actually attempted. */
 export interface BulkControlProgress {
   direction: BulkDirection
+  /** The repository-wide hold value the walk was asked to write. */
+  paused: boolean
+  pausedWritten: boolean
   /** The intake value the walk was asked to write. */
   intake: boolean
   intakeWritten: boolean
@@ -174,32 +197,40 @@ export class BulkWalkError extends Error {
 /** One operator-facing line describing what a bulk action durably did. */
 export function bulkControlReport(summary: BulkControlSummary): string {
   const label = summary.direction === 'pause' ? 'pause all' : 'resume all'
+  // Clauses follow write order. The hold clause is not decorative: in the
+  // zero-build case it is the only thing the action did, and it is the fact
+  // that makes the control trustworthy.
+  const hold = summary.paused ? 'queued builds held' : 'queued builds released'
   const intake = `intake ${summary.intake ? 'ON' : 'OFF'}`
   if (summary.slugs.length === 0) {
     const nothing = summary.direction === 'pause' ? 'no pausable builds' : 'no paused builds'
-    return `${label}: ${nothing}; ${intake}`
+    return `${label}: ${nothing}; ${hold}; ${intake}`
   }
   const count = summary.slugs.length === 1 ? '1 build' : `${summary.slugs.length} builds`
   const verb = summary.direction === 'pause' ? 'pause requested' : 'resume requested'
-  return `${label}: ${verb} for ${count}; ${intake}`
+  return `${label}: ${verb} for ${count}; ${hold}; ${intake}`
 }
 
 /**
- * Put the repository into (or out of) quiescence. Intake is set first, then
- * every eligible build is requested one at a time.
+ * Put the repository into (or out of) quiescence. The repository-wide hold is
+ * set first, then intake, then every eligible build is requested one at a time.
  *
- * A per-build write that fails outright leaves intake already set and some
- * builds requested. That is not transactional and the store offers no way to
- * make it so; the recovery is a second keypress, which the CAS loop and the
- * predicates make idempotent — nothing is double-paused. The failure is
+ * A per-build write that fails outright leaves both repository facts already
+ * set and some builds requested. That is not transactional and the store offers
+ * no way to make it so; the recovery is a second keypress, which the CAS loop
+ * and the predicates make idempotent — nothing is double-paused. The failure is
  * rethrown as a `BulkWalkError` carrying that partial progress, so a surface
- * with somewhere to print it can name what did not complete.
+ * with somewhere to print it can name what did not complete — including which
+ * of the two repository facts landed, since the prefix property above is only
+ * legible to an operator who is told where the walk stopped.
  */
 export async function bulkControlRepository(opts: BulkControlOpts): Promise<BulkControlSummary> {
   const { store, repo, direction } = opts
   const actor = humanActor(buildControlUser(opts.env))
+  const paused = direction === 'pause'
   const intake = direction === 'resume'
 
+  let pausedWritten = false
   let intakeWritten = false
   let records: BuildRecord[] = []
   let failedIndex: number | undefined
@@ -209,6 +240,13 @@ export async function bulkControlRepository(opts: BulkControlOpts): Promise<Bulk
     // `getRepoEvents`/`appendRepo` throw on a repository row no tick has created
     // yet, and a keypress can precede the first tick. Mirrors toggleHarvestGate.
     await store.ensureRepo(repo)
+    // The quiescence boundary, first — see the module doc's prefix property.
+    await store.appendRepo(repo, {
+      actor,
+      type: 'dispatcher.pause-set',
+      payload: { enabled: paused },
+    })
+    pausedWritten = true
     await store.appendRepo(repo, {
       actor,
       type: 'dispatcher.intake-set',
@@ -234,6 +272,8 @@ export async function bulkControlRepository(opts: BulkControlOpts): Promise<Bulk
     const failed = failedIndex === undefined ? undefined : records[failedIndex]
     throw new BulkWalkError(error, {
       direction,
+      paused,
+      pausedWritten,
       intake,
       intakeWritten,
       slugs,
@@ -243,7 +283,7 @@ export async function bulkControlRepository(opts: BulkControlOpts): Promise<Bulk
     })
   }
 
-  return { direction, slugs, intake }
+  return { direction, slugs, paused, intake }
 }
 
 /**
@@ -308,13 +348,23 @@ export function bulkControlLines(summary: BulkControlSummary): string[] {
 /** Operator-facing failure report: what the walk wrote, where it stopped, and
  * what it never reached. */
 export function bulkFailureLines(error: BulkWalkError): string[] {
-  const { direction, intake, intakeWritten, slugs, failedSlug, remaining } = error.progress
+  const { direction, paused, pausedWritten, intake, intakeWritten, slugs, failedSlug, remaining } =
+    error.progress
   const label = direction === 'pause' ? 'pause all' : 'resume all'
+  // Write order again, and the hold clause carries the same words as the
+  // success report. It is the clause that tells the operator whether the
+  // prefix that survived is the quiesced one: a failure with the hold written
+  // still holds every queued build, and a failure before it changed nothing.
+  const holdLine = pausedWritten
+    ? paused
+      ? 'queued builds held'
+      : 'queued builds released'
+    : 'hold not written'
   const intakeLine = intakeWritten
     ? `intake ${intake ? 'ON' : 'OFF'} written`
     : 'intake not written'
 
-  const lines = [`${label}: failed; ${intakeLine}`]
+  const lines = [`${label}: failed; ${holdLine}; ${intakeLine}`]
   if (slugs.length > 0) lines.push(`requested: ${slugs.join(', ')}`)
   lines.push(
     failedSlug === undefined
