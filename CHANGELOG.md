@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#157](https://github.com/defrex/autobuild/pull/157) — Carry harvest prerequisites into ticket dependencies
 - [#152](https://github.com/defrex/autobuild/pull/152) — Document workspace config as an open map
 - [#151](https://github.com/defrex/autobuild/pull/151) — Route verifier escalation guidance back to its step
 - [#150](https://github.com/defrex/autobuild/pull/150) — Document human guidance delivery to receiving phases
