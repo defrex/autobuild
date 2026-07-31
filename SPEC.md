@@ -1582,7 +1582,10 @@ operator. The skill-upgrade results and merge-derived exit status are unchanged.
 Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
 path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
 rebase, or cherry-pick likewise suppresses the whole commit and prints the
-reason. A staging or commit failure warns and leaves the merged files in place.
+reason. If upgrade cannot snapshot the worktree's Git index, it warns and
+declines to stage. A staging or commit failure restores that exact pre-attempt
+index without touching the merged worktree files, and warns with the original
+Git failure.
 Commit suppression or failure never changes the merge-derived exit status:
 content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
 never pushes or rewrites existing history.

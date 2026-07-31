@@ -964,7 +964,9 @@ results and the merge-derived exit status remain unchanged. Upgrade likewise
 suppresses the whole commit and names why when any skill or Claude discovery
 path conflicts, an owned path was already dirty, the target is not a Git
 repository, HEAD/worktree identity changes, or Git is mid-merge, mid-rebase, or
-mid-cherry-pick. A failed staging or commit attempt is warning only: merged files
+mid-cherry-pick. If upgrade cannot snapshot the worktree's Git index, it warns
+and declines to stage. A failed staging or commit attempt restores that exact
+pre-attempt index and reports the original Git failure; merged worktree files
 remain in place and the merge's exit status is unchanged. Upgrade never pushes
 or rewrites history.
 
