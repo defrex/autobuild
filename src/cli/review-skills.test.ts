@@ -1,29 +1,30 @@
 /**
- * Review-skill prose guards: the two rules that decide how a review round
- * ends — what a reviewer puts in `persists`, and which severity a finding
- * gets.
+ * Review-skill prose guards: the three rules that decide how a review round
+ * ends — what qualifies as a finding, what a reviewer puts in `persists`, and
+ * which severity a finding gets.
  *
- * Both are load-bearing and neither is enforceable in code. `persists` chains
- * are the only input to the kernel's stall guard, so the rule that decides
- * whether a chain continues decides when a build escalates. Severity has no
- * mechanical effect anywhere in `src/` — `blocking` and `important` alike
- * cost the producer a revision round purely by skill convention — so the only
- * thing keeping an immaterial true defect from spending a round is the
- * calibration text itself. Delete either rule and every test still passes
- * unless it is anchored here.
+ * All three are load-bearing and none is enforceable in code. The minimum bar
+ * keeps preferences from spending revision rounds. `persists` chains are the
+ * only input to the kernel's stall guard, so the rule that decides whether a
+ * chain continues decides when a build escalates. Severity has no mechanical
+ * effect anywhere in `src/` — `blocking` and `important` alike cost the
+ * producer a revision round purely by skill convention — so the only thing
+ * keeping an immaterial true defect from spending a round is the calibration
+ * text itself. Delete any rule and every test still passes unless it is
+ * anchored here.
  *
- * The two rules cover different sets of skills. The persistence rule must say
- * the same thing in `plan-review`, `code-review`, and `harvest-review` — all
- * three are the same loop as far as `stallRounds` is concerned, the third
- * because `src/processes/harvest-runner.ts` walks reviewer-marked chains
- * through the same `stalledChains` machinery the kernel uses for the other
- * two. The severity calibration covers `plan-review` and `code-review`, the
- * two loops it was written for; whether the harvest loop states the same
- * calibration is a separate question this file does not answer. Each rule
+ * The three rules cover different sets of skills. The minimum bar and severity
+ * calibration cover `plan-review` and `code-review`, the two loops they were
+ * written for; whether the harvest loop states either rule is a separate
+ * question this file does not answer. The persistence rule must say the same
+ * thing in `plan-review`, `code-review`, and `harvest-review` — all three are
+ * the same loop as far as `stallRounds` is concerned, the third because
+ * `src/processes/harvest-runner.ts` walks reviewer-marked chains through the
+ * same `stalledChains` machinery the kernel uses for the other two. Each rule
  * must sit in the `## Writing findings` section of every skill it covers,
- * where a reviewer choosing a `persists` id or a level is already reading.
- * Both properties are asserted rather than trusted, because prose cannot be
- * type-checked.
+ * where a reviewer deciding whether to file, choosing a `persists` id, or
+ * selecting a level is already reading. These properties are asserted rather
+ * than trusted, because prose cannot be type-checked.
  *
  * The anchors are whole sentences of the shared rules, asserted one at a
  * time, so a failure names the sentence that was dropped instead of reporting
@@ -69,16 +70,20 @@ const pristineHarvestReview = await readSkill(
   'SKILL.md',
 )
 
-/**
- * The skills the severity calibration covers: the plan loop and the code
- * loop, which are the same loop as far as severity is concerned. Kept as its
- * own list rather than folded into `reviewSkills` because the persistence
- * rule reaches one skill further.
- */
-const calibratedSkills = [
+/** The canonical and vendored plan-review forms. */
+const planReviewSkills = [
   ['plan-review (canonical)', planReview],
   ['plan-review (installed)', installedPlanReview],
   ['plan-review (pristine)', pristinePlanReview],
+] as const
+
+/**
+ * The skills the minimum finding bar and severity calibration cover: the plan
+ * loop and the code loop. Kept as its own list rather than folded into
+ * `reviewSkills` because the persistence rule reaches one skill further.
+ */
+const calibratedSkills = [
+  ...planReviewSkills,
   ['code-review (canonical)', codeReview],
   ['code-review (installed)', installedCodeReview],
   ['code-review (pristine)', pristineCodeReview],
@@ -116,9 +121,27 @@ function findingsSection(text: string): string | undefined {
   return next === -1 ? text.slice(after) : text.slice(after, next)
 }
 
+const MINIMUM_FINDING_BAR = 'Each finding must name a concrete failure, not a preference.'
+const PLAN_FINDING_EXAMPLE =
+  '"This could be sequenced differently" is not a finding; "Step 3 uses the new parser before any step adds it, so the plan cannot be executed in order" is.'
+
+describe('review skills — minimum finding bar', () => {
+  test.each(calibratedSkills)(
+    '%s states the shared bar in its findings section',
+    (_label, text) => {
+      expect(normalize(findingsSection(text) ?? '')).toContain(MINIMUM_FINDING_BAR)
+    },
+  )
+
+  test.each(planReviewSkills)('%s illustrates a plan failure, not a preference', (_label, text) => {
+    expect(normalize(findingsSection(text) ?? '')).toContain(PLAN_FINDING_EXAMPLE)
+  })
+})
+
 /**
- * The shared rule, sentence by sentence: the definition, the applicable test,
- * the disposition for a new instance of an already-fixed defect class, and
+ * The shared persistence rule, sentence by sentence: the definition, the
+ * applicable test, the disposition for a new instance of an already-fixed
+ * defect class, and
  * the preserved duty not to let a dodged finding look fresh. Byte-identical
  * text in all three review skills is what makes "worded symmetrically for the
  * plan loop, the code loop, and the harvest loop" a mechanical property

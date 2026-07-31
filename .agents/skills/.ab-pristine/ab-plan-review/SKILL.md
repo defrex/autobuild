@@ -79,6 +79,10 @@ finding nor let a dodged one look fresh, because the kernel mechanically
 escalates a chain that persists too long, and a stalemate is the only
 thing that counter can usefully measure.
 
+Each finding must name a concrete failure, not a preference. "This could be
+sequenced differently" is not a finding; "Step 3 uses the new parser before
+any step adds it, so the plan cannot be executed in order" is.
+
 Severity measures proportion, not certainty. Rate a finding by what the
 defect costs against the spec's acceptance criteria and the realistic
 operating conditions of the work under review — never by how sure you are
