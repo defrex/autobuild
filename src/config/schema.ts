@@ -6,9 +6,10 @@
  *
  * Strictness policy (§16.1): unknown top-level keys/tables and unknown keys
  * inside known tables are ERRORS — a typo must not silently disable a
- * verifier. Open maps ([commands], [roles], and the named [verify.<step>] and
- * [finalize.<step>] table sets) are exempt by construction: their keys are
- * user-chosen names, while every value remains strictly validated.
+ * verifier. Open maps ([commands], [roles], [workspace.config], and the named
+ * [verify.<step>] and [finalize.<step>] table sets) are exempt by construction:
+ * their keys are user-chosen names, while every value remains strictly
+ * validated.
  */
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
@@ -29,6 +30,13 @@ import { prImageHostSchema } from '../ontology'
 // so these keep it that way end to end: own descriptors in, `defineProperty`
 // out, null prototype on the result. Consumers can then read a user-chosen key
 // off these maps without `Object.hasOwn` ceremony.
+//
+// `[workspace.config]` is the one open map whose keys are PLUGIN-owned rather
+// than Autobuild-owned, which makes faithful pass-through more important here
+// rather than less. Autobuild cannot validate a key it does not interpret, so
+// a dropped one is undetectable downstream: the plugin sees an absent key and
+// cannot tell an operator who omitted it from one who declared it, then reports
+// its own error against a table that plainly contains it.
 
 type Ctx = { addIssue: (issue: { code: 'custom'; path?: PropertyKey[]; message: string }) => void }
 
@@ -68,14 +76,27 @@ function parseEntry<T>(schema: z.ZodType<T>, raw: unknown, key: string, ctx: Ctx
   return undefined
 }
 
-/** An open map: user-chosen keys → strictly validated values, keys preserved. */
-function openMap<T>(section: string, valueSchema: z.ZodType<T>) {
+/**
+ * An open map: user-chosen keys → strictly validated values, keys preserved.
+ *
+ * Preservation is the shared contract; the key vocabulary is not. An
+ * Autobuild-owned map names entries Autobuild itself must be able to address —
+ * a role to dispatch, a command to run — so a nameless entry there is dead
+ * configuration and an error. A plugin-owned pass-through map is not
+ * Autobuild's to narrow: it does not interpret those keys, so `allowBlankKeys`
+ * lets such a map accept whatever its plugin is willing to address.
+ */
+function openMap<T>(
+  section: string,
+  valueSchema: z.ZodType<T>,
+  opts: { allowBlankKeys?: boolean } = {},
+) {
   return z
     .unknown()
     .transform((input, ctx): Record<string, T> => {
       const entries: Record<string, T> = Object.create(null)
       for (const [key, raw] of ownEntries(input, section, ctx)) {
-        if (key.length === 0) {
+        if (key.length === 0 && opts.allowBlankKeys !== true) {
           ctx.addIssue({ code: 'custom', message: `[${section}] entry names must be nonempty` })
           continue
         }
@@ -146,7 +167,9 @@ export type PrConfig = z.infer<typeof prSchema>
 // ── [workspace] ─────────────────────────────────────────────────────────────
 
 /** Workspace selector. The host validates the selector envelope; the nested
- * config belongs to the selected plugin factory and is intentionally open. */
+ * config belongs to the selected plugin factory and is intentionally open. The
+ * pass-through is faithful: every declared key reaches the factory verbatim,
+ * including one named for an inherited object property such as `__proto__`. */
 export const workspaceSchema = z.strictObject({
   provider: z
     .string()
@@ -155,7 +178,7 @@ export const workspaceSchema = z.strictObject({
       '[workspace].provider must be a nonblank provider name',
     )
     .default('git-worktree'),
-  config: z.record(z.string(), z.unknown()).default({}),
+  config: openMap('workspace.config', z.unknown(), { allowBlankKeys: true }),
 })
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>
 
