@@ -13,8 +13,8 @@
  *
  * The split is deliberate: `forwardIssues` relays, `expandIssues` presents.
  * Forwarding keeps validation honest without deciding prose; expanding is what
- * makes union branch detail reach a human, and belongs at the two places that
- * render issues into operator-facing text rather than inside a validator.
+ * makes union branch detail reach a human, and belongs at operator-facing
+ * renderer boundaries rather than inside a validator.
  */
 import type { z } from 'zod'
 
@@ -66,8 +66,8 @@ export function forwardIssues(
  * markers.
  *
  * `invalid_key` and `invalid_element` nest issues the same way. Neither reaches
- * here (no `z.record` or element-level check survives on the config or manifest
- * surfaces), so they are left alone rather than handled speculatively.
+ * the currently covered config, plugin-manifest, findings, or ticket-update
+ * renderers, so they are left alone rather than handled speculatively.
  */
 export function expandIssues(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
   const expanded: z.core.$ZodIssue[] = []

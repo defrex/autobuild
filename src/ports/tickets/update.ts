@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { expandIssues } from '../../zod-issues'
 import type { TicketUpdate } from '../types'
 
 const ticketUpdateSchema = z
@@ -18,6 +19,16 @@ const ticketUpdateSchema = z
     'update must name at least one of title, body, or labels',
   )
 
+/** Render ticket-update issues while retaining nested union branch detail. */
+export function renderTicketUpdateIssues(issues: readonly z.core.$ZodIssue[]): string {
+  return expandIssues(issues)
+    .map((issue) => {
+      const path = issue.path.join('.')
+      return path === '' ? issue.message : `${path}: ${issue.message}`
+    })
+    .join('; ')
+}
+
 /**
  * Validate the common partial-update contract before an adapter performs any
  * write. Keeping this at the port boundary (rather than only in the CLI)
@@ -27,13 +38,7 @@ const ticketUpdateSchema = z
 export function validateTicketUpdate(patch: TicketUpdate): TicketUpdate {
   const result = ticketUpdateSchema.safeParse(patch)
   if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => {
-        const path = issue.path.join('.')
-        return path === '' ? issue.message : `${path}: ${issue.message}`
-      })
-      .join('; ')
-    throw new Error(`invalid ticket update — ${issues}`)
+    throw new Error(`invalid ticket update — ${renderTicketUpdateIssues(result.error.issues)}`)
   }
 
   // Reconstruct the patch so arrays cannot be mutated behind an adapter's
