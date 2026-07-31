@@ -8,6 +8,7 @@ import type { Actor } from '../events/envelope'
 import type { ArtifactRef, Finding, TicketRef } from '../ontology'
 import {
   occurrenceKey,
+  type HarvestBlockerProvenance,
   type HarvestDisposition,
   type HarvestPendingProposal,
   type HarvestStep,
@@ -76,7 +77,12 @@ export interface HarvestRunState {
   proposals: Array<{ round: number; artifact: ArtifactRef; seq: number }>
   reviews: HarvestReviewRound[]
   reservations: HarvestProposalReservation[]
-  filed: Array<{ proposalKey: string; ticket: TicketRef; seq: number }>
+  filed: Array<{
+    proposalKey: string
+    ticket: TicketRef
+    blockers?: HarvestBlockerProvenance
+    seq: number
+  }>
   dispositions: HarvestDisposition[]
   report?: ArtifactRef
   escalation?: {
@@ -552,6 +558,9 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           run.filed.push({
             proposalKey: event.payload.proposalKey,
             ticket: structuredClone(event.payload.ticket),
+            ...(event.payload.blockers !== undefined
+              ? { blockers: structuredClone(event.payload.blockers) }
+              : {}),
             seq: event.seq,
           })
         }

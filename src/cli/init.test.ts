@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { parseConfig } from '../config/load'
@@ -14,7 +24,6 @@ import {
   installedSkillPath,
   MODEL_INVOCABLE_SKILLS,
   pristineSkillFilePath,
-  pristineSkillPath,
   readDistSkills,
 } from './init'
 import type { SetupAgentInvocation } from './init-agent'
@@ -47,8 +56,10 @@ describe('agent-driven ab init', () => {
     const report = await init()
     expect(report.config).toBe('written')
     expect(report.exitCode).toBe(0)
-    expect(report.skills.some((entry) => entry.skill === 'ab-setup')).toBe(true)
-    expect(MODEL_INVOCABLE_SKILLS).toContain('setup')
+    expect(report.skills).toHaveLength(11)
+    expect(report.skills.map((entry) => entry.skill)).not.toContain('ab-setup')
+    expect(report.skills.map((entry) => entry.skill)).not.toContain('ab-verify-e2e')
+    expect([...MODEL_INVOCABLE_SKILLS].sort()).toEqual(['guide', 'spec', 'tickets'])
 
     const distributed = await readDistSkills(defaultDistRoot())
     expect(report.skills.map((entry) => entry.skill)).toEqual(
@@ -69,7 +80,20 @@ describe('agent-driven ab init', () => {
       expect(await readlink(claudeSkillPath(target, skill.installName))).toBe(
         `../../.agents/skills/${skill.installName}`,
       )
+      const frontmatter = skill.content.slice(0, skill.content.indexOf('\n---', 4))
+      expect(frontmatter.includes('disable-model-invocation: true')).toBe(
+        !MODEL_INVOCABLE_SKILLS.has(skill.name),
+      )
     }
+    const setupReference = 'references/setup.md'
+    const liveReference = await readFile(
+      installedSkillFilePath(target, 'ab-guide', setupReference),
+      'utf8',
+    )
+    expect(liveReference).toContain('author a repository-owned\n   agent-verify skill')
+    expect(await readFile(pristineSkillFilePath(target, 'ab-guide', setupReference), 'utf8')).toBe(
+      liveReference,
+    )
     expect(await readFile(join(target, '.gitignore'), 'utf8')).toBe('.autobuild/\n')
   })
 
@@ -128,8 +152,8 @@ describe('agent-driven ab init', () => {
     expect(report.exitCode).toBe(1)
     expect(report.discoveryConflicts).toHaveLength(1)
     expect(report.discoveryConflicts[0]?.skill).toBe(skill)
-    expect(report.skills.some((entry) => entry.skill === 'ab-verify-e2e')).toBe(true)
-    expect(existsSync(installedSkillPath(target, 'ab-verify-e2e'))).toBe(true)
+    expect(report.skills).toHaveLength(11)
+    expect(existsSync(installedSkillPath(target, 'ab-verify-e2e'))).toBe(false)
     expect(launches).toBe(0)
     const output = lines.join('\n')
     expect(output).toContain(`.claude/skills/${skill}`)
@@ -211,8 +235,31 @@ describe('agent-driven ab init', () => {
     expect(invocation?.runtime).toBe('claude')
     expect(invocation?.cwd).toBe(target)
     expect(invocation?.prompt).toBe(fallbackPrompt)
-    expect(invocation?.prompt).toContain('do **not** constrain the final arrangement')
-    expect(invocation?.prompt).toContain('one groomed,\n   dispatchable ticket')
+    expect(invocation?.prompt).toContain('.agents/skills/ab-guide/references/setup.md')
+    expect(invocation?.prompt).not.toContain('do **not** constrain the final arrangement')
+    expect(invocation?.prompt).not.toContain('one groomed,\n   dispatchable ticket')
+  })
+
+  test('a partial distribution without the setup reference still installs and prints the pointer', async () => {
+    const partial = await mkdtemp(join(tmpdir(), 'ab-init-partial-'))
+    try {
+      await cp(join(defaultDistRoot(), 'skills'), join(partial, 'skills'), { recursive: true })
+      await cp(join(defaultDistRoot(), 'templates'), join(partial, 'templates'), {
+        recursive: true,
+      })
+      await rm(join(partial, 'skills', 'guide', 'references', 'setup.md'))
+      const lines: string[] = []
+
+      const report = await init({ distRoot: partial, stdout: (line) => lines.push(line) })
+
+      expect(report.exitCode).toBe(0)
+      expect(existsSync(installedSkillFilePath(target, 'ab-guide', 'references/setup.md'))).toBe(
+        false,
+      )
+      expect(lines.at(-1)).toContain('.agents/skills/ab-guide/references/setup.md')
+    } finally {
+      await rm(partial, { recursive: true, force: true })
+    }
   })
 
   test('rerun preserves config and uses the review prompt', async () => {
@@ -232,15 +279,16 @@ describe('agent-driven ab init', () => {
     expect(prompt).toStartWith('Review and improve the existing autobuild.toml.')
   })
 
-  test('rerun preserves local skill edits unless force is explicit', async () => {
+  test('rerun preserves local guide-reference edits unless force is explicit', async () => {
     await init()
-    const path = installedSkillPath(target, 'ab-setup')
-    const pristine = await readFile(pristineSkillPath(target, 'ab-setup'), 'utf8')
+    const file = 'references/setup.md'
+    const path = installedSkillFilePath(target, 'ab-guide', file)
+    const pristine = await readFile(pristineSkillFilePath(target, 'ab-guide', file), 'utf8')
     await writeFile(path, `${pristine}\nlocal setup rule\n`)
-    expect((await init()).skills.find((entry) => entry.skill === 'ab-setup')?.action).toBe('kept')
+    expect((await init()).skills.find((entry) => entry.skill === 'ab-guide')?.action).toBe('kept')
     expect(await readFile(path, 'utf8')).toContain('local setup rule')
     expect(
-      (await init({ force: true })).skills.find((entry) => entry.skill === 'ab-setup')?.action,
+      (await init({ force: true })).skills.find((entry) => entry.skill === 'ab-guide')?.action,
     ).toBe('overwritten')
     expect(await readFile(path, 'utf8')).toBe(pristine)
   })

@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views
+- [#168](https://github.com/defrex/autobuild/pull/168) — Block harvest proposals on unresolved origin tickets
+- [#167](https://github.com/defrex/autobuild/pull/167) — Keep terminal dashboard status dominant
+- [#166](https://github.com/defrex/autobuild/pull/166) — Use dashboard content width for transcript scrolling
 - [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment
 - [#164](https://github.com/defrex/autobuild/pull/164) — Show repository pauses in the dispatch dashboard
 - [#163](https://github.com/defrex/autobuild/pull/163) — Add sessionless repository settings status

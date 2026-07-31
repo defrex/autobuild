@@ -571,7 +571,117 @@ describe('HarvestRunner', () => {
 
     expect((await tickets.get('fake-1'))?.blockedBy).toEqual(['fake-8'])
     expect(tickets.dependencyQueries).toEqual([['fake-8']])
-    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.run).toBe(seeded.run)
+    const state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.latest?.run).toBe(seeded.run)
+    expect(state.latest?.filed[0]?.blockers).toEqual({ declared: ['fake-8'], derived: [] })
+  })
+
+  test('refreshes observation origins at filing and records derived provenance in the report', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-origin-blocker-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const origin = {
+      ref: { source: 'fake', id: 'origin-1' },
+      title: 'Originating work',
+      body: 'body',
+      state: 'Done',
+      labels: [],
+    }
+    const tickets = new FakeTicketSource([origin])
+    await store.createBuild({
+      slug: 'resume-reviewed',
+      repo: '/repo',
+      ticket: origin.ref,
+    })
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+    })
+    // The scan saw a resolved origin. Filing is authoritative and must observe
+    // that the ticket became unresolved while agents were working.
+    await tickets.transition('origin-1', 'Doing')
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+
+    await new HarvestRunner({
+      store,
+      tickets,
+      config: config(1, {}, ['proposalState = "Ready"']),
+      runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: ids('instance'),
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect((await tickets.get('fake-1'))?.blockedBy).toEqual(['origin-1'])
+    expect(tickets.dependencyQueries).toEqual([['origin-1'], ['origin-1']])
+    const state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.latest?.run).toBe(seeded.run)
+    expect(state.latest?.filed[0]?.blockers).toEqual({
+      declared: [],
+      derived: ['origin-1'],
+    })
+    const reportRef = state.latest?.report
+    expect(reportRef).toBeDefined()
+    const report = await store.getRepoArtifact('/repo', reportRef!.kind, reportRef!.rev)
+    expect(JSON.parse(new TextDecoder().decode(report!.content)).proposals[0].blockers).toEqual({
+      declared: [],
+      derived: ['origin-1'],
+    })
+  })
+
+  test('an origin resolved before filing is not added as a blocker', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-resolved-origin-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const origin = {
+      ref: { source: 'fake', id: 'origin-1' },
+      title: 'Originating work',
+      body: 'body',
+      state: 'Doing',
+      labels: [],
+    }
+    const tickets = new FakeTicketSource([origin])
+    await store.createBuild({ slug: 'resume-reviewed', repo: '/repo', ticket: origin.ref })
+    const ids = sequentialIds()
+    await seedOpenRun({ store, tickets, ids, workspace, stage: 'reviewed' })
+    await tickets.transition('origin-1', 'Done')
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+
+    await new HarvestRunner({
+      store,
+      tickets,
+      config: config(1),
+      runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: ids('instance'),
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect((await tickets.get('fake-1'))?.blockedBy).toBeUndefined()
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.filed[0]?.blockers).toEqual({
+      declared: [],
+      derived: [],
+    })
   })
 
   test('an unknown blocker fails before reservation, create, or filing', async () => {

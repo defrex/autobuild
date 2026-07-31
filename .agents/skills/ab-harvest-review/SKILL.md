@@ -11,14 +11,20 @@ not author proposals or touch tickets.
 
 1. Run `ab harvest context`.
 2. Review `.ab/proposals.json` against `.ab/observations.json`,
-   `.ab/ledger.json`, and every prior `history/findings-r*.json` file.
+   `.ab/originating-tickets.json`, `.ab/ledger.json`, and every prior
+   `history/findings-r*.json` file. Origin lifecycle is scan-time context;
+   deterministic filing refreshes matching refs before create.
 3. Check all of the following:
    - every claimed `{build, seq}` occurs exactly once;
    - clusters describe one underlying problem rather than superficial keyword
      overlap;
    - create proposals meet the spec standard (what/why, verifiable acceptance
      criteria, explicit out-of-scope, evidence-supported claims);
-   - evidence-supported prose saying another ticket must complete before work
+   - filing automatically blocks a create on unresolved, same-source
+     originating tickets for its clustered observations; neither producer nor
+     reviewer must restate that originating dependency in `blockedBy` for it to
+     take effect;
+   - evidence-supported prose saying some other ticket must complete before work
      can start has the same source-local id in `blockedBy`; a prose-only hard
      prerequisite is not approvable;
    - every `blockedBy` id is justified by evidence as a hard start gate;

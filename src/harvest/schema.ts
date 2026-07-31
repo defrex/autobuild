@@ -29,6 +29,25 @@ export const harvestObservationSchema = z.strictObject({
 })
 export type HarvestObservation = z.infer<typeof harvestObservationSchema>
 
+/** Source-aware lifecycle visibility for distinct tickets that originated the
+ * observations in a scan. Foreign-source refs remain visible but are never
+ * sent to the repository's configured TicketSource. */
+export const harvestOriginatingTicketSchema = z.strictObject({
+  ticket: ticketRefSchema,
+  sourceMatches: z.boolean(),
+  exists: z.boolean(),
+  resolved: z.boolean(),
+})
+export type HarvestOriginatingTicket = z.infer<typeof harvestOriginatingTicketSchema>
+
+/** Filing records both meanings even when one id is simultaneously declared
+ * by the agent and automatically derived from an originating ticket. */
+export const harvestBlockerProvenanceSchema = z.strictObject({
+  declared: z.array(z.string().min(1)),
+  derived: z.array(z.string().min(1)),
+})
+export type HarvestBlockerProvenance = z.infer<typeof harvestBlockerProvenanceSchema>
+
 /** Prior proposals are semantic-dedup context for the synthesizer. The source
  * owns lifecycle resolution; harvest only reports the returned facts. */
 export const harvestLedgerTicketSchema = z.strictObject({
@@ -45,6 +64,7 @@ export const harvestScanPacketSchema = z.strictObject({
   repo: z.string().min(1),
   run: z.string().min(1),
   observations: z.array(harvestObservationSchema).min(1),
+  originatingTickets: z.array(harvestOriginatingTicketSchema).default([]),
   ledger: z.array(harvestLedgerTicketSchema).default([]),
 })
 export type HarvestScanPacket = z.infer<typeof harvestScanPacketSchema>

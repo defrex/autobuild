@@ -242,6 +242,28 @@ describe('DashboardBuildPollCache', () => {
     expect(row(snapshot, 'aborting')?.status).toBe('cleaning')
     expect(snapshot.states.get('aborting')?.status).toBe('aborted')
 
+    // A directly appended post-terminal command remains an accepted audit fact,
+    // but cannot make the incremental projection active or acknowledgement-bound.
+    await store.append('aborting', {
+      actor: { kind: 'human', user: 'racing-operator' },
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    snapshot = await cache.refresh()
+    expect(snapshot.states.get('aborting')?.status).toBe('aborted')
+    expect(
+      snapshot.states
+        .get('aborting')
+        ?.pendingCommands.some((command) => command.command === 'abort'),
+    ).toBe(true)
+    expect(row(snapshot, 'aborting')?.status).toBe('cleaning')
+    expect(row(snapshot, 'aborting')?.abortProgress).not.toContain('waiting')
+    expect(
+      [...snapshot.states.values()].filter(
+        (state) => state.status !== 'done' && state.status !== 'aborted',
+      ),
+    ).toEqual([])
+
     await store.append('aborting', {
       actor: { kind: 'dispatcher' },
       type: 'abort.remote-branch-deleted',
@@ -249,7 +271,7 @@ describe('DashboardBuildPollCache', () => {
     })
     reader.resetCalls()
     snapshot = await cache.refresh()
-    expect(reader.eventCalls).toEqual([{ slug: 'aborting', since: 3 }])
+    expect(reader.eventCalls).toEqual([{ slug: 'aborting', since: 4 }])
     expect(row(snapshot, 'aborting')?.status).toBe('cleaning')
 
     await store.append('aborting', {

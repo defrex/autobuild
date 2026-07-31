@@ -8,8 +8,9 @@ import {
   harvestProposalKey,
   makeHarvestScanPacket,
   partitionHarvestExhaustion,
+  reconcileOriginatingTickets,
+  resolveHarvestCreateBlockers,
   scanUnclaimedObservations,
-  validateHarvestCreateBlockers,
 } from './harvest'
 
 async function observation(store: MemoryBuildStore, build: string, id: string): Promise<void> {
@@ -40,7 +41,7 @@ async function claim(
   )
 }
 
-describe('harvest blocker validation', () => {
+describe('harvest blocker resolution', () => {
   const proposal = {
     action: 'create' as const,
     title: 'Dependent work',
@@ -49,6 +50,15 @@ describe('harvest blocker validation', () => {
     outOfScope: ['Unrelated work.'],
     observations: [{ build: 'build-a', seq: 1 }],
   }
+  const proposalObservations = [
+    {
+      occurrence: { build: 'build-a', seq: 1 },
+      id: 'obs-a',
+      kind: 'followup' as const,
+      summary: 'follow-up',
+      ts: '2026-08-01T00:00:00.000Z',
+    },
+  ]
 
   test('deduplicates valid source-local ids in first-seen order', async () => {
     const tickets = new FakeTicketSource([
@@ -69,32 +79,224 @@ describe('harvest blocker validation', () => {
     ])
 
     expect(
-      await validateHarvestCreateBlockers(
+      await resolveHarvestCreateBlockers(
         { ...proposal, blockedBy: ['fake-9', 'fake-8', 'fake-9'] },
+        proposalObservations,
         tickets,
       ),
-    ).toEqual(['fake-9', 'fake-8'])
+    ).toEqual({
+      blockedBy: ['fake-9', 'fake-8'],
+      provenance: { declared: ['fake-9', 'fake-8'], derived: [] },
+    })
     expect(tickets.dependencyQueries).toEqual([['fake-9', 'fake-8']])
   })
 
   test('an absent or empty set performs no source read', async () => {
     const tickets = new FakeTicketSource()
-    expect(await validateHarvestCreateBlockers(proposal, tickets)).toEqual([])
-    expect(await validateHarvestCreateBlockers({ ...proposal, blockedBy: [] }, tickets)).toEqual([])
+    expect(await resolveHarvestCreateBlockers(proposal, proposalObservations, tickets)).toEqual({
+      blockedBy: [],
+      provenance: { declared: [], derived: [] },
+    })
+    expect(
+      await resolveHarvestCreateBlockers(
+        { ...proposal, blockedBy: [] },
+        proposalObservations,
+        tickets,
+      ),
+    ).toEqual({
+      blockedBy: [],
+      provenance: { declared: [], derived: [] },
+    })
     expect(tickets.dependencyQueries).toEqual([])
   })
 
   test('rejects an unknown id with proposal, source, and blocker context', async () => {
     const tickets = new FakeTicketSource()
     await expect(
-      validateHarvestCreateBlockers({ ...proposal, blockedBy: ['other-404'] }, tickets),
+      resolveHarvestCreateBlockers(
+        { ...proposal, blockedBy: ['other-404'] },
+        proposalObservations,
+        tickets,
+      ),
     ).rejects.toThrow(
       'cannot file harvest proposal "Dependent work" through ticket source "fake": unknown or invalid blocker "other-404"',
     )
   })
+
+  test('unions unresolved matching origins while retaining overlapping provenance', async () => {
+    const tickets = new FakeTicketSource([
+      {
+        ref: { source: 'fake', id: 'fake-8' },
+        title: 'Origin',
+        body: 'body',
+        state: 'Ready',
+        labels: [],
+      },
+    ])
+    const observations = [
+      {
+        occurrence: { build: 'build-a', seq: 1 },
+        id: 'obs-a',
+        kind: 'followup' as const,
+        summary: 'follow-up',
+        ts: '2026-08-01T00:00:00.000Z',
+        ticket: { source: 'fake', id: 'fake-8' },
+      },
+    ]
+
+    expect(
+      await resolveHarvestCreateBlockers(
+        { ...proposal, blockedBy: ['fake-8'] },
+        observations,
+        tickets,
+      ),
+    ).toEqual({
+      blockedBy: ['fake-8'],
+      provenance: { declared: ['fake-8'], derived: ['fake-8'] },
+    })
+    expect(tickets.dependencyQueries).toEqual([['fake-8']])
+  })
+
+  test('drops missing, resolved, foreign-source, and absent origins', async () => {
+    const tickets = new FakeTicketSource([
+      {
+        ref: { source: 'fake', id: 'fake-done' },
+        title: 'Done origin',
+        body: 'body',
+        state: 'Done',
+        labels: [],
+      },
+    ])
+    const observations = [
+      {
+        occurrence: { build: 'missing', seq: 1 },
+        id: 'missing',
+        kind: 'followup' as const,
+        summary: 'missing origin',
+        ts: '2026-08-01T00:00:00.000Z',
+        ticket: { source: 'fake', id: 'fake-missing' },
+      },
+      {
+        occurrence: { build: 'done', seq: 1 },
+        id: 'done',
+        kind: 'followup' as const,
+        summary: 'resolved origin',
+        ts: '2026-08-01T00:00:00.000Z',
+        ticket: { source: 'fake', id: 'fake-done' },
+      },
+      {
+        occurrence: { build: 'foreign', seq: 1 },
+        id: 'foreign',
+        kind: 'followup' as const,
+        summary: 'foreign origin',
+        ts: '2026-08-01T00:00:00.000Z',
+        ticket: { source: 'linear', id: 'AUT-1' },
+      },
+      {
+        occurrence: { build: 'none', seq: 1 },
+        id: 'none',
+        kind: 'followup' as const,
+        summary: 'no origin',
+        ts: '2026-08-01T00:00:00.000Z',
+      },
+    ]
+    const clustered = {
+      ...proposal,
+      observations: observations.map((item) => item.occurrence),
+    }
+
+    expect(await resolveHarvestCreateBlockers(clustered, observations, tickets)).toEqual({
+      blockedBy: [],
+      provenance: { declared: [], derived: [] },
+    })
+    expect(tickets.dependencyQueries).toEqual([['fake-missing', 'fake-done']])
+  })
 })
 
 describe('harvest deterministic scan and ledger', () => {
+  test('projects distinct origin lifecycle without querying foreign sources', async () => {
+    const tickets = new FakeTicketSource([
+      {
+        ref: { source: 'fake', id: 'origin-open' },
+        title: 'Open',
+        body: 'body',
+        state: 'Doing',
+        labels: [],
+      },
+      {
+        ref: { source: 'fake', id: 'origin-done' },
+        title: 'Done',
+        body: 'body',
+        state: 'Done',
+        labels: [],
+      },
+    ])
+    const base = {
+      id: 'obs',
+      kind: 'followup' as const,
+      summary: 'follow-up',
+      ts: '2026-08-01T00:00:00.000Z',
+    }
+    const origins = await reconcileOriginatingTickets(
+      [
+        {
+          ...base,
+          occurrence: { build: 'a', seq: 1 },
+          ticket: { source: 'fake', id: 'origin-open' },
+        },
+        {
+          ...base,
+          occurrence: { build: 'b', seq: 1 },
+          ticket: { source: 'fake', id: 'origin-open' },
+        },
+        {
+          ...base,
+          occurrence: { build: 'c', seq: 1 },
+          ticket: { source: 'linear', id: 'AUT-1' },
+        },
+        {
+          ...base,
+          occurrence: { build: 'd', seq: 1 },
+          ticket: { source: 'fake', id: 'origin-done' },
+        },
+        {
+          ...base,
+          occurrence: { build: 'e', seq: 1 },
+          ticket: { source: 'fake', id: 'origin-missing' },
+        },
+      ],
+      tickets,
+    )
+
+    expect(origins).toEqual([
+      {
+        ticket: { source: 'fake', id: 'origin-open' },
+        sourceMatches: true,
+        exists: true,
+        resolved: false,
+      },
+      {
+        ticket: { source: 'linear', id: 'AUT-1' },
+        sourceMatches: false,
+        exists: false,
+        resolved: false,
+      },
+      {
+        ticket: { source: 'fake', id: 'origin-done' },
+        sourceMatches: true,
+        exists: true,
+        resolved: true,
+      },
+      {
+        ticket: { source: 'fake', id: 'origin-missing' },
+        sourceMatches: true,
+        exists: false,
+        resolved: false,
+      },
+    ])
+    expect(tickets.dependencyQueries).toEqual([['origin-open', 'origin-done', 'origin-missing']])
+  })
+
   test('per-build seq collisions are distinct; a started snapshot claims only its immutable members', async () => {
     const store = new MemoryBuildStore()
     await observation(store, 'a', 'a1')

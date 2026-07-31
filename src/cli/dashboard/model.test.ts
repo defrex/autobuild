@@ -869,6 +869,69 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     }
   })
 
+  test('terminal outcomes outrank later explicit and escalation-answer abort intent', () => {
+    const cases = [
+      { terminal: 'aborted' as const, source: 'explicit' as const },
+      { terminal: 'aborted' as const, source: 'answer' as const },
+      { terminal: 'done' as const, source: 'explicit' as const },
+      { terminal: 'done' as const, source: 'answer' as const },
+    ]
+
+    for (const { terminal, source } of cases) {
+      const escalation =
+        source === 'answer'
+          ? [
+              ev('plan.started', { round: 1 }),
+              ev('escalation.raised', {
+                id: `e_terminal_${terminal}`,
+                phase: 'plan' as const,
+                round: 1,
+                source: 'agent' as const,
+                question: 'Should this build stop?',
+              }),
+            ]
+          : []
+      const terminalEvent =
+        terminal === 'aborted'
+          ? ev('build.aborted', {})
+          : ev('build.completed', { outcome: 'merged' })
+      const lateAbort =
+        source === 'explicit'
+          ? ev('build.abort-requested', {})
+          : ev('escalation.answered', {
+              id: `e_terminal_${terminal}`,
+              answer: 'Abort this build.',
+              resolution: 'abort',
+            })
+      const log = toLog([...prelude(), ...escalation, terminalEvent, lateAbort])
+      const state = reduceBuild(log)
+
+      expect(state.status).toBe(terminal)
+      expect(state.pendingCommands.some((command) => command.command === 'abort')).toBe(true)
+      expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: terminal })
+
+      const row = projectBuild(RECORD, state, CONFIG, log)
+      const dashboard = buildDashboard([{ record: RECORD, state, events: log }], CONFIG, {
+        repo: '/repos/app',
+        queued: 0,
+        observationCount: 0,
+      })
+      expect(dashboard.active.current).toBe(0)
+
+      if (terminal === 'aborted') {
+        expect(row?.status).toBe('cleaning')
+        expect(row?.abortProgress).toBe(
+          'running work stopped; abort cleanup pending or in progress',
+        )
+        expect(row?.abortProgress).not.toContain('waiting')
+        expect(dashboardBuildControl(row!.status)).toBeUndefined()
+      } else {
+        expect(row).toBeNull()
+        expect(dashboard.builds).toEqual([])
+      }
+    }
+  })
+
   test('acknowledgement changes aborting to cleaning, and cleanup visibility consumes no capacity', () => {
     const requestedLog = toLog([...prelude(), ev('build.abort-requested', {})])
     expect(projectBuild(RECORD, reduceBuild(requestedLog), CONFIG, requestedLog)?.status).toBe(
