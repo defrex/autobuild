@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#158](https://github.com/defrex/autobuild/pull/158) — Make pending abort intent dominate bulk pause
 - [#154](https://github.com/defrex/autobuild/pull/154) — Preserve union detail in validation renderers
 - [#153](https://github.com/defrex/autobuild/pull/153) — Teach dashboard verification to consume escalation guidance
 - [#152](https://github.com/defrex/autobuild/pull/152) — Document workspace config as an open map
