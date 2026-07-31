@@ -182,6 +182,8 @@ export type DashboardView =
       /** Process-local offset into the fully wrapped detail body. */
       scroll: number
       sessionId?: string
+      /** Retained display content. Raising it is a one-shot controller reveal;
+       * its continued presence never implies a standing follow mode. */
       message?: string
       /** Message validity fence for facts that can change on the next poll. */
       messageWhileSessionOpen?: string

@@ -12,6 +12,7 @@ import {
   moveDetailScroll,
   moveTranscriptScroll,
   renderDashboard,
+  revealDetailFocus,
   resumeHintRows,
   resumeKeysRows,
   resumePanel,
@@ -2177,6 +2178,96 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect([...seen].some((line) => line.includes('ticket ENG-42'))).toBe(true)
     expect([...seen].some((line) => line.includes('blocker final'))).toBe(true)
     expect([...seen].some((line) => line.includes('plan-review phase'))).toBe(true)
+  })
+
+  test('a newly raised detail message is revealed from a nonzero scroll offset', () => {
+    const feedback = 'Fresh operator feedback must be visible immediately.'
+    const longBuild = {
+      ...detailedBuild,
+      blockers: Array.from(
+        { length: 8 },
+        (_, index) =>
+          `Long blocker ${index} keeps the end of this detail body outside the viewport.`,
+      ),
+    }
+    const width = 46
+    const height = 8
+    const priorScroll = 3
+    const withFeedback = {
+      ...model([longBuild]),
+      view: {
+        kind: 'detail' as const,
+        slug: longBuild.slug,
+        sessionId: 's_plan',
+        scroll: priorScroll,
+        message: feedback,
+      },
+    }
+
+    expect(rd(withFeedback, { color: false, width: width + 2, height }).join('\n')).not.toContain(
+      'Fresh operator feedback',
+    )
+    const revealed = revealDetailFocus(withFeedback, width, height, 'message', priorScroll)
+    expect(revealed).toBeGreaterThan(priorScroll)
+    expect(revealed).toBeLessThanOrEqual(detailScrollLimit(withFeedback, width, height))
+    expect(
+      rd(
+        { ...withFeedback, view: { ...withFeedback.view, scroll: revealed } },
+        { color: false, width: width + 2, height },
+      ).join('\n'),
+    ).toContain('Fresh operator feedback must be visible')
+  })
+
+  test('message focus targets wrapped text at one-row capacity and remains one-shot', () => {
+    const width = 28
+    const height = 6
+    const feedback = 'Fresh feedback wraps across several narrow physical rows.'
+    const base = {
+      ...model([detailedBuild]),
+      view: {
+        kind: 'detail' as const,
+        slug: detailedBuild.slug,
+        sessionId: 's_plan',
+        scroll: 2,
+        message: feedback,
+      },
+    }
+    const messageScroll = revealDetailFocus(base, width, height, 'message', base.view.scroll)
+    const messageFrame = rd(
+      { ...base, view: { ...base.view, scroll: messageScroll } },
+      { color: false, width: width + 2, height },
+    )
+
+    expect(messageFrame.some((line) => line.includes('Fresh feedback'))).toBe(true)
+    expect(messageFrame.at(-1)).toContain('Keys:')
+    expect(messageFrame.length).toBeLessThanOrEqual(height)
+    expect(messageFrame.every((line) => stripAnsi(line).length <= width + 2)).toBe(true)
+
+    const manualScroll = moveDetailScroll(base, width, height, messageScroll, -1)
+    const manuallyScrolled = rd(
+      { ...base, view: { ...base.view, scroll: manualScroll } },
+      { color: false, width: width + 2, height },
+    ).join('\n')
+    expect(manuallyScrolled).not.toContain('Fresh feedback')
+    expect(
+      rd(
+        { ...base, view: { ...base.view, scroll: manualScroll } },
+        { color: false, width: width + 2, height },
+      ).join('\n'),
+    ).toBe(manuallyScrolled)
+
+    const sessionScroll = revealDetailFocus(base, width, height, 'session', messageScroll)
+    const sessionFrame = rd(
+      { ...base, view: { ...base.view, scroll: sessionScroll } },
+      { color: false, width: width + 2, height },
+    ).join('\n')
+    expect(sessionFrame).toContain('>   plan')
+    expect(sessionFrame).not.toContain('Fresh feedback')
+
+    const resized = { ...base, view: { ...base.view, message: 'Short feedback.' } }
+    const resizedLimit = detailScrollLimit(resized, 80, 12)
+    expect(revealDetailFocus(resized, 80, 12, 'message', 999)).toBe(resizedLimit)
+    expect(resizedLimit).toBeLessThan(detailScrollLimit(base, width, height))
   })
 
   test('structured and producer-boundary transcripts render prompts, text, failures, usage, and notice', () => {

@@ -11,6 +11,7 @@ import {
   ticketRefSchema,
 } from '../ontology'
 import {
+  harvestBlockerProvenanceSchema,
   harvestDispositionSchema,
   harvestPendingProposalSchema,
   harvestStepSchema,
@@ -110,6 +111,7 @@ export const harvestEventPayloadSchemas = {
     run: z.string().min(1),
     proposalKey: z.string().min(1),
     ticket: ticketRefSchema,
+    blockers: harvestBlockerProvenanceSchema.optional(),
   }),
   /** The authoritative committed ledger facts for a successful run. */
   'harvest.completed': z.strictObject({

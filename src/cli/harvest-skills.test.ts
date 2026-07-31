@@ -16,18 +16,23 @@ const producer = await skill('skills/harvest')
 const reviewer = await skill('skills/harvest-review')
 
 describe('harvest skills — blocker judgment', () => {
-  test('producer requires metadata for hard prerequisites without broadening references', () => {
+  test('producer distinguishes automatic origins from other hard prerequisites', () => {
     const text = normalize(producer)
-    expect(text).toContain('another ticket must complete before this work can start')
-    expect(text).toContain("include that hard prerequisite's source-local ticket id in `blockedBy`")
+    expect(text).toContain('blocks a create on every unresolved, same-source originating ticket')
+    expect(text).toContain('do not restate that automatic dependency in `blockedBy`')
+    expect(text).toContain('some other ticket as a hard prerequisite')
     expect(text).toContain(
       'Contextual citations, related work, and nonbinding sequencing preferences',
     )
     expect(text).toContain('Never invent an id or turn every ticket mention into a dependency.')
   })
 
-  test('reviewer enforces both missing and unjustified blocker metadata', () => {
+  test('reviewer enforces the shared automatic rule and other blocker metadata', () => {
     const text = normalize(reviewer)
+    expect(text).toContain(
+      'automatically blocks a create on unresolved, same-source originating tickets',
+    )
+    expect(text).toContain('must restate that originating dependency in `blockedBy`')
     expect(text).toContain('a prose-only hard prerequisite is not approvable')
     expect(text).toContain('every `blockedBy` id is justified by evidence as a hard start gate')
     expect(text).toContain('must not become blockers, and ticket ids are never invented')

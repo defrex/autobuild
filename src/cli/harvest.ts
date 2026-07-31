@@ -134,6 +134,7 @@ export async function buildHarvestContext(deps: HarvestCliDeps): Promise<Harvest
   }
 
   await materialize('observations.json', packet.observations)
+  await materialize('originating-tickets.json', packet.originatingTickets)
   await materialize('ledger.json', packet.ledger)
 
   const proposal = proposalArtifactForRound(run, env.round)
@@ -391,6 +392,12 @@ export interface HarvestRecoveryStatus {
   }
 }
 
+export interface HarvestFiledStatusView {
+  proposalKey: string
+  ticket: { source: string; id: string }
+  blockers?: { declared: string[]; derived: string[] }
+}
+
 export interface HarvestRunStatusView {
   run: string
   status: HarvestRunState['status']
@@ -399,7 +406,7 @@ export interface HarvestRunStatusView {
   observations: number
   steps: HarvestRunState['steps']
   rounds: number
-  filed: Array<{ proposalKey: string; ticket: { source: string; id: string } }>
+  filed: HarvestFiledStatusView[]
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
   recovery: HarvestRecoveryStatus
@@ -424,7 +431,7 @@ export interface HarvestStatusView {
   observations: number
   steps: HarvestRunState['steps']
   rounds: number
-  filed: Array<{ proposalKey: string; ticket: { source: string; id: string } }>
+  filed: HarvestFiledStatusView[]
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
   recovery: HarvestRecoveryStatus
@@ -484,6 +491,7 @@ function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
     filed: run.filed.map((entry) => ({
       proposalKey: entry.proposalKey,
       ticket: { source: entry.ticket.source, id: entry.ticket.id },
+      ...(entry.blockers !== undefined ? { blockers: structuredClone(entry.blockers) } : {}),
     })),
     ...(run.escalation !== undefined ? { escalation: run.escalation } : {}),
     ...(run.failure !== undefined ? { failure: run.failure } : {}),
@@ -602,6 +610,12 @@ function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): str
     lines.push('filed:')
     for (const entry of run.filed) {
       lines.push(`  ${entry.proposalKey} -> ${entry.ticket.source}:${entry.ticket.id}`)
+      if (entry.blockers !== undefined) {
+        lines.push(
+          `    declared blockers: ${entry.blockers.declared.join(', ') || 'none'}`,
+          `    originating blockers: ${entry.blockers.derived.join(', ') || 'none'}`,
+        )
+      }
     }
   }
   return lines
