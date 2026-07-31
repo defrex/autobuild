@@ -247,7 +247,10 @@ conflict.
 
 `src/cli/repo-state.ts` owns repository identity and store precedence
 (`--store` > `AB_STORE` > `.autobuild/`); `src/cli/store-opening.ts` is the
-production store composition boundary;
+production store composition boundary shared by finite sessionless queries.
+`src/cli/repository-status.ts` consumes that boundary and the kernel's
+`reduceDispatchSettings` projection to report journal-backed dispatcher
+controls without ensuring a repository stream or starting dispatcher work.
 `src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
 classifies build/harvest session tuples and routes sessionless invocations, so
 phase-only commands report their complete runner context when run by hand.
