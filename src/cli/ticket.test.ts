@@ -27,6 +27,7 @@ import {
   abTicketShow,
   abTicketUnblock,
   abTicketUpdate,
+  openTicketSource,
 } from './ticket'
 
 let tmp: string
@@ -192,6 +193,37 @@ describe('plugin-selected ticket commands', () => {
         stderr: () => {},
       }),
     ).rejects.toThrow(/journal.*journal-plugin.*JOURNAL_TOKEN/)
+  })
+})
+
+describe('openTicketSource', () => {
+  test('explicit store selection relocates default file tickets ahead of AB_STORE', async () => {
+    await writeRepo('[tickets]\nsource = "file"\n')
+    let localStateRoot: string | undefined
+    const resolved = await openTicketSource(
+      {
+        targetRepo: tmp,
+        env: { AB_STORE: 'env-root' },
+        stdout: () => {},
+        storeRef: 'explicit-root',
+        sourceFactory: (_config, _env, _repo, root) => {
+          localStateRoot = root
+          return new FakeTicketSource()
+        },
+      },
+      'ab answer --revise-spec-from-ticket',
+    )
+    expect(resolved.source.name).toBe('fake')
+    expect(localStateRoot).toBe(join(tmp, 'explicit-root'))
+  })
+
+  test('missing config errors name the calling command', async () => {
+    await expect(
+      openTicketSource(
+        { targetRepo: tmp, env: {}, stdout: () => {} },
+        'ab answer --revise-spec-from-ticket',
+      ),
+    ).rejects.toThrow(/ab answer --revise-spec-from-ticket.*reads autobuild.toml/)
   })
 })
 

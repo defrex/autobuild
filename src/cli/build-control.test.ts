@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { agentActor, KERNEL } from '../events/envelope'
+import { parseConfig } from '../config/load'
+import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import type { EscalationSource } from '../ontology'
 import type { EventType } from '../events/payloads'
+import { decideNext } from '../kernel/engine'
+import { reduceBuild } from '../kernel/reducer'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
@@ -11,6 +14,7 @@ import {
   BuildControlError,
   abBuildControl,
   controlBuild,
+  terminalSignal,
   type BuildControlAction,
 } from './build-control'
 
@@ -18,11 +22,20 @@ const REPO = '/repo'
 const SLUG = 'active-build'
 
 async function makeStore(
-  opts: { slug?: string; repo?: string; active?: boolean } = {},
+  opts: {
+    slug?: string
+    repo?: string
+    active?: boolean
+    ticket?: { source: string; id: string }
+  } = {},
 ): Promise<MemoryBuildStore> {
   const slug = opts.slug ?? SLUG
   const store = new MemoryBuildStore({ clock: steppingClock() })
-  await store.createBuild({ slug, repo: opts.repo ?? REPO })
+  await store.createBuild({
+    slug,
+    repo: opts.repo ?? REPO,
+    ...(opts.ticket !== undefined ? { ticket: opts.ticket } : {}),
+  })
   if (opts.active !== false) {
     await store.append(slug, {
       actor: KERNEL,
@@ -37,6 +50,7 @@ async function raise(
   store: MemoryBuildStore,
   id: string,
   source: EscalationSource = 'agent',
+  refs?: string[],
 ): Promise<void> {
   await store.append(SLUG, {
     actor: agentActor('implement', `session-${id}`),
@@ -47,12 +61,45 @@ async function raise(
       round: 1,
       source,
       question: `Question ${id}?`,
+      ...(refs !== undefined ? { refs } : {}),
     },
   })
 }
 
 function eventTypes(store: MemoryBuildStore): Promise<string[]> {
   return store.getEvents(SLUG).then((events) => events.map((event) => event.type))
+}
+
+const ENGINE_CONFIG = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[verify]
+steps = []
+
+[finalize]
+steps = []
+`)
+
+const CONFORMING_SPEC = [
+  '# Replacement',
+  '',
+  '## Acceptance criteria',
+  '- The replacement is used.',
+  '',
+  '## Out of scope',
+  '- Nothing else.',
+  '',
+].join('\n')
+
+async function seedSpec(store: MemoryBuildStore, body = 'old spec'): Promise<void> {
+  const meta = await store.putArtifact(SLUG, { kind: 'spec', content: body })
+  await store.append(SLUG, {
+    actor: agentActor('spec', 'session-spec'),
+    type: 'spec.authored',
+    payload: { artifact: { kind: 'spec', rev: meta.revision }, session: 'session-spec' },
+  })
 }
 
 describe('controlBuild — shared durable controls', () => {
@@ -338,6 +385,914 @@ describe('controlBuild — shared durable controls', () => {
     )
     expect(answers.map((event) => event.payload.id)).toEqual(['esc-first', 'esc-second'])
     await store.close()
+  })
+
+  test('revises a blocked build on a new spec revision and retains an open PR', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 2 },
+    })
+    await store.append(SLUG, {
+      actor: agentActor('plan', 'plan-2'),
+      type: 'plan.completed',
+      payload: { round: 2, artifact: { kind: 'plan', rev: 0 } },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'plan-review.started',
+      payload: { round: 2 },
+    })
+    await store.append(SLUG, {
+      actor: agentActor('plan-review', 'review-2'),
+      type: 'plan-review.verdict',
+      payload: {
+        round: 2,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 7, url: 'https://example.test/pr/7', headSha: 'head-1' } },
+    })
+    await raise(store, 'esc-spec')
+    const before = (await store.getEvents(SLUG)).length
+
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'contract-owner' },
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'replacement.md', read: async () => CONFORMING_SPEC },
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      kind: 'answered',
+      resolution: 'revise-spec',
+      count: 1,
+      specRev: 1,
+    })
+    const added = (await store.getEvents(SLUG)).slice(before)
+    expect(added.map((event) => event.type)).toEqual(['escalation.answered', 'spec.revised'])
+    const answer = added[0]
+    expect(answer?.actor).toEqual({ kind: 'human', user: 'contract-owner' })
+    expect(answer?.payload).toMatchObject({
+      id: 'esc-spec',
+      resolution: 'revise-spec',
+      artifact: { kind: 'spec', rev: 1 },
+    })
+    expect(added[1]?.actor).toEqual(KERNEL)
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.specRev).toBe(1)
+    expect(state.restartSince).toBe(added[1]!.seq)
+    expect(state.openEscalations).toEqual([])
+    expect(state.pr).toEqual({ number: 7, url: 'https://example.test/pr/7', headSha: 'head-1' })
+    expect(state.finalizeCompletedSeq).toBeLessThan(state.restartSince)
+    expect(decideNext(await store.getEvents(SLUG), ENGINE_CONFIG)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'plan',
+      round: 3,
+    })
+    const replacement = await store.getArtifact(SLUG, 'spec', 1)
+    expect(replacement).not.toBeNull()
+    expect(new TextDecoder().decode(replacement!.content)).toBe(CONFORMING_SPEC)
+    await store.close()
+  })
+
+  test('reports an ended-PR precursor that lands after revision revalidation', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 8, url: 'https://example.test/pr/8', headSha: 'head-2' } },
+    })
+    await raise(store, 'esc-race')
+    const originalAppend = store.append.bind(store)
+    let injected = false
+    store.append = (async (target: string, event: Parameters<BuildStore['append']>[1]) => {
+      const appended = await originalAppend(target, event)
+      if (!injected && event.type === 'escalation.answered') {
+        injected = true
+        await originalAppend(target, {
+          actor: DISPATCHER,
+          type: 'pr.merged',
+          payload: { sha: 'merge-sha' },
+        })
+      }
+      return appended
+    }) as BuildStore['append']
+
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'replacement.md', read: async () => CONFORMING_SPEC },
+        },
+      },
+    })
+    expect(result).toMatchObject({
+      resolution: 'revise-spec',
+      terminalSignal: { kind: 'pr-ended', state: 'merged' },
+    })
+    expect(reduceBuild(await store.getEvents(SLUG)).status).toBe('running')
+    await store.close()
+  })
+
+  test('re-imports a replacement from the build ticket through the lazy adapter seam', async () => {
+    const ticket = { source: 'fake', id: 'T-42' }
+    const store = await makeStore({ ticket })
+    await seedSpec(store)
+    await raise(store, 'esc-ticket')
+    const reads: (typeof ticket)[] = []
+
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: { kind: 'revise-spec', body: { kind: 'ticket' } },
+      },
+      readTicketBody: async (ref) => {
+        reads.push(ref)
+        return CONFORMING_SPEC
+      },
+    })
+
+    expect(reads).toEqual([ticket])
+    expect(result).toMatchObject({ resolution: 'revise-spec', specRev: 1 })
+    expect((await store.getArtifact(SLUG, 'spec', 1))?.meta.metadata).toEqual({
+      ticket: 'T-42',
+      source: 'fake',
+    })
+    await store.close()
+  })
+
+  test('refuses non-conforming and unblocked spec replacements without recording', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await raise(store, 'esc-spec')
+    const beforeEvents = await store.getEvents(SLUG)
+    const beforeArtifacts = await store.listArtifacts(SLUG, 'spec')
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: { kind: 'supplied', origin: 'bad.md', read: async () => '# Incomplete' },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'spec-nonconforming',
+      message: expect.stringContaining('bad.md'),
+    })
+    expect(await store.getEvents(SLUG)).toEqual(beforeEvents)
+    expect(await store.listArtifacts(SLUG, 'spec')).toEqual(beforeArtifacts)
+
+    await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: { kind: 'answer' },
+    })
+    const answered = await store.getEvents(SLUG)
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: { kind: 'supplied', origin: 'good.md', read: async () => CONFORMING_SPEC },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'no-open-escalations' })
+    expect(await store.getEvents(SLUG)).toEqual(answered)
+    await store.close()
+  })
+
+  test('completes an earlier revision authorization without opening the new body source', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    const authorized = await store.putArtifact(SLUG, { kind: 'spec', content: CONFORMING_SPEC })
+    await raise(store, 'esc-first')
+    await raise(store, 'esc-second')
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'first-op' },
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-first',
+        answer: 'replace it',
+        resolution: 'revise-spec',
+        artifact: { kind: 'spec', rev: authorized.revision },
+      },
+    })
+    let read = false
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: {
+            kind: 'supplied',
+            origin: 'deleted.md',
+            read: async () => {
+              read = true
+              throw new Error('file disappeared')
+            },
+          },
+        },
+      },
+    })
+    expect(read).toBe(false)
+    expect(result).toMatchObject({
+      kind: 'answered',
+      resolution: 'revise-spec',
+      authorizedEarlier: true,
+      specRev: authorized.revision,
+    })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.specRev).toBe(authorized.revision)
+    expect(state.openEscalations).toEqual([])
+    await store.close()
+  })
+
+  test('fails closed when an earlier revise-spec answer names no authorized body', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await raise(store, 'esc-legacy')
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'legacy-op' },
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-legacy',
+        answer: 'revise it',
+        resolution: 'revise-spec',
+      },
+    })
+    let read = false
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: {
+              kind: 'supplied',
+              origin: 'new.md',
+              read: async () => {
+                read = true
+                return CONFORMING_SPEC
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'missing-authorization' })
+    expect(read).toBe(false)
+    expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(0)
+    await store.close()
+  })
+
+  test('dismisses only escalations that cite real review findings', async () => {
+    const store = await makeStore()
+    await store.append(SLUG, {
+      actor: agentActor('code-review', 'review-1'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'revise',
+        findings: [{ id: 'f_real', severity: 'blocking', summary: 'real issue', persists: [] }],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    await raise(store, 'esc-finding', 'stall', ['f_real', 'src/file.ts'])
+    await raise(store, 'esc-policy', 'policy')
+    await store.append(SLUG, { actor: KERNEL, type: 'build.paused', payload: {} })
+
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'review-owner' },
+      action: { kind: 'answer', resolve: { kind: 'dismiss-finding' } },
+    })
+    expect(result).toMatchObject({
+      kind: 'answered',
+      resolution: 'dismiss-finding',
+      count: 1,
+      remainingOpen: 1,
+      resumed: false,
+    })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.openEscalations.map((item) => item.id)).toEqual(['esc-policy'])
+    expect(state.pendingCommands.some((command) => command.command === 'resume')).toBe(false)
+    expect(state.answeredEscalations.at(-1)).toMatchObject({
+      id: 'esc-finding',
+      resolution: 'dismiss-finding',
+    })
+    await store.close()
+  })
+
+  test('pending abort refuses revision before reading or depositing a body', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await raise(store, 'esc-spec')
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'operator' },
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    expect(reduceBuild(await store.getEvents(SLUG)).status).toBe('blocked')
+    let read = false
+    const before = await store.listArtifacts(SLUG, 'spec')
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: {
+              kind: 'supplied',
+              origin: 'spec.md',
+              read: async () => {
+                read = true
+                return CONFORMING_SPEC
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'abort-pending' })
+    expect(read).toBe(false)
+    expect(await store.listArtifacts(SLUG, 'spec')).toEqual(before)
+    await store.close()
+  })
+
+  test('paused revision appends answers, revision, then resume in that order', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await raise(store, 'esc-paused')
+    await store.append(SLUG, { actor: KERNEL, type: 'build.paused', payload: {} })
+    const before = (await store.getEvents(SLUG)).length
+
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'paused.md', read: async () => CONFORMING_SPEC },
+        },
+      },
+    })
+
+    expect(result).toMatchObject({ resolution: 'revise-spec', resumed: true })
+    expect((await store.getEvents(SLUG)).slice(before).map((event) => event.type)).toEqual([
+      'escalation.answered',
+      'spec.revised',
+      'build.resume-requested',
+    ])
+    await store.close()
+  })
+
+  test('refuses when PR completion lands during body preparation before revalidation', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 9, url: 'https://example.test/pr/9', headSha: 'head-9' } },
+    })
+    await raise(store, 'esc-terminal')
+    const originalPut = store.putArtifact.bind(store)
+    store.putArtifact = async (target, artifact) => {
+      const meta = await originalPut(target, artifact)
+      await store.append(target, {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: 'merged-during-put' },
+      })
+      await store.append(target, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      return meta
+    }
+
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: { kind: 'supplied', origin: 'race.md', read: async () => CONFORMING_SPEC },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'no-longer-active' })
+    const state = reduceBuild(await store.getEvents(SLUG))
+    expect(state.status).toBe('done')
+    expect(state.specRev).toBe(0)
+    expect(state.openEscalations.map((item) => item.id)).toEqual(['esc-terminal'])
+    expect(state.answeredEscalations).toEqual([])
+    expect(await store.listArtifacts(SLUG, 'spec')).toHaveLength(2)
+    await store.close()
+  })
+
+  test('terminalSignal covers status, abort, ended PR, priority, and absent outcomes', async () => {
+    const store = await makeStore()
+    const base = reduceBuild(await store.getEvents(SLUG))
+    const abortCommand = {
+      command: 'abort' as const,
+      seq: 2,
+      actor: { kind: 'human' as const, user: 'operator' },
+    }
+    expect(terminalSignal({ ...base, status: 'aborted' })).toEqual({
+      kind: 'terminal-status',
+      status: 'aborted',
+    })
+    expect(terminalSignal({ ...base, status: 'done', outcome: 'merged' })).toEqual({
+      kind: 'terminal-status',
+      status: 'done',
+      outcome: 'merged',
+    })
+    expect(terminalSignal({ ...base, pendingCommands: [abortCommand] })).toEqual({
+      kind: 'abort-requested',
+    })
+    expect(terminalSignal({ ...base, prState: 'merged' })).toEqual({
+      kind: 'pr-ended',
+      state: 'merged',
+    })
+    expect(terminalSignal({ ...base, prState: 'closed' })).toEqual({
+      kind: 'pr-ended',
+      state: 'closed',
+    })
+    expect(
+      terminalSignal({
+        ...base,
+        status: 'aborted',
+        pendingCommands: [abortCommand],
+        prState: 'merged',
+      }),
+    ).toEqual({ kind: 'terminal-status', status: 'aborted' })
+    expect(terminalSignal(base)).toBeUndefined()
+    await store.close()
+  })
+
+  test('completes an authorization after every escalation was already answered', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    const authorized = await store.putArtifact(SLUG, { kind: 'spec', content: CONFORMING_SPEC })
+    await raise(store, 'esc-only')
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'operator' },
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-only',
+        answer: 'revise',
+        resolution: 'revise-spec',
+        artifact: { kind: 'spec', rev: authorized.revision },
+      },
+    })
+    const before = (await store.getEvents(SLUG)).length
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'unused.md', read: async () => 'unused' },
+        },
+      },
+    })
+    expect(result).toMatchObject({ authorizedEarlier: true, count: 0, specRev: 1 })
+    expect((await store.getEvents(SLUG)).slice(before).map((event) => event.type)).toEqual([
+      'spec.revised',
+    ])
+    await store.close()
+  })
+
+  test('retry after spec.revised refuses and points a still-paused build at resume', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    const authorized = await store.putArtifact(SLUG, { kind: 'spec', content: CONFORMING_SPEC })
+    await raise(store, 'esc-finished')
+    await store.append(SLUG, { actor: KERNEL, type: 'build.paused', payload: {} })
+    const raised = (await store.getEvents(SLUG)).find(
+      (event) => event.type === 'escalation.raised' && event.payload.id === 'esc-finished',
+    )!
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'operator' },
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-finished',
+        answer: 'revise',
+        resolution: 'revise-spec',
+        artifact: { kind: 'spec', rev: authorized.revision },
+      },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: authorized.revision }, escalation: raised.seq },
+    })
+    const before = await store.getEvents(SLUG)
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: {
+            kind: 'revise-spec',
+            body: { kind: 'supplied', origin: 'unused.md', read: async () => 'unused' },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'no-open-escalations',
+      message: expect.stringContaining('ab resume'),
+    })
+    expect(await store.getEvents(SLUG)).toEqual(before)
+    await store.close()
+  })
+
+  test('an orphan deposit is inert and a completed revision can be revised again', async () => {
+    const store = await makeStore()
+    await seedSpec(store)
+    await store.putArtifact(SLUG, { kind: 'spec', content: 'orphan' })
+    await raise(store, 'esc-after-orphan')
+    const second = CONFORMING_SPEC.replace('used.', 'used twice.')
+    await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'second.md', read: async () => second },
+        },
+      },
+    })
+    expect(reduceBuild(await store.getEvents(SLUG)).specRev).toBe(2)
+    expect(new TextDecoder().decode((await store.getArtifact(SLUG, 'spec', 2))!.content)).toBe(
+      second,
+    )
+
+    await raise(store, 'esc-next-revision')
+    const third = CONFORMING_SPEC.replace('used.', 'used three times.')
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: {
+        kind: 'answer',
+        resolve: {
+          kind: 'revise-spec',
+          body: { kind: 'supplied', origin: 'third.md', read: async () => third },
+        },
+      },
+    })
+    expect(result).toMatchObject({ specRev: 3 })
+    expect(result).not.toHaveProperty('authorizedEarlier')
+    expect(new TextDecoder().decode((await store.getArtifact(SLUG, 'spec', 3))!.content)).toBe(
+      third,
+    )
+    await store.close()
+  })
+
+  test('dismiss refuses citations that are not findings and ticket revision names unavailable seams', async () => {
+    const store = await makeStore()
+    await raise(store, 'esc-path', 'stall', ['src/file.ts', 'AUT-1'])
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'answer', resolve: { kind: 'dismiss-finding' } },
+      }),
+    ).rejects.toMatchObject({ code: 'no-cited-findings' })
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: { kind: 'revise-spec', body: { kind: 'ticket' } },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'ticket-unavailable' })
+    await store.close()
+
+    const ticketed = await makeStore({ ticket: { source: 'fake', id: 'T-1' } })
+    await raise(ticketed, 'esc-ticket-reader')
+    await expect(
+      controlBuild({
+        store: ticketed,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          resolve: { kind: 'revise-spec', body: { kind: 'ticket' } },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'ticket-unavailable' })
+    await ticketed.close()
+  })
+
+  test('dismiss reports a terminal writer that lands after its first answer', async () => {
+    const store = await makeStore()
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 10, url: 'https://example.test/pr/10', headSha: 'head-10' } },
+    })
+    await store.append(SLUG, {
+      actor: agentActor('code-review', 'review-race'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'revise',
+        findings: [{ id: 'f_race', severity: 'blocking', summary: 'race', persists: [] }],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    await raise(store, 'esc-dismiss-race', 'stall', ['f_race'])
+    const originalAppend = store.append.bind(store)
+    let injected = false
+    store.append = (async (target: string, event: Parameters<BuildStore['append']>[1]) => {
+      const appended = await originalAppend(target, event)
+      if (!injected && event.type === 'escalation.answered') {
+        injected = true
+        await originalAppend(target, {
+          actor: DISPATCHER,
+          type: 'pr.merged',
+          payload: { sha: 'dismiss-merge' },
+        })
+        await originalAppend(target, {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+      }
+      return appended
+    }) as BuildStore['append']
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: { kind: 'answer', resolve: { kind: 'dismiss-finding' } },
+    })
+    expect(result).toMatchObject({
+      count: 1,
+      terminalSignal: { kind: 'terminal-status', status: 'done', outcome: 'merged' },
+    })
+    expect(
+      (await store.getEvents(SLUG)).some((event) => event.type === 'escalation.answered'),
+    ).toBe(true)
+    await store.close()
+  })
+
+  test('dismissed plan and code finding chains advance their producer loops', async () => {
+    for (const loop of ['plan', 'code'] as const) {
+      const store = await makeStore()
+      await seedSpec(store)
+      await store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+      await store.append(SLUG, {
+        actor: agentActor('plan', `${loop}-plan`),
+        type: 'plan.completed',
+        payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+      })
+      await store.append(SLUG, {
+        actor: KERNEL,
+        type: 'plan-review.started',
+        payload: { round: 1 },
+      })
+      const findingId = `f_${loop}`
+      await store.append(SLUG, {
+        actor: agentActor('plan-review', `${loop}-plan-review`),
+        type: 'plan-review.verdict',
+        payload: {
+          round: 1,
+          verdict: loop === 'plan' ? 'revise' : 'approve',
+          findings:
+            loop === 'plan'
+              ? [
+                  {
+                    id: findingId,
+                    severity: 'blocking',
+                    file: 'src/shared.ts',
+                    summary: 'plan issue',
+                    persists: [],
+                  },
+                ]
+              : [],
+          artifact: { kind: 'plan-review', rev: 0 },
+        },
+      })
+      if (loop === 'code') {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'implement.started',
+          payload: { round: 1 },
+        })
+        await store.append(SLUG, {
+          actor: agentActor('implement', 'code-implement'),
+          type: 'implement.completed',
+          payload: {
+            round: 1,
+            commits: { base: 'base', head: 'head' },
+            artifact: { kind: 'implement-notes', rev: 0 },
+          },
+        })
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'code-review.started',
+          payload: { round: 1 },
+        })
+        await store.append(SLUG, {
+          actor: agentActor('code-review', 'code-review'),
+          type: 'code-review.verdict',
+          payload: {
+            round: 1,
+            verdict: 'revise',
+            findings: [
+              {
+                id: findingId,
+                severity: 'blocking',
+                file: 'src/shared.ts',
+                summary: 'code issue',
+                persists: [],
+              },
+            ],
+            artifact: { kind: 'code-review', rev: 0 },
+          },
+        })
+      }
+      await store.append(SLUG, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: `esc-${loop}`,
+          phase: loop === 'plan' ? 'plan-review' : 'code-review',
+          round: 1,
+          source: 'stall',
+          question: 'chain stalled',
+          refs: [findingId],
+        },
+      })
+      await controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'answer', resolve: { kind: 'dismiss-finding' } },
+      })
+      expect(decideNext(await store.getEvents(SLUG), ENGINE_CONFIG)).toMatchObject({
+        kind: 'run-phase',
+        phase: loop === 'plan' ? 'plan' : 'implement',
+        round: 2,
+      })
+
+      if (loop === 'plan') {
+        await store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 2 } })
+        await store.append(SLUG, {
+          actor: agentActor('plan', 'new-plan'),
+          type: 'plan.completed',
+          payload: { round: 2, artifact: { kind: 'plan', rev: 1 } },
+        })
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'plan-review.started',
+          payload: { round: 2 },
+        })
+        await store.append(SLUG, {
+          actor: agentActor('plan-review', 'new-plan-review'),
+          type: 'plan-review.verdict',
+          payload: {
+            round: 2,
+            verdict: 'revise',
+            findings: [
+              {
+                id: 'f_plan_new',
+                severity: 'blocking',
+                file: 'src/shared.ts',
+                summary: 'different plan issue',
+                persists: [],
+              },
+            ],
+            artifact: { kind: 'plan-review', rev: 1 },
+          },
+        })
+      } else {
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'implement.started',
+          payload: { round: 2 },
+        })
+        await store.append(SLUG, {
+          actor: agentActor('implement', 'new-implement'),
+          type: 'implement.completed',
+          payload: {
+            round: 2,
+            commits: { base: 'base', head: 'head-2' },
+            artifact: { kind: 'implement-notes', rev: 1 },
+          },
+        })
+        await store.append(SLUG, {
+          actor: KERNEL,
+          type: 'code-review.started',
+          payload: { round: 2 },
+        })
+        await store.append(SLUG, {
+          actor: agentActor('code-review', 'new-code-review'),
+          type: 'code-review.verdict',
+          payload: {
+            round: 2,
+            verdict: 'revise',
+            findings: [
+              {
+                id: 'f_code_new',
+                severity: 'blocking',
+                file: 'src/shared.ts',
+                summary: 'different code issue',
+                persists: [],
+              },
+            ],
+            artifact: { kind: 'code-review', rev: 1 },
+          },
+        })
+      }
+      expect(decideNext(await store.getEvents(SLUG), ENGINE_CONFIG)).toMatchObject({
+        kind: 'run-phase',
+        phase: loop === 'plan' ? 'plan' : 'implement',
+        round: 3,
+      })
+      await store.close()
+    }
   })
 
   test('discard is queued-only and duplicate requests reuse one durable fact', async () => {
