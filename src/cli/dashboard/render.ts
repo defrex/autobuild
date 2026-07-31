@@ -11,11 +11,9 @@
  * while color distinguishes requested, enabled, and cancelling. Strip the
  * escapes — as `--plain` and every pipe do — and the actionable intent remains.
  *
- * **ASCII only.** There is no string-width dependency in this repo and none
- * should be added: `.length` is honest only for ASCII, and a lying width
- * miscounts the painted rows, which is what makes a redraw accumulate
- * fragments. So the glyphs are ASCII, and we render ticket IDs but never
- * ticket titles.
+ * **Cell-honest Unicode.** Printable text is segmented into whole grapheme
+ * clusters and measured in terminal display cells. Control bytes remain
+ * visible escapes, so dynamic text cannot inject terminal traffic.
  *
  * The ~40 lines of ANSI are hand-rolled for the same reason: this repo has
  * four runtime deps and none is terminal-related; `chalk`/`ink` would be a
@@ -34,6 +32,7 @@ import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { dashboardSelections, sameSelection } from './selection'
 import { displayText, layoutComposer, packAtomic, wrapDisplay } from './composer'
+import { cellWidth, graphemes, padEndCells } from './cells'
 
 export interface RenderOpts {
   /** ANSI on. False ⇒ not a single `\x1b` in the output (the `--plain` AC). */
@@ -105,7 +104,7 @@ function link(url: string, text: string, on: boolean): string {
 
 /** Visible length: what the operator's eye counts, not what `.length` does. */
 function visibleLength(text: string): number {
-  return stripAnsi(text).length
+  return cellWidth(stripAnsi(text))
 }
 
 export function stripAnsi(text: string): string {
@@ -138,28 +137,36 @@ function truncate(text: string, width: number): string {
   let visible = 0
   let sawSgr = false
   let linkOpen = false
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i]!
-    if (char === '\x1b') {
-      // Copy the whole sequence: CSI ends at a letter, OSC 8 at BEL.
+  const budget = Math.max(0, width - 1)
+
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === '\x1b') {
       const osc = text[i + 1] === ']'
       const end = osc ? text.indexOf('\x07', i) : text.slice(i).search(/[A-Za-z]/) + i
       const stop = end === -1 || end < i ? text.length - 1 : end
       const seq = text.slice(i, stop + 1)
       out += seq
-      i = stop
-      // An OSC 8 with a URL opens the link; the empty-param form closes it.
+      i = stop + 1
       if (osc) linkOpen = seq !== LINK_OFF
       else sawSgr = true
       continue
     }
-    if (visible >= width - 1) {
-      out += '~' // ASCII ellipsis: `…` is 3 bytes and lies to `.length`
-      break
+
+    const nextEscape = text.indexOf('\x1b', i)
+    const stop = nextEscape === -1 ? text.length : nextEscape
+    let cut = false
+    for (const cluster of graphemes(text.slice(i, stop))) {
+      if (cluster.width > budget || visible + cluster.width > budget) {
+        cut = true
+        break
+      }
+      out += cluster.text
+      visible += cluster.width
     }
-    out += char
-    visible += 1
+    if (cut) break
+    i = stop
   }
+  out += '~'
   // Close what we cut through — the link first, so the `~` stays inside it.
   if (linkOpen) out += LINK_OFF
   return sawSgr ? `${out}${RESET}` : out
@@ -300,7 +307,7 @@ function renderBuild(
   // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
   const marker = selectionMarker(selected, selecting, color)
   const ticketCol =
-    widths.ticket > 0 ? paint((build.ticketId ?? '').padEnd(widths.ticket), 'blue', color) : ''
+    widths.ticket > 0 ? paint(padEndCells(build.ticketId ?? '', widths.ticket), 'blue', color) : ''
   const leftPrefix = `${marker}${ticketCol === '' ? '' : `${ticketCol}  `}`
 
   // Right cluster, rightmost last: [PR] [(paused)] STATUS. `padStart`
@@ -374,7 +381,7 @@ function renderHarvest(
   // Harvest has no ticket id, so its title takes the ticket column itself —
   // aligned with the ids, not the slugs — and the observation count sits in
   // the flexible slug slot, keeping one row grammar across mixed frames.
-  const title = widths.ticket > 0 ? HARVEST_TITLE.padEnd(widths.ticket) : HARVEST_TITLE
+  const title = widths.ticket > 0 ? padEndCells(HARVEST_TITLE, widths.ticket) : HARVEST_TITLE
   const leftPrefix = `${marker}${paint(title, 'bold', color)}  `
   const identity = paint(`${harvest.observations} observations`, 'dim', color)
   const statusColor = STATUS_COLOR[harvest.status]
@@ -406,18 +413,18 @@ const HARVEST_TITLE = 'Harvest'
  * title lives in the ticket column, so when that column exists it must also fit
  * the title; Harvest joins the status-width calculation even in a mixed frame. */
 function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undefined): Widths {
-  const ticketIds = builds.map((b) => (b.ticketId ?? '').length)
+  const ticketIds = builds.map((b) => cellWidth(b.ticketId ?? ''))
   const hasTicketColumn = ticketIds.some((length) => length > 0)
   return {
     ticket: Math.max(
       0,
       ...ticketIds,
-      ...(harvest !== undefined && hasTicketColumn ? [HARVEST_TITLE.length] : []),
+      ...(harvest !== undefined && hasTicketColumn ? [cellWidth(HARVEST_TITLE)] : []),
     ),
     status: Math.max(
       0,
-      ...builds.map((b) => b.status.length),
-      ...(harvest !== undefined ? [harvest.status.length] : []),
+      ...builds.map((b) => cellWidth(b.status)),
+      ...(harvest !== undefined ? [cellWidth(harvest.status)] : []),
     ),
   }
 }
@@ -971,19 +978,18 @@ export function controlsCapacity(height: number | undefined, topLength: number):
  * no-op for every `width >= 2`; at width 1 it keeps the caret visible. */
 function renderFieldRow(
   row: string,
-  caret: number | undefined,
+  caret: { offset: number; column: number } | undefined,
   width: number,
   color: boolean,
 ): string {
   if (caret === undefined) return truncate(row, width)
-  let text = `${row.slice(0, caret)}${RESUME_CARET}${row.slice(caret)}`
-  let at = caret
-  if (text.length > width) {
-    const start = Math.max(0, Math.min(text.length, at + 1) - width)
-    text = text.slice(start, start + width)
-    at -= start
-  }
-  return `${text.slice(0, at)}${paint(RESUME_CARET, 'cyan', color)}${text.slice(at + 1)}`
+  if (width <= 1) return paint(RESUME_CARET, 'cyan', color)
+  const before = row.slice(0, caret.offset)
+  const after = row.slice(caret.offset)
+  // layoutComposer reserves the caret's one cell. Keep insertion in UTF-16
+  // space and geometry in cell space so a wide cluster is never sliced at a
+  // display column.
+  return truncate(`${before}${paint(RESUME_CARET, 'cyan', color)}${after}`, width)
 }
 
 /**
@@ -1105,7 +1111,9 @@ export function resumePanel(
     rows.push(
       `${fieldIndent}${renderFieldRow(
         row,
-        index === field.cursorRow ? field.cursorColumn : undefined,
+        index === field.cursorRow
+          ? { offset: field.cursorOffset, column: field.cursorColumn }
+          : undefined,
         fieldWidth,
         color,
       )}`,

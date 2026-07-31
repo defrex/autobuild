@@ -200,8 +200,8 @@ export interface ResumeInputView {
   /** Full operator input, line structure included. Rendering may scroll it,
    * submission never truncates it. */
   value: string
-  /** Caret position as a CODE-POINT offset into `value` — the composer's one
-   * piece of geometry the controller owns, so the renderer stays pure. */
+  /** Caret position as a UTF-16 grapheme-boundary offset into `value` — the
+   * composer's one string coordinate the controller owns. */
   cursor: number
 }
 

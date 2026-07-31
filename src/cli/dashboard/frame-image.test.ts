@@ -22,6 +22,18 @@ describe('renderDashboardFrameImage', () => {
     expect(frame.svg).not.toContain('\x1b')
   })
 
+  test('places printable Unicode by terminal cells and renders stable bytes', () => {
+    const lines = ['naïve — 日本語 ☕️ 🇺🇸 👨‍👩‍👧‍👦', 'e\u0301x\u200by']
+    const first = renderDashboardFrameImage(lines, { columns: 40 })
+    const second = renderDashboardFrameImage(lines, { columns: 40 })
+
+    expect(first.text).toBe(`${lines.join('\n')}\n`)
+    expect(first.png).toEqual(second.png)
+    expect(first.svg).toMatch(/<text x="92"[^>]*>日<\/text>/)
+    expect(first.svg).toMatch(/<text x="112"[^>]*>本<\/text>/)
+    expect(first.svg).toMatch(/<text x="132"[^>]*>語<\/text>/)
+  })
+
   test('renders deterministic PNG bytes with pinned dimensions and fonts', () => {
     const lines = [
       '\x1b[1mAutobuild\x1b[0m  \x1b[32mintake ON\x1b[0m',

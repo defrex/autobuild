@@ -154,7 +154,7 @@ interface ResumePrompt {
   /** Snapshot at prompt-open time. Submission revalidates each id. */
   escalationIds: string[]
   value: string
-  /** Caret as a code-point offset into `value`; the composer owns the geometry. */
+  /** Caret as a UTF-16 grapheme-boundary offset into `value`. */
   cursor: number
 }
 

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
+import { graphemes } from './cells'
 
 /**
  * Deterministic dashboard-frame rendering.
@@ -143,26 +144,28 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
   let text = ''
   let cells = 0
 
-  const append = (character: string): void => {
+  const append = (cluster: string, width: number): void => {
     const previous = runs.at(-1)
+    // ASCII runs may coalesce. Unicode clusters stay independently pinned to
+    // their terminal cell columns so font fallback/advance cannot shift the
+    // run that follows a wide glyph.
     if (
       previous !== undefined &&
-      previous.column + [...previous.text].length === cells &&
+      previous.column + previous.text.length === cells &&
+      /^[\x20-\x7e]*$/.test(previous.text) &&
+      /^[\x20-\x7e]$/.test(cluster) &&
       sameStyle(previous.style, style)
     ) {
-      previous.text += character
+      previous.text += cluster
     } else {
-      runs.push({ column: cells, text: character, style: cloneStyle(style) })
+      runs.push({ column: cells, text: cluster, style: cloneStyle(style) })
     }
-    text += character
-    cells += 1
+    text += cluster
+    cells += width
   }
 
   for (let index = 0; index < value.length; ) {
-    const code = value.codePointAt(index)!
-    const character = String.fromCodePoint(code)
-
-    if (character === ESC) {
+    if (value[index] === ESC) {
       const family = value[index + 1]
       if (family === '[') {
         const rest = value.slice(index + 2)
@@ -198,27 +201,22 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
       )
     }
 
-    if (code < 0x20 || code === 0x7f) {
-      throw new Error(
-        `dashboard frame line ${lineNumber}: unsupported control U+${code
-          .toString(16)
-          .toUpperCase()
-          .padStart(4, '0')}`,
-      )
+    const nextEscape = value.indexOf(ESC, index)
+    const stop = nextEscape === -1 ? value.length : nextEscape
+    const plain = value.slice(index, stop)
+    for (const character of plain) {
+      const code = character.codePointAt(0)!
+      if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+        throw new Error(
+          `dashboard frame line ${lineNumber}: unsupported control U+${code
+            .toString(16)
+            .toUpperCase()
+            .padStart(4, '0')}`,
+        )
+      }
     }
-    // render.ts guarantees an ASCII frame so one code point is one terminal
-    // cell. Rejecting wider/non-ASCII input keeps this adapter from silently
-    // inventing width semantics the dashboard itself intentionally avoids.
-    if (code > 0x7e) {
-      throw new Error(
-        `dashboard frame line ${lineNumber}: non-ASCII cell U+${code
-          .toString(16)
-          .toUpperCase()} is outside the dashboard width contract`,
-      )
-    }
-
-    append(character)
-    index += character.length
+    for (const cluster of graphemes(plain)) append(cluster.text, cluster.width)
+    index = stop
   }
 
   if (style.href !== undefined) {
