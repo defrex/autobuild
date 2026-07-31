@@ -8,14 +8,19 @@ import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import { withFailingRepoAppend } from '../testing/store-failures'
-import { controlBuild } from './build-control'
+import { BuildControlError, controlBuild } from './build-control'
 import { effectiveStatus } from './dashboard/model'
 import {
+  bulkControlLines,
   bulkControlRepository,
   bulkControlReport,
+  bulkFailureLines,
   bulkPausable,
   bulkResumable,
+  BulkWalkError,
+  refuseOwnSessionBulkControl,
 } from './bulk-control'
+import { withFailingAppend } from './testkit'
 
 const REPO = '/repo'
 const OTHER_REPO = '/other-repo'
@@ -589,5 +594,256 @@ describe('bulkControlReport', () => {
     expect(bulkControlReport({ direction: 'resume', slugs: [], ...resumed })).toBe(
       'resume all: no paused builds; queued builds released; intake ON',
     )
+  })
+})
+
+describe('bulkControlLines', () => {
+  test('opens with the dashboard announcement and then names every requested build', () => {
+    const summary = {
+      direction: 'pause' as const,
+      slugs: ['alpha-work', 'beta-work'],
+      paused: true,
+      intake: false,
+    }
+    // The first line IS the dashboard's text, composed rather than reworded, so
+    // the two surfaces cannot drift.
+    expect(bulkControlLines(summary)[0]).toBe(bulkControlReport(summary))
+    expect(bulkControlLines(summary)).toEqual([
+      'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+      'build alpha-work: pause requested',
+      'build beta-work: pause requested',
+    ])
+
+    expect(
+      bulkControlLines({ direction: 'resume', slugs: ['a-paused'], paused: false, intake: true }),
+    ).toEqual([
+      'resume all: resume requested for 1 build; queued builds released; intake ON',
+      'build a-paused: resume requested',
+    ])
+  })
+
+  test('is just the report line when nothing was requested', () => {
+    const summary = { direction: 'pause' as const, slugs: [], paused: true, intake: false }
+    expect(bulkControlLines(summary)).toEqual([
+      'pause all: no pausable builds; queued builds held; intake OFF',
+    ])
+  })
+})
+
+describe('a walk that fails partway', () => {
+  const cause = new Error('store write rejected')
+
+  test('reports both repository writes, the builds already requested, and the untried tail', async () => {
+    const inner = await makeStore({
+      'a-running': 'running',
+      'b-running': 'running',
+      'c-running': 'running',
+    })
+    const store = withFailingAppend(inner, 'b-running', cause)
+
+    const thrown = await bulkControlRepository({
+      store,
+      repo: REPO,
+      env: ENV,
+      direction: 'pause',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+
+    expect(thrown).toBeInstanceOf(BulkWalkError)
+    const error = thrown as BulkWalkError
+    // The dashboard renders `error.message` verbatim; it must stay the cause's.
+    expect(error.message).toBe('store write rejected')
+    expect(error.cause).toBe(cause)
+    expect(error.progress).toEqual({
+      direction: 'pause',
+      paused: true,
+      pausedWritten: true,
+      intake: false,
+      intakeWritten: true,
+      slugs: ['a-running'],
+      failedSlug: 'b-running',
+      remaining: ['c-running'],
+    })
+
+    // The progress claim is durable fact, not bookkeeping: the first build has
+    // its request and the untried tail has none.
+    expect(countOf(await inner.getEvents('a-running'), 'build.pause-requested')).toBe(1)
+    expect(countOf(await inner.getEvents('c-running'), 'build.pause-requested')).toBe(0)
+    expect(await pausedOf(inner)).toBe(true)
+    expect(await intakeOf(inner)).toBe(false)
+    await inner.close()
+  })
+
+  test('a failure on the first repository write reports neither fact and no candidates', async () => {
+    const inner = await makeStore({ 'a-running': 'running' })
+    // The pause fact is the walk's first durable write, so failing it is what
+    // stops the walk before the build list — and the progress must say the
+    // repository was left entirely untouched.
+    const store = withFailingRepoAppend(inner, 'dispatcher.pause-set')
+
+    const thrown = await bulkControlRepository({
+      store,
+      repo: REPO,
+      env: ENV,
+      direction: 'resume',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+
+    expect(thrown).toBeInstanceOf(BulkWalkError)
+    const error = thrown as BulkWalkError
+    expect(error.message).toBe('store failure writing dispatcher.pause-set')
+    expect(error.progress).toEqual({
+      direction: 'resume',
+      paused: false,
+      pausedWritten: false,
+      intake: true,
+      intakeWritten: false,
+      slugs: [],
+      remaining: [],
+    })
+    expect(error.progress.failedSlug).toBeUndefined()
+    await inner.close()
+  })
+
+  test('a failure on the intake write still reports the hold it already landed', async () => {
+    const inner = await makeStore({ 'a-running': 'running' })
+    const store = withFailingRepoAppend(inner, 'dispatcher.intake-set')
+
+    const thrown = await bulkControlRepository({
+      store,
+      repo: REPO,
+      env: ENV,
+      direction: 'pause',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+
+    const error = thrown as BulkWalkError
+    expect(error).toBeInstanceOf(BulkWalkError)
+    // The prefix property, made legible to an operator: the walk failed, but the
+    // fact that holds every queued build is durably in place.
+    expect(error.progress).toEqual({
+      direction: 'pause',
+      paused: true,
+      pausedWritten: true,
+      intake: false,
+      intakeWritten: false,
+      slugs: [],
+      remaining: [],
+    })
+    expect(await pausedOf(inner)).toBe(true)
+    await inner.close()
+  })
+})
+
+describe('bulkFailureLines', () => {
+  test('names both repository writes, the requested builds, the failure, and the untried tail', () => {
+    const error = new BulkWalkError(new Error('store write rejected'), {
+      direction: 'pause',
+      paused: true,
+      pausedWritten: true,
+      intake: false,
+      intakeWritten: true,
+      slugs: ['alpha-work', 'beta-work'],
+      failedSlug: 'gamma-work',
+      remaining: ['delta-work'],
+    })
+    expect(bulkFailureLines(error)).toEqual([
+      'pause all: failed; queued builds held; intake OFF written',
+      'requested: alpha-work, beta-work',
+      'failed at: gamma-work — store write rejected',
+      'not attempted: delta-work',
+    ])
+  })
+
+  test('drops the empty sections and says so when neither fact landed', () => {
+    const error = new BulkWalkError(new Error('store write rejected'), {
+      direction: 'resume',
+      paused: false,
+      pausedWritten: false,
+      intake: true,
+      intakeWritten: false,
+      slugs: [],
+      remaining: [],
+    })
+    expect(bulkFailureLines(error)).toEqual([
+      'resume all: failed; hold not written; intake not written',
+      'failed before any build — store write rejected',
+    ])
+  })
+
+  test('reports a landed hold with an intake write that never followed', () => {
+    // The prefix the ordering exists to produce: an operator reading this knows
+    // no queued build can start, even though the walk did not finish.
+    const error = new BulkWalkError(new Error('store write rejected'), {
+      direction: 'pause',
+      paused: true,
+      pausedWritten: true,
+      intake: false,
+      intakeWritten: false,
+      slugs: [],
+      remaining: [],
+    })
+    expect(bulkFailureLines(error)[0]).toBe(
+      'pause all: failed; queued builds held; intake not written',
+    )
+  })
+
+  test('the resume direction names the release', () => {
+    const error = new BulkWalkError(new Error('store write rejected'), {
+      direction: 'resume',
+      paused: false,
+      pausedWritten: true,
+      intake: true,
+      intakeWritten: true,
+      slugs: [],
+      remaining: [],
+    })
+    expect(bulkFailureLines(error)[0]).toBe(
+      'resume all: failed; queued builds released; intake ON written',
+    )
+  })
+})
+
+describe('refuseOwnSessionBulkControl', () => {
+  test('refuses both directions when a phase session identifies its own build', () => {
+    for (const direction of ['pause', 'resume'] as const) {
+      const thrown = (() => {
+        try {
+          refuseOwnSessionBulkControl(direction, {
+            AB_SESSION: 'phase-session',
+            AB_BUILD: 'some-build',
+          })
+          return undefined
+        } catch (error: unknown) {
+          return error
+        }
+      })()
+      expect(thrown).toBeInstanceOf(BuildControlError)
+      const error = thrown as BuildControlError
+      expect(error.code).toBe('own-session')
+      expect(error.message).toContain(`cannot ${direction} every build`)
+      expect(error.message).toContain('own phase session')
+      expect(error.message).toContain('AB_SESSION/AB_BUILD conflict')
+    }
+  })
+
+  test('allows every environment that is not a phase session', () => {
+    for (const env of [
+      {},
+      { USER: 'operator' },
+      { AB_SESSION: 'phase-session' },
+      { AB_BUILD: 'some-build' },
+      { AB_SESSION: '   ', AB_BUILD: 'some-build' },
+      { AB_SESSION: 'phase-session', AB_BUILD: '  ' },
+    ]) {
+      expect(() => refuseOwnSessionBulkControl('pause', env)).not.toThrow()
+      expect(() => refuseOwnSessionBulkControl('resume', env)).not.toThrow()
+    }
   })
 })

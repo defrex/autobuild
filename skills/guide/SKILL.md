@@ -84,6 +84,20 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   back through `verify:*`. This can repeat. The build terminates **merged** or
   **closed**.
 
+**Review severity is proportion to the spec.** Both review loops rate a
+finding by what the defect costs against the spec's acceptance criteria and
+the realistic operating conditions of the work under review, not by how
+certainly it is a defect: `blocking` names an acceptance criterion the defect
+defeats, `important` names a criterion or stated invariant it puts at material
+risk. A true defect that puts no acceptance criterion at risk, breaks no
+stated invariant, and is unreachable under realistic input is `ab observe`,
+not a finding, and work carrying such observations is approvable. A reviewer
+does not raise a bar the spec set: where the spec bounds a failure model or an
+operating condition, a stricter model is not a defect, and hostile or
+pathological input that the surface's contract does not promise to handle is
+`minor` or an observation, unless a security boundary, an acceptance
+criterion, or a stated invariant makes it material.
+
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
 autobuild by configuring verify and finalize steps, never by inventing stages.
@@ -94,7 +108,8 @@ If a request seems to need a new phase, say so rather than improvising one.
 dispatch
 runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
-spec-standard proposals are created directly in Triage. A repository journal,
+spec-standard proposals are created, in `[tickets].proposalState` — the triage
+state unless this repository has named another one. A repository journal,
 artifact stream, dedup ledger, and lease make every step queryable and
 crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
@@ -549,6 +564,7 @@ state eligible.
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -561,6 +577,12 @@ as follows:
 | plugin | `[]` — no host-imposed label convention |
 
 An explicit `readyLabels` value always wins for every source.
+
+`proposalState` is the one supported way to waive the grooming gate, and it is
+deliberately not `triageState`. Do not suggest pointing `triageState` at the
+ready state to get auto-dispatched proposals: `triageState` is also where a
+spec-gate bounce lands, so a nonconforming ticket would be claimed, bounced,
+and reclaimed on every tick. `proposalState` moves only what harvest files.
 
 Cross-field rules, each an **error**:
 
@@ -860,10 +882,10 @@ build is also operator-paused, and `r` opens the existing feedback field. Keys
 that are not offered for the current build state are no-ops and append no
 control event.
 
-Global-row `p` is the repository-wide version: it durably holds every `QUEUED`
-build, turns intake off, and appends `build.pause-requested` to every `RUNNING`
-build, so the repository comes to rest before a machine, terminal, or dispatcher
-restart. The hold is the `dispatcher.pause-set` repository fact, written before
+Global-row `p` is the repository-wide version — the same walk `ab pause --all`
+runs sessionless: it durably holds every `QUEUED` build, turns intake off, and
+appends `build.pause-requested` to every `RUNNING` build, so the repository
+comes to rest before a machine, terminal, or dispatcher restart. The hold is the `dispatcher.pause-set` repository fact, written before
 the intake fact; while it is set no dispatcher tick attaches a runner to a
 queued build, whether through interrupted-dispatch recovery, startup resume, or
 the lease sweep. The per-build walk skips `PAUSING` — the bulk control never
@@ -889,10 +911,11 @@ hold, so a build the repository has already accepted still starts and finishes.
 Every dispatcher samples the current value on each tick, so a change in one
 process gates all dispatchers for that repository.
 
-The repository hold has no launch flag and no sessionless command: `p` and `r`
-on the dashboard's global row are the only way to set or clear it. Each
-dispatcher tick reads it from the repository journal itself, so it survives a
-restart and is not defeated by re-running `ab dispatch`.
+The repository hold has no launch flag and no setter of its own: `p` and `r` on
+the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
+they share are the only ways to set or clear it, and each of those moves intake
+with it. Each dispatcher tick reads the hold from the repository journal itself,
+so it survives a restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
 claim-time default; omission reuses stored state, falling back to OFF only when
@@ -947,12 +970,27 @@ to the build's event log and apply the same write-time checks.
 | Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
 | Pause | `ab pause <slug> [--store <ref>]` | Select a `RUNNING` build and press `p`; press `p` again while `PAUSING` to cancel the pending pause. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
 | Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
-| Pause all | — | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
-| Resume all | — | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
+| Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
+| Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
 | Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
+
+The two `--all` forms and the global-row keys are one walk behind two surfaces.
+The repository pause is written first and intake second, both absolutely —
+setters, not toggles, so the values the command names are the values the
+repository holds afterwards — and each per-build request is a compare-and-set
+against a freshly reduced log, so a rerun adds no second pending pause and
+never cancels one already in flight. Pause first is what makes every surviving
+prefix of a failed walk at least as quiesced as asked: once it lands, no queued
+build is launchable, whatever else fails after it. Output names every build that
+received a request, the hold, and the intake value written; `--json` emits that
+same summary for a script. A walk that fails partway exits nonzero and reports
+which of the two repository facts landed, which builds were requested, which one
+failed, and which were never attempted. Neither form starts a dispatcher, so
+reaching for one to quiesce the repository does not launch the work it is trying
+to park.
 
 Discard is dashboard-only and queued-only. The dispatcher releases any partial
 workspace and lease, returns the ticket to `[tickets].readyState`, and completes
@@ -999,7 +1037,10 @@ same stable fallback on both surfaces. All five commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
 local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
 caller's own phase build, the command refuses it; a phase cannot pause, resume,
-auto-merge, answer, or abort itself.
+auto-merge, answer, or abort itself. `ab pause --all` and `ab resume --all`
+accept `--store` on the same precedence and are refused for the same reason
+whenever `AB_SESSION` and `AB_BUILD` are both nonblank — the caller's own build
+is inside the walk.
 
 These commands request normal kernel work; they do not wake a runner, operate
 the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
@@ -1010,9 +1051,12 @@ escalation set and never invents guidance.
 Durable repository intake and the claim-time auto-merge default have launch-flag
 setters and global-row toggles but no standalone sessionless control commands.
 Abort is available through both its CLI command and the confirmed build-row/detail
-`a` key. Global-row `h` owns the durable harvest gate, and global-row `p`/`r`
-own the repository-wide pause-all and resume-all described above; there is no
-`ab pause --all` CLI equivalent. On the optional repository-scoped
+`a` key. Global-row `h` owns the durable harvest gate. Global-row `p`/`r` and
+`ab pause --all` / `ab resume --all` are two surfaces over the one walk described
+above: from the same repository state they write the same events. Neither the
+repository hold nor intake has a standalone sessionless setter of its own, but
+the bulk commands write both as part of quiescing — the hold first. On the
+optional repository-scoped
 `Harvest` run row, `p` only resumes or acknowledges the represented run; `i`
 and `h` are no-ops, and `m` remains an explanatory build-only no-op. On build
 rows, `i` and `h` are also no-ops.

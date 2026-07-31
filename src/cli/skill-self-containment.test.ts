@@ -1,36 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { posix, resolve } from 'node:path'
+import { markdownTargets, withoutFencedCode } from '../markdown'
 import { readDistSkills } from './init'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
-
-function withoutFencedCode(markdown: string): string {
-  const lines = markdown.split('\n')
-  let fence: '`' | '~' | undefined
-  return lines
-    .map((line) => {
-      const opening = line.match(/^\s*(`{3,}|~{3,})/)
-      if (opening) {
-        const marker = opening[1]![0] as '`' | '~'
-        if (fence === undefined) fence = marker
-        else if (fence === marker) fence = undefined
-        return ''
-      }
-      return fence === undefined ? line : ''
-    })
-    .join('\n')
-}
-
-function markdownTargets(markdown: string): string[] {
-  const targets: string[] = []
-  for (const match of markdown.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
-    let target = match[1]!.trim()
-    if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1)
-    target = target.split(/\s+["']/u, 1)[0]!
-    targets.push(target)
-  }
-  return targets
-}
 
 describe('shipped skill self-containment', () => {
   test('every Autobuild-owned Markdown reference resolves in the installed ab-* tree', async () => {

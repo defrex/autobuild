@@ -5,7 +5,7 @@
 
 # Root scalars, which TOML requires before the first table.
 baseBranch = "main"
-capacity = 10            # concurrent builds
+capacity = 5             # concurrent builds
 
 # Named commands the kernel may run. `setup` runs after workspace provision and
 # after a sandbox rehydrate; the rest are referenced by name from check steps.
@@ -94,3 +94,7 @@ readyLabels = []                # additional label gate ([] = none)
 claimedState = "In Progress"    # claim() moves the issue here
 createState = "Todo"            # new tickets are filed here
 triageState = "Backlog"         # bounced, aborted, and closed-unmerged tickets return here
+proposalState = "Todo"          # harvest files proposals straight into the ready state: this
+                                # repository runs its own harvest unattended and waives the
+                                # grooming gate. Deliberately not triageState — a bounce landing
+                                # in Todo would be reclaimed and bounced every tick.

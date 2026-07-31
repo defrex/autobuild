@@ -108,6 +108,20 @@ export function defaultTriageState(config: Config): string {
   return config.tickets.triageState ?? (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
 }
 
+/**
+ * Where harvest files a synthesized proposal (§12). Defaults to the triage
+ * state, so the constitutional gate — nothing auto-generated reaches Ready
+ * without a human — holds unless a repository names another state.
+ *
+ * It is a field of its own rather than a reuse of `triageState` because the
+ * two answer different questions. Pointing triage at the ready state to get
+ * auto-dispatched proposals would also send spec-gate bounces there, and a
+ * bounce that lands back in Ready is claimed and bounced again every tick.
+ */
+export function defaultProposalState(config: Config): string {
+  return config.tickets.proposalState ?? defaultTriageState(config)
+}
+
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
 // Shared with deterministic harvest filing; imported/re-exported above so the
 // long-standing dispatcher API remains stable.

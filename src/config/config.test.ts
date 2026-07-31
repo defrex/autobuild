@@ -210,6 +210,76 @@ describe('parseConfig — defaults', () => {
     )
   })
 
+  // `[workspace.config]` is a plugin-owned pass-through: Autobuild does not
+  // interpret these keys, so losing one is undetectable downstream. Everything
+  // below drives `parseConfig` rather than a hand-built config object, because
+  // a directly constructed map bypasses the exact step that used to lose the
+  // entry.
+  const pluginWorkspace = (table: string) =>
+    parseConfig(`[workspace]\nprovider = "container"\n[workspace.config]\n${table}${READY}`)
+      .workspace.config
+
+  for (const key of ['__proto__', 'constructor', 'toString']) {
+    test(`a [workspace.config] key named "${key}" reaches the provider intact`, () => {
+      const config = pluginWorkspace(`"${key}" = "kept"\nimage = "bun:latest"\n`)
+      expect(Object.keys(config)).toContain(key)
+      expect(Object.getOwnPropertyDescriptor(config, key)?.value).toBe('kept')
+      // The ordinary key alongside it is untouched.
+      expect(config.image).toBe('bun:latest')
+    })
+  }
+
+  test('a parsed workspace config never answers with an inherited member', () => {
+    const declared = pluginWorkspace('image = "bun:latest"\n')
+    expect(Object.getPrototypeOf(declared)).toBeNull()
+    expect(declared.toString).toBeUndefined()
+    expect(declared.constructor).toBeUndefined()
+    // Including when the table is absent entirely — `prefault` runs the
+    // transform, where `default` would hand back a plain `{}`.
+    expect(Object.getPrototypeOf(parseConfig(READY).workspace.config)).toBeNull()
+  })
+
+  test('a blank [workspace.config] key is plugin-addressable, not an error', () => {
+    // Autobuild does not interpret these keys, so it is not Autobuild's place
+    // to narrow what a plugin may declare. This is the assertion that fails if
+    // the `allowBlankKeys` axis is ever "tidied" away.
+    const config = pluginWorkspace('"" = "addressable"\n')
+    expect(config['']).toBe('addressable')
+  })
+
+  test('[commands] and [roles] still reject a blank entry name', () => {
+    // The new axis is per-map, not a global relaxation: these two name things
+    // Autobuild itself must address.
+    expect(() => parseConfig(`[commands]\n"" = "echo hi"\n${READY}`)).toThrow(/commands/)
+    expect(() => parseConfig(`[roles.""]\nruntime = "claude"\n${READY}`)).toThrow(/roles/)
+  })
+
+  test('git-worktree still rejects a [workspace.config] holding only a hazardous key', () => {
+    // The regression that matters most: these tables used to parse to an empty
+    // map, so the unsupported-table diagnostic never fired. Match the
+    // diagnostic itself, not just its path — a blank-key rejection would be
+    // reported under `workspace.config` too, and must not pass for it.
+    const unsupported = /is not supported by the builtin "git-worktree" provider/
+    for (const table of ['"__proto__" = "kept"', '"" = "addressable"']) {
+      expect(() => parseConfig(`[workspace.config]\n${table}\n${READY}`)).toThrow(unsupported)
+      expect(() =>
+        parseConfig(
+          `[workspace]\nprovider = "git-worktree"\n[workspace.config]\n${table}\n${READY}`,
+        ),
+      ).toThrow(unsupported)
+    }
+  })
+
+  test('an absent or genuinely empty [workspace.config] draws no git-worktree diagnostic', () => {
+    for (const source of [
+      READY,
+      `[workspace]\nprovider = "git-worktree"\n${READY}`,
+      `[workspace.config]\n${READY}`,
+    ]) {
+      expect(Object.keys(parseConfig(source).workspace.config)).toHaveLength(0)
+    }
+  })
+
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
     expect(parseConfig(READY).forge).toBe('github')
     expect(parseConfig(`forge = "gitlab"\n${READY}`).forge).toBe('gitlab')
@@ -576,7 +646,7 @@ describe('parseConfig — [tickets]', () => {
 
   test('readiness labels and lifecycle states retain their surface', () => {
     const config = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\ndir = "tickets"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\nproposalState = "ready"\ndir = "tickets"\n',
     )
     expect(config.tickets).toEqual({
       source: 'file',
@@ -584,6 +654,7 @@ describe('parseConfig — [tickets]', () => {
       readyLabels: [],
       createState: 'Triage',
       triageState: 'Triage',
+      proposalState: 'ready',
       dir: 'tickets',
     })
   })

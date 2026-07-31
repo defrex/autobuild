@@ -238,9 +238,13 @@ writableCache = true
 
 The builtin `git-worktree` provider needs no table and accepts no adapter
 configuration. A plugin factory receives exactly `[workspace.config]`, the
-process environment, and the absolute repository root. Factory invocation is
-lazy: registering an unselected provider constructs nothing. An unknown name
-fails before claims and lists every available builtin and plugin provider.
+process environment, and the absolute repository root. Every declared key
+reaches the factory verbatim, including names such as `__proto__` that collide
+with inherited object properties; the map has a null prototype, so reading an
+undeclared key answers `undefined` rather than an inherited member. Factory
+invocation is lazy: registering an unselected provider constructs nothing. An
+unknown name fails before claims and lists every available builtin and plugin
+provider.
 
 Every provider must satisfy the exported `WorkspaceProvider` contract and
 return a locally reachable absolute working-copy `path`. Its provider-scoped
@@ -607,6 +611,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
 When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
@@ -621,8 +626,8 @@ Source-specific validation is strict:
 
 - Linear requires `teamKey` and rejects `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
-- `createState` and `triageState` are valid for every source, but the named
-  state must exist in that provider when used.
+- `createState`, `triageState`, and `proposalState` are valid for every source,
+  but the named state must exist in that provider when used.
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
@@ -633,6 +638,16 @@ the selected source, which owns its workflow vocabulary and rejects unknown
 states before creating anything. An omitted Linear `triageState` uses `Backlog`,
 because every team has it while the optional Linear triage feature may be
 disabled. The file source uses `Triage`.
+
+`proposalState` names the one state observation harvest files proposals into,
+and defaults to the resolved `triageState` — proposals wait for a human, which
+is the grooming gate the pipeline is built around. Naming `readyState` here
+waives that gate for this repository: every proposal the harvest loop approves
+becomes dispatchable without being read, protected only by that loop's own
+review and by the spec gate at dispatch. It is a separate field precisely so
+the waiver stays narrow. Redirecting `triageState` instead would also send
+spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
+a bounced ticket is reclaimed and bounced again on every tick.
 
 The default file directory follows a selected local `AB_STORE` root and writes
 its own self-excluding `.gitignore`. An explicitly configured `dir` belongs to
@@ -758,6 +773,7 @@ readyState = "ready"
 readyLabels = []
 createState = "Triage"
 triageState = "Triage"
+proposalState = "Triage"
 dir = "tickets"
 ```
 
@@ -829,8 +845,8 @@ poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
-| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row | While on, no dispatcher tick attaches a runner to a queued build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same keypress writes; the janitor still settles aborts and discards. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
+| Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, no dispatcher tick attaches a runner to a queued build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
@@ -839,9 +855,11 @@ Omitting both writes nothing and reuses the durable value. Per-build
 pause/resume and auto-merge controls are separate facts and do not alter these
 repository defaults. Pause all and resume all write two facts each — the
 repository pause first, then intake — so a partial failure still leaves the
-repository at least as quiesced as asked. The current release has no TOML field
-or standalone sessionless command for the harvest gate or the repository pause;
-use the dashboard, and inspect the harvest gate with `ab harvest status`.
+repository at least as quiesced as asked; `ab pause --all` reports on stderr
+which of them landed when a walk stops partway. The current release has no TOML
+field for either the harvest gate or the repository pause, and no command that
+sets the repository pause on its own without also moving intake; inspect the
+harvest gate with `ab harvest status`.
 
 ## Environment and credentials
 
@@ -938,7 +956,7 @@ action. Check the gates in this order:
 2. **Repository pause:** a pause all holds every queued build, so an existing
    build sits at `QUEUED` and no ticket is claimed. It always turns intake off
    too, so a failing step 1 is the practical signal; `r` on the dashboard's
-   global row releases both.
+   global row or `ab resume --all` releases both.
 3. **Ready state:** the ticket must be in exactly `tickets.readyState`. Linear
    is case-sensitive; file tickets must physically be in the corresponding
    state directory.
