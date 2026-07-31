@@ -1211,7 +1211,8 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       displayText(basename(model.repo)),
       paint(
         `queue ${model.queued} | active ${model.active.current}/${model.active.limit} | ` +
-          `obs ${model.observations.current}/${model.observations.limit}`,
+          `obs ${model.observations.current}/${model.observations.limit} | ` +
+          `drift ${model.drift.current}/${model.drift.limit}`,
         'dim',
         color,
       ),

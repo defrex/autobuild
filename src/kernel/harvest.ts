@@ -12,6 +12,7 @@ import {
   type HarvestDisposition,
   type HarvestPendingProposal,
   type HarvestStep,
+  type HarvestTrigger,
   type OccurrenceKey,
 } from '../harvest/schema'
 
@@ -73,6 +74,8 @@ export interface HarvestRunState {
   startedAt: string
   observations: OccurrenceKey[]
   scan: ArtifactRef
+  /** Absent only on runs started by historical pre-drift journals. */
+  trigger?: HarvestTrigger
   steps: HarvestStepOccurrence[]
   proposals: Array<{ round: number; artifact: ArtifactRef; seq: number }>
   reviews: HarvestReviewRound[]
@@ -435,6 +438,7 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
           startedAt: event.ts,
           observations: event.payload.observations.map((key) => ({ ...key })),
           scan: cloneRef(event.payload.scan),
+          ...(event.payload.trigger !== undefined ? { trigger: event.payload.trigger } : {}),
           steps: [],
           proposals: [],
           reviews: [],

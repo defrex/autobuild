@@ -7,6 +7,8 @@ test('repository installs mandatory lint and the path-scoped dashboard verifier'
   expect(config.baseBranch).toBe('main')
   expect(config.capacity).toBe(5)
   expect(config.policy.harvestThreshold).toBe(5)
+  // Upgrade compatibility: the repository config intentionally omits this new field.
+  expect(config.policy.harvestMaxDrift).toBe(3)
   // This repository runs its harvest unattended: proposals are filed straight
   // into the ready state, while handbacks still land in Backlog.
   expect(config.tickets.proposalState).toBe('Todo')
