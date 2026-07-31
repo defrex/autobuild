@@ -46,8 +46,11 @@ import {
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
 import {
+  detailScrollLimit,
+  moveDetailScroll,
   moveTranscriptScroll,
   renderDashboard,
+  revealDetailFocus,
   type DashboardRendererResolver,
 } from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
@@ -131,6 +134,8 @@ const DASHBOARD_TICK_MS = 250
 type DashboardAction =
   | 'up'
   | 'down'
+  | 'left'
+  | 'right'
   | 'enter'
   | 'auto-merge'
   | 'intake'
@@ -400,7 +405,7 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
-        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk), opts.terminal.modes)
         : undefined
     this.region =
       this.dashboard && opts.terminal !== undefined
@@ -554,15 +559,19 @@ class DispatchLoop {
       return
     }
     if (this.view?.kind === 'detail') {
-      const build = this.model?.builds.find((candidate) => candidate.slug === this.view!.slug)
-      const sessions = build?.sessions ?? []
-      if (sessions.length > 0) {
-        const current = sessions.findIndex((session) => session.id === this.view!.sessionId)
-        const index = Math.max(
-          0,
-          Math.min(sessions.length - 1, (current < 0 ? 0 : current) + delta),
-        )
-        this.view = { kind: 'detail', slug: this.view.slug, sessionId: sessions[index]!.id }
+      const terminal = this.opts.terminal
+      this.view = {
+        ...this.view,
+        scroll:
+          terminal === undefined || this.model === undefined
+            ? 0
+            : moveDetailScroll(
+                this.model,
+                Math.max(0, terminal.columns - 2),
+                paintableRows(terminal.rows),
+                this.view.scroll,
+                delta,
+              ),
       }
       this.syncModelControls()
       this.paint()
@@ -928,6 +937,59 @@ class DispatchLoop {
     await this.renderOnce()
   }
 
+  private moveDetailSession(delta: number): void {
+    if (this.view?.kind !== 'detail') return
+    const build = this.model?.builds.find((candidate) => candidate.slug === this.view!.slug)
+    const sessions = build?.sessions ?? []
+    if (sessions.length === 0) return
+    const current = sessions.findIndex((session) => session.id === this.view!.sessionId)
+    const index = Math.max(0, Math.min(sessions.length - 1, (current < 0 ? 0 : current) + delta))
+    const next = { ...this.view, sessionId: sessions[index]!.id }
+    const terminal = this.opts.terminal
+    const nextModel = this.model === undefined ? undefined : { ...this.model, view: next }
+    this.view = {
+      ...next,
+      scroll:
+        terminal === undefined || nextModel === undefined
+          ? 0
+          : revealDetailFocus(
+              nextModel,
+              Math.max(0, terminal.columns - 2),
+              paintableRows(terminal.rows),
+              next.scroll,
+            ),
+    }
+    this.syncModelControls()
+    this.paint()
+  }
+
+  private detailMessage(
+    view: Extract<DashboardView, { kind: 'detail' }>,
+    message: string,
+    messageWhileSessionOpen?: string,
+  ): Extract<DashboardView, { kind: 'detail' }> {
+    const { message: _priorMessage, messageWhileSessionOpen: _priorFence, ...stable } = view
+    const next = {
+      ...stable,
+      message,
+      ...(messageWhileSessionOpen !== undefined ? { messageWhileSessionOpen } : {}),
+    }
+    const terminal = this.opts.terminal
+    const nextModel = this.model === undefined ? undefined : { ...this.model, view: next }
+    return {
+      ...next,
+      scroll:
+        terminal === undefined || nextModel === undefined
+          ? 0
+          : revealDetailFocus(
+              nextModel,
+              Math.max(0, terminal.columns - 2),
+              paintableRows(terminal.rows),
+              next.scroll,
+            ),
+    }
+  }
+
   private async openSelected(): Promise<void> {
     if (this.view === undefined) {
       if (this.selection?.kind !== 'build') return
@@ -937,6 +999,7 @@ class DispatchLoop {
       this.view = {
         kind: 'detail',
         slug: build.slug,
+        scroll: 0,
         ...(build.sessions?.[0] !== undefined ? { sessionId: build.sessions[0].id } : {}),
       }
       this.syncModelControls()
@@ -949,23 +1012,23 @@ class DispatchLoop {
     const build = this.model?.builds.find((candidate) => candidate.slug === captured.slug)
     const session = build?.sessions?.find((candidate) => candidate.id === captured.sessionId)
     if (session === undefined) {
-      this.view = { ...captured, message: 'No session is selected.' }
+      this.view = this.detailMessage(captured, 'No session is selected.')
       this.syncModelControls()
       this.paint()
       return
     }
     if (session.status === 'open') {
-      this.view = {
-        ...captured,
-        message: 'Transcript unavailable while this session is still open.',
-        messageWhileSessionOpen: session.id,
-      }
+      this.view = this.detailMessage(
+        captured,
+        'Transcript unavailable while this session is still open.',
+        session.id,
+      )
       this.syncModelControls()
       this.paint()
       return
     }
     if (session.transcript === undefined) {
-      this.view = { ...captured, message: 'This session ended without a transcript deposit.' }
+      this.view = this.detailMessage(captured, 'This session ended without a transcript deposit.')
       this.syncModelControls()
       this.paint()
       return
@@ -984,10 +1047,10 @@ class DispatchLoop {
         return
       }
       if (artifact === null) {
-        this.view = {
-          ...captured,
-          message: `Transcript ${ref.kind}@${ref.rev} is not retrievable.`,
-        }
+        this.view = this.detailMessage(
+          captured,
+          `Transcript ${ref.kind}@${ref.rev} is not retrievable.`,
+        )
       } else {
         this.view = {
           kind: 'transcript',
@@ -1003,10 +1066,10 @@ class DispatchLoop {
         this.view.slug === captured.slug &&
         this.view.sessionId === session.id
       ) {
-        this.view = {
-          ...captured,
-          message: `Transcript read failed: ${error instanceof Error ? error.message : String(error)}`,
-        }
+        this.view = this.detailMessage(
+          captured,
+          `Transcript read failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
     this.syncModelControls()
@@ -1015,7 +1078,12 @@ class DispatchLoop {
 
   private leaveView(): void {
     if (this.view?.kind === 'transcript') {
-      this.view = { kind: 'detail', slug: this.view.slug, sessionId: this.view.sessionId }
+      this.view = {
+        kind: 'detail',
+        slug: this.view.slug,
+        sessionId: this.view.sessionId,
+        scroll: 0,
+      }
     } else if (this.view?.kind === 'detail') {
       this.view = undefined
     } else {
@@ -1036,6 +1104,12 @@ class DispatchLoop {
         return
       case 'down':
         this.moveSelection(1)
+        return
+      case 'left':
+        this.moveDetailSession(-1)
+        return
+      case 'right':
+        this.moveDetailSession(1)
         return
       case 'enter':
         await this.openSelected()
@@ -1168,7 +1242,12 @@ class DispatchLoop {
       return
     }
 
-    if (input.type === 'up' || input.type === 'down') {
+    if (
+      input.type === 'up' ||
+      input.type === 'down' ||
+      input.type === 'left' ||
+      input.type === 'right'
+    ) {
       this.queueAction(input.type)
       return
     }
@@ -1181,7 +1260,7 @@ class DispatchLoop {
       return
     }
     // A stray paste outside the prompt is a no-op, not a burst of command keys;
-    // cursor motions have nothing to move.
+    // directional motions were routed above.
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':
@@ -1633,9 +1712,25 @@ class DispatchLoop {
           sessionId: _priorSession,
           ...stableDetail
         } = detail
-        this.view = {
+        const terminal = this.opts.terminal
+        const unclamped = {
           ...stableDetail,
           ...(selected !== undefined ? { sessionId: selected } : {}),
+        }
+        const projectedWithView = { ...projected, view: unclamped }
+        this.view = {
+          ...unclamped,
+          scroll:
+            terminal === undefined
+              ? 0
+              : Math.min(
+                  unclamped.scroll,
+                  detailScrollLimit(
+                    projectedWithView,
+                    Math.max(0, terminal.columns - 2),
+                    paintableRows(terminal.rows),
+                  ),
+                ),
           ...(messageStillValid && priorMessage !== undefined
             ? {
                 message: priorMessage,

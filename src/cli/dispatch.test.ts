@@ -20,6 +20,7 @@ import { runCli } from './main'
 import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
 import { renderDashboard, stripAnsi, type DashboardRenderer } from './dashboard/render'
 import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
+import { createTerminalModeController } from './terminal-restore'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -1837,12 +1838,14 @@ function fakeTerminal(
   size: { columns?: number; rows?: number } = {},
 ): TerminalOut & { frames: string[]; all: () => string } {
   const frames: string[] = []
+  const write = (chunk: string): void => {
+    frames.push(chunk)
+  }
   return {
     frames,
     all: () => frames.join(''),
-    write: (chunk) => {
-      frames.push(chunk)
-    },
+    write,
+    modes: createTerminalModeController(write),
     columns: size.columns ?? 120,
     rows: size.rows ?? 40,
     interactive,
@@ -1945,18 +1948,20 @@ describe('abDispatch --once with an interactive terminal', () => {
           }
         },
       }
+      const write = (chunk: string): void => {
+        base.write(chunk)
+        if (chunk === '\x1b[?u\x1b[c') {
+          queueMicrotask(() => {
+            if (response === 'accept') hooks?.onKeyboardFlags?.(29)
+            else if (response === 'partial') hooks?.onKeyboardFlags?.(25)
+            else hooks?.onDeviceAttributes?.()
+          })
+        }
+      }
       const terminal: TerminalOut & { frames: string[]; all: () => string } = {
         ...base,
-        write: (chunk) => {
-          base.write(chunk)
-          if (chunk === '\x1b[>29u\x1b[?u\x1b[c') {
-            queueMicrotask(() => {
-              if (response === 'accept') hooks?.onKeyboardFlags?.(29)
-              else if (response === 'partial') hooks?.onKeyboardFlags?.(25)
-              else hooks?.onDeviceAttributes?.()
-            })
-          }
-        },
+        write,
+        modes: createTerminalModeController(write),
       }
       try {
         await abDispatch({
@@ -1974,10 +1979,11 @@ describe('abDispatch --once with an interactive terminal', () => {
         const writes = base.frames
         expect(cleanup).toBe(1)
         expect(writes.filter((chunk) => chunk === '\x1b[?u')).toHaveLength(1)
-        expect(writes.filter((chunk) => chunk === '\x1b[>29u\x1b[?u\x1b[c')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[>29u')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[?u\x1b[c')).toHaveLength(1)
         expect(writes.filter((chunk) => chunk === '\x1b[<1u')).toHaveLength(1)
         expect(writes.indexOf('\x1b[?u')).toBeLessThan(writes.indexOf('\x1b[?1049h'))
-        expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u\x1b[?u\x1b[c'))
+        expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u'))
         expect(writes.indexOf('\x1b[<1u')).toBeLessThan(writes.indexOf('\x1b[?1049l'))
       } finally {
         await fx.cleanup()
@@ -3192,6 +3198,13 @@ describe('abDispatch interactive keyboard controls', () => {
           .slice(-2)
           .every((event) => event.actor.kind === 'human' && event.actor.user === 'harvest-op'),
       ).toBe(true)
+      // Raw Ctrl-C follows the ordinary LiveRegion teardown: one mode restore
+      // each, including the final-frame alternate-screen exit, never an
+      // emergency duplicate.
+      expect(term.frames.filter((chunk) => chunk === '\x1b[?2004l')).toHaveLength(1)
+      expect(term.frames.filter((chunk) => chunk === '\x1b[?1049l')).toHaveLength(1)
+      expect(term.frames.filter((chunk) => chunk === '\x1b[?25h')).toHaveLength(1)
+      expect(term.modes.activeModes).toEqual([])
     } finally {
       await fx.cleanup()
     }
@@ -4547,7 +4560,7 @@ describe('abDispatch interactive keyboard controls', () => {
         },
       })
 
-      const term = fakeTerminal(true, { columns: 160, rows: 60 })
+      const term = fakeTerminal(true, { columns: 160, rows: 16 })
       run = abDispatch({
         targetRepo: fx.origin,
         env: {},
@@ -4563,7 +4576,18 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Build  session-close'))
-      for (let index = 0; index < 20; index += 1) input.press('down')
+      expect(latestPaintedFrame(term)).toContain('Pipeline')
+      const beforeNavigation = await fx.store.getEvents('session-close')
+      for (let index = 0; index < 30; index += 1) input.press('down')
+      await waitFor(() => latestPaintedFrame(term).includes('Sessions'))
+      for (let index = 0; index < 30; index += 1) input.press('up')
+      await waitFor(() => latestPaintedFrame(term).includes('Pipeline'))
+      expect(await fx.store.getEvents('session-close')).toEqual(beforeNavigation)
+      Object.assign(term, { rows: 60 })
+
+      // Detail Up/Down scrolls; Left/Right retains session selection and brings
+      // the selected session back into the viewport.
+      for (let index = 0; index < 20; index += 1) input.press('right')
       await waitFor(() =>
         latestPaintedFrame(term).includes('code-review phase code-review round 2'),
       )

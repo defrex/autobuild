@@ -1187,7 +1187,16 @@ verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 `dismiss-finding` and `revise-spec` through `ab answer`; a `revise-spec` answer
 names the exact replacement artifact it authorizes. `guidance` feeds the answer
 into the next producer round as authoritative feedback; `dismiss-finding`
-marks the chain human-resolved and the next reviewer round is told so.
+marks the chain human-resolved and the next reviewer round is told so. Engine-routed
+guidance is latest-only per destination (`plan`, `code`, or one exact agent
+verifier): a newer answer durably supersedes every older answer for that
+destination before delivery. A guidance-bearing producer or verifier start is
+the durable carrier, and only its later matching `session.started` launch
+consumes the winner; until then the winner remains eligible across recovery.
+After that delivery, no shadowed answer can surface on a later round, while an
+answer appended after delivery is a new eligible winner. Destinations remain
+independent, and the kernel derives both the winner and its delivery from the
+event history so replay and restart preserve the result.
 
 **C — setup failure:** the first attach retains the normal `runner.attached`
 fact, then a failed setup appends `runner.setup-failed

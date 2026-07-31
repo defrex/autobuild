@@ -73,18 +73,23 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   )
   expect(report).toContain('resume-prompt.png')
   expect(report).toContain('- [ ] The resume-prompt frame shows the composer panel in place of the')
+  expect(report).toContain('complete blocker through its unique final line')
 
   for (const frame of first.result.frames) {
     const again = second.result.frames.find((item) => item.id === frame.id)!
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    expect(frame.text).toContain('CAP-PLAN')
-    expect(frame.text).toContain('CAP-IMPLEMENT')
-    expect(frame.text).toContain('CAP-COMPLETE')
+    if (frame.id.startsWith('mixed-')) {
+      expect(frame.text).toContain('CAP-PLAN')
+      expect(frame.text).toContain('CAP-IMPLEMENT')
+      expect(frame.text).toContain('CAP-COMPLETE')
+      expect(frame.text).toContain('Harvest')
+      expect(frame.text).toContain('PAUSED')
+    } else {
+      expect(frame.text).toContain('Build  plan-blocked-dashboard')
+    }
     expect(frame.text).toContain('BLOCKED')
-    expect(frame.text).toContain('Harvest')
-    expect(frame.text).toContain('PAUSED')
     expect(frame.text).not.toContain('\x1b')
   }
   for (const id of ['mixed-wide', 'mixed-narrow']) {
@@ -94,6 +99,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(mixed).toMatch(/CAP-QUEUED.*\(held\)\s+QUEUED/)
   }
   expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
+  for (const id of ['mixed-wide', 'mixed-narrow']) {
+    expect(first.result.frames.find((frame) => frame.id === id)!.text).toContain(
+      'more rows - Enter details',
+    )
+  }
 
   // The composer panel replaces the key legend, states its optional-guidance
   // note, keeps the blocker visible, and renders both typed lines with a caret.
@@ -103,6 +113,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(resume).toContain(
     'The scripted plan scenario is intentionally blocked for dashboard capture.',
   )
+  expect(resume).toContain('EXPANDED FINAL LINE: dashboard message preview complete.')
+  expect(resume).not.toContain('more rows - Enter details')
   expect(resume).toContain('Use the manual merge path.')
   expect(resume).toContain('Re-run verify:test |afterwards.')
   expect(resume).toContain('Enter submit')

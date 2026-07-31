@@ -1,7 +1,12 @@
 import type { TerminalInputEvent } from './terminal'
+import {
+  KITTY_KEYBOARD_FLAGS,
+  KITTY_KEYBOARD_MODE,
+  type TerminalModeController,
+} from './terminal-restore'
 
 /** Progressive enhancement flags requested from Kitty-compatible terminals. */
-export const KITTY_KEYBOARD_FLAGS = 0b1_1101
+export { KITTY_KEYBOARD_FLAGS } from './terminal-restore'
 /** Ask for the current progressive keyboard enhancement flags. */
 export const QUERY_KEYBOARD_FLAGS = '\x1b[?u'
 /**
@@ -9,9 +14,9 @@ export const QUERY_KEYBOARD_FLAGS = '\x1b[?u'
  * codes (8), and associated text (16). Alternate keys are essential: without
  * them Cyrillic Ctrl-C reports key 1089 and the decoder cannot recognize it.
  */
-export const PUSH_KEYBOARD_FLAGS = `\x1b[>${KITTY_KEYBOARD_FLAGS}u`
+export const PUSH_KEYBOARD_FLAGS = KITTY_KEYBOARD_MODE.enter
 /** Pop exactly the keyboard mode frame pushed by this process. */
-export const POP_KEYBOARD_FLAGS = '\x1b[<1u'
+export const POP_KEYBOARD_FLAGS = KITTY_KEYBOARD_MODE.restore
 /**
  * Primary Device Attributes is not a keyboard command. It follows the
  * verification query because its guaranteed, ordered reply lets verification
@@ -197,14 +202,20 @@ export interface KeyboardProtocol {
 }
 
 /** Negotiate and balance the per-screen Kitty keyboard mode stack. */
-export function createKeyboardProtocol(write: (chunk: string) => void): KeyboardProtocol {
+export function createKeyboardProtocol(
+  write: (chunk: string) => void,
+  modes: TerminalModeController,
+): KeyboardProtocol {
   let phase: KeyboardPhase = 'idle'
   let onScreen = false
 
   const push = (): void => {
     if (phase !== 'supported' || !onScreen) return
-    write(PUSH_KEYBOARD_FLAGS + QUERY_KEYBOARD_FLAGS + DEVICE_ATTRIBUTES_QUERY)
     phase = 'verifying'
+    // The ledger arms before the push write. Queries do not alter terminal
+    // state and therefore remain ordinary output after the declared enter.
+    modes.enter(KITTY_KEYBOARD_MODE)
+    write(QUERY_KEYBOARD_FLAGS + DEVICE_ATTRIBUTES_QUERY)
   }
 
   return {
@@ -223,13 +234,13 @@ export function createKeyboardProtocol(write: (chunk: string) => void): Keyboard
       if ((flags & KITTY_KEYBOARD_FLAGS) === KITTY_KEYBOARD_FLAGS) {
         phase = 'active'
       } else {
-        write(POP_KEYBOARD_FLAGS)
+        modes.leave(KITTY_KEYBOARD_MODE)
         phase = 'declined'
       }
     },
     deviceAttributes(): void {
       if (phase !== 'verifying') return
-      write(POP_KEYBOARD_FLAGS)
+      modes.leave(KITTY_KEYBOARD_MODE)
       phase = 'declined'
     },
     screenEntered(): void {
@@ -239,7 +250,7 @@ export function createKeyboardProtocol(write: (chunk: string) => void): Keyboard
     },
     screenLeaving(): void {
       if (phase === 'finished') return
-      if (phase === 'verifying' || phase === 'active') write(POP_KEYBOARD_FLAGS)
+      if (phase === 'verifying' || phase === 'active') modes.leave(KITTY_KEYBOARD_MODE)
       phase = 'finished'
       onScreen = false
     },

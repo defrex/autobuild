@@ -5,6 +5,7 @@ import { bulkControlRepository } from '../src/cli/bulk-control'
 import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
 import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
+import { createTerminalModeController } from '../src/cli/terminal-restore'
 import { humanActor, KERNEL } from '../src/events/envelope'
 import { spawnExec } from '../src/ports/workspace/git-worktree'
 import {
@@ -27,21 +28,43 @@ interface FrameSpec {
    * state that a keypress sets and no event ever produces, so there is nothing
    * in the log for the capture to drive it from. */
   resume?: { slug: string; value: string; cursor: number }
+  /** Overlay the existing build-detail kind at a scripted scroll offset. */
+  detail?: { slug: string; scroll: number }
   /** Frame-specific evidence this capture exists to show. */
   requires?: readonly string[]
 }
 
 const RESUME_GUIDANCE = 'Use the manual merge path.\nRe-run verify:test afterwards.'
+const SCRIPTED_BLOCKER = [
+  'The scripted plan scenario is intentionally blocked for dashboard capture.',
+  '',
+  'THE CONFLICT',
+  'The preview must preserve this paragraph structure.',
+  'The list row must withhold this explanation.',
+  'The detail view must make every line reachable.',
+  'EXPANDED FINAL LINE: dashboard message preview complete.',
+].join('\n')
 
 const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'QUEUED'] as const
 
 const FRAME_SPECS: readonly FrameSpec[] = [
-  { id: 'mixed-wide', columns: 140, rows: 40, requires: HELD_EVIDENCE },
-  { id: 'mixed-narrow', columns: 64, rows: 50, requires: HELD_EVIDENCE },
+  {
+    id: 'mixed-wide',
+    columns: 140,
+    rows: 40,
+    requires: [...HELD_EVIDENCE, 'more rows - Enter details'],
+  },
+  {
+    id: 'mixed-narrow',
+    columns: 64,
+    rows: 50,
+    requires: [...HELD_EVIDENCE, 'more rows - Enter details'],
+  },
   {
     id: 'resume-prompt',
     columns: 100,
     rows: 30,
+    detail: { slug: 'plan-blocked-dashboard', scroll: Number.MAX_SAFE_INTEGER },
     resume: {
       slug: 'plan-blocked-dashboard',
       value: RESUME_GUIDANCE,
@@ -53,6 +76,7 @@ const FRAME_SPECS: readonly FrameSpec[] = [
       'Resume plan-blocked-dashboard',
       'Enter submit',
       'The scripted plan scenario is intentionally blocked for dashboard capture.',
+      'EXPANDED FINAL LINE: dashboard message preview complete.',
     ],
   },
 ]
@@ -95,10 +119,7 @@ function captureHandlers(): SkillHandlers {
   handlers.plan = async (cli) => {
     if (cli.env.build === 'plan-blocked-dashboard') {
       await cli.run(['context'])
-      await cli.run([
-        'escalate',
-        'The scripted plan scenario is intentionally blocked for dashboard capture.',
-      ])
+      await cli.run(['escalate', SCRIPTED_BLOCKER])
       return
     }
     return happyPlan(cli)
@@ -256,6 +277,7 @@ async function prepareScenario(): Promise<E2eHarness> {
 class CaptureTerminal implements TerminalOut {
   readonly interactive = true
   readonly writes: string[] = []
+  readonly modes = createTerminalModeController((chunk) => this.write(chunk))
 
   constructor(
     readonly columns: number,
@@ -285,14 +307,11 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
     }
   }
   const text = plain.join('\n')
-  for (const required of [
-    'CAP-PLAN',
-    'CAP-IMPLEMENT',
-    'CAP-COMPLETE',
-    'BLOCKED',
-    'Harvest',
-    'PAUSED',
-  ]) {
+  const commonEvidence =
+    spec.detail === undefined
+      ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+      : ['Build  plan-blocked-dashboard', 'BLOCKED']
+  for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
         `dashboard capture ${id}: final frame omitted required mixed-state evidence "${required}"`,
@@ -328,13 +347,23 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
     input: NO_INPUT,
     wire: () => harness.wiring,
     resolveDashboardRenderer: () => (model, options) => {
-      const lines = renderDashboard(
-        spec.resume === undefined ? model : { ...model, resumeInput: spec.resume },
-        {
-          ...options,
-          now: RENDER_NOW,
-        },
-      )
+      const presented = {
+        ...model,
+        ...(spec.detail !== undefined
+          ? {
+              view: {
+                kind: 'detail' as const,
+                slug: spec.detail.slug,
+                scroll: spec.detail.scroll,
+              },
+            }
+          : {}),
+        ...(spec.resume !== undefined ? { resumeInput: spec.resume } : {}),
+      }
+      const lines = renderDashboard(presented, {
+        ...options,
+        now: RENDER_NOW,
+      })
       captured = [...lines]
       return lines
     },
@@ -407,13 +436,14 @@ export async function captureDashboardFrames(
         '## Visual checklist',
         '- [ ] Every PNG opens and is non-empty.',
         '- [ ] Rows, statuses, progress, and separators do not overlap.',
-        '- [ ] The Harvest row remains legible.',
+        '- [ ] The Harvest row remains legible and long list messages show a three-row preview/count.',
         '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
         '- [ ] The narrow frame truncates deliberately without clipping.',
         '- [ ] Colour emphasis is present and literal statuses remain readable.',
         '- [ ] The resume-prompt frame shows the composer panel in place of the',
-        '      key legend: build name, optional-guidance note, blocker, a',
-        '      two-line field with a visible caret, and its key bindings.',
+        '      key legend over the existing scrolled detail view: build name,',
+        '      complete blocker through its unique final line, optional-guidance',
+        '      note, a two-line field with a visible caret, and its key bindings.',
         '',
       ].join('\n'),
     )
