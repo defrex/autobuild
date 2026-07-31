@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#185](https://github.com/defrex/autobuild/pull/185) — Restore index after failed upgrade commits
 - [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
 - [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
 - [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
