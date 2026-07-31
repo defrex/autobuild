@@ -315,6 +315,7 @@ export async function finishUpgradeCommit(
   if (record.suppression !== undefined) blockers.push(record.suppression)
 
   let changed: string[] = []
+  let postMergeGitDir: string | undefined
   const roots = managedRoots(record, report)
   if (record.gitRoot !== undefined && blockers.length === 0) {
     try {
@@ -335,7 +336,8 @@ export async function finishUpgradeCommit(
           commandError('locating the target Git directory after the merge', gitDirResult),
         )
       } else {
-        const operation = await operationSuppression(gitDirResult.stdout.trim())
+        postMergeGitDir = gitDirResult.stdout.trim()
+        const operation = await operationSuppression(postMergeGitDir)
         if (operation !== undefined) blockers.push(operation)
       }
 
@@ -363,6 +365,10 @@ export async function finishUpgradeCommit(
     return
   }
   if (record.gitRoot === undefined || changed.length === 0) return
+  if (postMergeGitDir === undefined) {
+    stderr('ab upgrade could not commit its changes: could not locate the worktree Git index')
+    return
+  }
 
   const changedSkills = new Set<string>()
   for (const [skill, skillRoots] of roots) {
@@ -370,6 +376,17 @@ export async function finishUpgradeCommit(
       changedSkills.add(skill)
   }
   const pathspecs = changed.map(literalPathspec)
+  const indexPath = join(postMergeGitDir, 'index')
+  let indexSnapshot: Buffer
+  try {
+    indexSnapshot = await readFile(indexPath)
+  } catch (error) {
+    stderr(
+      `ab upgrade could not commit its changes: could not capture the worktree Git index: ${errorText(error)}`,
+    )
+    return
+  }
+
   try {
     const add = await git(exec, record.gitRoot, ['add', '-A', '--', ...pathspecs])
     if (add.exitCode !== 0) throw new Error(commandError('staging upgrade-owned paths', add))
@@ -386,6 +403,11 @@ export async function finishUpgradeCommit(
     stdout('ab upgrade: committed upgrade-owned changes')
   } catch (error) {
     stderr(`ab upgrade could not commit its changes: ${errorText(error)}`)
+    try {
+      await writeFile(indexPath, indexSnapshot)
+    } catch (restoreError) {
+      stderr(`ab upgrade could not restore the pre-attempt Git index: ${errorText(restoreError)}`)
+    }
   }
 }
 

@@ -1577,10 +1577,12 @@ binary. `--no-commit` also survives that handoff and leaves the merge exactly as
 written. Any content conflict, Claude discovery conflict, pre-existing dirt in
 an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
 merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
-A staging or commit failure warns and leaves the merged files in place. Commit
-suppression or failure never changes the merge-derived exit status: content
-conflicts remain zero and discovery conflicts remain nonzero. Upgrade never
-pushes or rewrites existing history.
+If upgrade cannot snapshot the worktree's Git index, it warns and declines to
+stage. A staging or commit failure restores that exact pre-attempt index without
+touching the merged worktree files, and warns with the original Git failure.
+Commit suppression or failure never changes the merge-derived exit status:
+content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
+never pushes or rewrites existing history.
 
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine
