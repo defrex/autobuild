@@ -253,7 +253,15 @@ export const eventPayloadSchemas = {
   'code-review.verdict': reviewVerdictPayload,
 
   // ── Verify / finalize ──────────────────────────────────────────────────────
-  'verify.started': z.strictObject({ step: z.string().min(1), attempt }),
+  'verify.started': z.strictObject({
+    step: z.string().min(1),
+    attempt,
+    /** An answered escalation raised by this agent verifier returns to the
+     * same step. The start citation is both the durable delivery carrier and
+     * the exactly-once consumption marker. Optional for historical logs and
+     * guidance-free check/skip starts. */
+    feedback: feedbackSchema.optional(),
+  }),
   'verify.completed': verifyCompletedPayloadSchema,
   'finalize.started': empty,
   'finalize.completed': z.strictObject({
