@@ -128,10 +128,13 @@ describe('layered CLI help catalog', () => {
         'ab upgrade [target]',
         '--no-self-update',
         '--version <semver>',
+        '--no-commit',
         'latest GitHub Release',
         'package.json',
         'bun.lock',
         'Three-way merge',
+        'Unrelated staged',
+        'merge-derived exit status',
         'outside sessions',
       ],
       dispatch: [

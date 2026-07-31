@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { abInit } from '../cli/init'
 import { parseConfig } from '../config/load'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
@@ -222,6 +223,28 @@ describe('minimal config dispatch over the real file tracker', () => {
     // ('Triage') and the canonical directories are the same names.
     expect(await ls('triage')).toEqual([`${created.ref.id}.md`])
     expect(await ls('ready')).toEqual([])
+  })
+
+  test('an initialized client persists bounce guidance to its installed spec standard', async () => {
+    const portableReference = '.agents/skills/ab-guide/references/spec-standard.md'
+    const report = await abInit({ targetRepo: repoDir, runtimes: {}, env: {} })
+    expect(report.exitCode).toBe(0)
+    expect(await Bun.file(join(repoDir, portableReference)).exists()).toBe(true)
+
+    const generatedConfig = await Bun.file(join(repoDir, 'autobuild.toml')).text()
+    const h = await harness(generatedConfig)
+    const created = await h.tickets.create({ title: 'Vague idea', body: 'make auth better' })
+    await h.tickets.transition(created.ref.id, 'Ready')
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), bounced: 1 })
+
+    const bounced = await Bun.file(join(trackerDir(), 'triage', `${created.ref.id}.md`)).text()
+    expect(h.launches).toEqual([])
+    expect(bounced).toContain('Bounced back to Triage')
+    expect(bounced).toContain(portableReference)
+    expect(bounced).not.toContain('docs/spec-standard.md')
+    expect(bounced).toContain("an '## Acceptance criteria' heading")
+    expect(bounced).toContain("an '## Out of scope' heading")
   })
 
   test('a cp instead of an mv is a loud error, never a double dispatch', async () => {

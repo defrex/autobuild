@@ -28,6 +28,7 @@ import { runCli } from './main'
 import { abUpgrade } from './upgrade'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
+import { spawnExec } from '../ports/workspace/git-worktree'
 
 const BODY = [
   '# alpha',
@@ -1122,7 +1123,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     const err: string[] = []
     let factoryCalls = 0
 
-    const code = await runCli(['upgrade', repo], {
+    const code = await runCli(['upgrade', repo, '--no-commit'], {
       workspacePath: target,
       processEnv: { UPGRADE_TOKEN: 'secret' },
       upgradeResolverFactory: (opts) => {
@@ -1329,7 +1330,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     // reports unknown — enough to prove sessionless routing end to end.
     const out: string[] = []
     const err: string[] = []
-    const code = await runCli(['upgrade', target], {
+    const code = await runCli(['upgrade', target, '--no-commit'], {
       workspacePath: target,
       stdout: (line) => out.push(line),
       stderr: (line) => err.push(line),
@@ -1344,6 +1345,51 @@ describe('runCli routing — ab upgrade outside a session', () => {
     expect(out).toContain('ab-plan: installed')
     // The fixture's own skill is not in the real distribution → unknown.
     expect(out.some((line) => line.startsWith('ab-alpha: unknown'))).toBe(true)
+  })
+
+  test('commits a clean target by default and --no-commit leaves the same merge dirty', async () => {
+    const oldDist = join(root, 'commit-old')
+    const nextDist = join(root, 'commit-next')
+    await writeDist(oldDist, { alpha: BODY })
+    await writeDist(nextDist, {
+      alpha: BODY.replace('middle line two', 'middle line two upgraded'),
+    })
+
+    for (const noCommit of [false, true]) {
+      const repo = join(root, noCommit ? 'commit-off' : 'commit-on')
+      await mkdir(repo)
+      await abInit({ targetRepo: repo, distRoot: oldDist })
+      await spawnExec(['git', 'init', '-q'], { cwd: repo })
+      await spawnExec(['git', 'config', 'user.name', 'Upgrade Test'], { cwd: repo })
+      await spawnExec(['git', 'config', 'user.email', 'upgrade@example.test'], { cwd: repo })
+      await spawnExec(['git', 'add', '.'], { cwd: repo })
+      await spawnExec(['git', 'commit', '-qm', 'initial'], { cwd: repo })
+      const before = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+
+      const code = await runCli(
+        ['upgrade', repo, '--no-self-update', ...(noCommit ? ['--no-commit'] : [])],
+        {
+          workspacePath: repo,
+          distributionRoot: nextDist,
+          stdout: () => {},
+          stderr: () => {},
+        },
+      )
+
+      expect(code).toBe(0)
+      const after = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
+      const status = (await spawnExec(['git', 'status', '--porcelain'], { cwd: repo })).stdout
+      if (noCommit) {
+        expect(after).toBe(before)
+        expect(status).toContain('.agents/skills/ab-alpha/SKILL.md')
+      } else {
+        expect(after).not.toBe(before)
+        expect(status).toBe('')
+        expect(
+          (await spawnExec(['git', 'log', '-1', '--format=%B'], { cwd: repo })).stdout,
+        ).toContain('- ab-alpha: adopted')
+      }
+    }
   })
 
   test('ab upgrade rejects extra arguments with usage feedback', async () => {

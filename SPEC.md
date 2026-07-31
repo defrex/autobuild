@@ -1560,6 +1560,28 @@ install failure is fatal and does not merge against the wrong defaults.
 `--no-self-update` always selects merge-only
 behavior. An exact version may be older than the installed version.
 
+Upgrade records its successful work in one local commit on the target's current
+HEAD by default. The exact ownership boundary is the reported skills' canonical
+`.agents` trees, pristine records, and `.claude` discovery paths, plus
+`package.json` and `bun.lock` only when this run's successful local Bun update
+wrote those files inside the target repository. A global update contributes no
+repository path. Additions, modifications, symlinks, and deletions all
+participate; a run with no owned Git change creates no commit. The message
+identifies `ab upgrade` and lists every skill with an owned byte change together
+with its reported outcome. It supplies no authorship or attribution trailers.
+Unrelated staged, unstaged, and untracked work is neither committed nor
+unstaged.
+
+The baseline is captured before self-update and carried to the replacement
+binary. `--no-commit` also survives that handoff and leaves the merge exactly as
+written. Any content conflict, Claude discovery conflict, pre-existing dirt in
+an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
+merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
+A staging or commit failure warns and leaves the merged files in place. Commit
+suppression or failure never changes the merge-derived exit status: content
+conflicts remain zero and discovery conflicts remain nonzero. Upgrade never
+pushes or rewrites existing history.
+
 Skill handling remains the classic vendoring problem: `ab init` records the
 pristine version of each installed skill; upgrade three-way merges (pristine
 base × local edits × new default). Two fixed former defaults, `ab-setup` and

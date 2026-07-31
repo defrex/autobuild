@@ -727,9 +727,10 @@ install failure stops before skill merge. No other command checks for or
 installs a release.
 
 A local Bun update changes the dependency in its owning project's
-`package.json` and the matching `bun.lock` resolution, potentially leaving that
-project dirty. An existing global install changes Bun's global package-manager
-state instead.
+`package.json` and the matching `bun.lock` resolution. An existing global
+install changes Bun's global package-manager state instead. Before either can
+write, upgrade captures the target repository's Git baseline and carries it to
+the replacement binary.
 
 After that distribution decision, upgrade three-way merges every distributed
 skill file as *pristine base × local edits × new default*, with a standing bias
@@ -763,6 +764,22 @@ canonical/pristine trees are retired. A preserved symlink keeps its exact link
 text and target. Every terminal classification clears obsolete pristine
 ownership, making the retirement report one-time and preventing later link
 recreation, resurrection, or re-reporting.
+
+After a conflict-free merge, upgrade makes one local commit by default. It
+includes only each reported skill's canonical tree, pristine record, and Claude
+discovery path, plus `package.json` and `bun.lock` when this run's local Bun
+update wrote those files inside the target repository. A global update adds no
+path, and no owned change means no commit. Additions, modifications, links, and
+deletions are included; unrelated staged, unstaged, and untracked work remains
+untouched. The message identifies `ab upgrade` and lists every byte-changing
+skill with its reported outcome. `--no-commit` disables this behavior and is
+preserved through self-update handoff.
+
+Any content conflict, discovery conflict, pre-existing dirt in an owned path,
+non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
+cherry-pick suppresses the whole commit with a named warning. Staging and commit
+failures are also warning-only. Files stay as merged and the report's existing
+exit code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -1259,12 +1276,13 @@ forever. That gap is exactly why the lease column is reported separately.
 | Lease | Meaning |
 |---|---|
 | `held` | A live runner holds an unexpired lease. Work is genuinely in flight. |
-| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. The dispatcher's lease sweep is what re-attaches it. |
+| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
 | `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with `updated`, not alone. |
 
-So `running` + `held` is healthy; `running` + `expired` means wait for the
-sweep, not that the build is progressing; and `no-lease` on a build updated
-seconds ago is almost certainly a runner still starting up.
+So `running` + `held` is healthy; for `running` + `expired`, inspect the build
+detail to distinguish actionable work that will return through the lease sweep
+from an ended PR awaiting repository-level completion. `no-lease` on a build
+updated seconds ago is almost certainly a runner still starting up.
 
 ## The installed skills
 

@@ -6,6 +6,12 @@ import { join } from 'node:path'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { runCli } from './main'
 import { selfUpdate, type SelfUpdateCommand } from './self-update'
+import {
+  cleanupUpgradeCommitContext,
+  createUpgradeCommitContext,
+  loadUpgradeCommitContext,
+  UPGRADE_COMMIT_CONTEXT_ENV,
+} from './upgrade-commit'
 
 let root: string | undefined
 afterEach(async () => {
@@ -121,6 +127,83 @@ describe('distribution self-update orchestration', () => {
     expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
     expect(calls).toHaveLength(4)
     expect(calls[3]).toEqual(['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/repo'])
+  })
+
+  test('local owner paths reach the handoff while global updates contribute no repository files', async () => {
+    const local = await installFixture()
+    const localFixtureRoot = root!
+    await Bun.$`git init -q`.cwd(local.owner)
+    await Bun.$`git config user.name 'Upgrade Test'`.cwd(local.owner)
+    await Bun.$`git config user.email upgrade@example.test`.cwd(local.owner)
+    await Bun.$`git add .`.cwd(local.owner)
+    await Bun.$`git commit -qm baseline`.cwd(local.owner)
+    const localContext = await createUpgradeCommitContext(local.owner)
+    const localCalls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    await selfUpdate({
+      targetRepo: local.owner,
+      distRoot: local.dist,
+      upgradeCommitContextPath: localContext.path,
+      command: scripted(
+        [result(`${local.globalBin}\n`), result('{"tag_name":"v2.1.0"}'), result(), result()],
+        localCalls,
+      ),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    const loadedLocal = await loadUpgradeCommitContext(localContext.path, local.owner)
+    expect(loadedLocal.record.selfUpdatePaths).toEqual(['bun.lock', 'package.json'])
+    expect(localCalls[3]?.options.env?.[UPGRADE_COMMIT_CONTEXT_ENV]).toBe(localContext.path)
+    await cleanupUpgradeCommitContext(localContext)
+    await rm(localFixtureRoot, { recursive: true, force: true })
+    root = undefined
+
+    const global = await installFixture('global')
+    const target = join(root!, 'target')
+    await mkdir(target)
+    await Bun.$`git init -q`.cwd(target)
+    await Bun.$`git config user.name 'Upgrade Test'`.cwd(target)
+    await Bun.$`git config user.email upgrade@example.test`.cwd(target)
+    await writeFile(join(target, 'base'), 'base\n')
+    await Bun.$`git add . && git commit -qm baseline`.cwd(target)
+    const globalContext = await createUpgradeCommitContext(target)
+    await selfUpdate({
+      targetRepo: target,
+      version: '1.9.0',
+      distRoot: global.dist,
+      upgradeCommitContextPath: globalContext.path,
+      command: scripted(
+        [result(`${global.globalBin}\n`), result('{"tag_name":"v1.9.0"}'), result(), result()],
+        [],
+      ),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    const loadedGlobal = await loadUpgradeCommitContext(globalContext.path, target)
+    expect(loadedGlobal.record.selfUpdatePaths).toEqual([])
+    await cleanupUpgradeCommitContext(globalContext)
+  })
+
+  test('--no-commit is forwarded explicitly to the replacement binary', async () => {
+    const fixture = await installFixture()
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    await selfUpdate({
+      targetRepo: '/repo',
+      noCommit: true,
+      distRoot: fixture.dist,
+      command: scripted(
+        [result(`${fixture.globalBin}\n`), result('{"tag_name":"v2.1.0"}'), result(), result()],
+        calls,
+      ),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(calls[3]?.command).toEqual([
+      'bun',
+      join(fixture.dist, 'bin', 'ab.ts'),
+      'upgrade',
+      '/repo',
+      '--no-commit',
+    ])
   })
 
   test('uses global Bun operation and permits an explicit downgrade', async () => {
@@ -250,11 +333,15 @@ describe('distribution self-update orchestration', () => {
     let resolverFactories = 0
     const errors: string[] = []
     const deps = {
-      workspacePath: '/repo',
+      workspacePath: target,
       stdout: () => {},
       stderr: (line: string) => errors.push(line),
-      selfUpdate: async (): Promise<import('./self-update').SelfUpdateResult> => {
+      selfUpdate: async (
+        options: import('./self-update').SelfUpdateOptions,
+      ): Promise<import('./self-update').SelfUpdateResult> => {
         updates += 1
+        expect(typeof options.upgradeCommitContextPath).toBe('string')
+        expect(existsSync(options.upgradeCommitContextPath!)).toBe(true)
         return { kind: 'handoff', exitCode: 7 }
       },
       upgradeResolverFactory: () => {

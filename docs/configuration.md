@@ -943,6 +943,26 @@ vendored skills from that distribution. For a local install, Bun may update the
 package-manager side effect is separate from target-repository configuration.
 Use `ab upgrade --no-self-update` for merge-only behavior.
 
+By default, upgrade makes one local commit on the target's current HEAD after a
+successful merge. It stages only paths it owns: each reported skill's canonical
+`.agents` tree, `.ab-pristine` record, and `.claude` discovery path, plus the
+target repository's `package.json` and `bun.lock` when this run's local Bun
+self-update wrote them. A global Bun update changes no target path, and a no-op
+skill merge creates no commit. Additions, modifications, links, and deletions
+are included. The message identifies `ab upgrade` and pairs every skill whose
+bytes changed with its reported outcome; unrelated staged, unstaged, and
+untracked work remains untouched.
+
+Use `ab upgrade --no-commit` to leave all output uncommitted for manual review.
+The flag is forwarded when self-update hands off to the replacement binary, and
+the default path likewise carries its pre-update Git baseline through that
+handoff. Upgrade suppresses the whole commit and names why when any skill or
+Claude discovery path conflicts, an owned path was already dirty, the target
+is not a Git repository, HEAD/worktree identity changes, or Git is mid-merge,
+mid-rebase, or mid-cherry-pick. A failed staging or commit attempt is warning
+only: merged files remain in place and the merge's exit status is unchanged.
+Upgrade never pushes or rewrites history.
+
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
 are model-invocable. The setup reference is an ordinary support file in the
 editable/pristine `ab-guide` tree and participates in the same three-way
