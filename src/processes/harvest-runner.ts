@@ -27,7 +27,7 @@ import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/rou
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { AgentRunner, AgentSessionHandle, AgentTurnResult, TicketSource } from '../ports/types'
 import { installedSkillName } from '../skills'
-import { defaultTriageState } from './dispatcher'
+import { defaultProposalState } from './dispatcher'
 import {
   artifactRef,
   HARVEST_REPORT_ARTIFACT,
@@ -747,7 +747,7 @@ export class HarvestRunner {
             await tickets.create(
               { title: proposal.title, body, labels: [HARVEST_PROPOSAL_LABEL] },
               {
-                state: defaultTriageState(config),
+                state: defaultProposalState(config),
                 idempotencyKey: reservedId,
               },
             )

@@ -50,12 +50,18 @@ async function seedObservation(
   })
 }
 
-function config(threshold = 2, policy: { maxReviewRounds?: number; stallRounds?: number } = {}) {
+function config(
+  threshold = 2,
+  policy: { maxReviewRounds?: number; stallRounds?: number } = {},
+  /** Extra `[tickets]` lines, e.g. `proposalState = "Ready"`. */
+  tickets: string[] = [],
+) {
   return parseConfig(
     [
       '[tickets]',
       'source = "file"',
       'readyState = "Ready"',
+      ...tickets,
       '[roles.default]',
       'runtime = "scripted"',
       '[policy]',
@@ -474,6 +480,48 @@ describe('HarvestRunner', () => {
       })
     })
   }
+
+  test('proposalState files an approved proposal there instead of triage', async () => {
+    // Filing state is configuration, not a constant: a repository may waive the
+    // grooming gate by pointing it at readyState, and the filed proposal then
+    // satisfies the readiness gate the next tick reads.
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-proposal-state-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({ store, tickets, ids, workspace, stage: 'reviewed' })
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1, {}, ['proposalState = "Ready"']),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: ids('instance'),
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+
+    expect(await tickets.get('fake-1')).toMatchObject({
+      state: 'Ready',
+      labels: [HARVEST_PROPOSAL_LABEL],
+    })
+    // Still only proposed: the harvester never claims what it files.
+    expect(tickets.claims).toEqual([])
+    const ready = await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })
+    expect(ready.tickets.map((ticket) => ticket.ref.id)).toEqual(['fake-1'])
+  })
 
   test('an idle pause prevents threshold launch; resume reopens normal scanning', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-pause-idle-'))

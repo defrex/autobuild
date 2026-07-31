@@ -611,6 +611,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
 When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
@@ -625,8 +626,8 @@ Source-specific validation is strict:
 
 - Linear requires `teamKey` and rejects `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
-- `createState` and `triageState` are valid for every source, but the named
-  state must exist in that provider when used.
+- `createState`, `triageState`, and `proposalState` are valid for every source,
+  but the named state must exist in that provider when used.
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
@@ -637,6 +638,16 @@ the selected source, which owns its workflow vocabulary and rejects unknown
 states before creating anything. An omitted Linear `triageState` uses `Backlog`,
 because every team has it while the optional Linear triage feature may be
 disabled. The file source uses `Triage`.
+
+`proposalState` names the one state observation harvest files proposals into,
+and defaults to the resolved `triageState` — proposals wait for a human, which
+is the grooming gate the pipeline is built around. Naming `readyState` here
+waives that gate for this repository: every proposal the harvest loop approves
+becomes dispatchable without being read, protected only by that loop's own
+review and by the spec gate at dispatch. It is a separate field precisely so
+the waiver stays narrow. Redirecting `triageState` instead would also send
+spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
+a bounced ticket is reclaimed and bounced again on every tick.
 
 The default file directory follows a selected local `AB_STORE` root and writes
 its own self-excluding `.gitignore`. An explicitly configured `dir` belongs to
@@ -762,6 +773,7 @@ readyState = "ready"
 readyLabels = []
 createState = "Triage"
 triageState = "Triage"
+proposalState = "Triage"
 dir = "tickets"
 ```
 
@@ -833,7 +845,7 @@ poll. Editing TOML cannot change them.
 
 | Setting | Fresh-repository default | Controls | Scope |
 |---|---:|---|---|
-| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
+| Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. |
 | Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
