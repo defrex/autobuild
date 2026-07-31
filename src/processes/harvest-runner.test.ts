@@ -204,6 +204,38 @@ async function seedOpenRun(opts: {
 }
 
 describe('HarvestRunner', () => {
+  test('samples the current harvest threshold instead of the constructor config', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-live-config-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedObservation(store, 'one', 'below the reloaded threshold')
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('a below-threshold run must not launch an agent')
+      },
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      getConfig: () => config(2),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect(result).toEqual({ outcome: 'idle' })
+    expect(scripted.sessions.size).toBe(0)
+    expect(
+      (await store.getRepoEvents('/repo')).some((event) => event.type === 'harvest.started'),
+    ).toBe(false)
+  })
+
   test('revise continues one producer session and starts a fresh reviewer each round', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-revise-'))
     roots.push(workspace)
@@ -1374,6 +1406,84 @@ describe('HarvestRunner', () => {
       run: 'harvest_1',
     })
     expect(calls).toBe(4)
+  })
+
+  test('Harvest substitutes eligible failures per session and resets to primary for review', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alternates-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        if (opts.model === 'primary-model') {
+          return failedTurnResult('primary unavailable', false, '', 'availability')
+        }
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', 'alternate-proposals.json')
+          await writeFile(file, JSON.stringify(proposalSet(observations)))
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, '.ab', 'alternate-review.md')
+          await writeFile(notes, 'approved by alternate\n')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    const alternateConfig = parseConfig(`
+[tickets]
+source = "file"
+readyState = "Ready"
+[roles.default]
+runtime = "scripted"
+model = "primary-model"
+alternates = [{ runtime = "alternate", model = "alternate-model" }]
+[policy]
+harvestThreshold = 1
+`)
+    await seedObservation(store, 'alternate-provider', 'primary provider unavailable')
+
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: alternateConfig,
+        runtimes: {
+          scripted: { runner: scripted, servesModels: ['primary-'] },
+          alternate: { runner: scripted, servesModels: ['alternate-'] },
+        },
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: 'harvest-alternates',
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toMatchObject({ outcome: 'completed' })
+
+    const events = await store.getRepoEvents('/repo')
+    const starts = events.filter((event) => event.type === 'harvest.session.started')
+    expect(starts.map((event) => event.payload.runner)).toEqual([
+      'scripted',
+      'alternate',
+      'scripted',
+      'alternate',
+    ])
+    expect(starts[1]?.payload).toMatchObject({
+      substitution: {
+        failed: { index: 0, error: 'primary unavailable', cause: 'availability' },
+        selectedIndex: 1,
+      },
+    })
+    expect(events.filter((event) => event.type === 'harvest.failed')).toHaveLength(0)
   })
 
   test('a repaired permanent provider failure resumes the stopped occurrence', async () => {

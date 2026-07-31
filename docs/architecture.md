@@ -47,7 +47,7 @@ K unclaimed observation.recorded events
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §15.4–15.5 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; runtime/model routing under `ports/runner/` | §3.2, §9, §13 |
+| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
@@ -149,6 +149,17 @@ launches per slug within one process; the BuildStore lease remains the
 cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
+
+**Live configuration.** `src/config/live.ts` owns the running dispatcher's
+immutable effective snapshot, exhaustive hot/restart field classification, and
+eager role resolver. The watch loop refreshes it before each serialized tick
+and publishes the exact accepted TOML atomically with a
+`dispatcher.config-reloaded` repository fact before making the snapshot
+visible. Dispatcher ticks, build/harvest actions, and dashboard projections each
+capture one snapshot at their own boundary. Startup-built plugin, forge, ticket,
+and workspace adapter fields stay pinned; changed values are durable restart
+notices rather than partial adapter swaps. `--once` retains static startup
+configuration.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
@@ -277,23 +288,27 @@ closes an unmerged PR, releases the workspace, deletes exact remote/local branch
 refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
 Triage, and appends abandoned completion last. Forge close/delete operations are
 optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.
+AgentRunner failure causes and the exhaustion contract fixture are additive
+plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
+behavior.
 
 **Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
-raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
-frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
-decoding, while `live.ts` owns normal teardown and sequences its push and pop
-with the alternate-screen region because the terminal's keyboard flag stack is
-per-screen. Every mode enters and leaves through the declarations and active
-ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
+raw fallback. `render.ts` composes the list, build-detail, and transcript as
+cell-honest Unicode frames; `keyboard.ts` owns Kitty keyboard-protocol
+negotiation and CSI-u decoding, while `live.ts` owns normal teardown and
+sequences its push and pop with the alternate-screen region because the
+terminal's keyboard flag stack is per-screen. Every mode enters and leaves through
+the declarations and active ledger in `terminal-restore.ts`; `binary.ts` installs a dispatch-only synchronous
 process-boundary fallback over that same ledger for faults and terminating
 signals that bypass normal teardown. `poll.ts` is a display-only incremental
 cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
 `composer.ts` owns the text geometry the blocked-resume panel edits against —
-display-cell wrapping, caret placement, and code-point motions — as pure,
-ANSI-free arithmetic shared by `render.ts` and `dispatch.ts`.
+display-cell wrapping and caret layout, plus cursor motions expressed as UTF-16
+string offsets normalized to extended-grapheme boundaries — as pure, ANSI-free
+arithmetic shared by `render.ts` and `dispatch.ts`.
 Nested navigation, session selection, and pinned artifact retrieval are
 read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,
@@ -345,9 +360,16 @@ behavioral assertions against every implementation:
 - `src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
   branch deletion with merged-race preservation;
 - `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
-  transcript metadata and usage, typed failure permanence, per-turn ambient
-  environment refresh and cancellation, distribution-managed `ab` resolution,
-  and the optional tool-free one-shot capability.
+  transcript metadata and usage, typed failure permanence/cause, per-turn
+  ambient environment refresh and cancellation, distribution-managed `ab`
+  resolution, and the optional tool-free one-shot capability.
+
+`src/ports/runner/routing.ts` eagerly resolves every role's primary and ordered
+alternate targets. `build-runner.ts` and `harvest-runner.ts` own the deterministic
+primary-first attempt loop: each substitution opens a new session bracket,
+records provenance on its start, and only complete-chain exhaustion consumes an
+existing phase/session attempt. This keeps runtime availability routing out of
+agent judgment while preserving transcript and artifact actor attribution.
 
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and

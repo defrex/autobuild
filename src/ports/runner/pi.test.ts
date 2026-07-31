@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { AgentStartOpts } from '../types'
 import {
+  CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_FOLLOW_UP,
   CONTRACT_ONE_SHOT_PROMPT,
   CONTRACT_ONE_SHOT_TEXT,
@@ -114,7 +115,9 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
           const message =
             scenario === 'permanent-failure'
               ? CONTRACT_PERMANENT_FAILURE
-              : CONTRACT_RETRYABLE_FAILURE
+              : scenario === 'exhaustion-failure'
+                ? CONTRACT_EXHAUSTION_FAILURE
+                : CONTRACT_RETRYABLE_FAILURE
           const capture = new PiTurnCapture()
           capture.observe({
             type: 'message_end',
@@ -302,7 +305,7 @@ describe('PiTurnCapture', () => {
     expect(capture.result({ inputTokens: 0, outputTokens: 0 })).toEqual({
       text: '',
       usage: { inputTokens: 0, outputTokens: 0 },
-      failure: { message: KIMI_QUOTA, permanent: true },
+      failure: { message: KIMI_QUOTA, permanent: true, cause: 'exhaustion' },
     })
   })
 

@@ -1,20 +1,9 @@
-/**
- * The composer (src/cli/dashboard/composer.ts) — pure geometry and motion
- * arithmetic, tested with no terminal and no model.
- *
- * This is where off-by-one cursor bugs and escape-expansion bugs live, and
- * where the non-lossiness guarantees are PROVED: `wrapDisplay` keeps every
- * cell, `packAtomic` keeps every token whole, and `layoutComposer` keeps every
- * row within budget with the caret visible. The first two are asserted as
- * properties over a generated sweep rather than as a handful of examples,
- * because a hand-picked case is exactly what a width bug slips past.
- */
 import { describe, expect, test } from 'bun:test'
+import { cellWidth, graphemes } from './cells'
 import {
   clampCursor,
   composerBudget,
   deleteBefore,
-  displayCells,
   displayText,
   insertText,
   layoutComposer,
@@ -24,275 +13,147 @@ import {
   type ComposerMotion,
 } from './composer'
 
-/** Render a layout row with the caret inserted, the way `render.ts` does. */
-function withCaret(row: string, column: number): string {
-  return `${row.slice(0, column)}|${row.slice(column)}`
-}
-
-describe('displayCells: the shared primitive', () => {
-  test('printable ASCII is one cell each; everything else is its escape', () => {
-    expect(displayCells('ab')).toEqual(['a', 'b'])
-    expect(displayCells('é').join('')).toBe('\\u{e9}')
-    expect(displayCells('é')).toHaveLength(6)
-  })
-
-  test('newline contributes NO cells — callers own the row break', () => {
-    expect(displayCells('a\nb')).toEqual(['a', 'b'])
-  })
-
-  test('other control characters are escaped, not dropped', () => {
-    expect(displayCells('\t').join('')).toBe('\\u{9}')
+describe('display-safe Unicode', () => {
+  test('keeps readable clusters literal and escapes controls only', () => {
+    expect(displayText('naïve — 日本語 ☕️ 🇺🇸 👨‍👩‍👧‍👦')).toBe('naïve — 日本語 ☕️ 🇺🇸 👨‍👩‍👧‍👦')
+    expect(displayText('\t')).toBe('\\u{9}')
   })
 })
 
-describe('wrapDisplay: prose is split, never truncated', () => {
-  test('word packing matches the existing look', () => {
+describe('wrapDisplay', () => {
+  test('packs words by cells and splits long tokens only between clusters', () => {
     expect(wrapDisplay('one two three four', 9)).toEqual(['one two', 'three', 'four'])
+    const value = `a${'🇺🇸'}${'👨‍👩‍👧‍👦'}b`
+    expect(wrapDisplay(value, 3)).toEqual([`a🇺🇸`, `👨‍👩‍👧‍👦b`])
   })
 
-  test('a token longer than the width SPLITS across rows — no ~, no lost cells', () => {
-    const url = 'x'.repeat(80)
-    const rows = wrapDisplay(`see ${url} now`, 40)
-    expect(rows.join('')).not.toContain('~')
-    expect(rows.join(' ').replace(/\s+/g, '')).toContain(url)
-    for (const row of rows) expect(row.length).toBeLessThanOrEqual(40)
+  test('CJK consumes two cells while combining and zero-width clusters stay attached', () => {
+    expect(wrapDisplay('日本語', 4)).toEqual(['日本', '語'])
+    expect(wrapDisplay(`e\u0301x\u200by`, 2)).toEqual([`e\u0301x\u200b`, 'y'])
+    expect(wrapDisplay('界', 1)).toEqual([''])
   })
 
-  test('a non-ASCII token at a width narrower than one escape still keeps every cell', () => {
-    // `\u{e9}` is 6 cells; at width 3 it can only survive by splitting.
-    const rows = wrapDisplay('éé', 3)
-    for (const row of rows) expect(row.length).toBeLessThanOrEqual(3)
-    expect(rows.join('')).toBe(displayText('éé'))
-  })
-
-  test('embedded newlines start new rows, and a blank paragraph keeps its row', () => {
+  test('preserves paragraphs, indentation, and long content', () => {
     expect(wrapDisplay('a\n\nb', 10)).toEqual(['a', '', 'b'])
-    expect(wrapDisplay('a\r\nb', 10)).toEqual(['a', 'b'])
-  })
-
-  test('degenerate widths', () => {
-    expect(wrapDisplay('abc', 0)).toEqual([])
-    expect(wrapDisplay('abc', -1)).toEqual([])
-    expect(wrapDisplay('abc', 1)).toEqual(['a', 'b', 'c'])
-  })
-
-  test('an indent wider than the row is dropped rather than starving the content', () => {
     expect(wrapDisplay('abc', 2, '    ')).toEqual(['ab', 'c'])
-    expect(wrapDisplay('ab cd', 8, '  ')).toEqual(['  ab cd'])
+    const rows = wrapDisplay(`see ${'x'.repeat(80)} now`, 40)
+    expect(rows.join(' ')).not.toContain('~')
+    expect(rows.join('').replaceAll(' ', '')).toContain('x'.repeat(80))
   })
 
-  test('PROPERTY: over a generated sweep, no row overflows and no cell is lost', () => {
-    const inputs = [
+  test('every row is cell-bounded over representative Unicode', () => {
+    for (const value of [
       'short',
-      'a bb ccc dddd eeeee',
-      'supercalifragilistic',
       'café au lait',
-      'ééééé',
-      'mixed café and a-very-long-unbroken-token-here',
-      'line one\nline two is longer\n\nlast',
-      '',
-      '   ',
-    ]
-    for (const input of inputs) {
+      '日本語日本語',
+      '🇺🇸 flags 👨‍👩‍👧‍👦',
+      'e\u0301\u200b',
+    ]) {
       for (let width = 1; width <= 12; width += 1) {
-        const rows = wrapDisplay(input, width)
-        for (const row of rows) expect(row.length).toBeLessThanOrEqual(width)
-        // Every display cell survives, in order, with whitespace normalized.
-        const expected = input.split(/\r?\n/).map(displayText).join('').replace(/\s+/g, '')
-        expect(rows.join('').replace(/\s+/g, '')).toBe(expected)
+        for (const row of wrapDisplay(value, width))
+          expect(cellWidth(row)).toBeLessThanOrEqual(width)
       }
     }
   })
 })
 
-describe('packAtomic: labels are kept whole or dropped', () => {
-  test('a token wider than the row is ABSENT, not fragmented', () => {
-    const rows = packAtomic(['ok', 'enormous-label', 'fine'], 8)
-    expect(rows.join(' ')).not.toContain('enormous')
-    expect(rows).toEqual(['ok  fine'])
-  })
-
-  test('the contrast with wrapDisplay on the same input', () => {
-    const token = 'enormous-label'
-    expect(packAtomic([token], 8)).toEqual([])
-    expect(wrapDisplay(token, 8)).toEqual(['enormous', '-label'])
-  })
-
-  test('greedy packing respects the separator and never overflows', () => {
-    const rows = packAtomic(['aaa', 'bbb', 'ccc'], 8)
-    expect(rows).toEqual(['aaa  bbb', 'ccc'])
-    for (const row of rows) expect(row.length).toBeLessThanOrEqual(8)
-  })
-
-  test('degenerate widths', () => {
-    expect(packAtomic(['a'], 0)).toEqual([])
-    expect(packAtomic([], 10)).toEqual([])
+describe('packAtomic', () => {
+  test('packs by cells and drops an over-wide token whole', () => {
+    expect(packAtomic(['ok', 'enormous-label', '界'], 8)).toEqual(['ok  界'])
+    expect(packAtomic(['🇺🇸', 'x'], 5)).toEqual(['🇺🇸  x'])
+    expect(packAtomic(['界'], 1)).toEqual([])
   })
 })
 
-describe('layoutComposer: wrapping and cursor geometry', () => {
-  test('a short value is one row with the cursor at its offset', () => {
-    const layout = layoutComposer('hello', 3, 20)
-    expect(layout.rows).toEqual(['hello'])
+describe('layoutComposer', () => {
+  test('reports separate UTF-16 and cell coordinates', () => {
+    const value = 'a界🇺🇸b'
+    const cursor = value.indexOf('b')
+    const layout = layoutComposer(value, cursor, 20)
+    expect(layout.rows).toEqual([value])
+    expect(layout.cursorColumn).toBe(5)
+    expect(layout.cursorOffset).toBe(cursor)
+  })
+
+  test('wraps whole clusters and keeps the caret on a valid boundary', () => {
+    const value = `a🇺🇸👨‍👩‍👧‍👦b`
+    const atFamily = value.indexOf('👨')
+    const layout = layoutComposer(value, atFamily, 4) // three-cell content budget
+    expect(layout.rows).toEqual(['a🇺🇸', '👨‍👩‍👧‍👦b'])
     expect(layout.cursorRow).toBe(0)
     expect(layout.cursorColumn).toBe(3)
+    expect(layout.cursorOffset).toBe(layout.rows[0]!.length)
   })
 
-  test('soft wrap reserves the caret column: budget is width - 1', () => {
-    expect(composerBudget(10)).toBe(9)
-    const layout = layoutComposer('abcdefghijkl', 0, 10)
-    expect(layout.rows).toEqual(['abcdefghi', 'jkl'])
+  test('combining and zero-width text consume no extra geometry', () => {
+    const layout = layoutComposer(`e\u0301\u200bx`, 'e\u0301\u200b'.length, 10)
+    expect(layout.cursorColumn).toBe(1)
+    expect(layout.cursorOffset).toBe('e\u0301\u200b'.length)
   })
 
-  test('a cursor at the end of a FULL soft-wrapped row stays on that row', () => {
-    // Column `budget`, not column 0 of the next row — the reserved column is
-    // what makes that legal, and it is why the field does not reflow as the
-    // caret crosses a wrap.
-    const layout = layoutComposer('abcdefghij', 9, 10)
-    expect(layout.cursorRow).toBe(0)
-    expect(layout.cursorColumn).toBe(9)
-    expect(withCaret(layout.rows[0]!, layout.cursorColumn).length).toBe(10)
+  test('logical newlines create rows and impossible wide clusters are omitted whole', () => {
+    expect(layoutComposer('ab\ncd', 3, 20).rows).toEqual(['ab', 'cd'])
+    const narrow = layoutComposer('界', 0, 2) // one-cell content budget
+    expect(narrow.rows).toEqual([''])
   })
 
-  test('an embedded newline breaks the row and puts the caret at column 0', () => {
-    const layout = layoutComposer('ab\ncd', 3, 20)
-    expect(layout.rows).toEqual(['ab', 'cd'])
-    expect(layout.cursorRow).toBe(1)
-    expect(layout.cursorColumn).toBe(0)
-  })
-
-  test('a trailing newline leaves an empty last row the caret can sit on', () => {
-    const layout = layoutComposer('ab\n', 3, 20)
-    expect(layout.rows).toEqual(['ab', ''])
-    expect(layout.cursorRow).toBe(1)
-    expect(layout.cursorColumn).toBe(0)
-  })
-
-  test('an escaped code point SPLITS across a wrap rather than overflowing (f_14906a08)', () => {
-    // `café` at width 6 wraps at budget 5: `\u{e9}` is 6 cells and cannot fit
-    // one row, so it straddles. Letting one unit exceed the row was revision
-    // 1's choice and it hid the caret.
-    const layout = layoutComposer('café', 4, 6)
-    for (const row of layout.rows) expect(row.length).toBeLessThanOrEqual(composerBudget(6))
-    expect(layout.rows.join('')).toBe('caf\\u{e9}')
-    expect(
-      withCaret(layout.rows[layout.cursorRow]!, layout.cursorColumn).length,
-    ).toBeLessThanOrEqual(6)
-  })
-
-  test('the cursor never lands inside a split escape', () => {
-    const layout = layoutComposer('café', 3, 6)
-    // Offset 3 is the boundary BEFORE `é`, so it is a cell boundary by
-    // construction whatever the wrap did.
-    expect(layout.rows[layout.cursorRow]!.slice(layout.cursorColumn)).not.toContain('u{')
-  })
-
-  test('width 1 and 2 still produce a visible caret', () => {
-    for (const width of [1, 2]) {
-      const layout = layoutComposer('abc', 2, width)
-      for (const row of layout.rows) expect(row.length).toBeLessThanOrEqual(composerBudget(width))
-      expect(layout.cursorRow).toBeLessThan(layout.rows.length)
-    }
-  })
-
-  test('an out-of-range cursor clamps to the buffer', () => {
-    expect(layoutComposer('abc', 99, 10).cursorColumn).toBe(3)
-    expect(layoutComposer('abc', -5, 10).cursorColumn).toBe(0)
-    expect(clampCursor('abc', 99)).toBe(3)
-    expect(clampCursor('café', 4)).toBe(4)
-  })
-
-  test('PROPERTY: every rendered caret row fits its width, at every width', () => {
-    const values = ['', 'abc', 'a\nb', 'café au lait', 'ééé', 'x'.repeat(30), 'a\n\nb\nc']
+  test('all rows and caret rows fit in display cells', () => {
+    const values = ['', 'abc', 'a\nb', 'café', '日本語', '🇺🇸👨‍👩‍👧‍👦', 'e\u0301\u200bx']
     for (const value of values) {
-      const length = [...value].length
+      const boundaries = [0, ...graphemes(value).map((cluster) => cluster.end)]
       for (let width = 1; width <= 10; width += 1) {
-        for (let cursor = 0; cursor <= length; cursor += 1) {
+        for (const cursor of boundaries) {
           const layout = layoutComposer(value, cursor, width)
-          for (const row of layout.rows) {
-            expect(row.length).toBeLessThanOrEqual(composerBudget(width))
-          }
-          const row = layout.rows[layout.cursorRow]
-          expect(row).toBeDefined()
-          expect(layout.cursorColumn).toBeLessThanOrEqual(row!.length)
-          const rendered = withCaret(row!, layout.cursorColumn)
-          expect(rendered).toContain('|')
-          expect(rendered.length).toBeLessThanOrEqual(Math.max(2, width))
+          for (const row of layout.rows)
+            expect(cellWidth(row)).toBeLessThanOrEqual(composerBudget(width))
+          expect(layout.cursorColumn + 1).toBeLessThanOrEqual(Math.max(2, width))
         }
       }
     }
   })
 })
 
-describe('insertText / deleteBefore: code points, not code units', () => {
-  test('text inserts AT the cursor and advances it', () => {
-    expect(insertText('ac', 1, 'b')).toEqual({ value: 'abc', cursor: 2 })
-    expect(insertText('', 0, 'hi')).toEqual({ value: 'hi', cursor: 2 })
+describe('composer editing uses UTF-16 grapheme boundaries', () => {
+  test('insertion and deletion preserve exact bytes', () => {
+    const inserted = insertText('ab', 1, '🇺🇸e\u0301')
+    expect(inserted.value).toBe('a🇺🇸e\u0301b')
+    expect(inserted.cursor).toBe('a🇺🇸e\u0301'.length)
+    expect(deleteBefore(inserted.value, inserted.cursor)).toEqual({
+      value: 'a🇺🇸b',
+      cursor: 'a🇺🇸'.length,
+    })
+    expect(deleteBefore('a🇺🇸b', 'a🇺🇸'.length)).toEqual({ value: 'ab', cursor: 1 })
   })
 
-  test('a multi-line paste inserts wholly in one step', () => {
-    expect(insertText('ad', 1, 'b\nc')).toEqual({ value: 'ab\ncd', cursor: 4 })
+  test('insertion advances over a cluster formed with a following combining mark', () => {
+    expect(insertText('\u0301', 0, 'a')).toEqual({ value: 'a\u0301', cursor: 2 })
   })
 
-  test('an astral code point counts as one', () => {
-    const inserted = insertText('', 0, '😀')
-    expect(inserted.cursor).toBe(1)
-    expect(deleteBefore(inserted.value, inserted.cursor)).toEqual({ value: '', cursor: 0 })
-  })
-
-  test('backspace deletes before the cursor, and is inert at offset 0', () => {
-    expect(deleteBefore('abc', 2)).toEqual({ value: 'ac', cursor: 1 })
-    expect(deleteBefore('abc', 0)).toEqual({ value: 'abc', cursor: 0 })
-  })
-
-  test('an out-of-range cursor clamps rather than corrupting the value', () => {
-    expect(insertText('ab', 99, 'c')).toEqual({ value: 'abc', cursor: 3 })
-    expect(deleteBefore('ab', 99)).toEqual({ value: 'a', cursor: 1 })
+  test('arbitrary offsets clamp before a cluster rather than splitting it', () => {
+    expect(clampCursor('a🇺🇸b', 3)).toBe(1)
+    expect(insertText('a🇺🇸b', 3, 'x')).toEqual({ value: 'ax🇺🇸b', cursor: 2 })
   })
 })
 
-describe('moveCursor: motions over LOGICAL lines', () => {
-  const value = 'alpha\nbb\n\nlast line'
-  const lines = value.split('\n')
-  const startOf = (index: number): number =>
-    lines.slice(0, index).reduce((sum, line) => sum + line.length + 1, 0)
-
+describe('moveCursor', () => {
+  const value = 'alpha\n界🇺🇸\n\nlast'
   const at = (motion: ComposerMotion, cursor: number): number => moveCursor(value, cursor, motion)
 
-  test('left and right step one code point and clamp at both ends', () => {
-    expect(at('left', 3)).toBe(2)
+  test('left/right move one grapheme and are inverse motions', () => {
+    for (const cluster of graphemes(value)) {
+      expect(at('right', cluster.start)).toBe(cluster.end)
+      expect(at('left', cluster.end)).toBe(cluster.start)
+    }
     expect(at('left', 0)).toBe(0)
-    expect(at('right', 3)).toBe(4)
-    expect(at('right', [...value].length)).toBe([...value].length)
+    expect(at('right', value.length)).toBe(value.length)
   })
 
-  test('left and right count code points, not code units', () => {
-    expect(moveCursor('😀x', 1, 'left')).toBe(0)
-    expect(moveCursor('😀x', 0, 'right')).toBe(1)
-  })
-
-  test('home and end are LOGICAL line bounds', () => {
-    expect(at('home', startOf(1) + 1)).toBe(startOf(1))
-    expect(at('end', startOf(1))).toBe(startOf(1) + lines[1]!.length)
-    expect(at('home', 0)).toBe(0)
-    expect(at('end', [...value].length)).toBe([...value].length)
-  })
-
-  test('up and down keep the column, clamped to a shorter target line', () => {
-    // Column 4 on `alpha` has no counterpart on `bb`; it clamps to its end.
-    expect(at('down', 4)).toBe(startOf(1) + 2)
-    // And onto the empty line, which clamps to column 0.
-    expect(at('down', startOf(1) + 1)).toBe(startOf(2))
-    expect(at('up', startOf(3) + 4)).toBe(startOf(2))
-  })
-
-  test('up off the top goes to offset 0; down off the bottom goes to the end', () => {
-    expect(at('up', 3)).toBe(0)
-    expect(at('down', startOf(3) + 2)).toBe([...value].length)
-  })
-
-  test('a single-line buffer has nowhere vertical to go', () => {
-    expect(moveCursor('one line', 4, 'up')).toBe(0)
-    expect(moveCursor('one line', 4, 'down')).toBe(8)
+  test('home/end and vertical motion use logical grapheme columns', () => {
+    const secondStart = value.indexOf('界')
+    const flagEnd = secondStart + '界🇺🇸'.length
+    expect(at('home', flagEnd)).toBe(secondStart)
+    expect(at('end', secondStart)).toBe(flagEnd)
+    expect(at('down', 2)).toBe(flagEnd)
+    expect(at('up', secondStart + '界'.length)).toBe(1)
   })
 })

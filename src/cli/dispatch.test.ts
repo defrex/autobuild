@@ -1386,6 +1386,62 @@ model = "gpt-slug-name"
 })
 
 describe('abDispatch watch build-runner coordination', () => {
+  test('rejects an invalid save, then adopts and durably records a mixed hot/restart save', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    const out: string[] = []
+    const valid = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2\nforge = "local-git"')
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await writeFile(
+              join(fx.origin, 'autobuild.toml'),
+              DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 0'),
+            )
+          } else if (sleeps === 2) {
+            await writeFile(join(fx.origin, 'autobuild.toml'), valid)
+          } else {
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      expect(fx.err.some((line) => line.includes('config reload rejected'))).toBe(true)
+      expect(fx.err.some((line) => line.includes('requires dispatch restart for: forge'))).toBe(
+        true,
+      )
+      expect(out).toContain('autobuild.toml reloaded (revision 1)')
+      const reloads = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.config-reloaded',
+      )
+      expect(reloads).toHaveLength(1)
+      expect(reloads[0]?.payload).toMatchObject({
+        restartRequired: ['forge'],
+        effectiveChanged: true,
+      })
+      const artifact = await fx.store.getRepoArtifact(
+        fx.origin,
+        reloads[0]!.payload.artifact.kind,
+        reloads[0]!.payload.artifact.rev,
+      )
+      expect(new TextDecoder().decode(artifact?.content)).toBe(valid)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('stale-lease polling cannot open competing sessions for one phase attempt', async () => {
     const handlers = happyHandlers()
     const happyCodeReview = handlers['code-review']!
@@ -5064,7 +5120,8 @@ describe('abDispatch interactive keyboard controls', () => {
         'esc_paste',
       )
 
-      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      const pasted =
+        'rebase onto main — “safe”\nkeep 日本語 and naïve intact\nre-run verify:test 🇺🇸 👨‍👩‍👧‍👦'
       input.paste(pasted)
       await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
       // No part of the paste is interpreted as submit, however many line

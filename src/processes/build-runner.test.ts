@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { buildContext } from '../cli/context'
 import { parseAbPhase } from '../cli/env'
 import { parseConfig } from '../config/load'
+import type { Config } from '../config/schema'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
@@ -323,6 +324,8 @@ interface HarnessOptions {
   /** Replaces the module config (parseConfig of this TOML) — e.g. to add a
    * [commands].setup for the §16.1 attach tests. */
   configToml?: string
+  /** Mutable dispatcher snapshot used by hot-reload boundary tests. */
+  getConfig?: () => Config
 }
 
 let nextHarnessWorkspace = 0
@@ -497,6 +500,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const br = new BuildRunner({
     store,
     config: selectedConfig,
+    ...(options.getConfig !== undefined ? { getConfig: options.getConfig } : {}),
     runtimes: {
       // `scripted` (the default runtime) serves the `m-` family so the routed
       // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
@@ -1683,6 +1687,71 @@ function reviseThenApproveHandlers(store: BuildStore): Record<string, SkillHandl
 }
 
 describe('session memory (§10)', () => {
+  test('an in-flight producer keeps its route, then the next round restarts under the new model', async () => {
+    let current = parseConfig(CONFIG_TOML)
+    current.roles.default = { runtime: 'scripted' }
+    let entered!: () => void
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const handlers = (store: BuildStore): Record<string, SkillHandler> => {
+      const base = happyHandlers(store)
+      return {
+        ...base,
+        plan: async (ctx) => {
+          if (roundOf(ctx) === 1) {
+            entered()
+            await gate
+          }
+          return base.plan!(ctx)
+        },
+        'plan-review': async (ctx) => {
+          const round = roundOf(ctx)
+          await reviewVerdict(
+            store,
+            ctx,
+            'plan-review',
+            round === 1 ? 'revise' : 'approve',
+            round === 1 ? [FINDING] : [],
+          )
+          return defaultTurnResult(`reviewed r${round}`)
+        },
+      }
+    }
+    const h = await makeHarness({ handlers, getConfig: () => current })
+
+    const first = h.br.step()
+    await inFlight
+    current = parseConfig(CONFIG_TOML.replace('model = "m-plan"', 'model = "m-plan-next"'))
+    current.roles.default = { runtime: 'scripted' }
+    const openStarts = ofType(await h.store.getEvents(SLUG), 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(openStarts.map((event) => event.payload.model)).toEqual(['m-plan'])
+    expect(
+      [...h.runner.sessions.values()].filter((journal) => journal.opts.skill === 'ab-plan'),
+    ).toHaveLength(1)
+    release()
+    await first
+    await h.br.step() // review r1 -> revise, using the new snapshot only after r1 finished
+    await h.br.step() // plan r2 must start fresh on the new route
+
+    const starts = ofType(await h.store.getEvents(SLUG), 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(starts.map((event) => event.payload.model)).toEqual(['m-plan', 'm-plan-next'])
+    const journals = [...h.runner.sessions.values()].filter(
+      (journal) => journal.opts.skill === 'ab-plan',
+    )
+    expect(journals).toHaveLength(2)
+    expect(journals.every((journal) => journal.turns.length === 1)).toBe(true)
+    expect(journals.every((journal) => journal.messages.length === 0)).toBe(true)
+  })
+
   test('implement r2 continues the SAME producer session; the message names the findings and .ab/', async () => {
     const h = await makeHarness({ handlers: reviseThenApproveHandlers })
     const state = await h.br.run()
@@ -2063,6 +2132,389 @@ describe('session memory (§10)', () => {
 // ── Provider/runner failures (§8.4, §9) ──────────────────────────────────────
 
 describe('structured provider failure policy', () => {
+  const alternateConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+
+[roles.default]
+runtime = "scripted"
+[roles.plan]
+runtime = "scripted"
+model = "m-plan"
+alternates = [{ runtime = "pi", model = "kimi-alt" }]
+`
+
+  test('an eligible primary failure substitutes in-order inside one attempt with durable attribution', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table.plan!
+        table.plan = (ctx) =>
+          ctx.opts.model === 'm-plan'
+            ? failedTurnResult('primary quota exhausted', true, '', 'exhaustion')
+            : happyPlan(ctx)
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const starts = events.filter((event) => event.type === 'session.started')
+    const planStarts = starts.filter(
+      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+    )
+    expect(planStarts).toHaveLength(2)
+    expect(planStarts[0]?.payload).toMatchObject({ runner: 'scripted', model: 'm-plan' })
+    expect(planStarts[1]?.payload).toMatchObject({
+      runner: 'pi',
+      model: 'kimi-alt',
+      substitution: {
+        failed: {
+          index: 0,
+          runner: 'scripted',
+          model: 'm-plan',
+          error: 'primary quota exhausted',
+          cause: 'exhaustion',
+        },
+        selectedIndex: 1,
+      },
+    })
+    expect(
+      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+    ).toHaveLength(0)
+    const planCompleted = events.find((event) => event.type === 'plan.completed')
+    expect(planCompleted?.actor).toMatchObject({
+      kind: 'agent',
+      session: planStarts[1]?.payload.session,
+    })
+    expect(starts[2]?.payload.runner).toBe('scripted')
+  })
+
+  test('a failed producer continuation falls back fresh and the following round resets to primary', async () => {
+    const continuationConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+[roles.default]
+runtime = "scripted"
+[roles.implement]
+runtime = "scripted"
+model = "m-implement"
+alternates = [{ runtime = "pi", model = "kimi-alternate" }]
+`
+    const h = await makeHarness({
+      configToml: continuationConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyImplement = table.implement!
+        table.implement = (ctx) => {
+          const round = roundOf(ctx)
+          if (round === 2 && ctx.opts.model === 'm-implement') {
+            expect(ctx.turn).toBe(2)
+            return failedTurnResult('continued primary unavailable', false, '', 'availability')
+          }
+          if (round === 2) {
+            expect(ctx.opts.model).toBe('kimi-alternate')
+            expect(ctx.turn).toBe(1)
+          }
+          if (round === 3) {
+            expect(ctx.opts.model).toBe('m-implement')
+            expect(ctx.turn).toBe(1)
+          }
+          return happyImplement(ctx)
+        }
+        table['code-review'] = async (ctx) => {
+          const round = roundOf(ctx)
+          if (round < 3) {
+            await reviewVerdict(store, ctx, 'code-review', 'revise', [
+              { ...FINDING, id: `f_round_${round}` },
+            ])
+            return defaultTurnResult(`revision ${round} requested`)
+          }
+          await reviewVerdict(store, ctx, 'code-review', 'approve')
+          return defaultTurnResult('approved')
+        }
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const implementStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'implement',
+    )
+    expect(
+      implementStarts.map(({ payload }) => ({
+        round: payload.round,
+        runner: payload.runner,
+        model: payload.model,
+      })),
+    ).toEqual([
+      { round: 1, runner: 'scripted', model: 'm-implement' },
+      { round: 2, runner: 'scripted', model: 'm-implement' },
+      { round: 2, runner: 'pi', model: 'kimi-alternate' },
+      { round: 3, runner: 'scripted', model: 'm-implement' },
+    ])
+    expect(implementStarts[2]?.payload.substitution).toMatchObject({
+      failed: {
+        session: implementStarts[1]?.payload.session,
+        error: 'continued primary unavailable',
+      },
+      selectedIndex: 1,
+    })
+    const completed = ofType(events, 'implement.completed')
+    expect(completed.find((event) => event.payload.round === 2)?.actor).toMatchObject({
+      kind: 'agent',
+      session: implementStarts[2]?.payload.session,
+    })
+    const alternateEnded = ofType(events, 'session.ended').find(
+      (event) => event.payload.session === implementStarts[2]?.payload.session,
+    )
+    expect(alternateEnded).toBeDefined()
+    const alternateTranscript = (await h.store.listArtifacts(SLUG, 'transcript')).find(
+      (artifact) => artifact.revision === alternateEnded!.payload.transcript.rev,
+    )
+    expect(alternateTranscript?.metadata).toMatchObject({
+      phase: 'implement',
+      round: 2,
+      role: 'implement',
+      runner: 'pi',
+      model: 'kimi-alternate',
+      session: implementStarts[2]?.payload.session,
+    })
+    expect(
+      events.filter(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'implement',
+      ),
+    ).toHaveLength(0)
+
+    const journals = [...h.runner.sessions.values()]
+    const firstPrimary = journals.find((journal) => journal.opts.model === 'm-implement')
+    expect(firstPrimary?.turns).toHaveLength(2)
+    expect(firstPrimary?.ended).toBe(true)
+    const alternate = journals.find((journal) => journal.opts.model === 'kimi-alternate')
+    expect(alternate?.turns).toHaveLength(1)
+    expect(alternate?.ended).toBe(true)
+    expect(
+      journals.filter(
+        (journal) => journal.opts.model === 'm-implement' && journal.turns.length === 1,
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('availability exhaustion consumes one attempt and retries primary first', async () => {
+    let primaryCalls = 0
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table.plan!
+        table.plan = (ctx) => {
+          if (ctx.opts.model === 'm-plan') {
+            primaryCalls += 1
+            if (primaryCalls === 2) return happyPlan(ctx)
+            return failedTurnResult('primary unavailable', false, '', 'availability')
+          }
+          return failedTurnResult('alternate unavailable', false, '', 'availability')
+        }
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const planStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(planStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi', 'scripted'])
+    const failures = ofType(events, 'phase.failed').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.payload).toMatchObject({
+      attempt: 1,
+      error: 'alternate unavailable',
+      willRetry: true,
+      providerAttempts: [
+        { index: 0, error: 'primary unavailable' },
+        { index: 1, error: 'alternate unavailable' },
+      ],
+    })
+  })
+
+  test('agent verify and finalize routes each use their logical role alternate chain', async () => {
+    const routedConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+[verify]
+steps = ["e2e"]
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+[finalize]
+steps = ["release-notes"]
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+[roles.default]
+runtime = "scripted"
+[roles.e2e]
+runtime = "scripted"
+model = "m-e2e"
+alternates = [{ runtime = "pi", model = "kimi-e2e" }]
+[roles.release-notes]
+runtime = "scripted"
+model = "m-finalize"
+alternates = [{ runtime = "pi", model = "kimi-finalize" }]
+`
+    const h = await makeHarness({
+      configToml: routedConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyVerify = table['verify-e2e']!
+        table['verify-e2e'] = (ctx) =>
+          ctx.opts.model === 'm-e2e'
+            ? failedTurnResult('verify provider exhausted', true, '', 'exhaustion')
+            : happyVerify(ctx)
+        table['release-notes'] = (ctx) =>
+          ctx.opts.model === 'm-finalize'
+            ? failedTurnResult('finalize provider overloaded', false, '', 'availability')
+            : defaultTurnResult('release notes completed')
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    const verifyStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'verify:e2e',
+    )
+    expect(verifyStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi'])
+    expect(verifyStarts[1]?.payload).toMatchObject({
+      role: 'e2e',
+      substitution: { failed: { error: 'verify provider exhausted' }, selectedIndex: 1 },
+    })
+    expect(
+      events.filter(
+        (event) => event.type === 'phase.failed' && event.payload.phase === 'verify:e2e',
+      ),
+    ).toHaveLength(0)
+
+    const finalizeStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'finalize' && event.payload.role === 'release-notes',
+    )
+    expect(finalizeStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi'])
+    expect(finalizeStarts[1]?.payload.substitution).toMatchObject({
+      failed: { error: 'finalize provider overloaded' },
+      selectedIndex: 1,
+    })
+    expect(
+      ofType(events, 'finalize.step-completed').find(
+        (event) => event.payload.step === 'release-notes',
+      ),
+    ).toMatchObject({
+      actor: { kind: 'agent', session: finalizeStarts[1]?.payload.session },
+      payload: { ok: true },
+    })
+  })
+
+  test('a completed turn with no typed terminal does not engage alternates', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = () => defaultTurnResult('agent omitted its terminal')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const starts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(starts).toHaveLength(2)
+    expect(starts.every((event) => event.payload.runner === 'scripted')).toBe(true)
+    expect(
+      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+    ).toHaveLength(2)
+  })
+
+  test('an exhausted chain writes one phase failure and escalation names every target', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = (ctx) =>
+          ctx.opts.model === 'm-plan'
+            ? failedTurnResult('primary overloaded', false, '', 'availability')
+            : failedTurnResult('alternate quota exhausted', true, '', 'exhaustion')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const failures = events.filter(
+      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+    )
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.payload).toMatchObject({
+      attempt: 1,
+      error: 'alternate quota exhausted',
+      willRetry: false,
+      providerAttempts: [
+        { index: 0, runner: 'scripted', error: 'primary overloaded' },
+        { index: 1, runner: 'pi', error: 'alternate quota exhausted' },
+      ],
+    })
+    const escalation = ofType(events, 'escalation.raised').find(
+      (event) => event.payload.source === 'policy',
+    )
+    expect(escalation?.payload.question).toContain('primary overloaded')
+    expect(escalation?.payload.question).toContain('alternate quota exhausted')
+  })
+
+  test('credential rejection bypasses a declared alternate and parks immediately', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = () => failedTurnResult('invalid API key', true, '', 'credentials')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const planStarts = events.filter(
+      (event) => event.type === 'session.started' && event.payload.phase === 'plan',
+    )
+    expect(planStarts).toHaveLength(1)
+    const failed = events.find(
+      (event) => event.type === 'phase.failed' && event.payload.phase === 'plan',
+    )
+    expect(failed?.payload).toMatchObject({
+      error: 'invalid API key',
+      willRetry: false,
+      providerAttempts: [{ index: 0, error: 'invalid API key', cause: 'credentials' }],
+    })
+  })
   test('AUT-28 quota rejection fails attempt 1 verbatim, deposits the transcript, and escalates without attempt 2', async () => {
     let calls = 0
     const h = await makeHarness({
@@ -2344,6 +2796,26 @@ describe('crash-gap repair', () => {
 // ── Deterministic checks (§8.2) ──────────────────────────────────────────────
 
 describe('checks', () => {
+  test('resolves a reloaded command at the next verify decision boundary', async () => {
+    const current = parseConfig(
+      CONFIG_TOML.replace(
+        'typecheck = "bun tsc --noEmit"',
+        'typecheck = "bun tsc --noEmit --pretty false"',
+      ),
+    )
+    current.roles.default = { runtime: 'scripted' }
+    const h = await makeHarness({ getConfig: () => current })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+
+    expect(await h.br.step()).toMatchObject({
+      kind: 'run-check',
+      step: 'types',
+      command: 'bun tsc --noEmit --pretty false',
+    })
+    expect(h.execCalls.at(-1)?.cmd).toEqual(['sh', '-c', 'bun tsc --noEmit --pretty false'])
+  })
+
   test('a failing check deposits the exec output as the verify report (D6) and completes outcome:fail', async () => {
     const h = await makeHarness({ failCommands: ['bun tsc --noEmit'] })
     await seedPlanApproved(h.store)

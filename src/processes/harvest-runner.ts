@@ -7,7 +7,7 @@
  */
 import { HARVEST_REVIEW_ROLE, HARVEST_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
-import type { RepositoryEvent } from '../events/repository'
+import type { HarvestEventPayload, RepositoryEvent } from '../events/repository'
 import { KERNEL } from '../events/envelope'
 import type { IdSource, UuidSource } from '../ids'
 import { occurrenceKey, type HarvestDisposition } from '../harvest/schema'
@@ -23,9 +23,20 @@ import {
   type HarvestRunState,
 } from '../kernel/harvest'
 import type { ArtifactRef, Feedback, Verdict } from '../ontology'
-import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
+import {
+  createRuntimeResolver,
+  type ResolvedRuntime,
+  type RuntimeResolver,
+} from '../ports/runner/routing'
+import { isAlternateEligible, mayRetryPhase } from '../ports/runner/provider-error'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type { AgentRunner, AgentSessionHandle, AgentTurnResult, TicketSource } from '../ports/types'
+import type {
+  AgentRunner,
+  AgentSessionHandle,
+  AgentTurnFailure,
+  AgentTurnResult,
+  TicketSource,
+} from '../ports/types'
 import { installedSkillName } from '../skills'
 import { defaultProposalState } from './dispatcher'
 import {
@@ -61,6 +72,8 @@ export interface HarvestRunnerDeps {
   store: BuildStore
   tickets: TicketSource
   config: Config
+  /** Current dispatcher snapshot, sampled only at workflow/session boundaries. */
+  getConfig?: () => Config
   runtimes: RuntimeRegistry
   repo: string
   workspacePath: string
@@ -85,7 +98,12 @@ export type HarvestRunnerResult =
 interface ProducerSession {
   handle: AgentSessionHandle
   runner: AgentRunner
+  route: string
 }
+
+type HarvestProviderAttempt = NonNullable<
+  HarvestEventPayload<'harvest.failed'>['providerAttempts']
+>[number]
 
 class SessionFailure extends Error {
   constructor(message: string) {
@@ -135,7 +153,6 @@ export class HarvestRunner {
   private readonly heartbeatMs: number
   private readonly maxSessionAttempts: number
   private readonly maxRecoveryAttempts: number
-  private readonly resolver: RuntimeResolver
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   /** Set only when the store positively reports a lapsed/stolen lease. A
    * rejected heartbeat is an outage; later beats retry until one can decide. */
@@ -151,7 +168,16 @@ export class HarvestRunner {
     if (!Number.isInteger(this.maxRecoveryAttempts) || this.maxRecoveryAttempts <= 0) {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+    // Preserve eager validation for static callers and startup failures.
+    createRuntimeResolver(deps.runtimes, deps.config.roles)
+  }
+
+  private currentConfig(): Config {
+    return this.deps.getConfig?.() ?? this.deps.config
+  }
+
+  private currentResolver(): RuntimeResolver {
+    return createRuntimeResolver(this.deps.runtimes, this.currentConfig().roles)
   }
 
   async run(): Promise<HarvestRunnerResult> {
@@ -184,7 +210,7 @@ export class HarvestRunner {
         // boundary even when the threshold is not met, so a request arriving
         // during the read is acknowledged before this runner returns idle.
         await this.controlBoundary()
-        const pressure = evaluateHarvestPressure(scan, this.deps.config.policy)
+        const pressure = evaluateHarvestPressure(scan, this.currentConfig().policy)
         if (pressure.trigger === undefined) return { outcome: 'idle' }
         const runId = this.deps.ids('harvest')
         const packet = await makeHarvestScanPacket({
@@ -325,7 +351,7 @@ export class HarvestRunner {
       .sort((a, b) => a.round - b.round)
     const stalled = stalledChains(
       reviseRounds.map((review) => review.findings),
-      this.deps.config.policy.stallRounds,
+      this.currentConfig().policy.stallRounds,
     )
     if (stalled.length > 0) {
       const chain = stalled.reduce((deepest, candidate) =>
@@ -352,9 +378,9 @@ export class HarvestRunner {
       startRound,
       priorRounds: reviseRounds.map((review) => review.findings),
       initialFeedback,
-      policy: {
-        maxRounds: this.deps.config.policy.maxReviewRounds,
-        stallRounds: this.deps.config.policy.stallRounds,
+      policy: () => {
+        const policy = this.currentConfig().policy
+        return { maxRounds: policy.maxReviewRounds, stallRounds: policy.stallRounds }
       },
       produce: async (_feedback, round) => {
         run = await this.refreshRun(run.run)
@@ -476,6 +502,250 @@ export class HarvestRunner {
     producer: boolean
     terminal: (event: RepositoryEvent, session: string) => boolean
   }): Promise<void> {
+    const resolved = this.currentResolver().resolve(spec.role)
+    if (resolved.alternates.length === 0) return this.executeSingleSession(spec)
+    return this.executeSessionChain(spec, resolved, resolved.alternates)
+  }
+
+  private async executeSessionChain(
+    spec: {
+      run: string
+      role: 'harvest' | 'harvest-review'
+      skill: string
+      step: 'synthesize' | 'review'
+      round: number
+      producer: boolean
+      terminal: (event: RepositoryEvent, session: string) => boolean
+    },
+    primary: ResolvedRuntime,
+    alternates: readonly ResolvedRuntime[],
+  ): Promise<void> {
+    const { store, repo, ids, workspacePath } = this.deps
+    await this.ensureLease()
+    const events = await store.getRepoEvents(repo)
+    const matchingFailures = events.filter(
+      (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
+        event.type === 'harvest.failed' &&
+        event.payload.run === spec.run &&
+        event.payload.step === spec.step &&
+        event.payload.round === spec.round,
+    )
+    const failures = matchingFailures.length
+    const latestFailure = matchingFailures.at(-1)
+    const current = reduceHarvest(events).runs.find((candidate) => candidate.run === spec.run)
+    const resumedAfterTerminalFailure =
+      latestFailure?.payload.willRetry === false &&
+      current?.status === 'running' &&
+      current.failure === undefined &&
+      events.some((event) => event.type === 'harvest.resumed' && event.seq > latestFailure.seq)
+    if (failures >= this.maxSessionAttempts && !resumedAfterTerminalFailure) {
+      throw new SessionFailure(`${spec.step}@${spec.round} exhausted retries`)
+    }
+
+    const targets = [primary, ...alternates]
+    const attempts: HarvestProviderAttempt[] = []
+    let substitution: HarvestProviderAttempt | undefined
+    const primaryRoute = JSON.stringify({
+      runtime: primary.runtime,
+      model: primary.model,
+      extensions: primary.extensions,
+    })
+    let primaryLive = spec.producer ? this.producer : undefined
+    if (
+      primaryLive !== undefined &&
+      (primaryLive.runner !== primary.runner || primaryLive.route !== primaryRoute)
+    ) {
+      try {
+        await primaryLive.runner.end(primaryLive.handle)
+      } catch {
+        // Best-effort cleanup after the previous round reached its boundary.
+      }
+      this.producer = undefined
+      primaryLive = undefined
+    }
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index]!
+      const session = ids('hs')
+      // A pause requested while a provider failed is honored before another
+      // provider starts; the incomplete step safely restarts at the primary.
+      if (index > 0) await this.controlBoundary(spec.run)
+      else await this.ensureLease()
+      const started = await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.session.started',
+        payload: {
+          run: spec.run,
+          session,
+          role: spec.role,
+          runner: target.runtime,
+          ...(target.model !== undefined ? { model: target.model } : {}),
+          step: spec.step,
+          round: spec.round,
+          ...(substitution !== undefined
+            ? { substitution: { failed: substitution, selectedIndex: index } }
+            : {}),
+        },
+      })
+
+      let handle: AgentSessionHandle | undefined
+      let result: AgentTurnResult | undefined
+      let turnError: unknown
+      const live = index === 0 ? primaryLive : undefined
+      try {
+        if (live !== undefined) {
+          handle = live.handle
+          result = await live.runner.continue(
+            live.handle,
+            `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
+            { env: this.sessionEnv(spec.run, spec.step, spec.round, session) },
+          )
+        } else {
+          const turn = await target.runner.start({
+            skill: spec.skill,
+            invocation: spec.run,
+            workspacePath,
+            ...(target.model !== undefined ? { model: target.model } : {}),
+            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+          })
+          handle = turn.session
+          result = turn.result
+        }
+      } catch (error) {
+        turnError = error
+      }
+
+      try {
+        await this.ensureLease()
+      } catch (error) {
+        if (handle !== undefined && live === undefined) {
+          try {
+            await target.runner.end(handle)
+          } catch {
+            // A dead session may have nothing left to close.
+          }
+        }
+        throw error
+      }
+
+      const since = await store.getRepoEvents(repo, started.seq)
+      const terminal =
+        turnError === undefined && since.some((event) => spec.terminal(event, session))
+      const owner = live?.runner ?? target.runner
+      if (terminal && handle !== undefined && result !== undefined) {
+        if (spec.producer && index === 0) {
+          this.producer = { handle, runner: owner, route: primaryRoute }
+          await this.depositTranscript(
+            spec,
+            session,
+            JSON.stringify(
+              {
+                session,
+                run: spec.run,
+                step: spec.step,
+                round: spec.round,
+                turn: result,
+                note: 'producer session kept live for convergence continuation',
+              },
+              null,
+              2,
+            ),
+            result.usage,
+            target.model,
+          )
+        } else {
+          const transcript = await owner.end(handle)
+          await this.depositTranscript(
+            spec,
+            session,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+          if (spec.producer) this.producer = undefined
+        }
+        return
+      }
+
+      if (handle !== undefined) {
+        try {
+          const transcript = await owner.end(handle)
+          await this.depositTranscript(
+            spec,
+            session,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+        } catch (error) {
+          if (error instanceof HarvestLeaseLostError) throw error
+        }
+      }
+      if (spec.producer) this.producer = undefined
+
+      const failure: AgentTurnFailure =
+        turnError !== undefined
+          ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
+          : result?.kind === 'failed'
+            ? result.failure
+            : { message: 'no-terminal', permanent: false }
+      const attempt: HarvestProviderAttempt = {
+        index,
+        session,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        error: failure.message,
+        ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+      }
+      attempts.push(attempt)
+      const eligibleForAlternate =
+        turnError !== undefined ||
+        (result?.kind === 'failed' && isAlternateEligible(result.failure))
+      if (index + 1 < targets.length && eligibleForAlternate) {
+        substitution = attempt
+        continue
+      }
+
+      const attemptNumber = failures + 1
+      await this.ensureLease()
+      await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.failed',
+        payload: {
+          run: spec.run,
+          step: spec.step,
+          round: spec.round,
+          attempt: attemptNumber,
+          error: failure.message,
+          willRetry: mayRetryPhase(failure) && attemptNumber < this.maxSessionAttempts,
+          providerAttempts: attempts,
+        },
+      })
+      await this.ensureLease()
+      await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.step.completed',
+        payload: {
+          run: spec.run,
+          step: spec.step,
+          round: spec.round,
+          outcome: 'failed',
+          detail: failure.message,
+        },
+      })
+      throw new SessionFailure(`${spec.step}@${spec.round} failed: ${failure.message}`)
+    }
+  }
+
+  private async executeSingleSession(spec: {
+    run: string
+    role: 'harvest' | 'harvest-review'
+    skill: string
+    step: 'synthesize' | 'review'
+    round: number
+    producer: boolean
+    terminal: (event: RepositoryEvent, session: string) => boolean
+  }): Promise<void> {
     const { store, repo, ids, workspacePath } = this.deps
     await this.ensureLease()
     const events = await store.getRepoEvents(repo)
@@ -503,7 +773,22 @@ export class HarvestRunner {
     }
 
     const session = ids('hs')
-    const resolved = this.resolver.resolve(spec.role)
+    const resolved = this.currentResolver().resolve(spec.role)
+    const route = JSON.stringify({
+      runtime: resolved.runtime,
+      model: resolved.model,
+      extensions: resolved.extensions,
+    })
+    let live = spec.producer ? this.producer : undefined
+    if (live !== undefined && (live.runner !== resolved.runner || live.route !== route)) {
+      try {
+        await live.runner.end(live.handle)
+      } catch {
+        // Best-effort cleanup after the old round reached a durable boundary.
+      }
+      this.producer = undefined
+      live = undefined
+    }
     await this.ensureLease()
     const started = await store.appendRepo(repo, {
       actor: KERNEL,
@@ -522,7 +807,6 @@ export class HarvestRunner {
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
     let turnError: unknown
-    const live = spec.producer ? this.producer : undefined
     try {
       if (live !== undefined) {
         handle = live.handle
@@ -571,6 +855,7 @@ export class HarvestRunner {
         this.producer = {
           handle,
           runner: live?.runner ?? resolved.runner,
+          route,
         }
         await this.depositTranscript(
           spec,
@@ -700,7 +985,8 @@ export class HarvestRunner {
   }
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
-    const { store, repo, tickets, config, uuids } = this.deps
+    const { store, repo, tickets, uuids } = this.deps
+    const config = this.currentConfig()
     // Filing is one deterministic side-effecting unit: settle pause before it,
     // then leave reservation/create/adoption bookkeeping uninterrupted.
     await this.controlBoundary(run.run)

@@ -9,6 +9,10 @@ const GUIDE = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
 const REFERENCE = join(DIST_ROOT, 'skills', 'guide', 'references', 'plugin-authoring.md')
 const roots: string[] = []
 
+function normalizedProse(source: string): string {
+  return source.replace(/\s+/g, ' ').trim()
+}
+
 function fencedBlock(source: string, marker: string, language: string): string {
   const start = `<!-- ${marker}:start -->\n\`\`\`${language}\n`
   const end = `\n\`\`\`\n<!-- ${marker}:end -->`
@@ -57,6 +61,17 @@ describe('plugin authoring guide', () => {
     ])
     expect(guide).toContain('[`references/plugin-authoring.md`](references/plugin-authoring.md)')
     expect((await lstat(REFERENCE)).isFile()).toBe(true)
+
+    const dualRootGuidance = [
+      'Repository-path specifiers resolve from the config-bearing root, which is the immutable build worktree in scoped phases.',
+      "npm package specifiers resolve from the consuming main checkout's installed dependencies, independent of local store/worktree placement; missing packages fail and are never installed automatically",
+    ]
+    for (const source of [guide, reference].map(normalizedProse)) {
+      for (const clause of dualRootGuidance) expect(source).toContain(clause)
+    }
+    expect(normalizedProse(reference)).not.toContain(
+      'Relative paths and npm package specifiers resolve from the consuming repository',
+    )
 
     const maps = ['ticketSources', 'agentRuntimes', 'workspaceProviders', 'forges']
     for (const token of [...PLUGIN_PORTS, ...maps]) expect(reference).toContain(`\`${token}\``)

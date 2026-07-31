@@ -377,6 +377,86 @@ describe('finalize.step-completed publication checkpoint', () => {
   })
 })
 
+describe('provider alternate evidence', () => {
+  const failed = {
+    index: 0,
+    session: 's_primary',
+    runner: 'pi',
+    model: 'provider/primary',
+    error: 'quota reached',
+    cause: 'exhaustion' as const,
+  }
+
+  test('accepts substitution starts and exhausted ordered attempts while old payloads stay valid', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_alt',
+          role: 'implement',
+          runner: 'claude',
+          model: 'claude-opus',
+          phase: 'implement',
+          round: 1,
+          substitution: { failed, selectedIndex: 1 },
+        },
+      }).payload,
+    ).toMatchObject({ substitution: { failed, selectedIndex: 1 } })
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: {
+          phase: 'implement',
+          round: 1,
+          attempt: 1,
+          error: 'also unavailable',
+          willRetry: true,
+          providerAttempts: [
+            failed,
+            {
+              index: 1,
+              session: 's_alt',
+              runner: 'claude',
+              error: 'also unavailable',
+              cause: 'availability',
+            },
+          ],
+        },
+      }).payload,
+    ).toMatchObject({ providerAttempts: [failed, { index: 1 }] })
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: {
+          phase: 'implement',
+          round: 1,
+          attempt: 1,
+          error: 'bad evidence',
+          willRetry: true,
+          providerAttempts: [{ ...failed, index: 1 }],
+        },
+      }),
+    ).toThrow(/provider attempt index/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_alt',
+          role: 'implement',
+          runner: 'claude',
+          phase: 'implement',
+          round: 1,
+          substitution: { failed, selectedIndex: 2 },
+        },
+      }),
+    ).toThrow(/selectedIndex/)
+  })
+})
+
 describe('verify.completed payload compatibility', () => {
   test('accepts canonical pass and fail outcomes', () => {
     expect(verify({ step: 'types', attempt: 1, outcome: 'pass' }).payload).toEqual({

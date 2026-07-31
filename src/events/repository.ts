@@ -20,11 +20,34 @@ import {
 } from '../harvest/schema'
 import { actorSchema, type Actor, type ActorKind } from './envelope'
 import { EventValidationError } from './catalog'
+import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const empty = z.strictObject({})
 const setting = z.strictObject({ enabled: z.boolean() })
+const restartRequiredConfigPathSchema = z.enum([
+  'forge',
+  'plugins',
+  'workspace.provider',
+  'workspace.config',
+  'tickets.source',
+  'tickets.teamKey',
+  'tickets.claimedState',
+  'tickets.createState',
+  'tickets.dir',
+])
+const restartRequiredConfigPathsSchema = z
+  .array(restartRequiredConfigPathSchema)
+  .superRefine((paths, ctx) => {
+    const seen = new Set<string>()
+    paths.forEach((path, index) => {
+      if (seen.has(path)) {
+        ctx.addIssue({ code: 'custom', path: [index], message: `duplicate config path ${path}` })
+      }
+      seen.add(path)
+    })
+  })
 
 export const harvestEventPayloadSchemas = {
   // Repository-wide operator control. Requests are human commands; paused /
@@ -81,6 +104,7 @@ export const harvestEventPayloadSchemas = {
     model: z.string().optional(),
     step: z.enum(['synthesize', 'review']),
     round,
+    substitution: providerSubstitutionSchema.optional(),
   }),
   'harvest.session.ended': z.strictObject({
     run: z.string().min(1),
@@ -140,10 +164,18 @@ export const harvestEventPayloadSchemas = {
     attempt,
     error: z.string().min(1),
     willRetry: z.boolean(),
+    providerAttempts: providerAttemptsSchema.optional(),
   }),
 } as const
 
 export const dispatcherSettingEventPayloadSchemas = {
+  /** Accepted main-checkout config revision. The exact TOML is deposited in
+   * the repository artifact stream atomically with this fact. */
+  'dispatcher.config-reloaded': z.strictObject({
+    artifact: artifactRefSchema,
+    restartRequired: restartRequiredConfigPathsSchema,
+    effectiveChanged: z.boolean(),
+  }),
   /** Current repository-wide intake gate sampled by every dispatcher tick. */
   'dispatcher.intake-set': setting,
   /** Repository-wide quiescence flag: pause-all sets it, resume-all clears it,
@@ -219,6 +251,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.completed': ['kernel'],
   'harvest.escalated': ['kernel', 'agent'],
   'harvest.failed': ['kernel'],
+  'dispatcher.config-reloaded': ['dispatcher'],
   'dispatcher.intake-set': ['human'],
   'dispatcher.pause-set': ['human'],
   'dispatcher.auto-merge-default-set': ['human'],

@@ -1,6 +1,8 @@
+import { readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
+import { graphemes } from './cells'
 
 /**
  * Deterministic dashboard-frame rendering.
@@ -15,12 +17,22 @@ import { Resvg } from '@resvg/resvg-js'
 const ESC = '\x1b'
 const BEL = '\x07'
 const FONT_FAMILY = 'DejaVu Sans Mono'
+const FONT_FAMILIES = [
+  FONT_FAMILY,
+  'Dashboard CJK 113',
+  'Dashboard CJK 117',
+  'Dashboard CJK 118',
+  'Dashboard Emoji Flags',
+  'Dashboard Emoji Food',
+  'Dashboard Emoji People',
+].join(', ')
 const FONT_SIZE = 16
 const CELL_WIDTH = 10
 const LINE_HEIGHT = 20
 const PADDING_X = 12
 const PADDING_Y = 10
 const BASELINE = 16
+const EMOJI_CLUSTER = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u
 
 const PALETTE = {
   background: '#0d1117',
@@ -43,6 +55,7 @@ interface Style {
 
 interface TextRun {
   column: number
+  cells: number
   text: string
   style: Style
 }
@@ -143,26 +156,29 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
   let text = ''
   let cells = 0
 
-  const append = (character: string): void => {
+  const append = (cluster: string, width: number): void => {
     const previous = runs.at(-1)
+    // ASCII runs may coalesce. Unicode clusters stay independently pinned to
+    // their terminal cell columns so font fallback/advance cannot shift the
+    // run that follows a wide glyph.
     if (
       previous !== undefined &&
-      previous.column + [...previous.text].length === cells &&
+      previous.column + previous.cells === cells &&
+      /^[\x20-\x7e]*$/.test(previous.text) &&
+      /^[\x20-\x7e]$/.test(cluster) &&
       sameStyle(previous.style, style)
     ) {
-      previous.text += character
+      previous.text += cluster
+      previous.cells += width
     } else {
-      runs.push({ column: cells, text: character, style: cloneStyle(style) })
+      runs.push({ column: cells, cells: width, text: cluster, style: cloneStyle(style) })
     }
-    text += character
-    cells += 1
+    text += cluster
+    cells += width
   }
 
   for (let index = 0; index < value.length; ) {
-    const code = value.codePointAt(index)!
-    const character = String.fromCodePoint(code)
-
-    if (character === ESC) {
+    if (value[index] === ESC) {
       const family = value[index + 1]
       if (family === '[') {
         const rest = value.slice(index + 2)
@@ -198,27 +214,22 @@ function parseLine(value: string, lineNumber: number): ParsedLine {
       )
     }
 
-    if (code < 0x20 || code === 0x7f) {
-      throw new Error(
-        `dashboard frame line ${lineNumber}: unsupported control U+${code
-          .toString(16)
-          .toUpperCase()
-          .padStart(4, '0')}`,
-      )
+    const nextEscape = value.indexOf(ESC, index)
+    const stop = nextEscape === -1 ? value.length : nextEscape
+    const plain = value.slice(index, stop)
+    for (const character of plain) {
+      const code = character.codePointAt(0)!
+      if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+        throw new Error(
+          `dashboard frame line ${lineNumber}: unsupported control U+${code
+            .toString(16)
+            .toUpperCase()
+            .padStart(4, '0')}`,
+        )
+      }
     }
-    // render.ts guarantees an ASCII frame so one code point is one terminal
-    // cell. Rejecting wider/non-ASCII input keeps this adapter from silently
-    // inventing width semantics the dashboard itself intentionally avoids.
-    if (code > 0x7e) {
-      throw new Error(
-        `dashboard frame line ${lineNumber}: non-ASCII cell U+${code
-          .toString(16)
-          .toUpperCase()} is outside the dashboard width contract`,
-      )
-    }
-
-    append(character)
-    index += character.length
+    for (const cluster of graphemes(plain)) append(cluster.text, cluster.width)
+    index = stop
   }
 
   if (style.href !== undefined) {
@@ -259,9 +270,20 @@ function svgFor(
       const y = PADDING_Y + BASELINE + row * LINE_HEIGHT
       const opacity = run.style.dim ? ' fill-opacity="0.58"' : ''
       const weight = run.style.bold ? ' font-weight="700"' : ' font-weight="400"'
+      // DejaVu's native advance is slightly narrower than the 10 px evidence
+      // grid. Fit coalesced ASCII runs to their exact terminal cells so the
+      // error cannot accumulate into a visible gap before a pinned Unicode
+      // cluster. Emoji get the same exact fit at a slightly larger size: the
+      // monochrome fallback remains readable without crossing its cell range.
+      const emoji = EMOJI_CLUSTER.test(run.text)
+      const geometry =
+        /^[\x20-\x7e]+$/.test(run.text) || emoji
+          ? ` textLength="${run.cells * CELL_WIDTH}" lengthAdjust="spacingAndGlyphs"`
+          : ''
+      const size = emoji ? ' font-size="18"' : ''
       const node =
         `<text x="${x}" y="${y}" fill="${PALETTE[run.style.foreground]}"` +
-        `${weight}${opacity}>${xml(run.text)}</text>`
+        `${weight}${opacity}${geometry}${size}>${xml(run.text)}</text>`
       content.push(
         run.style.href === undefined ? node : `<a href="${xml(run.style.href)}">${node}</a>`,
       )
@@ -274,7 +296,7 @@ function svgFor(
     svg: [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
       `<rect width="${width}" height="${height}" fill="${PALETTE.background}"/>`,
-      `<g font-family="${FONT_FAMILY}" font-size="${FONT_SIZE}" xml:space="preserve" text-rendering="geometricPrecision">`,
+      `<g font-family="${FONT_FAMILIES}" font-size="${FONT_SIZE}" xml:space="preserve" text-rendering="geometricPrecision">`,
       ...content,
       '</g>',
       '</svg>',
@@ -285,7 +307,15 @@ function svgFor(
 function fontFiles(): string[] {
   const require = createRequire(import.meta.url)
   const root = dirname(require.resolve('dejavu-fonts-ttf/package.json'))
-  return [join(root, 'ttf', 'DejaVuSansMono.ttf'), join(root, 'ttf', 'DejaVuSansMono-Bold.ttf')]
+  const fallbacks = join(import.meta.dir, '..', '..', '..', 'tools', 'fonts')
+  return [
+    join(root, 'ttf', 'DejaVuSansMono.ttf'),
+    join(root, 'ttf', 'DejaVuSansMono-Bold.ttf'),
+    ...readdirSync(fallbacks)
+      .filter((name) => name.endsWith('.ttf'))
+      .sort()
+      .map((name) => join(fallbacks, name)),
+  ]
 }
 
 /** Parse once, then derive both evidence forms from the same exact cells. */

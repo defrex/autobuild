@@ -42,6 +42,54 @@ TOML does not return to the root after entering a table. Put root scalars before
 the first table header; otherwise a value such as `capacity` becomes an unknown
 field in whichever table precedes it.
 
+## Reloading a running dispatcher
+
+A long-running `ab dispatch` watches the main checkout's `autobuild.toml` and
+checks it before every dispatch tick. A valid save is adopted within that tick.
+Each build, check, or agent action captures one configuration snapshot at its
+start: work already running is not interrupted, while the next action of the
+same in-flight build uses the new snapshot. Raising capacity can fill the new
+slots immediately; lowering it prevents new claims without terminating builds
+already above the limit. `ab dispatch --once` performs one pass and does not
+watch or reload.
+
+Every accepted revision is deposited verbatim as a `dispatcher-config`
+repository artifact and referenced by a `dispatcher.config-reloaded` repository
+event. The dashboard reports the reload and reprojects values such as capacity;
+plain watch mode writes the reload notice to stdout. Invalid syntax, schema, or
+runtime routing leaves the last valid snapshot in force and is reported in the
+dashboard notice row or on plain-mode stderr. An unchanged invalid file is not
+reported repeatedly, and a later valid save is adopted normally.
+
+These fields hot-reload:
+
+| Field or table | Boundary where a new value applies |
+|---|---|
+| `baseBranch` | Next dispatch or base fallback decision; existing `build.created` facts remain immutable. |
+| `capacity` | Next dispatcher tick. |
+| `[pr]` | Next build creation. |
+| `[commands]` | Next setup, verify check, or finalize check selected. |
+| `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
+| `[roles]` | Next agent session for that role. Runtime, model, and extensions are captured together. |
+| `[policy]` | Next policy or convergence gate evaluation. Prior evaluations are not revisited. |
+| `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
+| `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
+
+Adapter selectors and factory inputs are constructed once and require a
+restart. A valid save may still apply its hot fields, but these changed paths
+remain pinned to their startup values and are reported explicitly:
+
+| Restart-required field | Reason |
+|---|---|
+| `plugins` | Plugin modules and registration catalogs load before wiring. |
+| `forge` | Selects the constructed Forge adapter. |
+| `workspace.provider`, `workspace.config` | Select and configure the constructed workspace provider. |
+| `tickets.source`, `tickets.teamKey`, `tickets.claimedState`, `tickets.createState`, `tickets.dir` | Select or configure the constructed TicketSource. |
+
+The dispatch process reads the main checkout because it owns repository intake.
+Scoped phase commands still read the build worktree's `autobuild.toml`; this is
+the existing build-context boundary and is not unified by hot reload.
+
 ## Root scalars
 
 All root scalars are optional and receive defaults. They must appear before
@@ -99,7 +147,9 @@ carry a contract fixture descriptor. Ticket sources may also declare
 `requiredEnv`; the host checks every declared variable for a nonempty value
 before invoking the adapter factory. Plugins using Forge abort-cleanup and
 AgentRunner turn-cancellation capabilities introduced in API 1.2 should require
-`^1.2.0`.
+`^1.2.0`. The structured failure `cause` and provider-exhaustion contract
+scenario were added in API 1.3; a runtime plugin that relies on them should
+require `^1.3.0`.
 
 ```ts
 import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
@@ -506,26 +556,31 @@ failures become failure-tolerant follow-up observations.
 
 ## `[roles]`
 
-An open map from a nonempty role name to three independently inherited agent
-axes. The reserved `default` entry is required to name a runtime, is the raw
-base for every other role, and is never dispatched itself. Missing it fails
-eagerly before any session starts, with a copyable table and all registered
-runtime names.
+An open map from a nonempty role name to three primary agent axes plus an
+ordered alternate list. All four fields inherit independently. The reserved
+`default` entry is required to name a runtime, is the raw base for every other
+role, and is never dispatched itself. Missing it fails eagerly before any
+session starts, with a copyable table and all registered runtime names.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
 | `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
 | `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
 | `extensions` | inherited; otherwise `[]` (hermetic) | optional array of nonempty strings; `[]` allowed | Pi package/extension allowlist. A supplied list replaces, rather than unions with, the inherited list. |
+| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets. A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. |
 
 <!-- config-fragment:roles -->
 ```toml
 [roles.default]
 runtime = "claude"
 extensions = []
+alternates = [
+  { runtime = "pi", model = "openai-codex/gpt-5.6-sol", extensions = ["subagents"] },
+]
 
 [roles.plan]
 extensions = ["subagents", "web-access"]
+alternates = [] # replace the inherited list for this role
 
 [roles.code-review]
 runtime = "pi"
@@ -538,7 +593,11 @@ runtime does not discard a model inherited from `default`; the resulting exact
 pair must be compatible. Autobuild never searches for a runtime that happens
 to serve a configured model and never substitutes a different model to repair
 an invalid pair. The only implicit fill is when neither the role nor `default`
-names a model, in which case the selected runtime uses its own default.
+names a model, in which case the selected runtime uses its own default. Every
+alternate overlays that concrete role's effective primary runtime, model, and
+extensions, then undergoes the same exact-pair validation. Unknown fields,
+runtimes, and incompatible models in any indexed entry join the aggregated
+eager startup error; they never first surface during an outage.
 
 Three runtimes ship: `claude`, `codex`, and `pi`; `ab plugin list` projects all
 three as builtin agent runtimes, and trusted plugins may register additional
@@ -578,11 +637,29 @@ consumed. It is reported only when that check step is its sole apparent route â€
 a check step named `plan` leaves `[roles.plan]` consumed by the core `plan`
 phase, and nothing is reported.
 
-Resolver construction validates `default` and every declared role eagerly and
-aggregates all unknown-runtime and incompatible-model problems. Unknown-runtime
-diagnostics list every builtin and materialized plugin runtime. A deliberately
-different reviewer model is valid and often useful; mixed models are not a
-configuration inconsistency.
+Resolver construction validates `default`, every declared role, and every
+alternate eagerly and aggregates all unknown-runtime and incompatible-model
+problems. Unknown-runtime diagnostics list every builtin and materialized
+plugin runtime. A deliberately different reviewer model is valid and often
+useful; mixed models are not a configuration inconsistency.
+
+Each session attempt starts with its role's primary. Overload, rate limits, 5xx,
+timeout, transport, unknown provider failures, and quota/usage/billing
+exhaustion try alternates in declaration order inside that same phase attempt.
+Authentication, permission, and local runtime-configuration failures do not.
+Each target gets a separate session and transcript; a continuation that moves
+to another target starts fresh from durable context and cannot inherit the
+failed provider's conversation. Selection is not sticky: the next phase, next
+review-loop continuation, and next attempt begin at the primary again.
+
+Trying alternates does not consume additional phase attempts. Only an exhausted
+or non-eligible chain writes `phase.failed`; its final failure controls retry
+policy, so final quota/usage/billing exhaustion parks immediately while a final
+availability failure consumes one existing bounded attempt. `session.started`
+records each selected runtime/model and substitution cause, and an exhausted
+failure records every tried target and verbatim error for policy escalation.
+The chain applies to core phases, agent verify/finalize steps, and Harvest.
+Tool-free one-shot completions such as slug and upgrade use only the primary.
 
 ## `[policy]`
 

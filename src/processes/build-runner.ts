@@ -57,9 +57,20 @@ import {
   type Feedback,
   type Phase,
 } from '../ontology'
-import { createRuntimeResolver, type RuntimeResolver } from '../ports/runner/routing'
+import {
+  createRuntimeResolver,
+  type ResolvedRuntime,
+  type RuntimeResolver,
+} from '../ports/runner/routing'
+import { isAlternateEligible, mayRetryPhase } from '../ports/runner/provider-error'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
-import type { AgentRunner, AgentSessionHandle, AgentTurnResult, Forge } from '../ports/types'
+import type {
+  AgentRunner,
+  AgentSessionHandle,
+  AgentTurnFailure,
+  AgentTurnResult,
+  Forge,
+} from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -112,6 +123,9 @@ export interface BuildRunnerOpts {
 export interface BuildRunnerDeps {
   store: BuildStore
   config: Config
+  /** Current dispatcher snapshot. It is sampled once for setup and once for
+   * each engine/action boundary; omission preserves static runner callers. */
+  getConfig?: () => Config
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
@@ -148,7 +162,10 @@ type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 interface ProducerSession {
   handle: AgentSessionHandle
   runner: AgentRunner
+  route: string
 }
+
+type ProviderAttempt = NonNullable<EventPayload<'phase.failed'>['providerAttempts']>[number]
 
 /** One bracketed agent run (§15.3 sessions). */
 interface SessionSpec {
@@ -184,6 +201,20 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function providerAttemptSummary(attempts: readonly ProviderAttempt[] | undefined): string {
+  if (attempts === undefined) return ''
+  return (
+    '; configured provider attempts: ' +
+    attempts
+      .map(
+        (attempt) =>
+          `#${attempt.index} ${attempt.runner}` +
+          `${attempt.model !== undefined ? `/${attempt.model}` : ''}: ${attempt.error}`,
+      )
+      .join(' | ')
+  )
 }
 
 /** Latest event-checkpointed branch head that kernel plumbing published. */
@@ -305,16 +336,24 @@ export class BuildRunner {
   /** §10 producer session memory — in-memory by design: a new sandbox resumes
    * with fresh sessions rehydrated from the store (§7.4, §9). */
   private readonly producerSessions = new Map<CorePhase, ProducerSession>()
-  /** The role resolver (§9), built EAGERLY: a bad config (unregistered runtime
-   * or an incompatible merged runtime/model pair) throws here — the per-build
-   * loud-failure site — before any session launches. */
-  private readonly resolver: RuntimeResolver
+  /** Captured only at setup/step boundaries. Async work below a boundary never
+   * consults the mutable owner again. */
+  private boundaryConfig: Config
+  private boundaryResolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
-    this.resolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+    this.boundaryConfig = deps.config
+    this.boundaryResolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+  }
+
+  private captureConfig(): Config {
+    const config = this.deps.getConfig?.() ?? this.deps.config
+    this.boundaryConfig = config
+    this.boundaryResolver = createRuntimeResolver(this.deps.runtimes, config.roles)
+    return config
   }
 
   /** Consecutive durable setup failures since the latest successful attachment
@@ -339,7 +378,7 @@ export class BuildRunner {
     const status =
       failure.exitStatus === null ? 'exit status unavailable' : `exit status ${failure.exitStatus}`
     return (
-      `maxSetupAttempts (${this.deps.config.policy.maxSetupAttempts}) exhausted: ` +
+      `maxSetupAttempts (${this.boundaryConfig.policy.maxSetupAttempts}) exhausted: ` +
       `[commands].setup ${JSON.stringify(failure.command)} failed with ${status}. ` +
       `Output: ${failure.output || '(no output)'}`
     )
@@ -378,6 +417,7 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<void> {
+    const config = this.captureConfig()
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!claimed) throw new LeaseHeldError(slug, instance)
@@ -393,7 +433,7 @@ export class BuildRunner {
     // Crash-safe exhaustion: the final failure and escalation are separate
     // appends. If only the failure landed, raise the blocker before another
     // command execution can buy an extra attempt.
-    if (currentFailure !== undefined && streak >= this.deps.config.policy.maxSetupAttempts) {
+    if (currentFailure !== undefined && streak >= config.policy.maxSetupAttempts) {
       if (!openSetupEscalation) await this.raiseSetupEscalation(currentFailure)
       throw new SetupFailureError(slug, currentFailure, true)
     }
@@ -421,7 +461,7 @@ export class BuildRunner {
     }, this.heartbeatMs)
     this.heartbeatTimer.unref?.()
 
-    const setup = this.deps.config.commands.setup
+    const setup = config.commands.setup
     if (setup !== undefined) {
       let failure: EventPayload<'runner.setup-failed'> | undefined
       try {
@@ -452,7 +492,7 @@ export class BuildRunner {
             type: 'runner.setup-failed',
             payload: failure,
           } satisfies EventWrite<'runner.setup-failed'>)
-          const exhausted = failure.attempt >= this.deps.config.policy.maxSetupAttempts
+          const exhausted = failure.attempt >= config.policy.maxSetupAttempts
           if (exhausted) await this.raiseSetupEscalation(failure)
           throw new SetupFailureError(slug, failure, exhausted)
         } finally {
@@ -480,7 +520,8 @@ export class BuildRunner {
    * decision it executed; `wait` decisions execute nothing.
    */
   async step(): Promise<Decision> {
-    const { store, config, slug } = this.deps
+    const config = this.captureConfig()
+    const { store, slug } = this.deps
     const events = await store.getEvents(slug)
     const decision = decideNext(events, config)
     switch (decision.kind) {
@@ -922,9 +963,117 @@ export class BuildRunner {
     step: string,
     skill: string,
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
+    const resolved = this.boundaryResolver.resolve(step)
+    if (resolved.alternates.length === 0) return this.runFinalizeAgentSingle(step, skill)
+
+    const { store, slug, ids, workspacePath } = this.deps
+    const targets: readonly ResolvedRuntime[] = [resolved, ...resolved.alternates]
+    let substitution: ProviderAttempt | undefined
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index]!
+      const session = ids('s')
+      const started = await store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session,
+          role: step,
+          runner: target.runtime,
+          ...(target.model !== undefined ? { model: target.model } : {}),
+          phase: 'finalize',
+          round: 1,
+          ...(substitution !== undefined
+            ? { substitution: { failed: substitution, selectedIndex: index } }
+            : {}),
+        },
+      } satisfies EventWrite<'session.started'>)
+      const controller = new AbortController()
+      const unsubscribe = store.subscribe(slug, { fromSeq: started.seq, pollMs: 25 }, (event) => {
+        if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
+          controller.abort(new Error(`build ${slug} aborted by operator`))
+        }
+      })
+      let handle: AgentSessionHandle | undefined
+      let result: AgentTurnResult | undefined
+      let turnError: unknown
+      try {
+        const turn = await target.runner.start({
+          skill,
+          invocation: slug,
+          buildSlug: slug,
+          workspacePath,
+          ...(target.model !== undefined ? { model: target.model } : {}),
+          ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+          env: this.sessionEnvFor('finalize@1', session),
+          signal: controller.signal,
+        })
+        handle = turn.session
+        result = turn.result
+      } catch (error) {
+        turnError = error
+      } finally {
+        unsubscribe()
+      }
+      if (handle !== undefined) {
+        try {
+          const transcript = await target.runner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            { phase: 'finalize', round: 1, role: step, runnerName: target.runtime },
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+        } catch {
+          // The failure-tolerant post-step still records its outcome below.
+        }
+      }
+      if (controller.signal.aborted) {
+        return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
+      }
+      if (turnError === undefined && result?.kind !== 'failed') {
+        return { actor: agentActor(step, session), failureNote: undefined, cancelled: false }
+      }
+      const failure: AgentTurnFailure =
+        turnError !== undefined
+          ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
+          : result?.kind === 'failed'
+            ? result.failure
+            : {
+                message: 'agent session returned no result',
+                permanent: false,
+                cause: 'availability',
+              }
+      const attempt: ProviderAttempt = {
+        index,
+        session,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        error: failure.message,
+        ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+      }
+      if (index + 1 < targets.length && isAlternateEligible(failure)) {
+        substitution = attempt
+        continue
+      }
+      return {
+        actor: agentActor(step, session),
+        failureNote:
+          `${turnError !== undefined ? 'agent session failed' : 'agent turn failed'}: ` +
+          failure.message,
+        cancelled: false,
+      }
+    }
+    throw new Error('finalize alternate chain had no execution target')
+  }
+
+  private async runFinalizeAgentSingle(
+    step: string,
+    skill: string,
+  ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(step)
+    const { runner, runtime: runnerName, model, extensions } = this.boundaryResolver.resolve(step)
 
     const started = await store.append(slug, {
       actor: KERNEL,
@@ -1090,6 +1239,234 @@ export class BuildRunner {
    * start fresh (fresh skeptic).
    */
   private async executeSession(spec: SessionSpec): Promise<void> {
+    const resolved = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    // Preserve the historical single-target path byte-for-byte when no chain
+    // is configured. Besides compatibility, this keeps its crash-gap and
+    // producer-continuation behavior independently well exercised.
+    if (resolved.alternates.length === 0) return this.executeSingleSession(spec)
+    return this.executeSessionChain(spec, resolved, resolved.alternates)
+  }
+
+  /** Execute all configured targets inside one phase attempt. Every target has
+   * its own durable session bracket; only exhaustion writes phase.failed. */
+  private async executeSessionChain(
+    spec: SessionSpec,
+    primary: ResolvedRuntime,
+    alternates: readonly ResolvedRuntime[],
+  ): Promise<void> {
+    const { store, slug, ids, workspacePath } = this.deps
+    const targets = [primary, ...alternates]
+    const attempts: ProviderAttempt[] = []
+    let substitution: ProviderAttempt | undefined
+    const primaryRoute = JSON.stringify({
+      runtime: primary.runtime,
+      model: primary.model,
+      extensions: primary.extensions,
+    })
+    let primaryLive =
+      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
+    if (
+      primaryLive !== undefined &&
+      (primaryLive.runner !== primary.runner || primaryLive.route !== primaryRoute)
+    ) {
+      try {
+        await primaryLive.runner.end(primaryLive.handle)
+      } catch {
+        // Best-effort cleanup after the previous round reached its boundary.
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      primaryLive = undefined
+    }
+
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index]!
+      const session = ids('s')
+      const startedEnvelope = await store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session,
+          role: spec.role,
+          runner: target.runtime,
+          ...(target.model !== undefined ? { model: target.model } : {}),
+          phase: spec.phase,
+          round: spec.round,
+          ...(substitution !== undefined
+            ? { substitution: { failed: substitution, selectedIndex: index } }
+            : {}),
+        },
+      } satisfies EventWrite<'session.started'>)
+      const preSeq = startedEnvelope.seq
+      const live = index === 0 ? primaryLive : undefined
+
+      let handle: AgentSessionHandle | undefined
+      let result: AgentTurnResult | undefined
+      let turnError: unknown
+      const turnAbort = new AbortController()
+      const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
+        if (event.type === 'build.abort-requested' && !turnAbort.signal.aborted) {
+          turnAbort.abort(new Error(`build ${slug} aborted by operator`))
+        }
+      })
+      try {
+        if (live !== undefined) {
+          handle = live.handle
+          result = await live.runner.continue(handle, continueMessage(spec), {
+            env: this.sessionEnvFor(spec.abPhase, session),
+            signal: turnAbort.signal,
+          })
+        } else {
+          const turn = await target.runner.start({
+            skill: spec.skill,
+            invocation: slug,
+            buildSlug: slug,
+            workspacePath,
+            ...(target.model !== undefined ? { model: target.model } : {}),
+            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            env: this.sessionEnvFor(spec.abPhase, session),
+            signal: turnAbort.signal,
+          })
+          handle = turn.session
+          result = turn.result
+        }
+      } catch (error) {
+        turnError = error
+      } finally {
+        unsubscribe()
+      }
+
+      const since = await store.getEvents(slug, preSeq)
+      const terminal =
+        turnError === undefined &&
+        since.some(
+          (event) =>
+            spec.isTerminal(event) ||
+            (event.type === 'escalation.raised' &&
+              event.actor.kind === 'agent' &&
+              event.actor.session === session),
+        )
+      if (spec.phase === 'plan-review' || spec.phase === 'code-review') {
+        await this.repairEscalateGap(since, spec.phase, spec.round)
+      }
+
+      const bracket = {
+        phase: spec.phase,
+        round: spec.round,
+        role: spec.role,
+        runnerName: target.runtime,
+      }
+      const owner = live?.runner ?? target.runner
+
+      if (turnAbort.signal.aborted) {
+        if (handle !== undefined) {
+          try {
+            const transcript = await owner.end(handle)
+            await this.depositTranscriptAndEnd(
+              session,
+              bracket,
+              transcript.content,
+              transcript.metadata.usage,
+              transcript.metadata.model ?? target.model,
+            )
+          } catch {
+            // Cancellation remains a control boundary, never phase failure.
+          }
+        }
+        if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+        return
+      }
+
+      if (terminal && handle !== undefined && result !== undefined) {
+        if (spec.producerPhase !== undefined && index === 0) {
+          this.producerSessions.set(spec.producerPhase, {
+            handle,
+            runner: owner,
+            route: primaryRoute,
+          })
+          const content = JSON.stringify(
+            {
+              session,
+              phase: spec.phase,
+              round: spec.round,
+              note: 'producer session kept live for §10 continuation; per-round turn transcript',
+              turn: { text: result.text, usage: result.usage },
+            },
+            null,
+            2,
+          )
+          await this.depositTranscriptAndEnd(session, bracket, content, result.usage, target.model)
+        } else {
+          // An alternate producer must not become sticky across the review
+          // boundary. End it like any fresh session; the next round begins on
+          // the primary and rehydrates context from durable artifacts.
+          const transcript = await owner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+          if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+        }
+        return
+      }
+
+      if (handle !== undefined) {
+        try {
+          const transcript = await owner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? target.model,
+          )
+        } catch {
+          // A dead provider may leave no recoverable transcript.
+        }
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+
+      const failure: AgentTurnFailure =
+        turnError !== undefined
+          ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
+          : result?.kind === 'failed'
+            ? result.failure
+            : { message: 'no-terminal', permanent: false }
+      const attempt: ProviderAttempt = {
+        index,
+        session,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        error: failure.message,
+        ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+      }
+      attempts.push(attempt)
+
+      const eligibleForAlternate =
+        turnError !== undefined ||
+        (result?.kind === 'failed' && isAlternateEligible(result.failure))
+      if (index + 1 < targets.length && eligibleForAlternate) {
+        substitution = attempt
+        continue
+      }
+
+      await this.failPhase(
+        spec.phase,
+        spec.round,
+        spec.priorFailures,
+        failure.message,
+        mayRetryPhase(failure),
+        attempts,
+      )
+      return
+    }
+  }
+
+  /** Historical single-target bracket, retained unchanged for repositories
+   * that declare no alternates. */
+  private async executeSingleSession(spec: SessionSpec): Promise<void> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
     // `session.started.role` records the LOGICAL name the pipeline dispatched
@@ -1100,7 +1477,22 @@ export class BuildRunner {
       runtime: runnerName,
       model,
       extensions,
-    } = this.resolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    } = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const route = JSON.stringify({ runtime: runnerName, model, extensions })
+    let live =
+      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
+    if (live !== undefined && (live.runner !== runner || live.route !== route)) {
+      // A completed old round may keep provider continuation state, but a new
+      // route must begin a new provider session. The old round itself was not
+      // interrupted; it reached this boundary before being closed.
+      try {
+        await live.runner.end(live.handle)
+      } catch {
+        // Best-effort provider cleanup; route adoption must still proceed.
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      live = undefined
+    }
 
     const startedEnvelope = await store.append(slug, {
       actor: KERNEL,
@@ -1115,9 +1507,6 @@ export class BuildRunner {
       },
     } satisfies EventWrite<'session.started'>)
     const preSeq = startedEnvelope.seq
-
-    const live =
-      spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
 
     let handle: AgentSessionHandle | undefined
     let result: AgentTurnResult | undefined
@@ -1220,6 +1609,7 @@ export class BuildRunner {
         this.producerSessions.set(spec.producerPhase, {
           handle,
           runner: live?.runner ?? runner,
+          route,
         })
         const content = JSON.stringify(
           {
@@ -1398,12 +1788,18 @@ export class BuildRunner {
     events: AbEvent[],
     phase: Phase,
     round: number,
-  ): { count: number; lastError?: string; lastWillRetry?: boolean } {
+  ): {
+    count: number
+    lastError?: string
+    lastWillRetry?: boolean
+    lastProviderAttempts?: readonly ProviderAttempt[]
+  } {
     /** id → the raise's {phase, round} — answers are matched by id (§15.3). */
     const raised = new Map<string, { phase: EscalationTarget; round?: number }>()
     let count = 0
     let lastError: string | undefined
     let lastWillRetry: boolean | undefined
+    let lastProviderAttempts: readonly ProviderAttempt[] | undefined
     for (const event of events) {
       switch (event.type) {
         case 'escalation.raised':
@@ -1420,6 +1816,7 @@ export class BuildRunner {
             count = 0
             lastError = undefined
             lastWillRetry = undefined
+            lastProviderAttempts = undefined
           }
           break
         }
@@ -1428,6 +1825,7 @@ export class BuildRunner {
             count += 1
             lastError = event.payload.error
             lastWillRetry = event.payload.willRetry
+            lastProviderAttempts = event.payload.providerAttempts
           }
           break
         default:
@@ -1438,6 +1836,7 @@ export class BuildRunner {
       count,
       ...(lastError !== undefined ? { lastError } : {}),
       ...(lastWillRetry !== undefined ? { lastWillRetry } : {}),
+      ...(lastProviderAttempts !== undefined ? { lastProviderAttempts } : {}),
     }
   }
 
@@ -1447,6 +1846,7 @@ export class BuildRunner {
     priorFailures: number,
     error: string,
     mayRetry = true,
+    providerAttempts?: readonly ProviderAttempt[],
   ): Promise<void> {
     const attempt = priorFailures + 1
     await this.deps.store.append(this.deps.slug, {
@@ -1458,6 +1858,7 @@ export class BuildRunner {
         attempt,
         error,
         willRetry: mayRetry && attempt < this.maxPhaseAttempts,
+        ...(providerAttempts !== undefined ? { providerAttempts: [...providerAttempts] } : {}),
       },
     } satisfies EventWrite<'phase.failed'>)
   }
@@ -1468,7 +1869,11 @@ export class BuildRunner {
   private async raisePolicyNonRetryable(
     phase: Phase,
     round: number,
-    failures: { count: number; lastError?: string },
+    failures: {
+      count: number
+      lastError?: string
+      lastProviderAttempts?: readonly ProviderAttempt[]
+    },
   ): Promise<void> {
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,
@@ -1481,7 +1886,8 @@ export class BuildRunner {
         question:
           `${phase} round ${round} stopped after a non-retryable ` +
           `provider/runner failure on attempt ${failures.count}; last error: ` +
-          `${failures.lastError ?? 'unknown'}`,
+          `${failures.lastError ?? 'unknown'}` +
+          providerAttemptSummary(failures.lastProviderAttempts),
       },
     } satisfies EventWrite<'escalation.raised'>)
   }
@@ -1491,7 +1897,11 @@ export class BuildRunner {
   private async raisePolicyExhausted(
     phase: Phase,
     round: number,
-    failures: { count: number; lastError?: string },
+    failures: {
+      count: number
+      lastError?: string
+      lastProviderAttempts?: readonly ProviderAttempt[]
+    },
   ): Promise<void> {
     await this.deps.store.append(this.deps.slug, {
       actor: KERNEL,
@@ -1504,7 +1914,8 @@ export class BuildRunner {
         question:
           `${phase} round ${round} failed ${failures.count} times ` +
           `(maxPhaseAttempts ${this.maxPhaseAttempts}); last error: ` +
-          `${failures.lastError ?? 'unknown'}`,
+          `${failures.lastError ?? 'unknown'}` +
+          providerAttemptSummary(failures.lastProviderAttempts),
       },
     } satisfies EventWrite<'escalation.raised'>)
   }

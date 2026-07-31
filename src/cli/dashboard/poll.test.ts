@@ -92,6 +92,27 @@ function row(snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>, 
 }
 
 describe('DashboardBuildPollCache', () => {
+  test('a config-only revision reprojects unchanged live streams', async () => {
+    const store = new MemoryBuildStore()
+    await addRunning(store, 'live')
+    const reader = new CountingReader(store)
+    const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+    const first = await cache.refresh(CONFIG, 0)
+    const firstRow = row(first, 'live')
+    expect(firstRow).toBeDefined()
+
+    reader.resetCalls()
+    const changed = parseConfig(`
+capacity = 3
+[tickets]
+source = "file"
+readyState = "ready"
+`)
+    const second = await cache.refresh(changed, 1)
+    expect(reader.eventCalls).toEqual([{ slug: 'live', since: 1 }])
+    expect(row(second, 'live')).not.toBe(firstRow)
+  })
+
   test('steady-state event reads scale with nonterminal builds, not terminal history', async () => {
     const store = new MemoryBuildStore()
     for (let index = 0; index < 40; index += 1) {

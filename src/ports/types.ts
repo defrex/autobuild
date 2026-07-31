@@ -284,13 +284,19 @@ export interface AgentTurnCompleted extends AgentTurnResultBase {
   kind: 'completed'
 }
 
+export type AgentFailureCause = 'availability' | 'exhaustion' | 'credentials' | 'configuration'
+
 export interface AgentTurnFailure {
   /** Provider/runner text, preserved verbatim when one was supplied. */
   message: string
   /** False means "apply the existing bounded retry policy"; it does not claim
-   * the failure is transient. True is reserved for positive permanent signals
-   * such as authentication, permission, quota, or billing rejection. */
+   * the failure is transient. True remains the compatibility signal used by
+   * retry policy. Provider exhaustion is permanent for retry purposes while
+   * still being eligible for a configured alternate. */
   permanent: boolean
+  /** Additive structured routing cause. Legacy plugin runners may omit it;
+   * their existing permanent bit then supplies the conservative behavior. */
+  cause?: AgentFailureCause
 }
 
 /** A turn that reached a provider/runtime-declared failure while retaining an
