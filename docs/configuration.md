@@ -330,6 +330,31 @@ Cross-field validation rejects:
 selectors are validated even though the mandatory step will not use them for
 applicability.
 
+### Role routing for an agent verify step
+
+An agent verify step selects `[roles.<step>]` by its **logical step name** —
+the name in `[verify].steps`, not the skill it runs. This is the same rule an
+agent finalize post-step follows.
+
+<!-- config-fragment:verify-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.e2e]        # the STEP name — not "ab-verify-e2e"
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+```
+
+The step's configured skill name remains a deprecated alias for existing
+configurations and will be removed in a future release. It is consulted only
+when `[roles.<step>]` is undeclared, so the step name always wins when both are
+present, and `ab dispatch` reports the alias with the step name to rename it to.
+
 ### Plan-selected steps
 
 A plan may open with strict TOML front matter naming the complete set of
@@ -426,7 +451,37 @@ kind = "agent"
 skill = "ab-release-notes"
 ```
 
-The logical step name selects `[roles.<step>]` for an agent post-step. Both
+The logical step name selects `[roles.<step>]` for an agent post-step — the
+same rule an agent verify step follows, so one convention covers both:
+
+<!-- config-fragment:finalize-role -->
+```toml
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+
+[roles.e2e]              # verify STEP name — not "ab-verify-e2e"
+runtime = "pi"
+
+[roles.release-notes]    # finalize step name
+runtime = "pi"
+```
+
+For an agent *verify* step, the step's configured skill name remains a
+deprecated alias for existing configurations and will be removed in a future
+release. Finalize has never had such an alias.
+
+Both
 kinds are failure-tolerant: nonzero commands, launch/execution errors, and
 structured agent failures record `ok = false` plus a follow-up observation,
 then the sequence continues. A post-step cannot turn an otherwise green build
@@ -495,12 +550,23 @@ opt-in:
 `AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test src/ports/runner/codex.live.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
-`code-review`, `finalize`, and `reconcile`). Agent verify sessions route by
-their configured `skill` name; agent finalize post-steps route by logical step
-name. Repository judgments use `harvest` and `harvest-review`; `slug` and
-`upgrade` configure tool-free one-shot judgments. Arbitrary additional role
-keys are accepted, but only a name selected by one of these routes affects a
-session.
+`code-review`, `finalize`, and `reconcile`). Agent verify steps and agent
+finalize post-steps both route by their logical step name. The verify step's
+configured skill name remains a deprecated alias for existing configurations
+and will be removed in a future release. Repository judgments use `harvest` and
+`harvest-review`; `slug` and `upgrade` configure tool-free one-shot judgments.
+Arbitrary additional role keys are accepted, but only a name selected by one of
+these routes affects a session.
+
+A declared key that no route requests is resolved and validated like any other,
+and then never used — `ab dispatch` reports it at startup, naming the key and
+the keys valid for this configuration, and reports a deprecated skill-name key
+with the step name to rename it to. Both stay warnings; neither blocks a
+session or changes which runtime and model run. `kind = "check"` steps start no
+session and so are not a route: naming a role after one does not make it
+consumed. It is reported only when that check step is its sole apparent route —
+a check step named `plan` leaves `[roles.plan]` consumed by the core `plan`
+phase, and nothing is reported.
 
 Resolver construction validates `default` and every declared role eagerly and
 aggregates all unknown-runtime and incompatible-model problems. Unknown-runtime
@@ -541,6 +607,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
 When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
@@ -555,8 +622,8 @@ Source-specific validation is strict:
 
 - Linear requires `teamKey` and rejects `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
-- `createState` and `triageState` are valid for every source, but the named
-  state must exist in that provider when used.
+- `createState`, `triageState`, and `proposalState` are valid for every source,
+  but the named state must exist in that provider when used.
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
@@ -567,6 +634,16 @@ the selected source, which owns its workflow vocabulary and rejects unknown
 states before creating anything. An omitted Linear `triageState` uses `Backlog`,
 because every team has it while the optional Linear triage feature may be
 disabled. The file source uses `Triage`.
+
+`proposalState` names the one state observation harvest files proposals into,
+and defaults to the resolved `triageState` — proposals wait for a human, which
+is the grooming gate the pipeline is built around. Naming `readyState` here
+waives that gate for this repository: every proposal the harvest loop approves
+becomes dispatchable without being read, protected only by that loop's own
+review and by the spec gate at dispatch. It is a separate field precisely so
+the waiver stays narrow. Redirecting `triageState` instead would also send
+spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
+a bounced ticket is reclaimed and bounced again on every tick.
 
 The default file directory follows a selected local `AB_STORE` root and writes
 its own self-excluding `.gitignore`. An explicitly configured `dir` belongs to
@@ -692,6 +769,7 @@ readyState = "ready"
 readyLabels = []
 createState = "Triage"
 triageState = "Triage"
+proposalState = "Triage"
 dir = "tickets"
 ```
 

@@ -79,7 +79,7 @@ paragraph.
 
 1. **Judgment in skills, determinism in code.** Agents plan and review; tested code owns state, transitions, gating, deduplication, and plumbing.
 2. **Resumption comes from durable state.** Build state is reduced from a typed, append-only event log; snapshots are never authoritative.
-3. **Ingesters propose, humans dispatch.** Generated work must be groomed before it can leave Triage.
+3. **Ingesters propose, humans dispatch.** Generated work must be groomed before it can leave Triage, unless a repository waives that gate for its own harvest through `[tickets].proposalState` — as this one does.
 4. **Every step leaves a queryable paper trail.** Build metadata and artifacts belong in the BuildStore, not in the repository.
 
 The fixed pipeline is:
