@@ -749,20 +749,21 @@ Outcomes:
 | `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Both sides of that file stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `removed` | A fixed retired distribution skill had pristine provenance and either its unreferenced live tree matched pristine and was removed with its owned discovery link, or its canonical live tree was already missing and obsolete provenance plus any owned dangling link were removed. |
-| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a distinct user-owned Claude discovery directory was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
+| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a user-owned Claude discovery entry was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
 The `removed`/`kept` classifications apply only to the fixed retirements
 `ab-setup` and `ab-verify-e2e`. A pristine record proves Autobuild provenance;
 a same-named repository-authored skill without one is untouched. Upgrade keeps
 a retired skill named by an agent verify or finalize step, and parses config
-conservatively so an inspection failure also keeps it. A distinct real
-`.claude/skills/<name>` directory is preserved byte-for-byte, enters the
-structured discovery-conflict report, and makes upgrade exit nonzero even when
-the corresponding canonical/pristine trees are retired. Every terminal
-classification clears obsolete pristine ownership, making the retirement
-report one-time and preventing later link recreation, resurrection, or
-re-reporting.
+conservatively so an inspection failure also keeps it. A user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — is preserved byte-for-byte, enters the structured discovery-conflict
+report, and makes upgrade exit nonzero even when the corresponding
+canonical/pristine trees are retired. A preserved symlink keeps its exact link
+text and target. Every terminal classification clears obsolete pristine
+ownership, making the retirement report one-time and preventing later link
+recreation, resurrection, or re-reporting.
 
 After a conflict-free merge, upgrade makes one local commit by default. It
 includes only each reported skill's canonical tree, pristine record, and Claude
@@ -776,9 +777,11 @@ preserved through self-update handoff.
 
 Any content conflict, discovery conflict, pre-existing dirt in an owned path,
 non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
-cherry-pick suppresses the whole commit with a named warning. Staging and commit
-failures are also warning-only. Files stay as merged and the report's existing
-exit code is unchanged; upgrade never pushes or rewrites history.
+cherry-pick suppresses the whole commit with a named warning. If upgrade cannot
+snapshot the worktree's Git index, it warns and declines to stage. A staging or
+commit failure restores that exact pre-attempt index and reports the original
+Git failure without touching merged worktree files. The report's existing exit
+code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line

@@ -959,8 +959,10 @@ the default path likewise carries its pre-update Git baseline through that
 handoff. Upgrade suppresses the whole commit and names why when any skill or
 Claude discovery path conflicts, an owned path was already dirty, the target
 is not a Git repository, HEAD/worktree identity changes, or Git is mid-merge,
-mid-rebase, or mid-cherry-pick. A failed staging or commit attempt is warning
-only: merged files remain in place and the merge's exit status is unchanged.
+mid-rebase, or mid-cherry-pick. If upgrade cannot snapshot the worktree's Git
+index, it warns and declines to stage. A failed staging or commit attempt
+restores that exact pre-attempt index and reports the original Git failure;
+merged worktree files remain in place and the merge's exit status is unchanged.
 Upgrade never pushes or rewrites history.
 
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
@@ -975,13 +977,14 @@ its owned discovery link, or the canonical live tree was already missing and
 upgrade cleared provenance plus any owned dangling link. `kept` normally means
 the tree was customized, still configured, or could not be proved safe to
 remove; upgrade preserves it and clears obsolete pristine ownership. It also
-means an otherwise removable canonical tree was deleted while a distinct
-user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
-remains discoverable. That directory enters the ordinary structured discovery
-conflict report, so upgrade exits nonzero. A same-named repository-authored
-skill with no pristine provenance is never removed, and a second upgrade
-neither recreates a dangling link nor resurrects or re-reports either
-retirement.
+means an otherwise removable canonical tree was deleted while a user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — was preserved byte-for-byte and remains discoverable. For a symlink,
+its link text and target are unchanged. That entry enters the ordinary
+structured discovery conflict report, so upgrade exits nonzero. A same-named
+repository-authored skill with no pristine provenance is never removed, and a
+second upgrade neither recreates a dangling link nor resurrects or re-reports
+either retirement.
 
 ## Durable settings outside TOML
 
