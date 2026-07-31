@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
 - [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
 - [#171](https://github.com/defrex/autobuild/pull/171) — Clamp dashboard detail scrolling to resume panels
 - [#170](https://github.com/defrex/autobuild/pull/170) — Reveal newly raised dashboard feedback in detail views
