@@ -757,13 +757,18 @@ function transcriptContent(presentation: TranscriptPresentation, width: number):
   return lines
 }
 
+/** Convert a terminal's width to the dashboard's inset composition width. */
+export function dashboardContentWidth(terminalWidth: number): number {
+  return Math.max(0, Math.max(0, terminalWidth) - 2)
+}
+
 /** Maximum process-local transcript offset for the current wrapped viewport. */
 export function transcriptScrollLimit(
   presentation: TranscriptPresentation,
-  width: number,
+  terminalWidth: number,
   height: number,
 ): number {
-  const contentLines = transcriptContent(presentation, width).length
+  const contentLines = transcriptContent(presentation, dashboardContentWidth(terminalWidth)).length
   // Transcript chrome is two header rows plus the two separators and controls.
   const capacity = Math.max(0, height - 5)
   return Math.max(0, contentLines - capacity)
@@ -771,12 +776,12 @@ export function transcriptScrollLimit(
 
 export function moveTranscriptScroll(
   presentation: TranscriptPresentation,
-  width: number,
+  terminalWidth: number,
   height: number,
   current: number,
   delta: number,
 ): number {
-  const limit = transcriptScrollLimit(presentation, width, height)
+  const limit = transcriptScrollLimit(presentation, terminalWidth, height)
   // Clamp current first because a resize, or state from an older controller,
   // may leave it beyond the freshly wrapped viewport's end.
   return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
@@ -1383,7 +1388,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
  * separators) and therefore leaves vertical budgeting unchanged. */
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
   const terminalWidth = Math.max(0, opts.width)
-  const contentWidth = Math.max(0, terminalWidth - 2)
+  const contentWidth = dashboardContentWidth(terminalWidth)
   const lines = renderDashboardContent(model, { ...opts, width: contentWidth })
   const leftGutter = terminalWidth > 0 ? ' ' : ''
 

@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
+  dashboardContentWidth,
   detailScrollLimit,
   formatDuration,
   moveDetailScroll,
@@ -2231,7 +2232,57 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(boundary).toContain('Producer boundary record')
   })
 
-  test('scroll limits track wrapped content and viewport size', () => {
+  test('terminal width and gutter width share one clamped geometry contract', () => {
+    expect(dashboardContentWidth(80)).toBe(78)
+    expect(dashboardContentWidth(3)).toBe(1)
+    expect(dashboardContentWidth(2)).toBe(0)
+    expect(dashboardContentWidth(1)).toBe(0)
+    expect(dashboardContentWidth(-1)).toBe(0)
+  })
+
+  test('maximum scroll reaches width-sensitive structured and raw transcript tails', () => {
+    const terminalWidth = 20
+    const height = 8
+    const cases = [
+      {
+        tail: 'S_TAIL',
+        presentation: {
+          kind: 'turns' as const,
+          turns: [
+            { prompt: 'alpha beta', text: 'alpha beta' },
+            { prompt: 'ok', text: 'S_TAIL' },
+          ],
+        },
+      },
+      {
+        tail: 'R_TAIL',
+        presentation: {
+          kind: 'raw' as const,
+          text: ['alpha betaa gamma', 'alpha betaa gamma', 'R_TAIL'].join('\n'),
+        },
+      },
+    ]
+
+    for (const { presentation, tail } of cases) {
+      const scroll = transcriptScrollLimit(presentation, terminalWidth, height)
+      const lines = rd(
+        {
+          ...model([detailedBuild]),
+          view: {
+            kind: 'transcript',
+            slug: detailedBuild.slug,
+            sessionId: 's_plan',
+            scroll,
+            transcript: presentation,
+          },
+        },
+        { color: false, width: terminalWidth, height },
+      )
+      expect(lines.join('\n')).toContain(tail)
+    }
+  })
+
+  test('scroll limits track wrapped content and clamp offsets after resize', () => {
     const presentation = {
       kind: 'raw' as const,
       text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
@@ -2240,7 +2291,12 @@ describe('renderDashboard: build detail and transcript views', () => {
     const narrow = transcriptScrollLimit(presentation, 12, 12)
     expect(roomy).toBeGreaterThan(0)
     expect(narrow).toBeGreaterThan(roomy)
-    expect(transcriptScrollLimit(presentation, 80, 40)).toBe(0)
+
+    const taller = transcriptScrollLimit(presentation, 12, 40)
+    expect(taller).toBeLessThan(narrow)
+    expect(moveTranscriptScroll(presentation, 80, 12, narrow, 0)).toBe(roomy)
+    expect(moveTranscriptScroll(presentation, 12, 40, narrow, 0)).toBe(taller)
+
     // An overshot legacy/resize value is clamped before movement, so Up moves
     // off the bottom immediately rather than silently unwinding hidden offset.
     expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)

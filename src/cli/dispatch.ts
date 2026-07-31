@@ -46,6 +46,7 @@ import {
 } from './dashboard/model'
 import { DashboardBuildPollCache } from './dashboard/poll'
 import {
+  dashboardContentWidth,
   detailScrollLimit,
   moveDetailScroll,
   moveTranscriptScroll,
@@ -567,7 +568,7 @@ class DispatchLoop {
             ? 0
             : moveDetailScroll(
                 this.model,
-                Math.max(0, terminal.columns - 2),
+                dashboardContentWidth(terminal.columns),
                 paintableRows(terminal.rows),
                 this.view.scroll,
                 delta,
@@ -954,7 +955,7 @@ class DispatchLoop {
           ? 0
           : revealDetailFocus(
               nextModel,
-              Math.max(0, terminal.columns - 2),
+              dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
               next.scroll,
             ),
@@ -983,7 +984,7 @@ class DispatchLoop {
           ? 0
           : revealDetailFocus(
               nextModel,
-              Math.max(0, terminal.columns - 2),
+              dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
               next.scroll,
             ),
@@ -1727,7 +1728,7 @@ class DispatchLoop {
                   unclamped.scroll,
                   detailScrollLimit(
                     projectedWithView,
-                    Math.max(0, terminal.columns - 2),
+                    dashboardContentWidth(terminal.columns),
                     paintableRows(terminal.rows),
                   ),
                 ),
