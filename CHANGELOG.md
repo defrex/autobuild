@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#146](https://github.com/defrex/autobuild/pull/146) — Give plan reviewers a concrete finding bar
 - [#145](https://github.com/defrex/autobuild/pull/145) — Stop the open-map entry boundary from narrowing what validation said
 - [#144](https://github.com/defrex/autobuild/pull/144) — Preserve every adapter name a plugin manifest declares
 - [#143](https://github.com/defrex/autobuild/pull/143) — Hold queued builds while the repository is paused
