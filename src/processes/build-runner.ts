@@ -10,8 +10,10 @@
  * from its start (§15.6-C) — resumability is not a feature (§2.2).
  *
  * Ownership: `attach` claims the build's lease (§7.4) so a second sandbox can
- * never execute the same build, and a heartbeat interval keeps it (liveness
- * is mutable columns, never events — §15.2.6). `run` exits when the build
+ * never execute the same build. It may then acknowledge a pending pause or
+ * abort without preparing the workspace; workspace-backed work starts a
+ * heartbeat interval before setup (liveness is mutable columns, never events
+ * — §15.2.6). `run` exits when the build
  * parks (§11: a parked build's runner exits; cron re-attaches when
  * actionable). Nothing is released on exit — leases expire on their own and
  * the dispatcher's sweep re-attaches (§15.6-C).
@@ -154,6 +156,12 @@ type EvaluateVerifyDecision = Extract<Decision, { kind: 'evaluate-verify' }>
 type SkipVerifyDecision = Extract<Decision, { kind: 'skip-verify' }>
 type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
+
+/** Lease acquisition can finish either workspace-backed attachment or one
+ * engine-selected stop acknowledgement that deliberately needs no workspace. */
+export type AttachmentResult =
+  | { kind: 'workspace-ready' }
+  | { kind: 'control-acknowledged'; command: 'pause' | 'abort' }
 
 /** §10 memory: a producer's live runner session, kept across review rounds. */
 interface ProducerSession {
@@ -399,17 +407,27 @@ export class BuildRunner {
   }
 
   /**
-   * Claim the lease and run pre-phase setup. The first attempt retains the
+   * Claim the lease, honor engine-selected stop controls, then run pre-phase
+   * setup for workspace-backed work. The first workspace attempt retains the
    * historical successful-path protocol by announcing attachment before setup.
    * Once a setup failure is current, retries delay `runner.attached` until
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
-  async attach(): Promise<void> {
+  async attach(): Promise<AttachmentResult> {
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!claimed) throw new LeaseHeldError(slug, instance)
 
     let events = await store.getEvents(slug)
+    const decision = decideNext(events, this.deps.config)
+    if (
+      decision.kind === 'acknowledge' &&
+      (decision.command === 'pause' || decision.command === 'abort')
+    ) {
+      await this.acknowledge(decision.command)
+      return { kind: 'control-acknowledged', command: decision.command }
+    }
+
     const state = reduceBuild(events)
     const currentFailure = state.setupFailure
     const openSetupEscalation = state.openEscalations.some(
@@ -500,6 +518,7 @@ export class BuildRunner {
       }
     }
     this.attached = true
+    return { kind: 'workspace-ready' }
   }
 
   /**
@@ -548,7 +567,12 @@ export class BuildRunner {
    * already deposited — see module doc).
    */
   async run(): Promise<BuildState> {
-    if (!this.attached) await this.attach()
+    if (!this.attached) {
+      const attachment = await this.attach()
+      if (attachment.kind === 'control-acknowledged') {
+        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+      }
+    }
     try {
       for (;;) {
         await this.ensureLease()
