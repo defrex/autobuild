@@ -30,6 +30,7 @@ import {
   type ArtifactRef,
   type CorePhase,
   type EscalationSource,
+  type EscalationTarget,
   type Feedback,
   type Finding,
   type Phase,
@@ -266,12 +267,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     for (const ref of e.refs ?? []) dismissedIds.add(ref)
   }
 
-  // "Has an escalation.raised already landed after seq X?" — open and
-  // answered escalations both carry their raise seq, so the union is the
-  // complete raise history.
+  // "Has this exact escalation class already landed after seq X?" — open and
+  // answered escalations both carry their raise seq, source, and target, so
+  // the union is the complete durable deduplication history. Both dimensions
+  // must match: a later raise for another source or target cannot repair this
+  // condition's crash gap or acknowledge its exhausted budget.
   const allRaised = [...state.openEscalations, ...state.answeredEscalations]
-  const raisedAfter = (seq: number, source?: EscalationSource): boolean =>
-    allRaised.some((e) => e.seq > seq && (source === undefined || e.source === source))
+  const raisedAfter = (seq: number, source: EscalationSource, phase: EscalationTarget): boolean =>
+    allRaised.some((e) => e.seq > seq && e.source === source && e.phase === phase)
 
   // Latest-only guidance for an explicit destination (§15.6-B). Plan/code
   // escalations feed their producer; an agent verifier's own escalation feeds
@@ -364,10 +367,11 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   if (
     lastFail !== undefined &&
     fails.length >= config.policy.maxVerifyAttempts &&
-    !raisedAfter(lastFail.seq, 'policy')
+    !raisedAfter(lastFail.seq, 'policy', verifyPhase(lastFail.step))
   ) {
-    // Exhaustion escalates once per failure: any raise after the last failure
-    // (answered or not) suppresses a re-raise; a NEW failure re-arms it.
+    // Exhaustion escalates once per failure: an exact policy raise for this
+    // verify target after the last failure (answered or not) suppresses replay;
+    // a NEW failure re-arms it.
     return {
       kind: 'raise-escalation',
       source: 'policy',
@@ -504,11 +508,11 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     const nextAttempt = state.reconcileAttempts + 1
     if (
       nextAttempt > config.policy.maxReconcileAttempts &&
-      !raisedAfter(log.lastConflict.seq, 'policy')
+      !raisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
     ) {
-      // Bounds thrash against a busy base (§15.7). One raise per conflict:
-      // an answered raise lets the build proceed (the human unblocked it),
-      // and the NEXT conflict past the cap re-escalates.
+      // Bounds thrash against a busy base (§15.7). One matching reconcile
+      // policy raise per conflict: an answer lets the build proceed, and the
+      // NEXT conflict past the cap re-escalates.
       return {
         kind: 'raise-escalation',
         source: 'policy',
@@ -536,7 +540,7 @@ interface LoopArgs {
   reviewer: 'plan-review' | 'code-review'
   policy: Config['policy']
   dismissedIds: ReadonlySet<string>
-  raisedAfter: (seq: number, source?: EscalationSource) => boolean
+  raisedAfter: (seq: number, source: EscalationSource, phase: EscalationTarget) => boolean
   producerFeedback: () => Feedback | undefined
 }
 
@@ -573,7 +577,7 @@ function decideLoop(args: LoopArgs): Decision | 'approved' {
   if (verdict.verdict === 'escalate') {
     // CLI crash gap: the verdict landed but its escalation.raised did not
     // (§8.5 makes the pair near-atomic; the repair keeps decideNext total).
-    if (!raisedAfter(verdict.seq)) {
+    if (!raisedAfter(verdict.seq, 'agent', reviewer)) {
       return {
         kind: 'raise-escalation',
         source: 'agent',
@@ -595,10 +599,10 @@ function decideLoop(args: LoopArgs): Decision | 'approved' {
     loop.findingsByRound,
     verdict.round,
   )
-  if (stalled.length > 0 && !raisedAfter(verdict.seq, 'stall')) {
+  if (stalled.length > 0 && !raisedAfter(verdict.seq, 'stall', reviewer)) {
     // Deepest chain reported; first in root order on ties (converge does the
-    // same). Dedupe: raise once per verdict — a stall raise already recorded
-    // after this verdict (answered or not) suppresses a re-raise.
+    // same). Dedupe: raise once per verdict — a stall raise for this reviewer
+    // already recorded after this verdict (answered or not) suppresses replay.
     const chain = stalled.reduce((deepest, candidate) =>
       candidate.rounds > deepest.rounds ? candidate : deepest,
     )
@@ -611,7 +615,7 @@ function decideLoop(args: LoopArgs): Decision | 'approved' {
       refs: chain.ids,
     }
   }
-  if (loop.maxRound >= policy.maxReviewRounds && !raisedAfter(verdict.seq, 'policy')) {
+  if (loop.maxRound >= policy.maxReviewRounds && !raisedAfter(verdict.seq, 'policy', reviewer)) {
     return {
       kind: 'raise-escalation',
       source: 'policy',

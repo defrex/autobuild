@@ -78,7 +78,12 @@ consults a snapshot in place of the append-only log.
 `src/kernel/engine.ts` the deterministic transitions;
 `src/processes/build-runner.ts` executes the decisions. Agents reach state
 only through `src/cli/` terminals, which convert artifact deposits into
-event facts atomically — the engine never reads blobs.
+event facts atomically — the engine never reads blobs. Engine crash-gap and
+exhaustion guards query the event log for a later escalation raise with the
+exact same source/class and target phase; the triggering sequence remains the
+re-arm boundary. `BuildRunner` applies the same independent targeting at the
+setup seam, where only a setup-targeted policy raise can satisfy setup
+exhaustion.
 
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
@@ -149,6 +154,17 @@ launches per slug within one process; the BuildStore lease remains the
 cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
+
+**Live configuration.** `src/config/live.ts` owns the running dispatcher's
+immutable effective snapshot, exhaustive hot/restart field classification, and
+eager role resolver. The watch loop refreshes it before each serialized tick
+and publishes the exact accepted TOML atomically with a
+`dispatcher.config-reloaded` repository fact before making the snapshot
+visible. Dispatcher ticks, build/harvest actions, and dashboard projections each
+capture one snapshot at their own boundary. Startup-built plugin, forge, ticket,
+and workspace adapter fields stay pinned; changed values are durable restart
+notices rather than partial adapter swaps. `--once` retains static startup
+configuration.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
 fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
