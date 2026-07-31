@@ -223,9 +223,7 @@ export interface DashboardModel {
   /** Every nonterminal build consumes one configured dispatch capacity slot. */
   active: DashboardCounter
   /** Recorded observation occurrences not claimed by a Harvest snapshot. */
-  observations: DashboardCounter
-  /** Merged builds after the oldest unclaimed observation. A zero limit disables triggering. */
-  drift: DashboardCounter
+  observations: number
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
   /** Durable repository-wide hold (`true` means queued builds cannot launch). */
@@ -1076,7 +1074,6 @@ interface DashboardFrameHeader {
   repo: string
   queued: number
   observationCount: number
-  driftCount?: number
   selection?: DashboardSelection
   warningLines?: readonly string[]
   resumeInput?: ResumeInputView
@@ -1086,8 +1083,6 @@ interface DashboardFrameHeader {
 export interface DashboardHeader extends DashboardFrameHeader {
   activeCount: number
   capacity: number
-  harvestThreshold: number
-  harvestMaxDrift: number
 }
 
 /**
@@ -1107,8 +1102,7 @@ export function buildDashboardFromProjected(
     repo: header.repo,
     queued: header.queued,
     active: { current: header.activeCount, limit: header.capacity },
-    observations: { current: header.observationCount, limit: header.harvestThreshold },
-    drift: { current: header.driftCount ?? 0, limit: header.harvestMaxDrift },
+    observations: header.observationCount,
     drained: !settings.intake,
     repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
@@ -1142,8 +1136,6 @@ export function buildDashboard(
       ...header,
       activeCount,
       capacity: config.capacity,
-      harvestThreshold: config.policy.harvestThreshold,
-      harvestMaxDrift: config.policy.harvestMaxDrift,
     },
     repositoryEvents,
   )

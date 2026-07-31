@@ -70,7 +70,7 @@ import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
-import { evaluateHarvestPressure, scanUnclaimedObservations } from '../processes/harvest'
+import { scanUnclaimedObservations } from '../processes/harvest'
 import {
   Dispatcher,
   emptyTickReport,
@@ -384,8 +384,6 @@ class DispatchLoop {
   /** Last successfully measured unclaimed observation count. Sampling failures
    * retain this factual value rather than inventing a zero. */
   private observationCount = 0
-  /** Last successfully measured repository drift; retained atomically with observationCount. */
-  private driftCount = 0
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -500,18 +498,16 @@ class DispatchLoop {
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
 
-      // Observation pressure is display-only and sampled once per interactive
+      // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace
       // the last complete measurement with a fabricated zero.
       if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
-          const pressure = evaluateHarvestPressure(scan, this.currentConfig().config.policy)
-          this.observationCount = pressure.observationCount
-          this.driftCount = pressure.drift
+          this.observationCount = scan.observations.length
         } catch (error) {
           this.warn(
-            `dashboard observation pressure failed: ${
+            `dashboard observation scan failed: ${
               error instanceof Error ? error.message : String(error)
             }`,
           )
@@ -1748,9 +1744,6 @@ class DispatchLoop {
         ).length,
         capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,
-        driftCount: this.driftCount,
-        harvestThreshold: configSnapshot.config.policy.harvestThreshold,
-        harvestMaxDrift: configSnapshot.config.policy.harvestMaxDrift,
       },
       repositoryEvents,
     )

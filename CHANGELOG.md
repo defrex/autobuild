@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#188](https://github.com/defrex/autobuild/pull/188) — Simplify dashboard observation reporting
 - [#187](https://github.com/defrex/autobuild/pull/187) — Suppress unsafe cross-version upgrade commits
 - [#186](https://github.com/defrex/autobuild/pull/186) — Preserve foreign discovery symlinks during skill retirement
 - [#185](https://github.com/defrex/autobuild/pull/185) — Restore index after failed upgrade commits
