@@ -358,12 +358,13 @@ and falls back to a deterministic title-derived name on any absence, invalid
 output, error, or timeout. Naming failure never prevents build creation. The
 slug and its `ab/<slug>` branch are recorded once and never renamed.
 
-**Immutability:** the spec cannot change during a build. Every downstream
-reviewer approves conformance *to it*; a drifting spec silently converts
-approvals into approvals-of-something-else. A phase discovering the spec
-itself is wrong raises an `escalation`; a human answers, the spec gets rev
-N+1, and the build restarts from `plan` (cheap — downstream was invalidated
-anyway).
+**Immutability:** the spec cannot change during a build except through the
+explicit escalation revision protocol. Every downstream reviewer approves
+conformance *to it*; a drifting spec silently converts approvals into
+approvals-of-something-else. A phase discovering the spec itself is wrong
+raises an `escalation`; a human uses `ab answer --revise-spec` (or
+`--revise-spec-from-ticket`), the spec gets rev N+1, and the build restarts
+from `plan` (cheap — downstream was invalidated anyway).
 
 ## 7. The build store
 
@@ -874,11 +875,15 @@ The fixed workflow is:
    atomically store the scan packet with the run's claim.
 2. **synthesize ⇄ review (judgment through `converge`)** — the continuing
    producer clusters same-problem records and authors typed
-   create/join/suppress proposals; a fresh reviewer checks coverage, semantic
-   dedup, spec quality, and evidence. Only approval advances.
-3. **file (deterministic)** — render creates to the spec standard and file
-   them into `[tickets].proposalState`, Triage by default, with the reserved
-   `autobuild:proposal` provenance label.
+   create/join/suppress proposals. A create may carry source-local `blockedBy`
+   ids when its evidence establishes a hard prerequisite; contextual references
+   and nonbinding ordering do not become blockers. A fresh reviewer checks
+   coverage, semantic dedup, spec quality, evidence, and both directions of
+   that prerequisite rule. Only approval advances.
+3. **file (deterministic)** — validate every create blocker through the selected
+   TicketSource, render creates to the spec standard, and file them with those
+   native relationships into `[tickets].proposalState`, Triage by default,
+   with the reserved `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -909,8 +914,11 @@ event-level mechanics live in the repository catalog and reducer tests):
   proposal, and it files every one into the same configured state rather than
   ranking them. Humans own Triage → Ready by default. A repository that points
   `[tickets].proposalState` at its ready state has waived that gate for itself:
-  every harvested proposal becomes dispatchable unread, on the strength of the
-  synthesize ⇄ review loop and the spec gate alone. The waiver is a field of
+  every harvested proposal enters the ordinary dispatch eligibility checks
+  unread, on the strength of the synthesize ⇄ review loop and the spec gate.
+  An unresolved harvested `blockedBy` relationship still prevents claim until
+  the source reports completion or the relationship is deliberately removed.
+  The waiver is a field of
   its own rather than a reuse of `triageState`, because bounces, aborts, and
   closed-unmerged PRs must still land where the next tick will not reclaim
   them — a bounce filed into Ready is claimed and bounced again forever.
@@ -943,10 +951,13 @@ concurrent attempts to create the same name; callers never pre-register labels.
 creation or later. The source owns representation (how a blocker is stored)
 and completion semantics (what "done" means); the dispatcher owns the
 decision — an unresolved blocker means the ticket is not claimed and creates
-no build. Dependencies are written during grooming and read at dispatch time,
-both initiation, so the never-consulted-mid-build rule is untouched. A
-dependency-blocked ticket stays queued source work rather than becoming a
-blocked build: the runtime `blocked` status is for builds awaiting a human.
+no build. Dependencies are written during grooming or by an approved harvest
+create whose evidence establishes a hard prerequisite, then read at dispatch
+time. Harvest validates those source-local ids through the configured source
+before creating the proposal ticket. Both paths remain initiation, so the
+never-consulted-mid-build rule is untouched. A dependency-blocked ticket stays
+queued source work rather than becoming a blocked build: the runtime `blocked`
+status is for builds awaiting a human.
 
 **Crash-safe filing.** Creation supports a state override (harvest targets
 Triage explicitly) and an idempotency key that must adopt the same ticket on
@@ -1166,9 +1177,12 @@ guidance. A bare retry reruns the verifier with no feedback.
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
 `escalation.raised {source: "stall", refs: [chain]}`; status → `blocked`.
-`escalation.answered {resolution: "guidance"}` feeds the answer into the next
-producer round as authoritative feedback; `dismiss-finding` marks the chain
-human-resolved and the next reviewer round is told so.
+`escalation.answered` uses the resolution vocabulary `guidance`,
+`dismiss-finding`, `revise-spec`, `abort`, or `retry`. Operators produce
+`dismiss-finding` and `revise-spec` through `ab answer`; a `revise-spec` answer
+names the exact replacement artifact it authorizes. `guidance` feeds the answer
+into the next producer round as authoritative feedback; `dismiss-finding`
+marks the chain human-resolved and the next reviewer round is told so.
 
 **C — setup failure:** the first attach retains the normal `runner.attached`
 fact, then a failed setup appends `runner.setup-failed

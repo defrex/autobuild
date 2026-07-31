@@ -47,6 +47,8 @@ export interface OpenEscalation {
 export interface AnsweredEscalation extends OpenEscalation {
   answer: string
   resolution: EscalationResolution
+  /** Exact replacement spec revision authorized by a `revise-spec` answer. */
+  artifact?: ArtifactRef
   /** seq of the `escalation.answered` event. */
   answeredSeq: number
 }
@@ -604,6 +606,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
             ...open,
             answer: event.payload.answer,
             resolution: event.payload.resolution,
+            ...(event.payload.artifact !== undefined ? { artifact: event.payload.artifact } : {}),
             answeredSeq: event.seq,
           })
           // Abort is accepted through either supported operator surface. Keep

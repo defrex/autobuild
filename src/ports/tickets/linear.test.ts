@@ -409,6 +409,115 @@ describe('LinearTicketSource', () => {
     expect(calls[2]?.variables).toEqual({ id: reservedId })
   })
 
+  test('idempotent adoption reconciles one missing blocker from duplicate draft ids', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [{ message: 'Issue id already exists', extensions: { code: 'INPUT_ERROR' } }],
+        },
+      },
+      {
+        body: {
+          data: { issue: gqlIssue({ id: 'uuid-new', identifier: 'ENG-88' }) },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-blocker' } } } },
+      { body: { data: { issueRelationCreate: { success: true } } } },
+    ])
+    const reservedId = crypto.randomUUID()
+
+    const adopted = await makeSource(fetchFn).create(
+      { title: 'X', body: 'y', blockedBy: ['ENG-8', 'ENG-8'] },
+      { idempotencyKey: reservedId },
+    )
+
+    expect(adopted.blockedBy).toEqual(['ENG-8'])
+    const relations = calls.filter((call) => call.query.includes('issueRelationCreate'))
+    expect(relations).toHaveLength(1)
+    expect(relations[0]?.variables).toEqual({
+      issueId: 'uuid-blocker',
+      relatedIssueId: 'uuid-new',
+    })
+  })
+
+  test('idempotent adoption skips a recorded blocker and creates only the missing relation', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [{ message: 'Issue id already exists', extensions: { code: 'INPUT_ERROR' } }],
+        },
+      },
+      {
+        body: {
+          data: {
+            issue: gqlIssue({
+              id: 'uuid-new',
+              identifier: 'ENG-88',
+              inverseRelations: {
+                nodes: [blocksRelation('ENG-8', 'relation-8', 'uuid-8')],
+              },
+            }),
+          },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-9' } } } },
+      { body: { data: { issueRelationCreate: { success: true } } } },
+    ])
+    const reservedId = crypto.randomUUID()
+
+    const adopted = await makeSource(fetchFn).create(
+      { title: 'X', body: 'y', blockedBy: ['ENG-8', 'ENG-9'] },
+      { idempotencyKey: reservedId },
+    )
+
+    expect(adopted.blockedBy).toEqual(['ENG-8', 'ENG-9'])
+    expect(calls.filter((call) => call.query.includes('query ResolveIssue'))).toHaveLength(1)
+    expect(calls.filter((call) => call.query.includes('issueRelationCreate'))).toHaveLength(1)
+    expect(calls.at(-1)?.variables).toEqual({ issueId: 'uuid-9', relatedIssueId: 'uuid-new' })
+  })
+
+  test('failed adoption-time blocker reconciliation remains retry-safe and actionable', async () => {
+    const { fetchFn } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      {
+        body: {
+          errors: [{ message: 'Issue id already exists', extensions: { code: 'INPUT_ERROR' } }],
+        },
+      },
+      {
+        body: {
+          data: {
+            issue: gqlIssue({
+              id: 'uuid-new',
+              identifier: 'ENG-88',
+              inverseRelations: {
+                nodes: [blocksRelation('ENG-8', 'relation-8', 'uuid-8')],
+              },
+            }),
+          },
+        },
+      },
+      { body: { data: { issue: { id: 'uuid-9' } } } },
+      { body: { data: { issueRelationCreate: { success: false } } } },
+    ])
+    const reservedId = crypto.randomUUID()
+
+    const error = await rejectionOf(
+      makeSource(fetchFn).create(
+        { title: 'X', body: 'y', blockedBy: ['ENG-8', 'ENG-9'] },
+        { idempotencyKey: reservedId },
+      ),
+    )
+
+    expect(error.message).toContain('ticket "ENG-88" already exists')
+    expect(error.message).toContain('Blockers recorded: "ENG-8"')
+    expect(error.message).toContain('Blockers not recorded: "ENG-9"')
+    expect(error.message).toContain('Retry with the same idempotency key')
+    expect(error.message).not.toContain('Do not rerun ticket creation')
+  })
+
   test('invalid and non-v4 idempotency keys fail before issuing a Linear request', async () => {
     const { fetchFn, calls } = fakeLinear([])
 

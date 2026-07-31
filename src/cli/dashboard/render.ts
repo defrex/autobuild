@@ -256,6 +256,7 @@ const STATUS_COLOR: Record<DashboardBuild['status'] | DashboardHarvest['status']
   resuming: 'cyan',
   blocked: 'red',
   aborting: 'red',
+  cleaning: 'yellow',
   escalated: 'yellow',
   failed: 'red',
 }
@@ -446,7 +447,7 @@ export const DASHBOARD_QUEUED_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
 
 function buildLegend(build: DashboardBuild, detail: boolean): string {
-  if (build.status === 'aborting') {
+  if (build.status === 'aborting' || build.status === 'cleaning') {
     return detail
       ? 'Keys: Up/Down select session  Enter transcript  Esc back  Ctrl-C quit'
       : 'Keys: Up/Down select  Enter details  Ctrl-C quit'
@@ -606,6 +607,13 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
       body.push(
         ...wrappedText(`! ${blocker}`, width, '  ').map((line) => paint(line, 'red', color)),
       )
+    }
+    for (const note of [
+      'The r field records guidance, or a bare retry when empty.',
+      `CLI only: ab answer ${build.slug} --dismiss`,
+      `CLI only: ab answer ${build.slug} --revise-spec <file>`,
+    ]) {
+      body.push(...wrappedText(note, width, '  ').map((line) => paint(line, 'dim', color)))
     }
   }
   body.push('', paint('Sessions', 'bold', color))

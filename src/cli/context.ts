@@ -157,11 +157,14 @@ async function wipeAbDir(abDir: string): Promise<void> {
   await mkdir(abDir, { recursive: true })
 }
 
-function dismissedIds(state: BuildState): string[] {
+function dismissedIds(state: BuildState, events: AbEvent[]): string[] {
+  const known = findingsById(events)
   const ids = new Set<string>()
   for (const escalation of state.answeredEscalations) {
     if (escalation.resolution !== 'dismiss-finding') continue
-    for (const ref of escalation.refs ?? []) ids.add(ref)
+    for (const ref of escalation.refs ?? []) {
+      if (known.has(ref)) ids.add(ref)
+    }
   }
   return [...ids]
 }
@@ -314,7 +317,11 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     for (let r = 1; r < round && r <= loop.length; r += 1) {
       await writeDerived(`history/findings-r${r}.json`, `${JSON.stringify(loop[r - 1], null, 2)}\n`)
     }
-    manifest.dismissedFindingIds = dismissedIds(state)
+    const dismissed = dismissedIds(state, events)
+    manifest.dismissedFindingIds = dismissed
+    if (dismissed.length > 0) {
+      await writeDerived('dismissed-findings.json', `${JSON.stringify(dismissed, null, 2)}\n`)
+    }
   }
 
   // Answered guidance addressed to THIS phase (§15.6-B, §11): finalize and

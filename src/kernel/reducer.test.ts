@@ -923,6 +923,7 @@ describe('reduceBuild: spec revision (§6.3)', () => {
       id: 'e_1',
       answer: 'Right — spec updated to use the sessions endpoint.',
       resolution: 'revise-spec',
+      artifact: { kind: 'spec', rev: 1 },
     }),
     ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 6 }),
     ev('plan.started', { round: 2 }), // build restarts from plan
@@ -933,6 +934,7 @@ describe('reduceBuild: spec revision (§6.3)', () => {
     const revised = stateAfter(log, 'spec.revised')
     expect(revised.specRev).toBe(1)
     expect(revised.answeredEscalations[0]?.resolution).toBe('revise-spec')
+    expect(revised.answeredEscalations[0]?.artifact).toEqual({ kind: 'spec', rev: 1 })
     const restarted = reduceBuild(log)
     expect(restarted.currentPhase).toEqual({ phase: 'plan', round: 2, seq: 9 })
     expect(restarted.status).toBe('running')

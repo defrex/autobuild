@@ -2348,3 +2348,117 @@ test('h. harvest e2e: threshold → revise → file once → wait for K new obse
   expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest')).toHaveLength(2)
   expect(sessions.filter((entry) => entry.opts.skill === 'ab-harvest-review')).toHaveLength(3)
 }, 30_000)
+
+// A repository may waive grooming for harvest without waiving dependencies.
+test('h2. harvested hard prerequisite remains unclaimed in the ready state', async () => {
+  const configToml = CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1')
+    .replace('readyLabels = ["autobuild"]', 'readyLabels = []')
+    .replace('readyState = "Ready"', 'readyState = "Ready"\nproposalState = "Ready"')
+  const h = await track(
+    makeHarness({
+      handlers: {},
+      tickets: [readyTicket('BLOCK-1', { title: 'Required foundation', state: 'Doing' })],
+      configToml,
+    }),
+  )
+
+  const sourceTicket = { source: 'fake', id: 'source-hard-gate', title: 'Hard gate evidence' }
+  await h.store.createBuild({ slug: 'hard-gate-evidence', repo: h.origin, ticket: sourceTicket })
+  await h.store.append('hard-gate-evidence', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: sourceTicket, repo: h.origin, baseBranch: 'main' },
+  })
+  await h.store.append('hard-gate-evidence', {
+    actor: agentActor('implement', 'source-hard-gate-session'),
+    type: 'observation.recorded',
+    payload: {
+      id: 'obs-hard-gate',
+      kind: 'followup',
+      summary: 'This work cannot start until BLOCK-1 is complete.',
+    },
+  })
+  await h.store.append('hard-gate-evidence', {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+
+  const harvestAgents = new ScriptedAgentRunner({
+    script: async (ctx) => {
+      const harvestEnv = resolveHarvestCliEnv(ctx.opts.env)
+      const run = async (argv: string[]): Promise<void> => {
+        const errors: string[] = []
+        const code = await runCli(argv, {
+          store: h.store,
+          harvestEnv,
+          workspacePath: h.origin,
+          ids: h.ids,
+          stdout: () => {},
+          stderr: (line) => errors.push(line),
+        })
+        if (code !== 0) throw new Error(errors.join('\n'))
+      }
+      await run(['harvest', 'context'])
+      if (ctx.opts.skill === 'ab-harvest') {
+        const observations = JSON.parse(
+          await readFile(join(h.origin, '.ab', 'observations.json'), 'utf8'),
+        ) as Array<{ occurrence: { build: string; seq: number } }>
+        const file = join(h.origin, '.ab', 'hard-gate-proposal.json')
+        await writeFile(
+          file,
+          JSON.stringify({
+            proposals: [
+              {
+                action: 'create',
+                title: 'Work after required foundation',
+                whatWhy: 'The evidence says work cannot start until BLOCK-1 is complete.',
+                acceptanceCriteria: ['The dependent work is complete.'],
+                outOfScope: ['Changes to the foundation ticket.'],
+                blockedBy: ['BLOCK-1'],
+                observations: observations.map((item) => item.occurrence),
+              },
+            ],
+          }),
+        )
+        await run(['harvest', 'submit', file])
+      } else {
+        const notes = join(h.origin, '.ab', 'hard-gate-review.md')
+        await writeFile(notes, 'Hard prerequisite prose and metadata agree.\n')
+        await run(['harvest', 'verdict', 'approve', '--notes', notes])
+      }
+      return defaultTurnResult('harvest CLI terminal deposited')
+    },
+  })
+
+  expect(
+    await new HarvestRunner({
+      store: h.store,
+      tickets: h.tickets,
+      config: h.config,
+      runtimes: { scripted: { runner: harvestAgents, servesModels: [] } },
+      repo: h.origin,
+      workspacePath: h.origin,
+      ids: h.ids,
+      uuids: randomUuids(),
+      clock: h.clock,
+      instance: 'harvest-hard-gate-e2e',
+      sessionEnv: { AB_STORE: 'memory' },
+      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+    }).run(),
+  ).toMatchObject({ outcome: 'completed', launch: 'started' })
+
+  expect(await h.tickets.get('fake-1')).toMatchObject({
+    state: 'Ready',
+    blockedBy: ['BLOCK-1'],
+  })
+  const tick = await h.dispatcher.tick()
+  expect(tick).toMatchObject({
+    dispatched: 0,
+    dependencyBlocked: 1,
+    dependencyDiagnostics: ['ticket fake-1 blocked by BLOCK-1 (not complete)'],
+  })
+  expect(h.tickets.claims).not.toContain('fake-1')
+  expect(h.launched).toEqual([])
+  expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(false)
+}, 30_000)
