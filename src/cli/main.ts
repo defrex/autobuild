@@ -49,6 +49,14 @@ import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
 import { abUpgrade, type ResolveConflict } from './upgrade'
 import { withUpgradeProgress } from './upgrade-progress'
+import {
+  cleanupUpgradeCommitContext,
+  createUpgradeCommitContext,
+  finishUpgradeCommit,
+  loadUpgradeCommitContext,
+  UPGRADE_COMMIT_CONTEXT_ENV,
+  type UpgradeCommitContext,
+} from './upgrade-commit'
 import { formatInstalledVersion, readDistributionIdentity } from './installation'
 import {
   selfUpdate,
@@ -444,59 +452,93 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'upgrade': {
-      const usage = 'usage: ab upgrade [target] [--no-self-update | --version <semver>] (§16.3)'
-      const parsed = parseArgs(rest, { 'no-self-update': 'boolean', version: 'value' }, usage)
+      const usage =
+        'usage: ab upgrade [target] [--no-self-update | --version <semver>] [--no-commit] (§16.3)'
+      const parsed = parseArgs(
+        rest,
+        { 'no-self-update': 'boolean', 'no-commit': 'boolean', version: 'value' },
+        usage,
+      )
       if (parsed.positionals.length > 1) throw new Error(usage)
       if (parsed.flags.has('no-self-update') && parsed.flags.has('version')) {
         throw new Error(`--no-self-update and --version cannot be combined — ${usage}`)
       }
       const targetRepo = parsed.positionals[0] ?? deps.workspacePath
+      const noCommit = parsed.flags.has('no-commit')
       const handoff = deps.processEnv?.[SELF_UPDATE_HANDOFF_ENV] === '1'
-      if (!parsed.flags.has('no-self-update') && !handoff) {
-        const update = await (deps.selfUpdate ?? selfUpdate)({
+      let commitContext: UpgradeCommitContext | undefined
+      if (!noCommit) {
+        try {
+          const handoffPath = handoff ? deps.processEnv?.[UPGRADE_COMMIT_CONTEXT_ENV] : undefined
+          commitContext =
+            handoffPath === undefined
+              ? await createUpgradeCommitContext(targetRepo)
+              : await loadUpgradeCommitContext(handoffPath, targetRepo)
+        } catch (error) {
+          stderr(
+            `ab upgrade did not commit: could not capture or restore the pre-upgrade Git baseline: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        }
+      }
+
+      try {
+        if (!parsed.flags.has('no-self-update') && !handoff) {
+          const update = await (deps.selfUpdate ?? selfUpdate)({
+            targetRepo,
+            stdout,
+            stderr,
+            env: deps.processEnv ?? {},
+            noCommit: noCommit || commitContext === undefined,
+            ...(commitContext === undefined
+              ? {}
+              : { upgradeCommitContextPath: commitContext.path }),
+            ...(deps.distributionRoot === undefined ? {} : { distRoot: deps.distributionRoot }),
+            ...(deps.selfUpdateCommand === undefined ? {} : { command: deps.selfUpdateCommand }),
+            ...(stringFlag(parsed, 'version') === undefined
+              ? {}
+              : { version: stringFlag(parsed, 'version') }),
+          })
+          if (update.kind === 'handoff') return update.exitCode
+          if (update.kind === 'failed') return 1
+        }
+        const resolverFactory = deps.upgradeResolverFactory
+        let resolver: ResolveConflict | undefined
+        const resolveConflict: ResolveConflict | undefined =
+          resolverFactory === undefined
+            ? undefined
+            : async (input, options) => {
+                // Factory/config/runtime work is lazy: a clean upgrade never
+                // needs agent infrastructure. Throws are caught per skill by
+                // abUpgrade and become the byte-preserving conflicted outcome.
+                resolver ??= resolverFactory({
+                  targetRepo,
+                  env: deps.processEnv ?? {},
+                })
+                return resolver(input, options)
+              }
+        const progressResolver =
+          resolveConflict === undefined || deps.terminal === undefined
+            ? resolveConflict
+            : withUpgradeProgress(resolveConflict, {
+                terminal: deps.terminal,
+                input: deps.input ?? { start: () => () => {} },
+              })
+        const report = await abUpgrade({
           targetRepo,
           stdout,
-          stderr,
-          env: deps.processEnv ?? {},
-          ...(deps.distributionRoot === undefined ? {} : { distRoot: deps.distributionRoot }),
-          ...(deps.selfUpdateCommand === undefined ? {} : { command: deps.selfUpdateCommand }),
-          ...(stringFlag(parsed, 'version') === undefined
-            ? {}
-            : { version: stringFlag(parsed, 'version') }),
+          ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
+          ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
+          ...(progressResolver !== undefined ? { resolveConflict: progressResolver } : {}),
         })
-        if (update.kind === 'handoff') return update.exitCode
-        if (update.kind === 'failed') return 1
+        if (commitContext !== undefined) {
+          await finishUpgradeCommit(commitContext, report, { stdout, stderr })
+        }
+        return report.exitCode
+      } finally {
+        if (commitContext !== undefined) await cleanupUpgradeCommitContext(commitContext)
       }
-      const resolverFactory = deps.upgradeResolverFactory
-      let resolver: ResolveConflict | undefined
-      const resolveConflict: ResolveConflict | undefined =
-        resolverFactory === undefined
-          ? undefined
-          : async (input, options) => {
-              // Factory/config/runtime work is lazy: a clean upgrade never
-              // needs agent infrastructure. Throws are caught per skill by
-              // abUpgrade and become the byte-preserving conflicted outcome.
-              resolver ??= resolverFactory({
-                targetRepo,
-                env: deps.processEnv ?? {},
-              })
-              return resolver(input, options)
-            }
-      const progressResolver =
-        resolveConflict === undefined || deps.terminal === undefined
-          ? resolveConflict
-          : withUpgradeProgress(resolveConflict, {
-              terminal: deps.terminal,
-              input: deps.input ?? { start: () => () => {} },
-            })
-      const report = await abUpgrade({
-        targetRepo,
-        stdout,
-        ...(deps.distributionRoot !== undefined ? { distRoot: deps.distributionRoot } : {}),
-        ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
-        ...(progressResolver !== undefined ? { resolveConflict: progressResolver } : {}),
-      })
-      return report.exitCode
     }
 
     // Ticket grooming runs OUTSIDE build sessions (§8.8): command-scoped flag
