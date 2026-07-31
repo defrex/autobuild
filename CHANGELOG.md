@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#177](https://github.com/defrex/autobuild/pull/177) — Add provider alternates for agent roles
 - [#168](https://github.com/defrex/autobuild/pull/168) — Block harvest proposals on unresolved origin tickets
 - [#167](https://github.com/defrex/autobuild/pull/167) — Keep terminal dashboard status dominant
 - [#166](https://github.com/defrex/autobuild/pull/166) — Use dashboard content width for transcript scrolling
