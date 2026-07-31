@@ -2055,7 +2055,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }, 30_000)
   }
 
-  test('shows configured capacity and both pressure dimensions even for queued/non-row work and a paused gate', async () => {
+  test('shows configured capacity and unclaimed observations for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 1',
@@ -2106,7 +2106,9 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7 | drift 1/1')
+      expect(firstFrame).toContain('queue 0 | active 1/5 | observations 5')
+      expect(firstFrame).not.toMatch(/\bdrift\b/i)
+      expect(firstFrame).not.toContain('observations 5/')
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
       expect(firstFrame).toContain('QUEUED')
@@ -2148,7 +2150,9 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7 | drift 0/1')
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | observations 0')
+      expect(claimedFrame).not.toMatch(/\bdrift\b/i)
+      expect(claimedFrame).not.toContain('observations 0/')
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
     } finally {
@@ -2671,7 +2675,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch retains the last complete pressure measurement when a later tick cannot scan', async () => {
+  test('watch retains the last complete observation measurement when a later tick cannot scan', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
@@ -2723,7 +2727,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            await waitFor(() => latestDashboardFrame(term).includes('obs 2/7'))
+            await waitFor(() => latestDashboardFrame(term).includes('observations 2'))
             failReads = true
             return
           }
@@ -2734,8 +2738,10 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('obs 2/7 | drift 1/3')
-      expect(frame).not.toContain('obs 0/7 | drift 0/3')
+      expect(frame).toContain('observations 2')
+      expect(frame).not.toContain('observations 0')
+      expect(frame).not.toContain('observations 2/')
+      expect(frame).not.toMatch(/\bdrift\b/i)
       expect(frame).toContain('pressure scan unavailable')
       expect(fx.err).toEqual([])
     } finally {
