@@ -846,11 +846,13 @@ nonterminal-build count against root `capacity`; and `obs` is the current count
 of recorded observation occurrences not yet claimed by a Harvest snapshot
 against `[policy].harvestThreshold`. An indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
-ON`/`harvest OFF`. The controls start in the title column. From the top
-of the frame through the body, the two-column marker lane stays empty except for
-the selected row's `> ` marker. All three controls are durable repository
-projections and converge across dispatchers on the existing poll; harvest
-specifically reflects its acknowledged gate, not pending intent. Routine tick
+ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
+the durable repository-wide hold is set. The controls start in the title
+column. From the top of the frame through the body, the two-column marker lane
+stays empty except for the selected row's `> ` marker. These controls and the
+pause segment are durable repository projections and converge across
+dispatchers on the existing poll; harvest specifically reflects its
+acknowledged gate, not pending intent. Routine tick
 counts, dependency diagnostics, parked-build notices, harvest outcomes, and
 action confirmations are suppressed in the interactive frame. The latest true
 warning or error instead appears on a conditional row below the header, aligned
@@ -863,6 +865,9 @@ distinct from a pass without color. Every nonterminal build has a row,
 including `queued` builds that have not attached a runner. A queued row shows
 its ticket, slug, literal `QUEUED` status, and either the pending dispatch
 boundary or the latest durable `dispatch.failed` stage, attempt, and error.
+While the repository hold is set, only queued rows gain a yellow `(held)`
+modifier beside `QUEUED`; intake being off without that hold shows neither
+`repository PAUSED` nor `(held)`.
 
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
@@ -916,8 +921,10 @@ process gates all dispatchers for that repository.
 The repository hold has no launch flag and no setter of its own: `p` and `r` on
 the dashboard's global row and the `ab pause --all` / `ab resume --all` walk
 they share are the only ways to set or clear it, and each of those moves intake
-with it. Each dispatcher tick reads the hold from the repository journal itself,
-so it survives a restart and is not defeated by re-running `ab dispatch`.
+with it. Each dispatcher frame reads the hold from the repository journal
+itself, so an already-paused repository shows `repository PAUSED` and `(held)`
+on its first paint; clearing the hold removes both on the next poll. The hold
+survives a restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
 claim-time default; omission reuses stored state, falling back to OFF only when

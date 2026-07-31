@@ -203,6 +203,14 @@ describe('ab-guide — dispatch dashboard summary', () => {
     expect(compact).toContain(
       '`obs` is the current count of recorded observation occurrences not yet claimed by a Harvest snapshot against `[policy].harvestThreshold`',
     )
+    expect(compact).toContain('conditional yellow `repository PAUSED` segment')
+    expect(compact).toContain('only queued rows gain a yellow `(held)` modifier beside `QUEUED`')
+    expect(compact).toContain(
+      'intake being off without that hold shows neither `repository PAUSED` nor `(held)`',
+    )
+    expect(compact).toContain(
+      'an already-paused repository shows `repository PAUSED` and `(held)` on its first paint',
+    )
     expect(compact).not.toContain('basename, queue depth, and active-build count')
   })
 })

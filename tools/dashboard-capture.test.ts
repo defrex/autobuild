@@ -68,6 +68,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(report).toContain('mixed-wide.png')
   expect(report).toContain('mixed-narrow.txt')
   expect(report).toContain('- [ ] Every PNG opens and is non-empty.')
+  expect(report).toContain(
+    '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
+  )
   expect(report).toContain('resume-prompt.png')
   expect(report).toContain('- [ ] The resume-prompt frame shows the composer panel in place of the')
 
@@ -80,10 +83,15 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toContain('CAP-IMPLEMENT')
     expect(frame.text).toContain('CAP-COMPLETE')
     expect(frame.text).toContain('BLOCKED')
-    expect(frame.text).toContain('RUNNING')
     expect(frame.text).toContain('Harvest')
     expect(frame.text).toContain('PAUSED')
     expect(frame.text).not.toContain('\x1b')
+  }
+  for (const id of ['mixed-wide', 'mixed-narrow']) {
+    const mixed = first.result.frames.find((frame) => frame.id === id)!.text
+    expect(mixed).toContain('repository PAUSED')
+    expect(mixed).toContain('CAP-QUEUED')
+    expect(mixed).toMatch(/CAP-QUEUED.*\(held\)\s+QUEUED/)
   }
   expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
 

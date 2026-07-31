@@ -26,7 +26,9 @@ the diff and not to decide applicability again.
    help identify a frame, but they are not a basis for your verdict.
 4. Append criterion-by-criterion visual observations to the generated report:
    each image opened and non-empty; rows/status/progress/separators do not
-   overlap; the Harvest row is legible; the narrow frame truncates/wraps
+   overlap; the Harvest row is legible; both mixed frames persistently show
+   `repository PAUSED` and the `CAP-QUEUED` row as yellow `(held)` while keeping
+   its literal `QUEUED` status; the narrow frame truncates/wraps those additions
    deliberately without clipping; colour emphasis is present while literal
    status remains readable; and the resume-prompt frame shows the blocked-build
    composer panel in place of the key legend — build name, optional-guidance
