@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
@@ -16,6 +17,7 @@ import { graphemes } from './cells'
 const ESC = '\x1b'
 const BEL = '\x07'
 const FONT_FAMILY = 'DejaVu Sans Mono'
+const FONT_FAMILIES = `${FONT_FAMILY}, Noto Sans JP, Noto Emoji`
 const FONT_SIZE = 16
 const CELL_WIDTH = 10
 const LINE_HEIGHT = 20
@@ -272,7 +274,7 @@ function svgFor(
     svg: [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
       `<rect width="${width}" height="${height}" fill="${PALETTE.background}"/>`,
-      `<g font-family="${FONT_FAMILY}" font-size="${FONT_SIZE}" xml:space="preserve" text-rendering="geometricPrecision">`,
+      `<g font-family="${FONT_FAMILIES}" font-size="${FONT_SIZE}" xml:space="preserve" text-rendering="geometricPrecision">`,
       ...content,
       '</g>',
       '</svg>',
@@ -283,7 +285,15 @@ function svgFor(
 function fontFiles(): string[] {
   const require = createRequire(import.meta.url)
   const root = dirname(require.resolve('dejavu-fonts-ttf/package.json'))
-  return [join(root, 'ttf', 'DejaVuSansMono.ttf'), join(root, 'ttf', 'DejaVuSansMono-Bold.ttf')]
+  const fallbacks = join(import.meta.dir, '..', '..', '..', 'tools', 'fonts')
+  return [
+    join(root, 'ttf', 'DejaVuSansMono.ttf'),
+    join(root, 'ttf', 'DejaVuSansMono-Bold.ttf'),
+    ...readdirSync(fallbacks)
+      .filter((name) => name.endsWith('.ttf'))
+      .sort()
+      .map((name) => join(fallbacks, name)),
+  ]
 }
 
 /** Parse once, then derive both evidence forms from the same exact cells. */

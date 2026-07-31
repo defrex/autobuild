@@ -29,6 +29,7 @@ describe('renderDashboardFrameImage', () => {
 
     expect(first.text).toBe(`${lines.join('\n')}\n`)
     expect(first.png).toEqual(second.png)
+    expect(first.svg).toContain('Noto Sans JP, Noto Emoji')
     expect(first.svg).toMatch(/<text x="92"[^>]*>日<\/text>/)
     expect(first.svg).toMatch(/<text x="112"[^>]*>本<\/text>/)
     expect(first.svg).toMatch(/<text x="132"[^>]*>語<\/text>/)
@@ -49,7 +50,7 @@ describe('renderDashboardFrameImage', () => {
     // PNG IHDR stores width/height at byte offsets 16 and 20.
     expect(pngDimension(first.png, 16)).toBe(first.width)
     expect(pngDimension(first.png, 20)).toBe(first.height)
-    expect(first.svg).toContain('font-family="DejaVu Sans Mono"')
+    expect(first.svg).toContain('font-family="DejaVu Sans Mono, Noto Sans JP, Noto Emoji"')
     expect(first.svg).toContain('font-weight="700"')
     expect(first.svg).toContain('fill-opacity="0.58"')
   })
