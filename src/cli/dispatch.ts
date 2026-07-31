@@ -956,6 +956,7 @@ class DispatchLoop {
               nextModel,
               Math.max(0, terminal.columns - 2),
               paintableRows(terminal.rows),
+              'session',
               next.scroll,
             ),
     }
@@ -985,6 +986,7 @@ class DispatchLoop {
               nextModel,
               Math.max(0, terminal.columns - 2),
               paintableRows(terminal.rows),
+              'message',
               next.scroll,
             ),
     }
@@ -1716,6 +1718,14 @@ class DispatchLoop {
         const unclamped = {
           ...stableDetail,
           ...(selected !== undefined ? { sessionId: selected } : {}),
+          ...(messageStillValid && priorMessage !== undefined
+            ? {
+                message: priorMessage,
+                ...(priorMessageFence !== undefined
+                  ? { messageWhileSessionOpen: priorMessageFence }
+                  : {}),
+              }
+            : {}),
         }
         const projectedWithView = { ...projected, view: unclamped }
         this.view = {
@@ -1731,14 +1741,6 @@ class DispatchLoop {
                     paintableRows(terminal.rows),
                   ),
                 ),
-          ...(messageStillValid && priorMessage !== undefined
-            ? {
-                message: priorMessage,
-                ...(priorMessageFence !== undefined
-                  ? { messageWhileSessionOpen: priorMessageFence }
-                  : {}),
-              }
-            : {}),
         }
       }
     }

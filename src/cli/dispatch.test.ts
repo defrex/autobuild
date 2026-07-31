@@ -4583,16 +4583,40 @@ describe('abDispatch interactive keyboard controls', () => {
       for (let index = 0; index < 30; index += 1) input.press('up')
       await waitFor(() => latestPaintedFrame(term).includes('Pipeline'))
       expect(await fx.store.getEvents('session-close')).toEqual(beforeNavigation)
-      Object.assign(term, { rows: 60 })
+      Object.assign(term, { rows: 8 })
 
       // Detail Up/Down scrolls; Left/Right retains session selection and brings
-      // the selected session back into the viewport.
+      // the selected session back into this two-row body viewport. Its nonzero
+      // offset leaves feedback appended after the selected session off-screen.
       for (let index = 0; index < 20; index += 1) input.press('right')
       await waitFor(() =>
         latestPaintedFrame(term).includes('code-review phase code-review round 2'),
       )
+      const beforeFeedback = await fx.store.getEvents('session-close')
       input.press('enter')
-      await waitFor(() => latestPaintedFrame(term).includes('still open'))
+      await waitFor(() =>
+        latestPaintedFrame(term).includes(
+          'Transcript unavailable while this session is still open.',
+        ),
+      )
+      expect(await fx.store.getEvents('session-close')).toEqual(beforeFeedback)
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(latestPaintedFrame(term)).toContain(
+        'Transcript unavailable while this session is still open.',
+      )
+
+      // Revealing is action-local: manual scrolling can immediately hide the
+      // retained message, and neither a poll nor session navigation follows it.
+      for (let index = 0; index < 3; index += 1) input.press('up')
+      await waitFor(() => !latestPaintedFrame(term).includes('still open'))
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(latestPaintedFrame(term)).not.toContain('still open')
+      expect(latestPaintedFrame(term)).not.toContain('code-review phase code-review round 2')
+      input.press('right')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes('code-review phase code-review round 2'),
+      )
+      expect(latestPaintedFrame(term)).not.toContain('still open')
 
       await fx.store.appendWithArtifacts(
         'session-close',

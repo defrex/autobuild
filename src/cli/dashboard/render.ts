@@ -584,8 +584,11 @@ function viewport(lines: string[], capacity: number, focus: number, scroll = 0):
 
 interface DetailBodyLayout {
   body: string[]
-  focus: number
+  sessionFocus: number | undefined
+  messageFocus: number | undefined
 }
+
+export type DetailFocusTarget = 'session' | 'message'
 
 function detailBody(
   build: DashboardBuild,
@@ -630,20 +633,22 @@ function detailBody(
   }
   body.push('', paint('Sessions', 'bold', color))
   const sessions = build.sessions ?? []
-  let focus = body.length
+  let sessionFocus: number | undefined
   if (sessions.length === 0) body.push('  no agent sessions recorded')
   for (const session of sessions) {
-    if (session.id === view.sessionId) focus = body.length
+    if (session.id === view.sessionId) sessionFocus = body.length
     body.push(...sessionLines(session, session.id === view.sessionId, opts))
   }
+  let messageFocus: number | undefined
   if (view.message !== undefined) {
-    focus = body.length
-    body.push(
-      '',
-      ...wrappedText(view.message, width, '  ').map((line) => paint(line, 'yellow', color)),
+    const messageLines = wrappedText(view.message, width, '  ').map((line) =>
+      paint(line, 'yellow', color),
     )
+    body.push('')
+    if (messageLines.length > 0) messageFocus = body.length
+    body.push(...messageLines)
   }
-  return { body, focus }
+  return { body, sessionFocus, messageFocus }
 }
 
 interface DetailGeometry extends DetailBodyLayout {
@@ -684,20 +689,23 @@ export function moveDetailScroll(
   return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
 }
 
-/** Keep the current detail focus (a selected session or transient message)
- * inside the explicit viewport without otherwise recentering operator scroll. */
+/** Reveal one action-selected detail target without making retained display
+ * content a standing focus. Incoming and resulting offsets are always clamped. */
 export function revealDetailFocus(
   model: DashboardModel,
   width: number,
   height: number,
+  target: DetailFocusTarget,
   current: number,
 ): number {
   const geometry = detailGeometry(model, width, height)
   if (geometry === undefined) return 0
   const scroll = Math.max(0, Math.min(geometry.limit, current))
-  if (geometry.focus < scroll) return geometry.focus
-  if (geometry.focus >= scroll + geometry.capacity) {
-    return Math.min(geometry.limit, geometry.focus - Math.max(0, geometry.capacity - 1))
+  const focus = target === 'session' ? geometry.sessionFocus : geometry.messageFocus
+  if (focus === undefined || geometry.capacity <= 0) return scroll
+  if (focus < scroll) return focus
+  if (focus >= scroll + geometry.capacity) {
+    return Math.min(geometry.limit, focus - Math.max(0, geometry.capacity - 1))
   }
   return scroll
 }
