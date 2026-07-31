@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { cellWidth, displayText, fitCells, graphemeBoundary, graphemes, splitCells } from './cells'
+import { cellWidth, displayText, graphemeBoundary, graphemes, splitCells } from './cells'
 
 describe('dashboard Unicode cell geometry', () => {
   test.each([
@@ -21,13 +21,16 @@ describe('dashboard Unicode cell geometry', () => {
     expect(displayText('a\tb\x1bc')).toBe('a\\u{9}b\\u{1b}c')
   })
 
-  test('fitting and splitting never fragment clusters', () => {
+  test('splitCells keeps combining and fitting wide graphemes whole', () => {
     const flag = '🇺🇸'
     const family = '👨‍👩‍👧‍👦'
-    expect(fitCells(`a${flag}b`, 2)).toBe('a')
-    expect(fitCells(`a${flag}b`, 3)).toBe(`a${flag}`)
+    expect(splitCells(`e\u0301x`, 1)).toEqual([`e\u0301`, 'x'])
     expect(splitCells(`a${flag}${family}b`, 3)).toEqual([`a${flag}`, `${family}b`])
-    expect(splitCells(flag, 1)).toEqual([''])
+  })
+
+  test('splitCells omits an impossible middle cluster and resumes later clusters', () => {
+    expect(splitCells('a界b', 1)).toEqual(['a', 'b'])
+    expect(splitCells('🇺🇸', 1)).toEqual([''])
   })
 
   test('UTF-16 offsets normalize to whole-grapheme boundaries', () => {

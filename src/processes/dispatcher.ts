@@ -411,6 +411,9 @@ export interface DispatcherDeps {
   workspaces: WorkspaceProvider
   forge: Forge
   config: Config
+  /** Current process snapshot, captured once at the beginning of each tick.
+   * Omission preserves the cron/static-config API. */
+  getConfig?: () => Config
   /** The repo this dispatcher serves — a local path (§15.7: `git ls-remote`
    * against it needs no network). One dispatcher per repo (§12). */
   repo: string
@@ -493,14 +496,12 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 
 export class Dispatcher {
   private readonly leaseTtlMs: number
-  private readonly triageState: string
   private readonly doneState: string
   private readonly slugNamingTimeoutMs: number
   private readonly maxHarvestRecoveryAttempts: number
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
-    this.triageState = deps.opts?.triageState ?? defaultTriageState(deps.config)
     this.doneState = deps.opts?.doneState ?? 'Done'
     this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
     this.maxHarvestRecoveryAttempts =
@@ -514,6 +515,9 @@ export class Dispatcher {
    * once per command, while ordinary watch ticks must preserve policy parks.
    */
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    // One immutable config for this complete decision pass. A reload racing the
+    // tick is observed by the next tick, never half-way through this one.
+    this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     let autoMergeUser: string | undefined
     if (opts.defaultAutoMerge === true) {
       autoMergeUser = opts.autoMergeUser?.trim()
@@ -550,6 +554,10 @@ export class Dispatcher {
    * `triggerHarvest`: `getRepoEvents` throws for a repository row no tick has
    * created yet, and an unpaused repository is the correct reading of one that
    * has never recorded a setting. */
+  private triageState(): string {
+    return this.deps.opts?.triageState ?? defaultTriageState(this.deps.config)
+  }
+
   private async repositoryPaused(): Promise<boolean> {
     if ((await this.deps.store.getRepo(this.deps.repo)) === null) return false
     const events = await this.deps.store.getRepoEvents(this.deps.repo)
@@ -759,11 +767,12 @@ export class Dispatcher {
         if (!current.labels.includes(label)) {
           await tickets.update(record.ticket.id, { labels: [...current.labels, label] })
         }
-        await tickets.transition(record.ticket.id, this.triageState)
+        const triageState = this.triageState()
+        await tickets.transition(record.ticket.id, triageState)
         await append({
           actor: DISPATCHER,
           type: 'abort.ticket-returned',
-          payload: { ticket: record.ticket, state: this.triageState, label },
+          payload: { ticket: record.ticket, state: triageState, label },
         })
       } catch (error) {
         fail('ticket handback', `${tickets.name} ticket ${record.ticket.id}`, error)
@@ -938,10 +947,11 @@ export class Dispatcher {
         }
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
-          await tickets.transition(record.ticket.id, this.triageState)
+          const triageState = this.triageState()
+          await tickets.transition(record.ticket.id, triageState)
           await tickets.comment(
             record.ticket.id,
-            `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${this.triageState}`,
+            `build ${record.slug} PR closed without merging (${pr.url}) — returned to ${triageState}`,
           )
         }
         await store.append(record.slug, {
@@ -1537,10 +1547,11 @@ export class Dispatcher {
    * WHICH parts are missing — failure at the cheapest point, not a build
    * that thrashes and escalates. No build is created. */
   private async bounce(ticket: Ticket, missing: string[]): Promise<void> {
-    await this.deps.tickets.transition(ticket.ref.id, this.triageState)
+    const triageState = this.triageState()
+    await this.deps.tickets.transition(ticket.ref.id, triageState)
     await this.deps.tickets.comment(
       ticket.ref.id,
-      `Bounced back to ${this.triageState}: this ticket does not conform to ` +
+      `Bounced back to ${triageState}: this ticket does not conform to ` +
         `the spec standard (docs/spec-standard.md) and cannot be dispatched.\n` +
         `Missing: ${missing.join('; ')}.`,
     )
