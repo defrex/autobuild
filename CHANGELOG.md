@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#186](https://github.com/defrex/autobuild/pull/186) — Preserve foreign discovery symlinks during skill retirement
 - [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target
 - [#180](https://github.com/defrex/autobuild/pull/180) — Hot-reload dispatcher configuration
 - [#179](https://github.com/defrex/autobuild/pull/179) — Align dashboard Unicode geometry contracts
