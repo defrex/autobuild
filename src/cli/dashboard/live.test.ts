@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { LiveRegion, paintableRows } from './live'
 import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
+import { createTerminalModeController } from '../terminal-restore'
 
 interface FakeTerm extends TerminalOut {
   writes: string[]
@@ -14,12 +15,14 @@ interface FakeTerm extends TerminalOut {
 
 function fakeTerm(rows = 24): FakeTerm {
   const writes: string[] = []
+  const write = (chunk: string): void => {
+    writes.push(chunk)
+  }
   return {
     writes,
     all: () => writes.join(''),
-    write: (chunk) => {
-      writes.push(chunk)
-    },
+    write,
+    modes: createTerminalModeController(write),
     columns: 80,
     rows,
     interactive: true,
@@ -118,6 +121,7 @@ describe('LiveRegion: alternate-screen replacement', () => {
     term.rows = 2
     region.update([])
     expect(term.writes).toEqual([])
+    expect(term.modes.activeModes).toEqual([])
   })
 })
 
@@ -192,6 +196,11 @@ describe('LiveRegion: finish() leaves the last frame on the normal screen', () =
       SHOW_CURSOR,
     ])
     expect(teardown.join('')).not.toContain(CLEAR_DISPLAY)
+    expect(term.modes.activeModes).toEqual([])
+
+    const afterFinish = term.writes.length
+    term.modes.restoreAll()
+    expect(term.writes).toHaveLength(afterFinish)
   })
 
   test('bracketed paste is enabled on the first effective paint and disabled by finish()', () => {

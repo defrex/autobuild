@@ -400,7 +400,7 @@ class DispatchLoop {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
-        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk), opts.terminal.modes)
         : undefined
     this.region =
       this.dashboard && opts.terminal !== undefined
