@@ -57,7 +57,10 @@ decision below answers to them:
    no separate resume path; every phase is a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated moves past
    Triage without a human grooming it to Ready. That single gate is where
-   taste and prioritization live.
+   taste and prioritization live. A repository may waive the gate for its own
+   harvest by naming a filing state (`[tickets].proposalState`, §12); the
+   waiver is explicit, repository-wide, and configured, and no code path
+   reaches Ready without one.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## 3. System decomposition
@@ -739,10 +742,42 @@ deterministic fail-safe.
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and
   extension allowlist live in one open `[roles]` map whose reserved `default`
-  entry is the inheritance base and must explicitly name a runtime. There is no
-  wiring fallback. Every concrete role merges over it independently per field;
-  the merged runtime/model pair must be compatible —
-  the resolver never silently substitutes a runtime or model. All roles
+  entry is the inheritance base and must explicitly name a runtime.
+
+  **Which key a session selects.** One rule for both kinds of agent step: an
+  agent verify step and an agent finalize step each select `[roles.<step>]` by
+  their *logical step name*; core phases select `[roles.<phase>]`.
+
+  ```toml
+  [verify.e2e]
+  kind = "agent"
+  skill = "ab-verify-e2e"
+
+  [roles.e2e]        # the STEP name — not "ab-verify-e2e"
+  runtime = "pi"
+  ```
+
+  The step's configured skill name remains a deprecated alias for existing
+  configurations and will be removed in a future release. It is consulted only
+  when `[roles.<step>]` is undeclared, so the step name always wins.
+
+  **What is and is not a fallback**, stated as three separate facts so none of
+  them is read as the others:
+
+  1. A *resolved* role never has its runtime or model substituted per field.
+     Every concrete role merges over `default` independently per field; the
+     merged runtime/model pair must be compatible, and an incompatible one is
+     an error, not a substitution.
+  2. A **requested** role key that no `[roles.<key>]` declares resolves to
+     `[roles.default]` wholesale. That is a real fallback and not an error — a
+     pipeline whose config names no roles at all runs entirely on the default.
+  3. A **declared** key that nothing ever requests is resolved, validated, and
+     then never used. `ab dispatch` reports it at startup, naming the key and
+     the keys valid for that configuration. It stays a warning: an unmatched
+     role key is never a hard error, so upgrading with a stale or typo'd key
+     never turns a working repository red.
+
+  All roles
   resolve **eagerly, before any session launches**, with problems aggregated
   into one error. A missing default diagnostic includes a copyable table and
   every materialized runtime name. Builtin and plugin registrations use the same model-family,
@@ -836,7 +871,8 @@ The fixed workflow is:
    create/join/suppress proposals; a fresh reviewer checks coverage, semantic
    dedup, spec quality, and evidence. Only approval advances.
 3. **file (deterministic)** — render creates to the spec standard and file
-   them into Triage with the reserved `autobuild:proposal` provenance label.
+   them into `[tickets].proposalState`, Triage by default, with the reserved
+   `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -863,8 +899,15 @@ event-level mechanics live in the repository catalog and reducer tests):
   ordinary parked run and clears every exhaustion barrier. It never
   resurrects a terminal run. Completed and escalated runs are irrevocable; a
   deliberate escalation consumes its snapshot and is never auto-recovered.
-- **The harvester only proposes.** It never claims, readies, grooms, or
-  dispatches a proposal. Humans still own Triage → Ready.
+- **The harvester only proposes.** It never claims, grooms, or dispatches a
+  proposal, and it files every one into the same configured state rather than
+  ranking them. Humans own Triage → Ready by default. A repository that points
+  `[tickets].proposalState` at its ready state has waived that gate for itself:
+  every harvested proposal becomes dispatchable unread, on the strength of the
+  synthesize ⇄ review loop and the spec gate alone. The waiver is a field of
+  its own rather than a reuse of `triageState`, because bounces, aborts, and
+  closed-unmerged PRs must still land where the next tick will not reclaim
+  them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
 
