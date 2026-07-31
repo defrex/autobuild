@@ -14,6 +14,15 @@
  * key off these maps without `Object.hasOwn` ceremony, and a name nobody
  * declared answers `undefined` rather than an inherited object member.
  *
+ * The entry boundary keeps the other half of the same promise: it must not
+ * narrow what the value schema said. A value that validates *to* nothing is
+ * kept — success is carried in the result's `ok`, never inferred from the value,
+ * or a legitimately absent value would be read as a rejection and produce the
+ * silent drop above from the other direction. And a rejection reaches the map's
+ * caller as validation reported it — every issue forwarded whole, with only its
+ * path prefixed — because re-encoding an issue as prose discards the structure a
+ * diagnostic needs to say what was actually wrong (see `../zod-issues`).
+ *
  * Two surfaces consume this. `autobuild.toml`'s open maps ([commands],
  * [roles], [workspace.config], and the named [verify.<step>] / [finalize.<step>]
  * table sets) are one; the plugin manifest's adapter maps (`ticketSources`,
@@ -21,8 +30,7 @@
  * likewise author-chosen — there, by the plugin author rather than the operator.
  */
 import { z } from 'zod'
-
-type Ctx = { addIssue: (issue: { code: 'custom'; path?: PropertyKey[]; message: string }) => void }
+import { forwardIssues, type IssueSink } from './zod-issues'
 
 /** How an entry name is validated. Autobuild-owned maps must be able to address
  * every entry, so a nameless one is dead configuration; a map whose names belong
@@ -109,7 +117,7 @@ function isRecord(input: unknown): input is object {
 export function ownEntries(
   input: unknown,
   label: string,
-  ctx: Ctx,
+  ctx: IssueSink,
   shape?: string,
 ): [string, unknown][] {
   if (!isRecord(input)) {
@@ -147,19 +155,22 @@ export function defineEntry<T>(entries: Record<string, T>, key: string, value: T
   })
 }
 
+/** Whether one entry's value validated, and what it validated to. Success is
+ * explicit rather than read off the value: a schema may legitimately validate to
+ * `undefined`, and that entry is kept like any other. */
+export type ParsedEntry<T> = { ok: true; value: T } | { ok: false }
+
 /** Validate one open-map value, forwarding every issue under its own key. */
 export function parseEntry<T>(
   schema: z.ZodType<T>,
   raw: unknown,
   key: string,
-  ctx: Ctx,
-): T | undefined {
+  ctx: IssueSink,
+): ParsedEntry<T> {
   const parsed = schema.safeParse(raw)
-  if (parsed.success) return parsed.data
-  for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message })
-  }
-  return undefined
+  if (parsed.success) return { ok: true, value: parsed.data }
+  forwardIssues(parsed.error.issues, ctx, [key])
+  return { ok: false }
 }
 
 /**
@@ -183,8 +194,8 @@ export function openMap<T>(label: string, valueSchema: z.ZodType<T>, opts: OpenM
           ctx.addIssue({ code: 'custom', message: `${label} entry names must be ${keys}` })
           continue
         }
-        const value = parseEntry(valueSchema, raw, key, ctx)
-        if (value !== undefined) defineEntry(entries, key, value)
+        const parsed = parseEntry(valueSchema, raw, key, ctx)
+        if (parsed.ok) defineEntry(entries, key, parsed.value)
       }
       return entries
     })
