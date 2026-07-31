@@ -299,12 +299,14 @@ never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
 **Init and upgrade.** `src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
-launches the installed non-phase `ab-setup` judgment surface directly in an
-interactive agent CLI, or prints the identical prompt; this bypasses all build
-and BuildStore session plumbing. Existing config is never reconciled, even with
-`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge
-and all writes: agent output is an untrusted proposal validated before anything
-touches disk, and every failure path leaves live and pristine byte-untouched.
+launches an interactive agent CLI, or prints the identical short prompt, telling
+the setup agent to read the installed
+`.agents/skills/ab-guide/references/setup.md`; this bypasses all build and
+BuildStore session plumbing. Existing config is never reconciled, even with
+`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge,
+the provenance-safe fixed retirement of obsolete defaults, and all writes:
+agent output is an untrusted proposal validated before anything touches disk,
+and every failure path leaves live and pristine byte-untouched.
 
 ## Development
 
