@@ -31,8 +31,10 @@
  * - installed ab-* skills absent from the distribution → left alone
  *   (`unknown`); local skill additions are legitimate. The only exception is
  *   the fixed, pristine-provenance retirement of `ab-setup` and
- *   `ab-verify-e2e`: exact unreferenced trees are `removed`, while customized,
- *   configured, or unsafe trees are `kept` and relinquish pristine ownership.
+ *   `ab-verify-e2e`: exact unreferenced or already-missing canonical trees are
+ *   `removed`, while customized, configured, unsafe, or distinctly discoverable
+ *   Claude trees are `kept`; every terminal classification relinquishes pristine
+ *   ownership.
  *
  * Like init, upgrade runs OUTSIDE build sessions — no AB_* environment.
  */
@@ -504,6 +506,20 @@ async function removeOwnedClaudeLink(targetRepo: string, installName: string): P
   }
 }
 
+/** A real Claude directory is user-owned when the canonical tree is absent. */
+async function hasDistinctClaudeDirectory(
+  targetRepo: string,
+  installName: string,
+): Promise<boolean> {
+  try {
+    const discovery = await lstat(claudeSkillPath(targetRepo, installName))
+    return discovery.isDirectory() && !discovery.isSymbolicLink()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
 export async function abUpgrade(opts: {
   targetRepo: string
   distRoot?: string
@@ -726,7 +742,6 @@ export async function abUpgrade(opts: {
     // merge path. Retirement begins only once the incoming distribution drops it.
     if (distNames.has(name)) continue
 
-    await migrateLegacySkill(targetRepo, name, stdout)
     const liveRoot = dirname(installedSkillPath(targetRepo, name))
     const pristineRoot = dirname(pristineSkillFilePath(targetRepo, name, 'SKILL.md'))
     let pristine: InspectedTree
@@ -741,8 +756,52 @@ export async function abUpgrade(opts: {
       continue
     }
     // No pristine provenance means this is repository-authored (or a prior
-    // retirement already cleared ownership). It is intentionally silent.
+    // retirement already cleared ownership). Do not migrate a surviving
+    // user-owned Claude directory back into the canonical tree on a later run.
     if (!pristine.exists) continue
+
+    // Preserve legacy migration for complete canonical installations, but a
+    // missing canonical tree must be classified before discovery maintenance
+    // can create a dangling link or move a distinct Claude directory.
+    if (live.exists) {
+      await migrateLegacySkill(targetRepo, name, stdout)
+      try {
+        ;[pristine, live] = await Promise.all([inspectTree(pristineRoot), inspectTree(liveRoot)])
+      } catch (error) {
+        report(
+          name,
+          'kept',
+          `could not inspect retirement candidate safely: ${errorMessage(error)}`,
+        )
+        stdout(`${name}: kept (could not inspect retirement candidate safely)`)
+        continue
+      }
+    }
+
+    if (!live.exists) {
+      const distinctClaudeDirectory = await hasDistinctClaudeDirectory(targetRepo, name)
+      if (distinctClaudeDirectory) {
+        containDiscoveryConflict(new ClaudeSkillDiscoveryConflict(targetRepo, name))
+      }
+      await removeOwnedClaudeLink(targetRepo, name)
+      await rm(pristineRoot, { recursive: true, force: true })
+
+      const action: UpgradeSkillAction = distinctClaudeDirectory ? 'kept' : 'removed'
+      const detail = distinctClaudeDirectory
+        ? 'retired canonical tree was already missing; distinct user-owned Claude discovery directory remains'
+        : 'retired distribution skill; installed tree was already missing'
+      report(name, action, detail)
+      stdout(`${name}: ${action} (${detail})`)
+      continue
+    }
+
+    let distinctClaudeDirectory = false
+    try {
+      await ensureClaudeSkillLink(targetRepo, name)
+    } catch (error) {
+      if (error instanceof ClaudeSkillDiscoveryConflict) distinctClaudeDirectory = true
+      containDiscoveryConflict(error)
+    }
 
     const mismatch = treeMismatch(live, pristine)
     const reason =
@@ -758,11 +817,6 @@ export async function abUpgrade(opts: {
       // Relinquish obsolete ownership. The live tree is now an ordinary local
       // skill, so later upgrades neither repeat this report nor remove it.
       await rm(pristineRoot, { recursive: true, force: true })
-      try {
-        await ensureClaudeSkillLink(targetRepo, name)
-      } catch (error) {
-        containDiscoveryConflict(error)
-      }
       report(name, 'kept', reason)
       stdout(`${name}: kept (${reason})`)
       continue
@@ -771,8 +825,15 @@ export async function abUpgrade(opts: {
     await removeOwnedClaudeLink(targetRepo, name)
     await rm(liveRoot, { recursive: true, force: true })
     await rm(pristineRoot, { recursive: true, force: true })
-    report(name, 'removed', 'retired distribution skill; installed tree matched pristine')
-    stdout(`${name}: removed (retired distribution skill; installed tree matched pristine)`)
+    if (distinctClaudeDirectory) {
+      const detail =
+        'retired canonical tree matched pristine and was removed; distinct user-owned Claude discovery directory remains'
+      report(name, 'kept', detail)
+      stdout(`${name}: kept (${detail})`)
+    } else {
+      report(name, 'removed', 'retired distribution skill; installed tree matched pristine')
+      stdout(`${name}: removed (retired distribution skill; installed tree matched pristine)`)
+    }
   }
 
   const retiredNames = new Set<string>(RETIRED_SKILLS)

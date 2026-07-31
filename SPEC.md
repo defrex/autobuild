@@ -1528,15 +1528,21 @@ base × local edits × new default). Two fixed former defaults, `ab-setup` and
 `ab-verify-e2e`, additionally have one-time retirement handling when absent
 from the incoming distribution. A pristine record is required to prove
 Autobuild provenance; without it, a same-named repository-authored skill is
-untouched and unreported. Upgrade removes and reports `removed` only when the
-complete live and pristine trees match byte-for-byte and no configured agent
-verify or finalize step names the skill. Any customization, config reference,
+untouched and unreported. Upgrade reports `removed` when the complete live and
+pristine trees match byte-for-byte, no configured agent verify or finalize step
+names the skill, and no distinct user-owned Claude discovery directory remains;
+it also reports `removed` when the canonical live tree is already missing. In
+the latter state it clears obsolete provenance and removes only an
+Autobuild-owned dangling discovery link. Any customization, config reference,
 or inability to inspect config safely preserves the live tree and reports
-`kept`; its obsolete pristine ownership is removed, so later upgrades treat it
-as a quiet local skill. Exact removals also clear only Autobuild-owned discovery
-links. Consequently a second upgrade neither resurrects nor re-reports either
-retirement. All other installed skills absent from the distribution retain the
-`unknown` local-addition classification.
+`kept`. When an otherwise removable canonical tree is shadowed by a distinct
+real `.claude/skills/<name>` directory, upgrade reports `kept`, removes only the
+canonical/pristine Autobuild-owned trees, preserves the Claude directory
+byte-for-byte, and includes it in the existing structured discovery-conflict
+report and nonzero exit behavior. Every terminal classification clears obsolete
+pristine ownership, so a second upgrade neither recreates a dangling link nor
+resurrects or re-reports the retirement. All other installed skills absent from
+the distribution retain the `unknown` local-addition classification.
 
 A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local
