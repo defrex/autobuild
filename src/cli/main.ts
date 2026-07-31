@@ -170,7 +170,7 @@ export interface SessionlessCliDeps {
   }) => ResolveConflict
   /** Injectable child-process seam for plugin contract CLI tests. */
   pluginSubprocess?: PluginContractSubprocess
-  /** Injectable store-adapter seam for the sessionless build-control routes;
+  /** Injectable store-adapter seam for sessionless commands that open a store;
    * production leaves it unset and `store-opening.ts` composes the real one. */
   openStore?: StoreOpener
   store?: BuildStore
@@ -602,6 +602,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         all: parsed.flags.has('all'),
         json: parsed.flags.has('json'),
         ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
@@ -641,6 +642,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         json: parsed.flags.has('json'),
         ...(events !== undefined ? { events } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
@@ -852,6 +854,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           spec,
           outputPath,
           ...(storeRef !== undefined ? { storeRef } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         })
         stdout(
           `downloaded ${downloaded.artifact.meta.kind}@${downloaded.artifact.meta.revision} to ${downloaded.outputPath}`,

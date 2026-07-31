@@ -14,6 +14,7 @@ import {
   processTerminal,
   processTerminalInput,
   type TerminalInputEvent,
+  type TerminalInputHooks,
 } from './terminal'
 
 function stream(props: { isTTY?: boolean; columns?: number; rows?: number }): NodeJS.WriteStream {
@@ -206,10 +207,28 @@ describe('processTerminalInput', () => {
     expect(stream.readableFlowing).toBe(false)
   })
 
-  test('a non-TTY is untouched', () => {
-    const stream = inputStream({ tty: false })
-    const cleanup = processTerminalInput(stream).start(() => {})
+  test('reports listening only after a real TTY is in raw, flowing mode', () => {
+    const tty = inputStream()
+    let listening = 0
+    const cleanup = processTerminalInput(tty).start(() => {}, {
+      onListening: () => {
+        expect(tty.isRaw).toBe(true)
+        expect(tty.readableFlowing).toBe(true)
+        listening += 1
+      },
+    })
+    expect(listening).toBe(1)
     cleanup()
+  })
+
+  test('a non-TTY is untouched and never reports listening', () => {
+    const stream = inputStream({ tty: false })
+    let listening = 0
+    const cleanup = processTerminalInput(stream).start(() => {}, {
+      onListening: () => (listening += 1),
+    })
+    cleanup()
+    expect(listening).toBe(0)
     expect(stream.rawCalls).toEqual([])
     expect(stream.listenerCount('keypress')).toBe(0)
   })
@@ -224,17 +243,17 @@ describe('processTerminalInput', () => {
  * expected event: one failure mode here is an EXTRA event (a CSI tail arriving
  * as text) rather than a missing one.
  */
-function keyboard() {
+function keyboard(hooks?: TerminalInputHooks) {
   const stream = inputStream()
   const inputs: TerminalInputEvent[] = []
-  const cleanup = processTerminalInput(stream).start((input) => inputs.push(input))
+  const cleanup = processTerminalInput(stream).start((input) => inputs.push(input), hooks)
   return {
     inputs,
     cleanup,
-    async type(bytes: string): Promise<TerminalInputEvent[]> {
+    async type(bytes: string, settleMs = 5): Promise<TerminalInputEvent[]> {
       inputs.length = 0
       stream.write(bytes)
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      await new Promise((resolve) => setTimeout(resolve, settleMs))
       return inputs
     },
   }
@@ -338,16 +357,127 @@ describe('processTerminalInput: partial CSI sequences are reassembled', () => {
     kb.cleanup()
   })
 
-  test('a run past CSI_MAX is abandoned without emitting text, and the next key lands', () => {
-    // Driven through the decoder directly so the fragment boundary is exact:
-    // the buffer opens at 7 characters and is abandoned the moment it passes
-    // 32, with nothing of it reaching the guidance buffer.
+  test('an impossible eight-digit parameter drains through its final byte', () => {
     const decoder = createTerminalInputDecoder()
-    expect(decoder.press(undefined, { name: 'undefined', sequence: '\x1b[13;2:' })).toBeUndefined()
-    for (let i = 0; i < 26; i += 1) {
+    expect(decoder.press(undefined, { name: 'undefined', sequence: '\x1b[13;' })).toBeUndefined()
+    for (let i = 0; i < 20; i += 1) {
       expect(decoder.press('1', { name: '1', sequence: '1' })).toBeUndefined()
     }
+    // Every ASCII letter is a CSI final byte, so it closes and is consumed.
+    expect(decoder.press('h', { name: 'h', sequence: 'h' })).toBeUndefined()
     expect(decoder.press('x', { name: 'x', sequence: 'x' })).toEqual({ type: 'text', text: 'x' })
+  })
+
+  test('a fresh CSI restarts a drain', () => {
+    const decoder = createTerminalInputDecoder()
+    expect(
+      decoder.press(undefined, { name: 'undefined', sequence: '\x1b[12345678' }),
+    ).toBeUndefined()
+    expect(decoder.press(undefined, { name: 'undefined', sequence: '\x1b[13;2u' })).toEqual({
+      type: 'newline',
+    })
+  })
+})
+
+describe('processTerminalInput: legacy and Kitty encodings normalize identically', () => {
+  const cases: Array<[string, string, string, TerminalInputEvent]> = [
+    ['submit', '\r', '\x1b[13;129u', { type: 'enter' }],
+    ['newline', '\n', '\x1b[13;130u', { type: 'newline' }],
+    ['Escape', '\x1b', '\x1b[27u', { type: 'escape' }],
+    ['Backspace', '\x7f', '\x1b[127u', { type: 'backspace' }],
+    ['Up', '\x1b[A', '\x1b[1;129A', { type: 'up' }],
+    ['Down', '\x1b[B', '\x1b[1;129B', { type: 'down' }],
+    ['Ctrl-C', '\x03', '\x1b[99;133u', { type: 'interrupt' }],
+    ['command letter', 'm', '\x1b[109;129;109u', { type: 'text', text: 'm' }],
+  ]
+
+  for (const [label, legacy, kitty, expected] of cases) {
+    test(label, async () => {
+      const kb = keyboard()
+      // readline waits briefly to decide whether a lone Escape starts a CSI.
+      expect(await kb.type(legacy, label === 'Escape' ? 600 : 5)).toEqual([expected])
+      expect(await kb.type(kitty)).toEqual([expected])
+      kb.cleanup()
+    })
+  }
+})
+
+describe('processTerminalInput: full CSI-u reports survive parser fragmentation', () => {
+  test('astral and multi-code-point text each arrive as one event', async () => {
+    const kb = keyboard()
+    expect(await kb.type('\x1b[0;;128512u')).toEqual([{ type: 'text', text: '😀' }])
+    expect(await kb.type('\x1b[0;;101:769u')).toEqual([{ type: 'text', text: 'é' }])
+    expect(await kb.type('\x1b[0;;128104:8205:128105:8205:128103:8205:128102u')).toEqual([
+      { type: 'text', text: '👨‍👩‍👧‍👦' },
+    ])
+    expect(await kb.type('\x1b[0;;128075:127997u')).toEqual([{ type: 'text', text: '👋🏽' }])
+    kb.cleanup()
+  })
+
+  for (const count of [40, 90, 10_000]) {
+    test(`a valid associated-text report with ${count} code points has no total cap`, async () => {
+      const kb = keyboard()
+      const expected = '😀'.repeat(count)
+      const report = `\x1b[0;;${Array.from({ length: count }, () => '128512').join(':')}u`
+      expect(await kb.type(report)).toEqual([{ type: 'text', text: expected }])
+      kb.cleanup()
+    })
+  }
+
+  test('keyboard flags and device attributes call hooks, never input', async () => {
+    const flags: number[] = []
+    let attributes = 0
+    const kb = keyboard({
+      onKeyboardFlags: (value) => flags.push(value),
+      onDeviceAttributes: () => (attributes += 1),
+    })
+    expect(await kb.type('\x1b[?29u')).toEqual([])
+    expect(flags).toEqual([29])
+    expect(await kb.type('\x1b[?62;1;6c')).toEqual([])
+    expect(attributes).toBe(1)
+    kb.cleanup()
+  })
+})
+
+describe('processTerminalInput: CSI-u interrupt watch', () => {
+  for (const bytes of ['\x1b[99;5u', '\x1b[99;133u', '\x1b[1089::99;133u']) {
+    test(`${JSON.stringify(bytes)} interrupts idle and clears for the next key`, async () => {
+      const kb = keyboard()
+      expect(await kb.type(bytes)).toEqual([{ type: 'interrupt' }])
+      expect(await kb.type('a')).toEqual([{ type: 'text', text: 'a' }])
+      kb.cleanup()
+    })
+
+    test(`${JSON.stringify(bytes)} interrupts an open CSI run`, async () => {
+      const kb = keyboard()
+      // The colon makes readline give up and emit a partial keypress, leaving
+      // our reassembler (rather than readline itself) with the open run.
+      expect(await kb.type('\x1b[13;2:')).toEqual([])
+      expect(await kb.type(bytes)).toEqual([{ type: 'interrupt' }])
+      expect(await kb.type('a')).toEqual([{ type: 'text', text: 'a' }])
+      kb.cleanup()
+    })
+
+    test(`${JSON.stringify(bytes)} interrupts a bracketed paste`, async () => {
+      const kb = keyboard()
+      expect(await kb.type(`\x1b[200~content${bytes}`)).toEqual([{ type: 'interrupt' }])
+      expect(await kb.type('a')).toEqual([{ type: 'text', text: 'a' }])
+      kb.cleanup()
+    })
+  }
+
+  test('Ctrl-J on a non-Latin layout reassembles as newline', async () => {
+    const kb = keyboard()
+    expect(await kb.type('\x1b[1086::106;5u')).toEqual([{ type: 'newline' }])
+    kb.cleanup()
+  })
+
+  test('both interrupt encodings escape a draining run', async () => {
+    for (const bytes of ['\x03', '\x1b[99;133u']) {
+      const kb = keyboard()
+      expect(await kb.type(`\x1b[12345678${bytes}`)).toEqual([{ type: 'interrupt' }])
+      kb.cleanup()
+    }
   })
 })
 
