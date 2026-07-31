@@ -242,7 +242,7 @@ describe('parseConfig — defaults', () => {
   test('a blank [workspace.config] key is plugin-addressable, not an error', () => {
     // Autobuild does not interpret these keys, so it is not Autobuild's place
     // to narrow what a plugin may declare. This is the assertion that fails if
-    // the `allowBlankKeys` axis is ever "tidied" away.
+    // this map's `keys: 'any'` policy is ever "tidied" back to the default.
     const config = pluginWorkspace('"" = "addressable"\n')
     expect(config['']).toBe('addressable')
   })
