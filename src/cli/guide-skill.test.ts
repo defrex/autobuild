@@ -338,6 +338,23 @@ describe('ab-guide — ticket grooming coverage', () => {
   })
 })
 
+describe('ab-guide — repository settings status', () => {
+  test('documents the sessionless form, all settings, and empty-journal defaults', () => {
+    const compact = guide.replace(/\s+/g, ' ')
+    for (const contract of [
+      '`ab repository status [--json] [--store <ref>]`',
+      'ticket intake (`intake`, default `true`)',
+      'repository-wide pause (`paused`, default `false`)',
+      'claim-time auto-merge default (`defaultAutoMerge`, default `false`)',
+      'repository with no journal row',
+      'writes no state',
+      'starts no dispatcher work',
+    ]) {
+      expect(compact).toContain(contract)
+    }
+  })
+})
+
 describe('ab-guide — durable build-control coverage', () => {
   test('documents every sessionless command form beside the dashboard controls', () => {
     const missing: string[] = []
