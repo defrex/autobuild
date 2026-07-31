@@ -1120,7 +1120,7 @@ describe('happy path (§15.6)', () => {
       ['plan-review', 1, 'plan-review'],
       ['implement', 1, 'implement'],
       ['code-review', 1, 'code-review'],
-      ['verify:e2e', 1, 'ab-verify-e2e'],
+      ['verify:e2e', 1, 'e2e'],
       ['finalize', 1, 'finalize'],
       ['finalize', 1, 'release-notes'],
     ])
@@ -1167,13 +1167,72 @@ describe('happy path (§15.6)', () => {
     expect(transcript?.meta.metadata.model).toBe('m-plan')
   })
 
+  // The routing rule (§9) as an explicit contract, not incidentally as a
+  // selector inside a test about something else. Observed through
+  // `session.started` and the runner journal — the same evidence the reporting
+  // repository had to dig out of SQLite by hand.
+  describe('§9 routing: which [roles.<key>] an agent step runs on', () => {
+    const withRoles = (roles: string): string => `${CONFIG_TOML}${roles}`
+
+    async function startedFor(configToml: string, role: string) {
+      const h = await makeHarness({ configToml })
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      const started = ofType(events, 'session.started').find((e) => e.payload.role === role)
+      if (started === undefined) throw new Error(`no session.started with role "${role}"`)
+      return { h, started }
+    }
+
+    test('an agent verify step routes by its STEP name, not its skill name', async () => {
+      const { h, started } = await startedFor(
+        withRoles(
+          'e2e = { runtime = "scripted", model = "m-step" }\n' +
+            '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n',
+        ),
+        'e2e',
+      )
+      expect(started.payload.phase).toBe('verify:e2e')
+      expect(started.payload.model).toBe('m-step')
+      const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
+      expect(journal.opts.model).toBe('m-step')
+    })
+
+    test('…and still routes by its deprecated skill-name key when that is all there is', async () => {
+      const { h, started } = await startedFor(
+        withRoles('"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n'),
+        // The RECORDED role is the logical step name in both cases — one
+        // meaning for the field across every kind of session, so finding the
+        // session BY it is itself the assertion. The model says what applied.
+        'e2e',
+      )
+      expect(started.payload.phase).toBe('verify:e2e')
+      expect(started.payload.model).toBe('m-skill')
+      const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
+      expect(journal.opts.model).toBe('m-skill')
+    })
+
+    test('an agent finalize step routes by its step name — unchanged', async () => {
+      const { h, started } = await startedFor(
+        withRoles(
+          '"release-notes" = { runtime = "scripted", model = "m-step" }\n' +
+            '"ab-release-notes" = { runtime = "scripted", model = "m-skill" }\n',
+        ),
+        'release-notes',
+      )
+      expect(started.payload.phase).toBe('finalize')
+      expect(started.payload.model).toBe('m-step')
+      const journal = [...h.runner.sessions.values()].find(
+        (j) => j.opts.skill === 'ab-release-notes',
+      )!
+      expect(journal.opts.model).toBe('m-step')
+    })
+  })
+
   test('ambient env (D8): AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION on the e2e session', async () => {
     const h = await makeHarness()
     await h.br.run()
     const events = await h.store.getEvents(SLUG)
-    const e2eSession = ofType(events, 'session.started').find(
-      (e) => e.payload.role === 'ab-verify-e2e',
-    )!
+    const e2eSession = ofType(events, 'session.started').find((e) => e.payload.role === 'e2e')!
     const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
     expect(journal.opts.env.AB_STORE).toBe('local')
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
@@ -2378,6 +2437,70 @@ paths = ["web/**"]
     expect(h.ops).toEqual([])
     expect(h.runner.sessions.size).toBe(0)
     expect(ofType(await h.store.getEvents(SLUG), 'session.started')).toEqual([])
+  })
+
+  test('matching agent steps persist routed guidance through the wrapped action', async () => {
+    const h = await makeHarness({
+      configToml: `
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = ["e2e"]
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+paths = ["web/**"]
+`,
+      verifyDiffs: [{ paths: ['web/routes/login.ts'] }],
+    })
+    await seedApproved(h.store)
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'e2e', attempt: 1 },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('e2e', 's_old'),
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_verify',
+        phase: 'verify:e2e',
+        source: 'agent',
+        question: 'Which account should the verifier use?',
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_verify',
+        answer: 'Use the seeded admin account.',
+        resolution: 'guidance',
+      },
+    })
+
+    const feedback = {
+      guidance: { escalation: 'esc_verify', answer: 'Use the seeded admin account.' },
+    }
+    expect(await h.br.step()).toEqual({
+      kind: 'evaluate-verify',
+      step: 'e2e',
+      attempt: 1,
+      paths: ['web/**'],
+      action: {
+        kind: 'run-agent-verify',
+        step: 'e2e',
+        skill: 'ab-verify-e2e',
+        attempt: 1,
+        feedback,
+      },
+    })
+    expect(ofType(await h.store.getEvents(SLUG), 'verify.started').at(-1)?.payload).toEqual({
+      step: 'e2e',
+      attempt: 1,
+      feedback,
+    })
   })
 
   test('matching agent steps retain normal session execution', async () => {

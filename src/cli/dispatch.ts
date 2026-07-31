@@ -24,6 +24,7 @@
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from '../config/load'
+import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -50,8 +51,10 @@ import {
   type DashboardRendererResolver,
 } from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
+import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
+import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -145,6 +148,8 @@ interface ResumePrompt {
   /** Snapshot at prompt-open time. Submission revalidates each id. */
   escalationIds: string[]
   value: string
+  /** Caret as a code-point offset into `value`; the composer owns the geometry. */
+  cursor: number
 }
 
 /** The real adapters the loop drives — resolved by `wire` (default: the
@@ -337,6 +342,7 @@ class DispatchLoop {
    * untouched and makes plain the default rather than a mode.
    */
   private readonly dashboard: boolean
+  private readonly keyboard: KeyboardProtocol | undefined
   private readonly region: LiveRegion | undefined
   /** One display-only incremental build cache for this dispatch process. */
   private readonly dashboardBuilds: DashboardBuildPollCache
@@ -362,6 +368,11 @@ class DispatchLoop {
   /** Read-only nested UI state. Omission is the top-level list. */
   private view: DashboardView | undefined
   private warningLine: string | undefined
+  /** Startup, configuration-level notices — constant for the life of the
+   * process. Rendered ABOVE the transient warning line and never overwritten by
+   * it: `setWarning` replaces the transient slot outright, so sharing it would
+   * let the first tick's janitor notice erase a startup diagnostic for good. */
+  private configWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
   /** Last successfully measured unclaimed observation count. Sampling failures
@@ -387,14 +398,20 @@ class DispatchLoop {
     resolver: RuntimeResolver,
   ) {
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
+    this.keyboard =
+      this.dashboard && opts.terminal !== undefined && opts.input !== undefined
+        ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk))
+        : undefined
     this.region =
-      this.dashboard && opts.terminal !== undefined ? new LiveRegion(opts.terminal) : undefined
+      this.dashboard && opts.terminal !== undefined
+        ? new LiveRegion(opts.terminal, this.keyboard)
+        : undefined
     this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, opts.targetRepo, config)
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
     // the dispatcher take its deterministic title fallback.
-    const resolvedSlug = resolver.resolve('slug')
+    const resolvedSlug = resolver.resolve(SLUG_ROLE)
     const oneShot = wiring.runtimes[resolvedSlug.runtime]?.oneShot
     const nameSlug =
       oneShot === undefined
@@ -483,21 +500,29 @@ class DispatchLoop {
     if (this.model === undefined) return
     const {
       selection: _oldSelection,
-      warningLine: _oldWarningLine,
+      warningLines: _oldWarningLines,
       resumeInput: _oldResumeInput,
       abortConfirmation: _oldAbortConfirmation,
       view: _oldView,
       ...base
     } = this.model
+    // Composed at PROJECTION time, on every projection, so the sticky config
+    // diagnostic reaches the first painted frame and every frame after it with
+    // no dependence on emission order relative to `startRendering()`.
+    const warningLines = [
+      ...this.configWarnings,
+      ...(this.warningLine !== undefined ? [this.warningLine] : []),
+    ]
     this.model = {
       ...base,
-      ...(this.warningLine !== undefined ? { warningLine: this.warningLine } : {}),
+      ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
       ...(this.resumePrompt !== undefined
         ? {
             resumeInput: {
               slug: this.resumePrompt.slug,
               value: this.resumePrompt.value,
+              cursor: this.resumePrompt.cursor,
             },
           }
         : {}),
@@ -682,6 +707,7 @@ class DispatchLoop {
         slug,
         escalationIds: result.escalationIds,
         value: '',
+        cursor: 0,
       }
       this.syncModelControls()
       this.paint()
@@ -1059,19 +1085,38 @@ class DispatchLoop {
   private handleResumeInput(input: TerminalInputEvent): void {
     const prompt = this.resumePrompt
     if (prompt === undefined || this.resumeSubmitting) return
+    const edit = (next: { value: string; cursor: number }): void => {
+      this.resumePrompt = { ...prompt, ...next }
+      this.syncModelControls()
+      this.paint()
+    }
+    const move = (motion: ComposerMotion): void => {
+      this.resumePrompt = { ...prompt, cursor: moveCursor(prompt.value, prompt.cursor, motion) }
+      this.syncModelControls()
+      this.paint()
+    }
     switch (input.type) {
+      // A paste is one insertion, not a burst of keystrokes: no part of it can
+      // be interpreted as submit, and none of it is dropped.
       case 'text':
-        this.resumePrompt = { ...prompt, value: prompt.value + input.text }
-        this.syncModelControls()
-        this.paint()
+      case 'paste':
+        edit(insertText(prompt.value, prompt.cursor, input.text))
+        return
+      case 'newline':
+        edit(insertText(prompt.value, prompt.cursor, '\n'))
         return
       case 'backspace':
-        this.resumePrompt = {
-          ...prompt,
-          value: [...prompt.value].slice(0, -1).join(''),
-        }
-        this.syncModelControls()
-        this.paint()
+        edit(deleteBefore(prompt.value, prompt.cursor))
+        return
+      case 'left':
+      case 'right':
+      case 'up':
+      case 'down':
+      case 'home':
+      case 'end':
+        // Up/Down move the CARET while the prompt is open; the dashboard's row
+        // selection deliberately does not follow.
+        move(input.type)
         return
       case 'escape':
         this.clearResumePrompt(prompt.slug)
@@ -1092,8 +1137,6 @@ class DispatchLoop {
             this.paint()
           })
         return
-      case 'up':
-      case 'down':
       case 'interrupt':
         return
     }
@@ -1110,8 +1153,13 @@ class DispatchLoop {
       this.handleResumeInput(input)
       return
     }
+    // Outside the resume prompt `newline` is handled identically to `enter`.
+    // That is the structural mitigation for splitting CR from LF: only the
+    // composer can tell the two apart, so a terminal that reports Return as LF
+    // cannot make Enter stop working anywhere else.
+    const enterLike = input.type === 'enter' || input.type === 'newline'
     if (this.abortConfirmation !== undefined) {
-      if (input.type === 'enter') this.queueAction('abort-confirm')
+      if (enterLike) this.queueAction('abort-confirm')
       else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncModelControls()
@@ -1124,7 +1172,7 @@ class DispatchLoop {
       this.queueAction(input.type)
       return
     }
-    if (input.type === 'enter') {
+    if (enterLike) {
       this.queueAction('enter')
       return
     }
@@ -1132,6 +1180,8 @@ class DispatchLoop {
       this.leaveView()
       return
     }
+    // A stray paste outside the prompt is a no-op, not a burst of command keys;
+    // cursor motions have nothing to move.
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':
@@ -1192,7 +1242,11 @@ class DispatchLoop {
   private startInput(): void {
     if (!this.dashboard || this.opts.input === undefined) return
     this.acceptingKeys = true
-    this.cleanupInput = this.opts.input.start((input) => this.onInput(input))
+    this.cleanupInput = this.opts.input.start((input) => this.onInput(input), {
+      onListening: () => this.keyboard?.query(),
+      onKeyboardFlags: (flags) => this.keyboard?.reported(flags),
+      onDeviceAttributes: () => this.keyboard?.deviceAttributes(),
+    })
   }
 
   private stopInput(): void {
@@ -1435,6 +1489,24 @@ class DispatchLoop {
    * dashboard, so line-oriented behavior is unchanged while routine
    * interactive chatter disappears.
    */
+  /**
+   * A startup, configuration-level notice (§9 role-key consumability) — never a
+   * tick outcome, never blocking. Both surfaces get the SAME strings in full:
+   * stderr writes each one, the dashboard wraps them into its warning region.
+   * No surface gets a digest, a cap, or a truncated tail.
+   */
+  private reportRoleDiagnostics(): void {
+    const lines = roleKeyWarnings(this.config)
+    if (lines.length === 0) return
+    if (this.dashboard) {
+      this.configWarnings = lines
+      this.syncModelControls()
+      this.paint()
+    } else {
+      for (const line of lines) this.opts.stderr(line)
+    }
+  }
+
   private printReport(report: Awaited<ReturnType<Dispatcher['tick']>>, printIdle = true): boolean {
     // `queued` is a standing depth, not a tick action — the header owns it;
     // repeating it in the notice would make every saturated tick look busy.
@@ -1695,6 +1767,8 @@ class DispatchLoop {
   }
 
   async run(): Promise<void> {
+    // Before the `--once` branch, so both modes report it exactly once.
+    this.reportRoleDiagnostics()
     const capacity = this.config.capacity
     if (this.opts.once) {
       if (!this.dashboard) {

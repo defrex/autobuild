@@ -12,7 +12,11 @@ the diff and not to decide applicability again.
 
 ## Session shape
 
-1. Run `ab context`.
+1. Run `ab context`. If it materializes `.ab/guidance.json`, this is an
+   answered escalation for the retried verification: read it first and apply
+   the guidance while performing the same dashboard capture and visual
+   inspection below. If the file is absent, continue with the existing flow
+   unchanged.
 2. Run `bun run capture:dashboard`. This drives the repo-local scripted
    dispatch harness and writes `.ab/dashboard-frames/verify-report.md` plus
    PNG/text scratch files. It requires no server, network, forge, or live agent
@@ -24,7 +28,11 @@ the diff and not to decide applicability again.
    each image opened and non-empty; rows/status/progress/separators do not
    overlap; the Harvest row is legible; the narrow frame truncates/wraps
    deliberately without clipping; colour emphasis is present while literal
-   status remains readable.
+   status remains readable; and the resume-prompt frame shows the blocked-build
+   composer panel in place of the key legend — build name, optional-guidance
+   note, blocker question, a two-line field with a visible caret, and its key
+   bindings. On a guidance-assisted retry, also record how the answered
+   escalation affected the capture, interpretation of the evidence, or verdict.
 5. If and only if every visual criterion passes, designate the reviewed files
    as ordinary PR attachments, then issue the passing verdict:
 
@@ -33,6 +41,8 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:mixed-wide:png .ab/dashboard-frames/mixed-wide.png --attach
    ab artifact put dashboard-frame:mixed-narrow:text .ab/dashboard-frames/mixed-narrow.txt --attach
    ab artifact put dashboard-frame:mixed-narrow:png .ab/dashboard-frames/mixed-narrow.png --attach
+   ab artifact put dashboard-frame:resume-prompt:text .ab/dashboard-frames/resume-prompt.txt --attach
+   ab artifact put dashboard-frame:resume-prompt:png .ab/dashboard-frames/resume-prompt.png --attach
    ab verdict pass --notes .ab/dashboard-frames/verify-report.md
    ```
 
@@ -49,6 +59,10 @@ the diff and not to decide applicability again.
   is otherwise broken.
 - A visual difference from an earlier build is not itself a failure. There is
   no golden-frame comparison; judge whether this capture is usable and coherent.
+- Human guidance may clarify how to perform the retry or interpret the evidence,
+  but it cannot change the visual criteria or verdict semantics, authorize a
+  pass that contradicts a visibly failed criterion, or authorize editing product
+  code from this verify phase.
 - Never run Git diff/log/status to decide whether the step applies. Never emit
   `skip`: a nonmatching change is skipped by the kernel before this session is
   created.

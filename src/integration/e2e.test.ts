@@ -1394,10 +1394,16 @@ const GUIDANCE_ANSWER = 'A fixed 5-minute window is correct; approve unless it r
 
 test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-B)', async () => {
   const guidanceSeen: Array<{ round: number; escalation: string; answer: string }> = []
+  const feedbackSeen: Array<{ round: number; guidance: boolean; findings: boolean }> = []
   const handlers = happyHandlers()
   handlers.implement = async (cli) => {
     await cli.run(['context'])
     const guidancePath = join(cli.ws, '.ab', 'guidance.json')
+    feedbackSeen.push({
+      round: cli.round,
+      guidance: existsSync(guidancePath),
+      findings: existsSync(join(cli.ws, '.ab', 'findings.json')),
+    })
     if (existsSync(guidancePath)) {
       const guidance = JSON.parse(await Bun.file(guidancePath).text()) as {
         escalation: string
@@ -1557,6 +1563,14 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
   })
   // …and the script actually read it from the materialized .ab/guidance.json.
   expect(guidanceSeen).toEqual([{ round: 4, escalation: 'esc_1', answer: GUIDANCE_ANSWER }])
+  // Feedback is exclusive: the guidance round gets .ab/guidance.json and no
+  // .ab/findings.json — the file the skills used to point at unconditionally.
+  expect(feedbackSeen).toEqual([
+    { round: 1, guidance: false, findings: false },
+    { round: 2, guidance: false, findings: true },
+    { round: 3, guidance: false, findings: true },
+    { round: 4, guidance: true, findings: false },
+  ])
 
   // Each bracket's re-issued AB_SESSION (D8) stamps its own terminal (§15.3)…
   expect(ofType(events, 'implement.completed').map(agentSession)).toEqual([
@@ -1581,6 +1595,107 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     outcome: 'pass',
   })
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+}, 30_000)
+
+// ── c2. Agent verifier escalation → same verifier guidance ──────────────────
+
+const VERIFY_GUIDANCE = 'Use the seeded admin account.'
+
+test('c2. verifier guidance is delivered once and cannot hide its later failure report', async () => {
+  const configToml = `
+baseBranch = "main"
+capacity = 1
+
+[verify]
+steps = ["e2e"]
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.default]
+runtime = "scripted"
+
+[tickets]
+source = "file"
+readyLabels = ["autobuild"]
+readyState = "Ready"
+`
+  const handlers = happyHandlers()
+  const guidanceSeen: Array<{ escalation: string; answer: string }> = []
+  const implementFeedback: Array<{ report: string; guidancePresent: boolean }> = []
+  let verifyRuns = 0
+
+  handlers.implement = async (cli) => {
+    await cli.run(['context'])
+    if (cli.round > 1) {
+      implementFeedback.push({
+        report: await readFile(join(cli.ws, '.ab', 'verify', 'e2e.md'), 'utf8'),
+        guidancePresent: existsSync(join(cli.ws, '.ab', 'guidance.json')),
+      })
+    }
+    await writeFileIn(cli.ws, 'rate-limit.txt', `throttle after 5 (r${cli.round})\n`)
+    await commitAll(cli.ws, `implement: verifier round ${cli.round}`)
+    const notes = await writeFileIn(
+      cli.ws,
+      '.ab/implement-notes.md',
+      `Implementation round ${cli.round}.\n`,
+    )
+    await cli.run(['done', '--notes', notes])
+  }
+  handlers['verify-e2e'] = async (cli) => {
+    verifyRuns += 1
+    await cli.run(['context'])
+    const guidancePath = join(cli.ws, '.ab', 'guidance.json')
+    if (existsSync(guidancePath)) {
+      guidanceSeen.push(JSON.parse(await readFile(guidancePath, 'utf8')))
+    }
+    if (verifyRuns === 1) {
+      await cli.run(['escalate', 'Which test account is authoritative?'])
+      return
+    }
+    const report = await writeFileIn(
+      cli.ws,
+      '.ab/verify-report.md',
+      verifyRuns === 2 ? 'seeded admin login still times out\n' : 'seeded admin login passed\n',
+    )
+    if (verifyRuns === 2) await cli.run(['verdict', 'fail', '--report', report])
+    else await cli.run(['verdict', 'pass', '--notes', report])
+  }
+
+  const h = await track(makeHarness({ configToml, handlers, tickets: [readyTicket('T-1')] }))
+  await h.dispatcher.tick()
+  expect((await h.runLatest()).status).toBe('blocked')
+
+  let events = await h.events(SLUG)
+  const escalation = ofType(events, 'escalation.raised')[0]!
+  expect(escalation.payload).toMatchObject({ phase: 'verify:e2e', source: 'agent' })
+  await h.store.append(SLUG, {
+    actor: humanActor('operator'),
+    type: 'escalation.answered',
+    payload: { id: escalation.payload.id, answer: VERIFY_GUIDANCE, resolution: 'guidance' },
+  })
+
+  h.clock.advance(4 * 3_600_000)
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
+  const final = await h.runLatest()
+  expect(final.prState).toBe('open')
+  expect(h.cliErrors).toEqual([])
+
+  events = await h.events(SLUG)
+  const starts = ofType(events, 'verify.started')
+  expect(starts.map((event) => event.payload.feedback)).toEqual([
+    undefined,
+    { guidance: { escalation: escalation.payload.id, answer: VERIFY_GUIDANCE } },
+    undefined,
+  ])
+  expect(guidanceSeen).toEqual([{ escalation: escalation.payload.id, answer: VERIFY_GUIDANCE }])
+  expect(implementFeedback).toEqual([
+    { report: 'seeded admin login still times out\n', guidancePresent: false },
+  ])
+  expect(ofType(events, 'implement.started').at(-1)?.payload.feedback).toEqual({
+    verify: { step: 'e2e', report: { kind: 'verify-report:e2e', rev: 0 } },
+  })
 }, 30_000)
 
 // ── d. Bounce (§6.3): dispatch quality gate ──────────────────────────────────

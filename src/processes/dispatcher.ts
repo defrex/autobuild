@@ -20,6 +20,15 @@
  * one (per-tick launch dedupe); a build dispatched in step (d) is not swept
  * in the same tick because the sweep already ran.
  *
+ * A repository-wide pause (`dispatcher.pause-set`, written by the dashboard's
+ * pause-all) holds every QUEUED build across steps (b)–(e): none of them may
+ * attach a runner to a build that has no runner yet, whichever stage reaches
+ * it first. The janitor (a) is deliberately NOT gated, so abort and discard
+ * still settle while the repository is at rest, and running builds are left to
+ * the per-build pauses that pause-all writes alongside the flag. The flag is
+ * sampled once per tick, so a pause landing mid-tick takes effect on the next
+ * one — the same semantics intake already has.
+ *
  * The dispatcher never runs pipeline agents (§15.7) — conflicted PRs and
  * stale leases both resolve by re-attaching a build-runner via
  * `launchRunner`. Optional pre-build judgment (spec authoring and short slug
@@ -37,6 +46,7 @@ import {
   pendingAutoMerge,
   recordAutoMergeDeferralObservation,
 } from '../kernel/auto-merge'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { decideNext } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
@@ -96,6 +106,20 @@ export function readyCriteria(config: Config): { labels: string[]; state: string
  */
 export function defaultTriageState(config: Config): string {
   return config.tickets.triageState ?? (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
+}
+
+/**
+ * Where harvest files a synthesized proposal (§12). Defaults to the triage
+ * state, so the constitutional gate — nothing auto-generated reaches Ready
+ * without a human — holds unless a repository names another state.
+ *
+ * It is a field of its own rather than a reuse of `triageState` because the
+ * two answer different questions. Pointing triage at the ready state to get
+ * auto-dispatched proposals would also send spec-gate bounces there, and a
+ * bounce that lands back in Ready is claimed and bounced again every tick.
+ */
+export function defaultProposalState(config: Config): string {
+  return config.tickets.proposalState ?? defaultTriageState(config)
 }
 
 // ── Spec quality gate (SPEC §6.3, docs/spec-standard.md) ─────────────────────
@@ -446,6 +470,27 @@ function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
   return { kind: meta.kind, rev: meta.revision }
 }
 
+/**
+ * Whether a repository-wide pause holds this build back from being given a
+ * runner. Narrow on purpose, and the narrowness is load-bearing:
+ *
+ * - `queued` is exactly "a build record exists and no runner is attached" —
+ *   the gap the repository pause exists to close. It is also the set bulk
+ *   pause eligibility deliberately excludes, so the two halves of the control
+ *   cover the whole space with no overlap.
+ * - `running` builds are NOT held here. They are parked by the per-build pause
+ *   the same keypress writes, and holding them in the dispatcher would strand
+ *   `pendingCommands` delivery — the lease sweep is the only thing that
+ *   re-attaches a runner so a build whose runner died can receive its abort or
+ *   resume (§15.2.7).
+ * - `done` / `aborted` / `blocked` / `paused` builds are the janitor's and the
+ *   engine's business; the janitor is not gated, so abort and discard keep
+ *   settling while the repository is at rest.
+ */
+export function heldByRepositoryPause(state: BuildState, paused: boolean): boolean {
+  return paused && state.status === 'queued'
+}
+
 export class Dispatcher {
   private readonly leaseTtlMs: number
   private readonly triageState: string
@@ -480,12 +525,17 @@ export class Dispatcher {
     /** Builds already launched this tick — a janitor/startup re-attach must
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
     const launched = new Set<string>()
+    // Sampled once, before any stage that could attach a runner: a pause that
+    // lands mid-tick takes effect on the next tick, matching intake (which the
+    // CLI likewise samples before calling `tick`). Neither control pretends to
+    // a serialization the store does not offer.
+    const paused = await this.repositoryPaused()
     await this.janitor(report, launched)
-    await this.recoverDispatches(report, launched)
-    if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched)
-    await this.leaseSweep(report, launched)
+    await this.recoverDispatches(report, launched, paused)
+    if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused)
+    await this.leaseSweep(report, launched, paused)
     if (opts.acceptNewWork !== false) {
-      await this.dispatch(report, launched, autoMergeUser)
+      await this.dispatch(report, launched, autoMergeUser, paused)
     }
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
@@ -494,6 +544,16 @@ export class Dispatcher {
     // can settle them under the repository lease.
     await this.triggerHarvest()
     return report
+  }
+
+  /** The repository-wide quiescence flag, from durable state. Guarded like
+   * `triggerHarvest`: `getRepoEvents` throws for a repository row no tick has
+   * created yet, and an unpaused repository is the correct reading of one that
+   * has never recorded a setting. */
+  private async repositoryPaused(): Promise<boolean> {
+    if ((await this.deps.store.getRepo(this.deps.repo)) === null) return false
+    const events = await this.deps.store.getRepoEvents(this.deps.repo)
+    return reduceDispatchSettings(events).paused
   }
 
   private async triggerHarvest(): Promise<void> {
@@ -1162,7 +1222,11 @@ export class Dispatcher {
     }
   }
 
-  private async recoverDispatches(report: TickReport, launched: Set<string>): Promise<void> {
+  private async recoverDispatches(
+    report: TickReport,
+    launched: Set<string>,
+    paused: boolean,
+  ): Promise<void> {
     for (const record of await this.deps.store.listBuilds()) {
       if (
         record.repo !== this.deps.repo ||
@@ -1173,7 +1237,13 @@ export class Dispatcher {
       }
       const events = await this.deps.store.getEvents(record.slug)
       const state = reduceBuild(events)
-      if (state.status !== 'queued' || state.discardRequest !== undefined) continue
+      if (
+        state.status !== 'queued' ||
+        state.discardRequest !== undefined ||
+        heldByRepositoryPause(state, paused)
+      ) {
+        continue
+      }
       // Queued itself means runner attachment is still missing. Always enter
       // the fact-driven helper: it skips every completed boundary and retries
       // only the final launch when setup is already durable.
@@ -1196,7 +1266,11 @@ export class Dispatcher {
    * is the operator's explicit request to re-arm that budget. Each policy
    * raise gets an auditable dispatcher-authored `escalation.answered{retry}`.
    */
-  private async resumeCurrent(report: TickReport, launched: Set<string>): Promise<void> {
+  private async resumeCurrent(
+    report: TickReport,
+    launched: Set<string>,
+    paused: boolean,
+  ): Promise<void> {
     const { store, config } = this.deps
     for (const record of await store.listBuilds()) {
       if (record.repo !== this.deps.repo || launched.has(record.slug)) continue
@@ -1206,7 +1280,8 @@ export class Dispatcher {
       if (
         state.status === 'done' ||
         state.status === 'aborted' ||
-        (state.status === 'queued' && state.discardRequest !== undefined)
+        (state.status === 'queued' && state.discardRequest !== undefined) ||
+        heldByRepositoryPause(state, paused)
       ) {
         continue
       }
@@ -1268,7 +1343,11 @@ export class Dispatcher {
    * claims the lease itself; the reduced log tells it where to resume
    * (started-without-terminal work re-runs from the phase start).
    */
-  private async leaseSweep(report: TickReport, launched: Set<string>): Promise<void> {
+  private async leaseSweep(
+    report: TickReport,
+    launched: Set<string>,
+    paused: boolean,
+  ): Promise<void> {
     const now = this.deps.clock().getTime()
     for (const record of await this.deps.store.listBuilds()) {
       if (record.repo !== this.deps.repo) continue // §12: not this dispatcher's build
@@ -1282,6 +1361,7 @@ export class Dispatcher {
       const state = reduceBuild(events)
       if (
         (state.status === 'queued' && state.discardRequest !== undefined) ||
+        heldByRepositoryPause(state, paused) ||
         decideNext(events, this.deps.config).kind === 'wait'
       ) {
         continue
@@ -1297,6 +1377,7 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     autoMergeUser: string | undefined,
+    paused: boolean,
   ): Promise<void> {
     const { store, tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
@@ -1323,7 +1404,15 @@ export class Dispatcher {
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length
-    if (capacity <= 0) return
+    // This stage creates a build and launches it in one step, so it is also a
+    // way to attach a runner to a queued build. A pause-all turns intake off,
+    // so in practice this stage does not run while paused; it becomes reachable
+    // only if an operator toggles intake back on without resuming, or if the
+    // intake write failed after the pause write landed. The ready scan above
+    // still runs either way, so the standing queue-depth report stays honest —
+    // this only declines to claim a ticket into a build that would immediately
+    // sit held.
+    if (capacity <= 0 || paused) return
     // One dependency-node cache per tick: blockers are commonly shared across
     // the ready set, and a blocker's resolution must be re-read every tick
     // (never cached across them) so a completion lands on the next pass.

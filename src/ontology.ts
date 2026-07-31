@@ -257,7 +257,7 @@ export const workspaceBaseSchema = z.discriminatedUnion('source', [
 ])
 export type WorkspaceBase = z.infer<typeof workspaceBaseSchema>
 
-// ── Feedback (producer round input — SPEC §10, §15.3 implement.started) ──────
+// ── Feedback (phase-occurrence input — SPEC §10, §15.3 started events) ─────
 
 export const feedbackSchema = z.union([
   /** Findings from a revise verdict, by id (payloads carry refs, not blobs). */
@@ -266,7 +266,8 @@ export const feedbackSchema = z.union([
   z.strictObject({
     verify: z.strictObject({ step: z.string(), report: artifactRefSchema }),
   }),
-  /** A human escalation answer fed in as authoritative feedback (§15.6-B). */
+  /** A human escalation answer fed to a producer or agent verifier as
+   * authoritative feedback (§15.6-B). */
   z.strictObject({
     guidance: z.strictObject({ escalation: z.string(), answer: z.string() }),
   }),

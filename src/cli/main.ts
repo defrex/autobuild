@@ -21,6 +21,13 @@ import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactGet, artifactPut } from './artifact'
 import { parseArgs, stringFlag, type ParsedArgs } from './args'
 import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
+import {
+  abBulkControl,
+  bulkControlLines,
+  bulkFailureLines,
+  BulkWalkError,
+  type BulkDirection,
+} from './bulk-control'
 import { buildContext, type ContextManifest } from './context'
 import { abDispatch } from './dispatch'
 import type { DashboardRendererResolver } from './dashboard/render'
@@ -36,6 +43,7 @@ import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
+import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
 import { abUpgrade, type ResolveConflict } from './upgrade'
@@ -164,6 +172,9 @@ export interface SessionlessCliDeps {
   }) => ResolveConflict
   /** Injectable child-process seam for plugin contract CLI tests. */
   pluginSubprocess?: PluginContractSubprocess
+  /** Injectable store-adapter seam for sessionless commands that open a store;
+   * production leaves it unset and `store-opening.ts` composes the real one. */
+  openStore?: StoreOpener
   store?: BuildStore
   env?: CliEnv
   harvestEnv?: HarvestCliEnv
@@ -277,8 +288,45 @@ async function runBuildControl(
     action,
     ...(storeRef !== undefined ? { storeRef } : {}),
     ...(readTicketBody !== undefined ? { readTicketBody } : {}),
+    ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
   })
   deps.stdout(buildControlConfirmation(result))
+}
+
+/**
+ * The repository-wide form. Success renders the walk's summary; a partial walk
+ * is the one failure this route owns rather than delegates — it reports what
+ * did complete on stderr and exits 1, and nothing reaches stdout. Every other
+ * error propagates to `runCli`'s stderr+1 handler.
+ */
+async function runBulkControl(
+  deps: SessionlessCliDeps,
+  direction: BulkDirection,
+  opts: { json: boolean; storeRef?: string },
+): Promise<number> {
+  if (deps.exec === undefined) {
+    throw new Error(
+      'build-control commands need an exec seam — this is a wiring bug in the ab binary',
+    )
+  }
+  try {
+    const summary = await abBulkControl({
+      targetRepo: deps.workspacePath,
+      env: deps.processEnv ?? {},
+      exec: deps.exec,
+      direction,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+    })
+    if (opts.json) deps.stdout(JSON.stringify(summary, null, 2))
+    else for (const line of bulkControlLines(summary)) deps.stdout(line)
+    return 0
+  } catch (error) {
+    if (!(error instanceof BulkWalkError)) throw error
+    if (opts.json) deps.stderr(JSON.stringify({ ...error.progress, error: error.message }, null, 2))
+    else for (const line of bulkFailureLines(error)) deps.stderr(line)
+    return 1
+  }
 }
 
 function listFlag(parsed: ParsedArgs, name: string): string[] | undefined {
@@ -589,6 +637,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         all: parsed.flags.has('all'),
         json: parsed.flags.has('json'),
         ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
@@ -628,23 +677,44 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         json: parsed.flags.has('json'),
         ...(events !== undefined ? { events } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
     }
 
-    case 'pause':
-    case 'resume':
     case 'abort': {
-      const usage = `usage: ab ${command} <slug> [--store <ref>]`
+      const usage = 'usage: ab abort <slug> [--store <ref>]'
       const parsed = parseArgs(rest, { store: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
       await runBuildControl(
         deps,
         parsed.positionals[0]!,
-        { kind: command },
+        { kind: 'abort' },
         stringFlag(parsed, 'store'),
       )
+      return 0
+    }
+
+    case 'pause':
+    case 'resume': {
+      const usage = `usage: ab ${command} <slug> | --all [--store <ref>] [--json]`
+      const parsed = parseArgs(rest, { store: 'value', all: 'boolean', json: 'boolean' }, usage)
+      const all = parsed.flags.has('all')
+      const json = parsed.flags.has('json')
+      const storeRef = stringFlag(parsed, 'store')
+      if (json && !all) throw new Error(`--json requires --all — ${usage}`)
+      if (all && parsed.positionals.length > 0) {
+        throw new Error(`--all takes no build slug — ${usage}`)
+      }
+      if (all) {
+        return runBulkControl(deps, command, {
+          json,
+          ...(storeRef !== undefined ? { storeRef } : {}),
+        })
+      }
+      if (parsed.positionals.length !== 1) throw new Error(usage)
+      await runBuildControl(deps, parsed.positionals[0]!, { kind: command }, storeRef)
       return 0
     }
 
@@ -896,6 +966,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           spec,
           outputPath,
           ...(storeRef !== undefined ? { storeRef } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         })
         stdout(
           `downloaded ${downloaded.artifact.meta.kind}@${downloaded.artifact.meta.revision} to ${downloaded.outputPath}`,

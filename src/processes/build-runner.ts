@@ -158,6 +158,10 @@ interface SessionSpec {
    * finalize. */
   round: number
   role: string
+  /** Deprecated compatibility role keys, consulted in order only when `role`
+   * is undeclared (§9 routing). Today: an agent verify step's configured skill
+   * name, the key verify used to route by before step names unified the rule. */
+  roleAliases?: readonly string[]
   skill: string
   abPhase: string
   /** Set for producer core phases — §10 session memory applies. */
@@ -809,7 +813,7 @@ export class BuildRunner {
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
   private async runAgentVerify(decision: RunAgentVerifyDecision, events: AbEvent[]): Promise<void> {
     const { store, slug } = this.deps
-    const { step, skill, attempt } = decision
+    const { step, skill, attempt, feedback } = decision
     const phase = verifyPhase(step)
 
     // D5 guard, extended to agent-verify (see module doc): keyed by
@@ -827,13 +831,15 @@ export class BuildRunner {
     await store.append(slug, {
       actor: KERNEL,
       type: 'verify.started',
-      payload: { step, attempt },
+      payload: { step, attempt, ...(feedback !== undefined ? { feedback } : {}) },
     } satisfies EventWrite<'verify.started'>)
 
     await this.executeSession({
       phase,
       round: attempt,
-      role: skill, // role name = the verify step's skill (§9 routing)
+      role: step, // role name = the verify step's logical name (§9 routing)
+      // The deprecated skill-name key, still honoured for existing configs.
+      roleAliases: [skill],
       skill,
       abPhase: `verify:${step}@${attempt}`,
       priorFailures: failures.count,
@@ -1086,7 +1092,15 @@ export class BuildRunner {
   private async executeSession(spec: SessionSpec): Promise<void> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const { runner, runtime: runnerName, model, extensions } = this.resolver.resolve(spec.role)
+    // `session.started.role` records the LOGICAL name the pipeline dispatched
+    // in every case, including when a deprecated alias answered the lookup —
+    // the runtime/model on the same payload say what was resolved.
+    const {
+      runner,
+      runtime: runnerName,
+      model,
+      extensions,
+    } = this.resolver.resolve(spec.role, ...(spec.roleAliases ?? []))
 
     const startedEnvelope = await store.append(slug, {
       actor: KERNEL,

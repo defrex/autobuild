@@ -17,7 +17,8 @@ disagree, the code is authoritative.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    current build; each phase resumes as a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
-   Triage without a human grooming it to Ready.
+   Triage without a human grooming it to Ready, unless the repository waives
+   that gate explicitly with `[tickets].proposalState`.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## Pipeline
@@ -33,7 +34,8 @@ adjacent, never a build phase:
 
 ```
 K unclaimed observation.recorded events
-  → scan → synthesize ⇄ review → file approved proposals in Triage
+  → scan → synthesize ⇄ review → file approved proposals in proposalState
+                                  (Triage by default)
 ```
 
 ## Layout
@@ -52,7 +54,7 @@ K unclaimed observation.recorded events
 | `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
-| `src/config/` | `autobuild.toml` parsing and strict validation; user reference in `docs/configuration.md` | §16.1 |
+| `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
 | `src/integration/` | End-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
@@ -78,6 +80,29 @@ consults a snapshot in place of the append-only log.
 only through `src/cli/` terminals, which convert artifact deposits into
 event facts atomically — the engine never reads blobs.
 
+**Human guidance delivery.** The routing fact is an `escalation.answered`
+event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
+answer` and the dashboard's blocked-build resume control are two surfaces over
+the one `src/cli/build-control.ts` operation that appends it, so delivery is
+identical whichever a human used.
+`src/kernel/engine.ts` routes answers from `plan` and `plan-review` to the next
+`plan` round, and answers from `implement` and `code-review` to the next
+`implement` round. An agent verifier's own escalation is the deliberate
+exception to producer routing: its answer returns to that same step on
+`verify.started.feedback`, and `PHASE_SPECS.inputs.currentFeedback` makes `ab
+context` the delivery channel. When a failed verify report instead exhausts
+policy, guidance answering that policy escalation takes precedence over the
+pending report as the failure routes to the next `implement` round. `finalize`
+and `reconcile` have no producer round, so
+`PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
+for the latest answer addressed to that phase. On every receiving path,
+`src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
+answer text. A producer round's feedback is a discriminated union — findings, a
+failed verify report, or guidance — and a round may carry none, so a round with
+guidance writes no `.ab/findings.json`. The receiving skills document their
+corresponding input, and `src/cli/skill-guidance.test.ts` derives that
+requirement from the phase table.
+
 **Finalize publication.** Content-producing `finalize:*` checks or agents
 select and commit files locally and leave a clean worktree. `build-runner.ts`
 derives the last published head from event facts, rejects a non-descendant
@@ -98,7 +123,13 @@ branch-cut base (or the refreshed base promoted by a completed reconcile).
 This verify-only base is deliberately independent from implementation's
 focused review range. Both narrowing mechanisms produce the ordinary
 queryable skipped outcome; Git failure is infrastructure and fails closed,
-never a synthetic skip.
+never a synthetic skip. Verify escalation routing is also explicit in the
+engine: guidance answering an agent verifier's own `ab escalate` returns to the
+same step on `verify.started.feedback`, which `ab context` materializes as
+`.ab/guidance.json`; that cited start consumes the answer once. Guidance
+answering the policy escalation after failed-report exhaustion instead routes
+to `implement` and outranks the pending report. A bare retry carries no
+feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
 launches per slug within one process; the BuildStore lease remains the
@@ -233,9 +264,14 @@ optional API 1.2 capabilities so older plugins load but leave cleanup visibly du
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript ASCII
-frames; `live.ts` owns the alternate-screen region and teardown; `poll.ts` is a
+frames; `keyboard.ts` owns Kitty keyboard-protocol negotiation and CSI-u
+decoding, while `live.ts` sequences its push and pop with the alternate-screen
+region because the terminal's keyboard flag stack is per-screen; `poll.ts` is a
 display-only incremental cache (the logs remain authoritative — cache loss just
 rehydrates); `frame-image.ts` renders a deterministic PNG with pinned fonts.
+`composer.ts` owns the text geometry the blocked-resume panel edits against —
+display-cell wrapping, caret placement, and code-point motions — as pure,
+ANSI-free arithmetic shared by `render.ts` and `dispatch.ts`.
 Nested navigation, session selection, and pinned artifact retrieval are
 read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,

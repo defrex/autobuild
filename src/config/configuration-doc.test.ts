@@ -26,11 +26,18 @@ import {
 } from './schema'
 import { parseConfig } from './load'
 import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
+import { createProductionRuntimes } from '../ports/runner/production'
+import { createRuntimeResolver } from '../ports/runner/routing'
 
 const ROOT = resolve(import.meta.dir, '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
+const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
 const README_PATH = join(ROOT, 'README.md')
-const [doc, readme] = await Promise.all([readFile(DOC_PATH, 'utf8'), readFile(README_PATH, 'utf8')])
+const [doc, guide, readme] = await Promise.all([
+  readFile(DOC_PATH, 'utf8'),
+  readFile(GUIDE_PATH, 'utf8'),
+  readFile(README_PATH, 'utf8'),
+])
 
 function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -68,6 +75,32 @@ function headingSection(markdown: string, level: number, heading: string): strin
     end += 1
   }
   return lines.slice(start + 1, end).join('\n')
+}
+
+function paragraphContaining(markdown: string, text: string): string | undefined {
+  return markdown.split(/\n\s*\n/).find((paragraph) => paragraph.includes(text))
+}
+
+function openMapEnumeration(summary: string): string[] {
+  const marker = 'The open maps are '
+  const start = summary.indexOf(marker)
+  if (start === -1) return []
+
+  let inCode = false
+  let end = summary.length
+  for (let index = start + marker.length; index < summary.length; index += 1) {
+    const character = summary[index]
+    if (character === '`') {
+      inCode = !inCode
+    } else if (character === '.' && !inCode) {
+      end = index
+      break
+    }
+  }
+
+  return [...summary.slice(start + marker.length, end).matchAll(/`(\[[^`\n]+\])`/g)].map(
+    (match) => match[1]!,
+  )
 }
 
 function unique(fields: readonly string[]): string[] {
@@ -159,6 +192,34 @@ function hasTicketsTable(source: string): boolean {
   return /(?:^|\n)\[tickets\](?:\n|$)/.test(source)
 }
 
+describe('configuration strictness summaries', () => {
+  test('enumerate the same complete open-map surface and its workspace exception', () => {
+    const expectedSurfaces = [
+      '[commands]',
+      '[roles]',
+      '[workspace.config]',
+      '[verify.<step>]',
+      '[finalize.<step>]',
+    ]
+    const summaries = [
+      ['docs/configuration.md', paragraphContaining(doc, 'The open maps are')],
+      ['skills/guide/SKILL.md', paragraphContaining(guide, 'The open maps are')],
+    ] as const
+
+    for (const [location, summary] of summaries) {
+      expect(summary, `${location} strictness summary is missing`).toBeDefined()
+      if (summary === undefined) continue
+      expect(openMapEnumeration(summary), `${location} open-map enumeration drifted`).toEqual(
+        expectedSurfaces,
+      )
+      expect(summary).toContain('plugin-owned')
+      expect(summary).toContain('passed through unchanged')
+      expect(summary).toMatch(/builtin `git-worktree` provider requires it to be\s+empty/)
+      expect(summary).toMatch(/other known\s+table(?: is|s are) closed to unknown keys/)
+    }
+  })
+})
+
 describe('docs/configuration.md — schema coverage', () => {
   test('the explicit scalar/table maps cover exactly the root schema', () => {
     expect([...TOP_LEVEL_SCALARS, ...TOP_LEVEL_TABLES].sort()).toEqual([...TOP_LEVEL_KEYS].sort())
@@ -229,6 +290,33 @@ describe('docs/configuration.md — executable examples', () => {
         parseConfig(source, `docs/configuration.md#${fragment.name ?? 'fragment'}`),
       ).not.toThrow()
     }
+  })
+
+  test('every documented [roles] pair is one the SHIPPED runtimes actually serve', () => {
+    // Parsing is not enough: runtime/model compatibility is checked by the
+    // registry-aware eager resolver, a layer `parseConfig` never reaches. A
+    // documented `runtime = "pi"` with an unqualified `model = "gpt-…"` parses
+    // cleanly and then fails `ab dispatch` for anyone who copies it — which is
+    // exactly what a worked example must not do.
+    const blocks = markedTomlBlocks().filter(
+      (block) => block.kind === 'config-fragment' || block.kind === 'complete-config',
+    )
+    const registry = createProductionRuntimes().runtimes
+    let checked = 0
+    for (const block of blocks) {
+      const source = hasTicketsTable(block.source)
+        ? block.source
+        : `${block.source}\n\n${MINIMAL_TICKETS}`
+      const roles = parseConfig(source, `docs/configuration.md#${block.name ?? 'fragment'}`).roles
+      if (Object.keys(roles).length === 0) continue
+      checked += 1
+      // A fragment need not carry [roles.default]; supply the documented
+      // product default so the merge has a base, exactly as a real file would.
+      expect(() =>
+        createRuntimeResolver(registry, { default: { runtime: 'claude' }, ...roles }),
+      ).not.toThrow()
+    }
+    expect(checked).toBeGreaterThan(1)
   })
 
   test('the delimited complete example parses as-is', () => {

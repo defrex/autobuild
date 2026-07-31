@@ -32,6 +32,9 @@ export interface ContextInputs {
    * (reviewers — §15.4).
    */
   findings?: 'current' | 'all-rounds'
+  /** Feedback cited by this exact phase occurrence's started event. Agent
+   * verify uses this for answered guidance without widening findings input. */
+  currentFeedback?: boolean
   /** Producer's own prior-round artifacts (plan revs / implement notes). */
   priorOwnArtifacts?: boolean
   commitRange?: boolean
@@ -144,7 +147,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminal: 'verdict',
     terminalEvent: 'verify.completed',
     verdictVocabulary: ['pass', 'fail', 'skip'],
-    inputs: { spec: true, stepConfig: true, commitRange: true },
+    inputs: { spec: true, stepConfig: true, commitRange: true, currentFeedback: true },
   },
   finalize: {
     name: 'finalize',

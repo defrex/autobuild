@@ -210,6 +210,76 @@ describe('parseConfig — defaults', () => {
     )
   })
 
+  // `[workspace.config]` is a plugin-owned pass-through: Autobuild does not
+  // interpret these keys, so losing one is undetectable downstream. Everything
+  // below drives `parseConfig` rather than a hand-built config object, because
+  // a directly constructed map bypasses the exact step that used to lose the
+  // entry.
+  const pluginWorkspace = (table: string) =>
+    parseConfig(`[workspace]\nprovider = "container"\n[workspace.config]\n${table}${READY}`)
+      .workspace.config
+
+  for (const key of ['__proto__', 'constructor', 'toString']) {
+    test(`a [workspace.config] key named "${key}" reaches the provider intact`, () => {
+      const config = pluginWorkspace(`"${key}" = "kept"\nimage = "bun:latest"\n`)
+      expect(Object.keys(config)).toContain(key)
+      expect(Object.getOwnPropertyDescriptor(config, key)?.value).toBe('kept')
+      // The ordinary key alongside it is untouched.
+      expect(config.image).toBe('bun:latest')
+    })
+  }
+
+  test('a parsed workspace config never answers with an inherited member', () => {
+    const declared = pluginWorkspace('image = "bun:latest"\n')
+    expect(Object.getPrototypeOf(declared)).toBeNull()
+    expect(declared.toString).toBeUndefined()
+    expect(declared.constructor).toBeUndefined()
+    // Including when the table is absent entirely — `prefault` runs the
+    // transform, where `default` would hand back a plain `{}`.
+    expect(Object.getPrototypeOf(parseConfig(READY).workspace.config)).toBeNull()
+  })
+
+  test('a blank [workspace.config] key is plugin-addressable, not an error', () => {
+    // Autobuild does not interpret these keys, so it is not Autobuild's place
+    // to narrow what a plugin may declare. This is the assertion that fails if
+    // this map's `keys: 'any'` policy is ever "tidied" back to the default.
+    const config = pluginWorkspace('"" = "addressable"\n')
+    expect(config['']).toBe('addressable')
+  })
+
+  test('[commands] and [roles] still reject a blank entry name', () => {
+    // The new axis is per-map, not a global relaxation: these two name things
+    // Autobuild itself must address.
+    expect(() => parseConfig(`[commands]\n"" = "echo hi"\n${READY}`)).toThrow(/commands/)
+    expect(() => parseConfig(`[roles.""]\nruntime = "claude"\n${READY}`)).toThrow(/roles/)
+  })
+
+  test('git-worktree still rejects a [workspace.config] holding only a hazardous key', () => {
+    // The regression that matters most: these tables used to parse to an empty
+    // map, so the unsupported-table diagnostic never fired. Match the
+    // diagnostic itself, not just its path — a blank-key rejection would be
+    // reported under `workspace.config` too, and must not pass for it.
+    const unsupported = /is not supported by the builtin "git-worktree" provider/
+    for (const table of ['"__proto__" = "kept"', '"" = "addressable"']) {
+      expect(() => parseConfig(`[workspace.config]\n${table}\n${READY}`)).toThrow(unsupported)
+      expect(() =>
+        parseConfig(
+          `[workspace]\nprovider = "git-worktree"\n[workspace.config]\n${table}\n${READY}`,
+        ),
+      ).toThrow(unsupported)
+    }
+  })
+
+  test('an absent or genuinely empty [workspace.config] draws no git-worktree diagnostic', () => {
+    for (const source of [
+      READY,
+      `[workspace]\nprovider = "git-worktree"\n${READY}`,
+      `[workspace.config]\n${READY}`,
+    ]) {
+      expect(Object.keys(parseConfig(source).workspace.config)).toHaveLength(0)
+    }
+  })
+
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
     expect(parseConfig(READY).forge).toBe('github')
     expect(parseConfig(`forge = "gitlab"\n${READY}`).forge).toBe('gitlab')
@@ -445,6 +515,48 @@ describe('parseConfig — verify cross-validation', () => {
   })
 })
 
+describe('parseConfig — what an operator sees for a malformed step table', () => {
+  test('the whole error block, verbatim', () => {
+    const error = parseError(`${READY}[commands]
+test = "bun test"
+
+[verify]
+steps = ["unit", "e2e"]
+
+[verify.unit]
+kind = "check"
+command = "test"
+bogus = 1
+
+[verify.e2e]
+kind = "browser"
+skill = "ab-verify-e2e"
+`)
+
+    // Every line an operator gets, in order. The second is the tagged-choice
+    // message: [verify.<step>] is a discriminated union, which names the tags it
+    // expected and so has no branch detail to expand.
+    expect(error.message).toBe(
+      [
+        'autobuild.toml: invalid config',
+        '  verify.unit: Unrecognized key: "bogus"',
+        "  verify.e2e.kind: Invalid discriminator value. Expected 'check' | 'agent'",
+      ].join('\n'),
+    )
+
+    // And the structured payload keeps what validation reported, rather than the
+    // `custom` re-encoding the entry boundary used to apply on the way out.
+    expect(error.issues).toEqual([
+      expect.objectContaining({
+        code: 'unrecognized_keys',
+        keys: ['bogus'],
+        path: ['verify', 'unit'],
+      }),
+      expect.objectContaining({ code: 'invalid_union', path: ['verify', 'e2e', 'kind'] }),
+    ])
+  })
+})
+
 describe('parseConfig — first-class finalize steps', () => {
   test('accepts strict check and agent tables in configured order', () => {
     const config = parseConfig(`${READY}
@@ -576,7 +688,7 @@ describe('parseConfig — [tickets]', () => {
 
   test('readiness labels and lifecycle states retain their surface', () => {
     const config = parseConfig(
-      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\ndir = "tickets"\n',
+      '[tickets]\nsource = "file"\nreadyState = "ready"\nreadyLabels = []\ncreateState = "Triage"\ntriageState = "Triage"\nproposalState = "ready"\ndir = "tickets"\n',
     )
     expect(config.tickets).toEqual({
       source: 'file',
@@ -584,6 +696,7 @@ describe('parseConfig — [tickets]', () => {
       readyLabels: [],
       createState: 'Triage',
       triageState: 'Triage',
+      proposalState: 'ready',
       dir: 'tickets',
     })
   })

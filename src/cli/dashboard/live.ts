@@ -12,6 +12,7 @@
  * in-place replacement and cursor restoration. Routine notices never enter
  * the live region, and nothing may print through it into dashboard scrollback.
  */
+import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
 
 const ENTER_ALTERNATE_SCREEN = '\x1b[?1049h'
@@ -21,6 +22,19 @@ const CLEAR_DISPLAY = '\x1b[2J'
 const CURSOR_POSITION = (row: number): string => `\x1b[${row};1H`
 const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
+/**
+ * Bracketed paste (DEC mode 2004): the terminal brackets pasted text in
+ * `ESC[200~` … `ESC[201~`, which is the only way the input seam can tell a
+ * paste from typing and therefore the only way a multi-line paste can be
+ * inserted rather than submitted at its first line break.
+ *
+ * A terminal without the mode ignores both writes, and there a paste degrades
+ * to exactly today's behavior — the newline arrives as an ordinary keypress.
+ * Nothing in the codebase can detect that, so it is documented rather than
+ * worked around.
+ */
+const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
+const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
 
 /**
  * How many lines a region may paint on a `rows`-row screen: **one fewer than
@@ -53,9 +67,13 @@ export class LiveRegion {
   private paintedRows: number | undefined
   private alternate = false
   private hidden = false
+  private bracketedPaste = false
   private finished = false
 
-  constructor(private readonly term: TerminalOut) {}
+  constructor(
+    private readonly term: TerminalOut,
+    private readonly keyboard?: KeyboardProtocol,
+  ) {}
 
   /**
    * Repaint the region in place.
@@ -79,6 +97,11 @@ export class LiveRegion {
       this.alternate = true
       this.term.write(HIDE_CURSOR)
       this.hidden = true
+      this.term.write(ENABLE_BRACKETED_PASTE)
+      this.bracketedPaste = true
+      // Kitty keyboard mode stacks are per-screen, so negotiate only after
+      // the alternate screen is active.
+      this.keyboard?.screenEntered()
     }
 
     this.term.write(CLEAR_DISPLAY + CURSOR_POSITION(1))
@@ -101,6 +124,16 @@ export class LiveRegion {
     if (this.finished) return
     this.finished = true
 
+    // Leave the terminal's paste mode as we found it, BEFORE handing the
+    // normal screen back: a mode left on outlives the process and would
+    // bracket the operator's next shell paste.
+    if (this.bracketedPaste) {
+      this.term.write(DISABLE_BRACKETED_PASTE)
+      this.bracketedPaste = false
+    }
+    // Balance an outstanding keyboard push before returning to the normal
+    // screen. Calling this even when no frame painted also latches late replies.
+    this.keyboard?.screenLeaving()
     if (this.alternate) {
       this.term.write(LEAVE_ALTERNATE_SCREEN)
       this.alternate = false

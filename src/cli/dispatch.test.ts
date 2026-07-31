@@ -19,7 +19,7 @@ import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
 import { renderDashboard, stripAnsi, type DashboardRenderer } from './dashboard/render'
-import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
+import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -33,7 +33,7 @@ import type { Ticket } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
-import { systemClock, textContent, type Clock } from '../store/types'
+import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
@@ -1711,6 +1711,10 @@ describe('abDispatch watch harvest coordination', () => {
 type FakeInputKey =
   | 'up'
   | 'down'
+  | 'left'
+  | 'right'
+  | 'home'
+  | 'end'
   | 'auto-merge'
   | 'intake'
   | 'pause'
@@ -1720,6 +1724,7 @@ type FakeInputKey =
   | 'letter-a'
   | 'interrupt'
   | 'enter'
+  | 'newline'
   | 'backspace'
   | 'escape'
 
@@ -1751,16 +1756,22 @@ function fakeInput(
 ): TerminalInput & {
   press: (key: FakeInputKey) => void
   text: (text: string) => void
+  paste: (text: string) => void
+  listening: () => void
+  keyboardFlags: (flags: number) => void
+  deviceAttributes: () => void
   starts: number
   cleanups: number
 } {
   let onInput: ((input: TerminalInputEvent) => void) | undefined
+  let inputHooks: TerminalInputHooks | undefined
   const input = {
     starts: 0,
     cleanups: 0,
-    start(handler: (event: TerminalInputEvent) => void): () => void {
+    start(handler: (event: TerminalInputEvent) => void, hooks?: TerminalInputHooks): () => void {
       input.starts += 1
       onInput = handler
+      inputHooks = hooks
       for (const key of initial) handler(fakeInputEvent(key))
       let cleaned = false
       return () => {
@@ -1768,6 +1779,7 @@ function fakeInput(
         cleaned = true
         input.cleanups += 1
         onInput = undefined
+        inputHooks = undefined
         onCleanup()
       }
     },
@@ -1776,6 +1788,20 @@ function fakeInput(
     },
     text(text: string): void {
       onInput?.({ type: 'text', text })
+    },
+    /** One bracketed paste, exactly as the terminal seam delivers it: whole,
+     * with its line structure, and never split into keystrokes. */
+    paste(text: string): void {
+      onInput?.({ type: 'paste', text })
+    },
+    listening(): void {
+      inputHooks?.onListening?.()
+    },
+    keyboardFlags(flags: number): void {
+      inputHooks?.onKeyboardFlags?.(flags)
+    },
+    deviceAttributes(): void {
+      inputHooks?.onDeviceAttributes?.()
     },
   }
   return input
@@ -1827,6 +1853,19 @@ function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
     [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Autobuild')) ?? '',
   )
+}
+
+/** The repository-setting facts a dashboard action durably wrote, in journal
+ * order — `[type, payload]` pairs, so both the values and their ORDER are
+ * assertable. Order matters: the pause fact is the quiescence boundary and must
+ * precede intake (src/cli/bulk-control.ts). */
+async function settingWrites(
+  store: BuildStore,
+  repo: string,
+): Promise<[string, { enabled: boolean }][]> {
+  return (await store.getRepoEvents(repo))
+    .filter((event) => event.type.startsWith('dispatcher.'))
+    .map((event) => [event.type, event.payload as { enabled: boolean }])
 }
 
 function latestPaintedFrame(term: { frames: string[] }): string {
@@ -1887,6 +1926,64 @@ describe('abDispatch --once with an interactive terminal', () => {
       await fx.cleanup()
     }
   }, 30_000)
+
+  for (const response of ['accept', 'partial', 'device-attributes'] as const) {
+    test(`negotiates keyboard mode around the alternate screen: ${response}`, async () => {
+      const fx = await makeFixture([], happyHandlers())
+      const base = fakeTerminal()
+      let hooks: TerminalInputHooks | undefined
+      let cleanup = 0
+      const input: TerminalInput = {
+        start: (_handler, nextHooks) => {
+          hooks = nextHooks
+          // The query is unlocked by the real input seam, not dashboard paint.
+          expect(base.all()).not.toContain('\x1b[?u')
+          hooks?.onListening?.()
+          hooks?.onKeyboardFlags?.(0)
+          return () => {
+            cleanup += 1
+          }
+        },
+      }
+      const terminal: TerminalOut & { frames: string[]; all: () => string } = {
+        ...base,
+        write: (chunk) => {
+          base.write(chunk)
+          if (chunk === '\x1b[>29u\x1b[?u\x1b[c') {
+            queueMicrotask(() => {
+              if (response === 'accept') hooks?.onKeyboardFlags?.(29)
+              else if (response === 'partial') hooks?.onKeyboardFlags?.(25)
+              else hooks?.onDeviceAttributes?.()
+            })
+          }
+        },
+      }
+      try {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          terminal,
+          input,
+        })
+
+        const writes = base.frames
+        expect(cleanup).toBe(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[?u')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[>29u\x1b[?u\x1b[c')).toHaveLength(1)
+        expect(writes.filter((chunk) => chunk === '\x1b[<1u')).toHaveLength(1)
+        expect(writes.indexOf('\x1b[?u')).toBeLessThan(writes.indexOf('\x1b[?1049h'))
+        expect(writes.indexOf('\x1b[?1049h')).toBeLessThan(writes.indexOf('\x1b[>29u\x1b[?u\x1b[c'))
+        expect(writes.indexOf('\x1b[<1u')).toBeLessThan(writes.indexOf('\x1b[?1049l'))
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
 
   test('shows configured capacity and unclaimed observation pressure even for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
@@ -3920,8 +4017,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.pause-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: pause requested for 2 builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+        ),
       )
+      // The wiring assertion: the fact the dashboard writes is the one the
+      // dispatcher reads, and it lands before intake.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
 
       // No live runner in this fixture, so the kernel's acknowledgement — the
       // thing that actually settles a pause — is written explicitly.
@@ -3936,8 +4041,16 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.resume-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
       await waitFor(() =>
-        latestDashboardFrame(term).includes('resume all: resume requested for 2 builds; intake ON'),
+        latestDashboardFrame(term).includes(
+          'resume all: resume requested for 2 builds; queued builds released; intake ON',
+        ),
       )
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+        ['dispatcher.pause-set', { enabled: false }],
+        ['dispatcher.intake-set', { enabled: true }],
+      ])
 
       await ack('alpha-work', 'build.resumed')
       await ack('beta-work', 'build.resumed')
@@ -4009,15 +4122,22 @@ describe('abDispatch interactive keyboard controls', () => {
 
       input.press('pause')
       await waitFor(() =>
-        latestDashboardFrame(term).includes('pause all: no pausable builds; intake OFF'),
+        latestDashboardFrame(term).includes(
+          'pause all: no pausable builds; queued builds held; intake OFF',
+        ),
       )
       expect(latestDashboardFrame(term)).toContain('intake OFF')
-      const intakeWrites = (await fx.store.getRepoEvents(fx.origin)).filter(
-        (event) => event.type === 'dispatcher.intake-set',
+      // With nothing pausable, the repository facts are the whole action.
+      expect(await settingWrites(fx.store, fx.origin)).toEqual([
+        ['dispatcher.pause-set', { enabled: true }],
+        ['dispatcher.intake-set', { enabled: false }],
+      ])
+      const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
+        event.type.startsWith('dispatcher.'),
       )
-      expect(intakeWrites).toHaveLength(1)
-      expect(intakeWrites[0]?.payload).toEqual({ enabled: false })
-      expect(intakeWrites[0]?.actor).toEqual({ kind: 'human', user: 'quiet-op' })
+      expect(
+        settings.every((event) => event.actor.kind === 'human' && event.actor.user === 'quiet-op'),
+      ).toBe(true)
 
       input.press('interrupt')
       await run
@@ -4213,7 +4333,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const afterAutoMerge = await fx.store.getEvents('detail-actions')
 
       input.press('resume')
-      await waitFor(() => latestPaintedFrame(term).includes('Resume feedback'))
+      await waitFor(() => latestPaintedFrame(term).includes('Resume '))
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).toContain('Which detail action should resume this build?')
 
@@ -4221,7 +4341,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(
         () =>
           latestPaintedFrame(term).includes('Build  detail-actions') &&
-          !latestPaintedFrame(term).includes('Resume feedback'),
+          !latestPaintedFrame(term).includes('Resume '),
       )
       expect(await fx.store.getEvents('detail-actions')).toEqual(afterAutoMerge)
       expect(latestPaintedFrame(term)).not.toContain('Autobuild')
@@ -4286,6 +4406,15 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(detail).toContain('Sessions')
       expect(detail).toContain('runtime')
       expect(detail).not.toContain('Autobuild')
+
+      // Outside the resume prompt `newline` drives the SAME action as `enter`.
+      // That is the structural mitigation for the terminal seam now telling CR
+      // from LF: if some terminal reports Return as LF, only the composer can
+      // tell, and Enter cannot stop working anywhere else.
+      input.press('escape')
+      await waitFor(() => /^ > .*drilldown-work/m.test(latestDashboardFrame(term)))
+      input.press('newline')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  drilldown-work'))
 
       input.press('enter')
       await waitFor(() => latestPaintedFrame(term).includes('Transcript  drilldown-work'))
@@ -4449,7 +4578,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^ > .*guidance-work/m.test(stripAnsi(term.all())))
 
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       expect(await fx.store.getEvents('guidance-work')).toHaveLength(before.length)
 
       // m/p/d are feedback characters while the modal is active, never global
@@ -4485,6 +4614,186 @@ describe('abDispatch interactive keyboard controls', () => {
           ].includes(event.type),
         ),
       ).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  /** One blocked build with an open escalation, its dashboard running, its
+   * resume prompt open, and nothing written yet. */
+  async function promptOpen(
+    fx: Awaited<ReturnType<typeof makeFixture>>,
+    slug: string,
+    question: string,
+    escalationId: string,
+  ) {
+    await abDispatch({
+      targetRepo: fx.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      once: true,
+      wire: fx.wire,
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id: escalationId, phase: 'plan', source: 'agent', question },
+    })
+    const before = await fx.store.getEvents(slug)
+    const term = fakeTerminal()
+    const input = fakeInput()
+    const run = abDispatch({
+      targetRepo: fx.origin,
+      env: { USER: 'dashboard-op' },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      intervalMs: 60_000,
+      wire: fx.wire,
+      terminal: term,
+      input,
+    })
+    await waitFor(() => stripAnsi(term.all()).includes(question))
+    input.press('down')
+    await waitFor(() => new RegExp(`^ > .*${slug}`, 'm').test(stripAnsi(term.all())))
+    input.press('resume')
+    await waitFor(() => stripAnsi(term.all()).includes(`Resume ${slug}`))
+    expect(await fx.store.getEvents(slug)).toHaveLength(before.length)
+    return { term, input, run, before }
+  }
+
+  test('guidance typed across a newline reaches the agent with its line structure intact', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-multiline', { title: 'Multiline work' }),
+      happyHandlers(),
+    )
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'multiline-work',
+        'Which merge strategy should finalize use?',
+        'esc_multiline',
+      )
+
+      input.text('first line')
+      input.press('newline')
+      input.text('second line')
+      // Home/End are LOGICAL line bounds, so this edits the second line only.
+      input.press('home')
+      input.text('> ')
+      input.press('end')
+      await waitFor(() => stripAnsi(term.all()).includes('> second line'))
+      input.press('enter')
+
+      await waitFor(async () =>
+        (await fx.store.getEvents('multiline-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const added = (await fx.store.getEvents('multiline-work')).slice(before.length)
+      const answers = added.filter((event) => event.type === 'escalation.answered')
+      // Same event type, same id, same resolution vocabulary as the one-line
+      // prompt wrote — the write path is untouched.
+      expect(answers).toHaveLength(1)
+      expect(answers[0]?.payload).toEqual({
+        id: 'esc_multiline',
+        answer: 'first line\n> second line',
+        resolution: 'guidance',
+      })
+      expect(answers[0]?.actor).toEqual({ kind: 'human', user: 'dashboard-op' })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a multi-line paste inserts wholly without submitting, and Enter then sends all of it', async () => {
+    const fx = await makeFixture(readyTicket('T-paste', { title: 'Paste work' }), happyHandlers())
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'paste-work',
+        'Which reconciliation approach should the agent take?',
+        'esc_paste',
+      )
+
+      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      input.paste(pasted)
+      await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
+      // No part of the paste is interpreted as submit, however many line
+      // breaks it carries.
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(await fx.store.getEvents('paste-work')).toHaveLength(before.length)
+
+      input.press('enter')
+      await waitFor(async () =>
+        (await fx.store.getEvents('paste-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const answer = (await fx.store.getEvents('paste-work'))
+        .slice(before.length)
+        .find((event) => event.type === 'escalation.answered')
+      // Asserted against the EXACT pasted text, so a cap or a dropped tail
+      // fails here too.
+      expect(answer?.payload).toEqual({
+        id: 'esc_paste',
+        answer: pasted,
+        resolution: 'guidance',
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Up and Down move the caret while the prompt is open and never move the selected row', async () => {
+    const fx = await makeFixture(readyTicket('T-caret', { title: 'Caret work' }), happyHandlers())
+    try {
+      const { term, input, run, before } = await promptOpen(
+        fx,
+        'caret-work',
+        'Should the finalize step keep native auto-merge?',
+        'esc_caret',
+      )
+
+      input.text('one')
+      input.press('newline')
+      input.text('two')
+      input.press('up')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      // The row selection is exactly where it was; Up belongs to the composer
+      // while the prompt is open.
+      const painted = stripAnsi(term.all())
+      expect(painted).toMatch(/^ > .*caret-work/m)
+      input.text('X')
+      input.press('enter')
+
+      await waitFor(async () =>
+        (await fx.store.getEvents('caret-work')).some(
+          (event) => event.type === 'escalation.answered',
+        ),
+      )
+      input.press('interrupt')
+      await run
+
+      const answer = (await fx.store.getEvents('caret-work'))
+        .slice(before.length)
+        .find((event) => event.type === 'escalation.answered')
+      expect(answer?.payload).toEqual({
+        id: 'esc_caret',
+        answer: 'oneX\ntwo',
+        resolution: 'guidance',
+      })
+      // The selection never left the build row, so no other build's controls
+      // were ever addressed.
+      expect(stripAnsi(term.all())).not.toMatch(/^ > Autobuild/m)
     } finally {
       await fx.cleanup()
     }
@@ -4548,7 +4857,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*retry-work/m.test(stripAnsi(term.all())))
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.text('   ')
       input.press('enter')
       await waitFor(async () => {
@@ -4681,7 +4990,7 @@ describe('abDispatch interactive keyboard controls', () => {
         ),
       )
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.press('enter')
       await waitFor(async () =>
         (await fx.store.getEvents('finalize-retry')).some(
@@ -4773,7 +5082,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*cancel-work/m.test(stripAnsi(term.all())))
       input.press('resume')
-      await waitFor(() => stripAnsi(term.all()).includes('Resume feedback'))
+      await waitFor(() => stripAnsi(term.all()).includes('Resume '))
       input.text('do not submit this')
       input.press('escape')
       await new Promise((resolve) => setTimeout(resolve, 30))
@@ -5113,4 +5422,173 @@ describe('abDispatch interactive keyboard controls', () => {
       await fx.cleanup()
     }
   }, 30_000)
+})
+
+/**
+ * Startup role-key diagnostics (SPEC §9). These reach the operator through the
+ * seam `ab dispatch` already uses for configuration-level notices, and both
+ * surfaces get the IDENTICAL strings in full — stderr writes them verbatim, the
+ * dashboard wraps them into its warning region. No fixture here dispatches a
+ * build: the diagnostic is emitted before the first tick and is what is under
+ * test.
+ */
+describe('abDispatch: unconsumed and deprecated [roles] keys', () => {
+  /** A stray key plus a deprecated skill-name alias for a real agent step. */
+  const BROKEN_ROLES_TOML = DISPATCH_CONFIG_TOML.replace(
+    'steps = ["unit"]',
+    'steps = ["unit", "e2e"]',
+  ).replace(
+    '[policy]',
+    `[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[roles.ghost]
+runtime = "claude"
+
+[roles.typo]
+runtime = "claude"
+
+[roles.ab-verify-e2e]
+runtime = "claude"
+
+[policy]`,
+  )
+
+  /** Every detail an operator needs to act, on either surface. */
+  const DETAILS = [
+    '[roles.ghost]',
+    '[roles.typo]',
+    '[roles.ab-verify-e2e]',
+    '[roles.e2e]',
+    'harvest-review',
+    'plan-review',
+    'reconcile',
+  ]
+
+  test('a `[roles."__proto__"]` entry reaches the operator like any other stray key', async () => {
+    // The sharpest open-map key: legal TOML, but assigning it into a normal
+    // object invokes the legacy prototype setter instead of creating an own
+    // key. It used to parse fine and then be invisible to every surface —
+    // never resolved, never dispatchable, never warned about. Driven through
+    // a real autobuild.toml on disk, so nothing about the config path is faked.
+    const toml = DISPATCH_CONFIG_TOML.replace(
+      '[policy]',
+      '[roles."__proto__"]\nruntime = "claude"\n\n[policy]',
+    )
+    const fx = await makeFixture([], happyHandlers(), toml)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime and model never reach a session.',
+        'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+      ])
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('line-oriented mode writes every notice to stderr, in full, and leaves stdout clean', async () => {
+    const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+    const out: string[] = []
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+        'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
+        'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
+      ])
+      // Scripted stdout consumers stay clean.
+      for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  for (const size of [
+    { columns: 120, rows: 40 },
+    { columns: 80, rows: 24 },
+  ]) {
+    test(`the painted frame carries every detail at ${size.columns}x${size.rows}`, async () => {
+      const fx = await makeFixture([], happyHandlers(), BROKEN_ROLES_TOML)
+      const term = fakeTerminal(true, size)
+      try {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          terminal: term,
+        })
+
+        // The whole frame, because details legitimately land on continuation
+        // rows — that is what wrapping means.
+        const frame = latestDashboardFrame(term)
+        for (const detail of DETAILS) expect(frame).toContain(detail)
+        // Uncapped: no notice is dropped by count. (`~` is deliberately NOT
+        // asserted absent — packLines truncating an over-wide single token is
+        // an inherited invariant this change does not own.)
+        expect(frame).not.toMatch(/\+\d+ more/)
+        // The interactive frame is the only surface: stderr stays silent.
+        expect(fx.err).toEqual([])
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
+
+  test('a later transient warning does not erase the config diagnostic', async () => {
+    const fx = await makeFixture(readyTicket('T-sticky'), happyHandlers(), BROKEN_ROLES_TOML)
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    const transient = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
+    fx.tickets.listReady = async (criteria) => {
+      const listing = await originalListReady(criteria)
+      return { ...listing, diagnostics: [transient] }
+    }
+    const term = fakeTerminal()
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      // `setWarning` replaces the transient slot outright, so sharing it would
+      // have let this tick's ticket diagnostic erase the startup notice for the
+      // life of the process. The final frame carries BOTH.
+      const frame = latestDashboardFrame(term)
+      for (const detail of DETAILS) expect(frame).toContain(detail)
+      expect(frame).toContain('invalid frontmatter')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 60_000)
 })

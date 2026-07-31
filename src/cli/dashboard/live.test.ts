@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { LiveRegion, paintableRows } from './live'
+import type { KeyboardProtocol } from '../keyboard'
 import type { TerminalOut } from '../terminal'
 
 interface FakeTerm extends TerminalOut {
@@ -31,6 +32,8 @@ const CLEAR_DISPLAY = '\x1b[2J'
 const CURSOR_POSITION = (row: number): string => `\x1b[${row};1H`
 const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
+const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
+const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
 const frame = (lines: string[]): string => lines.map((line) => `${line}\n`).join('')
 
 describe('paintableRows: the frame needs one row fewer than the screen', () => {
@@ -76,6 +79,7 @@ describe('paintableRows: the frame needs one row fewer than the screen', () => {
     expect(term.writes).toEqual([
       ENTER_ALTERNATE_SCREEN,
       HIDE_CURSOR,
+      ENABLE_BRACKETED_PASTE,
       CLEAR_DISPLAY + CURSOR_POSITION(1),
       frame(lines),
     ])
@@ -90,6 +94,7 @@ describe('LiveRegion: alternate-screen replacement', () => {
     expect(term.writes).toEqual([
       ENTER_ALTERNATE_SCREEN,
       HIDE_CURSOR,
+      ENABLE_BRACKETED_PASTE,
       CLEAR_DISPLAY + CURSOR_POSITION(1),
       'one\ntwo\n',
     ])
@@ -180,8 +185,96 @@ describe('LiveRegion: finish() leaves the last frame on the normal screen', () =
     region.finish()
 
     const teardown = term.writes.slice(before)
-    expect(teardown).toEqual([LEAVE_ALTERNATE_SCREEN, 'final-frame\n', SHOW_CURSOR])
+    expect(teardown).toEqual([
+      DISABLE_BRACKETED_PASTE,
+      LEAVE_ALTERNATE_SCREEN,
+      'final-frame\n',
+      SHOW_CURSOR,
+    ])
     expect(teardown.join('')).not.toContain(CLEAR_DISPLAY)
+  })
+
+  test('bracketed paste is enabled on the first effective paint and disabled by finish()', () => {
+    // Without DEC mode 2004 the terminal cannot tell the input seam a paste
+    // from typing, and a multi-line paste submits at its first line break. A
+    // mode left ON would outlive the process and bracket the operator's next
+    // shell paste, so both halves are asserted.
+    const term = fakeTerm()
+    const region = new LiveRegion(term)
+    expect(term.all()).not.toContain(ENABLE_BRACKETED_PASTE)
+
+    region.update(['frame'])
+    expect(term.writes.filter((chunk) => chunk === ENABLE_BRACKETED_PASTE)).toHaveLength(1)
+
+    // A repaint does not re-enable it; only the first entry into the region.
+    region.update(['other'])
+    expect(term.writes.filter((chunk) => chunk === ENABLE_BRACKETED_PASTE)).toHaveLength(1)
+
+    region.finish()
+    expect(term.writes.filter((chunk) => chunk === DISABLE_BRACKETED_PASTE)).toHaveLength(1)
+    // Disabled BEFORE the normal screen comes back, and never twice.
+    expect(term.writes.indexOf(DISABLE_BRACKETED_PASTE)).toBeLessThan(
+      term.writes.indexOf(LEAVE_ALTERNATE_SCREEN),
+    )
+    region.finish()
+    expect(term.writes.filter((chunk) => chunk === DISABLE_BRACKETED_PASTE)).toHaveLength(1)
+  })
+
+  test('keyboard mode is entered after alternate-screen entry and left before exit', () => {
+    const term = fakeTerm()
+    let pushed = false
+    const keyboard: KeyboardProtocol = {
+      query: () => {},
+      reported: () => {},
+      deviceAttributes: () => {},
+      screenEntered: () => {
+        pushed = true
+        term.write('<keyboard-push>')
+      },
+      screenLeaving: () => {
+        pushed = false
+        term.write('<keyboard-pop>')
+      },
+      get pushed() {
+        return pushed
+      },
+    }
+    const region = new LiveRegion(term, keyboard)
+    region.update(['frame'])
+    region.update(['other'])
+    region.finish()
+    region.finish()
+
+    expect(term.writes.filter((chunk) => chunk === '<keyboard-push>')).toHaveLength(1)
+    expect(term.writes.filter((chunk) => chunk === '<keyboard-pop>')).toHaveLength(1)
+    expect(term.writes.indexOf(ENTER_ALTERNATE_SCREEN)).toBeLessThan(
+      term.writes.indexOf('<keyboard-push>'),
+    )
+    expect(term.writes.indexOf('<keyboard-pop>')).toBeLessThan(
+      term.writes.indexOf(LEAVE_ALTERNATE_SCREEN),
+    )
+  })
+
+  test('an unpainted region still latches keyboard teardown without writing terminal escapes', () => {
+    const term = fakeTerm()
+    let leaving = 0
+    const keyboard: KeyboardProtocol = {
+      query: () => {},
+      reported: () => {},
+      deviceAttributes: () => {},
+      screenEntered: () => {},
+      screenLeaving: () => (leaving += 1),
+      pushed: false,
+    }
+    new LiveRegion(term, keyboard).finish()
+    expect(leaving).toBe(1)
+    expect(term.all()).toBe('')
+  })
+
+  test('an unpainted region never touches paste mode', () => {
+    const term = fakeTerm()
+    new LiveRegion(term).finish()
+    expect(term.all()).toBe('')
   })
 
   test('finish() on an unpainted region leaves no escapes at all', () => {

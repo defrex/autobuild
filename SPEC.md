@@ -57,7 +57,10 @@ decision below answers to them:
    no separate resume path; every phase is a function of durable state.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated moves past
    Triage without a human grooming it to Ready. That single gate is where
-   taste and prioritization live.
+   taste and prioritization live. A repository may waive the gate for its own
+   harvest by naming a filing state (`[tickets].proposalState`, §12); the
+   waiver is explicit, repository-wide, and configured, and no code path
+   reaches Ready without one.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
 
 ## 3. System decomposition
@@ -740,10 +743,42 @@ deterministic fail-safe.
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, and
   extension allowlist live in one open `[roles]` map whose reserved `default`
-  entry is the inheritance base and must explicitly name a runtime. There is no
-  wiring fallback. Every concrete role merges over it independently per field;
-  the merged runtime/model pair must be compatible —
-  the resolver never silently substitutes a runtime or model. All roles
+  entry is the inheritance base and must explicitly name a runtime.
+
+  **Which key a session selects.** One rule for both kinds of agent step: an
+  agent verify step and an agent finalize step each select `[roles.<step>]` by
+  their *logical step name*; core phases select `[roles.<phase>]`.
+
+  ```toml
+  [verify.e2e]
+  kind = "agent"
+  skill = "ab-verify-e2e"
+
+  [roles.e2e]        # the STEP name — not "ab-verify-e2e"
+  runtime = "pi"
+  ```
+
+  The step's configured skill name remains a deprecated alias for existing
+  configurations and will be removed in a future release. It is consulted only
+  when `[roles.<step>]` is undeclared, so the step name always wins.
+
+  **What is and is not a fallback**, stated as three separate facts so none of
+  them is read as the others:
+
+  1. A *resolved* role never has its runtime or model substituted per field.
+     Every concrete role merges over `default` independently per field; the
+     merged runtime/model pair must be compatible, and an incompatible one is
+     an error, not a substitution.
+  2. A **requested** role key that no `[roles.<key>]` declares resolves to
+     `[roles.default]` wholesale. That is a real fallback and not an error — a
+     pipeline whose config names no roles at all runs entirely on the default.
+  3. A **declared** key that nothing ever requests is resolved, validated, and
+     then never used. `ab dispatch` reports it at startup, naming the key and
+     the keys valid for that configuration. It stays a warning: an unmatched
+     role key is never a hard error, so upgrading with a stale or typo'd key
+     never turns a working repository red.
+
+  All roles
   resolve **eagerly, before any session launches**, with problems aggregated
   into one error. A missing default diagnostic includes a copyable table and
   every materialized runtime name. Builtin and plugin registrations use the same model-family,
@@ -794,7 +829,13 @@ builds with the question and an answer channel (an `escalation.answered`
 event — commands are events, §15.2.7). The durable record is in the store
 like everything else. An answer carries either bare `retry` or free-text
 `guidance` that feeds the parked phase's next run; answering is an attempt,
-not a forced success — an unresolved condition may escalate again.
+not a forced success — an unresolved condition may escalate again. For an
+agent verifier's own `ab escalate`, that next run is the same `verify:<step>`:
+`verify.started.feedback` cites the answer, `ab context` materializes it as
+`.ab/guidance.json`, and the citation consumes it once. A bare retry reruns the
+step without guidance. The intentionally different policy escalation after an
+exhausted failed verify report feeds `implement`, where its guidance outranks
+the pending report.
 
 Policy escalations caused by an exhausted bounded retry/round budget are the
 narrow exception to the human-answer rule: a fresh `ab dispatch` invocation
@@ -837,7 +878,8 @@ The fixed workflow is:
    create/join/suppress proposals; a fresh reviewer checks coverage, semantic
    dedup, spec quality, and evidence. Only approval advances.
 3. **file (deterministic)** — render creates to the spec standard and file
-   them into Triage with the reserved `autobuild:proposal` provenance label.
+   them into `[tickets].proposalState`, Triage by default, with the reserved
+   `autobuild:proposal` provenance label.
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
@@ -864,8 +906,15 @@ event-level mechanics live in the repository catalog and reducer tests):
   ordinary parked run and clears every exhaustion barrier. It never
   resurrects a terminal run. Completed and escalated runs are irrevocable; a
   deliberate escalation consumes its snapshot and is never auto-recovered.
-- **The harvester only proposes.** It never claims, readies, grooms, or
-  dispatches a proposal. Humans still own Triage → Ready.
+- **The harvester only proposes.** It never claims, grooms, or dispatches a
+  proposal, and it files every one into the same configured state rather than
+  ranking them. Humans own Triage → Ready by default. A repository that points
+  `[tickets].proposalState` at its ready state has waived that gate for itself:
+  every harvested proposal becomes dispatchable unread, on the strength of the
+  synthesize ⇄ review loop and the spec gate alone. The waiver is a field of
+  its own rather than a reuse of `triageState`, because bounces, aborts, and
+  closed-unmerged PRs must still land where the next tick will not reclaim
+  them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
 
@@ -916,10 +965,12 @@ displays is a reduction of the logs, and anything it does is an event — so
 every frontend (terminal today, web later) is the same adapter pattern
 against the same store, and a dead runner still receives commands on resume.
 
-Durable operator settings (intake, the claim-time auto-merge default, the
-harvest gate) are repository-journal facts: they survive restarts, propagate
-between dispatchers by ordinary polling, and are never optimistically
-rendered — the UI shows acknowledged state.
+Durable operator settings (intake, the repository-wide pause, the claim-time
+auto-merge default, the harvest gate) are repository-journal facts: they
+survive restarts, propagate between dispatchers by ordinary polling, and are
+never optimistically rendered — the UI shows acknowledged state. The
+repository-wide pause holds every queued build: while it is set, no dispatcher
+tick may attach a runner to a build that does not have one yet.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
@@ -1009,7 +1060,7 @@ The families, with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
@@ -1105,7 +1156,13 @@ report}` → kernel routes back into the code loop: `implement.started
 {round: 2, feedback: {verify: {step, report}}}` → fix → `code-review` round
 2 → approve → verify re-runs **from the first step** (implement changed the
 code; cheap checks first), `attempt: 2`. `policy.maxVerifyAttempts`
-exhausted → `escalation.raised {source: "policy"}`.
+exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
+policy escalation routes to `implement` and outranks the pending report. By
+contrast, when the agent verifier itself uses `ab escalate`, guidance answering
+it reruns that same step with `verify.started {feedback: {guidance}}`; `ab context`
+writes `.ab/guidance.json`. The start citation consumes the answer
+once, so a later failure routes its report to `implement` without stale
+guidance. A bare retry reruns the verifier with no feedback.
 
 **B — review stall:** round 1 `code-review.verdict {revise, [f1]}` → round 2
 verdict's finding marks `persists: [f1]` → round 3 again → kernel:
