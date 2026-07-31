@@ -156,8 +156,9 @@ interface VerifyRecord {
   reason?: string
 }
 
-interface GuidanceStart {
+interface GuidanceDelivery {
   escalation: string
+  /** seq of the matching `session.started` that made the carrier actionable. */
   seq: number
 }
 
@@ -204,13 +205,12 @@ interface LogIndex {
   /** A `reconcile.started` after lastConflict without its completion — a
    * crashed reconcile re-runs the SAME attempt from its start (§15.6-C). */
   conflictReconcileStarted?: { attempt: number }
-  /** Every `*.started` carrying feedback.guidance — consumption markers: a
-   * guidance answer is consumed once a started event after it cites it.
-   * Plan, implement, and agent-verify starts may carry feedback (§15.3). Only
-   * a started event that actually CITES the answer consumes it — a start that
-   * failed to carry it leaves the answer deliverable (§15.6-B: a human answer
-   * is authoritative and must never be silently dropped). */
-  guidanceStarts: GuidanceStart[]
+  /** Guidance carriers that reached a matching durable session launch.
+   * Plan, implement, and agent-verify starts may cite feedback (§15.3), but a
+   * citation alone remains recoverable across the pre-launch crash boundary.
+   * Only a later `session.started` for the same phase and round/attempt marks
+   * that answer delivered (§15.6-B). */
+  guidanceDeliveries: GuidanceDelivery[]
 }
 
 export function decideNext(events: AbEvent[], config: Config): Decision {
@@ -289,13 +289,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   // Unconsumed guidance for an explicit destination (§15.6-B). Plan/code
   // escalations feed their producer; an agent verifier's own escalation feeds
   // that exact verifier occurrence; policy verify guidance keeps its existing
-  // implement destination. A cited *.started payload consumes the answer.
+  // implement destination. A cited *.started payload carries the answer; its
+  // matching durable session launch consumes it.
   const guidanceFeedback = (destination: GuidanceDestination): Feedback | undefined => {
     let latest: AnsweredEscalation | undefined
     for (const e of state.answeredEscalations) {
       if (e.resolution !== 'guidance' || guidanceDestination(e) !== destination) continue
-      const consumed = log.guidanceStarts.some(
-        (g) => g.escalation === e.id && g.seq > e.answeredSeq,
+      const consumed = log.guidanceDeliveries.some(
+        (delivery) => delivery.escalation === e.id && delivery.seq > e.answeredSeq,
       )
       if (consumed) continue
       if (latest === undefined || e.answeredSeq > latest.answeredSeq) latest = e
@@ -693,7 +694,8 @@ function indexLog(events: AbEvent[]): LogIndex {
   const verifyStarted: { seq: number; attempt: number }[] = []
   let maxVerifyAttemptEver = 0
   const finalizeStepsDone = new Set<string>()
-  const guidanceStarts: GuidanceStart[] = []
+  const guidanceDeliveries: GuidanceDelivery[] = []
+  const pendingGuidanceStarts = new Map<string, { escalation: string; seq: number }>()
   let lastReconcileCompletedSeq = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
@@ -713,6 +715,17 @@ function indexLog(events: AbEvent[]): LogIndex {
       loop.rounds.set(r, record)
     }
     return record
+  }
+
+  const noteGuidanceStart = (key: string, feedback: Feedback | undefined, seq: number): void => {
+    // A newer start is the authoritative carrier for this exact occurrence.
+    // In particular, a guidance-free retry must not let its later session
+    // consume an older citation that never launched.
+    if (feedback !== undefined && 'guidance' in feedback) {
+      pendingGuidanceStarts.set(key, { escalation: feedback.guidance.escalation, seq })
+    } else {
+      pendingGuidanceStarts.delete(key)
+    }
   }
 
   const noteVerdict = (
@@ -748,10 +761,7 @@ function indexLog(events: AbEvent[]): LogIndex {
     const post = event.seq > restartSeq
     switch (event.type) {
       case 'plan.started': {
-        const feedback = event.payload.feedback
-        if (feedback !== undefined && 'guidance' in feedback) {
-          guidanceStarts.push({ escalation: feedback.guidance.escalation, seq: event.seq })
-        }
+        noteGuidanceStart(`plan@${event.payload.round}`, event.payload.feedback, event.seq)
         const record = roundRecord(plan, event.payload.round, post)
         if (record !== undefined) record.startedSeq = event.seq
         break
@@ -778,10 +788,7 @@ function indexLog(events: AbEvent[]): LogIndex {
         break
 
       case 'implement.started': {
-        const feedback = event.payload.feedback
-        if (feedback !== undefined && 'guidance' in feedback) {
-          guidanceStarts.push({ escalation: feedback.guidance.escalation, seq: event.seq })
-        }
+        noteGuidanceStart(`implement@${event.payload.round}`, event.payload.feedback, event.seq)
         const record = roundRecord(code, event.payload.round, post)
         if (record !== undefined) record.startedSeq = event.seq
         break
@@ -800,12 +807,23 @@ function indexLog(events: AbEvent[]): LogIndex {
         break
 
       case 'verify.started': {
-        const feedback = event.payload.feedback
-        if (feedback !== undefined && 'guidance' in feedback) {
-          guidanceStarts.push({ escalation: feedback.guidance.escalation, seq: event.seq })
-        }
+        noteGuidanceStart(
+          `${verifyPhase(event.payload.step)}@${event.payload.attempt}`,
+          event.payload.feedback,
+          event.seq,
+        )
         maxVerifyAttemptEver = Math.max(maxVerifyAttemptEver, event.payload.attempt)
         if (post) verifyStarted.push({ seq: event.seq, attempt: event.payload.attempt })
+        break
+      }
+      case 'session.started': {
+        if (event.payload.round === undefined) break
+        const key = `${event.payload.phase}@${event.payload.round}`
+        const carrier = pendingGuidanceStarts.get(key)
+        if (carrier !== undefined && carrier.seq < event.seq) {
+          guidanceDeliveries.push({ escalation: carrier.escalation, seq: event.seq })
+          pendingGuidanceStarts.delete(key)
+        }
         break
       }
       case 'verify.completed': {
@@ -868,6 +886,6 @@ function indexLog(events: AbEvent[]): LogIndex {
     finalizeStepsDone,
     lastConflict,
     conflictReconcileStarted,
-    guidanceStarts,
+    guidanceDeliveries,
   }
 }

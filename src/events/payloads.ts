@@ -227,8 +227,9 @@ export const eventPayloadSchemas = {
     round,
     /** Symmetric with `implement.started` (§15.6-B): guidance answered on a
      * plan-loop escalation must reach the producer even when the runner
-     * parked and re-attached with a fresh session — the started payload is
-     * the carrier `ab context` materializes from. */
+     * parked and re-attached with a fresh session. The start is the carrier
+     * `ab context` materializes from; a later matching `session.started` is
+     * the durable consumption boundary. */
     feedback: feedbackSchema.optional(),
   }),
   'plan.completed': z.strictObject({
@@ -242,6 +243,8 @@ export const eventPayloadSchemas = {
   'plan-review.verdict': reviewVerdictPayload,
   'implement.started': z.strictObject({
     round,
+    /** Carries routed feedback for this producer occurrence. Guidance remains
+     * recoverable until a matching `session.started` records launch. */
     feedback: feedbackSchema.optional(),
   }),
   'implement.completed': z.strictObject({
@@ -257,9 +260,10 @@ export const eventPayloadSchemas = {
     step: z.string().min(1),
     attempt,
     /** An answered escalation raised by this agent verifier returns to the
-     * same step. The start citation is both the durable delivery carrier and
-     * the exactly-once consumption marker. Optional for historical logs and
-     * guidance-free check/skip starts. */
+     * same step. The start citation is the durable delivery carrier; the
+     * subsequent matching `session.started` is the exactly-once consumption
+     * boundary. Optional for historical logs and guidance-free check/skip
+     * starts. */
     feedback: feedbackSchema.optional(),
   }),
   'verify.completed': verifyCompletedPayloadSchema,

@@ -366,7 +366,8 @@ describe('ab-guide — durable build-control coverage', () => {
       "guidance answering an agent verifier's own `ab escalate` returns to that same `verify:<step>`",
       '`verify.started.feedback`',
       'materializes as `.ab/guidance.json`',
-      'the cited start consumes it once',
+      'the cited start carries it durably across any pre-launch recovery',
+      'the matching `session.started` consumes it once after launch',
       'policy escalation after exhausted failed verify reports instead goes to `implement` and outranks the pending report',
       'A bare retry on either path carries no guidance',
     ]) {
