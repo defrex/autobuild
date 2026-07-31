@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#166](https://github.com/defrex/autobuild/pull/166) — Use dashboard content width for transcript scrolling
+- [#165](https://github.com/defrex/autobuild/pull/165) — Correct the dashboard warning preview comment
+- [#163](https://github.com/defrex/autobuild/pull/163) — Add sessionless repository settings status
+- [#162](https://github.com/defrex/autobuild/pull/162) — Preview long dashboard messages
 - [#161](https://github.com/defrex/autobuild/pull/161) — Prevent superseded guidance from replaying
 - [#160](https://github.com/defrex/autobuild/pull/160) — Restore dashboard terminal modes after abnormal exits
 - [#159](https://github.com/defrex/autobuild/pull/159) — Keep escalation guidance durable until session launch

@@ -698,6 +698,14 @@ Observation harvest uses a separate typed, repository-scoped namespace
 commands: context hydration, a producer terminal, a reviewer terminal, and a
 sessionless read-only status projection.
 
+`ab repository status [--json] [--store <ref>]` is the sessionless read-only
+projection of the repository journal's dispatcher controls: ticket intake, the
+repository-wide pause, and the claim-time auto-merge default. It uses the same
+dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
+repository stream reduces as an empty journal and reports intake on, repository
+pause off, and auto-merge default off; the query does not create that stream,
+append an event, claim a ticket, attach a runner, or start dispatcher work.
+
 Agents never receive TicketSource credentials. Only the deterministic file
 step creates/adopts approved proposals and commits ledger facts.
 

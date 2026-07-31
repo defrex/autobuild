@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { KERNEL, agentActor } from '../events/envelope'
+import { KERNEL, agentActor, humanActor } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
 import { MemoryBuildStore } from '../store/memory'
@@ -102,10 +102,22 @@ describe('runCli — routing and exit codes', () => {
 
   test('detailed help documents status and every sessionless build-control command', async () => {
     const d = deps()
-    for (const command of ['builds', 'build', 'pause', 'resume', 'auto-merge', 'answer', 'abort']) {
+    for (const command of [
+      'repository',
+      'builds',
+      'build',
+      'pause',
+      'resume',
+      'auto-merge',
+      'answer',
+      'abort',
+    ]) {
       expect(await runCli(['help', command], d)).toBe(0)
     }
     const help = d.out.join('\n')
+    expect(help).toContain('ab repository status [--json] [--store <ref>]')
+    expect(help).toContain('repository pause off')
+    expect(help).toContain('starts no dispatcher')
     expect(help).toContain('ab builds [--queued] [--all] [--json] [--store <ref>]')
     expect(help).toContain('ab build status <slug> [--events <n>] [--json] [--store <ref>]')
     expect(help).toContain('running, paused, blocked')
@@ -251,6 +263,11 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab harvest verdict',
       },
       {
+        argv: ['repository', 'status', '--events', '2'],
+        flag: '--events',
+        usage: 'usage: ab repository status',
+      },
+      {
         argv: ['builds', '--notes', 'notes.md'],
         flag: '--notes',
         usage: 'usage: ab builds',
@@ -305,6 +322,11 @@ describe('runCli — command-scoped flag contracts', () => {
         usage: 'usage: ab context',
       },
       {
+        argv: ['repository', 'status', '--json', '--json'],
+        diagnostic: '--json may be supplied only once',
+        usage: 'usage: ab repository status',
+      },
+      {
         argv: ['builds', '--all', '--all'],
         diagnostic: '--all may be supplied only once',
         usage: 'usage: ab builds',
@@ -345,6 +367,11 @@ describe('runCli — command-scoped flag contracts', () => {
         argv: ['done', '--notes', '--report'],
         diagnostic: '--notes requires a value, got "--report"',
         usage: 'usage: ab done',
+      },
+      {
+        argv: ['repository', 'status', '--store', '--json'],
+        diagnostic: '--store requires a value, got "--json"',
+        usage: 'usage: ab repository status',
       },
       {
         argv: ['builds', '--store', '--json'],
@@ -397,6 +424,7 @@ describe('SESSIONLESS_COMMANDS', () => {
     for (const command of [
       'builds',
       'build',
+      'repository',
       'pause',
       'resume',
       'auto-merge',
@@ -445,7 +473,7 @@ describe('SESSIONLESS_COMMANDS', () => {
   })
 })
 
-describe('runCli — builds / build status routing', () => {
+describe('runCli — read-only status routing', () => {
   /** Sessionless deps: no store, no env, no forge — exactly what bin/ab.ts's
    * sessionless branch passes. If these commands ever reach requireSession,
    * these tests fail with its AB_* error. */
@@ -470,6 +498,31 @@ describe('runCli — builds / build status routing', () => {
       err,
     }
   }
+
+  test('ab repository status routes sessionless and reports empty-journal defaults', async () => {
+    const d = sessionlessDeps()
+    expect(await runCli(['repository', 'status', '--json'], d)).toBe(0)
+    expect(d.err).toEqual([])
+    expect(JSON.parse(d.out.join('\n'))).toEqual({
+      repo: tmp,
+      intake: true,
+      paused: false,
+      defaultAutoMerge: false,
+    })
+  })
+
+  test('ab repository rejects missing/unknown subcommands and extra positionals', async () => {
+    for (const argv of [
+      ['repository'],
+      ['repository', 'frobnicate'],
+      ['repository', 'status', 'extra'],
+    ]) {
+      const d = sessionlessDeps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain('usage: ab repository status')
+      expect(d.out).toEqual([])
+    }
+  })
 
   test('ab builds routes with NO AB_* env — it never hits requireSession', async () => {
     const d = sessionlessDeps()
@@ -516,18 +569,29 @@ describe('runCli — builds / build status routing', () => {
     })
     const bytes = new Uint8Array([137, 80, 78, 71, 0, 255, 9])
     await queryStore.putArtifact('query-build', { kind: 'visual:query', content: bytes })
+    await queryStore.ensureRepo(tmp)
+    await queryStore.appendRepo(tmp, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.pause-set',
+      payload: { enabled: true },
+    })
     const tracked = injectedQueryDeps(queryStore)
 
+    expect(await runCli(['repository', 'status', '--json'], tracked.deps)).toBe(0)
+    expect(JSON.parse(tracked.deps.out.join('\n'))).toMatchObject({ repo: tmp, paused: true })
+    expect(tracked.closeCount()).toBe(1)
+
+    tracked.deps.out.length = 0
     expect(await runCli(['builds'], tracked.deps)).toBe(0)
     expect(tracked.deps.err).toEqual([])
     expect(tracked.deps.out.join('\n')).toContain('query-build')
-    expect(tracked.closeCount()).toBe(1)
+    expect(tracked.closeCount()).toBe(2)
 
     tracked.deps.out.length = 0
     expect(await runCli(['build', 'status', 'query-build'], tracked.deps)).toBe(0)
     expect(tracked.deps.err).toEqual([])
     expect(tracked.deps.out[0]).toBe('build query-build')
-    expect(tracked.closeCount()).toBe(2)
+    expect(tracked.closeCount()).toBe(3)
 
     tracked.deps.out.length = 0
     const output = join(tmp, 'query-output', 'visual.png')
@@ -540,12 +604,13 @@ describe('runCli — builds / build status routing', () => {
     expect(tracked.deps.err).toEqual([])
     expect(tracked.deps.out).toEqual([`downloaded visual:query@0 to ${output}`])
     expect(new Uint8Array(await Bun.file(output).bytes())).toEqual(bytes)
-    expect(tracked.closeCount()).toBe(3)
-    expect(tracked.opened).toEqual([
-      { ref: join(tmp, 'injected-query-store'), token: undefined },
-      { ref: join(tmp, 'injected-query-store'), token: undefined },
-      { ref: join(tmp, 'injected-query-store'), token: undefined },
-    ])
+    expect(tracked.closeCount()).toBe(4)
+    expect(tracked.opened).toEqual(
+      Array.from({ length: 4 }, () => ({
+        ref: join(tmp, 'injected-query-store'),
+        token: undefined,
+      })),
+    )
   })
 
   test('status and artifact failures keep exact diagnostics and close injected stores', async () => {

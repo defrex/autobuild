@@ -864,6 +864,16 @@ including `queued` builds that have not attached a runner. A queued row shows
 its ticket, slug, literal `QUEUED` status, and either the pending dispatch
 boundary or the latest durable `dispatch.failed` stage, attempt, and error.
 
+A build row previews each unresolved blocker and setup error as at most three
+rendered rows, preserving authored newlines and one blank row between
+paragraphs. Longer messages add the withheld-row count and name `Enter details`;
+that existing detail view shows the setup error and every blocker in full.
+Up/Down scrolls detail content, Left/Right selects a session, and Enter opens the
+selected transcript. Harvest failure detail and each process warning use the
+same three-row cap and count but advertise no unavailable expansion action.
+These are display-only transformations: stored event and status text is
+unchanged.
+
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
@@ -1115,10 +1125,21 @@ rows, `i` and `h` are also no-ops.
 
 ## Checking build status
 
-Two read-only commands answer "what is happening?" without inspecting SQLite,
-worktrees, or OS processes. Both run *outside* build sessions, need no `AB_*`
-environment, and never mutate a build — they append no events, take no leases,
-and are safe to run at any time.
+The read-only status commands answer "what is happening?" without inspecting
+SQLite, worktrees, or OS processes. They run *outside* build sessions, need no
+phase-session `AB_*` identity, append no events, take no leases, and are safe to
+run at any time.
+
+**`ab repository status [--json] [--store <ref>]`** reports the three durable
+dispatcher settings in one answer: ticket intake (`intake`, default `true`), the
+repository-wide pause (`paused`, default `false`), and the claim-time auto-merge
+default (`defaultAutoMerge`, default `false`). Those defaults also describe a
+repository with no journal row; the read does not create one. Human output is
+the default. `--json` emits one bare object with those exact fields plus the
+canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` >
+repository-local precedence. The command uses the same reducer as the
+dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
+and starts no dispatcher work.
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
