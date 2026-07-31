@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#191](https://github.com/defrex/autobuild/pull/191) — Honor stop controls before workspace setup
 - [#178](https://github.com/defrex/autobuild/pull/178) — Correct plugin resolution root guidance
 - [#177](https://github.com/defrex/autobuild/pull/177) — Add provider alternates for agent roles
 - [#176](https://github.com/defrex/autobuild/pull/176) — Guard runtime registry lookups against inherited properties
