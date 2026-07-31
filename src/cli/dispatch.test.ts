@@ -3975,6 +3975,84 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
+  test('an already-paused repository is visible on first paint and clears held state on resume', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    let run: Promise<void> | undefined
+    try {
+      const slug = 'held-queued-work'
+      const ticket = { source: 'fake', id: 'T-held', title: 'Held queued work' }
+      await fx.store.createBuild({
+        slug,
+        repo: fx.origin,
+        ticket,
+        branch: `ab/${slug}`,
+      })
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: fx.origin, baseBranch: 'main' },
+      })
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: humanActor('other-operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: true },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: humanActor('other-operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'attaching-operator' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+
+      await waitFor(() => {
+        const frame = latestDashboardFrame(term)
+        return (
+          frame.includes('repository PAUSED') &&
+          frame.includes('intake OFF') &&
+          /T-held.*\(held\)\s+QUEUED/.test(frame)
+        )
+      })
+      const firstFrame = term.frames.find((frame) => stripAnsi(frame).includes('Autobuild'))
+      expect(firstFrame).toBeDefined()
+      expect(stripAnsi(firstFrame!)).toContain('repository PAUSED')
+      expect(stripAnsi(firstFrame!)).toMatch(/T-held.*\(held\)\s+QUEUED/)
+
+      input.press('resume')
+      await waitFor(() => {
+        const frame = latestDashboardFrame(term)
+        return (
+          frame.includes('held-queued-work') &&
+          frame.includes('intake ON') &&
+          !frame.includes('repository PAUSED') &&
+          !frame.includes('(held)')
+        )
+      })
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('global p/r pause and resume every build and flip intake, leaving build-row p/r alone', async () => {
     const fx = await makeFixture(
       [
@@ -4029,6 +4107,7 @@ describe('abDispatch interactive keyboard controls', () => {
       input.text('P')
       await waitFor(() => bothHave('build.pause-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
+      await waitFor(() => latestDashboardFrame(term).includes('repository PAUSED'))
       await waitFor(() =>
         latestDashboardFrame(term).includes(
           'pause all: pause requested for 2 builds; queued builds held; intake OFF',
@@ -4058,6 +4137,7 @@ describe('abDispatch interactive keyboard controls', () => {
           'resume all: resume requested for 2 builds; queued builds released; intake ON',
         ),
       )
+      expect(latestDashboardFrame(term)).not.toContain('repository PAUSED')
       expect(await settingWrites(fx.store, fx.origin)).toEqual([
         ['dispatcher.pause-set', { enabled: true }],
         ['dispatcher.intake-set', { enabled: false }],
