@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#144](https://github.com/defrex/autobuild/pull/144) — Preserve every adapter name a plugin manifest declares
 - [#143](https://github.com/defrex/autobuild/pull/143) — Hold queued builds while the repository is paused
 - [#142](https://github.com/defrex/autobuild/pull/142) — Delete the orphaned headline asset and check for new ones
 - [#141](https://github.com/defrex/autobuild/pull/141) — Preserve every declared key in the plugin workspace config table
