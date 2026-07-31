@@ -105,6 +105,23 @@ describe('converge', () => {
     expect(reviewer.calls[1]!.priorRounds[0]![0]).toBe(round1[0]!)
   })
 
+  test('a policy accessor is re-read at the post-review stall boundary', async () => {
+    let policy = { maxRounds: 10, stallRounds: 3 }
+    const outcome = await converge({
+      policy: () => policy,
+      produce: async (_feedback, round) => ({ draft: round }),
+      review: async () => {
+        policy = { maxRounds: 10, stallRounds: 1 }
+        return { verdict: 'revise', findings: [finding('f_live')] }
+      },
+    })
+    expect(outcome).toMatchObject({
+      outcome: 'escalated',
+      source: 'stall',
+      rounds: 1,
+    })
+  })
+
   test('reviewer escalate verdict → escalated with source agent and the reason', async () => {
     const producer = scriptedProducer([{ draft: 1 }, { draft: 2 }])
     const reviewer = scriptedReviewer([
