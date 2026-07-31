@@ -515,6 +515,48 @@ describe('parseConfig — verify cross-validation', () => {
   })
 })
 
+describe('parseConfig — what an operator sees for a malformed step table', () => {
+  test('the whole error block, verbatim', () => {
+    const error = parseError(`${READY}[commands]
+test = "bun test"
+
+[verify]
+steps = ["unit", "e2e"]
+
+[verify.unit]
+kind = "check"
+command = "test"
+bogus = 1
+
+[verify.e2e]
+kind = "browser"
+skill = "ab-verify-e2e"
+`)
+
+    // Every line an operator gets, in order. The second is the tagged-choice
+    // message: [verify.<step>] is a discriminated union, which names the tags it
+    // expected and so has no branch detail to expand.
+    expect(error.message).toBe(
+      [
+        'autobuild.toml: invalid config',
+        '  verify.unit: Unrecognized key: "bogus"',
+        "  verify.e2e.kind: Invalid discriminator value. Expected 'check' | 'agent'",
+      ].join('\n'),
+    )
+
+    // And the structured payload keeps what validation reported, rather than the
+    // `custom` re-encoding the entry boundary used to apply on the way out.
+    expect(error.issues).toEqual([
+      expect.objectContaining({
+        code: 'unrecognized_keys',
+        keys: ['bogus'],
+        path: ['verify', 'unit'],
+      }),
+      expect.objectContaining({ code: 'invalid_union', path: ['verify', 'e2e', 'kind'] }),
+    ])
+  })
+})
+
 describe('parseConfig — first-class finalize steps', () => {
   test('accepts strict check and agent tables in configured order', () => {
     const config = parseConfig(`${READY}

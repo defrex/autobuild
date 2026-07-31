@@ -14,6 +14,7 @@
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
+import { forwardIssues } from '../zod-issues'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
@@ -61,19 +62,11 @@ function stepSection<T, C>(
         if (key === 'steps') {
           const parsed = stepsSchema.safeParse(raw)
           if (parsed.success) steps = parsed.data
-          else {
-            for (const issue of parsed.error.issues) {
-              ctx.addIssue({
-                code: 'custom',
-                path: ['steps', ...issue.path],
-                message: issue.message,
-              })
-            }
-          }
+          else forwardIssues(parsed.error.issues, ctx, ['steps'])
           continue
         }
         const table = parseEntry(tableSchema, raw, key, ctx)
-        if (table !== undefined) defineEntry(stepConfigs, key, table)
+        if (table.ok) defineEntry(stepConfigs, key, table.value)
       }
       return compose(steps, stepConfigs)
     })
