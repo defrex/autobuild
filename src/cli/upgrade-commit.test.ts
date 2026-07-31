@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { UpgradeReport } from './upgrade'
 import {
@@ -231,6 +231,83 @@ describe('upgrade commit coordinator', () => {
     })
     expect(operationErrors.join('\n')).toContain('mid-cherry-pick')
     await cleanupUpgradeCommitContext(operationContext)
+  })
+
+  test('a rejecting commit hook restores a split index after Git prunes its backing file', async () => {
+    const repo = await repository()
+    const operator = join(repo, 'operator.txt')
+    const unstaged = join(repo, 'unstaged.txt')
+    const skill = join(repo, '.agents', 'skills', 'ab-plan', 'SKILL.md')
+    const support = join(repo, '.agents', 'skills', 'ab-plan', 'new-support.md')
+    await mkdir(dirname(skill), { recursive: true })
+    await writeFile(operator, 'operator base\n')
+    await writeFile(unstaged, 'unstaged base\n')
+    await writeFile(skill, 'old skill\n')
+    await git(repo, 'add', '.')
+    await git(repo, 'commit', '-qm', 'fixture')
+
+    await writeFile(operator, 'operator staged\n')
+    await git(repo, 'add', 'operator.txt')
+    await git(repo, 'config', 'core.splitIndex', 'true')
+    // Split the already-staged operator entry into the shared backing index.
+    await git(repo, 'update-index', '--split-index')
+    await writeFile(operator, 'operator worktree\n')
+    await writeFile(unstaged, 'unstaged worktree\n')
+    const untracked = join(repo, 'untracked.txt')
+    await writeFile(untracked, 'untracked operator work\n')
+
+    const context = await createUpgradeCommitContext(repo)
+    await writeFile(skill, 'upgraded skill\n')
+    await writeFile(support, 'new upgrade support\n')
+
+    const gitDir = (await git(repo, 'rev-parse', '--absolute-git-dir')).trim()
+    const sharedOutput = (await git(repo, 'rev-parse', '--shared-index-path')).trim()
+    expect(sharedOutput).not.toBe('')
+    const sharedIndex = resolve(repo, sharedOutput)
+    const indexBefore = await readFile(join(gitDir, 'index'))
+    const sharedIndexBefore = await readFile(sharedIndex)
+    const cachedBefore = await git(repo, 'diff', '--cached', '--binary')
+    const entriesBefore = await git(repo, 'ls-files', '--stage', '-z')
+    const statusBefore = await git(repo, 'status', '--porcelain')
+    const headBefore = (await git(repo, 'rev-parse', 'HEAD')).trim()
+
+    // Force the next split-index rewrite to expire the previous backing file.
+    await git(repo, 'config', 'splitIndex.maxPercentChange', '0')
+    await git(repo, 'config', 'splitIndex.sharedIndexExpire', 'now')
+    const pruneMarker = join(root!, 'old-shared-index-was-pruned')
+    const hook = join(gitDir, 'hooks', 'pre-commit')
+    await writeFile(
+      hook,
+      `#!/bin/sh\nif test ! -e '${sharedIndex}'; then\n  echo pruned > '${pruneMarker}'\nfi\necho "hook rejected commit" >&2\nexit 1\n`,
+      { mode: 0o755 },
+    )
+    const errors: string[] = []
+    const upgradeReport = report([{ skill: 'ab-plan', action: 'merged' }])
+
+    await finishUpgradeCommit(context, upgradeReport, {
+      stderr: (line) => errors.push(line),
+    })
+
+    expect(await readFile(pruneMarker, 'utf8')).toBe('pruned\n')
+    expect(Buffer.compare(await readFile(join(gitDir, 'index')), indexBefore)).toBe(0)
+    expect(Buffer.compare(await readFile(sharedIndex), sharedIndexBefore)).toBe(0)
+    expect(resolve(repo, (await git(repo, 'rev-parse', '--shared-index-path')).trim())).toBe(
+      sharedIndex,
+    )
+    expect(await git(repo, 'diff', '--cached', '--binary')).toBe(cachedBefore)
+    expect(await git(repo, 'ls-files', '--stage', '-z')).toBe(entriesBefore)
+    expect(await git(repo, 'status', '--porcelain')).toBe(statusBefore)
+    expect((await git(repo, 'rev-parse', 'HEAD')).trim()).toBe(headBefore)
+    expect(upgradeReport.exitCode).toBe(0)
+    expect(errors.join('\n')).toContain('ab upgrade could not commit its changes')
+    expect(errors.join('\n')).toContain('committing upgrade-owned paths failed (exit 1)')
+    expect(errors.join('\n')).toContain('hook rejected commit')
+    expect(await readFile(operator, 'utf8')).toBe('operator worktree\n')
+    expect(await readFile(unstaged, 'utf8')).toBe('unstaged worktree\n')
+    expect(await readFile(untracked, 'utf8')).toBe('untracked operator work\n')
+    expect(await readFile(skill, 'utf8')).toBe('upgraded skill\n')
+    expect(await readFile(support, 'utf8')).toBe('new upgrade support\n')
+    await cleanupUpgradeCommitContext(context)
   })
 
   test('a rejecting commit hook restores the exact linked-worktree index and keeps output', async () => {

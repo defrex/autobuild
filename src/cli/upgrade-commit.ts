@@ -271,6 +271,55 @@ function commitMessage(report: UpgradeReport, changedSkills: Set<string>): strin
   ].join('\n')
 }
 
+interface IndexSnapshot {
+  main: { path: string; bytes: Buffer }
+  shared?: { path: string; bytes: Buffer }
+}
+
+async function captureIndexSnapshot(
+  exec: Exec,
+  gitRoot: string,
+  gitDir: string,
+): Promise<IndexSnapshot> {
+  const canonicalGitDir = await realpath(gitDir)
+  const mainPath = join(canonicalGitDir, 'index')
+  const main = { path: mainPath, bytes: await readFile(mainPath) }
+
+  const sharedResult = await git(exec, gitRoot, ['rev-parse', '--shared-index-path'])
+  if (sharedResult.exitCode !== 0) {
+    throw new Error(commandError('locating the active shared Git index', sharedResult))
+  }
+  const sharedOutput = sharedResult.stdout.replace(/\r?\n$/, '')
+  if (sharedOutput === '') return { main }
+  if (sharedOutput.includes('\n') || sharedOutput.includes('\r')) {
+    throw new Error('locating the active shared Git index returned multiple lines')
+  }
+
+  const sharedPath = await realpath(resolve(gitRoot, sharedOutput))
+  const sharedName = relative(canonicalGitDir, sharedPath)
+  if (
+    sharedName === '' ||
+    sharedName === '..' ||
+    sharedName.startsWith(`..${sep}`) ||
+    isAbsolute(sharedName) ||
+    sharedName.includes(sep) ||
+    !/^sharedindex\.[0-9a-f]+$/.test(sharedName)
+  ) {
+    throw new Error(
+      `the active shared Git index is outside the worktree Git directory: ${sharedPath}`,
+    )
+  }
+
+  return { main, shared: { path: sharedPath, bytes: await readFile(sharedPath) } }
+}
+
+async function restoreIndexSnapshot(snapshot: IndexSnapshot): Promise<void> {
+  if (snapshot.shared !== undefined) {
+    await writeFile(snapshot.shared.path, snapshot.shared.bytes)
+  }
+  await writeFile(snapshot.main.path, snapshot.main.bytes)
+}
+
 export interface FinishUpgradeCommitOptions {
   exec?: Exec
   stdout?: (line: string) => void
@@ -376,10 +425,9 @@ export async function finishUpgradeCommit(
       changedSkills.add(skill)
   }
   const pathspecs = changed.map(literalPathspec)
-  const indexPath = join(postMergeGitDir, 'index')
-  let indexSnapshot: Buffer
+  let indexSnapshot: IndexSnapshot
   try {
-    indexSnapshot = await readFile(indexPath)
+    indexSnapshot = await captureIndexSnapshot(exec, record.gitRoot, postMergeGitDir)
   } catch (error) {
     stderr(
       `ab upgrade could not commit its changes: could not capture the worktree Git index: ${errorText(error)}`,
@@ -404,7 +452,7 @@ export async function finishUpgradeCommit(
   } catch (error) {
     stderr(`ab upgrade could not commit its changes: ${errorText(error)}`)
     try {
-      await writeFile(indexPath, indexSnapshot)
+      await restoreIndexSnapshot(indexSnapshot)
     } catch (restoreError) {
       stderr(`ab upgrade could not restore the pre-attempt Git index: ${errorText(restoreError)}`)
     }
