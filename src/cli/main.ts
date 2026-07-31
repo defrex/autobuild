@@ -204,7 +204,7 @@ function requireSession(command: string, deps: SessionlessCliDeps): CliDeps {
   return { ...deps, store, env, forge, exec, ids, clock }
 }
 
-function buildControlConfirmation(result: BuildControlResult): string {
+export function buildControlConfirmation(result: BuildControlResult): string {
   switch (result.kind) {
     case 'command': {
       const outcome: Record<typeof result.command, string> = {

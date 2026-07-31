@@ -12,7 +12,12 @@ import { KERNEL, agentActor } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { openLocalStore } from '../store/local/store'
 import type { MemoryBuildStore } from '../store/memory'
-import { isSessionlessInvocation, runCli, SESSIONLESS_COMMANDS } from './main'
+import {
+  buildControlConfirmation,
+  isSessionlessInvocation,
+  runCli,
+  SESSIONLESS_COMMANDS,
+} from './main'
 import {
   BRANCH,
   BUILD,
@@ -584,10 +589,18 @@ describe('runCli — sessionless build controls', () => {
 
   async function seedControlStore(
     storeRef: string,
-    opts: { escalations?: string[]; queuedSlug?: string } = {},
+    opts: {
+      escalations?: string[]
+      queuedSlug?: string
+      ticket?: { source: string; id: string }
+    } = {},
   ): Promise<void> {
     const local = openLocalStore(storeRef)
-    await local.createBuild({ slug, repo: tmp })
+    await local.createBuild({
+      slug,
+      repo: tmp,
+      ...(opts.ticket !== undefined ? { ticket: opts.ticket } : {}),
+    })
     await local.append(slug, {
       actor: KERNEL,
       type: 'runner.attached',
@@ -719,6 +732,103 @@ describe('runCli — sessionless build controls', () => {
     const d = controlDeps(join(tmp, 'grammar-store'))
     expect(await runCli(['answer', slug, '--dismiss', '--revise-spec-from-ticket'], d)).toBe(1)
     expect(d.err.join('\n')).toContain('resolution flags are mutually exclusive')
+  })
+
+  test('from-ticket refuses a configured source that differs from the build ticket', async () => {
+    const storeRef = join(tmp, 'source-mismatch-store')
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
+    await seedControlStore(storeRef, {
+      escalations: ['esc-source'],
+      ticket: { source: 'linear', id: 'AUT-42' },
+    })
+    const local = openLocalStore(storeRef)
+    const original = await local.putArtifact(slug, { kind: 'spec', content: 'old' })
+    await local.append(slug, {
+      actor: agentActor('spec', 'source-spec'),
+      type: 'spec.authored',
+      payload: { artifact: { kind: 'spec', rev: original.revision }, session: 'source-spec' },
+    })
+    const before = await local.getEvents(slug)
+    await local.close()
+
+    const d = controlDeps(storeRef)
+    expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(1)
+    expect(d.err.join('\n')).toContain('build ticket source is "linear"')
+    expect(d.err.join('\n')).toContain('configured for "file"')
+    const after = openLocalStore(storeRef)
+    expect(await after.getEvents(slug)).toEqual(before)
+    await after.close()
+  })
+
+  test('new answer confirmations are honest about completion, blockers, and terminal races', () => {
+    expect(
+      buildControlConfirmation({
+        kind: 'answered',
+        slug,
+        count: 0,
+        resolution: 'revise-spec',
+        resumed: false,
+        specRev: 2,
+        authorizedEarlier: true,
+      }),
+    ).toContain('body supplied now was not used')
+    expect(
+      buildControlConfirmation({
+        kind: 'answered',
+        slug,
+        count: 1,
+        resolution: 'dismiss-finding',
+        resumed: false,
+        remainingOpen: 1,
+      }),
+    ).toContain('1 blocker remains')
+
+    const terminalResults = [
+      {
+        kind: 'answered' as const,
+        slug,
+        count: 1,
+        resolution: 'revise-spec' as const,
+        resumed: false,
+        terminalSignal: { kind: 'terminal-status' as const, status: 'aborted' as const },
+      },
+      {
+        kind: 'answered' as const,
+        slug,
+        count: 1,
+        resolution: 'revise-spec' as const,
+        resumed: false,
+        terminalSignal: {
+          kind: 'terminal-status' as const,
+          status: 'done' as const,
+          outcome: 'merged' as const,
+        },
+      },
+      {
+        kind: 'answered' as const,
+        slug,
+        count: 1,
+        resolution: 'revise-spec' as const,
+        resumed: false,
+        terminalSignal: { kind: 'abort-requested' as const },
+      },
+      ...(['merged', 'closed'] as const).map((state) => ({
+        kind: 'answered' as const,
+        slug,
+        count: 1,
+        resolution: 'revise-spec' as const,
+        resumed: false,
+        terminalSignal: { kind: 'pr-ended' as const, state },
+      })),
+    ]
+    for (const result of terminalResults) {
+      const confirmation = buildControlConfirmation(result)
+      expect(confirmation).toContain('will not restart')
+      expect(confirmation).not.toContain('restarting from plan')
+    }
   })
 
   test('every verb refuses an own-phase target before appending', async () => {

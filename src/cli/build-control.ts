@@ -482,7 +482,8 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           if (!conformance.conforms) {
             throw new BuildControlError(
               'spec-nonconforming',
-              `replacement spec does not conform: missing ${conformance.missing.join('; ')}; ` +
+              `replacement spec from ${source.kind === 'supplied' ? source.origin : 'the build ticket'} ` +
+                `does not conform: missing ${conformance.missing.join('; ')}; ` +
                 'nothing was recorded and the build remains blocked',
             )
           }
