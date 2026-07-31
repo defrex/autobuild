@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#139](https://github.com/defrex/autobuild/pull/139) — Quiesce and restart a repository from a sessionless command
 - [#136](https://github.com/defrex/autobuild/pull/136) — Narrow `persists` marking to a surviving disagreement
 - [#134](https://github.com/defrex/autobuild/pull/134) — Replace the one-line resume field with a multi-line composer panel
 - [#133](https://github.com/defrex/autobuild/pull/133) — Add pause-all and resume-all to the dispatch dashboard top row
