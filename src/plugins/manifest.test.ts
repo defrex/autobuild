@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { runInNewContext } from 'node:vm'
 import {
   PLUGIN_API_VERSION,
   parsePluginManifest,
@@ -273,6 +274,28 @@ describe('plugin manifest adapter-name preservation', () => {
       'a record built on a null-prototype one',
       () => Object.assign(Object.create(Object.create(null)), { acme: factory }),
     ],
+    [
+      'a record whose prototype declares a non-function constructor',
+      () => Object.assign(Object.create({ constructor: null }), { acme: factory }),
+    ],
+    [
+      'a record whose prototype declares a numeric constructor',
+      () => Object.assign(Object.create({ constructor: 42 }), { acme: factory }),
+    ],
+    [
+      'a record whose constructor prototype owns isPrototypeOf',
+      () => {
+        function Composed(this: Record<string, unknown>) {}
+        Composed.prototype.isPrototypeOf = () => false
+        return Object.assign(new (Composed as unknown as new () => object)(), { acme: factory })
+      },
+    ],
+    [
+      // A plugin loaded into its own realm hands over an object whose prototype
+      // is that realm's `Object.prototype`, never this one's.
+      'a plain object from another realm',
+      () => Object.assign(runInNewContext('({})') as object, { acme: factory }),
+    ],
   ])('%s registers its own ordinary adapter', (_label, build) => {
     for (const map of ADAPTER_MAPS) {
       const parsed = parseAdapters(map, build() as Record<string, unknown>)
@@ -293,6 +316,34 @@ describe('plugin manifest adapter-name preservation', () => {
       expect(Object.getOwnPropertyNames(parseAdapters(map, { constructor: factory }))).toEqual([
         'constructor',
       ])
+    }
+  })
+
+  // A symbol cannot name an entry in the map validation produces, so passing
+  // over one silently would be the same drop this change exists to eliminate.
+  // `z.record` ran every own key through its string key schema and rejected the
+  // container; so does this.
+  test('an own enumerable symbol key is an error, not a skipped entry', () => {
+    for (const map of ADAPTER_MAPS) {
+      expect(() => parseAdapters(map, { acme: factory, [Symbol('adapter')]: factory })).toThrow(
+        /entry names must be strings; Symbol\(adapter\) cannot name an entry/,
+      )
+    }
+  })
+
+  // The other half of `z.record`'s key set: own and ENUMERABLE. Bookkeeping a
+  // plugin hides from enumeration is not a declaration, and was collected by
+  // neither schema.
+  test('non-enumerable own properties are not declarations', () => {
+    for (const map of ADAPTER_MAPS) {
+      const container: Record<string, unknown> = { acme: factory }
+      Object.defineProperty(container, 'hidden', { value: factory, enumerable: false })
+      Object.defineProperty(container, Symbol('internal'), {
+        value: factory,
+        enumerable: false,
+      })
+      const parsed = parseAdapters(map, container)
+      expect(Object.getOwnPropertyNames(parsed)).toEqual(['acme'])
     }
   })
 })

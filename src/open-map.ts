@@ -60,28 +60,52 @@ function keyIsValid(key: string, policy: OpenMapKeyPolicy): boolean {
  * the same reason: absence is spelled by omission, which `openMap`'s
  * `.prefault({})` turns into `{}` before this ever runs.
  *
- * `constructor` is read off the PROTOTYPE, never off `input`. Reading it off
- * the input is what `z.record` does, and it is the same prototype hazard this
- * module exists to close: a map declaring an adapter named `constructor`
- * shadows the property the check depends on, and the whole container is
- * rejected over an entry that is merely unusually named. Starting one link up
- * cannot be shadowed by any declared entry, and still answers `Object` for a
- * record whose prototype is itself a plain object.
+ * The decision itself is `z.record`'s, deliberately: this module replaced that
+ * schema on the manifest surface, and a container it accepted must keep
+ * parsing. Hence "was it built by something other than a plain-object
+ * constructor" rather than an identity test against the local `Object` — which
+ * would turn away a record whose prototype declares a non-function
+ * `constructor`, one whose constructor prototype owns `isPrototypeOf`, and
+ * every plain object arriving from another realm.
+ *
+ * The one departure: `constructor` is read off the PROTOTYPE, never off
+ * `input`. Reading it off the input is what `z.record` does, and it is the same
+ * prototype hazard this module exists to close — a map declaring an adapter
+ * named `constructor` shadows the property the check depends on, and the whole
+ * container is rejected over an entry that is merely unusually named. Starting
+ * one link up cannot be shadowed by any declared entry, and answers identically
+ * for every container that does not declare that name.
  */
 function isRecord(input: unknown): input is object {
   if (typeof input !== 'object' || input === null) return false
   const prototype = Object.getPrototypeOf(input)
   if (prototype === null) return true
   const builder = (prototype as { constructor?: unknown }).constructor
-  return builder === undefined || builder === Object
+  if (typeof builder !== 'function') return true
+  const builderPrototype: unknown = (builder as { prototype?: unknown }).prototype
+  if (typeof builderPrototype !== 'object' || builderPrototype === null) return false
+  return Object.hasOwn(builderPrototype, 'isPrototypeOf')
 }
 
-/** The own entries of a parsed container, read BY DESCRIPTOR. `input[key]` is
- * wrong here: on any object that has a prototype, reading `"__proto__"` answers
- * that prototype rather than the declared entry.
+/**
+ * The own ENUMERABLE STRING entries of a parsed container, read BY DESCRIPTOR.
+ * `input[key]` is wrong here: on any object that has a prototype, reading
+ * `"__proto__"` answers that prototype rather than the declared entry.
+ *
+ * The key set is `z.record`'s — own and enumerable — because a container that
+ * schema collected must still be collected the same way. Non-enumerable
+ * properties are internal bookkeeping rather than declarations, and are skipped
+ * in both.
+ *
+ * An own enumerable SYMBOL is an error rather than a skip. `z.record` ran every
+ * own key through its string key schema, so a symbol failed validation and the
+ * whole container was invalid; passing over it silently instead would be the
+ * exact drop this module exists to prevent, applied to the one key shape that
+ * can never name an entry in the map it produces.
  *
  * `label` is rendered verbatim into the diagnostic — `'[roles]'` for a TOML
- * table, `'forges'` for a manifest map. */
+ * table, `'forges'` for a manifest map.
+ */
 export function ownEntries(
   input: unknown,
   label: string,
@@ -92,20 +116,24 @@ export function ownEntries(
     ctx.addIssue({ code: 'custom', message: `${label} must be ${shape ?? DEFAULT_SHAPE}` })
     return []
   }
-  return Object.getOwnPropertyNames(input).map((key) => {
+  for (const symbol of Object.getOwnPropertySymbols(input)) {
+    if (Object.getOwnPropertyDescriptor(input, symbol)?.enumerable !== true) continue
+    ctx.addIssue({
+      code: 'custom',
+      message: `${label} entry names must be strings; ${String(symbol)} cannot name an entry`,
+    })
+  }
+  const entries: [string, unknown][] = []
+  for (const key of Object.getOwnPropertyNames(input)) {
     const descriptor = Object.getOwnPropertyDescriptor(input, key)
+    if (descriptor === undefined || !descriptor.enumerable) continue
     // TOML only ever produces data properties, but a manifest is real
     // JavaScript: `forges: { get acme() { … } }` is a valid declaration, and
     // `descriptor.value` is `undefined` for it. Invoking the getter still never
     // consults the prototype chain.
-    const value =
-      descriptor === undefined
-        ? undefined
-        : 'value' in descriptor
-          ? descriptor.value
-          : descriptor.get?.call(input)
-    return [key, value]
-  })
+    entries.push([key, 'value' in descriptor ? descriptor.value : descriptor.get?.call(input)])
+  }
+  return entries
 }
 
 /** Record a named entry so the key survives verbatim. Plain assignment is what
