@@ -9,6 +9,7 @@
  */
 import { parse as parseToml, TomlError } from 'smol-toml'
 import type { z } from 'zod'
+import { expandIssues } from '../zod-issues'
 import { configSchema, TOP_LEVEL_SCALARS, TOP_LEVEL_TABLES, type Config } from './schema'
 
 /**
@@ -81,7 +82,10 @@ export function parseConfig(tomlText: string, source = 'autobuild.toml'): Config
 
   const result = configSchema.safeParse(table)
   if (!result.success) {
-    const details = result.error.issues.map(describeIssue).join('\n')
+    // Expanded for the operator, raw for the payload: the expanded copies carry
+    // synthesized `option N of M:` messages, while `ConfigError.issues` should
+    // stay what validation actually reported.
+    const details = expandIssues(result.error.issues).map(describeIssue).join('\n')
     throw new ConfigError(`${source}: invalid config\n${details}`, result.error.issues)
   }
   return result.data

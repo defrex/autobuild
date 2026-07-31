@@ -1,6 +1,7 @@
 import semver from 'semver'
 import { z } from 'zod'
 import { openMap } from '../open-map'
+import { forwardIssues } from '../zod-issues'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import type { AgentRunnerContractFactory } from '../ports/runner/contract'
 import type { RuntimeRegistration } from '../ports/runner/runtime'
@@ -148,9 +149,8 @@ const registrationSchema = z.unknown().transform((value, ctx) => {
   if (typeof value === 'function') return value
   const parsed = registrationObjectSchema.safeParse(value)
   if (parsed.success) return parsed.data
-  for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
-  }
+  // No prefix: this transform already sits at the value's own path.
+  forwardIssues(parsed.error.issues, ctx)
   return z.NEVER
 })
 
@@ -192,18 +192,23 @@ const ticketSourceDescriptorSchema = z.strictObject({
   contract: contractSchema.optional(),
 })
 
-/** The ticket-source counterpart of `registrationSchema`. A union would be the
- * obvious spelling, but a Zod `invalid_union` issue carries the bare message
- * "Invalid input" with the branch detail nested in `issue.errors` — detail that
- * both `openMap` and the loader's `path: message` rendering drop. An explicit
- * transform keeps "must be a factory function" in front of the plugin author. */
+/**
+ * The ticket-source counterpart of `registrationSchema`. A `z.union` would be
+ * the obvious spelling, and the boundary would now carry its branch detail
+ * through — `openMap` forwards issues verbatim and the loader expands a union's
+ * branches, so nothing is dropped either way. This stays a transform for what it
+ * REPORTS, not for what a union would lose: once the value is known not to be a
+ * function, committing to the descriptor branch says
+ * `ticketSources.acme.factory: must be a factory function`, where a union offers
+ * an alternatives list that includes the already-rejected function branch. It
+ * also matches its three sibling maps. Do not copy this shape as a workaround —
+ * there is nothing left here to work around.
+ */
 const ticketSourceRegistrationSchema = z.unknown().transform((value, ctx) => {
   if (typeof value === 'function') return value
   const parsed = ticketSourceDescriptorSchema.safeParse(value)
   if (parsed.success) return parsed.data
-  for (const issue of parsed.error.issues) {
-    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
-  }
+  forwardIssues(parsed.error.issues, ctx)
   return z.NEVER
 })
 
