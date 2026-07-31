@@ -276,11 +276,16 @@ describe('ab-guide — durable build-control coverage', () => {
     for (const claim of [
       '`.ab/guidance.json`',
       'feeds the next `plan` round',
-      'feeds the next `implement` round',
+      'An escalation from `implement` or `code-review`',
+      'policy escalation also feeds the next `implement` round and takes precedence',
+      'A direct verifier escalation is a known gap',
+      'the answer is not materialized for that rerun',
+      'AUT-169',
       "A round's feedback is exclusive",
     ]) {
       expect(section ?? '').toContain(claim)
     }
+    expect(section ?? '').not.toContain('any `verify:*` step')
   })
 })
 
