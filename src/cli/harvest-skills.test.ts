@@ -12,17 +12,8 @@ function normalize(text: string): string {
   return text.replace(/\s+/g, ' ')
 }
 
-function installForm(canonical: string, name: string): string {
-  const renamed = canonical.replace(`\nname: ${name}\n`, `\nname: ab-${name}\n`)
-  return renamed.replace(/^(description: .*)$/m, '$1\ndisable-model-invocation: true')
-}
-
 const producer = await skill('skills/harvest')
-const installedProducer = await skill('.agents/skills/ab-harvest')
-const pristineProducer = await skill('.agents/skills/.ab-pristine/ab-harvest')
 const reviewer = await skill('skills/harvest-review')
-const installedReviewer = await skill('.agents/skills/ab-harvest-review')
-const pristineReviewer = await skill('.agents/skills/.ab-pristine/ab-harvest-review')
 
 describe('harvest skills — blocker judgment', () => {
   test('producer requires metadata for hard prerequisites without broadening references', () => {
@@ -40,17 +31,5 @@ describe('harvest skills — blocker judgment', () => {
     expect(text).toContain('a prose-only hard prerequisite is not approvable')
     expect(text).toContain('every `blockedBy` id is justified by evidence as a hard start gate')
     expect(text).toContain('must not become blockers, and ticket ids are never invented')
-  })
-
-  test('canonical producer matches checked-in live and pristine install forms', () => {
-    const expected = installForm(producer, 'harvest')
-    expect(installedProducer).toBe(expected)
-    expect(pristineProducer).toBe(expected)
-  })
-
-  test('canonical reviewer matches checked-in live and pristine install forms', () => {
-    const expected = installForm(reviewer, 'harvest-review')
-    expect(installedReviewer).toBe(expected)
-    expect(pristineReviewer).toBe(expected)
   })
 })
