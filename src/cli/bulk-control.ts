@@ -78,18 +78,23 @@ export interface BulkControlSummary {
 }
 
 /**
- * Pausable for the bulk control: actually running, with no pause already in
- * flight. The pending-pause exclusion is the "never cancels a pending pause /
- * still exactly one pending pause" rule, and it also means a row displaying
- * `PAUSING` is left alone. `queued`, `paused`, `blocked`, `done`, and `aborted`
- * all fail the first clause, so they are skipped with no error. A `running`
- * build carrying a pending *resume* (a just-cancelled pause) is eligible: the
- * reducer clears `pending.resume` when the pause request lands, which is the
- * existing opposing-command supersession.
+ * Pausable for the bulk control: actually running, with neither pause nor
+ * abort intent already in flight. The pending-pause exclusion is the "never
+ * cancels a pending pause / still exactly one pending pause" rule, and it also
+ * means a row displaying `PAUSING` is left alone. Abort intent dominates pause
+ * regardless of whether it came from an explicit request or an escalation
+ * answer, so a row displaying `ABORTING` is also left alone. `queued`, `paused`,
+ * `blocked`, `done`, and `aborted` all fail the first clause, so they are
+ * skipped with no error. A `running` build carrying a pending *resume* (a
+ * just-cancelled pause) is eligible: the reducer clears `pending.resume` when
+ * the pause request lands, which is the existing opposing-command
+ * supersession.
  */
 export function bulkPausable(state: BuildState): boolean {
   if (state.status !== 'running') return false
-  return !state.pendingCommands.some((command) => command.command === 'pause')
+  return !state.pendingCommands.some(
+    (command) => command.command === 'pause' || command.command === 'abort',
+  )
 }
 
 /**

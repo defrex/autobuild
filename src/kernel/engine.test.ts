@@ -474,15 +474,25 @@ describe('decideNext: rule 2 — operator commands (D2)', () => {
     ).toEqual(runPhase('plan', 1))
   })
 
-  test('abort-request wins over pause requests and open escalations', () => {
-    expect(
-      decide([
-        ...prelude(),
-        ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
-        ev('build.pause-requested', {}),
-        ev('build.abort-requested', { reason: 'wrong ticket' }),
-      ]),
-    ).toEqual({ kind: 'acknowledge', command: 'abort' })
+  test('explicit and escalation-based abort intent win over pause and open escalations', () => {
+    const explicit = [
+      ...prelude(),
+      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'q?' }),
+      ev('build.pause-requested', {}),
+      ev('build.abort-requested', { reason: 'wrong ticket' }),
+    ]
+    const answered = [
+      ...prelude(),
+      ev('build.pause-requested', {}),
+      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
+      ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'agent', question: 'two?' }),
+      ev('escalation.answered', { id: 'e_1', answer: 'Kill it.', resolution: 'abort' }),
+    ]
+
+    for (const writes of [explicit, answered]) {
+      expect(decide(writes)).toEqual({ kind: 'acknowledge', command: 'abort' })
+      expect(decide([...writes, ev('build.aborted', {})])).toEqual(wait('aborted'))
+    }
   })
 
   test('abort-request wins while paused', () => {
@@ -635,17 +645,6 @@ describe('decideNext: rule 3 — escalation gating', () => {
         }),
       ]),
     ).toEqual(wait('blocked'))
-  })
-
-  test('answered abort-resolution without build.aborted → acknowledge abort, even with other escalations open', () => {
-    const writes = [
-      ...prelude(),
-      ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
-      ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'agent', question: 'two?' }),
-      ev('escalation.answered', { id: 'e_1', answer: 'Kill it.', resolution: 'abort' }),
-    ]
-    expect(decide(writes)).toEqual({ kind: 'acknowledge', command: 'abort' })
-    expect(decide([...writes, ev('build.aborted', {})])).toEqual(wait('aborted'))
   })
 
   test('answered revise-spec → wait/awaiting-spec until spec.revised lands', () => {

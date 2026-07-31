@@ -977,6 +977,9 @@ to the build's event log and apply the same write-time checks.
 | Enable/disable auto-merge | `ab auto-merge <slug> on\|off [--store <ref>]` | Select the build and press `m` to toggle. | `build.auto-merge-requested` / `build.auto-merge-cancelled` |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |
 | Retry blockers without guidance | `ab answer <slug> [--store <ref>]` | Open the same `r` field and press Enter empty or whitespace-only. | One `escalation.answered` with `resolution: retry` per applicable blocker. |
+| Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
+| Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | Human `escalation.answered` events naming the exact replacement revision, then kernel `spec.revised`. |
+| Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same `revise-spec` answer and `spec.revised` sequence. |
 | Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
@@ -1053,6 +1056,25 @@ A producer round's feedback is exclusive: on a guidance round
 failure, so the answer has to carry what the agent needs. A bare retry writes no
 `.ab/guidance.json` and displaces nothing: the resumed round still gets whatever
 the loop was already routing, such as the last review round's findings.
+
+`--dismiss` is per escalation. It answers only blockers that cite at least one
+real plan-review or code-review finding; blockers with no such citation remain
+open. A dismissed finding id means a human retired that disagreement. The next
+reviewer receives `.ab/dismissed-findings.json`, must not re-raise the finding,
+and must use a fresh id without `persists` if a genuinely different problem
+touches the same code. Dismissal settles a chain, not a file or the reviewer's
+ability to report new problems.
+
+Spec revision requires an open escalation. `--revise-spec` reads a conforming
+replacement from a file; `--revise-spec-from-ticket` re-imports the build's
+recorded ticket after an operator amends it. The human `escalation.answered`
+fact names the exact deposited revision it authorizes, then kernel
+`spec.revised` publishes it. If interrupted between those facts, a retry
+completes the recorded body and does not use a newly supplied one. A
+non-conforming body records nothing. The build restarts from `plan` on the new
+revision and keeps any open PR. A build's spec can therefore change under it:
+phase runs after the revision read the new revision, while historical runs
+remain readable at the revision they actually saw.
 
 Every command requires the target to exist in this repository and be active
 (`running`, `paused`, or `blocked`), except abort also accepts `queued`;

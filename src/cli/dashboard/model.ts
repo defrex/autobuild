@@ -54,9 +54,18 @@ import {
   type HarvestState,
 } from '../../kernel/harvest'
 
-/** Every nonterminal build is listed; queued dispatch work consumes capacity
- * just like runner-attached work and must never be invisible. */
-export type EffectiveStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'resuming' | 'blocked'
+/** Every capacity-bearing build plus acknowledged abort cleanup is listed.
+ * `aborting` and `cleaning` are display-only projections over durable abort
+ * facts; neither extends the reducer's lifecycle vocabulary. */
+export type EffectiveStatus =
+  | 'queued'
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'resuming'
+  | 'blocked'
+  | 'aborting'
+  | 'cleaning'
 
 export type DashboardBuildControl =
   | { key: 'p'; action: 'pause'; label: 'pause' }
@@ -76,6 +85,8 @@ export function dashboardBuildControl(status: EffectiveStatus): DashboardBuildCo
       return { key: 'r', action: 'resume', label: 'resume' }
     case 'queued':
     case 'resuming':
+    case 'aborting':
+    case 'cleaning':
       return undefined
   }
 }
@@ -148,6 +159,9 @@ export interface DashboardBuild {
   steps: PipelineStep[]
   /** Queued-only explanation of the dispatcher boundary currently pending. */
   dispatch?: string
+  /** Abort-stage explanation. Present instead of pipeline progress so the two
+   * destructive-action stages remain explicit without manufacturing work. */
+  abortProgress?: string
   /** Current durable setup error, attributed to this build and retained until
    * a later successful attachment proves recovery. */
   setupError?: string
@@ -242,6 +256,11 @@ export interface DashboardModel {
  * exactly as today.
  */
 export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState['status'] {
+  // Abort intent outranks every lifecycle and visual override from the moment
+  // the request is durable. Acknowledgement clears the pending command and
+  // moves the reducer to `aborted`, which is the cleanup display stage.
+  if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
+  if (state.status === 'aborted') return 'cleaning'
   if (
     (state.status === 'paused' || state.status === 'blocked') &&
     state.openEscalations.length > 0
@@ -268,7 +287,9 @@ function isVisible(status: EffectiveStatus | BuildState['status']): status is Ef
     status === 'pausing' ||
     status === 'paused' ||
     status === 'resuming' ||
-    status === 'blocked'
+    status === 'blocked' ||
+    status === 'aborting' ||
+    status === 'cleaning'
   )
 }
 
@@ -456,6 +477,14 @@ export function projectBuild(
 ): DashboardBuild | null {
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
+  const abortProgress =
+    status === 'aborting'
+      ? state.status === 'queued'
+        ? 'abort requested; waiting for dispatcher acknowledgement'
+        : 'abort requested; waiting for running work to stop'
+      : status === 'cleaning'
+        ? 'running work stopped; abort cleanup pending or in progress'
+        : undefined
 
   if (status === 'queued') {
     const created = events.findLast((event) => event.type === 'build.created')
@@ -503,6 +532,23 @@ export function projectBuild(
       dispatch,
       blockers: [],
       autoMerge: autoMergeDisplay(state),
+      sessions: projectSessions(events),
+    }
+  }
+
+  if (abortProgress !== undefined) {
+    return {
+      slug: record.slug,
+      status,
+      alsoPaused: false,
+      ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
+      steps: [],
+      abortProgress,
+      blockers: state.openEscalations.map((escalation) => escalation.question),
+      autoMerge: autoMergeDisplay(state),
+      ...(state.pr !== undefined && state.prState !== undefined
+        ? { pr: { url: state.pr.url, state: state.prState } }
+        : {}),
       sessions: projectSessions(events),
     }
   }

@@ -338,6 +338,8 @@ export const eventPayloadSchemas = {
     id: z.string().min(1),
     answer: z.string().min(1),
     resolution: escalationResolutionSchema,
+    /** Exact replacement spec authorized by a `revise-spec` answer. */
+    artifact: artifactRefSchema.optional(),
   }),
   /** Infra failure — distinct from verdicts (a verdict is a fact, not a failure). */
   'phase.failed': z.strictObject({

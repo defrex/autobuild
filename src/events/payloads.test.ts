@@ -108,6 +108,35 @@ describe('dispatch recovery event protocol', () => {
   })
 })
 
+describe('escalation answer protocol', () => {
+  test('a human revise-spec answer may authorize an exact artifact revision', () => {
+    expect(
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: {
+          id: 'esc-spec',
+          answer: 'replace the contract',
+          resolution: 'revise-spec',
+          artifact: { kind: 'spec', rev: 2 },
+        },
+      }).payload,
+    ).toEqual({
+      id: 'esc-spec',
+      answer: 'replace the contract',
+      resolution: 'revise-spec',
+      artifact: { kind: 'spec', rev: 2 },
+    })
+    expect(
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: { id: 'esc-retry', answer: 'retry', resolution: 'retry' },
+      }).payload,
+    ).not.toHaveProperty('artifact')
+  })
+})
+
 describe('runner setup failure protocol', () => {
   test('setup failures are strict kernel facts with an explicit unavailable status', () => {
     expect(
