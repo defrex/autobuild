@@ -523,6 +523,105 @@ describe('HarvestRunner', () => {
     expect(ready.tickets.map((ticket) => ticket.ref.id)).toEqual(['fake-1'])
   })
 
+  test('files validated deduplicated blockers on an approved create', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-blockers-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    tickets.add({
+      ref: { source: 'fake', id: 'fake-8' },
+      title: 'Prerequisite',
+      body: 'body',
+      state: 'Ready',
+      labels: [],
+    })
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+      makeProposals: (observations) => {
+        const set = proposalSet(observations)
+        return {
+          proposals: [{ ...set.proposals[0]!, blockedBy: ['fake-8', 'fake-8'] }],
+        }
+      },
+    })
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+
+    await new HarvestRunner({
+      store,
+      tickets,
+      config: config(1, {}, ['proposalState = "Ready"']),
+      runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: ids('instance'),
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect((await tickets.get('fake-1'))?.blockedBy).toEqual(['fake-8'])
+    expect(tickets.dependencyQueries).toEqual([['fake-8']])
+    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.run).toBe(seeded.run)
+  })
+
+  test('an unknown blocker fails before reservation, create, or filing', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-invalid-blocker-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const uuids = countingUuids()
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+      makeProposals: (observations) => {
+        const set = proposalSet(observations)
+        return { proposals: [{ ...set.proposals[0]!, blockedBy: ['fake-404'] }] }
+      },
+    })
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: config(1, {}, ['proposalState = "Ready"']),
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: uuids.source,
+        clock: steppingClock(),
+        instance: ids('instance'),
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'failed', launch: 'resumed', run: seeded.run })
+
+    expect(uuids.allocated).toEqual([])
+    expect(await tickets.get('fake-1')).toBeNull()
+    const events = await store.getRepoEvents('/repo')
+    expect(events.some((event) => event.type === 'harvest.proposal.id-reserved')).toBe(false)
+    expect(events.some((event) => event.type === 'harvest.proposal.filed')).toBe(false)
+    expect(reduceHarvest(events).latest?.failure?.error).toContain('fake-404')
+  })
+
   test('an idle pause prevents threshold launch; resume reopens normal scanning', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-pause-idle-'))
     roots.push(workspace)

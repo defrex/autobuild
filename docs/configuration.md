@@ -614,7 +614,7 @@ state. Within a present table, `source` and `readyState` are required.
 | `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
-| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate. |
+| `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
 When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
@@ -646,8 +646,12 @@ disabled. The file source uses `Triage`.
 and defaults to the resolved `triageState` — proposals wait for a human, which
 is the grooming gate the pipeline is built around. Naming `readyState` here
 waives that gate for this repository: every proposal the harvest loop approves
-becomes dispatchable without being read, protected only by that loop's own
-review and by the spec gate at dispatch. It is a separate field precisely so
+enters the ordinary dispatch eligibility checks without being read, protected
+by that loop's own review and by the spec gate at dispatch. Approved creates
+may carry evidence-backed source-local `blockedBy` ids, which harvest validates
+through the selected TicketSource and records during creation. An unresolved
+harvested blocker still prevents claim until the source reports completion or
+the relationship is deliberately removed. It is a separate field precisely so
 the waiver stays narrow. Redirecting `triageState` instead would also send
 spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
 a bounced ticket is reclaimed and bounced again on every tick.
@@ -966,7 +970,8 @@ action. Check the gates in this order:
 4. **Labels:** the ticket must carry every effective `readyLabels` value,
    including Linear's default `autobuild` label when the field is omitted.
 5. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
-   same source. Plain dispatch output reports unresolved ids and cycles.
+   same source. This includes harvest proposals filed directly into the ready
+   state. Plain dispatch output reports unresolved ids and cycles.
 6. **Capacity:** every nonterminal build for this repository—including paused
    and blocked builds—uses a slot. Inspect `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.

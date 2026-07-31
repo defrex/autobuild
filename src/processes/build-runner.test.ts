@@ -9,8 +9,13 @@
  * metadata, actor kinds).
  */
 import { describe, expect, test } from 'bun:test'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildContext } from '../cli/context'
+import { parseAbPhase } from '../cli/env'
 import { parseConfig } from '../config/load'
-import type { AbEvent } from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
@@ -101,6 +106,30 @@ function roundOf(ctx: ScriptContext): number {
   const raw = ctx.opts.env.AB_PHASE ?? ''
   const at = raw.lastIndexOf('@')
   return at === -1 ? 1 : Number(raw.slice(at + 1)) || 1
+}
+
+async function guidanceMaterializedFor(
+  store: BuildStore,
+  ctx: ScriptContext,
+): Promise<{ escalation: string; answer: string }> {
+  const rawPhase = ctx.opts.env.AB_PHASE ?? ''
+  const { phase, round } = parseAbPhase(rawPhase)
+  await mkdir(ctx.opts.workspacePath, { recursive: true })
+  await writeFile(join(ctx.opts.workspacePath, 'autobuild.toml'), CONFIG_TOML)
+  await buildContext({
+    store,
+    workspacePath: ctx.opts.workspacePath,
+    env: {
+      store: ctx.opts.env.AB_STORE ?? 'local',
+      build: SLUG,
+      phase,
+      round,
+      session: sessionOf(ctx),
+    },
+  })
+  return JSON.parse(
+    await readFile(join(ctx.opts.workspacePath, '.ab', 'guidance.json'), 'utf8'),
+  ) as { escalation: string; answer: string }
 }
 
 function refOf(deposited: ArtifactMeta[]): { kind: string; rev: number } {
@@ -244,6 +273,26 @@ type VerifyDiffResult = { paths: string[] } | { stdout: string } | { error: stri
 
 type FinalizeGitResult<T> = T | { error: string }
 
+class OneShotPostAppendFaultStore extends MemoryBuildStore {
+  private faultType: EventType | undefined
+
+  faultAfterNext(type: EventType): void {
+    this.faultType = type
+  }
+
+  override async append<T extends EventType>(
+    slug: string,
+    event: EventWrite<T>,
+  ): Promise<EventEnvelope<T>> {
+    const envelope = await super.append(slug, event)
+    if (this.faultType === event.type) {
+      this.faultType = undefined
+      throw new Error(`injected crash after ${event.type}@${envelope.seq}`)
+    }
+    return envelope
+  }
+}
+
 interface HarnessOptions {
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
   /** Shell commands (the `sh -c` argument) that exit 1 with output. */
@@ -276,8 +325,10 @@ interface HarnessOptions {
   configToml?: string
 }
 
+let nextHarnessWorkspace = 0
+
 interface Harness {
-  store: MemoryBuildStore
+  store: OneShotPostAppendFaultStore
   runner: ScriptedAgentRunner
   br: BuildRunner
   forge: FakeForge
@@ -288,8 +339,12 @@ interface Harness {
 
 async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const clock = options.clock ?? steppingClock()
-  const store = new MemoryBuildStore({ clock })
-  const workspaces = new FakeWorkspaceProvider({ mode: 'logical' })
+  const store = new OneShotPostAppendFaultStore({ clock })
+  nextHarnessWorkspace += 1
+  const workspaces = new FakeWorkspaceProvider({
+    mode: 'logical',
+    root: join(tmpdir(), `ab-build-runner-${process.pid}-${nextHarnessWorkspace}`),
+  })
   const handle = await workspaces.provision({
     repo: 'acme/app',
     baseBranch: 'main',
@@ -1665,16 +1720,19 @@ describe('session memory (§10)', () => {
     expect(starts[1]!.payload).toEqual({ round: 2, feedback: { findings: ['f_1'] } })
   })
 
-  test('plan.started after a parked plan-loop guidance answer CARRIES the answer (§15.6-B)', async () => {
-    // Regression: a plan-loop escalation always parks the build, the runner
-    // exits, and producerSessions is in-memory — so the post-answer re-attach
-    // starts a FRESH plan session. plan.started used to be a bare {round}: the
-    // decision's guidance feedback was silently dropped, then marked consumed
-    // by the very start that failed to deliver it. The payload is the carrier
-    // `ab context` materializes .ab/guidance.json from.
-    const h = await makeHarness()
-    // Dead-runner log: plan round 1 escalated; a human answered with guidance
-    // while nothing was attached (§11: answerable from any UI).
+  test('producer guidance survives a crash after its carrier start and before session launch', async () => {
+    const materialized: Array<{ escalation: string; answer: string }> = []
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const plan = table.plan!
+        table.plan = async (ctx) => {
+          materialized.push(await guidanceMaterializedFor(store, ctx))
+          return plan(ctx)
+        }
+        return table
+      },
+    })
     await h.store.append(SLUG, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
     await h.store.append(SLUG, {
       actor: agentActor('plan', 's_seed'),
@@ -1715,22 +1773,145 @@ describe('session memory (§10)', () => {
     })
 
     const guidance = { escalation: 'esc_plan', answer: 'Only the API surface.' }
-    const decision = await h.br.step()
-    expect(decision).toEqual({
+    h.store.faultAfterNext('plan.started')
+    await expect(h.br.step()).rejects.toThrow('injected crash after plan.started')
+
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'plan.started').at(-1)!.payload).toEqual({
+      round: 2,
+      feedback: { guidance },
+    })
+    expect(ofType(events, 'session.started')).toHaveLength(0)
+    expect(ofType(events, 'escalation.answered')).toHaveLength(1)
+
+    expect(await h.br.step()).toEqual({
       kind: 'run-phase',
       phase: 'plan',
       round: 2,
       feedback: { guidance },
     })
+    expect(materialized).toEqual([guidance])
 
-    const events = await h.store.getEvents(SLUG)
-    const starts = ofType(events, 'plan.started')
-    expect(starts.at(-1)!.payload).toEqual({ round: 2, feedback: { guidance } })
+    events = await h.store.getEvents(SLUG)
+    expect(
+      ofType(events, 'plan.started')
+        .slice(-2)
+        .map((event) => event.payload),
+    ).toEqual([
+      { round: 2, feedback: { guidance } },
+      { round: 2, feedback: { guidance } },
+    ])
+    expect(
+      ofType(events, 'session.started').filter((event) => event.payload.phase === 'plan'),
+    ).toHaveLength(1)
+    expect(ofType(events, 'escalation.answered')).toHaveLength(1)
 
-    // Fresh session (no live handle survives a park): started, never continued.
-    const planJournals = [...h.runner.sessions.values()].filter((j) => j.opts.skill === 'ab-plan')
-    expect(planJournals).toHaveLength(1)
-    expect(planJournals[0]!.messages).toEqual([])
+    expect(await h.br.step()).toMatchObject({ kind: 'run-phase', phase: 'plan-review', round: 2 })
+    expect(ofType(await h.store.getEvents(SLUG), 'plan.started')).toHaveLength(3)
+  })
+
+  test('verifier guidance survives a crash after its carrier start and before session launch', async () => {
+    const materialized: Array<{ escalation: string; answer: string }> = []
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table['verify-e2e'] = async (ctx) => {
+          materialized.push(await guidanceMaterializedFor(store, ctx))
+          await store.append(SLUG, {
+            actor: agentActor('verify-e2e', sessionOf(ctx)),
+            type: 'verify.completed',
+            payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
+          })
+          return defaultTurnResult('e2e green with operator guidance')
+        }
+        return table
+      },
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+    for (const step of ['types', 'unit']) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { step, attempt: 1 },
+      })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step, attempt: 1, outcome: 'pass' },
+      })
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'e2e', attempt: 1 },
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('verify-e2e', 's_seed'),
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_verify',
+        phase: 'verify:e2e',
+        round: 1,
+        source: 'agent',
+        question: 'Which test account is authoritative?',
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_verify',
+        answer: 'Use the seeded admin account.',
+        resolution: 'guidance',
+      },
+    })
+
+    const guidance = { escalation: 'esc_verify', answer: 'Use the seeded admin account.' }
+    h.store.faultAfterNext('verify.started')
+    await expect(h.br.step()).rejects.toThrow('injected crash after verify.started')
+
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'verify.started').at(-1)!.payload).toEqual({
+      step: 'e2e',
+      attempt: 1,
+      feedback: { guidance },
+    })
+    expect(ofType(events, 'session.started')).toHaveLength(0)
+    expect(ofType(events, 'escalation.answered')).toHaveLength(1)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-agent-verify',
+      step: 'e2e',
+      skill: 'ab-verify-e2e',
+      attempt: 1,
+      feedback: { guidance },
+    })
+    expect(materialized).toEqual([guidance])
+
+    events = await h.store.getEvents(SLUG)
+    expect(
+      ofType(events, 'verify.started')
+        .filter((event) => event.payload.step === 'e2e')
+        .slice(-2)
+        .map((event) => event.payload),
+    ).toEqual([
+      { step: 'e2e', attempt: 1, feedback: { guidance } },
+      { step: 'e2e', attempt: 1, feedback: { guidance } },
+    ])
+    expect(
+      ofType(events, 'session.started').filter(
+        (event) => event.payload.phase === 'verify:e2e' && event.payload.round === 1,
+      ),
+    ).toHaveLength(1)
+    expect(ofType(events, 'escalation.answered')).toHaveLength(1)
+
+    expect(await h.br.step()).toMatchObject({ kind: 'run-phase', phase: 'finalize' })
+    expect(
+      ofType(await h.store.getEvents(SLUG), 'verify.started').filter(
+        (event) => event.payload.step === 'e2e',
+      ),
+    ).toHaveLength(3)
   })
 
   test('a continued turn re-issues ambient auth (D8): the new round in AB_PHASE, the new bracket in AB_SESSION', async () => {

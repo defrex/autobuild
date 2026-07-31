@@ -560,6 +560,7 @@ describe('harvest CLI', () => {
             whatWhy: 'Users encounter the recorded bug.',
             acceptanceCriteria: ['The bug is fixed.'],
             outOfScope: ['Other behavior.'],
+            blockedBy: ['AUT-152'],
             observations: [{ build: 'build-a', seq: 4 }],
           },
         ],
@@ -567,6 +568,15 @@ describe('harvest CLI', () => {
     )
     const submitted = await submitHarvestProposals(deps, good)
     expect(submitted.type).toBe('harvest.proposals.submitted')
+    const artifact = await deps.store.getRepoArtifact(
+      '/repo',
+      submitted.payload.artifact.kind,
+      submitted.payload.artifact.rev,
+    )
+    if (artifact === null) throw new Error('submitted proposal artifact is missing')
+    expect(JSON.parse(new TextDecoder().decode(artifact.content)).proposals[0].blockedBy).toEqual([
+      'AUT-152',
+    ])
     await expect(submitHarvestProposals(deps, good)).rejects.toThrow(/second harvest terminal/)
 
     const reviewDeps = {

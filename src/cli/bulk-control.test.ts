@@ -36,6 +36,8 @@ type Seed =
   | 'resuming'
   | 'blocked'
   | 'paused-and-blocked'
+  | 'aborting-explicit'
+  | 'aborting-escalation'
   | 'completed'
 
 async function seedBuild(
@@ -89,6 +91,33 @@ async function seedBuild(
       actor: { kind: 'human', user: 'someone-else' },
       type: 'build.resume-requested',
       payload: {},
+    })
+  }
+
+  if (seed === 'aborting-explicit') {
+    await store.append(slug, {
+      actor: { kind: 'human', user: 'someone-else' },
+      type: 'build.abort-requested',
+      payload: { reason: 'stop this build' },
+    })
+  }
+
+  if (seed === 'aborting-escalation') {
+    await store.append(slug, {
+      actor: agentActor('implement', `session-${slug}`),
+      type: 'escalation.raised',
+      payload: {
+        id: `esc-${slug}`,
+        phase: 'implement',
+        round: 1,
+        source: 'agent',
+        question: 'Should this build continue?',
+      },
+    })
+    await store.append(slug, {
+      actor: { kind: 'human', user: 'someone-else' },
+      type: 'escalation.answered',
+      payload: { id: `esc-${slug}`, answer: 'Abort it.', resolution: 'abort' },
     })
   }
 
@@ -177,9 +206,11 @@ describe('bulkControlRepository — pause', () => {
         'b-pausing': 'pausing',
         'c-paused': 'paused',
         'd-blocked': 'blocked',
-        'e-queued': 'queued',
-        'f-completed': 'completed',
-        'g-running': 'running',
+        'e-aborting-explicit': 'aborting-explicit',
+        'f-aborting-escalation': 'aborting-escalation',
+        'g-queued': 'queued',
+        'h-completed': 'completed',
+        'i-running': 'running',
       },
       { 'z-other-running': 'running' },
     )
@@ -189,12 +220,12 @@ describe('bulkControlRepository — pause', () => {
 
     expect(summary).toEqual({
       direction: 'pause',
-      slugs: ['a-running', 'g-running'],
+      slugs: ['a-running', 'i-running'],
       paused: true,
       intake: false,
     })
 
-    for (const slug of ['a-running', 'g-running']) {
+    for (const slug of ['a-running', 'i-running']) {
       const added = (await store.getEvents(slug)).slice(before[slug]?.length ?? 0)
       expect(typesOf(added)).toEqual(['build.pause-requested'])
       expect(added[0]?.actor).toEqual({ kind: 'human', user: 'operator' })
@@ -210,12 +241,19 @@ describe('bulkControlRepository — pause', () => {
       'b-pausing',
       'c-paused',
       'd-blocked',
-      'e-queued',
-      'f-completed',
+      'e-aborting-explicit',
+      'f-aborting-escalation',
+      'g-queued',
+      'h-completed',
       'z-other-running',
     ]) {
       expect(await store.getEvents(slug)).toEqual(before[slug] ?? [])
     }
+    expect(bulkControlReport(summary)).toBe(
+      'pause all: pause requested for 2 builds; queued builds held; intake OFF',
+    )
+    expect(await pausedOf(store)).toBe(true)
+    expect(await intakeOf(store)).toBe(false)
     await store.close()
   })
 
@@ -419,6 +457,8 @@ describe('bulk eligibility predicates', () => {
       'resuming',
       'blocked',
       'paused-and-blocked',
+      'aborting-explicit',
+      'aborting-escalation',
     ]
     const store = await makeStore(Object.fromEntries(seeds.map((seed) => [seed, seed])))
 
@@ -527,6 +567,24 @@ describe('bulk per-build writes are compare-and-set', () => {
     expect(doneSummary.slugs).toEqual([])
     expect(countOf(await done.getEvents('a-running'), 'build.pause-requested')).toBe(0)
     await done.close()
+  })
+
+  test('a competing abort intent wins the CAS race and no inert pause lands', async () => {
+    const inner = await makeStore({ 'a-running': 'running' })
+    const store = withRacingAppend(inner, 'a-running', {
+      actor: { kind: 'human', user: 'other-dashboard' },
+      type: 'build.abort-requested',
+      payload: { reason: 'stop now' },
+    })
+
+    const summary = await bulkControlRepository({ store, repo: REPO, env: ENV, direction: 'pause' })
+
+    expect(summary.slugs).toEqual([])
+    const events = await inner.getEvents('a-running')
+    expect(countOf(events, 'build.abort-requested')).toBe(1)
+    expect(countOf(events, 'build.pause-requested')).toBe(0)
+    expect(reduceBuild(events).pendingCommands.map((command) => command.command)).toEqual(['abort'])
+    await inner.close()
   })
 
   test('an unrelated competing append retries and then succeeds', async () => {

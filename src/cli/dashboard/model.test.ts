@@ -779,6 +779,22 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
         ev('build.abort-requested', {}),
       ],
       [...blocked, ev('build.abort-requested', {})],
+      [
+        ...prelude(),
+        ev('plan.started', { round: 1 }),
+        ev('escalation.raised', {
+          id: 'e_answered_abort',
+          phase: 'plan',
+          round: 1,
+          source: 'agent',
+          question: 'Continue?',
+        }),
+        ev('escalation.answered', {
+          id: 'e_answered_abort',
+          answer: 'Abort this build.',
+          resolution: 'abort',
+        }),
+      ],
     ]
 
     for (const writes of cases) {
