@@ -755,20 +755,21 @@ Outcomes:
 | `conflicted` | Resolution was unavailable, failed, declined as ambiguous, or failed validation. Both sides of that file stay **byte-untouched** for a human — **conflict markers are never written into a live skill**. |
 | `installed` | In the distribution but not yet in the repo — installed fresh, like init. |
 | `removed` | A fixed retired distribution skill had pristine provenance and either its unreferenced live tree matched pristine and was removed with its owned discovery link, or its canonical live tree was already missing and obsolete provenance plus any owned dangling link were removed. |
-| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a distinct user-owned Claude discovery directory was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
+| `kept` | A fixed retired skill was customized, still configured, or unsafe to remove, so its live copy remains local; or an otherwise removable canonical copy was deleted while a user-owned Claude discovery entry was preserved and remains discoverable. Obsolete pristine ownership is cleared. |
 | `unknown` | An installed `ab-*` skill absent from the distribution. **Left alone** — local skill additions are legitimate. |
 
 The `removed`/`kept` classifications apply only to the fixed retirements
 `ab-setup` and `ab-verify-e2e`. A pristine record proves Autobuild provenance;
 a same-named repository-authored skill without one is untouched. Upgrade keeps
 a retired skill named by an agent verify or finalize step, and parses config
-conservatively so an inspection failure also keeps it. A distinct real
-`.claude/skills/<name>` directory is preserved byte-for-byte, enters the
-structured discovery-conflict report, and makes upgrade exit nonzero even when
-the corresponding canonical/pristine trees are retired. Every terminal
-classification clears obsolete pristine ownership, making the retirement
-report one-time and preventing later link recreation, resurrection, or
-re-reporting.
+conservatively so an inspection failure also keeps it. A user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — is preserved byte-for-byte, enters the structured discovery-conflict
+report, and makes upgrade exit nonzero even when the corresponding
+canonical/pristine trees are retired. A preserved symlink keeps its exact link
+text and target. Every terminal classification clears obsolete pristine
+ownership, making the retirement report one-time and preventing later link
+recreation, resurrection, or re-reporting.
 
 After a conflict-free merge, upgrade makes one local commit by default. It
 includes only each reported skill's canonical tree, pristine record, and Claude
@@ -778,15 +779,20 @@ path, and no owned change means no commit. Additions, modifications, links, and
 deletions are included; unrelated staged, unstaged, and untracked work remains
 untouched. The message identifies `ab upgrade` and lists every byte-changing
 skill with its reported outcome. `--no-commit` disables this behavior and is
-preserved through self-update handoff.
+preserved through self-update handoff. If a replacement child receives the
+handoff marker without the pre-self-update baseline — possible when an older
+parent launches a newer child — it suppresses the entire automatic commit,
+names the cross-version compatibility reason, and leaves all upgrade-owned
+changes uncommitted for the operator. Skill-upgrade results and the report's
+existing exit code remain unchanged.
 
 Any content conflict, discovery conflict, pre-existing dirt in an owned path,
 non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
-cherry-pick suppresses the whole commit with a named warning. If upgrade cannot
-snapshot the worktree's Git index, it warns and declines to stage. A staging or
-commit failure restores that exact pre-attempt index and reports the original
-Git failure without touching merged worktree files. The report's existing exit
-code is unchanged; upgrade never pushes or rewrites history.
+cherry-pick likewise suppresses the whole commit with a named warning. If upgrade
+cannot snapshot the worktree's Git index, it warns and declines to stage. A
+staging or commit failure restores that exact pre-attempt index and reports the
+original Git failure without touching merged worktree files. The report's
+existing exit code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
@@ -911,13 +917,11 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`.
+`queue <depth> | active <current>/<limit> | observations <count>`.
 `queue` is the ready-ticket queue depth; `active` is the current
-nonterminal-build count against root `capacity`; `obs` is the current count of
-recorded observation occurrences not yet claimed by a Harvest snapshot against
-`[policy].harvestThreshold`; and `drift` is distinct other builds merged after
-the oldest such observation against `[policy].harvestMaxDrift`. A drift limit
-of zero renders as `/0` and means drift triggering is disabled. An indented controls line follows for
+nonterminal-build count against root `capacity`; and `observations` is the count
+of recorded observation occurrences not yet claimed by a Harvest snapshot. An
+indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title

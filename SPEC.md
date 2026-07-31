@@ -1586,12 +1586,18 @@ unstaged.
 
 The baseline is captured before self-update and carried to the replacement
 binary. `--no-commit` also survives that handoff and leaves the merge exactly as
-written. Any content conflict, Claude discovery conflict, pre-existing dirt in
-an owned path, non-Git target, changed HEAD/worktree identity, or in-progress
-merge, rebase, or cherry-pick suppresses the whole commit and prints the reason.
-If upgrade cannot snapshot the worktree's Git index, it warns and declines to
-stage. A staging or commit failure restores that exact pre-attempt index without
-touching the merged worktree files, and warns with the original Git failure.
+written. A replacement child marked as a handoff but missing that pre-update
+baseline — as when an older parent launches a newer child without the newer
+context — suppresses the entire automatic commit, names the cross-version
+compatibility reason, and leaves all upgrade-owned changes uncommitted for the
+operator. The skill-upgrade results and merge-derived exit status are unchanged.
+Any content conflict, Claude discovery conflict, pre-existing dirt in an owned
+path, non-Git target, changed HEAD/worktree identity, or in-progress merge,
+rebase, or cherry-pick likewise suppresses the whole commit and prints the
+reason. If upgrade cannot snapshot the worktree's Git index, it warns and
+declines to stage. A staging or commit failure restores that exact pre-attempt
+index without touching the merged worktree files, and warns with the original
+Git failure.
 Commit suppression or failure never changes the merge-derived exit status:
 content conflicts remain zero and discovery conflicts remain nonzero. Upgrade
 never pushes or rewrites existing history.
@@ -1604,19 +1610,21 @@ from the incoming distribution. A pristine record is required to prove
 Autobuild provenance; without it, a same-named repository-authored skill is
 untouched and unreported. Upgrade reports `removed` when the complete live and
 pristine trees match byte-for-byte, no configured agent verify or finalize step
-names the skill, and no distinct user-owned Claude discovery directory remains;
-it also reports `removed` when the canonical live tree is already missing. In
-the latter state it clears obsolete provenance and removes only an
-Autobuild-owned dangling discovery link. Any customization, config reference,
-or inability to inspect config safely preserves the live tree and reports
-`kept`. When an otherwise removable canonical tree is shadowed by a distinct
-real `.claude/skills/<name>` directory, upgrade reports `kept`, removes only the
-canonical/pristine Autobuild-owned trees, preserves the Claude directory
-byte-for-byte, and includes it in the existing structured discovery-conflict
-report and nonzero exit behavior. Every terminal classification clears obsolete
-pristine ownership, so a second upgrade neither recreates a dangling link nor
-resurrects or re-reports the retirement. All other installed skills absent from
-the distribution retain the `unknown` local-addition classification.
+names the skill, and no user-owned Claude discovery entry remains; it also
+reports `removed` when the canonical live tree is already missing. In the latter
+state it clears obsolete provenance and removes only an Autobuild-owned dangling
+discovery link. Any customization, config reference, or inability to inspect
+config safely preserves the live tree and reports `kept`. When an otherwise
+removable canonical tree is shadowed by a user-owned
+`.claude/skills/<name>` discovery entry — either a distinct real directory or a
+foreign symlink — upgrade reports `kept`, removes only the canonical/pristine
+Autobuild-owned trees, preserves the entry byte-for-byte (including a symlink's
+link text and target), and includes it in the existing structured
+discovery-conflict report and nonzero exit behavior. Every terminal
+classification clears obsolete pristine ownership, so a second upgrade neither
+recreates a dangling link nor resurrects or re-reports the retirement. All
+other installed skills absent from the distribution retain the `unknown`
+local-addition classification.
 
 A conflict may be resolved by the optional
 tool-free `upgrade` one-shot with a standing bias: **prefer the local

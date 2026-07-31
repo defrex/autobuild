@@ -688,10 +688,10 @@ uses the oldest unclaimed observation, counts only later same-repository
 builds. Whichever trigger fires, Harvest claims the complete current
 accumulation and records `count`, `drift`, or `both` on the durable start fact.
 The dashboard header reports
-`queue … | active … | obs <current>/<limit> | drift <current>/<limit>`; `/0`
-means drift triggering is disabled. The repository lease and fixed per-run
-recovery budget are implementation invariants, not additional configuration
-fields.
+`queue <depth> | active <current>/<limit> | observations <count>`. The
+observation figure is the current unclaimed occurrence count; trigger thresholds
+are not dashboard state. The repository lease and fixed per-run recovery budget
+are implementation invariants, not additional configuration fields.
 
 ## `[tickets]`
 
@@ -960,14 +960,19 @@ untracked work remains untouched.
 Use `ab upgrade --no-commit` to leave all output uncommitted for manual review.
 The flag is forwarded when self-update hands off to the replacement binary, and
 the default path likewise carries its pre-update Git baseline through that
-handoff. Upgrade suppresses the whole commit and names why when any skill or
-Claude discovery path conflicts, an owned path was already dirty, the target
-is not a Git repository, HEAD/worktree identity changes, or Git is mid-merge,
-mid-rebase, or mid-cherry-pick. If upgrade cannot snapshot the worktree's Git
-index, it warns and declines to stage. A failed staging or commit attempt
-restores that exact pre-attempt index and reports the original Git failure;
-merged worktree files remain in place and the merge's exit status is unchanged.
-Upgrade never pushes or rewrites history.
+handoff. If a replacement child receives the handoff marker without that
+baseline — possible when an older parent launches a newer child — it suppresses
+the entire automatic commit, names the cross-version compatibility reason, and
+leaves all upgrade-owned changes uncommitted for the operator. Skill-upgrade
+results and the merge-derived exit status remain unchanged. Upgrade likewise
+suppresses the whole commit and names why when any skill or Claude discovery
+path conflicts, an owned path was already dirty, the target is not a Git
+repository, HEAD/worktree identity changes, or Git is mid-merge, mid-rebase, or
+mid-cherry-pick. If upgrade cannot snapshot the worktree's Git index, it warns
+and declines to stage. A failed staging or commit attempt restores that exact
+pre-attempt index and reports the original Git failure; merged worktree files
+remain in place and the merge's exit status is unchanged. Upgrade never pushes
+or rewrites history.
 
 Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
 are model-invocable. The setup reference is an ordinary support file in the
@@ -981,13 +986,14 @@ its owned discovery link, or the canonical live tree was already missing and
 upgrade cleared provenance plus any owned dangling link. `kept` normally means
 the tree was customized, still configured, or could not be proved safe to
 remove; upgrade preserves it and clears obsolete pristine ownership. It also
-means an otherwise removable canonical tree was deleted while a distinct
-user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
-remains discoverable. That directory enters the ordinary structured discovery
-conflict report, so upgrade exits nonzero. A same-named repository-authored
-skill with no pristine provenance is never removed, and a second upgrade
-neither recreates a dangling link nor resurrects or re-reports either
-retirement.
+means an otherwise removable canonical tree was deleted while a user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — was preserved byte-for-byte and remains discoverable. For a symlink,
+its link text and target are unchanged. That entry enters the ordinary
+structured discovery conflict report, so upgrade exits nonzero. A same-named
+repository-authored skill with no pristine provenance is never removed, and a
+second upgrade neither recreates a dangling link nor resurrects or re-reports
+either retirement.
 
 ## Durable settings outside TOML
 
@@ -1125,12 +1131,13 @@ action. Check the gates in this order:
 7. **Duplicate work:** a ready ticket already represented by an active build is
    deliberately excluded from the queue.
 
-If the expected work is observation harvesting instead of a ticket, also check
-the acknowledged harvest gate and both dashboard pressure counters. Harvest
-starts when `policy.harvestThreshold` unclaimed observations exist or when
-`policy.harvestMaxDrift` other builds have merged since the oldest one; a drift
-limit of zero disables the second condition. Harvest does not consume build
-capacity.
+If the expected work is observation harvesting instead of a ticket, check the
+acknowledged harvest gate, the dashboard's unclaimed `observations` count, and
+the configured triggers. Harvest starts when `policy.harvestThreshold`
+unclaimed observations exist or when `policy.harvestMaxDrift` other builds have
+merged since the oldest one; a drift limit of zero disables the second
+condition. Trigger progress is not shown in the dashboard. Harvest does not
+consume build capacity.
 
 ### Authentication failures
 

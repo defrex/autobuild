@@ -197,24 +197,21 @@ describe('ab-guide — init behavior', () => {
 })
 
 describe('ab-guide — dispatch dashboard summary', () => {
-  test('documents the live queue and pressure-counter grammar', () => {
+  test('documents the live queue and observation-count grammar', () => {
     const section = headingSection('## Dispatch dashboard')
     expect(section).toBeDefined()
     const compact = section?.replace(/\s+/g, ' ') ?? ''
-    expect(compact).toContain(
-      '`queue <depth> | active <current>/<limit> | obs <current>/<limit> | drift <current>/<limit>`',
-    )
+    expect(compact).toContain('`queue <depth> | active <current>/<limit> | observations <count>`')
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
     expect(compact).toContain(
       '`active` is the current nonterminal-build count against root `capacity`',
     )
     expect(compact).toContain(
-      '`obs` is the current count of recorded observation occurrences not yet claimed by a Harvest snapshot against `[policy].harvestThreshold`',
+      '`observations` is the count of recorded observation occurrences not yet claimed by a Harvest snapshot',
     )
-    expect(compact).toContain(
-      '`drift` is distinct other builds merged after the oldest such observation against `[policy].harvestMaxDrift`',
-    )
-    expect(compact).toContain('A drift limit of zero renders as `/0`')
+    expect(compact).not.toContain('`obs`')
+    expect(compact).not.toContain('`drift`')
+    expect(compact).not.toContain('renders as `/0`')
     expect(compact).toContain('conditional yellow `repository PAUSED` segment')
     expect(compact).toContain('only queued rows gain a yellow `(held)` modifier beside `QUEUED`')
     expect(compact).toContain(
