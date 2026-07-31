@@ -43,64 +43,24 @@ async function readSkill(...segments: string[]): Promise<string> {
 }
 
 const planReview = await readSkill('skills', 'plan-review', 'SKILL.md')
-const installedPlanReview = await readSkill('.agents', 'skills', 'ab-plan-review', 'SKILL.md')
-const pristinePlanReview = await readSkill(
-  '.agents',
-  'skills',
-  '.ab-pristine',
-  'ab-plan-review',
-  'SKILL.md',
-)
 const codeReview = await readSkill('skills', 'code-review', 'SKILL.md')
-const installedCodeReview = await readSkill('.agents', 'skills', 'ab-code-review', 'SKILL.md')
-const pristineCodeReview = await readSkill(
-  '.agents',
-  'skills',
-  '.ab-pristine',
-  'ab-code-review',
-  'SKILL.md',
-)
 const harvestReview = await readSkill('skills', 'harvest-review', 'SKILL.md')
-const installedHarvestReview = await readSkill('.agents', 'skills', 'ab-harvest-review', 'SKILL.md')
-const pristineHarvestReview = await readSkill(
-  '.agents',
-  'skills',
-  '.ab-pristine',
-  'ab-harvest-review',
-  'SKILL.md',
-)
 
-/** The canonical and vendored plan-review forms. */
-const planReviewSkills = [
-  ['plan-review (canonical)', planReview],
-  ['plan-review (installed)', installedPlanReview],
-  ['plan-review (pristine)', pristinePlanReview],
-] as const
+const planReviewSkills = [['plan-review', planReview]] as const
 
 /**
- * The skills the minimum finding bar and severity calibration cover: the plan
- * loop and the code loop. Kept as its own list rather than folded into
- * `reviewSkills` because the persistence rule reaches one skill further.
+ * The canonical skills the minimum finding bar and severity calibration cover:
+ * the plan loop and the code loop. Kept as its own list rather than folded
+ * into `reviewSkills` because the persistence rule reaches one skill further.
  */
-const calibratedSkills = [
-  ...planReviewSkills,
-  ['code-review (canonical)', codeReview],
-  ['code-review (installed)', installedCodeReview],
-  ['code-review (pristine)', pristineCodeReview],
-] as const
+const calibratedSkills = [...planReviewSkills, ['code-review', codeReview]] as const
 
 /**
- * Every skill the persistence rule covers — the calibrated two plus the
- * harvest loop, whose runner walks the same `persists` chains through the
- * same stall machinery. Derived from `calibratedSkills` so a newly vendored
- * plan- or code-review copy joins both lists at once.
+ * Every canonical skill the persistence rule covers — the calibrated two plus
+ * the harvest loop, whose runner walks the same `persists` chains through the
+ * same stall machinery.
  */
-const reviewSkills = [
-  ...calibratedSkills,
-  ['harvest-review (canonical)', harvestReview],
-  ['harvest-review (installed)', installedHarvestReview],
-  ['harvest-review (pristine)', pristineHarvestReview],
-] as const
+const reviewSkills = [...calibratedSkills, ['harvest-review', harvestReview]] as const
 
 /** Collapse wrapping so anchors survive a reflow. */
 function normalize(text: string): string {
@@ -264,38 +224,5 @@ describe('review skills — severity calibration', () => {
     expect(normalize(findingsSection(planReview) ?? '')).not.toContain(
       "(should fix, wouldn't sink the build)",
     )
-  })
-})
-
-describe('review skills — vendored copies', () => {
-  /**
-   * Hand-derived rather than routed through `rewriteSkillSource`, so a change
-   * to the install transform has to be restated here deliberately instead of
-   * silently redefining what the checked-in mirrors are compared against.
-   */
-  function installForm(canonical: string, name: string): string {
-    const renamed = canonical.replace(`\nname: ${name}\n`, `\nname: ab-${name}\n`)
-    return renamed.replace(/^(description: .*)$/m, '$1\ndisable-model-invocation: true')
-  }
-
-  test('checked-in live and pristine plan-review match the canonical install form', () => {
-    const expected = installForm(planReview, 'plan-review')
-    expect(expected).not.toBe(planReview)
-    expect(installedPlanReview).toBe(expected)
-    expect(pristinePlanReview).toBe(expected)
-  })
-
-  test('checked-in live and pristine code-review match the canonical install form', () => {
-    const expected = installForm(codeReview, 'code-review')
-    expect(expected).not.toBe(codeReview)
-    expect(installedCodeReview).toBe(expected)
-    expect(pristineCodeReview).toBe(expected)
-  })
-
-  test('checked-in live and pristine harvest-review match the canonical install form', () => {
-    const expected = installForm(harvestReview, 'harvest-review')
-    expect(expected).not.toBe(harvestReview)
-    expect(installedHarvestReview).toBe(expected)
-    expect(pristineHarvestReview).toBe(expected)
   })
 })
