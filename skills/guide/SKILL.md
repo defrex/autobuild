@@ -777,9 +777,11 @@ preserved through self-update handoff.
 
 Any content conflict, discovery conflict, pre-existing dirt in an owned path,
 non-Git target, changed HEAD/worktree identity, or in-progress merge, rebase, or
-cherry-pick suppresses the whole commit with a named warning. Staging and commit
-failures are also warning-only. Files stay as merged and the report's existing
-exit code is unchanged; upgrade never pushes or rewrites history.
+cherry-pick suppresses the whole commit with a named warning. If upgrade cannot
+snapshot the worktree's Git index, it warns and declines to stage. A staging or
+commit failure restores that exact pre-attempt index and reports the original
+Git failure without touching merged worktree files. The report's existing exit
+code is unchanged; upgrade never pushes or rewrites history.
 
 The agent gets a fixed per-file deadline of at least ten minutes. While it is
 resolving and stdout is interactive, `ab upgrade` continuously redraws one line
