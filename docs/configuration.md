@@ -955,13 +955,14 @@ its owned discovery link, or the canonical live tree was already missing and
 upgrade cleared provenance plus any owned dangling link. `kept` normally means
 the tree was customized, still configured, or could not be proved safe to
 remove; upgrade preserves it and clears obsolete pristine ownership. It also
-means an otherwise removable canonical tree was deleted while a distinct
-user-owned `.claude/skills/<name>` directory was preserved byte-for-byte and
-remains discoverable. That directory enters the ordinary structured discovery
-conflict report, so upgrade exits nonzero. A same-named repository-authored
-skill with no pristine provenance is never removed, and a second upgrade
-neither recreates a dangling link nor resurrects or re-reports either
-retirement.
+means an otherwise removable canonical tree was deleted while a user-owned
+`.claude/skills/<name>` discovery entry — a distinct real directory or foreign
+symlink — was preserved byte-for-byte and remains discoverable. For a symlink,
+its link text and target are unchanged. That entry enters the ordinary
+structured discovery conflict report, so upgrade exits nonzero. A same-named
+repository-authored skill with no pristine provenance is never removed, and a
+second upgrade neither recreates a dangling link nor resurrects or re-reports
+either retirement.
 
 ## Durable settings outside TOML
 
