@@ -126,6 +126,49 @@ describe('live dispatcher config', () => {
     }
   })
 
+  test('exact restoration resets missing-file notice deduplication without a new revision', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-live-config-'))
+    const source = join(dir, 'autobuild.toml')
+    const published: string[] = []
+    try {
+      await writeFile(source, base)
+      const live = new LiveConfig(
+        source,
+        parseConfig(base),
+        base,
+        runtimes,
+        async ({ content }) => {
+          published.push(content)
+        },
+      )
+      const accepted = live.current()
+      const expectOriginalSnapshot = () => {
+        expect(live.current()).toBe(accepted)
+        expect(live.current().revision).toBe(0)
+        expect(live.current().config.capacity).toBe(1)
+        expect(published).toEqual([])
+      }
+
+      await unlink(source)
+      expect(await live.refreshFromDisk()).toMatchObject({ kind: 'rejected', notify: true })
+      expectOriginalSnapshot()
+      expect(await live.refreshFromDisk()).toMatchObject({ kind: 'rejected', notify: false })
+      expectOriginalSnapshot()
+
+      await writeFile(source, base)
+      expect(await live.refreshFromDisk()).toEqual({ kind: 'unchanged' })
+      expectOriginalSnapshot()
+
+      await unlink(source)
+      expect(await live.refreshFromDisk()).toMatchObject({ kind: 'rejected', notify: true })
+      expectOriginalSnapshot()
+      expect(await live.refreshFromDisk()).toMatchObject({ kind: 'rejected', notify: false })
+      expectOriginalSnapshot()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test('keeps the last valid snapshot, suppresses duplicate invalid notices, then recovers', async () => {
     const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {})
     const invalid = base.replace('capacity = 1', 'capacity = 0')
