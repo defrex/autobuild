@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#143](https://github.com/defrex/autobuild/pull/143) — Hold queued builds while the repository is paused
 - [#136](https://github.com/defrex/autobuild/pull/136) — Narrow `persists` marking to a surviving disagreement
 - [#135](https://github.com/defrex/autobuild/pull/135) — Route agent verify steps by step name, warn on unconsumed role keys
 - [#134](https://github.com/defrex/autobuild/pull/134) — Replace the one-line resume field with a multi-line composer panel
