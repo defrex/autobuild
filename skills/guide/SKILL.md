@@ -923,7 +923,8 @@ routing, such as the last review round's findings.
 
 A direct verifier escalation is a known gap: answering it resolves the blocker
 and reruns the verify step, but the answer is not materialized for that rerun.
-AUT-169 tracks delivering that answer to a phase that can act on it.
+The answer still needs a phase that can act on it. That delivery remains
+tracked follow-up work.
 
 Every command requires the target to exist in this repository and be active
 (`running`, `paused`, or `blocked`), except abort also accepts `queued`;

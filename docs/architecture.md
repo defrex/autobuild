@@ -89,8 +89,9 @@ identical whichever a human used.
 exhausts policy, guidance answering that policy escalation takes precedence
 over the pending report as the failure routes to the next `implement` round. A
 direct verifier escalation is a known gap: answering it resolves the blocker
-and reruns the step, but the answer is not materialized for that rerun; AUT-169
-tracks the fix. `finalize` and `reconcile` have no producer round, so
+and reruns the step, but the answer is not materialized for that rerun.
+Delivering that answer remains tracked follow-up work. `finalize` and
+`reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
 `src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and

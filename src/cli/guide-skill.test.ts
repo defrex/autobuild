@@ -280,7 +280,6 @@ describe('ab-guide — durable build-control coverage', () => {
       'policy escalation also feeds the next `implement` round and takes precedence',
       'A direct verifier escalation is a known gap',
       'the answer is not materialized for that rerun',
-      'AUT-169',
       "A round's feedback is exclusive",
     ]) {
       expect(section ?? '').toContain(claim)
