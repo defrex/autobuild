@@ -1081,7 +1081,8 @@ releaseId = 42
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
     const comment = h.tickets.comments[0]
     expect(comment?.id).toBe('T-1')
-    expect(comment?.body).toContain('docs/spec-standard.md')
+    expect(comment?.body).toContain('.agents/skills/ab-guide/references/spec-standard.md')
+    expect(comment?.body).not.toContain('docs/spec-standard.md')
     expect(comment?.body).toContain("an '## Acceptance criteria' heading")
     expect(comment?.body).toContain("an '## Out of scope' heading")
   })
