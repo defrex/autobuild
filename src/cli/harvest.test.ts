@@ -60,6 +60,7 @@ async function fixture() {
         run: 'h_1',
         observations: [{ build: 'build-a', seq: 4 }],
         scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+        trigger: 'drift',
       },
     }),
   )
@@ -98,7 +99,9 @@ describe('harvest status', () => {
       pausedAt: paused.ts,
       pendingCommands: [],
       observations: 1,
+      trigger: 'drift',
     })
+    expect(renderHarvestStatus(view)).toContain('trigger: drift')
 
     const idle = new MemoryBuildStore({ clock: steppingClock() })
     await idle.ensureRepo('/idle')
@@ -567,7 +570,11 @@ describe('harvest CLI', () => {
       bad,
       JSON.stringify({
         proposals: [
-          { action: 'suppress', reason: 'x', observations: [{ build: 'other', seq: 1 }] },
+          {
+            action: 'suppress',
+            reason: 'x',
+            observations: [{ build: 'other', seq: 1 }],
+          },
         ],
       }),
     )

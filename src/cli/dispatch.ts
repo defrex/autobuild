@@ -70,7 +70,7 @@ import { createWorkspaceProvider } from '../ports/workspace/create'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
-import { scanUnclaimedObservations } from '../processes/harvest'
+import { evaluateHarvestPressure, scanUnclaimedObservations } from '../processes/harvest'
 import {
   Dispatcher,
   emptyTickReport,
@@ -154,7 +154,7 @@ interface ResumePrompt {
   /** Snapshot at prompt-open time. Submission revalidates each id. */
   escalationIds: string[]
   value: string
-  /** Caret as a code-point offset into `value`; the composer owns the geometry. */
+  /** Caret as a UTF-16 grapheme-boundary offset into `value`. */
   cursor: number
 }
 
@@ -384,6 +384,8 @@ class DispatchLoop {
   /** Last successfully measured unclaimed observation count. Sampling failures
    * retain this factual value rather than inventing a zero. */
   private observationCount = 0
+  /** Last successfully measured repository drift; retained atomically with observationCount. */
+  private driftCount = 0
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -475,7 +477,9 @@ class DispatchLoop {
       if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
-          this.observationCount = scan.observations.length
+          const pressure = evaluateHarvestPressure(scan, this.config.policy)
+          this.observationCount = pressure.observationCount
+          this.driftCount = pressure.drift
         } catch (error) {
           this.warn(
             `dashboard observation pressure failed: ${
@@ -501,7 +505,9 @@ class DispatchLoop {
     })
   }
 
-  /** Overlay only process-local presentation controls onto the projection. */
+  /** Overlay process-local presentation controls and normalize the exact model
+   * the renderer will receive. Detail bounds depend on modal control height, so
+   * composition must precede clamping rather than measuring the durable base. */
   private syncModelControls(): void {
     if (this.model === undefined) return
     const {
@@ -519,7 +525,7 @@ class DispatchLoop {
       ...this.configWarnings,
       ...(this.warningLine !== undefined ? [this.warningLine] : []),
     ]
-    this.model = {
+    let effective: DashboardModel = {
       ...base,
       ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
@@ -537,6 +543,29 @@ class DispatchLoop {
         : {}),
       ...(this.view !== undefined ? { view: this.view } : {}),
     }
+    if (this.view?.kind === 'detail') {
+      const terminal = this.opts.terminal
+      const normalized = {
+        ...this.view,
+        scroll:
+          terminal === undefined
+            ? 0
+            : Math.max(
+                0,
+                Math.min(
+                  this.view.scroll,
+                  detailScrollLimit(
+                    effective,
+                    dashboardContentWidth(terminal.columns),
+                    paintableRows(terminal.rows),
+                  ),
+                ),
+              ),
+      }
+      this.view = normalized
+      effective = { ...effective, view: normalized }
+    }
+    this.model = effective
   }
 
   private moveSelection(delta: number): void {
@@ -957,6 +986,7 @@ class DispatchLoop {
               nextModel,
               dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
+              'session',
               next.scroll,
             ),
     }
@@ -986,6 +1016,7 @@ class DispatchLoop {
               nextModel,
               dashboardContentWidth(terminal.columns),
               paintableRows(terminal.rows),
+              'message',
               next.scroll,
             ),
     }
@@ -1683,7 +1714,9 @@ class DispatchLoop {
         ).length,
         capacity: this.config.capacity,
         observationCount: this.observationCount,
+        driftCount: this.driftCount,
         harvestThreshold: this.config.policy.harvestThreshold,
+        harvestMaxDrift: this.config.policy.harvestMaxDrift,
       },
       repositoryEvents,
     )
@@ -1713,25 +1746,9 @@ class DispatchLoop {
           sessionId: _priorSession,
           ...stableDetail
         } = detail
-        const terminal = this.opts.terminal
-        const unclamped = {
+        this.view = {
           ...stableDetail,
           ...(selected !== undefined ? { sessionId: selected } : {}),
-        }
-        const projectedWithView = { ...projected, view: unclamped }
-        this.view = {
-          ...unclamped,
-          scroll:
-            terminal === undefined
-              ? 0
-              : Math.min(
-                  unclamped.scroll,
-                  detailScrollLimit(
-                    projectedWithView,
-                    dashboardContentWidth(terminal.columns),
-                    paintableRows(terminal.rows),
-                  ),
-                ),
           ...(messageStillValid && priorMessage !== undefined
             ? {
                 message: priorMessage,

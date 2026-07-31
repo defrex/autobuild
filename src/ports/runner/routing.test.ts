@@ -23,6 +23,16 @@ function resolver(roles: Record<string, RuntimeSpec> = {}) {
   return createRuntimeResolver(registry, configured)
 }
 
+function runtimeConfigError(create: () => unknown): RuntimeConfigError {
+  try {
+    create()
+  } catch (error) {
+    expect(error).toBeInstanceOf(RuntimeConfigError)
+    return error as RuntimeConfigError
+  }
+  throw new Error('expected a RuntimeConfigError')
+}
+
 describe('createRuntimeResolver — raw per-field inheritance', () => {
   test('an absent default is rejected with a copyable fix and available runtimes', () => {
     expect(() => createRuntimeResolver(registry, {})).toThrow(
@@ -202,6 +212,80 @@ describe('createRuntimeResolver — exact compatibility', () => {
     expect(() => resolver({ default: { runtime: 'ghost' } })).toThrow(
       /\[roles\.default\] resolves to runtime "ghost"/,
     )
+  })
+
+  describe('runtime names inherited from Object.prototype are not registrations', () => {
+    const inheritedNames = ['constructor', 'toString', 'valueOf']
+    const notRegistered = (label: string, runtime: string) =>
+      `${label} resolves to runtime "${runtime}", which is not registered ` +
+      '(registered runtimes: claude, pi, gemini)'
+
+    for (const runtime of inheritedNames) {
+      test(`rejects "${runtime}" on [roles.default]`, () => {
+        const error = runtimeConfigError(() => resolver({ default: { runtime } }))
+        expect(error.problems).toEqual([notRegistered('[roles.default]', runtime)])
+      })
+
+      test(`rejects "${runtime}" on an overriding role`, () => {
+        const error = runtimeConfigError(() => resolver({ plan: { runtime } }))
+        expect(error.problems).toEqual([notRegistered('[roles.plan]', runtime)])
+      })
+
+      test(`rejects "${runtime}" on every role that inherits it`, () => {
+        const error = runtimeConfigError(() =>
+          resolver({ default: { runtime }, plan: {}, implement: {} }),
+        )
+        expect(error.problems).toEqual([
+          notRegistered('[roles.default]', runtime),
+          notRegistered('[roles.plan]', runtime),
+          notRegistered('[roles.implement]', runtime),
+        ])
+      })
+    }
+  })
+
+  describe('an own registration may use an Object.prototype name', () => {
+    for (const runtime of ['constructor', 'toString', 'valueOf']) {
+      test(`resolves a genuine own "${runtime}" registration`, () => {
+        const collidingRunner = runner()
+        const ownRegistry: RuntimeRegistry = {
+          claude: registry.claude!,
+          [runtime]: {
+            runner: collidingRunner,
+            servesModels: [`${runtime}-`],
+            defaultModel: `${runtime}-default`,
+          },
+        }
+
+        const inherited = createRuntimeResolver(ownRegistry, {
+          default: { runtime },
+        }).resolve(runtime)
+        expect(inherited).toMatchObject({
+          runner: collidingRunner,
+          runtime,
+          model: `${runtime}-default`,
+        })
+
+        const overridden = createRuntimeResolver(ownRegistry, {
+          default: { runtime: 'claude' },
+          plan: { runtime, model: `${runtime}-model` },
+        }).resolve('plan')
+        expect(overridden).toMatchObject({
+          runner: collidingRunner,
+          runtime,
+          model: `${runtime}-model`,
+        })
+
+        expect(() =>
+          createRuntimeResolver(ownRegistry, {
+            default: { runtime, model: 'incompatible' },
+          }),
+        ).toThrow(
+          `[roles.default] resolves runtime "${runtime}" with model "incompatible", but ` +
+            `"${runtime}" serves only [${runtime}-]`,
+        )
+      })
+    }
   })
 
   test('all bad roles are aggregated into one eager failure', () => {

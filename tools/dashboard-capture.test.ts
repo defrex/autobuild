@@ -61,6 +61,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
     'mixed-wide',
     'mixed-narrow',
+    'unicode-transcript',
     'resume-prompt',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
@@ -71,6 +72,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(report).toContain(
     '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
   )
+  expect(report).toContain('unicode-transcript.png')
   expect(report).toContain('resume-prompt.png')
   expect(report).toContain('- [ ] The resume-prompt frame shows the composer panel in place of the')
   expect(report).toContain('complete blocker through its unique final line')
@@ -86,10 +88,14 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('CAP-COMPLETE')
       expect(frame.text).toContain('Harvest')
       expect(frame.text).toContain('PAUSED')
-    } else {
+    } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
+      expect(frame.text).toContain('BLOCKED')
+    } else {
+      expect(frame.text).toContain('Transcript  complete-dashboard-evidence')
+      expect(frame.text).toContain('Agent: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦')
     }
-    expect(frame.text).toContain('BLOCKED')
+    if (frame.id !== 'unicode-transcript') expect(frame.text).toContain('BLOCKED')
     expect(frame.text).not.toContain('\x1b')
   }
   for (const id of ['mixed-wide', 'mixed-narrow']) {
@@ -99,6 +105,11 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(mixed).toMatch(/CAP-QUEUED.*\(held\)\s+QUEUED/)
   }
   expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
+  for (const id of ['mixed-wide', 'mixed-narrow']) {
+    expect(first.result.frames.find((frame) => frame.id === id)!.text).toContain(
+      'Unicode warning: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦',
+    )
+  }
   for (const id of ['mixed-wide', 'mixed-narrow']) {
     expect(first.result.frames.find((frame) => frame.id === id)!.text).toContain(
       'more rows - Enter details',
@@ -116,7 +127,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(resume).toContain('EXPANDED FINAL LINE: dashboard message preview complete.')
   expect(resume).not.toContain('more rows - Enter details')
   expect(resume).toContain('Use the manual merge path.')
-  expect(resume).toContain('Re-run verify:test |afterwards.')
+  expect(resume).toContain('Re-run verify:test |afterwards — naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦.')
+  expect(resume).not.toMatch(/\\u\{(?:e[fE]9|2014|1f1fa|1f468)\}/)
   expect(resume).toContain('Enter submit')
   expect(resume).toContain('newline')
   expect(resume).toContain('Esc cancel')

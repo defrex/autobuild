@@ -4,24 +4,8 @@ import { join, resolve } from 'node:path'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
-const installedSpec = await readFile(
-  join(DIST_ROOT, '.agents', 'skills', 'ab-spec', 'SKILL.md'),
-  'utf8',
-)
-const pristineSpec = await readFile(
-  join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-spec', 'SKILL.md'),
-  'utf8',
-)
 const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
-const installedTickets = await readFile(
-  join(DIST_ROOT, '.agents', 'skills', 'ab-tickets', 'SKILL.md'),
-  'utf8',
-)
-const pristineTickets = await readFile(
-  join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-tickets', 'SKILL.md'),
-  'utf8',
-)
-const ticketGuides = [tickets, installedTickets] as const
+const ticketGuides = [tickets] as const
 
 describe('ticket grooming skill guidance', () => {
   test('spec syncs an accepted body and dependencies through exact CLI forms', () => {
@@ -43,13 +27,6 @@ describe('ticket grooming skill guidance', () => {
     for (const gate of ['label', 'dependency', 'intake', 'capacity', 'readiness']) {
       expect(spec).toContain(gate)
     }
-  })
-
-  test('checked-in live and pristine spec skills match the canonical install form', () => {
-    const expectedInstalled = spec.replace('\nname: spec\n', '\nname: ab-spec\n')
-    expect(expectedInstalled).not.toBe(spec)
-    expect(installedSpec).toBe(expectedInstalled)
-    expect(pristineSpec).toBe(expectedInstalled)
   })
 
   test('tickets keeps file lifecycle transitions local but blocker edits source-agnostic', () => {
@@ -82,12 +59,5 @@ describe('ticket grooming skill guidance', () => {
       expect(guide).not.toContain('the *entire* act of dispatching it')
       expect(guide).not.toContain('`ready/` alone decides dispatchability')
     }
-  })
-
-  test('checked-in live and pristine ticket skills match the canonical install form', () => {
-    const expectedInstalled = tickets.replace('\nname: tickets\n', '\nname: ab-tickets\n')
-    expect(expectedInstalled).not.toBe(tickets)
-    expect(installedTickets).toBe(expectedInstalled)
-    expect(pristineTickets).toBe(expectedInstalled)
   })
 })

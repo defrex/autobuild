@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } from '../cli/harvest'
 import { resolveHarvestCliEnv } from '../cli/env'
 import { parseConfig } from '../config/load'
-import { KERNEL, agentActor, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
@@ -52,7 +52,7 @@ async function seedObservation(
 
 function config(
   threshold = 2,
-  policy: { maxReviewRounds?: number; stallRounds?: number } = {},
+  policy: { maxReviewRounds?: number; stallRounds?: number; harvestMaxDrift?: number } = {},
   /** Extra `[tickets]` lines, e.g. `proposalState = "Ready"`. */
   tickets: string[] = [],
 ) {
@@ -66,6 +66,7 @@ function config(
       'runtime = "scripted"',
       '[policy]',
       `harvestThreshold = ${threshold}`,
+      `harvestMaxDrift = ${policy.harvestMaxDrift ?? 3}`,
       `maxReviewRounds = ${policy.maxReviewRounds ?? 3}`,
       `stallRounds = ${policy.stallRounds ?? 3}`,
     ].join('\n'),
@@ -353,6 +354,7 @@ describe('HarvestRunner', () => {
     expect(reviewRounds).toBe(1)
     const state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.latest?.status).toBe('completed')
+    expect(state.latest?.trigger).toBe('count')
     expect(state.ledger).toHaveLength(2)
     expect(await tickets.get('fake-1')).toMatchObject({
       state: 'Triage',
@@ -370,6 +372,64 @@ describe('HarvestRunner', () => {
     await seedObservation(store, 'four', 'fourth')
     expect((await makeRunner().run()).outcome).toBe('completed')
     expect(await tickets.get('fake-2')).not.toBeNull()
+  })
+
+  test('drift below the count threshold claims the whole accumulation and records why', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-drift-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', 'submit.json')
+          await writeFile(file, JSON.stringify(proposalSet(observations, 'Drift-triggered defect')))
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, '.ab', 'review.md')
+          await writeFile(notes, 'approved\n')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+
+    await seedObservation(store, 'origin', 'oldest')
+    await store.createBuild({ slug: 'landed', repo: '/repo' })
+    await store.append('landed', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'abc123' },
+    })
+    await seedObservation(store, 'fresh', 'recorded after merge')
+    const result = await new HarvestRunner({
+      store,
+      tickets,
+      config: config(5, { harvestMaxDrift: 1 }),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance-drift',
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect(result).toMatchObject({ outcome: 'completed', launch: 'started' })
+    const state = reduceHarvest(await store.getRepoEvents('/repo'))
+    expect(state.latest?.trigger).toBe('drift')
+    expect(state.latest?.observations).toEqual([
+      { build: 'fresh', seq: 1 },
+      { build: 'origin', seq: 1 },
+    ])
   })
 
   for (const pauseDuring of ['synthesize', 'review'] as const) {

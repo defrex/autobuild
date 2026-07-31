@@ -6,7 +6,7 @@
  * role's effective primary axes and is validated at construction.
  */
 import type { AgentRunner } from '../types'
-import { serves, type RuntimeRegistry } from './runtime'
+import { serves, type RuntimeRegistration, type RuntimeRegistry } from './runtime'
 
 /** A resolved runtime/model pair plus the adapter to run it (§9). */
 export interface ResolvedRuntime {
@@ -54,8 +54,9 @@ function runtimeNames(registry: RuntimeRegistry): string {
   return Object.keys(registry).join(', ') || 'none'
 }
 
-function servedModels(registry: RuntimeRegistry, runtime: string): string {
-  return registry[runtime]!.servesModels.join(', ') || 'no models'
+/** The declared model families for one runtime, for error messages. */
+function servedModels(registration: RuntimeRegistration): string {
+  return registration.servesModels.join(', ') || 'no models'
 }
 
 function mergeAxes(spec: RuntimeAxes, base: RuntimeAxes): RuntimeAxes {
@@ -86,20 +87,20 @@ function resolveAxes(
     )
     return undefined
   }
-  const reg = registry[runtime]
-  if (reg === undefined) {
+  if (!Object.hasOwn(registry, runtime)) {
     problems.push(
       `${label} resolves to runtime "${runtime}", which is not registered ` +
         `(registered runtimes: ${runtimeNames(registry)})`,
     )
     return undefined
   }
+  const reg = registry[runtime]!
 
   const model = axes.model ?? reg.defaultModel
   if (model !== undefined && !serves(reg, model)) {
     problems.push(
       `${label} resolves runtime "${runtime}" with model "${model}", but ` +
-        `"${runtime}" serves only [${servedModels(registry, runtime)}]`,
+        `"${runtime}" serves only [${servedModels(reg)}]`,
     )
     return undefined
   }

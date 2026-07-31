@@ -18,7 +18,15 @@ import { pathToFileURL } from 'node:url'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
-import { renderDashboard, stripAnsi, type DashboardRenderer } from './dashboard/render'
+import {
+  dashboardContentWidth,
+  detailScrollLimit,
+  renderDashboard,
+  stripAnsi,
+  type DashboardRenderer,
+} from './dashboard/render'
+import type { DashboardModel } from './dashboard/model'
+import { paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
@@ -35,7 +43,7 @@ import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
-import { manualClock } from '../testing/fixed'
+import { manualClock, steppingClock } from '../testing/fixed'
 import {
   CONFORMING_BODY,
   GIT_ID,
@@ -1991,12 +1999,12 @@ describe('abDispatch --once with an interactive terminal', () => {
     }, 30_000)
   }
 
-  test('shows configured capacity and unclaimed observation pressure even for queued/non-row work and a paused gate', async () => {
+  test('shows configured capacity and both pressure dimensions even for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
       'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 1',
     )
-    const fx = await makeFixture([], happyHandlers(), config)
+    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
     const source = 'pressure-source'
     const firstTerminal = fakeTerminal()
     try {
@@ -2012,6 +2020,17 @@ describe('abDispatch --once with an interactive terminal', () => {
           },
         })
       }
+      await fx.store.createBuild({ slug: 'pressure-merged', repo: fx.origin })
+      await fx.store.append('pressure-merged', {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: 'pressure-merged-sha' },
+      })
+      await fx.store.append('pressure-merged', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
       await fx.store.ensureRepo(fx.origin)
       await fx.store.appendRepo(fx.origin, {
         actor: KERNEL,
@@ -2031,7 +2050,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7')
+      expect(firstFrame).toContain('queue 0 | active 1/5 | obs 5/7 | drift 1/1')
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
       expect(firstFrame).toContain('QUEUED')
@@ -2073,7 +2092,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7')
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | obs 0/7 | drift 0/1')
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
     } finally {
@@ -2596,12 +2615,12 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch retains the last observation measurement when a later tick cannot scan pressure', async () => {
+  test('watch retains the last complete pressure measurement when a later tick cannot scan', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
     )
-    const fx = await makeFixture([], happyHandlers(), config)
+    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
     const term = fakeTerminal()
     const stop = new AbortController()
     const source = 'pressure-carry-over'
@@ -2625,6 +2644,17 @@ describe('abDispatch --once with an interactive terminal', () => {
           },
         })
       }
+      await fx.store.createBuild({ slug: 'carry-merged', repo: fx.origin })
+      await fx.store.append('carry-merged', {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: 'carry-merged-sha' },
+      })
+      await fx.store.append('carry-merged', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
 
       await abDispatch({
         targetRepo: fx.origin,
@@ -2648,8 +2678,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('obs 2/7')
-      expect(frame).not.toContain('obs 0/7')
+      expect(frame).toContain('obs 2/7 | drift 1/3')
+      expect(frame).not.toContain('obs 0/7 | drift 0/3')
       expect(frame).toContain('pressure scan unavailable')
       expect(fx.err).toEqual([])
     } finally {
@@ -4456,6 +4486,191 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
+  test('poll-time detail clamping uses the effective resume-panel projection without background drift', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-resume-clamp', { title: 'Resume clamp' }),
+      happyHandlers(),
+    )
+    const term = fakeTerminal(true, { columns: 120, rows: 16 })
+    const input = fakeInput()
+    const captures: Array<{
+      model: DashboardModel
+      width: number
+      height: number
+      storeRead: number
+    }> = []
+    let storeReads = 0
+    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
+    fx.store.listBuilds = async () => {
+      const builds = await originalListBuilds()
+      storeReads += 1
+      return builds
+    }
+    const renderer: DashboardRenderer = (model, opts) => {
+      captures.push({
+        model,
+        width: dashboardContentWidth(opts.width),
+        height: opts.height ?? Number.POSITIVE_INFINITY,
+        storeRead: storeReads,
+      })
+      return renderDashboard(model, opts)
+    }
+    const latestDetail = (predicate: (model: DashboardModel) => boolean = () => true) =>
+      [...captures]
+        .reverse()
+        .find((capture) => capture.model.view?.kind === 'detail' && predicate(capture.model))
+    const waitForStorePaint = async (read: number) => {
+      await waitFor(() =>
+        captures.some(
+          (capture) =>
+            capture.storeRead >= read &&
+            capture.height === paintableRows(term.rows) &&
+            capture.model.view?.kind === 'detail',
+        ),
+      )
+      return latestDetail()!
+    }
+    let run: Promise<void> | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      const question = Array.from(
+        { length: 60 },
+        (_, index) => `Long blocker detail line ${String(index + 1).padStart(2, '0')}`,
+      ).join('\n')
+      await fx.store.append('resume-clamp', {
+        actor: agentActor('plan', 's_resume_clamp'),
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_resume_clamp',
+          phase: 'plan',
+          source: 'agent',
+          question,
+        },
+      })
+      const before = await fx.store.getEvents('resume-clamp')
+
+      run = abDispatch({
+        targetRepo: fx.origin,
+        env: { USER: 'dashboard-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+        resolveDashboardRenderer: () => renderer,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('resume-clamp'))
+      input.press('down')
+      input.press('enter')
+      await waitFor(() => latestDetail() !== undefined)
+      for (let index = 0; index < 100; index += 1) input.press('down')
+      await waitFor(() => {
+        const capture = latestDetail()
+        if (capture?.model.view?.kind !== 'detail') return false
+        const limit = detailScrollLimit(capture.model, capture.width, capture.height)
+        return limit > 0 && capture.model.view.scroll === limit
+      })
+
+      input.press('resume')
+      await waitFor(() => latestDetail((model) => model.resumeInput !== undefined) !== undefined)
+      const opened = latestDetail((model) => model.resumeInput !== undefined)!
+      if (opened.model.view?.kind !== 'detail') throw new Error('expected detail capture')
+      const retained = opened.model.view.scroll
+      expect(retained).toBeGreaterThan(0)
+
+      // Find a resize where the offset is valid for the painted resume panel,
+      // but not for the unoverlaid one-line detail legend. This is the exact
+      // range in which clamping the durable projection would drift upward.
+      let driftRows: number | undefined
+      for (let rows = term.rows + 1; rows <= 100; rows += 1) {
+        const height = paintableRows(rows)
+        const effectiveLimit = detailScrollLimit(opened.model, opened.width, height)
+        const durableLimit = detailScrollLimit(
+          { ...opened.model, resumeInput: undefined },
+          opened.width,
+          height,
+        )
+        if (durableLimit < retained && retained <= effectiveLimit) {
+          driftRows = rows
+          break
+        }
+      }
+      expect(driftRows).toBeDefined()
+      Object.assign(term, { rows: driftRows! })
+
+      const firstPoll = storeReads + 1
+      const afterFirstPoll = await waitForStorePaint(firstPoll)
+      expect(afterFirstPoll.model.view).toMatchObject({ kind: 'detail', scroll: retained })
+      const secondPoll = storeReads + 1
+      const afterSecondPoll = await waitForStorePaint(secondPoll)
+      expect(afterSecondPoll.model.view).toMatchObject({ kind: 'detail', scroll: retained })
+
+      // A genuinely stale offset still clamps against the modal geometry and
+      // remains stable on the following poll.
+      let clampRows: number | undefined
+      let clampLimit = retained
+      for (let rows = driftRows! + 1; rows <= 300; rows += 1) {
+        const limit = detailScrollLimit(opened.model, opened.width, paintableRows(rows))
+        if (limit < retained) {
+          clampRows = rows
+          clampLimit = limit
+          break
+        }
+      }
+      expect(clampRows).toBeDefined()
+      Object.assign(term, { rows: clampRows! })
+      const clampPoll = storeReads + 1
+      const clamped = await waitForStorePaint(clampPoll)
+      expect(clamped.model.view).toMatchObject({ kind: 'detail', scroll: clampLimit })
+      const stablePoll = storeReads + 1
+      const stable = await waitForStorePaint(stablePoll)
+      expect(stable.model.view).toMatchObject({ kind: 'detail', scroll: clampLimit })
+
+      // Escape removes the process-local overlay synchronously. The restored
+      // detail controls get their own bound immediately, and the tail remains
+      // reachable after returning to the original viewport.
+      input.press('escape')
+      await waitFor(() => latestDetail((model) => model.resumeInput === undefined) !== undefined)
+      const restored = latestDetail((model) => model.resumeInput === undefined)!
+      if (restored.model.view?.kind !== 'detail')
+        throw new Error('expected restored detail capture')
+      expect(restored.model.view.scroll).toBeLessThanOrEqual(
+        detailScrollLimit(restored.model, restored.width, restored.height),
+      )
+      Object.assign(term, { rows: 16 })
+      for (let index = 0; index < 100; index += 1) input.press('down')
+      await waitFor(() => {
+        const capture = latestDetail((model) => model.resumeInput === undefined)
+        if (capture?.model.view?.kind !== 'detail' || capture.height !== paintableRows(term.rows)) {
+          return false
+        }
+        const limit = detailScrollLimit(capture.model, capture.width, capture.height)
+        return limit > 0 && capture.model.view.scroll === limit
+      })
+      expect(latestPaintedFrame(term)).toContain('runtime')
+      expect(await fx.store.getEvents('resume-clamp')).toEqual(before)
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('Enter drills into a build and pinned transcript without appending facts, then Escape restores the row', async () => {
     const fx = await makeFixture(
       readyTicket('T-drill', { title: 'Drilldown work' }),
@@ -4583,16 +4798,40 @@ describe('abDispatch interactive keyboard controls', () => {
       for (let index = 0; index < 30; index += 1) input.press('up')
       await waitFor(() => latestPaintedFrame(term).includes('Pipeline'))
       expect(await fx.store.getEvents('session-close')).toEqual(beforeNavigation)
-      Object.assign(term, { rows: 60 })
+      Object.assign(term, { rows: 8 })
 
       // Detail Up/Down scrolls; Left/Right retains session selection and brings
-      // the selected session back into the viewport.
+      // the selected session back into this two-row body viewport. Its nonzero
+      // offset leaves feedback appended after the selected session off-screen.
       for (let index = 0; index < 20; index += 1) input.press('right')
       await waitFor(() =>
         latestPaintedFrame(term).includes('code-review phase code-review round 2'),
       )
+      const beforeFeedback = await fx.store.getEvents('session-close')
       input.press('enter')
-      await waitFor(() => latestPaintedFrame(term).includes('still open'))
+      await waitFor(() =>
+        latestPaintedFrame(term).includes(
+          'Transcript unavailable while this session is still open.',
+        ),
+      )
+      expect(await fx.store.getEvents('session-close')).toEqual(beforeFeedback)
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(latestPaintedFrame(term)).toContain(
+        'Transcript unavailable while this session is still open.',
+      )
+
+      // Revealing is action-local: manual scrolling can immediately hide the
+      // retained message, and neither a poll nor session navigation follows it.
+      for (let index = 0; index < 3; index += 1) input.press('up')
+      await waitFor(() => !latestPaintedFrame(term).includes('still open'))
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(latestPaintedFrame(term)).not.toContain('still open')
+      expect(latestPaintedFrame(term)).not.toContain('code-review phase code-review round 2')
+      input.press('right')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes('code-review phase code-review round 2'),
+      )
+      expect(latestPaintedFrame(term)).not.toContain('still open')
 
       await fx.store.appendWithArtifacts(
         'session-close',
@@ -4825,7 +5064,8 @@ describe('abDispatch interactive keyboard controls', () => {
         'esc_paste',
       )
 
-      const pasted = 'rebase onto main\nkeep the feature flag\nre-run verify:test'
+      const pasted =
+        'rebase onto main — “safe”\nkeep 日本語 and naïve intact\nre-run verify:test 🇺🇸 👨‍👩‍👧‍👦'
       input.paste(pasted)
       await waitFor(() => stripAnsi(term.all()).includes('re-run verify:test'))
       // No part of the paste is interpreted as submit, however many line

@@ -41,6 +41,7 @@ import { installedSkillName } from '../skills'
 import { defaultProposalState } from './dispatcher'
 import {
   artifactRef,
+  evaluateHarvestPressure,
   HARVEST_REPORT_ARTIFACT,
   HARVEST_SCAN_ARTIFACT,
   HARVEST_TRANSCRIPT_ARTIFACT,
@@ -198,9 +199,8 @@ export class HarvestRunner {
         // boundary even when the threshold is not met, so a request arriving
         // during the read is acknowledged before this runner returns idle.
         await this.controlBoundary()
-        if (scan.observations.length < this.deps.config.policy.harvestThreshold) {
-          return { outcome: 'idle' }
-        }
+        const pressure = evaluateHarvestPressure(scan, this.deps.config.policy)
+        if (pressure.trigger === undefined) return { outcome: 'idle' }
         const runId = this.deps.ids('harvest')
         const packet = await makeHarvestScanPacket({
           store,
@@ -230,6 +230,7 @@ export class HarvestRunner {
               run: runId,
               observations: packet.observations.map((item) => item.occurrence),
               scan: artifactRef(deposited[0]!),
+              trigger: pressure.trigger,
             },
           }),
         )

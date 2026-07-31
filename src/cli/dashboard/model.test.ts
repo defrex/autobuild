@@ -494,7 +494,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
         { record: { ...RECORD, slug: 'alpha' }, state: active, events: activeLog },
       ],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 4 },
+      { repo: '/repos/app', queued: 2, observationCount: 4, driftCount: 2 },
     )
     expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'queued', 'zebra'])
     expect(model).toMatchObject({
@@ -502,6 +502,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       queued: 2,
       active: { current: 3, limit: 1 },
       observations: { current: 4, limit: 5 },
+      drift: { current: 2, limit: 3 },
       drained: false,
       repositoryPaused: false,
       defaultAutoMerge: false,
@@ -522,7 +523,9 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       activeCount: 3,
       capacity: 1,
       observationCount: 4,
+      driftCount: 2,
       harvestThreshold: 5,
+      harvestMaxDrift: 3,
     })
     expect(preprojected).toEqual(model)
     expect(preprojected.builds[0]).toBe(alpha)
