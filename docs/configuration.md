@@ -647,11 +647,17 @@ and defaults to the resolved `triageState` — proposals wait for a human, which
 is the grooming gate the pipeline is built around. Naming `readyState` here
 waives that gate for this repository: every proposal the harvest loop approves
 enters the ordinary dispatch eligibility checks without being read, protected
-by that loop's own review and by the spec gate at dispatch. Approved creates
-may carry evidence-backed source-local `blockedBy` ids, which harvest validates
-through the selected TicketSource and records during creation. An unresolved
-harvested blocker still prevents claim until the source reports completion or
-the relationship is deliberately removed. It is a separate field precisely so
+by that loop's own review and by the spec gate at dispatch. The producer and
+reviewer see scan-time existence and resolution for every distinct ticket that
+originated a claimed observation. Approved creates may carry evidence-backed
+source-local `blockedBy` ids for other prerequisites. Immediately before create,
+harvest refreshes declared ids and matching-source origins through the selected
+TicketSource. Unknown declared ids fail; missing or resolved origins are dropped;
+still-unresolved origins are deduplicated into `blockedBy` automatically.
+Harvest status and the filing report distinguish declared blockers from those
+derived from originating tickets. An unresolved harvested blocker still
+prevents claim until the source reports completion or the relationship is
+deliberately removed. It is a separate field precisely so
 the waiver stays narrow. Redirecting `triageState` instead would also send
 spec-gate bounces, aborts, and closed-unmerged PRs into the ready state, where
 a bounced ticket is reclaimed and bounced again on every tick.

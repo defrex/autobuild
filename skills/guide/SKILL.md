@@ -109,9 +109,14 @@ dispatch
 runs one repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created, in `[tickets].proposalState` — the triage
-state unless this repository has named another one. A repository journal,
-artifact stream, dedup ledger, and lease make every step queryable and
-crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
+state unless this repository has named another one. The scan context exposes
+existence and resolution for each distinct observation-origin ticket. At filing,
+matching-source origins are refreshed and every still-existing unresolved one
+is unioned with the agent-declared `blockedBy` ids; missing, resolved, foreign,
+and absent origins are dropped. Filing records declared and origin-derived
+blockers separately, while duplicate ids appear only once on the created ticket.
+A repository journal, artifact stream, dedup ledger, and lease make every step
+queryable and crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
 idle ticks launch no harvest agent. A non-retrying infrastructure failure parks
 its run at the durable boundary. Before any new scan, dispatch recovers every
