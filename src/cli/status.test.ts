@@ -808,6 +808,27 @@ describe('renderers', () => {
     expect(bareText).not.toContain('Auto-merge gate')
   })
 
+  test('merged and closed PRs render repository completion without runner recovery guidance', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    const events = await store.getEvents('b1')
+    const expired = record({
+      slug: 'b1',
+      lease: { holder: 'runner-1', expiresAt: '2026-07-15T11:00:00.000Z' },
+    })
+
+    for (const prState of ['merged', 'closed'] as const) {
+      const text = renderDetail(
+        detail(expired, events, NOW, undefined, { kind: 'repository-completion', prState }),
+        NOW,
+      ).join('\n')
+      expect(text).toContain(`the PR is ${prState}`)
+      expect(text).toContain(`repository-level completion after the PR was ${prState}`)
+      expect(text).toContain('no runner re-attachment is pending')
+      expect(text).not.toContain('lease sweep will re-attach')
+    }
+  })
+
   test('lease guidance retains re-attachment only for confirmed runner work', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -1142,6 +1163,65 @@ describe('abBuildStatus', () => {
       expect(out.join('\n')).not.toContain('Auto-merge gate could not apply consent')
     } finally {
       await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('projects repository completion between PR ending and build completion, including after workspace release', async () => {
+    for (const prState of ['merged', 'closed'] as const) {
+      for (const released of [false, true]) {
+        const store = new MemoryBuildStore({
+          clock: steppingClock('2026-07-15T11:00:00.000Z'),
+        })
+        await seedAwaitingPr(store, `/workspace/${prState}-${released ? 'released' : 'present'}`)
+        await store.append('merge-wait', {
+          actor: DISPATCHER,
+          type: prState === 'merged' ? 'pr.merged' : 'pr.closed',
+          payload: prState === 'merged' ? { sha: 'merge-sha' } : {},
+        })
+        if (released) {
+          await store.append('merge-wait', {
+            actor: DISPATCHER,
+            type: 'workspace.released',
+            payload: {},
+          })
+        }
+        await store.claimLease('merge-wait', 'runner-expired', 1000)
+
+        const human: string[] = []
+        await abBuildStatus({
+          targetRepo: '/anywhere',
+          env: {},
+          exec: fakeExec,
+          stdout: (line) => human.push(line),
+          openStore: () => store,
+          now: () => NOW,
+          slug: 'merge-wait',
+        })
+        const text = human.join('\n')
+        expect(text).toContain(`pr:       #7 (${prState})`)
+        expect(text).toContain(`repository-level completion after the PR was ${prState}`)
+        expect(text).toContain('no runner re-attachment is pending')
+        expect(text).not.toContain('lease sweep will re-attach')
+        expect(text).not.toContain('decision: unavailable')
+
+        const json: string[] = []
+        await abBuildStatus({
+          targetRepo: '/anywhere',
+          env: {},
+          exec: fakeExec,
+          stdout: (line) => json.push(line),
+          openStore: () => store,
+          now: () => NOW,
+          slug: 'merge-wait',
+          json: true,
+        })
+        const parsed = JSON.parse(json.join('\n'))
+        expect(parsed.status).toBe('running')
+        expect(parsed.lease.health).toBe('expired')
+        expect(parsed.pr.state).toBe(prState)
+        expect(parsed.decision).toEqual({ kind: 'repository-completion', prState })
+        expect(parsed.outcome).toBeUndefined()
+      }
     }
   })
 

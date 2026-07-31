@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#184](https://github.com/defrex/autobuild/pull/184) — Report accurate recovery for merged or closed PRs
 - [#183](https://github.com/defrex/autobuild/pull/183) — Point bounce guidance at the installed spec standard
 - [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
 - [#181](https://github.com/defrex/autobuild/pull/181) — Deduplicate policy exhaustion by source and target

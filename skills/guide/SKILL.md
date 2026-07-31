@@ -1275,12 +1275,13 @@ forever. That gap is exactly why the lease column is reported separately.
 | Lease | Meaning |
 |---|---|
 | `held` | A live runner holds an unexpired lease. Work is genuinely in flight. |
-| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. The dispatcher's lease sweep is what re-attaches it. |
+| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
 | `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with `updated`, not alone. |
 
-So `running` + `held` is healthy; `running` + `expired` means wait for the
-sweep, not that the build is progressing; and `no-lease` on a build updated
-seconds ago is almost certainly a runner still starting up.
+So `running` + `held` is healthy; for `running` + `expired`, inspect the build
+detail to distinguish actionable work that will return through the lease sweep
+from an ended PR awaiting repository-level completion. `no-lease` on a build
+updated seconds ago is almost certainly a runner still starting up.
 
 ## The installed skills
 
