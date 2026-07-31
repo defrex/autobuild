@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#182](https://github.com/defrex/autobuild/pull/182) — Make `ab upgrade` commit its owned changes
 - [#175](https://github.com/defrex/autobuild/pull/175) — Make retired-skill reports match discovery state
 - [#174](https://github.com/defrex/autobuild/pull/174) — Trigger observation harvest on repository drift
 - [#172](https://github.com/defrex/autobuild/pull/172) — Hold every vendored skill mirror to its canonical form
