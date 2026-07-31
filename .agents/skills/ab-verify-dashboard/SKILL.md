@@ -30,8 +30,10 @@ the diff and not to decide applicability again.
    `repository PAUSED` and the `CAP-QUEUED` row as yellow `(held)` while keeping
    its literal `QUEUED` status; the narrow frame truncates/wraps those additions
    deliberately without clipping; colour emphasis is present while literal
-   status remains readable; and the resume-prompt frame shows the blocked-build
-   composer panel in place of the key legend — build name, optional-guidance
+   status remains readable; Unicode samples (accented text, curly punctuation,
+   em dash, CJK, variation-selector emoji, flag, and ZWJ family) are readable,
+   unsplit, non-overlapping, and not rendered as code-point escapes; and the
+   resume-prompt frame shows the blocked-build composer panel in place of the key legend — build name, optional-guidance
    note, blocker question, a two-line field with a visible caret, and its key
    bindings. On a guidance-assisted retry, also record how the answered
    escalation affected the capture, interpretation of the evidence, or verdict.
@@ -43,6 +45,8 @@ the diff and not to decide applicability again.
    ab artifact put dashboard-frame:mixed-wide:png .ab/dashboard-frames/mixed-wide.png --attach
    ab artifact put dashboard-frame:mixed-narrow:text .ab/dashboard-frames/mixed-narrow.txt --attach
    ab artifact put dashboard-frame:mixed-narrow:png .ab/dashboard-frames/mixed-narrow.png --attach
+   ab artifact put dashboard-frame:unicode-transcript:text .ab/dashboard-frames/unicode-transcript.txt --attach
+   ab artifact put dashboard-frame:unicode-transcript:png .ab/dashboard-frames/unicode-transcript.png --attach
    ab artifact put dashboard-frame:resume-prompt:text .ab/dashboard-frames/resume-prompt.txt --attach
    ab artifact put dashboard-frame:resume-prompt:png .ab/dashboard-frames/resume-prompt.png --attach
    ab verdict pass --notes .ab/dashboard-frames/verify-report.md
