@@ -1285,7 +1285,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     const calls: string[] = []
     let cancelledSignal: AbortSignal | undefined
     const out: string[] = []
-    const code = await runCli(['upgrade', repo, '--no-self-update'], {
+    const code = await runCli(['update', repo, '--no-self-update'], {
       workspacePath: repo,
       distributionRoot: nextDist,
       terminal,
@@ -1323,7 +1323,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     expect(raw.join('')).toContain('Resolving ab-beta/SKILL.md')
   })
 
-  test('ab upgrade <target> works with no store/env deps and prints per-skill lines', async () => {
+  test('ab update <target> works with no store/env deps and prints the canonical per-skill output', async () => {
     await install()
     // The CLI cannot inject a fixture distRoot, so this runs against the
     // REAL distribution: its skills aren't installed in the fixture repo and
@@ -1331,7 +1331,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
     // reports unknown — enough to prove sessionless routing end to end.
     const out: string[] = []
     const err: string[] = []
-    const code = await runCli(['upgrade', target, '--no-commit'], {
+    const code = await runCli(['update', target, '--no-commit'], {
       workspacePath: target,
       stdout: (line) => out.push(line),
       stderr: (line) => err.push(line),
@@ -1367,12 +1367,18 @@ describe('runCli routing — ab upgrade outside a session', () => {
       await spawnExec(['git', 'commit', '-qm', 'initial'], { cwd: repo })
       const before = (await spawnExec(['git', 'rev-parse', 'HEAD'], { cwd: repo })).stdout.trim()
 
+      const out: string[] = []
       const code = await runCli(
-        ['upgrade', repo, '--no-self-update', ...(noCommit ? ['--no-commit'] : [])],
+        [
+          noCommit ? 'upgrade' : 'update',
+          repo,
+          '--no-self-update',
+          ...(noCommit ? ['--no-commit'] : []),
+        ],
         {
           workspacePath: repo,
           distributionRoot: nextDist,
-          stdout: () => {},
+          stdout: (line) => out.push(line),
           stderr: () => {},
         },
       )
@@ -1386,9 +1392,11 @@ describe('runCli routing — ab upgrade outside a session', () => {
       } else {
         expect(after).not.toBe(before)
         expect(status).toBe('')
-        expect(
-          (await spawnExec(['git', 'log', '-1', '--format=%B'], { cwd: repo })).stdout,
-        ).toContain('- ab-alpha: adopted')
+        expect(out).toContain('ab upgrade: committed upgrade-owned changes')
+        expect(out.join('\n')).not.toContain('ab update:')
+        const message = (await spawnExec(['git', 'log', '-1', '--format=%B'], { cwd: repo })).stdout
+        expect(message).toContain('ab upgrade: record updated vendored skills')
+        expect(message).toContain('- ab-alpha: adopted')
       }
     }
   })
@@ -1425,7 +1433,7 @@ describe('runCli routing — ab upgrade outside a session', () => {
 
     const out: string[] = []
     const err: string[] = []
-    const code = await runCli(['upgrade', repo], {
+    const code = await runCli(['update', repo], {
       workspacePath: repo,
       distributionRoot: nextDist,
       processEnv: { [SELF_UPDATE_HANDOFF_ENV]: '1' },
@@ -1439,6 +1447,8 @@ describe('runCli routing — ab upgrade outside a session', () => {
     )
     expect(out).toContain('ab-alpha: adopted')
     expect(out).not.toContain('ab upgrade: committed upgrade-owned changes')
+    expect(err.join('\n')).toContain('ab upgrade did not commit:')
+    expect(err.join('\n')).not.toContain('ab update')
     expect(err.join('\n')).toContain('automatic commit suppressed for cross-version compatibility')
     expect(err.join('\n')).toContain('parent binary did not provide a pre-self-update Git baseline')
     expect(err.join('\n')).toContain(
@@ -1458,14 +1468,23 @@ describe('runCli routing — ab upgrade outside a session', () => {
     expect(status).toContain('?? untracked.txt')
   })
 
-  test('ab upgrade rejects extra arguments with usage feedback', async () => {
-    const err: string[] = []
-    const code = await runCli(['upgrade', target, 'extra'], {
-      workspacePath: target,
-      stdout: () => {},
-      stderr: (line) => err.push(line),
-    })
-    expect(code).toBe(1)
-    expect(err.join('\n')).toContain('usage: ab upgrade [target]')
+  test('upgrade and update reject the same arguments with canonical usage feedback', async () => {
+    const errors: string[][] = []
+    const codes: number[] = []
+    for (const command of ['upgrade', 'update']) {
+      const err: string[] = []
+      codes.push(
+        await runCli([command, target, 'extra'], {
+          workspacePath: target,
+          stdout: () => {},
+          stderr: (line) => err.push(line),
+        }),
+      )
+      errors.push(err)
+    }
+    expect(codes).toEqual([1, 1])
+    expect(errors[1]).toEqual(errors[0])
+    expect(errors[1]!.join('\n')).toContain('usage: ab upgrade [target]')
+    expect(errors[1]!.join('\n')).not.toContain('ab update')
   })
 })

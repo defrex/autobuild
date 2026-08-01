@@ -440,6 +440,7 @@ describe('SESSIONLESS_COMMANDS', () => {
     for (const command of [
       'init',
       'upgrade',
+      'update',
       'ticket',
       'dispatch',
       'help',

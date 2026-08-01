@@ -21,10 +21,11 @@ import { randomIds } from '../ids'
 import { systemClock } from '../store/types'
 import { resolveMainRepo } from './repo-state'
 
-/** Upgrade owns Ctrl-C only while raw per-file progress is active. Everywhere
- * else its process must retain Node's ordinary immediate SIGINT termination. */
+/** Upgrade (including its `update` alias) owns Ctrl-C only while raw per-file
+ * progress is active. Everywhere else its process must retain Node's ordinary
+ * immediate SIGINT termination. */
 export function usesGenericSessionlessSigintHandler(command: string | undefined): boolean {
-  return command !== 'upgrade'
+  return command !== 'upgrade' && command !== 'update'
 }
 
 /** Install the dispatch-only process fallback around the exact CLI lifetime. */

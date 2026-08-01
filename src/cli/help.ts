@@ -66,6 +66,8 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Usage:',
       '  ab upgrade [target] [--no-self-update | --version <semver>] [--no-commit]',
       '',
+      '`ab update` is an accepted alias; `upgrade` remains the canonical name.',
+      '',
       'By default, update the running Bun forge installation to its repository’s',
       'latest GitHub Release, then use the replacement binary and defaults to',
       'Three-way merge vendored ab-* skills (§16.3). The target defaults to the',
@@ -521,7 +523,7 @@ export function renderTopLevelHelp(): string {
 }
 
 export function renderCommandHelp(command: string): string {
-  const entry = ENTRY_BY_NAME.get(command)
+  const entry = ENTRY_BY_NAME.get(command === 'update' ? 'upgrade' : command)
   if (entry === undefined) {
     throw new Error(`unknown help command "${command}"`)
   }

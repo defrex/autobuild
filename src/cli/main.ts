@@ -89,6 +89,7 @@ import {
 export const SESSIONLESS_COMMANDS = new Set([
   'init',
   'upgrade',
+  'update',
   'ticket',
   'dispatch',
   'builds',
@@ -451,7 +452,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       return report.exitCode
     }
 
-    case 'upgrade': {
+    case 'upgrade':
+    case 'update': {
       const usage =
         'usage: ab upgrade [target] [--no-self-update | --version <semver>] [--no-commit] (§16.3)'
       const parsed = parseArgs(
