@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#193](https://github.com/defrex/autobuild/pull/193) — Accept `ab update` as an alias for `ab upgrade`
 - [#192](https://github.com/defrex/autobuild/pull/192) — Pin live-config rejection episode resets
 - [#191](https://github.com/defrex/autobuild/pull/191) — Honor stop controls before workspace setup
 - [#190](https://github.com/defrex/autobuild/pull/190) — Restore split indexes after failed upgrade commits
