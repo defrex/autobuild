@@ -113,6 +113,29 @@ describe('layered CLI help catalog', () => {
     }
   })
 
+  test('update help resolves to the canonical upgrade page without adding an overview row', async () => {
+    const outputs: string[] = []
+    for (const argv of [
+      ['help', 'upgrade'],
+      ['upgrade', '--help'],
+      ['help', 'update'],
+      ['update', '--help'],
+    ]) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(0)
+      expect(d.err).toEqual([])
+      expect(d.out).toHaveLength(1)
+      outputs.push(d.out[0]!)
+    }
+
+    expect(new Set(outputs)).toEqual(new Set([renderCommandHelp('upgrade')]))
+    expect(renderCommandHelp('update')).toBe(renderCommandHelp('upgrade'))
+    expect(outputs[0]).toContain('`ab update` is an accepted alias')
+    expect(HELP_CATALOG.filter((entry) => entry.name === 'upgrade')).toHaveLength(1)
+    expect(HELP_CATALOG.some((entry) => entry.name === 'update')).toBe(false)
+    expect(renderTopLevelHelp()).not.toMatch(/^ {2}ab update\s/m)
+  })
+
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
       help: ['ab help <command>', 'requires no', 'AB_*'],
@@ -126,6 +149,7 @@ describe('layered CLI help catalog', () => {
       ],
       upgrade: [
         'ab upgrade [target]',
+        '`ab update` is an accepted alias',
         '--no-self-update',
         '--version <semver>',
         '--no-commit',
@@ -285,6 +309,7 @@ describe('layered CLI help catalog', () => {
       command: 'help',
     })
     expect(recognizeHelpRequest(['context', '--help', 'extra'])).toBeUndefined()
+    expect(isSessionlessInvocation(['update', '--help'])).toBe(true)
 
     for (const command of [
       'context',

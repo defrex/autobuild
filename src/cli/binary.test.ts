@@ -57,8 +57,9 @@ function fakeTerminal(): {
 }
 
 describe('sessionless SIGINT ownership', () => {
-  test('upgrade retains process-default SIGINT while other sessionless commands use cancellation', () => {
+  test('upgrade and update retain process-default SIGINT while other sessionless commands use cancellation', () => {
     expect(usesGenericSessionlessSigintHandler('upgrade')).toBe(false)
+    expect(usesGenericSessionlessSigintHandler('update')).toBe(false)
     for (const command of ['init', 'dispatch', 'ticket', 'builds', undefined]) {
       expect(usesGenericSessionlessSigintHandler(command)).toBe(true)
     }
