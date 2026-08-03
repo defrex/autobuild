@@ -92,20 +92,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 
 Only `verify:*` and `finalize:*` are configurable extension points. Agents interact with build state only through the typed `ab` CLI; never infer outcomes from agent stdout. Git pushes and forge operations are kernel-side plumbing.
 
-## Codebase map
-
-- `src/kernel/` — pure pipeline decisions, reducer, and convergence/stall logic.
-- `src/events/` — event envelope, frozen payload schemas, actor and write validation.
-- `src/store/` — BuildStore contract plus memory, local SQLite/blob, and remote HTTP implementations.
-- `src/ports/` — swappable ticket, agent-runner, workspace, and forge adapters.
-- `src/processes/` — crash-safe build runner and cron-friendly dispatcher/janitor.
-- `src/cli/` and `bin/ab.ts` — the agent/store command channel and binary wiring.
-- `skills/` — canonical phase skills vendored by `ab init` as namespaced `ab-*` skills.
-- `docs/spec-standard.md` — minimum standard for dispatchable tickets.
-
 ## Development conventions
 
-- Runtime/tooling: Bun, strict TypeScript ESM, Zod, Drizzle.
 - Keep tests colocated as `*.test.ts`; integration scenarios are in `src/integration/`.
 - Run `bun run check`, `bun test`, and `bun typecheck` before finishing changes.
 - Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `src/store/contract.ts`.
