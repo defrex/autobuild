@@ -24,8 +24,8 @@ const generated = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
 function harness(
   overrides: Partial<ReadmeHeadlineEnvironment> = {},
   frames: { id: string; png: Uint8Array; pngPath: string }[] = [
-    { id: 'mixed-narrow', png: new Uint8Array([9]), pngPath: '/scratch/mixed-narrow.png' },
-    { id: 'mixed-wide', png: generated, pngPath: '/scratch/mixed-wide.png' },
+    { id: 'mixed-wide', png: new Uint8Array([9]), pngPath: '/scratch/mixed-wide.png' },
+    { id: 'headline-happy-wide', png: generated, pngPath: '/scratch/headline-happy-wide.png' },
   ],
 ) {
   const stdout: string[] = []
@@ -61,7 +61,7 @@ describe('runReadmeHeadline', () => {
     expect(await runReadmeHeadline([], stub.env, stub.output)).toBe(0)
     expect([...(await readFile(headlinePath()))]).toEqual([...generated])
     expect(stub.captureOptions).toEqual([{ workspacePath: tmp }])
-    expect(stub.stdout.join('')).toContain('dashboard frame "mixed-wide"')
+    expect(stub.stdout.join('')).toContain('dashboard frame "headline-happy-wide"')
     expect(stub.stdout.join('')).toContain('docs/assets/headline-wide.png')
   })
 
@@ -99,10 +99,18 @@ describe('runReadmeHeadline', () => {
 
   test('missing and duplicate source frames fail clearly', async () => {
     for (const frames of [
-      [{ id: 'mixed-narrow', png: generated, pngPath: '/scratch/narrow.png' }],
+      [{ id: 'mixed-wide', png: generated, pngPath: '/scratch/mixed-wide.png' }],
       [
-        { id: 'mixed-wide', png: generated, pngPath: '/scratch/wide-1.png' },
-        { id: 'mixed-wide', png: generated, pngPath: '/scratch/wide-2.png' },
+        {
+          id: 'headline-happy-wide',
+          png: generated,
+          pngPath: '/scratch/happy-wide-1.png',
+        },
+        {
+          id: 'headline-happy-wide',
+          png: generated,
+          pngPath: '/scratch/happy-wide-2.png',
+        },
       ],
     ]) {
       const stub = harness({}, frames)
