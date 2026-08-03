@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.0 — 2026-08-03
+
 - [#194](https://github.com/defrex/autobuild/pull/194) — Notify interactive dispatchers about available upgrades
 - [#193](https://github.com/defrex/autobuild/pull/193) — Accept `ab update` as an alias for `ab upgrade`
 - [#192](https://github.com/defrex/autobuild/pull/192) — Pin live-config rejection episode resets
