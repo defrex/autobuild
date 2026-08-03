@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 - [#193](https://github.com/defrex/autobuild/pull/193) — Accept `ab update` as an alias for `ab upgrade`
 - [#192](https://github.com/defrex/autobuild/pull/192) — Pin live-config rejection episode resets
 - [#191](https://github.com/defrex/autobuild/pull/191) — Honor stop controls before workspace setup
