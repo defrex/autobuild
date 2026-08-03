@@ -137,6 +137,48 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(warned).toHaveLength(clean.length + 1)
   })
 
+  test('an available release has a dedicated persistent row alongside warnings', () => {
+    const clean = rd(model([build()]), WIDE).map(stripAnsi)
+    expect(clean.join('\n')).not.toContain('run ab upgrade')
+
+    const noticedModel = {
+      ...model([build()]),
+      availableUpgrade: '2.4.0',
+      warningLines: ['ticket source unavailable'],
+    }
+    const first = rd(noticedModel, WIDE).map(stripAnsi)
+    const second = rd(noticedModel, WIDE).map(stripAnsi)
+    expect(first).toEqual(second)
+    expect(first[2]).toContain('Autobuild v2.4.0 is available — run ab upgrade')
+    expect(first[3]).toBe('   ticket source unavailable')
+
+    const detail = rd(
+      { ...noticedModel, view: { kind: 'detail', slug: 'auth-rate-limit', scroll: 0 } },
+      WIDE,
+    ).map(stripAnsi)
+    const transcript = rd(
+      {
+        ...noticedModel,
+        view: {
+          kind: 'transcript',
+          slug: 'auth-rate-limit',
+          sessionId: 's1',
+          transcript: { kind: 'raw', text: 'session output' },
+          scroll: 0,
+        },
+      },
+      WIDE,
+    ).map(stripAnsi)
+    expect(detail.join('\n')).toContain('run ab upgrade')
+    expect(transcript.join('\n')).toContain('run ab upgrade')
+
+    for (const color of [false, true]) {
+      const narrow = rd(noticedModel, { color, width: 34, height: 8 })
+      expect(narrow.length).toBeLessThanOrEqual(8)
+      for (const row of narrow) expect(cellWidth(stripAnsi(row))).toBeLessThanOrEqual(34)
+    }
+  })
+
   test('long, multiline, and non-ASCII warnings WRAP onto safe physical rows', () => {
     const clean = rd(model([build()]), { color: true, width: 40 })
     const warned = rd(

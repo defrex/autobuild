@@ -235,6 +235,9 @@ export interface DashboardModel {
   harvestPaused: boolean
   /** Stable row identity, never a row index. */
   selection?: DashboardSelection
+  /** Process-local release courtesy, separate from transient and startup
+   * warnings so those notices can never overwrite one another. */
+  availableUpgrade?: string
   /** Process-local warnings/errors, in render order. Routine dispatcher
    * notices never enter the interactive model; absence (or an empty array)
    * means the warning chrome is omitted. */

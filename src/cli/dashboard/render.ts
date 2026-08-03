@@ -663,6 +663,23 @@ interface DetailGeometry extends DetailBodyLayout {
   limit: number
 }
 
+function upgradeNoticeLine(
+  model: DashboardModel,
+  color: boolean,
+  width: number,
+): string | undefined {
+  return model.availableUpgrade === undefined
+    ? undefined
+    : truncate(
+        paint(
+          `  Autobuild v${displayText(model.availableUpgrade)} is available — run ab upgrade`,
+          'cyan',
+          color,
+        ),
+        width,
+      )
+}
+
 function detailGeometry(
   model: DashboardModel,
   width: number,
@@ -673,11 +690,12 @@ function detailGeometry(
   const build = model.builds.find((candidate) => candidate.slug === view.slug)
   if (build === undefined) return undefined
   const layout = detailBody(build, view, { color: false, width, height, now: 0 })
+  const topLength = 2 + (model.availableUpgrade === undefined ? 0 : 1)
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
-      ? dashboardControls(model, false, width, controlsCapacity(height, 2))
+      ? dashboardControls(model, false, width, controlsCapacity(height, topLength))
       : [buildLegend(build, true)]
-  const capacity = Math.max(0, height - 2 - 2 - controls.length)
+  const capacity = Math.max(0, height - topLength - 2 - controls.length)
   return { ...layout, capacity, limit: Math.max(0, layout.body.length - capacity) }
 }
 
@@ -724,12 +742,14 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   if (build === undefined) return []
   const { color, width, height } = opts
   const paused = build.alsoPaused ? ' (also paused)' : ''
+  const notice = upgradeNoticeLine(model, color, width)
   const top = [
     truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
     truncate(
       `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
       width,
     ),
+    ...(notice === undefined ? [] : [notice]),
   ]
   const { body } = detailBody(build, view, opts)
   const controls =
@@ -823,9 +843,11 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
   const view = model.view
   if (view?.kind !== 'transcript') return []
   const { color, width, height } = opts
+  const notice = upgradeNoticeLine(model, color, width)
   const top = [
     truncate(`${paint('Transcript', 'bold', color)}  ${displayText(view.slug)}`, width),
     truncate(`  session ${displayText(view.sessionId)}`, width),
+    ...(notice === undefined ? [] : [notice]),
   ]
   const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
   const controls = truncate(
@@ -1235,13 +1257,19 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       .join('  ')}`,
     width,
   )
+  const upgradeNotice = upgradeNoticeLine(model, color, width)
   // Warnings are conditional chrome, not a reserved log slot. Each notice is
   // capped to the configured three-row content preview, followed by the
   // overflow/count notice when content remains; notices are not dropped by
   // count. The resulting rows join `top`, so `top.slice` limits what short
   // frames paint and `controlsCapacity` budgets proportionally fewer controls
   // rows as warnings increase `top.length`.
-  const top = [summary, toggles, ...warningRows(model.warningLines ?? [], width)]
+  const top = [
+    summary,
+    toggles,
+    ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
+    ...warningRows(model.warningLines ?? [], width),
+  ]
   const controls = dashboardControls(model, color, width, controlsCapacity(height, top.length))
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
