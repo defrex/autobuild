@@ -214,6 +214,9 @@ export const dispatcherStatusEventPayloadSchemas = {
     run: dispatchRun,
     error: z.string().min(1),
   }),
+  /** Brackets the one unsafe-to-force dispatcher turn. A supervisor may kill
+   * an unresponsive child only when no started turn remains open. */
+  'dispatcher.tick-started': z.strictObject({ run: dispatchRun }),
   'dispatcher.tick-completed': z.strictObject({
     run: dispatchRun,
     queued: z.number().int().nonnegative(),
@@ -336,6 +339,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.run-stopped': ['dispatcher'],
   'dispatcher.config-rejected': ['dispatcher'],
   'dispatcher.config-publication-failed': ['dispatcher'],
+  'dispatcher.tick-started': ['dispatcher'],
   'dispatcher.tick-completed': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],
   'dispatcher.runner-settled': ['dispatcher'],

@@ -537,6 +537,11 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
+      await this.appendStatus({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: this.opts.kernelRunId! },
+      })
 
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace

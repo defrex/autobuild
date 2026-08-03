@@ -169,7 +169,8 @@ The distinctions that change an administrator's answer:
   config, standing queue depth, diagnostics, reload outcomes, runner outcomes,
   and child health are run-correlated repository facts. Controls append directly
   to the Store, so a slow claim or agent turn cannot delay a keypress. Ctrl-C
-  stops both processes; `--plain`/non-TTY stay on the line-oriented direct path,
+  restores the terminal immediately and stops the child after any open claim
+  tick reaches a recoverable boundary; `--plain`/non-TTY stay on the direct path,
   and `--once` remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each

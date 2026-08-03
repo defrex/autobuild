@@ -95,6 +95,7 @@ export class DispatchFrontend {
   private polling = false
   private pollInFlight: Promise<void> | undefined
   private actionTail: Promise<void> = Promise.resolve()
+  private presentationRestored = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
     this.clock = opts.clock ?? systemClock
@@ -393,9 +394,10 @@ export class DispatchFrontend {
     this.paint()
   }
 
-  private async buildAction(kind: 'pause' | 'resume' | 'discard' | 'toggle-auto-merge' | 'abort') {
-    const slug = this.selectedSlug()
-    if (slug === undefined) return
+  private async buildAction(
+    kind: 'pause' | 'resume' | 'discard' | 'toggle-auto-merge' | 'abort',
+    slug: string,
+  ): Promise<void> {
     const result = await controlBuild({
       store: this.opts.store,
       repo: this.opts.repo,
@@ -435,7 +437,6 @@ export class DispatchFrontend {
   }
 
   private async toggleIntake(): Promise<void> {
-    if (this.selection?.kind !== 'global') return
     const enabled = !reduceDispatchSettings(await this.events()).intake
     await this.opts.store.appendRepo(this.opts.repo, {
       actor: humanActor(buildControlUser(this.opts.env)),
@@ -446,23 +447,18 @@ export class DispatchFrontend {
     await this.renderOnce()
   }
 
-  private async toggleAutoMerge(): Promise<void> {
-    if (this.view === undefined && this.selection?.kind === 'global') {
-      const enabled = !reduceDispatchSettings(await this.events()).defaultAutoMerge
-      await this.opts.store.appendRepo(this.opts.repo, {
-        actor: humanActor(buildControlUser(this.opts.env)),
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled },
-      })
-      await this.report(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
-      await this.renderOnce()
-      return
-    }
-    await this.buildAction('toggle-auto-merge')
+  private async toggleDefaultAutoMerge(): Promise<void> {
+    const enabled = !reduceDispatchSettings(await this.events()).defaultAutoMerge
+    await this.opts.store.appendRepo(this.opts.repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled },
+    })
+    await this.report(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
+    await this.renderOnce()
   }
 
   private async bulk(direction: 'pause' | 'resume'): Promise<void> {
-    if (this.selection?.kind !== 'global' || this.view !== undefined) return
     const summary = await bulkControlRepository({
       store: this.opts.store,
       repo: this.opts.repo,
@@ -474,7 +470,6 @@ export class DispatchFrontend {
   }
 
   private async toggleHarvest(): Promise<void> {
-    if (this.selection?.kind !== 'global') return
     const state = reduceHarvest(await this.events())
     const pending = state.pendingCommands.at(-1)
     const paused = pending === undefined ? state.paused : pending.command === 'pause'
@@ -488,10 +483,18 @@ export class DispatchFrontend {
     await this.renderOnce()
   }
 
-  private async harvestRun(): Promise<void> {
+  private async harvestRun(expectedRun: string | undefined): Promise<void> {
     const events = await this.events()
     const projected = projectHarvest(events)
-    if (projected?.action === undefined) return
+    if (
+      expectedRun === undefined ||
+      projected?.run !== expectedRun ||
+      projected.action === undefined
+    ) {
+      await this.report('harvest run action ignored: selected run is no longer active')
+      await this.renderOnce()
+      return
+    }
     await this.opts.store.appendRepo(this.opts.repo, {
       actor: humanActor(buildControlUser(this.opts.env)),
       type: 'harvest.resume-requested',
@@ -547,7 +550,7 @@ export class DispatchFrontend {
   private onInput(input: TerminalInputEvent): void {
     if (!this.accepting) return
     if (input.type === 'interrupt') {
-      this.accepting = false
+      this.restorePresentationForStop()
       void this.child?.stop()
       return
     }
@@ -560,8 +563,7 @@ export class DispatchFrontend {
       if (enter) {
         const slug = this.abortConfirmation.slug
         this.abortConfirmation = undefined
-        this.queue(() => this.buildAction('abort'))
-        void slug
+        this.queue(() => this.buildAction('abort', slug))
       } else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncControls()
@@ -578,7 +580,14 @@ export class DispatchFrontend {
       return
     }
     if (enter) {
-      this.queue(() => this.openSelected())
+      // List/detail identity is captured synchronously before any Store read;
+      // a later selection move cannot retarget this navigation.
+      void this.openSelected().catch((error) =>
+        this.report(
+          `dashboard open action failed: ${error instanceof Error ? error.message : String(error)}`,
+          'warning',
+        ),
+      )
       return
     }
     if (input.type === 'escape') {
@@ -591,26 +600,40 @@ export class DispatchFrontend {
         if (this.selection?.kind === 'global' && this.view === undefined)
           this.queue(() => this.toggleIntake())
         break
-      case 'm':
-        this.queue(() => this.toggleAutoMerge())
+      case 'm': {
+        const slug = this.selectedSlug()
+        if (this.view === undefined && this.selection?.kind === 'global') {
+          this.queue(() => this.toggleDefaultAutoMerge())
+        } else if (slug !== undefined) {
+          this.queue(() => this.buildAction('toggle-auto-merge', slug))
+        }
         break
-      case 'p':
+      }
+      case 'p': {
+        const build = this.selectedBuild()
         if (this.selection?.kind === 'global' && this.view === undefined)
           this.queue(() => this.bulk('pause'))
-        else if (this.selection?.kind === 'harvest' && this.view === undefined)
-          this.queue(() => this.harvestRun())
-        else if (dashboardBuildControl(this.selectedBuild()?.status ?? 'queued')?.key === 'p')
-          this.queue(() => this.buildAction('pause'))
+        else if (this.selection?.kind === 'harvest' && this.view === undefined) {
+          const run = this.model?.harvest?.run
+          this.queue(() => this.harvestRun(run))
+        } else if (dashboardBuildControl(build?.status ?? 'queued')?.key === 'p') {
+          this.queue(() => this.buildAction('pause', build!.slug))
+        }
         break
-      case 'r':
+      }
+      case 'r': {
+        const build = this.selectedBuild()
         if (this.selection?.kind === 'global' && this.view === undefined)
           this.queue(() => this.bulk('resume'))
-        else if (dashboardBuildControl(this.selectedBuild()?.status ?? 'queued')?.key === 'r')
-          this.queue(() => this.buildAction('resume'))
+        else if (dashboardBuildControl(build?.status ?? 'queued')?.key === 'r')
+          this.queue(() => this.buildAction('resume', build!.slug))
         break
-      case 'd':
-        if (this.selectedBuild()?.status === 'queued') this.queue(() => this.buildAction('discard'))
+      }
+      case 'd': {
+        const build = this.selectedBuild()
+        if (build?.status === 'queued') this.queue(() => this.buildAction('discard', build.slug))
         break
+      }
       case 'a':
         if (this.selectedBuild() !== undefined && this.view?.kind !== 'transcript') {
           this.abortConfirmation = { slug: this.selectedBuild()!.slug }
@@ -659,17 +682,39 @@ export class DispatchFrontend {
     poll()
   }
 
-  private async finishPresentation(): Promise<void> {
+  /** Stop terminal ownership synchronously before awaiting a kernel that may
+   * still be finishing an unsafe ticket-claim tick. Normal/abnormal child exits
+   * retain the final-frame path below; operator interruption prioritizes shell
+   * restoration without force-killing that tick. */
+  private restorePresentationForStop(): void {
+    if (this.presentationRestored) return
+    this.presentationRestored = true
     this.accepting = false
     try {
       this.cleanupInput?.()
     } finally {
       this.cleanupInput = undefined
+      if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
+      if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
+      this.pollTimer = undefined
+      this.paintTimer = undefined
+      this.region.finish()
     }
-    if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
-    if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
-    this.pollTimer = undefined
-    this.paintTimer = undefined
+  }
+
+  private async finishPresentation(): Promise<void> {
+    if (!this.presentationRestored) {
+      this.accepting = false
+      try {
+        this.cleanupInput?.()
+      } finally {
+        this.cleanupInput = undefined
+      }
+      if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
+      if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
+      this.pollTimer = undefined
+      this.paintTimer = undefined
+    }
     try {
       await this.pollInFlight
       await this.actionTail
@@ -713,7 +758,10 @@ export class DispatchFrontend {
       env: this.opts.env,
       options,
     })
-    const stop = (): void => void this.child?.stop()
+    const stop = (): void => {
+      this.restorePresentationForStop()
+      void this.child?.stop()
+    }
     this.opts.signal?.addEventListener('abort', stop, { once: true })
     try {
       this.startPresentation()
