@@ -7,7 +7,7 @@ import {
 } from './dashboard-capture'
 import { repoRoot } from './git-tracked'
 
-const SOURCE_FRAME_ID = 'mixed-wide'
+const SOURCE_FRAME_ID = 'headline-happy-wide'
 const HEADLINE_PATH = 'docs/assets/headline-wide.png'
 const REGENERATE_COMMAND = 'bun run capture:readme-headline'
 

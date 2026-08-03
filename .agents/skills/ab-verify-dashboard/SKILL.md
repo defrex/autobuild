@@ -21,12 +21,20 @@ the diff and not to decide applicability again.
    dispatch harness and writes `.ab/dashboard-frames/verify-report.md` plus
    PNG/text scratch files. It requires no server, network, forge, or live agent
    runner and does not deposit artifacts itself.
-3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool.
-   Judge the images themselves. The `.txt` files are human evidence and may
-   help identify a frame, but they are not a basis for your verdict.
-4. Append criterion-by-criterion visual observations to the generated report:
-   each image opened and non-empty; rows/status/progress/separators do not
-   overlap; the Harvest row is legible; both mixed frames persistently show
+3. Open **every** `.ab/dashboard-frames/*.png` with the image-capable file tool,
+   including `headline-happy-wide.png`. Judge the images themselves. The `.txt`
+   files are human evidence and may help identify a frame, but they are not a
+   basis for your verdict.
+4. Append criterion-by-criterion visual observations to the generated report.
+   In its distinct **Headline visual verdict** section, explicitly record pass
+   or fail after confirming the headline shows intake, auto merge, and Harvest
+   enabled; a running Harvest with a completed and current step; five plausible
+   builds spanning plan, implement, code-review, verify, and a merged PR; a
+   review round above one; and no blocked/paused/held state, failure text,
+   fixture-only evidence, Unicode stress sample, row-count preview, or
+   truncation marker. Then retain the verification-fixture observations: each
+   image opened and non-empty; rows/status/progress/separators do not overlap;
+   the Harvest row is legible; both mixed frames persistently show
    `repository PAUSED` and the `CAP-QUEUED` row as yellow `(held)` while keeping
    its literal `QUEUED` status; the narrow frame truncates/wraps those additions
    deliberately without clipping; colour emphasis is present while literal
@@ -41,6 +49,8 @@ the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put dashboard-frame:headline-happy-wide:text .ab/dashboard-frames/headline-happy-wide.txt --attach
+   ab artifact put dashboard-frame:headline-happy-wide:png .ab/dashboard-frames/headline-happy-wide.png --attach
    ab artifact put dashboard-frame:mixed-wide:text .ab/dashboard-frames/mixed-wide.txt --attach
    ab artifact put dashboard-frame:mixed-wide:png .ab/dashboard-frames/mixed-wide.png --attach
    ab artifact put dashboard-frame:mixed-narrow:text .ab/dashboard-frames/mixed-narrow.txt --attach
