@@ -377,10 +377,9 @@ class DispatchLoop {
     harvestFailed: 0,
   }
   /** Settlement-only publications carry the latest standing status instead of
-   * manufacturing zero queue/observation measurements or losing diagnostics. */
+   * manufacturing a zero queue measurement or losing diagnostics. */
   private lastTickStatus = {
     queued: 0,
-    observations: 0,
     janitorDiagnostics: [] as string[],
     ticketDiagnostics: [] as string[],
     dependencyDiagnostics: [] as string[],
@@ -571,7 +570,7 @@ class DispatchLoop {
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace
       // the last complete measurement with a fabricated zero.
-      if (this.dashboard || this.opts.kernelRunId !== undefined) {
+      if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
           this.observationCount = scan.observations.length
@@ -606,7 +605,6 @@ class DispatchLoop {
       this.queuedCount = publishedReport.queued
       this.lastTickStatus = {
         queued: publishedReport.queued,
-        observations: this.observationCount,
         janitorDiagnostics: [...publishedReport.janitorDiagnostics],
         ticketDiagnostics: [...publishedReport.ticketDiagnostics],
         dependencyDiagnostics: [...publishedReport.dependencyDiagnostics],
@@ -1936,6 +1934,7 @@ class DispatchLoop {
         ).length,
         capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,
+        observationLimit: configSnapshot.config.policy.harvestThreshold,
       },
       repositoryEvents,
     )

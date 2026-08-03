@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DISPATCHER } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
@@ -14,6 +14,30 @@ function deferred<T>() {
     resolve = done
   })
   return { promise, resolve }
+}
+
+const tickCounters = {
+  merged: 0,
+  closed: 0,
+  conflicted: 0,
+  abandoned: 0,
+  discarded: 0,
+  janitorFailed: 0,
+  recovered: 0,
+  dispatchFailed: 0,
+  resumed: 0,
+  swept: 0,
+  dispatched: 0,
+  authored: 0,
+  bounced: 0,
+  claimRaces: 0,
+  invalidTickets: 0,
+  dependencyBlocked: 0,
+  harvestStarted: 0,
+  harvestResumed: 0,
+  harvestCompleted: 0,
+  harvestEscalated: 0,
+  harvestFailed: 0,
 }
 
 async function waitFor(
@@ -133,8 +157,9 @@ test('frontend input and captured controls remain responsive while the kernel is
   const running = frontend.run()
   await waitFor(() => output.includes('alpha') && input !== undefined, 'first dashboard frame')
   await waitFor(() => repositoryReads.some((sinceSeq) => sinceSeq > 0), 'incremental repo cursor')
-  const incrementalAt = repositoryReads.findIndex((sinceSeq) => sinceSeq > 0)
-  expect(repositoryReads.slice(incrementalAt).every((sinceSeq) => sinceSeq > 0)).toBe(true)
+  // The frontend journal cursor still advances incrementally. The independent
+  // observation scan legitimately performs its own full repository reduction.
+  expect(repositoryReads.filter((sinceSeq) => sinceSeq > 0).length).toBeGreaterThan(0)
 
   // Occupy the Store-action queue, then navigate and confirm abort while both
   // that action and the child kernel remain unresolved.
@@ -211,6 +236,275 @@ test('frontend input and captured controls remain responsive while the kernel is
   input!({ type: 'interrupt' })
   expect(output).toContain('\x1b[?1049l')
   childDone.resolve({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
+  await running
+})
+
+test('frontend owns live observation pressure and retains the last factual sample on refresh failure', async () => {
+  const repo = '/pressure-repo'
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo(repo)
+  await backing.createBuild({ slug: 'source', repo })
+  await backing.append('source', {
+    actor: agentActor('implement', 's_observe_1'),
+    type: 'observation.recorded',
+    payload: { id: 'obs-1', kind: 'followup', summary: 'first pending observation' },
+  })
+
+  let failNextObservationRead = false
+  const store = new Proxy(backing, {
+    get(target, property) {
+      if (property === 'getEvents') {
+        return async (...args: Parameters<BuildStore['getEvents']>) => {
+          if (failNextObservationRead) {
+            failNextObservationRead = false
+            throw new Error('observation stream unavailable')
+          }
+          return target.getEvents(...args)
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+
+  const childDone = deferred<DispatchChildResult>()
+  const frames: Array<{ current: number; limit: number; warnings: readonly string[] }> = []
+  let output = ''
+  const write = (chunk: string): void => {
+    output += chunk
+  }
+  // The first failed sample must produce only a diagnostic, never a complete
+  // dashboard model carrying a fabricated zero.
+  failNextObservationRead = true
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write,
+      modes: createTerminalModeController(write, write),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    resolveDashboardRenderer: () => (model) => {
+      frames.push({
+        current: model.observations.current,
+        limit: model.observations.limit,
+        warnings: model.warningLines ?? [],
+      })
+      return ['frame']
+    },
+    launchChild: ({ run }) => {
+      const startup = backing
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 1,
+                roles: { default: { runtime: 'claude' } },
+                policy: { harvestThreshold: 7 },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: [],
+            },
+          }),
+        )
+        .then(() =>
+          backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run,
+              queued: 0,
+              observations: 99,
+              counters: tickCounters,
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          }),
+        )
+      return { completed: startup.then(() => childDone.promise), async stop() {} }
+    },
+  })
+
+  const running = frontend.run()
+  await waitFor(
+    () => output.includes('observation stream unavailable'),
+    'initial refresh diagnostic',
+  )
+  expect(frames).toHaveLength(0)
+  await waitFor(
+    () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
+    'first factual pressure sample',
+  )
+  expect(frames.some((frame) => frame.current === 99)).toBe(false)
+
+  await backing.append('source', {
+    actor: agentActor('implement', 's_observe_2'),
+    type: 'observation.recorded',
+    payload: { id: 'obs-2', kind: 'followup', summary: 'second pending observation' },
+  })
+  await waitFor(() => frames.some((frame) => frame.current === 2), 'recorded observation refresh')
+
+  const firstClaim = await backing.appendRepoWithArtifacts(
+    repo,
+    [{ kind: 'harvest-scan', content: '{}' }],
+    (artifacts) => ({
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_dispositioned',
+        observations: [
+          { build: 'source', seq: 1 },
+          { build: 'source', seq: 2 },
+        ],
+        scan: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+      },
+    }),
+  )
+  await waitFor(() => frames.some((frame) => frame.current === 0), 'claimed pressure refresh')
+  await backing.appendRepoWithArtifacts(
+    repo,
+    [{ kind: 'harvest-report', content: '{}' }],
+    (artifacts) => ({
+      actor: KERNEL,
+      type: 'harvest.completed',
+      payload: {
+        run: 'h_dispositioned',
+        dispositions: [
+          {
+            occurrence: { build: 'source', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'first',
+          },
+          {
+            occurrence: { build: 'source', seq: 2 },
+            action: 'suppressed',
+            proposalKey: 'second',
+          },
+        ],
+        report: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+      },
+    }),
+  )
+  expect(firstClaim.event.type).toBe('harvest.started')
+
+  await backing.append('source', {
+    actor: agentActor('implement', 's_observe_3'),
+    type: 'observation.recorded',
+    payload: { id: 'obs-3', kind: 'followup', summary: 'released observation' },
+  })
+  await waitFor(() => frames.some((frame) => frame.current === 1), 'new pending observation')
+  const beforeSecondClaim = frames.length
+  await backing.appendRepoWithArtifacts(
+    repo,
+    [{ kind: 'harvest-scan', content: '{}' }],
+    (artifacts) => ({
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_released',
+        observations: [{ build: 'source', seq: 3 }],
+        scan: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+      },
+    }),
+  )
+  await waitFor(
+    () => frames.slice(beforeSecondClaim).some((frame) => frame.current === 0),
+    'second claimed refresh',
+  )
+  await backing.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.failed',
+    payload: {
+      run: 'h_released',
+      step: 'file',
+      attempt: 1,
+      error: 'ticket provider unavailable',
+      willRetry: false,
+    },
+  })
+  for (const attempt of [1, 2]) {
+    await backing.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.recovery-requested',
+      payload: { run: 'h_released', attempt, limit: 2 },
+    })
+    await backing.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.resumed',
+      payload: {},
+    })
+    await backing.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_released',
+        step: 'file',
+        attempt: attempt + 1,
+        error: 'ticket provider unavailable',
+        willRetry: false,
+      },
+    })
+  }
+  const beforeRelease = frames.length
+  await backing.appendRepo(repo, {
+    actor: KERNEL,
+    type: 'harvest.recovery-exhausted',
+    payload: {
+      run: 'h_released',
+      step: 'file',
+      error: 'ticket provider unavailable',
+      attempts: 2,
+      limit: 2,
+      releasedObservations: [{ build: 'source', seq: 3 }],
+      committedDispositions: [],
+      pendingProposals: [
+        {
+          proposalKey: 'released',
+          action: 'create',
+          observations: [{ build: 'source', seq: 3 }],
+        },
+      ],
+    },
+  })
+  await waitFor(
+    () => frames.slice(beforeRelease).some((frame) => frame.current === 1),
+    'released pressure refresh',
+  )
+
+  const repoEventsBeforeFailure = (await backing.getRepoEvents(repo)).length
+  const buildEventsBeforeFailure = (await backing.getEvents('source')).length
+  failNextObservationRead = true
+  await waitFor(
+    () =>
+      frames.some(
+        (frame) =>
+          frame.current === 1 &&
+          frame.warnings.some((warning) => warning.includes('observation stream unavailable')),
+      ),
+    'retained pressure refresh diagnostic',
+  )
+  expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
+  expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
+
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
 

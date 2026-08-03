@@ -220,7 +220,9 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.tick-completed': z.strictObject({
     run: dispatchRun,
     queued: z.number().int().nonnegative(),
-    observations: z.number().int().nonnegative(),
+    /** Replay-only compatibility for journals written while the isolated
+     * dispatcher child transported a display sample in its tick fact. */
+    observations: z.number().int().nonnegative().optional(),
     counters: tickCountersSchema,
     janitorDiagnostics: boundedDiagnostics,
     ticketDiagnostics: boundedDiagnostics,

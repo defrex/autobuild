@@ -1244,7 +1244,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       displayText(basename(model.repo)),
       paint(
         `queue ${model.queued} | active ${model.active.current}/${model.active.limit} | ` +
-          `observations ${model.observations}`,
+          `observations ${model.observations.current}/${model.observations.limit}`,
         'dim',
         color,
       ),
