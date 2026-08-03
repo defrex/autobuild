@@ -10,6 +10,7 @@ import type {
   TicketRef,
   WorkspaceBase,
 } from '../ontology'
+import type { BuildExecution } from './workspace/build-execution'
 
 // ── TicketSource (SPEC §3.2, §13) ────────────────────────────────────────────
 //
@@ -138,6 +139,9 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
 
 export interface WorkspaceProvider {
   readonly name: string
+  /** Optional workspace-adjacent executor. Remote providers substitute here;
+   * locally reachable providers use the shipped subprocess capability. */
+  readonly buildExecution?: BuildExecution
   provision(opts: {
     repo: string
     baseBranch: string

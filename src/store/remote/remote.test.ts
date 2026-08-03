@@ -17,6 +17,7 @@ import {
   sampleBuildInput,
   sampleEventWrite,
 } from '../contract'
+import { BuildScopeError } from '../build-scope'
 import { MemoryBuildStore } from '../memory'
 import { textContent } from '../types'
 import { AuthError, RemoteBuildStore } from './client'
@@ -328,6 +329,25 @@ describe('D8 scope enforcement over the wire', () => {
         .createBuild(sampleBuildInput('build-c'))
         .catch((e: unknown) => e)
       expect(createErr).toBeInstanceOf(AuthError)
+    })
+  })
+
+  test('interface scope constrains even an admin-token remote client before transport', async () => {
+    await withSecureStore(async ({ admin }) => {
+      await admin.createBuild(sampleBuildInput('build-a'))
+      await admin.createBuild(sampleBuildInput('build-b'))
+      await admin.ensureRepo('acme/repo')
+      const scoped = admin.scopeBuild('build-a')
+      expect(await scoped.getEvents('build-a')).toEqual([])
+      expect(await scoped.getEvents('build-b').catch((error: unknown) => error)).toBeInstanceOf(
+        BuildScopeError,
+      )
+      expect(await scoped.listBuilds().catch((error: unknown) => error)).toBeInstanceOf(
+        BuildScopeError,
+      )
+      expect(
+        await scoped.getRepoEvents('acme/repo').catch((error: unknown) => error),
+      ).toBeInstanceOf(BuildScopeError)
     })
   })
 

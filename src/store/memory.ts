@@ -17,6 +17,7 @@ import {
   type RepositoryEventType,
   type RepositoryEventWrite,
 } from '../events/repository'
+import { createBuildScopedStore } from './build-scope'
 import { pollingSubscribe } from './subscribe'
 import {
   contentHash,
@@ -28,6 +29,7 @@ import {
   type ArtifactMeta,
   type BlobStore,
   type BuildRecord,
+  type BuildScopedStore,
   type BuildStore,
   type Clock,
   type NewBuildInput,
@@ -94,6 +96,10 @@ export class MemoryBuildStore implements BuildStore {
   constructor(opts: { clock?: Clock; blobs?: BlobStore } = {}) {
     this.clock = opts.clock ?? systemClock
     this.blobs = opts.blobs ?? new MemoryBlobStore()
+  }
+
+  scopeBuild(slug: string): BuildScopedStore {
+    return createBuildScopedStore(this, slug)
   }
 
   private now(): string {

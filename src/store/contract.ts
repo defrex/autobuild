@@ -860,6 +860,49 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('build-scoped handles', () => {
+      test('permit own-build stream, artifact, lease, and subscription operations', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('scope-own'))
+          const scoped = store.scopeBuild('scope-own')
+          expect(scoped.buildScope).toBe('scope-own')
+          expect(await scoped.getBuild('scope-own')).not.toBeNull()
+          await scoped.append('scope-own', sampleEventWrite())
+          await scoped.putArtifact('scope-own', { kind: 'notes', content: 'owned' })
+          expect(textContent((await scoped.getArtifact('scope-own', 'notes'))!)).toBe('owned')
+          expect(await scoped.claimLease('scope-own', 'runner', 1000)).toBe(true)
+          expect(await scoped.heartbeat('scope-own', 'runner')).toBe(true)
+          await scoped.releaseLease('scope-own', 'runner')
+          const unsubscribe = scoped.subscribe('scope-own', { pollMs: 5 }, () => {})
+          unsubscribe()
+          expect(scoped.scopeBuild('scope-own')).toBe(scoped)
+        })
+      })
+
+      test('reject foreign-build, collection/admin, nested foreign scope, and repository access', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('scope-a'))
+          await store.createBuild(sampleBuildInput('scope-b'))
+          const scoped = store.scopeBuild('scope-a')
+          expect(() => scoped.scopeBuild('scope-b')).toThrow(/build-scoped store/)
+          await expect(scoped.getBuild('scope-b')).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.append('scope-b', sampleEventWrite())).rejects.toThrow(
+            /build-scoped store/,
+          )
+          expect(() => scoped.subscribe('scope-b', {}, () => {})).toThrow(/build-scoped store/)
+          await expect(scoped.listBuilds()).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.createBuild(sampleBuildInput('scope-c'))).rejects.toThrow(
+            /build-scoped store/,
+          )
+          await expect(scoped.ensureRepo('acme/rate-limiter')).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.getRepoEvents('acme/rate-limiter')).rejects.toThrow(
+            /build-scoped store/,
+          )
+          await expect(scoped.close()).rejects.toThrow(/build-scoped store/)
+        })
+      })
+    })
+
     describe('subscribe (§7.2 — polling delivery)', () => {
       test('delivers appended events in order, each exactly once', async () => {
         await withStore(factory, undefined, async (store) => {

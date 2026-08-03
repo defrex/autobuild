@@ -41,8 +41,17 @@ import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../p
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
+import type { BuildExecution } from '../ports/workspace/build-execution'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
+import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { MemoryBuildStore } from '../store/memory'
+import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  diagnosticArtifact,
+  parseEffectiveBuildConfig,
+  selectOpenWorkspace,
+} from '../processes/build-execution-state'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock, steppingClock } from '../testing/fixed'
@@ -174,15 +183,74 @@ async function makeFixture(
     },
   })
 
+  const runtimes = {
+    claude: { runner: agents, servesModels: [] },
+    scripted: { runner: agents, servesModels: [] },
+  }
+  // The in-process execution double composes child-side runtimes itself. Keep
+  // the plugin fixture available there without registering it in the kernel's
+  // builtin map (the real plugin materialization path is still exercised).
+  const executionRuntimes = {
+    ...runtimes,
+    'custom-runtime': {
+      runner: agents,
+      servesModels: ['custom/'],
+      defaultModel: 'custom/default',
+    },
+  }
+  const buildExecution = new InProcessBuildExecution(async (input) => {
+    const record = await store.getBuild(input.slug)
+    const workspace = selectOpenWorkspace(await store.getEvents(input.slug))
+    const artifact = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+    if (record === null || workspace === null || artifact === null)
+      throw new Error('missing launch state')
+    let config = parseEffectiveBuildConfig(artifact)
+    try {
+      await new BuildRunner({
+        store: store.scopeBuild(input.slug),
+        config,
+        getConfig: async () => {
+          const latest = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+          if (latest !== null) config = parseEffectiveBuildConfig(latest)
+          return config
+        },
+        runtimes: executionRuntimes,
+        workspacePath: workspace.path,
+        branch: record.branch ?? `ab/${input.slug}`,
+        slug: input.slug,
+        exec: spawnExec,
+        forge,
+        ids,
+        clock,
+        instance: input.instance,
+        host: 'dispatch-test',
+        sessionEnv: { AB_STORE: 'memory' },
+      }).run()
+    } catch (error) {
+      await store.putArtifact(
+        input.slug,
+        diagnosticArtifact({
+          instance: input.instance,
+          outcome:
+            error instanceof LeaseHeldError
+              ? 'lease-held'
+              : error instanceof SetupFailureError
+                ? 'setup-failed'
+                : 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      throw error
+    }
+  })
+
   const wire = (): DispatchWiring => ({
     store,
     tickets,
     forge,
     workspaces,
-    runtimes: {
-      claude: { runner: agents, servesModels: [] },
-      scripted: { runner: agents, servesModels: [] },
-    },
+    buildExecution,
+    runtimes,
     storeRef: 'memory', // unused: the scripted CLI writes the shared store by ref
     ids,
     uuids: randomUuids(),
@@ -530,6 +598,7 @@ describe('abDispatch guards', () => {
             tickets: new FakeTicketSource([]),
             forge: new FakeForge(),
             workspaces: new GitWorktreeProvider({ root: join(tmp, 'worktrees') }),
+            buildExecution: new InProcessBuildExecution(async () => {}),
             runtimes: {
               claude: {
                 runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
@@ -1514,6 +1583,67 @@ model = "gpt-slug-name"
 })
 
 describe('abDispatch watch build-runner coordination', () => {
+  test('kernel shutdown stops and awaits every active build execution before returning', async () => {
+    const fx = await makeFixture(
+      [readyTicket('T-shutdown-reap-1'), readyTicket('T-shutdown-reap-2')],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    const stop = new AbortController()
+    const stopEntered = deferred()
+    const releaseStop = deferred()
+    const completion = deferred()
+    let startCalls = 0
+    let stopCalls = 0
+    const execution: BuildExecution = {
+      async start() {
+        startCalls += 1
+        return {
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            stopCalls += 1
+            stopEntered.resolve()
+            await releaseStop.promise
+            completion.resolve()
+          },
+        }
+      },
+    }
+    const baseWire = fx.wire()
+    const dispatch = abDispatch({
+      targetRepo: fx.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      signal: stop.signal,
+      intervalMs: 60_000,
+      wire: () => ({ ...baseWire, buildExecution: execution }),
+    })
+    let returned = false
+    void dispatch.then(() => {
+      returned = true
+    })
+
+    try {
+      await waitFor(() => startCalls === 2)
+      stop.abort()
+      await stopEntered.promise
+      await Bun.sleep(20)
+      expect(stopCalls).toBe(2)
+      expect(returned).toBe(false)
+
+      releaseStop.resolve()
+      await dispatch
+      expect(returned).toBe(true)
+    } finally {
+      releaseStop.resolve()
+      completion.resolve()
+      await dispatch.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 10_000)
+
   test('retains the accepted config across deletion and reloads after restoration', async () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()
@@ -1840,10 +1970,10 @@ describe('abDispatch watch build-runner coordination', () => {
 
       expect(failedPreflight).toBe(true)
       expect(sleeps).toBe(2)
-      expect(err).toEqual([])
+      expect(err).toEqual(['build add-rate-limiting runner failed: child exited 1'])
       const [record] = await fx.store.listBuilds()
       const events = await fx.store.getEvents(record!.slug)
-      expect(events.filter((event) => event.type === 'dispatch.failed')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'dispatch.failed')).toHaveLength(0)
       expect(events.filter((event) => event.type === 'runner.attached')).toHaveLength(1)
       expect(fx.cliErrors).toEqual([])
     } finally {

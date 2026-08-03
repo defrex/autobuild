@@ -26,6 +26,7 @@ import type {
   RepositoryEventType,
   RepositoryEventWrite,
 } from '../../events/repository'
+import { createBuildScopedStore } from '../build-scope'
 import { pollingSubscribe } from '../subscribe'
 import {
   toBytes,
@@ -33,6 +34,7 @@ import {
   type ArtifactInput,
   type ArtifactMeta,
   type BuildRecord,
+  type BuildScopedStore,
   type BuildStore,
   type NewBuildInput,
   type RepositoryArtifact,
@@ -91,6 +93,10 @@ export class RemoteBuildStore implements BuildStore {
     this.base = opts.url.replace(/\/+$/, '')
     this.token = opts.token
     this.fetchFn = opts.fetchFn ?? fetch
+  }
+
+  scopeBuild(slug: string): BuildScopedStore {
+    return createBuildScopedStore(this, slug)
   }
 
   private buildPath(slug: string): string {

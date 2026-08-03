@@ -44,9 +44,8 @@ export class SessionScopeError extends Error {
 type BuildSessionScope = Extract<LocalSessionScope, { kind: 'build' }>
 type RepositorySessionScope = Extract<LocalSessionScope, { kind: 'repo' }>
 
-/** The AUT-201 seam is included now so nested same-build scoping is idempotent
- * while a foreign scope can never widen this handle. The return shapes also
- * remain structurally compatible once BuildStore itself requires scopeBuild. */
+/** Nested same-build scoping is idempotent while a foreign scope can never
+ * widen this ambient-session handle. */
 export interface BuildLocalSessionStore extends BuildStore {
   readonly sessionScope: BuildSessionScope
   readonly buildScope: string

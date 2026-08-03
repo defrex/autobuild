@@ -45,13 +45,13 @@ K unclaimed observation.recorded events
 | `src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
 | `src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
-| `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters; local ambient-session authority wrapper | §7 |
+| `src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
-| `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
-| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus init/upgrade, the Store-only dispatch frontend, and its private supervised kernel entry | §8, §14, §16.3 |
+| `src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
+| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -160,21 +160,37 @@ instead routes to `implement` and outranks the pending report. A bare retry carr
 feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` is the kernel owner and
-single-flights build-runner launches per slug within its process. Interactive
-`ab dispatch` runs that owner in the private `bin/ab-dispatch-kernel.ts` child;
+single-flights supervised build executions per slug within its process. It
+publishes effective config into the build artifact namespace, then calls the
+workspace-adjacent `BuildExecution` capability; it never constructs a
+`BuildRunner`. The shipped local capability starts `bin/ab-build-runner.ts`
+with ignored stdio. That child immediately scopes its Store handle, discovers
+its workspace from durable events, and composes the existing runner. Config and
+instance-correlated diagnostics remain build artifacts; process exit is only a
+liveness/reaping signal. Interactive `ab dispatch` runs the kernel owner in the
+private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
 SIGTERM restore terminal modes immediately and begin one supervised drain;
 persistent frontend and child handlers keep repeated signals graceful until the
-child is reaped, after which a non-SIGINT terminating signal is replayed in the
-frontend. A parent-liveness watch remains the detached-kernel fallback. Timeout
-escalation is held while a durable `tick-started` fact remains open, because
-force-killing the ticket claim before build creation would not be recoverable.
-The supervisor rechecks child liveness at the force boundary and projects the
-same normal, forced, or abnormal result (with available process/error detail)
-that the repository run-stopped evidence records. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
-not suppressed polls. Open session history is never a lock — a dead session
+kernel child is reaped, after which a non-SIGINT terminating signal is replayed
+in the frontend. A parent-liveness watch remains the detached-kernel fallback.
+Timeout escalation is held while a durable `tick-started` fact remains open,
+because force-killing the ticket claim before build creation would not be
+recoverable. The supervisor rechecks kernel-child liveness at the force boundary
+and projects the same normal, forced, or abnormal result (with available
+process/error detail) that the repository run-stopped evidence records. Ordinary
+kernel teardown stops and reaps all build children; their own parent-death
+watch and lease expiry recover an abrupt kernel death. The BuildStore lease
+remains the cross-process gate. `src/processes/dispatcher.ts` counts actual
+schedules, not suppressed polls. Open session history is never a lock — a dead session
 may never close.
+
+**Store authority.** `src/store/build-scope.ts` wraps every adapter with one
+build's authority. Own-build record/event/artifact/lease/subscription calls
+delegate; foreign-build, collection/admin, close, and repository-journal calls
+raise `BuildScopeError`. The shared Store suite applies these checks to memory,
+SQLite, and remote clients, while HTTP token scope remains defense in depth.
 
 **Live configuration.** `src/config/live.ts` owns the running dispatcher's
 immutable last-valid main-checkout snapshot, exhaustive hot/restart field
@@ -219,9 +235,11 @@ issue UUID and file/fake preserve their idempotency metadata through create,
 adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
 unchanged.
 
-**Workspace and review base selection.**
+**Workspace, execution, and review base selection.**
 `src/ports/workspace/create.ts` resolves `[workspace].provider` against the
-builtin-plus-plugin registry once during production wiring. The builtin stays
+builtin-plus-plugin registry once during production wiring and pairs it with a
+`BuildExecution` capability. A provider-supplied capability substitutes at
+that seam; otherwise the shipped local subprocess capability is used. The builtin stays
 store-root-aware; selected plugin factories receive their nested config,
 environment, and absolute repository root. `WorkspaceHandle.ref` remains a
 provider identifier while `path` is the locally reachable working copy used by

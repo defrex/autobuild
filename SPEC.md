@@ -196,9 +196,12 @@ surface remains the remote HTTP protocol rather than in-process registration.
 
 Small, independently runnable, crash-safe:
 
-- **build-runner** — one per build; owns one pipeline execution end to end.
-  Per-build processes are deliberate: crash isolation, and the natural shape
-  once builds run in remote sandboxes.
+- **build-runner** — one operating-system process per build; owns one pipeline
+  execution end to end. The local implementation starts the process beside its
+  Git worktree. Workspace execution is a substitutable capability, so a future
+  sandbox provider can place both checkout and process elsewhere without the
+  dispatcher spawning a local proxy. Per-build processes are deliberate: crash
+  isolation, and the natural shape once builds run in remote sandboxes.
 - **dispatcher** — watches the TicketSource for tickets passing the configured
   ready gate, claims, establishes the final conforming spec, chooses a short
   immutable build slug, provisions a workspace, and launches build-runners up
@@ -422,8 +425,14 @@ snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
 ordinary event validation, unknown builds reject, and a comparison miss leaves
 the log and build timestamps untouched.
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
-and read methods, plus a repository lease. Two implementations of one
-contract (`src/store/contract.ts` is the shared conformance suite):
+and read methods, plus a repository lease. Before execution, a runner obtains
+an interface-enforced handle scoped to exactly its build. Own-build records,
+stream, artifacts, lease, and subscription remain available; another build,
+collection/admin operations, nested foreign scope, and every repository-journal
+operation reject. This guard applies identically to every adapter; remote tokens
+carry the same authority over the wire as defense in depth rather than creating
+it. Two implementations of one contract (`src/store/contract.ts` is the shared
+conformance suite):
 
 1. **Local** — one self-contained state tree at `<main-repo>/.autobuild/` by
    default: database, content-addressed blobs, Git worktrees, and the file
@@ -549,22 +558,25 @@ AB_STORE     # store URL or local path
 AB_BUILD     # build slug
 AB_PHASE     # current phase (+ round)
 AB_SESSION   # session id
-AB_TOKEN     # scoped token (remote store)
+AB_TOKEN     # transports the scoped handle's authority to a remote store
 ```
 
 A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE`
 of `synthesize@N` or `review@N`. The AgentRunner invocation argument is
 opaque: a build skill receives its slug; a harvest skill receives its run id.
-The CLI resolves identity from ambient auth. A remote handle forwards the
-runner-minted token unchanged; a local handle is wrapped at the same CLI
-opening boundary with authority over exactly `AB_BUILD` or `AB_REPO`. Either
-way, build and repository resources cannot cross, and naming another resource
-to a Store operation cannot widen the handle. Event-bearing writes attributed
-to an agent must name the ambient `AB_SESSION`; non-agent writes remain allowed
-so the CLI can perform its existing trusted kernel plumbing, including finalize.
+The CLI resolves identity from ambient auth. Every build process holds an
+interface-enforced build-scoped Store handle. At the phase CLI opening boundary,
+a remote handle forwards the runner-minted token unchanged, while a local handle
+is wrapped with authority over exactly `AB_BUILD` or `AB_REPO`. Build and
+repository resources cannot cross, and naming another resource to a Store
+operation cannot widen either handle. Event-bearing writes attributed to an
+agent must name the ambient `AB_SESSION`; non-agent writes remain allowed so the
+CLI can perform its existing trusted kernel plumbing, including finalize.
 Sessionless operator and kernel processes with no complete agent-session
-identity retain unscoped Store access. Least privilege comes from the runner,
-not prompt instructions.
+identity retain unscoped Store access. Remote tokens transport the corresponding
+resource and session authority over the wire; build-process resource scope is
+already enforced by the Store interface. Least privilege comes from the Store
+and runner, not prompt instructions.
 
 Every phase and harvest turn also receives a runner-controlled `PATH` prefix
 containing a private `ab` launcher from the same Autobuild distribution that
@@ -707,8 +719,9 @@ implementer:  ab context   (findings.json now materialized) → …
   corrects and retries [D6].
 - *Crash after deposits, before terminal* → artifacts are revisioned; the
   re-run phase deposits fresh revs; orphaned revs are harmless history.
-- *Wrong-resource access or wrong-session agent write* → the remote token or
-  local ambient-session handle rejects it at the Store boundary [D8].
+- *Wrong-resource access or wrong-session agent write* → the applicable
+  build-scoped or ambient-session Store handle rejects it at the interface;
+  a remote token enforces the same scope over the wire [D8].
 - *Store unreachable* → CLI retries with backoff; a phase that cannot
   deposit cannot complete → `phase.failed`, runner-level policy takes over.
 
@@ -1337,22 +1350,28 @@ The setup target belongs only to escalation metadata and is not a pipeline `Phas
 
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
-`workspace.provisioned {base: {source: existing, sha}}` → `runner.attached
-{resumedFromSeq}` → reducer says implement r2 started-not-completed → re-run
-the phase from its start. The provider restores the already-created branch at
+`workspace.provisioned {base: {source: existing, sha}}` → the workspace
+execution capability starts a fresh build process. That process reads its
+workspace location from the durable event, claims the lease, and appends
+`runner.attached {resumedFromSeq}` → reducer says implement r2
+started-not-completed → re-run the phase from its start. The provider restores the already-created branch at
 round 1's pushed head [D3]; the Git adapter never re-cuts it from a newer
 base (§7.4). `ab context` rehydrates scratch from the store into a fresh
 session. Uncommitted round-2 work is lost by design (§7.3 — phase boundaries
 are the resume points).
 
 Two liveness rules complete the picture. Within one dispatcher process,
-build-runner launches are single-flighted by slug — in-memory liveness beats
-a transiently stale lease, while the durable lease remains the cross-process
-recovery gate (the guard is deliberately not durable: a dead process's
-memory disappears with it). And a new `ab dispatch` process attempts every
-actionable build on its first tick rather than waiting for the sweep; lease
-claiming stays the exclusivity gate, so a genuinely live old runner wins
-harmlessly.
+build-runner launches are single-flighted by slug through supervised process
+liveness — a child exit is only a reaping signal, never a pipeline outcome.
+Build progress, config, diagnostics, and outcomes cross the process boundary
+only through build-owned Store state. The durable lease remains the
+cross-process recovery gate (the in-memory guard is deliberately not durable:
+a dead process's memory disappears with it). Ordinary dispatcher shutdown
+stops and reaps every child; abrupt dispatcher death is recovered by parent
+liveness detection plus lease expiry. A new `ab dispatch` process attempts
+every actionable build on its first tick rather than waiting for the sweep;
+lease claiming stays the exclusivity gate, so a genuinely live old runner
+wins harmlessly.
 
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 
@@ -1458,9 +1477,10 @@ Decisions here continue the series: **[D9]** declarative repo config and
 
 One declarative file at the repo root. A running dispatcher owns an accepted
 snapshot read from the **main checkout** and refreshes it before each dispatch
-tick. Dispatcher and build-runner orchestration capture that snapshot at each
-action boundary — dispatch, setup, and pipeline step — so a valid change may
-affect the next action of an in-flight build but never interrupts an agent turn
+tick. Before launch and after each accepted revision, the dispatcher deposits
+the composed snapshot into each affected build's artifact namespace. The child
+samples that durable artifact at setup and pipeline-step boundaries, so a valid
+change may affect the next action of an in-flight build but never interrupts an agent turn
 or deterministic command already running. Scoped phase CLI processes separately
 read the build worktree's branch-owned file. Because the file is repo-versioned,
 changes still flow through the pipeline itself: once merged, the system can

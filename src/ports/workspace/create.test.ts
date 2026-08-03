@@ -5,7 +5,9 @@ import { FakeWorkspaceProvider } from './fake'
 import { GitWorktreeProvider } from './git-worktree'
 import { createPluginRegistry } from '../../plugins/registry'
 import { parseConfig } from '../../config/load'
-import { createWorkspaceProvider } from './create'
+import { createWorkspaceProvider, createWorkspaceRuntime } from './create'
+import type { BuildExecution } from './build-execution'
+import { LocalBuildExecution } from './local-build-execution'
 
 const baseOpts = () => ({
   registry: createPluginRegistry(),
@@ -97,6 +99,29 @@ readyState = "ready"
     // Nothing between the parse and the factory clones the map, so the
     // inherited-read guarantee holds where the plugin actually reads it.
     expect(Object.getPrototypeOf(received)).toBeNull()
+  })
+
+  test('pairs local providers with the shipped executor and lets providers substitute it', async () => {
+    const local = await createWorkspaceRuntime({ provider: 'git-worktree', config: {} }, baseOpts())
+    expect(local.execution).toBeInstanceOf(LocalBuildExecution)
+
+    const opts = baseOpts()
+    const execution: BuildExecution = {
+      async start() {
+        return { completion: Promise.resolve({ exitCode: 0 }), async stop() {} }
+      },
+    }
+    const selected = Object.assign(new FakeWorkspaceProvider({ mode: 'logical' }), {
+      buildExecution: execution,
+    })
+    opts.registry.register({
+      name: 'remote-sandbox',
+      apiVersion: '^1.0.0',
+      workspaceProviders: { remote: () => selected },
+    })
+    const remote = await createWorkspaceRuntime({ provider: 'remote', config: {} }, opts)
+    expect(remote.provider).toBe(selected)
+    expect(remote.execution).toBe(execution)
   })
 
   test('unknown selectors list every available provider deterministically', async () => {

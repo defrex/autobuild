@@ -2,7 +2,9 @@ import { resolve } from 'node:path'
 import type { WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
+import type { BuildExecution } from './build-execution'
 import { GitWorktreeProvider } from './git-worktree'
+import { LocalBuildExecution } from './local-build-execution'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -11,6 +13,11 @@ export interface CreateWorkspaceProviderOptions {
   /** Absolute repository root supplied to plugin factories. */
   repoRoot: string
   env: Record<string, string | undefined>
+}
+
+export interface WorkspaceRuntime {
+  provider: WorkspaceProvider
+  execution: BuildExecution
 }
 
 /** Resolve and lazily construct the configured WorkspaceProvider. Builtin
@@ -60,5 +67,20 @@ export async function createWorkspaceProvider(
       }`,
       { cause: error },
     )
+  }
+}
+
+/** Resolve provisioning and execution as one workspace-owned runtime. Existing
+ * providers remain source-compatible: locally reachable implementations that
+ * omit execution receive the shipped child-process capability, while a future
+ * sandbox provider can replace it without a local proxy process. */
+export async function createWorkspaceRuntime(
+  config: WorkspaceConfig,
+  opts: CreateWorkspaceProviderOptions,
+): Promise<WorkspaceRuntime> {
+  const provider = await createWorkspaceProvider(config, opts)
+  return {
+    provider,
+    execution: provider.buildExecution ?? new LocalBuildExecution({ env: opts.env }),
   }
 }

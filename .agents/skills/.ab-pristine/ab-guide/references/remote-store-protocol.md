@@ -532,8 +532,15 @@ Beyond leases, the backing store must maintain:
 
 ## 9. Client-only behavior and health
 
-Three shipped behaviors do not add `BuildStore` routes:
+Four shipped behaviors do not add `BuildStore` routes:
 
+- `RemoteBuildStore.scopeBuild(slug)` returns an interface-enforced client
+  handle for exactly that build. Own-build record, event, artifact, lease, and
+  subscription calls use the existing routes below. Foreign-build calls,
+  collection/admin operations, nested foreign scope, `close`, and every
+  repository-journal operation fail in the client before a request. This is
+  required even with an open server or an admin token: HTTP token scope carries
+  authority over the wire as defense in depth; it does not create Store scope.
 - `RemoteBuildStore.subscribe(slug, options, onEvent)` polls
   `GET /builds/{slug}/events?since=<lastSeq>`. It starts with
   `options.fromSeq ?? 0`, polls immediately and then every
