@@ -45,7 +45,7 @@ K unclaimed observation.recorded events
 | `src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
 | `src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
-| `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters; local ambient-session authority wrapper | §7 |
 | `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
@@ -73,6 +73,16 @@ are the frozen catalogs; every write passes `validateEventWrite` /
 status; `src/kernel/harvest.ts` and `src/kernel/dispatch-settings.ts` reduce
 the repository journal independently of each other. No decision anywhere
 consults a snapshot in place of the append-only log.
+
+**Session Store authority.** `src/cli/binary.ts` validates a complete build or
+Harvest ambient tuple before opening its phase Store through
+`src/cli/store-opening.ts`. Remote references keep the existing token-backed
+client unchanged. Local references are wrapped by `src/store/session-scope.ts`,
+which permits only the exact ambient build or repository resource and rejects
+agent-attributed event writes for any session other than `AB_SESSION`. The
+wrapper deliberately allows non-agent actors because phase terminals also run
+trusted kernel plumbing in that CLI process; resource authority still applies
+to every operation. Generic and sessionless opening remains unwrapped.
 
 **Phase decisions.** `src/kernel/phases.ts` owns the phase table,
 `src/kernel/engine.ts` the deterministic transitions;
@@ -282,7 +292,9 @@ conflict.
 
 `src/cli/repo-state.ts` owns repository identity and store precedence
 (`--store` > `AB_STORE` > `.autobuild/`); `src/cli/store-opening.ts` is the
-production store composition boundary shared by finite sessionless queries.
+production store composition boundary shared by finite sessionless queries and
+phase sessions. Its phase-session opener preserves remote token composition and
+adds the local ambient authority wrapper only for filesystem stores.
 `src/cli/repository-status.ts` consumes that boundary and the kernel's
 `reduceDispatchSettings` projection to report journal-backed dispatcher
 controls without ensuring a repository stream or starting dispatcher work.

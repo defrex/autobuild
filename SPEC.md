@@ -431,7 +431,11 @@ contract (`src/store/contract.ts` is the shared conformance suite):
    repository/worktree topology, so a command run inside a linked worktree
    resolves the same state. There is no home-directory fallback or
    machine-global state. Store selection is uniform: explicit `--store` >
-   nonempty `AB_STORE` > repository default.
+   nonempty `AB_STORE` > repository default. When a phase or Harvest CLI
+   process reopens this store, a handle wrapper derives exact build-or-repository
+   authority and agent-event session attribution from its validated ambient
+   identity. This preserves the remote adapter's observable resource boundary
+   without making the SQLite adapter itself ambient-aware.
 2. **Remote** — the same store interface behind a small self-hosted HTTP API
    binary, selected by an `http(s)://` reference. What remote sandboxes talk
    to. The documented [remote store protocol](docs/remote-store-protocol.md)
@@ -551,10 +555,16 @@ AB_TOKEN     # scoped token (remote store)
 A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE`
 of `synthesize@N` or `review@N`. The AgentRunner invocation argument is
 opaque: a build skill receives its slug; a harvest skill receives its run id.
-The CLI resolves identity from ambient auth, and remote tokens distinguish
-build from repository resources as well as session attribution. A leaked
-harvest token cannot read a build stream and vice versa. Least privilege
-comes from the runner, not prompt instructions.
+The CLI resolves identity from ambient auth. A remote handle forwards the
+runner-minted token unchanged; a local handle is wrapped at the same CLI
+opening boundary with authority over exactly `AB_BUILD` or `AB_REPO`. Either
+way, build and repository resources cannot cross, and naming another resource
+to a Store operation cannot widen the handle. Event-bearing writes attributed
+to an agent must name the ambient `AB_SESSION`; non-agent writes remain allowed
+so the CLI can perform its existing trusted kernel plumbing, including finalize.
+Sessionless operator and kernel processes with no complete agent-session
+identity retain unscoped Store access. Least privilege comes from the runner,
+not prompt instructions.
 
 Every phase and harvest turn also receives a runner-controlled `PATH` prefix
 containing a private `ab` launcher from the same Autobuild distribution that
@@ -697,7 +707,8 @@ implementer:  ab context   (findings.json now materialized) → …
   corrects and retries [D6].
 - *Crash after deposits, before terminal* → artifacts are revisioned; the
   re-run phase deposits fresh revs; orphaned revs are harmless history.
-- *Wrong-build write* → token scope rejects it at the store [D8].
+- *Wrong-resource access or wrong-session agent write* → the remote token or
+  local ambient-session handle rejects it at the Store boundary [D8].
 - *Store unreachable* → CLI retries with backoff; a phase that cannot
   deposit cannot complete → `phase.failed`, runner-level policy takes over.
 
