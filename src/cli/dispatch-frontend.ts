@@ -4,9 +4,10 @@ import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import { reduceHarvest } from '../kernel/harvest'
+import type { BuildState } from '../kernel/reducer'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
-import { buildControlUser, controlBuild } from './build-control'
+import { BuildControlError, buildControlUser, controlBuild } from './build-control'
 import { bulkControlReport, bulkControlRepository } from './bulk-control'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import {
@@ -41,6 +42,24 @@ import {
 
 const POLL_MS = 500
 const PAINT_MS = 250
+const ABORTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'blocked'])
+
+function validAbortConfirmation(state: BuildState | undefined): boolean {
+  return (
+    state !== undefined &&
+    ABORTABLE_STATUSES.has(state.status) &&
+    !state.pendingCommands.some((command) => command.command === 'abort')
+  )
+}
+
+function isStaleAbortControlError(error: unknown): error is BuildControlError {
+  return (
+    error instanceof BuildControlError &&
+    ['not-found', 'wrong-repository', 'inactive', 'no-longer-active', 'abort-pending'].includes(
+      error.code,
+    )
+  )
+}
 
 function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
   return (
@@ -245,8 +264,8 @@ export class DispatchFrontend {
   }
 
   private async renderOnce(): Promise<void> {
-    const repositoryEvents = await this.events()
-    const status = this.dispatchStatus
+    let repositoryEvents = await this.events()
+    let status = this.dispatchStatus
     const ref = status.effectiveConfig
     // No filesystem fallback: the first frame waits for the child's durable,
     // run-correlated effective snapshot.
@@ -269,12 +288,11 @@ export class DispatchFrontend {
       else this.resumePrompt = { ...this.resumePrompt, escalationIds: remaining }
     }
     if (this.abortConfirmation !== undefined) {
-      const state = snapshot.states.get(this.abortConfirmation.slug)
-      if (
-        state === undefined ||
-        state.pendingCommands.some((command) => command.command === 'abort')
-      ) {
-        this.abortConfirmation = undefined
+      const slug = this.abortConfirmation.slug
+      if (!validAbortConfirmation(snapshot.states.get(slug))) {
+        await this.dismissStaleAbortConfirmation(slug)
+        repositoryEvents = await this.events()
+        status = this.dispatchStatus
       }
     }
 
@@ -423,6 +441,40 @@ export class DispatchFrontend {
     else return
     this.syncControls()
     this.paint()
+  }
+
+  private async dismissStaleAbortConfirmation(slug: string): Promise<void> {
+    if (this.abortConfirmation?.slug === slug) this.abortConfirmation = undefined
+    await this.report(
+      `build ${slug}: abort confirmation dismissed because the build state changed`,
+      'warning',
+    )
+  }
+
+  private async confirmAbort(slug: string): Promise<void> {
+    await this.events()
+    const ref = this.dispatchStatus.effectiveConfig
+    if (ref === undefined) throw new Error('effective config is not available')
+    const config = await this.loadConfig(ref.kind, ref.rev)
+    this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
+    let snapshot = await this.cache.refresh(config, this.configRevision)
+    while (!this.cache.isCurrent(snapshot)) {
+      snapshot = await this.cache.refresh(config, this.configRevision)
+    }
+
+    if (!validAbortConfirmation(snapshot.states.get(slug))) {
+      await this.dismissStaleAbortConfirmation(slug)
+      await this.renderOnce()
+      return
+    }
+
+    try {
+      await this.buildAction('abort', slug)
+    } catch (error) {
+      if (!isStaleAbortControlError(error)) throw error
+      await this.dismissStaleAbortConfirmation(slug)
+      await this.renderOnce()
+    }
   }
 
   private async buildAction(
@@ -593,7 +645,7 @@ export class DispatchFrontend {
       if (enter) {
         const slug = this.abortConfirmation.slug
         this.abortConfirmation = undefined
-        this.queue(() => this.buildAction('abort', slug))
+        this.queue(() => this.confirmAbort(slug))
       } else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncControls()
