@@ -368,6 +368,36 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   await running
 })
 
+test('frontend rejects a recorded normal outcome when the child exits nonzero', async () => {
+  const repo = '/cleanup-failed-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const childDone = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 80,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    launchChild: () => ({ completed: childDone.promise, async stop() {} }),
+  })
+
+  const running = frontend.run()
+  childDone.resolve({ outcome: 'normal', exitCode: 17 })
+  await expect(running).rejects.toThrow('dispatcher kernel normal (exit code 17)')
+})
+
 test('frontend preserves unsolicited child failure detail and process evidence', async () => {
   const repo = '/failed-repo'
   const store = new MemoryBuildStore()

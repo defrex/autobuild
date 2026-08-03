@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#201](https://github.com/defrex/autobuild/pull/201) — Fail dispatch frontend on cleanup exit errors
 - [#200](https://github.com/defrex/autobuild/pull/200) — Align dispatch accounting with settled Harvest results
 - [#198](https://github.com/defrex/autobuild/pull/198) — Make dispatch shutdown child-safe
 - [#197](https://github.com/defrex/autobuild/pull/197) — Reject stale abort confirmations in isolated dispatch frontend

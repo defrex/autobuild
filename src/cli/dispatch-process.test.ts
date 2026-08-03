@@ -121,6 +121,28 @@ describe('dispatch child supervision', () => {
     expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
   })
 
+  test('a normal stop fact preserves a later nonzero cleanup exit without duplication', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'run-1', outcome: 'normal', exitCode: 0 },
+    })
+    const child = fakeSubprocess()
+    const supervisor = supervisorFixture(store, child)
+
+    child.finish(17)
+    const result = await supervisor.completed
+
+    expect(result).toEqual({ outcome: 'normal', exitCode: 17 })
+    const stopped = (await store.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0]?.payload).toEqual({ run: 'run-1', outcome: 'normal', exitCode: 0 })
+  })
+
   test('an unsolicited signalled exit records and returns actionable evidence', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')
