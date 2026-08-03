@@ -960,7 +960,15 @@ The fixed workflow is:
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
-   only its missing tickets. The label is informational: Autobuild never reads
+   only its missing tickets. Ready projections expose that stable external
+   creation key separately from the human-facing ticket id. Dispatch brackets
+   each ready listing with repository-journal reads and withholds a ticket when
+   its key matches an unfinished reservation, including a reservation first
+   observed during the listing interval. The ticket remains counted as queued,
+   consumes no capacity, and receives a distinct durable standing diagnostic.
+   A later tick releases it after filing settles or the owning run completes,
+   escalates, fails non-retryingly, or exhausts recovery; tickets without a
+   matching reservation are unchanged. The label is informational: Autobuild never reads
    it as readiness policy and does not remove it during grooming.
 
 Beyond the workflow, harvest is governed by a small set of invariants (their
@@ -1037,9 +1045,13 @@ status is for builds awaiting a human.
 
 **Crash-safe filing.** Creation supports a state override (harvest targets
 Triage explicitly) and an idempotency key that must adopt the same ticket on
-retry across process restarts. The reservation fact precedes the external
-side effect — that ordering, not provider behavior, is what makes filing
-crash-safe.
+retry across process restarts. Ticket projections may carry this stable
+external creation key separately from their source-facing identifier; adapters
+that support idempotent creation preserve it through create, adoption, get, and
+ready listing. The reservation fact precedes the external side effect — that
+ordering, not provider behavior, is what makes filing crash-safe. Dispatch
+uses the key only to withhold unfinished Autobuild creates; its absence fails
+open for legacy/plugin tickets and introduces no new readiness gate.
 
 ## 14. Operator UI
 
@@ -1182,7 +1194,7 @@ The families, with illustrative members:
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
+| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
@@ -1195,9 +1207,11 @@ idempotent and the three `abort.*` facts checkpoint projections across crashes;
 missing Forge capabilities or outages leave the remainder due on the next tick.
 
 One deliberate subtlety worth recording: `pr.conflicted.baseSha` is
-detection-time evidence, while `reconcile.started.baseSha` is the freshly
-fetched merge target for that attempt. Agent context uses only the started
-fact, so a reconcile never runs against a known-stale base.
+detection-time evidence, while `reconcile.progress-checked.baseSha` is the
+kernel's authoritative observation for deciding whether a completed attempt
+made progress and `reconcile.started.baseSha` is the separately refreshed merge
+target for the next attempt. Agent context uses only the started fact, so a
+reconcile never runs against a persisted or known-stale observation.
 
 ### 15.4 Finding schema and stall mechanics [D4]
 
@@ -1414,8 +1428,20 @@ neither; the resolution lands as a merge commit, and because reconciliation
 changed code, **`verify:*` re-runs in full**. A resolution the agent judges
 risky — semantic conflicts, spec-relevant choices — escalates rather than
 guesses. Reconcile skips `code-review` by default (escalation covers the
-judgment cases; policy can force it), and `policy.maxReconcileAttempts`
-bounds thrash against a busy base.
+judgment cases; policy can force it).
+
+On each repeat conflict, the runner records a fresh authoritative base snapshot
+on `reconcile.progress-checked`, tied to that conflict and the most recently
+completed attempt. The kernel compares it with that attempt's matching latest
+`reconcile.started.baseSha`. A different SHA proves that the reconcile lost a
+race against a moving base, so another monotonic attempt runs regardless of the
+configured limit. An equal SHA consumes `policy.maxReconcileAttempts`; reaching
+the limit escalates because reconciliation made no progress against an unchanged
+base. The classification is reduced from the durable log, with the next
+attempt's authoritative `reconcile.started` serving as the observation for
+historical logs that predate the progress-check event. A started but incomplete
+attempt re-runs at the same number and consumes nothing. Every completed
+reconcile still starts a fresh, fully bounded `verify:*` cycle.
 
 The grammar's tail is thus an epilogue loop, outside the mainline:
 

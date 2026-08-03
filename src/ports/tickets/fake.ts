@@ -18,6 +18,7 @@ import { validateTicketUpdate } from './update'
 function cloneTicket(ticket: Ticket): Ticket {
   return {
     ref: { ...ticket.ref },
+    ...(ticket.creationKey !== undefined ? { creationKey: ticket.creationKey } : {}),
     title: ticket.title,
     body: ticket.body,
     state: ticket.state,
@@ -62,6 +63,9 @@ export class FakeTicketSource implements TicketSource {
   ) {
     for (const ticket of seed) {
       this.tickets.set(ticket.ref.id, cloneTicket(ticket))
+      if (ticket.creationKey !== undefined) {
+        this.idempotency.set(ticket.creationKey, ticket.ref.id)
+      }
     }
     this.createState = opts.createState ?? 'Triage'
     this.doneState = opts.doneState ?? 'Done'
@@ -124,6 +128,7 @@ export class FakeTicketSource implements TicketSource {
     const id = `fake-${this.nextId++}`
     const ticket: Ticket = {
       ref: { source: this.name, id, title: draft.title },
+      ...(opts.idempotencyKey !== undefined ? { creationKey: opts.idempotencyKey } : {}),
       title: draft.title,
       body: draft.body,
       state: opts.state ?? this.createState,

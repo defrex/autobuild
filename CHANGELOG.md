@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#205](https://github.com/defrex/autobuild/pull/205) — Scope local phase stores to ambient session identity
+- [#204](https://github.com/defrex/autobuild/pull/204) — Make reconcile budgets progress-aware
+- [#203](https://github.com/defrex/autobuild/pull/203) — Withhold tickets during in-flight Harvest creation
 - [#202](https://github.com/defrex/autobuild/pull/202) — Retain Harvest counters after tick publication failures
 - [#201](https://github.com/defrex/autobuild/pull/201) — Fail dispatch frontend on cleanup exit errors
 - [#200](https://github.com/defrex/autobuild/pull/200) — Align dispatch accounting with settled Harvest results

@@ -87,6 +87,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'pr.merged': ['dispatcher'],
   'pr.closed': ['dispatcher'],
   'pr.conflicted': ['dispatcher'],
+  'reconcile.progress-checked': ['kernel'],
   'reconcile.started': ['kernel'],
   'reconcile.completed': ['agent'],
 

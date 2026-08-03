@@ -1840,6 +1840,106 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
   }
 }, 30_000)
 
+/** The unsafe Harvest interleaving is controlled across the real file source
+ * and repository journal: reservation, externally visible ready ticket,
+ * dispatcher scan, then blocker recording and filing completion. */
+test('d4. dispatch withholds a ready ticket while its Autobuild creation is in flight', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-inflight-ticket-'))
+  try {
+    const source = new FileTicketSource({ dir, createState: 'Ready' })
+    const blocker = await source.create({
+      title: 'Required baseline',
+      body: CONFORMING_BODY,
+      labels: ['autobuild'],
+    })
+    await source.transition(blocker.ref.id, 'Doing')
+    const h = await track(makeHarness({ handlers: {}, ticketSource: source }))
+    await h.store.ensureRepo(h.origin)
+    await h.store.appendRepo(h.origin, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_inflight_e2e',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+
+    const creationKey = crypto.randomUUID()
+    let releaseBlockerWrite!: () => void
+    const blockerWriteGate = new Promise<void>((resolve) => {
+      releaseBlockerWrite = resolve
+    })
+    let markVisible!: () => void
+    const visible = new Promise<void>((resolve) => {
+      markVisible = resolve
+    })
+    let dependentId = ''
+    const filing = (async () => {
+      await h.store.appendRepo(h.origin, {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_inflight_e2e', proposalKey: 'cluster-e2e', id: creationKey },
+      })
+      const dependent = await source.create(
+        {
+          title: 'Generated dependent work',
+          body: CONFORMING_BODY,
+          labels: ['autobuild'],
+        },
+        { state: 'Ready', idempotencyKey: creationKey },
+      )
+      dependentId = dependent.ref.id
+      markVisible()
+      await blockerWriteGate
+      await source.addBlocker(dependent.ref.id, blocker.ref.id)
+      await h.store.appendRepo(h.origin, {
+        actor: KERNEL,
+        type: 'harvest.proposal.filed',
+        payload: {
+          run: 'h_inflight_e2e',
+          proposalKey: 'cluster-e2e',
+          ticket: dependent.ref,
+        },
+      })
+    })()
+
+    await visible
+    const midCreate = await h.dispatcher.tick()
+    expect(midCreate).toMatchObject({
+      queued: 1,
+      creationWithheld: 1,
+      dependencyBlocked: 0,
+      dispatched: 0,
+    })
+    expect(midCreate.creationDiagnostics[0]).toContain(
+      `ticket ${dependentId}: creation withheld — Harvest run h_inflight_e2e`,
+    )
+    expect(await h.store.listBuilds()).toEqual([])
+    expect((await source.get(dependentId))?.state).toBe('Ready')
+
+    releaseBlockerWrite()
+    await filing
+    const afterFiling = await h.dispatcher.tick()
+    expect(afterFiling).toMatchObject({
+      queued: 1,
+      creationWithheld: 0,
+      dependencyBlocked: 1,
+      dispatched: 0,
+    })
+    expect(afterFiling.dependencyDiagnostics).toEqual([
+      `ticket ${dependentId} blocked by ${blocker.ref.id} (not complete)`,
+    ])
+
+    await source.transition(blocker.ref.id, 'Done')
+    const released = await h.dispatcher.tick()
+    expect(released.dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([dependentId])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 30_000)
+
 // ── e. The real binary over the real local store (§7.2.1, §8.1) ──────────────
 
 test('e. runner PATH uses the real `ab` for context through a validated terminal', async () => {

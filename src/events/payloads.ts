@@ -361,6 +361,13 @@ export const eventPayloadSchemas = {
   'pr.merged': z.strictObject({ sha: z.string().min(1) }),
   'pr.closed': empty,
   'pr.conflicted': z.strictObject({ baseSha: z.string().min(1) }),
+  'reconcile.progress-checked': z.strictObject({
+    /** seq of the repeat pr.conflicted fact this authoritative read answers. */
+    conflictSeq: z.number().int().positive(),
+    /** Completed reconcile whose merge target is being compared. */
+    attempt,
+    baseSha: z.string().min(1),
+  }),
   'reconcile.started': z.strictObject({ attempt, baseSha: z.string().min(1) }),
   'reconcile.completed': z.strictObject({
     mergeCommit: z.string().min(1),
