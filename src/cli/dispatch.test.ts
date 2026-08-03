@@ -209,6 +209,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   const title = over.title ?? 'Add rate limiting'
   return {
     ref: { source: 'fake', id, title },
+    ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
@@ -977,6 +978,60 @@ model = "gpt-slug-name"
       // see readyCriteria.)
       const builds = await fx.store.listBuilds()
       expect(builds.map((b) => b.ticket?.id)).toEqual(['T-free'])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('prints creation-withheld diagnostics and persists a distinct standing reason', async () => {
+    const creationKey = crypto.randomUUID()
+    const fx = await makeFixture(
+      [
+        readyTicket('T-creating', { title: 'Generated work', creationKey }),
+        readyTicket('T-free', { title: 'Independent work' }),
+      ],
+      happyHandlers(),
+    )
+    const out: string[] = []
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_creating',
+          observations: [{ build: 'origin', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_creating', proposalKey: 'cluster-creating', id: creationKey },
+      })
+      // Keep this fixture's incomplete Harvest run from being executed by the
+      // post-tick coordinator; pause is orthogonal to creation activity.
+      await fx.store.appendRepo(fx.origin, { actor: KERNEL, type: 'harvest.paused', payload: {} })
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(out).toContainEqual(
+        expect.stringContaining(
+          'ticket T-creating: creation withheld — Harvest run h_creating, proposal cluster-creating',
+        ),
+      )
+      const tick = out.find((line) => line.startsWith('tick: '))
+      expect(tick).toContain('creationWithheld=1')
+      expect(tick).not.toContain('creationDiagnostics')
+      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-free'])
     } finally {
       await fx.cleanup()
     }

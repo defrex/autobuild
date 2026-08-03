@@ -595,6 +595,7 @@ class DispatchLoop {
           queued: _legacyQueued,
           janitorDiagnostics,
           ticketDiagnostics,
+          creationDiagnostics,
           dependencyDiagnostics,
           ...reportCounters
         } = report
@@ -612,6 +613,7 @@ class DispatchLoop {
             counters,
             janitorDiagnostics,
             ticketDiagnostics: readyObservation?.ticketDiagnostics ?? ticketDiagnostics,
+            creationDiagnostics,
             dependencyDiagnostics,
           },
         })
@@ -1790,12 +1792,14 @@ class DispatchLoop {
     const {
       janitorDiagnostics,
       ticketDiagnostics,
+      creationDiagnostics,
       dependencyDiagnostics,
       queued: _queued,
       ...counts
     } = report
     for (const line of janitorDiagnostics) this.warn(line)
     for (const line of ticketDiagnostics) this.warn(line)
+    for (const line of creationDiagnostics) this.say(line)
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
       .filter(([, count]) => typeof count === 'number' && count > 0)
@@ -1813,6 +1817,7 @@ class DispatchLoop {
     return (
       janitorDiagnostics.length > 0 ||
       ticketDiagnostics.length > 0 ||
+      creationDiagnostics.length > 0 ||
       dependencyDiagnostics.length > 0
     )
   }

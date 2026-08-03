@@ -61,9 +61,10 @@ describe('reduceDispatchStatus', () => {
         run: 'run-a',
         queued: 4,
         observations: 2,
-        counters,
+        counters: { ...counters, creationWithheld: 1 },
         janitorDiagnostics: ['janitor warning'],
         ticketDiagnostics: [],
+        creationDiagnostics: ['ticket AUT-1: creation withheld'],
         dependencyDiagnostics: [],
       }),
       event(4, 'dispatcher.config-rejected', { run: 'run-a', error: 'bad TOML' }),
@@ -73,7 +74,8 @@ describe('reduceDispatchStatus', () => {
     expect(status.effectiveConfig).toEqual({ kind: 'dispatcher-effective-config', rev: 0 })
     expect(status.queued).toBe(4)
     expect(status.observations).toBe(2)
-    expect(status.diagnostics).toEqual(['janitor warning'])
+    expect(status.creationWithheld).toBe(1)
+    expect(status.diagnostics).toEqual(['janitor warning', 'ticket AUT-1: creation withheld'])
     expect(status.notice).toBe('tick failed: tracker offline')
     expect(status.lastSeq).toBe(5)
   })
