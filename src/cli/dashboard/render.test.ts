@@ -2421,21 +2421,24 @@ describe('renderDashboard: build detail and transcript views', () => {
     ]
 
     for (const { presentation, tail } of cases) {
-      const scroll = transcriptScrollLimit(presentation, terminalWidth, height)
-      const lines = rd(
-        {
-          ...model([detailedBuild]),
-          view: {
-            kind: 'transcript',
-            slug: detailedBuild.slug,
-            sessionId: 's_plan',
-            scroll,
-            transcript: presentation,
+      for (const hasUpgradeNotice of [false, true]) {
+        const scroll = transcriptScrollLimit(presentation, terminalWidth, height, hasUpgradeNotice)
+        const lines = rd(
+          {
+            ...model([detailedBuild]),
+            ...(hasUpgradeNotice ? { availableUpgrade: '9.1.0' } : {}),
+            view: {
+              kind: 'transcript',
+              slug: detailedBuild.slug,
+              sessionId: 's_plan',
+              scroll,
+              transcript: presentation,
+            },
           },
-        },
-        { color: false, width: terminalWidth, height },
-      )
-      expect(lines.join('\n')).toContain(tail)
+          { color: false, width: terminalWidth, height },
+        )
+        expect(lines.join('\n')).toContain(tail)
+      }
     }
   })
 
@@ -2445,8 +2448,10 @@ describe('renderDashboard: build detail and transcript views', () => {
       text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
     }
     const roomy = transcriptScrollLimit(presentation, 80, 12)
+    const noticed = transcriptScrollLimit(presentation, 80, 12, true)
     const narrow = transcriptScrollLimit(presentation, 12, 12)
     expect(roomy).toBeGreaterThan(0)
+    expect(noticed).toBe(roomy + 1)
     expect(narrow).toBeGreaterThan(roomy)
 
     const taller = transcriptScrollLimit(presentation, 12, 40)
@@ -2458,6 +2463,7 @@ describe('renderDashboard: build detail and transcript views', () => {
     // off the bottom immediately rather than silently unwinding hidden offset.
     expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)
     expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1)).toBe(roomy)
+    expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1, true)).toBe(noticed)
   })
 
   test('raw fallback, scrolling, and tiny terminals obey width and height caps', () => {

@@ -802,10 +802,12 @@ export function transcriptScrollLimit(
   presentation: TranscriptPresentation,
   terminalWidth: number,
   height: number,
+  hasUpgradeNotice = false,
 ): number {
   const contentLines = transcriptContent(presentation, dashboardContentWidth(terminalWidth)).length
-  // Transcript chrome is two header rows plus the two separators and controls.
-  const capacity = Math.max(0, height - 5)
+  // Transcript chrome is two header rows, the optional upgrade row, two
+  // separators, and controls. Keep this in lockstep with renderTranscript.
+  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0))
   return Math.max(0, contentLines - capacity)
 }
 
@@ -815,8 +817,9 @@ export function moveTranscriptScroll(
   height: number,
   current: number,
   delta: number,
+  hasUpgradeNotice = false,
 ): number {
-  const limit = transcriptScrollLimit(presentation, terminalWidth, height)
+  const limit = transcriptScrollLimit(presentation, terminalWidth, height, hasUpgradeNotice)
   // Clamp current first because a resize, or state from an older controller,
   // may leave it beyond the freshly wrapped viewport's end.
   return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))

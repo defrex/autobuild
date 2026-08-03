@@ -624,6 +624,7 @@ class DispatchLoop {
                 paintableRows(terminal.rows),
                 this.view.scroll,
                 delta,
+                this.availableUpgrade !== undefined,
               ),
       }
       this.syncModelControls()
