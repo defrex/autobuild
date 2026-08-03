@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** Private shipped child: one operating-system process per build. */
 import { runBuildChild } from '../src/processes/build-child'
+import { watchBuildParent } from '../src/processes/build-parent-watch'
 import { BUILD_RUNNER_OPTIONS_ENV } from '../src/ports/workspace/local-build-execution'
 import type { BuildExecutionStart } from '../src/ports/workspace/build-execution'
 
@@ -30,16 +31,7 @@ if (input === undefined) process.exit(2)
 const stop = (code: number): never => process.exit(code)
 process.on('SIGINT', () => stop(130))
 process.on('SIGTERM', () => stop(143))
-const parent = process.ppid
-const parentWatch = setInterval(() => {
-  if (process.ppid !== parent || process.ppid === 1) stop(143)
-  try {
-    process.kill(parent, 0)
-  } catch {
-    stop(143)
-  }
-}, 500)
-parentWatch.unref()
+const parentWatch = watchBuildParent(process.ppid, () => stop(143))
 
 let exitCode = 0
 try {
@@ -47,6 +39,6 @@ try {
 } catch {
   exitCode = 1
 } finally {
-  clearInterval(parentWatch)
+  parentWatch.close()
 }
 process.exit(exitCode)

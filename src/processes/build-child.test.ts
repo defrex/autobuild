@@ -19,7 +19,7 @@ source = "file"
 readyState = "ready"
 `)
 
-test('build child discovers its repository, branch, and workspace only from durable state', async () => {
+test('build child uses durable location and a close failure cannot falsify a clean park', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-'))
   const stateRoot = join(tmp, 'store')
   const durableWorkspace = join(tmp, 'durable-workspace')
@@ -68,7 +68,19 @@ test('build child discovers its repository, branch, and workspace only from dura
     await mkdir(misleadingCwd, { recursive: true })
     process.chdir(misleadingCwd)
     try {
-      await runBuildChild({ slug, storeRef: stateRoot, instance: 'child-1' }, process.env)
+      await runBuildChild(
+        { slug, storeRef: stateRoot, instance: 'child-1' },
+        process.env,
+        (ref) => {
+          const opened = openLocalStore(ref)
+          const close = opened.close.bind(opened)
+          opened.close = async () => {
+            await close()
+            throw new Error('scripted close failure after successful park')
+          }
+          return opened
+        },
+      )
     } finally {
       process.chdir(original)
     }

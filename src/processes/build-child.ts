@@ -5,7 +5,7 @@ import { spawnExec } from '../ports/workspace/git-worktree'
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { randomIds } from '../ids'
-import { systemClock } from '../store/types'
+import { systemClock, type BuildStore } from '../store/types'
 import { openProductionStore } from '../cli/store-opening'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from './build-runner'
 import {
@@ -26,8 +26,9 @@ function message(error: unknown): string {
 export async function runBuildChild(
   input: BuildExecutionStart,
   env: Record<string, string | undefined> = process.env,
+  openStore: (ref: string, token?: string) => BuildStore = openProductionStore,
 ): Promise<void> {
-  const fullStore = openProductionStore(input.storeRef, env.AB_TOKEN)
+  const fullStore = openStore(input.storeRef, env.AB_TOKEN)
   const store = fullStore.scopeBuild(input.slug)
   try {
     const record = await store.getBuild(input.slug)
@@ -101,6 +102,12 @@ export async function runBuildChild(
     }
     throw error
   } finally {
-    await fullStore.close()
+    try {
+      await fullStore.close()
+    } catch {
+      // Process teardown cannot change the already-durable runner outcome. A
+      // close failure after a clean park must not turn truthful Store state
+      // into a synthetic failed child settlement.
+    }
   }
 }

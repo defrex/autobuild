@@ -40,6 +40,7 @@ import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../p
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
+import type { BuildExecution } from '../ports/workspace/build-execution'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { MemoryBuildStore } from '../store/memory'
@@ -1455,6 +1456,67 @@ model = "gpt-slug-name"
 })
 
 describe('abDispatch watch build-runner coordination', () => {
+  test('kernel shutdown stops and awaits every active build execution before returning', async () => {
+    const fx = await makeFixture(
+      [readyTicket('T-shutdown-reap-1'), readyTicket('T-shutdown-reap-2')],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 2'),
+    )
+    const stop = new AbortController()
+    const stopEntered = deferred()
+    const releaseStop = deferred()
+    const completion = deferred()
+    let startCalls = 0
+    let stopCalls = 0
+    const execution: BuildExecution = {
+      async start() {
+        startCalls += 1
+        return {
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            stopCalls += 1
+            stopEntered.resolve()
+            await releaseStop.promise
+            completion.resolve()
+          },
+        }
+      },
+    }
+    const baseWire = fx.wire()
+    const dispatch = abDispatch({
+      targetRepo: fx.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      signal: stop.signal,
+      intervalMs: 60_000,
+      wire: () => ({ ...baseWire, buildExecution: execution }),
+    })
+    let returned = false
+    void dispatch.then(() => {
+      returned = true
+    })
+
+    try {
+      await waitFor(() => startCalls === 2)
+      stop.abort()
+      await stopEntered.promise
+      await Bun.sleep(20)
+      expect(stopCalls).toBe(2)
+      expect(returned).toBe(false)
+
+      releaseStop.resolve()
+      await dispatch
+      expect(returned).toBe(true)
+    } finally {
+      releaseStop.resolve()
+      completion.resolve()
+      await dispatch.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 10_000)
+
   test('retains the accepted config across deletion and reloads after restoration', async () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()
