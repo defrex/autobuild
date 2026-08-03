@@ -134,6 +134,7 @@ export class DispatchFrontend {
   private pollInFlight: Promise<void> | undefined
   private actionTail: Promise<void> = Promise.resolve()
   private presentationRestored = false
+  private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
     this.clock = opts.clock ?? systemClock
@@ -657,8 +658,7 @@ export class DispatchFrontend {
   private onInput(input: TerminalInputEvent): void {
     if (!this.accepting) return
     if (input.type === 'interrupt') {
-      this.restorePresentationForStop()
-      void this.child?.stop()
+      this.requestOperatorStop()
       return
     }
     if (this.resumePrompt !== undefined) {
@@ -789,6 +789,12 @@ export class DispatchFrontend {
     poll()
   }
 
+  private requestOperatorStop(): void {
+    this.operatorStopRequested = true
+    this.restorePresentationForStop()
+    void this.child?.stop()
+  }
+
   /** Stop terminal ownership synchronously before awaiting a kernel that may
    * still be finishing an unsafe ticket-claim tick. Normal/abnormal child exits
    * retain the final-frame path below; operator interruption prioritizes shell
@@ -865,17 +871,25 @@ export class DispatchFrontend {
       env: this.opts.env,
       options,
     })
-    const stop = (): void => {
-      this.restorePresentationForStop()
-      void this.child?.stop()
-    }
+    const stop = (): void => this.requestOperatorStop()
     this.opts.signal?.addEventListener('abort', stop, { once: true })
     try {
       this.startPresentation()
-      if (this.opts.signal?.aborted) await this.child.stop()
+      if (this.opts.signal?.aborted) this.requestOperatorStop()
       const result = await this.child.completed
-      if (result.exitCode !== 0 && !this.opts.signal?.aborted) {
-        throw new Error(`dispatcher kernel exited with status ${result.exitCode}`)
+      if (
+        result.outcome !== 'normal' &&
+        !(result.outcome === 'forced' && this.operatorStopRequested)
+      ) {
+        const processDetails = [
+          `exit code ${result.exitCode}`,
+          ...(result.signal !== undefined ? [`signal ${result.signal}`] : []),
+        ].join(', ')
+        throw new Error(
+          result.error !== undefined
+            ? `dispatcher kernel failed: ${result.error} (${processDetails})`
+            : `dispatcher kernel ${result.outcome} (${processDetails})`,
+        )
       }
     } finally {
       this.opts.signal?.removeEventListener('abort', stop)

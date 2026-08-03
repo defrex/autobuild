@@ -3,8 +3,9 @@ import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
-import { DispatchFrontend } from './dispatch-frontend'
 import { renderDashboard } from './dashboard/render'
+import { DispatchFrontend } from './dispatch-frontend'
+import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
 
 function deferred<T>() {
@@ -97,7 +98,7 @@ test('frontend input and captured controls remain responsive while the kernel is
   const write = (chunk: string): void => {
     output += chunk
   }
-  const childDone = deferred<{ exitCode: number }>()
+  const childDone = deferred<DispatchChildResult>()
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
@@ -234,7 +235,7 @@ test('frontend input and captured controls remain responsive while the kernel is
 
   input!({ type: 'interrupt' })
   expect(output).toContain('\x1b[?1049l')
-  childDone.resolve({ exitCode: 0 })
+  childDone.resolve({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
   await running
 })
 
@@ -266,7 +267,7 @@ test('frontend owns live observation pressure and retains the last factual sampl
     },
   }) as BuildStore
 
-  const childDone = deferred<{ exitCode: number }>()
+  const childDone = deferred<DispatchChildResult>()
   const frames: Array<{ current: number; limit: number; warnings: readonly string[] }> = []
   let output = ''
   const write = (chunk: string): void => {
@@ -503,7 +504,7 @@ test('frontend owns live observation pressure and retains the last factual sampl
   expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
   expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
 
-  childDone.resolve({ exitCode: 0 })
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
 
@@ -546,7 +547,7 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   const write = (chunk: string): void => {
     output += chunk
   }
-  const childDone = deferred<{ exitCode: number }>()
+  const childDone = deferred<DispatchChildResult>()
   let confirmationSlug: string | undefined
   const frontend = new DispatchFrontend({
     repo,
@@ -657,15 +658,52 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   )
 
   input!({ type: 'interrupt' })
-  childDone.resolve({ exitCode: 0 })
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
+})
+
+test('frontend preserves unsolicited child failure detail and process evidence', async () => {
+  const repo = '/failed-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const childDone = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 80,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    launchChild: () => ({ completed: childDone.promise, async stop() {} }),
+  })
+
+  const running = frontend.run()
+  childDone.resolve({
+    outcome: 'abnormal',
+    exitCode: 2,
+    signal: 'SIGTERM',
+    error: 'adapter startup exploded',
+  })
+  await expect(running).rejects.toThrow(
+    'dispatcher kernel failed: adapter startup exploded (exit code 2, signal SIGTERM)',
+  )
 })
 
 test('frontend keeps the durable effective config across rejection and adopts a published reload', async () => {
   const repo = '/reload-repo'
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
-  const childDone = deferred<{ exitCode: number }>()
+  const childDone = deferred<DispatchChildResult>()
   const frames: Array<{
     capacity: number
     warnings: readonly string[]
@@ -773,7 +811,7 @@ test('frontend keeps the durable effective config across rejection and adopts a 
     'durable upgrade notice',
   )
 
-  childDone.resolve({ exitCode: 0 })
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
 
@@ -781,7 +819,7 @@ test('frontend elapsed repaint cadence advances while the child remains gated', 
   const repo = '/timer-repo'
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
-  const childDone = deferred<{ exitCode: number }>()
+  const childDone = deferred<DispatchChildResult>()
   const paints: number[] = []
   let now = 1_700_000_000_000
   const write = (_chunk: string): void => {}
@@ -844,6 +882,6 @@ test('frontend elapsed repaint cadence advances while the child remains gated', 
   const running = frontend.run()
   await waitFor(() => paints.length >= 2, 'independent elapsed repaint ticks')
   expect(paints.at(-1)!).toBeGreaterThan(paints[0]!)
-  childDone.resolve({ exitCode: 0 })
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
