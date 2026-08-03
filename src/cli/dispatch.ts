@@ -33,6 +33,7 @@ import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, humanActor } from '../events/envelope'
+import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
@@ -87,6 +88,7 @@ import {
 import { bulkControlReport, bulkControlRepository, type BulkDirection } from './bulk-control'
 import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
+import { DispatchFrontend } from './dispatch-frontend'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { availableRelease } from './self-update'
 import {
@@ -98,6 +100,21 @@ import {
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
 const DEFAULT_INTERVAL_MS = 10_000
+/** Repository artifact containing the schema-validated composed Config used by
+ * one dispatch run. It is the frontend's only config source. */
+export const DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT = 'dispatcher-effective-config'
+
+/** JSON encoding in the config schema's declarative input shape. Parsed Config
+ * has normalized `{steps, stepConfigs}` sections; flattening named step tables
+ * lets the frontend validate the artifact with the same strict configSchema. */
+function effectiveConfigContent(config: Config): string {
+  const { verify, finalize, ...root } = config
+  return JSON.stringify({
+    ...root,
+    verify: { steps: verify.steps, ...verify.stepConfigs },
+    finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+  })
+}
 
 /** The pre-build naming prompt. Its output is only a proposal: dispatcher.ts
  * owns strict validation, timeout/failure fallback, and store-wide uniqueness. */
@@ -236,8 +253,15 @@ export interface DispatchOpts {
   /** Optional repo-dev presentation seam. The resolver is called for every
    * paint; production omits it and remains bound to `renderDashboard`. */
   resolveDashboardRenderer?: DashboardRendererResolver
-  /** Interactive-watch-only release courtesy seams. Neither is consulted by
-   * plain, non-interactive, or one-pass dispatch. */
+  /** Private child-kernel correlation. Presence suppresses terminal ownership
+   * and enables durable dispatcher status publication. */
+  kernelRunId?: string
+  /** Private child mode: preserve kernel behavior while routing no legacy
+   * line output into the terminal-owning parent. */
+  silent?: boolean
+  /** Interactive-watch-only release courtesy seams. The supervised kernel
+   * publishes results durably; direct plain/noninteractive and one-pass
+   * dispatch never consult them. */
   availableReleaseProbe?: AvailableReleaseProbe
   upgradeNoticeScheduler?: UpgradeNoticeScheduler
 }
@@ -470,15 +494,32 @@ class DispatchLoop {
     return this.liveConfig.current()
   }
 
+  private async appendStatus(event: RepositoryEventWrite): Promise<void> {
+    if (this.opts.kernelRunId === undefined) return
+    await this.wiring.store.appendRepo(this.opts.targetRepo, event)
+  }
+
   private async refreshConfig(): Promise<void> {
     if (this.opts.once === true) return
     const outcome = await this.liveConfig.refreshFromDisk()
     if (outcome.kind === 'unchanged') return
     if (outcome.kind === 'rejected') {
-      if (outcome.notify) this.warn(`config reload rejected: ${outcome.error}`)
+      if (outcome.notify) {
+        await this.appendStatus({
+          actor: DISPATCHER,
+          type: 'dispatcher.config-rejected',
+          payload: { run: this.opts.kernelRunId!, error: outcome.error },
+        })
+        this.warn(`config reload rejected: ${outcome.error}`)
+      }
       return
     }
     if (outcome.kind === 'publication-failed') {
+      await this.appendStatus({
+        actor: DISPATCHER,
+        type: 'dispatcher.config-publication-failed',
+        payload: { run: this.opts.kernelRunId!, error: outcome.error },
+      })
       this.warn(`config reload not applied because its durable trace failed: ${outcome.error}`)
       return
     }
@@ -512,11 +553,16 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
+      await this.appendStatus({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: this.opts.kernelRunId! },
+      })
 
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace
       // the last complete measurement with a fabricated zero.
-      if (this.dashboard) {
+      if (this.dashboard || this.opts.kernelRunId !== undefined) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
           this.observationCount = scan.observations.length
@@ -532,15 +578,44 @@ class DispatchLoop {
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
       const settings = await this.readDispatchSettings()
+      const readyObservation =
+        settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
+          ? undefined
+          : await this.dispatcher.observeReady()
       const report = await this.dispatcher.tick({
         resumeCurrent,
         acceptNewWork: settings.intake,
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
       })
-      // A drained tick never ran the ready scan, so its zero is not a queue
-      // fact — keep the last observed depth on screen instead.
-      if (settings.intake) this.queuedCount = report.queued
+      const displayedQueued = readyObservation?.queued ?? report.queued
+      this.queuedCount = displayedQueued
+      if (this.opts.kernelRunId !== undefined) {
+        const {
+          queued: _legacyQueued,
+          janitorDiagnostics,
+          ticketDiagnostics,
+          dependencyDiagnostics,
+          ...reportCounters
+        } = report
+        const counters = {
+          ...reportCounters,
+          invalidTickets: readyObservation?.invalidTickets ?? reportCounters.invalidTickets,
+        }
+        await this.appendStatus({
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-completed',
+          payload: {
+            run: this.opts.kernelRunId,
+            queued: displayedQueued,
+            observations: this.observationCount,
+            counters,
+            janitorDiagnostics,
+            ticketDiagnostics: readyObservation?.ticketDiagnostics ?? ticketDiagnostics,
+            dependencyDiagnostics,
+          },
+        })
+      }
       return report
     })
   }
@@ -1456,8 +1531,18 @@ class DispatchLoop {
           this.say(`harvest ${result.run} ${result.outcome}`)
         }
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         this.pendingHarvest.harvestFailed += 1
+        if (this.opts.kernelRunId !== undefined) {
+          await this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.harvest-runner-failed',
+            payload: {
+              run: this.opts.kernelRunId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
+        }
         if (!this.stopped) {
           this.warn(
             `harvest runner failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1552,14 +1637,39 @@ class DispatchLoop {
       tracked = runner
         .run()
         .then(
-          (state: BuildState) => {
+          async (state: BuildState) => {
+            await this.appendStatus({
+              actor: DISPATCHER,
+              type: 'dispatcher.runner-settled',
+              payload: {
+                run: this.opts.kernelRunId!,
+                slug,
+                outcome: 'parked',
+                status: state.status,
+              },
+            })
             this.say(`build ${slug} parked (${state.status})`)
           },
-          (error: unknown) => {
+          async (error: unknown) => {
             if (error instanceof LeaseHeldError) {
+              await this.appendStatus({
+                actor: DISPATCHER,
+                type: 'dispatcher.runner-settled',
+                payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+              })
               this.say(`build ${slug} already held by another runner — skipped`)
               return
             }
+            await this.appendStatus({
+              actor: DISPATCHER,
+              type: 'dispatcher.runner-settled',
+              payload: {
+                run: this.opts.kernelRunId!,
+                slug,
+                outcome: 'failed',
+                error: error instanceof Error ? error.message : String(error),
+              },
+            })
             const line = `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`
             // SetupFailureError has already deposited an attributed durable
             // fact. Plain mode still needs a line; the TTY gets the persistent
@@ -1583,6 +1693,16 @@ class DispatchLoop {
       if (this.activeBuildRuns.get(slug) === reservation) {
         this.activeBuildRuns.delete(slug)
       }
+      await this.appendStatus({
+        actor: DISPATCHER,
+        type: 'dispatcher.runner-settled',
+        payload: {
+          run: this.opts.kernelRunId!,
+          slug,
+          outcome: 'launch-failed',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
       throw error
     }
   }
@@ -1612,7 +1732,7 @@ class DispatchLoop {
   }
 
   private say(line: string): void {
-    if (!this.dashboard) this.opts.stdout(line)
+    if (!this.dashboard && this.opts.silent !== true) this.opts.stdout(line)
   }
 
   /** Report a completed operator action where the operator can see it. The
@@ -1628,7 +1748,7 @@ class DispatchLoop {
 
   private warn(line: string): void {
     if (this.dashboard) this.setWarning(line)
-    else this.opts.stderr(line)
+    else if (this.opts.silent !== true) this.opts.stderr(line)
   }
 
   /**
@@ -1835,7 +1955,13 @@ class DispatchLoop {
   }
 
   private startUpgradeChecks(): void {
-    if (!this.dashboard || this.opts.once === true || this.stopUpgradeNotice !== undefined) return
+    if (
+      (!this.dashboard && this.opts.kernelRunId === undefined) ||
+      this.opts.once === true ||
+      this.stopUpgradeNotice !== undefined
+    ) {
+      return
+    }
     const probe =
       this.opts.availableReleaseProbe ?? ((signal: AbortSignal) => availableRelease({ signal }))
     try {
@@ -1849,6 +1975,15 @@ class DispatchLoop {
             return
           }
           this.availableUpgrade = version
+          if (this.opts.kernelRunId !== undefined) {
+            void this.appendStatus({
+              actor: DISPATCHER,
+              type: 'dispatcher.upgrade-available',
+              payload: { run: this.opts.kernelRunId, version },
+            }).catch(() => {
+              // Release discovery and publication are a silent courtesy.
+            })
+          }
           this.syncModelControls()
           this.paint()
         },
@@ -1922,11 +2057,12 @@ class DispatchLoop {
    * exit path runs this — including SIGINT — or the operator's shell is left
    * without a cursor. */
   private async finishRendering(): Promise<void> {
-    if (!this.dashboard) return
     // Stop network/process discovery synchronously before any final dashboard
-    // read. A probe that ignores cancellation is never joined.
+    // read. A probe that ignores cancellation is never joined. The private
+    // kernel owns this courtesy even though it owns no terminal rendering.
     this.stopUpgradeNotice?.()
     this.stopUpgradeNotice = undefined
+    if (!this.dashboard) return
     // No new keys or polls may begin once teardown starts. Already queued
     // actions finish before the final truth is painted and raw mode/cursor are
     // considered released.
@@ -2011,7 +2147,13 @@ class DispatchLoop {
           this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
-          this.warn(`tick failed: ${error instanceof Error ? error.message : String(error)}`)
+          const message = error instanceof Error ? error.message : String(error)
+          await this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-failed',
+            payload: { run: this.opts.kernelRunId!, error: message },
+          })
+          this.warn(`tick failed: ${message}`)
         }
         if (this.stopped) break
         await sleep(intervalMs)
@@ -2049,6 +2191,46 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     targetRepo: state.repo,
     storeRef: state.storeRef,
   }
+
+  // Interactive production dispatch is two programs. Resolve/open only the
+  // Store in the terminal owner; config, plugins, adapters, runners, and ticket
+  // I/O are constructed exclusively by the supervised private child. Injected
+  // wiring remains the direct test/embedding seam, and every plain/non-TTY
+  // invocation stays on the byte-compatible in-process kernel path below.
+  if (
+    resolvedOpts.kernelRunId === undefined &&
+    resolvedOpts.wire === undefined &&
+    resolvedOpts.plain !== true &&
+    resolvedOpts.terminal?.interactive === true &&
+    resolvedOpts.input !== undefined
+  ) {
+    const opened = openStoreForRepoState(state, { env: resolvedOpts.env })
+    try {
+      const frontend = new DispatchFrontend({
+        repo: state.repo,
+        storeRef: opened.storeRef,
+        store: opened.store,
+        env: resolvedOpts.env,
+        terminal: resolvedOpts.terminal,
+        input: resolvedOpts.input,
+        once: resolvedOpts.once === true,
+        ...(resolvedOpts.intervalMs !== undefined ? { intervalMs: resolvedOpts.intervalMs } : {}),
+        ...(resolvedOpts.intake !== undefined ? { intake: resolvedOpts.intake } : {}),
+        ...(resolvedOpts.defaultAutoMerge !== undefined
+          ? { defaultAutoMerge: resolvedOpts.defaultAutoMerge }
+          : {}),
+        ...(resolvedOpts.signal !== undefined ? { signal: resolvedOpts.signal } : {}),
+        ...(resolvedOpts.resolveDashboardRenderer !== undefined
+          ? { resolveDashboardRenderer: resolvedOpts.resolveDashboardRenderer }
+          : {}),
+      })
+      await frontend.run()
+    } finally {
+      await opened.store.close()
+    }
+    return
+  }
+
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let configContent: string
   let config: Config
@@ -2090,7 +2272,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     config,
     configContent,
     wiring.runtimes,
-    async ({ content, restartRequired, effectiveChanged }) => {
+    async ({ content, effectiveConfig, restartRequired, effectiveChanged }) => {
       await wiring.store.appendRepoWithArtifacts(
         resolvedOpts.targetRepo,
         [
@@ -2099,10 +2281,21 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
             content,
             metadata: { restartRequired: [...restartRequired], effectiveChanged },
           },
+          {
+            kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+            content: effectiveConfigContent(effectiveConfig),
+            metadata: {
+              ...(resolvedOpts.kernelRunId !== undefined ? { run: resolvedOpts.kernelRunId } : {}),
+              effectiveChanged,
+            },
+          },
         ],
         (deposited) => {
           const artifact = deposited[0]
-          if (artifact === undefined) throw new Error('config reload deposit returned no artifact')
+          const effectiveArtifact = deposited[1]
+          if (artifact === undefined || effectiveArtifact === undefined) {
+            throw new Error('config reload deposit returned incomplete artifacts')
+          }
           return {
             actor: DISPATCHER,
             type: 'dispatcher.config-reloaded',
@@ -2110,6 +2303,16 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
               artifact: { kind: artifact.kind, rev: artifact.revision },
               restartRequired: [...restartRequired],
               effectiveChanged,
+              ...(resolvedOpts.kernelRunId !== undefined
+                ? {
+                    run: resolvedOpts.kernelRunId,
+                    effectiveConfig: {
+                      kind: effectiveArtifact.kind,
+                      rev: effectiveArtifact.revision,
+                    },
+                    roleWarnings: roleKeyWarnings(effectiveConfig),
+                  }
+                : {}),
             },
           }
         },
@@ -2137,6 +2340,62 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     })
   }
 
+  if (resolvedOpts.kernelRunId !== undefined) {
+    await wiring.store.appendRepoWithArtifacts(
+      resolvedOpts.targetRepo,
+      [
+        {
+          kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+          content: effectiveConfigContent(config),
+          metadata: { run: resolvedOpts.kernelRunId, revision: 0 },
+        },
+      ],
+      (deposited) => {
+        const artifact = deposited[0]
+        if (artifact === undefined) throw new Error('startup config deposit returned no artifact')
+        return {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: resolvedOpts.kernelRunId!,
+            pid: process.pid,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: roleKeyWarnings(config),
+          },
+        }
+      },
+    )
+  }
+
   const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts)
-  await loop.run()
+  try {
+    await loop.run()
+    if (resolvedOpts.kernelRunId !== undefined) {
+      await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run: resolvedOpts.kernelRunId, outcome: 'normal', exitCode: 0 },
+      })
+    }
+  } catch (error) {
+    if (resolvedOpts.kernelRunId !== undefined) {
+      try {
+        await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-stopped',
+          payload: {
+            run: resolvedOpts.kernelRunId,
+            outcome: 'abnormal',
+            exitCode: 1,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        })
+      } catch {
+        // Preserve the kernel failure; the supervising frontend records exit.
+      }
+    }
+    throw error
+  } finally {
+    if (resolvedOpts.wire === undefined) await wiring.store.close()
+  }
 }

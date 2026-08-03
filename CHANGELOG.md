@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
+
 ## v0.4.0 — 2026-08-03
 
 - [#194](https://github.com/defrex/autobuild/pull/194) — Notify interactive dispatchers about available upgrades

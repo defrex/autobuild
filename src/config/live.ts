@@ -125,6 +125,8 @@ export type ConfigReloadOutcome =
 
 export type ConfigReloadPublisher = (input: {
   content: string
+  /** Fully composed snapshot that will become current after publication. */
+  effectiveConfig: Config
   restartRequired: readonly RestartRequiredConfigPath[]
   effectiveChanged: boolean
 }) => Promise<void>
@@ -211,7 +213,7 @@ export class LiveConfig {
     const restartRequired = restartRequiredChanges(this.startup, candidate)
     const effectiveChanged = !same(this.snapshot.config, config)
     try {
-      await this.publish({ content, restartRequired, effectiveChanged })
+      await this.publish({ content, effectiveConfig: config, restartRequired, effectiveChanged })
     } catch (error) {
       return {
         kind: 'publication-failed',

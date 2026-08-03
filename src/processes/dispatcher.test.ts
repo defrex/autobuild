@@ -1608,6 +1608,14 @@ describe('Dispatcher tick-time intake gate', () => {
     expect(h.tickets.claims).toEqual(['T-drain'])
   })
 
+  test('observation-only ready listing reports depth without claim or build side effects', async () => {
+    const h = harness({ tickets: [readyTicket('T-observe')] })
+    const observed = await h.dispatcher.observeReady()
+    expect(observed).toEqual({ queued: 1, invalidTickets: 0, ticketDiagnostics: [] })
+    expect(h.tickets.claims).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
   test('drained still performs janitor completion without refilling capacity', async () => {
     const h = harness({ tickets: [readyTicket('T-next')] })
     const slug = await seedBuild(h, { pr: PR })

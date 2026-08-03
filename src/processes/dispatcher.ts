@@ -558,6 +558,32 @@ export class Dispatcher {
     return this.deps.opts?.triageState ?? defaultTriageState(this.deps.config)
   }
 
+  /** Observation-only ready listing for Store-backed frontends while intake is
+   * disabled. It shares the active-ticket exclusion with dispatch but performs
+   * no dependency fetch, claim, bounce, build, workspace, or launch side
+   * effect, and deliberately does not alter TickReport compatibility. */
+  async observeReady(): Promise<{
+    queued: number
+    invalidTickets: number
+    ticketDiagnostics: string[]
+  }> {
+    this.deps.config = this.deps.getConfig?.() ?? this.deps.config
+    const activeTicketIds = new Set<string>()
+    for (const record of await this.deps.store.listBuilds()) {
+      if (record.repo !== this.deps.repo || record.ticket === undefined) continue
+      const state = reduceBuild(await this.deps.store.getEvents(record.slug))
+      if (state.status !== 'done' && state.status !== 'aborted') {
+        activeTicketIds.add(record.ticket.id)
+      }
+    }
+    const listing = await this.deps.tickets.listReady(readyCriteria(this.deps.config))
+    return {
+      queued: listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length,
+      invalidTickets: listing.diagnostics.length,
+      ticketDiagnostics: [...listing.diagnostics],
+    }
+  }
+
   private async repositoryPaused(): Promise<boolean> {
     if ((await this.deps.store.getRepo(this.deps.repo)) === null) return false
     const events = await this.deps.store.getRepoEvents(this.deps.repo)

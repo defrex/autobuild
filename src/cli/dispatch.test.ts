@@ -2068,6 +2068,7 @@ describe('abDispatch interactive upgrade notice', () => {
         },
         wire: fx.wire,
         terminal: term,
+        kernelRunId: 'upgrade-run',
         availableReleaseProbe: async () => {
           probes += 1
           return '9.1.0'
@@ -2075,6 +2076,14 @@ describe('abDispatch interactive upgrade notice', () => {
       })
 
       expect(probes).toBe(1)
+      expect(
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) =>
+            event.type === 'dispatcher.upgrade-available' &&
+            event.payload.run === 'upgrade-run' &&
+            event.payload.version === '9.1.0',
+        ),
+      ).toBe(true)
       const frame = latestDashboardFrame(term)
       expect(frame).toContain('Autobuild v9.1.0 is available — run ab upgrade')
       expect(frame).toContain('no active builds')
