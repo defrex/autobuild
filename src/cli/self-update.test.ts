@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { runCli } from './main'
-import { selfUpdate, type SelfUpdateCommand } from './self-update'
+import { availableRelease, selfUpdate, type SelfUpdateCommand } from './self-update'
 import {
   cleanupUpgradeCommitContext,
   createUpgradeCommitContext,
@@ -65,6 +65,104 @@ function scripted(
     return replies.shift() ?? result('', 'unexpected command', 99)
   }
 }
+
+describe('silent available-release probe', () => {
+  test('returns only a newer exact release and never reaches installation commands', async () => {
+    const fixture = await installFixture()
+    for (const [tag, expected] of [
+      ['v2.1.0', '2.1.0'],
+      ['v2.0.0', undefined],
+      ['v1.9.0', undefined],
+    ] as const) {
+      const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+      expect(
+        await availableRelease({
+          distRoot: fixture.dist,
+          command: scripted(
+            [result(`${fixture.globalBin}\n`), result(`{"tag_name":"${tag}"}`)],
+            calls,
+          ),
+        }),
+      ).toBe(expected)
+      expect(calls.map((call) => call.command)).toEqual([
+        ['bun', 'pm', 'bin', '-g'],
+        ['gh', 'api', 'repos/a-fork/autobuild/releases/latest'],
+      ])
+    }
+  })
+
+  test('unsupported installations and every command/response failure are silent absence', async () => {
+    const fixture = await installFixture()
+    await mkdir(join(fixture.dist, '.git'))
+    let calls = 0
+    expect(
+      await availableRelease({
+        distRoot: fixture.dist,
+        command: async () => {
+          calls += 1
+          return result()
+        },
+      }),
+    ).toBeUndefined()
+    expect(calls).toBe(0)
+    await rm(join(fixture.dist, '.git'), { recursive: true })
+
+    for (const replies of [
+      [result('', 'missing bun', 127)],
+      [result(`${fixture.globalBin}\n`), result('', 'offline', 1)],
+      [result(`${fixture.globalBin}\n`), result('not json')],
+      [result(`${fixture.globalBin}\n`), result('{"tag_name":"latest"}')],
+    ]) {
+      expect(
+        await availableRelease({
+          distRoot: fixture.dist,
+          command: scripted(replies, []),
+        }),
+      ).toBeUndefined()
+    }
+  })
+
+  test('an unclassifiable distribution stops before release lookup', async () => {
+    const fixture = await installFixture()
+    await writeFile(
+      join(fixture.owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: 'file:../autobuild' } }),
+    )
+    const calls: string[][] = []
+    expect(
+      await availableRelease({
+        distRoot: fixture.dist,
+        command: async (command) => {
+          calls.push(command)
+          return result(`${fixture.globalBin}\n`)
+        },
+      }),
+    ).toBeUndefined()
+    expect(calls).toEqual([['bun', 'pm', 'bin', '-g']])
+  })
+
+  test('passes cancellation to helper commands and collapses abort to absence', async () => {
+    const fixture = await installFixture()
+    const abort = new AbortController()
+    let observed: AbortSignal | undefined
+    const pending = availableRelease({
+      distRoot: fixture.dist,
+      signal: abort.signal,
+      command: async (_command, options) => {
+        observed = options.signal
+        return await new Promise<ExecResult>((resolve) => {
+          options.signal?.addEventListener('abort', () => resolve(result('', 'aborted', 1)), {
+            once: true,
+          })
+        })
+      },
+    })
+    while (observed === undefined) await new Promise((resolve) => setTimeout(resolve, 1))
+    abort.abort()
+    expect(await pending).toBeUndefined()
+    expect(observed).toBe(abort.signal)
+  })
+})
 
 describe('distribution self-update orchestration', () => {
   test('latest local update resolves the fork, mutates through Bun, then only hands off', async () => {

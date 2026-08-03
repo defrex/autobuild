@@ -238,6 +238,12 @@ export const dispatcherStatusEventPayloadSchemas = {
     run: dispatchRun,
     error: z.string().min(1),
   }),
+  /** Newer published release discovered by the private kernel. Keeping this
+   * run-correlated makes the release courtesy available to Store-only UIs. */
+  'dispatcher.upgrade-available': z.strictObject({
+    run: dispatchRun,
+    version: z.string().min(1),
+  }),
   /** Durable acknowledgement text for controls whose exact bulk result is not
    * otherwise one event. It is presentation-neutral operator evidence. */
   'dispatcher.operator-reported': z.strictObject({
@@ -344,6 +350,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.tick-failed': ['dispatcher'],
   'dispatcher.runner-settled': ['dispatcher'],
   'dispatcher.harvest-runner-failed': ['dispatcher'],
+  'dispatcher.upgrade-available': ['dispatcher'],
   'dispatcher.operator-reported': ['human'],
   'dispatcher.config-reloaded': ['dispatcher'],
   'dispatcher.intake-set': ['human'],

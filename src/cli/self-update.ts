@@ -5,6 +5,7 @@ import { addUpgradeSelfUpdatePaths, UPGRADE_COMMIT_CONTEXT_ENV } from './upgrade
 import {
   inspectInstallation,
   readDistributionIdentity,
+  type BunForgeInstallation,
   type DistributionIdentity,
 } from './installation'
 
@@ -13,6 +14,7 @@ export const SELF_UPDATE_HANDOFF_ENV = 'AB_SELF_UPDATE_HANDOFF'
 export interface SelfUpdateCommandOptions {
   cwd?: string
   env?: Record<string, string | undefined>
+  signal?: AbortSignal
 }
 
 export type SelfUpdateCommand = (
@@ -39,7 +41,12 @@ export interface SelfUpdateOptions {
   noCommit?: boolean
 }
 
+function signalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false
+}
+
 const processCommand: SelfUpdateCommand = async (command, options) => {
+  if (signalAborted(options.signal)) throw new Error('command aborted')
   const proc = Bun.spawn(command, {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),
@@ -47,12 +54,26 @@ const processCommand: SelfUpdateCommand = async (command, options) => {
     stdout: 'pipe',
     stderr: 'pipe',
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { stdout, stderr, exitCode }
+  const abort = (): void => {
+    try {
+      proc.kill()
+    } catch {
+      // The process may have exited between the abort and this callback.
+    }
+  }
+  options.signal?.addEventListener('abort', abort, { once: true })
+  // Abort may have raced the spawn/listener boundary.
+  if (signalAborted(options.signal)) abort()
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { stdout, stderr, exitCode }
+  } finally {
+    options.signal?.removeEventListener('abort', abort)
+  }
 }
 
 function commandFailure(label: string, result: ExecResult): string {
@@ -61,7 +82,7 @@ function commandFailure(label: string, result: ExecResult): string {
   }`
 }
 
-function releaseVersion(response: string): string {
+export function releaseVersion(response: string): string {
   let parsed: unknown
   try {
     parsed = JSON.parse(response)
@@ -84,6 +105,15 @@ function releaseVersion(response: string): string {
   return version
 }
 
+function releaseApiPath(
+  installation: Pick<BunForgeInstallation, 'owner' | 'repository'>,
+  version?: string,
+): string {
+  return version === undefined
+    ? `repos/${installation.owner}/${installation.repository}/releases/latest`
+    : `repos/${installation.owner}/${installation.repository}/releases/tags/v${version}`
+}
+
 function exactRequestedVersion(value: string): string {
   if (semver.valid(value) !== value) {
     throw new Error(`--version must be an exact semver version: ${value}`)
@@ -104,6 +134,51 @@ function fail(options: SelfUpdateOptions, reason: string): SelfUpdateResult {
 function forward(output: string, sink: (line: string) => void): void {
   const text = output.replace(/\n$/, '')
   if (text !== '') sink(text)
+}
+
+export interface AvailableReleaseOptions {
+  distRoot?: string
+  signal?: AbortSignal
+  command?: SelfUpdateCommand
+}
+
+/** Silently determine whether this installation has a newer published release.
+ * This read-only courtesy intentionally collapses every unsupported install,
+ * command failure, malformed response, and cancellation to no result. */
+export async function availableRelease(
+  options: AvailableReleaseOptions = {},
+): Promise<string | undefined> {
+  const command = options.command ?? processCommand
+  try {
+    if (signalAborted(options.signal)) return undefined
+    const distRoot = options.distRoot ?? defaultDistRoot()
+    const identity = await readDistributionIdentity(distRoot)
+    if (identity.sourceCheckout || signalAborted(options.signal)) return undefined
+
+    const globalBin = await command(['bun', 'pm', 'bin', '-g'], { signal: options.signal })
+    if (
+      globalBin.exitCode !== 0 ||
+      globalBin.stdout.trim() === '' ||
+      signalAborted(options.signal)
+    ) {
+      return undefined
+    }
+
+    const inspection = await inspectInstallation({
+      distRoot,
+      globalBin: globalBin.stdout.trim(),
+    })
+    if (inspection.kind !== 'bun-forge' || signalAborted(options.signal)) return undefined
+    const install = inspection.installation
+    const release = await command(['gh', 'api', releaseApiPath(install)], {
+      signal: options.signal,
+    })
+    if (release.exitCode !== 0 || signalAborted(options.signal)) return undefined
+    const published = releaseVersion(release.stdout)
+    return semver.gt(published, install.version) ? published : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Update the running Bun forge distribution, or explicitly decide that the
@@ -162,10 +237,7 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
   }
   const install = inspection.installation
 
-  const apiPath =
-    requested === undefined
-      ? `repos/${install.owner}/${install.repository}/releases/latest`
-      : `repos/${install.owner}/${install.repository}/releases/tags/v${requested}`
+  const apiPath = releaseApiPath(install, requested)
   const release = await invoke(['gh', 'api', apiPath], {})
   if (release.exitCode !== 0) {
     const reason = commandFailure(

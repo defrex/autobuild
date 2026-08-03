@@ -52,7 +52,7 @@ usable on your machine.
 <!-- release-install:start -->
 
 ```sh
-bun add -g github:defrex/autobuild#v0.3.0
+bun add -g github:defrex/autobuild#v0.4.0
 ```
 
 <!-- release-install:end -->

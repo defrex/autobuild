@@ -10,6 +10,7 @@ export interface DispatchStatus {
   effectiveConfig?: ArtifactRef
   queued?: number
   observations?: number
+  availableUpgrade?: string
   roleWarnings: string[]
   diagnostics: string[]
   notice?: string
@@ -102,6 +103,9 @@ export function reduceDispatchStatus(
         break
       case 'dispatcher.harvest-runner-failed':
         state.notice = errorNotice('harvest runner failed', event.payload.error)
+        break
+      case 'dispatcher.upgrade-available':
+        state.availableUpgrade = event.payload.version
         break
       case 'dispatcher.operator-reported':
         state.notice = event.payload.message

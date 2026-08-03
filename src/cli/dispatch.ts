@@ -23,6 +23,7 @@
  */
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import semver from 'semver'
 import { parseConfig } from '../config/load'
 import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
 import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
@@ -89,6 +90,12 @@ import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { DispatchFrontend } from './dispatch-frontend'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
+import { availableRelease } from './self-update'
+import {
+  startUpgradeNotice,
+  type AvailableReleaseProbe,
+  type UpgradeNoticeScheduler,
+} from './upgrade-notice'
 
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
@@ -252,6 +259,11 @@ export interface DispatchOpts {
   /** Private child mode: preserve kernel behavior while routing no legacy
    * line output into the terminal-owning parent. */
   silent?: boolean
+  /** Interactive-watch-only release courtesy seams. The supervised kernel
+   * publishes results durably; direct plain/noninteractive and one-pass
+   * dispatch never consult them. */
+  availableReleaseProbe?: AvailableReleaseProbe
+  upgradeNoticeScheduler?: UpgradeNoticeScheduler
 }
 
 /** setTimeout that also resolves the moment ANY stop signal aborts, so OS
@@ -397,6 +409,10 @@ class DispatchLoop {
   /** Read-only nested UI state. Omission is the top-level list. */
   private view: DashboardView | undefined
   private warningLine: string | undefined
+  /** Process-local, persistent release notice. It never shares the replaceable
+   * warning slot and is re-applied to every store projection. */
+  private availableUpgrade: string | undefined
+  private stopUpgradeNotice: (() => void) | undefined
   /** Startup, configuration-level notices — constant for the life of the
    * process. Rendered ABOVE the transient warning line and never overwritten by
    * it: `setWarning` replaces the transient slot outright, so sharing it would
@@ -612,6 +628,7 @@ class DispatchLoop {
     const {
       selection: _oldSelection,
       warningLines: _oldWarningLines,
+      availableUpgrade: _oldAvailableUpgrade,
       resumeInput: _oldResumeInput,
       abortConfirmation: _oldAbortConfirmation,
       view: _oldView,
@@ -626,6 +643,7 @@ class DispatchLoop {
     ]
     let effective: DashboardModel = {
       ...base,
+      ...(this.availableUpgrade !== undefined ? { availableUpgrade: this.availableUpgrade } : {}),
       ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
       ...(this.resumePrompt !== undefined
@@ -681,6 +699,7 @@ class DispatchLoop {
                 paintableRows(terminal.rows),
                 this.view.scroll,
                 delta,
+                this.availableUpgrade !== undefined,
               ),
       }
       this.syncModelControls()
@@ -1935,6 +1954,45 @@ class DispatchLoop {
     )
   }
 
+  private startUpgradeChecks(): void {
+    if (
+      (!this.dashboard && this.opts.kernelRunId === undefined) ||
+      this.opts.once === true ||
+      this.stopUpgradeNotice !== undefined
+    ) {
+      return
+    }
+    const probe =
+      this.opts.availableReleaseProbe ?? ((signal: AbortSignal) => availableRelease({ signal }))
+    try {
+      this.stopUpgradeNotice = startUpgradeNotice({
+        probe,
+        ...(this.opts.upgradeNoticeScheduler !== undefined
+          ? { scheduler: this.opts.upgradeNoticeScheduler }
+          : {}),
+        onAvailable: (version) => {
+          if (this.availableUpgrade !== undefined && !semver.gt(version, this.availableUpgrade)) {
+            return
+          }
+          this.availableUpgrade = version
+          if (this.opts.kernelRunId !== undefined) {
+            void this.appendStatus({
+              actor: DISPATCHER,
+              type: 'dispatcher.upgrade-available',
+              payload: { run: this.opts.kernelRunId, version },
+            }).catch(() => {
+              // Release discovery and publication are a silent courtesy.
+            })
+          }
+          this.syncModelControls()
+          this.paint()
+        },
+      })
+    } catch {
+      // Timer/probe setup is the same silent courtesy as the check itself.
+    }
+  }
+
   private startRendering(): void {
     if (!this.dashboard || this.timer !== undefined) return
     this.acceptingRenderPolls = true
@@ -1999,6 +2057,11 @@ class DispatchLoop {
    * exit path runs this — including SIGINT — or the operator's shell is left
    * without a cursor. */
   private async finishRendering(): Promise<void> {
+    // Stop network/process discovery synchronously before any final dashboard
+    // read. A probe that ignores cancellation is never joined. The private
+    // kernel owns this courtesy even though it owns no terminal rendering.
+    this.stopUpgradeNotice?.()
+    this.stopUpgradeNotice = undefined
     if (!this.dashboard) return
     // No new keys or polls may begin once teardown starts. Already queued
     // actions finish before the final truth is painted and raw mode/cursor are
@@ -2076,6 +2139,7 @@ class DispatchLoop {
     try {
       this.startInput()
       this.startRendering()
+      this.startUpgradeChecks()
       let startup = true
       while (!this.stopped) {
         try {

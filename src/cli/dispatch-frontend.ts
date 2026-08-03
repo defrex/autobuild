@@ -293,6 +293,9 @@ export class DispatchFrontend {
         ).length,
         capacity: config.capacity,
         observationCount: status.observations ?? 0,
+        ...(status.availableUpgrade !== undefined
+          ? { availableUpgrade: status.availableUpgrade }
+          : {}),
         ...(warningLines.length > 0 ? { warningLines } : {}),
       },
       repositoryEvents,
@@ -319,6 +322,7 @@ export class DispatchFrontend {
           paintableRows(this.opts.terminal.rows),
           this.view.scroll,
           delta,
+          this.model?.availableUpgrade !== undefined,
         ),
       }
     } else if (this.view?.kind === 'detail' && this.model !== undefined) {

@@ -235,6 +235,10 @@ export interface DashboardModel {
   harvestPaused: boolean
   /** Stable row identity, never a row index. */
   selection?: DashboardSelection
+  /** Release courtesy, separate from transient and startup warnings so those
+   * notices can never overwrite one another. Store-only frontends project it
+   * from their correlated dispatcher run. */
+  availableUpgrade?: string
   /** Process-local warnings/errors, in render order. Routine dispatcher
    * notices never enter the interactive model; absence (or an empty array)
    * means the warning chrome is omitted. */
@@ -1075,6 +1079,7 @@ interface DashboardFrameHeader {
   queued: number
   observationCount: number
   selection?: DashboardSelection
+  availableUpgrade?: string
   warningLines?: readonly string[]
   resumeInput?: ResumeInputView
 }
@@ -1108,6 +1113,7 @@ export function buildDashboardFromProjected(
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
+    ...(header.availableUpgrade !== undefined ? { availableUpgrade: header.availableUpgrade } : {}),
     ...(header.warningLines !== undefined && header.warningLines.length > 0
       ? { warningLines: header.warningLines }
       : {}),

@@ -191,6 +191,29 @@ describe('repository event catalog', () => {
         }),
       ).toThrow(/invalid payload/)
     }
+
+    const upgrade = { run: 'dispatch-1', version: '0.5.0' }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.upgrade-available',
+        payload: upgrade,
+      }),
+    ).toEqual({ actor: DISPATCHER, type: 'dispatcher.upgrade-available', payload: upgrade })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatcher.upgrade-available',
+        payload: upgrade,
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.upgrade-available',
+        payload: { ...upgrade, extra: true },
+      }),
+    ).toThrow(/invalid payload/)
   })
 
   test('dispatcher setting facts require strict booleans and human actors', () => {

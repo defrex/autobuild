@@ -208,7 +208,11 @@ test('frontend keeps the durable effective config across rejection and adopts a 
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   const childDone = deferred<{ exitCode: number }>()
-  const frames: Array<{ capacity: number; warnings: readonly string[] }> = []
+  const frames: Array<{
+    capacity: number
+    warnings: readonly string[]
+    availableUpgrade?: string
+  }> = []
   let runId = ''
   const write = (_chunk: string): void => {}
   const configContent = (capacity: number): string =>
@@ -232,7 +236,13 @@ test('frontend keeps the durable effective config across rejection and adopts a 
     input: { start: () => () => {} },
     once: false,
     resolveDashboardRenderer: () => (model) => {
-      frames.push({ capacity: model.active.limit, warnings: model.warningLines ?? [] })
+      frames.push({
+        capacity: model.active.limit,
+        warnings: model.warningLines ?? [],
+        ...(model.availableUpgrade !== undefined
+          ? { availableUpgrade: model.availableUpgrade }
+          : {}),
+      })
       return ['frame']
     },
     launchChild: ({ run }) => {
@@ -294,6 +304,16 @@ test('frontend keeps the durable effective config across rejection and adopts a 
     }),
   )
   await waitFor(() => frames.some((frame) => frame.capacity === 3), 'accepted effective config')
+
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.upgrade-available',
+    payload: { run: runId, version: '0.5.0' },
+  })
+  await waitFor(
+    () => frames.some((frame) => frame.availableUpgrade === '0.5.0'),
+    'durable upgrade notice',
+  )
 
   childDone.resolve({ exitCode: 0 })
   await running

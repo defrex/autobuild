@@ -142,11 +142,13 @@ describe('reduceDispatchStatus', () => {
         ticketDiagnostics: [],
         dependencyDiagnostics: [],
       }),
+      event(5, 'dispatcher.upgrade-available', { run: 'run-a', version: '0.5.0' }),
     ]
     const status = reduceDispatchStatus(events, 'run-a')
     expect(status.effectiveConfig?.rev).toBe(1)
     expect(status.roleWarnings).toEqual([])
     expect(status.diagnostics).toEqual([])
     expect(status.queued).toBe(0)
+    expect(status.availableUpgrade).toBe('0.5.0')
   })
 })
