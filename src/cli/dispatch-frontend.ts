@@ -853,7 +853,7 @@ export class DispatchFrontend {
       if (this.opts.signal?.aborted) this.requestOperatorStop()
       const result = await this.child.completed
       if (
-        result.outcome !== 'normal' &&
+        !(result.outcome === 'normal' && result.exitCode === 0) &&
         !(result.outcome === 'forced' && this.operatorStopRequested)
       ) {
         const processDetails = [
