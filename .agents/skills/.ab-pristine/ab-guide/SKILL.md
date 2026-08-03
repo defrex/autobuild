@@ -573,10 +573,17 @@ nonnegative integer so zero can disable that trigger.
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
-| `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
+| `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
 | `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
+
+For each repeat conflict, Autobuild compares the base merged by the latest
+completed reconcile with a fresh authoritative base snapshot. An advanced base
+proves the attempt lost a race and permits another reconcile regardless of the
+attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
+escalates when the budget is exhausted. Post-reconcile verification still runs
+in full and remains independently bounded by `maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect
