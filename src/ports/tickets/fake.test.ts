@@ -125,9 +125,13 @@ describe('FakeTicketSource', () => {
       { title: 'changed', body: 'two' },
       { state: 'Ready', idempotencyKey: 'cluster-a' },
     )
+    expect(first.creationKey).toBe('cluster-a')
     expect(retry.ref.id).toBe(first.ref.id)
+    expect(retry.creationKey).toBe('cluster-a')
     expect(retry.title).toBe('A')
     expect(retry.state).toBe('Triage')
+    expect((await source.get(first.ref.id))?.creationKey).toBe('cluster-a')
+    expect((await source.listReady({ state: 'Triage' })).tickets[0]?.creationKey).toBe('cluster-a')
   })
 
   test('create assigns ids fake-1, fake-2, … and stores the ticket', async () => {

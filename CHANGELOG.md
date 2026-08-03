@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#203](https://github.com/defrex/autobuild/pull/203) — Withhold tickets during in-flight Harvest creation
 - [#202](https://github.com/defrex/autobuild/pull/202) — Retain Harvest counters after tick publication failures
 - [#201](https://github.com/defrex/autobuild/pull/201) — Fail dispatch frontend on cleanup exit errors
 - [#200](https://github.com/defrex/autobuild/pull/200) — Align dispatch accounting with settled Harvest results

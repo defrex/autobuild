@@ -63,6 +63,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   const title = over.title ?? 'Add rate limiting'
   return {
     ref: { source: 'fake', id, title },
+    ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
@@ -1888,6 +1889,127 @@ describe('Dispatcher repository pause hold', () => {
 
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
     expect(h.launches).toEqual([slug])
+  })
+})
+
+describe('Dispatcher in-flight creation gate', () => {
+  test('a ready scan racing reservation, source create, and blocker filing withholds then gates the fresh dependency', async () => {
+    const creationKey = crypto.randomUUID()
+    let firstListing = true
+    let h!: Harness
+    h = harness({
+      tickets: [
+        readyTicket('T-created', { title: 'Generated work', creationKey }),
+        readyTicket('T-blocker', { title: 'Prerequisite', state: 'In Progress' }),
+      ],
+      wrapTickets: (source) => {
+        const listReady = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          const stale = await listReady(criteria)
+          if (!firstListing) return stale
+          firstListing = false
+          // The source listing has captured the newly visible ticket without
+          // blockers. Filing then finishes entirely before dispatch receives
+          // that stale projection, reproducing the production race.
+          await h.store.appendRepo(REPO, {
+            actor: KERNEL,
+            type: 'harvest.proposal.id-reserved',
+            payload: { run: 'h_race', proposalKey: 'cluster-race', id: creationKey },
+          })
+          await source.addBlocker('T-created', 'T-blocker')
+          await h.store.appendRepo(REPO, {
+            actor: KERNEL,
+            type: 'harvest.proposal.filed',
+            payload: {
+              run: 'h_race',
+              proposalKey: 'cluster-race',
+              ticket: { source: 'fake', id: 'T-created', title: 'Generated work' },
+            },
+          })
+          return stale
+        }
+        return source
+      },
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_race',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+
+    const raced = await h.dispatcher.tick()
+    expect(raced).toMatchObject({
+      queued: 1,
+      creationWithheld: 1,
+      dependencyBlocked: 0,
+      dispatched: 0,
+    })
+    expect(raced.creationDiagnostics).toEqual([
+      expect.stringContaining('ticket T-created: creation withheld — Harvest run h_race'),
+    ])
+    expect(h.tickets.claims).toEqual([])
+    expect(h.tickets.dependencyQueries).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+    expect(h.workspaces.provisions).toEqual([])
+    expect(h.launches).toEqual([])
+
+    // The conservative current-scan hold is gone. A fresh source projection
+    // now carries the blocker written by filing, so the ordinary dependency
+    // gate — not the creation gate — explains why the ticket still waits.
+    const blocked = await h.dispatcher.tick()
+    expect(blocked).toMatchObject({
+      queued: 1,
+      creationWithheld: 0,
+      dependencyBlocked: 1,
+      dispatched: 0,
+    })
+    expect(blocked.dependencyDiagnostics).toEqual([
+      'ticket T-created blocked by T-blocker (not complete)',
+    ])
+    expect(h.tickets.claims).toEqual([])
+
+    await h.tickets.transition('T-blocker', 'Done')
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+    expect(h.tickets.claims).toEqual(['T-created'])
+  })
+
+  test('a held ticket spends no capacity and a later ready ticket dispatches', async () => {
+    const creationKey = crypto.randomUUID()
+    const h = harness({
+      tickets: [
+        readyTicket('T-held', { title: 'Held generated work', creationKey }),
+        readyTicket('T-next', { title: 'Independent work' }),
+      ],
+    })
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_active',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: { run: 'h_active', proposalKey: 'cluster-held', id: creationKey },
+    })
+
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      queued: 1,
+      creationWithheld: 1,
+      creationDiagnostics: [expect.stringContaining('ticket T-held: creation withheld')],
+      dispatched: 1,
+    })
+    expect(h.tickets.claims).toEqual(['T-next'])
   })
 })
 

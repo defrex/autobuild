@@ -781,6 +781,7 @@ export class LinearTicketSource implements TicketSource {
         url: issue.url,
         title: issue.title,
       },
+      ...(issue.id !== undefined ? { creationKey: issue.id } : {}),
       title: issue.title,
       body: issue.description ?? '',
       state: issue.state?.name,

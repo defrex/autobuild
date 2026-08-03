@@ -77,7 +77,7 @@ describe('ab plugin', () => {
     expect(text).toContain('file owner=builtin')
     expect(text).toContain('jira owner=plugin:acme module=./plugin.ts')
     expect(text).toContain('resolution=repo-path')
-    expect(text).toContain('api=^1.0.0 host=1.3.0 compatible')
+    expect(text).toContain('api=^1.0.0 host=1.4.0 compatible')
     expect(text).toContain('contract=missing')
   })
 
