@@ -55,7 +55,9 @@ import type {
   WorkspaceProvider,
 } from '../ports/types'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
-import { BuildRunner } from '../processes/build-runner'
+import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
+import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
+import { diagnosticArtifact } from '../processes/build-execution-state'
 import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -433,38 +435,38 @@ export async function makeHarness(opts: {
   // the SAME store and the provisioned workspace path; the dispatcher never
   // runs agents itself.
   let instances = 0
-  const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
+  const makeRunner = async (slug: string, instance?: string): Promise<BuildRunner> => {
     const record = await store.getBuild(slug)
     const workspacePath = openWorkspacePath(await store.getEvents(slug))
     if (record === null || workspacePath === null) {
       throw new Error(`launchRunner("${slug}"): no build record or open workspace`)
     }
     instances += 1
-    launched.push({
+    return new BuildRunner({
+      store: store.scopeBuild(slug),
+      config,
+      // Two-axis registry (§9): every runtime is backed by the SAME scripted
+      // runner instance, so the `s_1…s_N` session numbering scenarios rely on
+      // is preserved regardless of which runtime a role selects. `scripted`
+      // is the configured default and runs only with its un-named built-in model; `pi`
+      // serves the Kimi family for exact configured-pair validation.
+      runtimes,
+      workspacePath,
+      branch: record.branch ?? `ab/${slug}`,
       slug,
-      runner: new BuildRunner({
-        store,
-        config,
-        // Two-axis registry (§9): every runtime is backed by the SAME scripted
-        // runner instance, so the `s_1…s_N` session numbering scenarios rely on
-        // is preserved regardless of which runtime a role selects. `scripted`
-        // is the configured default and runs only with its un-named built-in model; `pi`
-        // serves the Kimi family for exact configured-pair validation.
-        runtimes,
-        workspacePath,
-        branch: record.branch ?? `ab/${slug}`,
-        slug,
-        exec: spawnExec,
-        forge: selectedForge,
-        ids,
-        clock,
-        instance: `runner-${instances}`,
-        host: 'e2e-host',
-        // Long lease/heartbeat: liveness is driven by the shared stepping
-        // clock; scenarios advance it explicitly to expire a lease.
-        opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
-      }),
+      exec: spawnExec,
+      forge: selectedForge,
+      ids,
+      clock,
+      instance: instance ?? `runner-${instances}`,
+      host: 'e2e-host',
+      // Long lease/heartbeat: liveness is driven by the shared stepping
+      // clock; scenarios advance it explicitly to expire a lease.
+      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
     })
+  }
+  const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
+    launched.push({ slug, runner: await makeRunner(slug) })
     return 'scheduled'
   }
 
@@ -485,6 +487,25 @@ export async function makeHarness(opts: {
     tickets: ticketSource,
     forge: selectedForge,
     workspaces,
+    buildExecution: new InProcessBuildExecution(async (input) => {
+      const runner = await makeRunner(input.slug, input.instance)
+      await runner.run().catch(async (error) => {
+        await store.putArtifact(
+          input.slug,
+          diagnosticArtifact({
+            instance: input.instance,
+            outcome:
+              error instanceof LeaseHeldError
+                ? 'lease-held'
+                : error instanceof SetupFailureError
+                  ? 'setup-failed'
+                  : 'failed',
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        throw error
+      })
+    }),
     runtimes,
     // Scripted agents resolve this ambient value, then invoke runCli against
     // the injected shared store. It is an identity label, never opened.

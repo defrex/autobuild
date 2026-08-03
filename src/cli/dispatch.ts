@@ -31,13 +31,12 @@ import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
-import type { AbEvent } from '../events/catalog'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
-import type { BuildState } from '../kernel/reducer'
+import { reduceBuild } from '../kernel/reducer'
 import {
   buildDashboardFromProjected,
   dashboardBuildControl,
@@ -68,9 +67,15 @@ import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
-import { createWorkspaceProvider } from '../ports/workspace/create'
+import { createWorkspaceRuntime } from '../ports/workspace/create'
+import type { BuildExecution, BuildExecutionHandle } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  BUILD_RUNNER_DIAGNOSTIC_ARTIFACT,
+  effectiveBuildConfigContent,
+  parseDiagnostic,
+} from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { scanUnclaimedObservations } from '../processes/harvest'
 import {
@@ -189,6 +194,9 @@ export interface DispatchWiring {
   tickets: TicketSource
   forge: Forge
   workspaces: WorkspaceProvider
+  /** Workspace-adjacent build executor. Production always supplies the local
+   * subprocess implementation; tests may inject an in-process double. */
+  buildExecution: BuildExecution
   /** Runtime registry (§9): name → adapter + compatibility data. The resolver
    * applies `[roles]`, whose `default` entry is required. */
   runtimes: RuntimeRegistry
@@ -288,18 +296,6 @@ function interruptibleSleep(
   })
 }
 
-/** Latest open workspace's locally reachable path. Historical events predate
- * path evidence, so their provider ref remains the compatibility fallback. */
-function openWorkspacePath(events: AbEvent[]): string | null {
-  let open: string | null = null
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') {
-      open = event.payload.path ?? event.payload.ref
-    } else if (event.type === 'workspace.released') open = null
-  }
-  return open
-}
-
 /** Production wiring: the local (or remote) store, configured adapters,
  * git worktrees, and shipped runtimes. Forge construction deliberately happens
  * before store opening so a plugin factory failure cannot precede a claim. */
@@ -328,7 +324,7 @@ async function defaultWire(
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
   // their explicit config plus repository/environment context.
-  const workspaces = await createWorkspaceProvider(config.workspace, {
+  const workspaceRuntime = await createWorkspaceRuntime(config.workspace, {
     registry: plugins,
     worktreeRoot: opened.worktreeRoot,
     repoRoot: opened.repo,
@@ -339,7 +335,8 @@ async function defaultWire(
     store: opened.store,
     tickets,
     forge,
-    workspaces,
+    workspaces: workspaceRuntime.provider,
+    buildExecution: workspaceRuntime.execution,
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
     runtimes,
@@ -352,8 +349,17 @@ async function defaultWire(
   }
 }
 
-/** The dispatch loop: owns the Dispatcher, the in-process runner fleet, and
- * the tick cadence. One instance per `ab dispatch` invocation. */
+interface ActiveBuildExecution {
+  reservation: symbol
+  instance: string
+  handle?: BuildExecutionHandle
+  settled?: Promise<void>
+  stopping: boolean
+}
+
+/** The dispatch loop owns deterministic decisions and supervises one
+ * workspace-adjacent process per build. Build outcomes flow only through the
+ * Store; child completion is liveness evidence used for reaping/single-flight. */
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
   private readonly host = hostname()
@@ -361,10 +367,10 @@ class DispatchLoop {
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
    * `--once` exit so every visible workflow reaches a durable boundary. */
   private readonly inFlight = new Set<Promise<void>>()
-  /** One active BuildRunner per slug in this dispatch process. The token is
-   * reserved before async setup and makes cleanup identity-safe; the durable
-   * build lease remains the cross-process recovery/exclusion gate. */
-  private readonly activeBuildRuns = new Map<string, symbol>()
+  /** One active execution per slug in this kernel. Reservations are acquired
+   * before awaits; the durable lease remains the cross-kernel exclusion gate. */
+  private readonly activeBuildRuns = new Map<string, ActiveBuildExecution>()
+  private acceptingBuildLaunches = true
   /** Process-local fast path; the repository lease is the cross-process gate. */
   private harvestInFlight: Promise<void> | undefined
   /** Outcomes settle outside Dispatcher.tick(), then merge into the next
@@ -494,6 +500,25 @@ class DispatchLoop {
     return this.liveConfig.current()
   }
 
+  /** Publish the exact composed snapshot into one build-owned namespace. The
+   * child samples only this artifact and never receives config over IPC. */
+  private async publishBuildConfig(slug: string, snapshot = this.currentConfig()): Promise<void> {
+    await this.wiring.store.putArtifact(slug, {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(snapshot.config),
+      metadata: {
+        revision: snapshot.revision,
+        ...(this.opts.kernelRunId !== undefined ? { run: this.opts.kernelRunId } : {}),
+      },
+    })
+  }
+
+  private async publishActiveBuildConfigs(snapshot: ConfigSnapshot): Promise<void> {
+    await Promise.all(
+      [...this.activeBuildRuns.keys()].map((slug) => this.publishBuildConfig(slug, snapshot)),
+    )
+  }
+
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
     if (this.opts.kernelRunId === undefined) return
     await this.wiring.store.appendRepo(this.opts.targetRepo, event)
@@ -524,6 +549,7 @@ class DispatchLoop {
       return
     }
 
+    await this.publishActiveBuildConfigs(outcome.snapshot)
     this.announce(`autobuild.toml reloaded (revision ${outcome.snapshot.revision})`)
     if (outcome.restartRequired.length > 0) {
       this.warn(
@@ -1587,57 +1613,55 @@ class DispatchLoop {
     return report
   }
 
-  /** Construct a BuildRunner over the shared store/workspace and start it
-   * without blocking the dispatcher. Capacity is enforced by the dispatcher's
-   * active-count gate; the tracked promise lets `--once` drain it. A known
-   * local run wins over a transiently stale lease, so polling cannot create a
-   * second agent session for the same build while that run is still live. */
-  private async launchRunner(slug: string): Promise<LaunchRunnerResult> {
-    if (this.activeBuildRuns.has(slug)) return 'already-active'
+  private async matchingRunnerDiagnostic(slug: string, instance: string) {
+    const metas = await this.wiring.store.listArtifacts(slug, BUILD_RUNNER_DIAGNOSTIC_ARTIFACT)
+    for (const meta of metas.toReversed()) {
+      if (meta.metadata.instance !== instance) continue
+      const artifact = await this.wiring.store.getArtifact(slug, meta.kind, meta.revision)
+      if (artifact === null) continue
+      const diagnostic = parseDiagnostic(artifact)
+      if (diagnostic?.instance === instance) return diagnostic
+    }
+    return null
+  }
 
-    // Reserve before the first await: startup resume and later lease sweeps
-    // share this seam, and neither may pass async setup for the same slug.
+  /** Start one workspace-adjacent executor without handing it workspace,
+   * config, or outcome channels. Capacity and local single-flight remain
+   * kernel decisions; the child claims the durable lease itself. */
+  private async launchRunner(slug: string): Promise<LaunchRunnerResult> {
+    if (!this.acceptingBuildLaunches || this.activeBuildRuns.has(slug)) return 'already-active'
+
     const reservation = Symbol(slug)
-    this.activeBuildRuns.set(slug, reservation)
+    const instance = `${this.host}-${slug}-${this.wiring.ids('inst')}`
+    const active: ActiveBuildExecution = { reservation, instance, stopping: false }
+    this.activeBuildRuns.set(slug, active)
 
     try {
-      const { store, runtimes, ids, clock, storeRef, token } = this.wiring
-      const record = await store.getBuild(slug)
-      const workspacePath = openWorkspacePath(await store.getEvents(slug))
-      if (record === null || workspacePath === null) {
-        throw new Error(
-          `launchRunner("${slug}"): no build record or open workspace — the ` +
-            'dispatcher provisions both before launching (§12)',
-        )
-      }
-
-      const runner = new BuildRunner({
-        store,
-        config: this.currentConfig().config,
-        getConfig: () => this.currentConfig().config,
-        runtimes,
-        workspacePath,
-        branch: record.branch ?? `ab/${slug}`,
+      await this.publishBuildConfig(slug)
+      const handle = await this.wiring.buildExecution.start({
         slug,
-        exec: this.opts.exec,
-        forge: this.wiring.forge,
-        ids,
-        clock,
-        instance: `${this.host}-${slug}-${ids('inst')}`,
-        host: this.host,
-        // D8: sessions resolve THIS store; identity keys (AB_BUILD/PHASE/SESSION)
-        // are stamped per session by the runner and never overridden here.
-        sessionEnv: {
-          AB_STORE: storeRef,
-          ...(token !== undefined ? { AB_TOKEN: token } : {}),
-        },
+        storeRef: this.wiring.storeRef,
+        instance,
       })
+      active.handle = handle
 
       let tracked: Promise<void>
-      tracked = runner
-        .run()
-        .then(
-          async (state: BuildState) => {
+      tracked = handle.completion
+        .then(async (exit) => {
+          if (active.stopping) return
+          const diagnostic = await this.matchingRunnerDiagnostic(slug, instance)
+          if (diagnostic?.outcome === 'lease-held') {
+            await this.appendStatus({
+              actor: DISPATCHER,
+              type: 'dispatcher.runner-settled',
+              payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+            })
+            this.say(`build ${slug} already held by another runner — skipped`)
+            return
+          }
+
+          const state = reduceBuild(await this.wiring.store.getEvents(slug))
+          if (diagnostic === null && exit.exitCode === 0) {
             await this.appendStatus({
               actor: DISPATCHER,
               type: 'dispatcher.runner-settled',
@@ -1649,48 +1673,31 @@ class DispatchLoop {
               },
             })
             this.say(`build ${slug} parked (${state.status})`)
-          },
-          async (error: unknown) => {
-            if (error instanceof LeaseHeldError) {
-              await this.appendStatus({
-                actor: DISPATCHER,
-                type: 'dispatcher.runner-settled',
-                payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
-              })
-              this.say(`build ${slug} already held by another runner — skipped`)
-              return
-            }
-            await this.appendStatus({
-              actor: DISPATCHER,
-              type: 'dispatcher.runner-settled',
-              payload: {
-                run: this.opts.kernelRunId!,
-                slug,
-                outcome: 'failed',
-                error: error instanceof Error ? error.message : String(error),
-              },
-            })
-            const line = `build ${slug} runner failed: ${error instanceof Error ? error.message : String(error)}`
-            // SetupFailureError has already deposited an attributed durable
-            // fact. Plain mode still needs a line; the TTY gets the persistent
-            // build-row projection on its next store poll, not a global notice.
-            if (error instanceof SetupFailureError && this.dashboard) return
-            this.warn(line)
-          },
-        )
+            return
+          }
+
+          const detail =
+            diagnostic?.error ??
+            `child exited ${exit.exitCode ?? 'without status'}${exit.signal ? ` (${exit.signal})` : ''}`
+          await this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.runner-settled',
+            payload: { run: this.opts.kernelRunId!, slug, outcome: 'failed', error: detail },
+          })
+          if (diagnostic?.outcome === 'setup-failed' && this.dashboard) return
+          this.warn(`build ${slug} runner failed: ${detail}`)
+        })
         .finally(() => {
           this.inFlight.delete(tracked)
-          // An old run must never clear a newer reservation for this slug.
-          if (this.activeBuildRuns.get(slug) === reservation) {
+          if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
             this.activeBuildRuns.delete(slug)
           }
         })
+      active.settled = tracked
       this.inFlight.add(tracked)
       return 'scheduled'
     } catch (error) {
-      // Preflight/setup failures never strand the slug. Identity-checking keeps
-      // this safe if launch coordination grows more concurrent in the future.
-      if (this.activeBuildRuns.get(slug) === reservation) {
+      if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
         this.activeBuildRuns.delete(slug)
       }
       await this.appendStatus({
@@ -1715,6 +1722,17 @@ class DispatchLoop {
     while (this.inFlight.size > 0) {
       await Promise.all([...this.inFlight])
     }
+  }
+
+  /** Ordinary kernel teardown reaps every build process. Deliberate stops are
+   * liveness-only and do not manufacture runner-failure notices or release a
+   * lease that must lapse naturally after abrupt termination. */
+  private async stopBuildExecutions(): Promise<void> {
+    this.acceptingBuildLaunches = false
+    const active = [...this.activeBuildRuns.values()]
+    for (const entry of active) entry.stopping = true
+    await Promise.all(active.map((entry) => entry.handle?.stop()))
+    await Promise.all(active.map((entry) => entry.settled))
   }
 
   // ── Message routing ───────────────────────────────────────────────────────
@@ -2121,6 +2139,7 @@ class DispatchLoop {
           this.printReport(emptyTickReport())
         }
       } finally {
+        await this.stopBuildExecutions()
         await this.finishRendering()
       }
       return
@@ -2159,8 +2178,9 @@ class DispatchLoop {
         await sleep(intervalMs)
       }
     } finally {
+      await this.stopBuildExecutions()
       // A result that settled after the final tick still gets one attributed
-      // counter line; active work is deliberately not awaited in watch mode.
+      // counter line after every child has been reaped.
       this.printReport(this.consumeHarvestResults(emptyTickReport()), false)
       // SIGINT lands here too: without it the region keeps the cursor hidden.
       await this.finishRendering()
