@@ -137,6 +137,48 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(warned).toHaveLength(clean.length + 1)
   })
 
+  test('an available release has a dedicated persistent row alongside warnings', () => {
+    const clean = rd(model([build()]), WIDE).map(stripAnsi)
+    expect(clean.join('\n')).not.toContain('run ab upgrade')
+
+    const noticedModel = {
+      ...model([build()]),
+      availableUpgrade: '2.4.0',
+      warningLines: ['ticket source unavailable'],
+    }
+    const first = rd(noticedModel, WIDE).map(stripAnsi)
+    const second = rd(noticedModel, WIDE).map(stripAnsi)
+    expect(first).toEqual(second)
+    expect(first[2]).toContain('Autobuild v2.4.0 is available — run ab upgrade')
+    expect(first[3]).toBe('   ticket source unavailable')
+
+    const detail = rd(
+      { ...noticedModel, view: { kind: 'detail', slug: 'auth-rate-limit', scroll: 0 } },
+      WIDE,
+    ).map(stripAnsi)
+    const transcript = rd(
+      {
+        ...noticedModel,
+        view: {
+          kind: 'transcript',
+          slug: 'auth-rate-limit',
+          sessionId: 's1',
+          transcript: { kind: 'raw', text: 'session output' },
+          scroll: 0,
+        },
+      },
+      WIDE,
+    ).map(stripAnsi)
+    expect(detail.join('\n')).toContain('run ab upgrade')
+    expect(transcript.join('\n')).toContain('run ab upgrade')
+
+    for (const color of [false, true]) {
+      const narrow = rd(noticedModel, { color, width: 34, height: 8 })
+      expect(narrow.length).toBeLessThanOrEqual(8)
+      for (const row of narrow) expect(cellWidth(stripAnsi(row))).toBeLessThanOrEqual(34)
+    }
+  })
+
   test('long, multiline, and non-ASCII warnings WRAP onto safe physical rows', () => {
     const clean = rd(model([build()]), { color: true, width: 40 })
     const warned = rd(
@@ -2379,21 +2421,24 @@ describe('renderDashboard: build detail and transcript views', () => {
     ]
 
     for (const { presentation, tail } of cases) {
-      const scroll = transcriptScrollLimit(presentation, terminalWidth, height)
-      const lines = rd(
-        {
-          ...model([detailedBuild]),
-          view: {
-            kind: 'transcript',
-            slug: detailedBuild.slug,
-            sessionId: 's_plan',
-            scroll,
-            transcript: presentation,
+      for (const hasUpgradeNotice of [false, true]) {
+        const scroll = transcriptScrollLimit(presentation, terminalWidth, height, hasUpgradeNotice)
+        const lines = rd(
+          {
+            ...model([detailedBuild]),
+            ...(hasUpgradeNotice ? { availableUpgrade: '9.1.0' } : {}),
+            view: {
+              kind: 'transcript',
+              slug: detailedBuild.slug,
+              sessionId: 's_plan',
+              scroll,
+              transcript: presentation,
+            },
           },
-        },
-        { color: false, width: terminalWidth, height },
-      )
-      expect(lines.join('\n')).toContain(tail)
+          { color: false, width: terminalWidth, height },
+        )
+        expect(lines.join('\n')).toContain(tail)
+      }
     }
   })
 
@@ -2403,8 +2448,10 @@ describe('renderDashboard: build detail and transcript views', () => {
       text: Array.from({ length: 20 }, (_, index) => `raw line ${index}`).join('\n'),
     }
     const roomy = transcriptScrollLimit(presentation, 80, 12)
+    const noticed = transcriptScrollLimit(presentation, 80, 12, true)
     const narrow = transcriptScrollLimit(presentation, 12, 12)
     expect(roomy).toBeGreaterThan(0)
+    expect(noticed).toBe(roomy + 1)
     expect(narrow).toBeGreaterThan(roomy)
 
     const taller = transcriptScrollLimit(presentation, 12, 40)
@@ -2416,6 +2463,7 @@ describe('renderDashboard: build detail and transcript views', () => {
     // off the bottom immediately rather than silently unwinding hidden offset.
     expect(moveTranscriptScroll(presentation, 80, 12, 999, -1)).toBe(roomy - 1)
     expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1)).toBe(roomy)
+    expect(moveTranscriptScroll(presentation, 80, 12, roomy, 1, true)).toBe(noticed)
   })
 
   test('raw fallback, scrolling, and tiny terminals obey width and height caps', () => {

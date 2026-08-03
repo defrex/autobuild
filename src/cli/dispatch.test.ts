@@ -29,6 +29,7 @@ import type { DashboardModel } from './dashboard/model'
 import { paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
+import type { UpgradeNoticeScheduler, UpgradeNoticeTimer } from './upgrade-notice'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -1989,6 +1990,24 @@ function fakeTerminal(
   }
 }
 
+class ManualUpgradeScheduler implements UpgradeNoticeScheduler {
+  cadenceCallbacks: Array<() => void> = []
+  activeCadence = true
+
+  interval(callback: () => void): UpgradeNoticeTimer {
+    this.cadenceCallbacks.push(callback)
+    return { clear: () => (this.activeCadence = false), unref: () => {} }
+  }
+
+  timeout(): UpgradeNoticeTimer {
+    return { clear: () => {}, unref: () => {} }
+  }
+
+  cadence(): void {
+    if (this.activeCadence) for (const callback of this.cadenceCallbacks) callback()
+  }
+}
+
 function latestDashboardFrame(term: { frames: string[] }): string {
   return stripAnsi(
     [...term.frames].reverse().find((frame) => stripAnsi(frame).includes('Autobuild')) ?? '',
@@ -2022,6 +2041,159 @@ function tallestFrame(term: { frames: string[] }): number {
       .map((chunk) => chunk.split('\n').length - 1),
   )
 }
+
+describe('abDispatch interactive upgrade notice', () => {
+  test('checks at startup, retains the dedicated notice across polls, and stays silent', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const stop = new AbortController()
+    let probes = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {
+          throw new Error('interactive release checks must not write stdout')
+        },
+        stderr: () => {
+          throw new Error('interactive release checks must not write stderr')
+        },
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          await waitFor(() => latestDashboardFrame(term).includes('run ab upgrade'))
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          stop.abort()
+        },
+        wire: fx.wire,
+        terminal: term,
+        availableReleaseProbe: async () => {
+          probes += 1
+          return '9.1.0'
+        },
+      })
+
+      expect(probes).toBe(1)
+      const frame = latestDashboardFrame(term)
+      expect(frame).toContain('Autobuild v9.1.0 is available — run ab upgrade')
+      expect(frame).toContain('no active builds')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('an initially absent release appears after the four-hour cadence without restart', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const stop = new AbortController()
+    const scheduler = new ManualUpgradeScheduler()
+    let probes = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          await waitFor(() => probes === 1)
+          expect(latestDashboardFrame(term)).not.toContain('run ab upgrade')
+          scheduler.cadence()
+          await waitFor(() => latestDashboardFrame(term).includes('v9.2.0'))
+          stop.abort()
+        },
+        wire: fx.wire,
+        terminal: term,
+        upgradeNoticeScheduler: scheduler,
+        availableReleaseProbe: async () => {
+          probes += 1
+          return probes === 1 ? undefined : '9.2.0'
+        },
+      })
+
+      expect(probes).toBe(2)
+      expect(latestDashboardFrame(term)).toContain('run ab upgrade')
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('plain, non-interactive, and once dispatch never invoke the probe', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    let probes = 0
+    const probe = async (): Promise<string | undefined> => {
+      probes += 1
+      return '9.3.0'
+    }
+    try {
+      for (const mode of ['plain', 'noninteractive'] as const) {
+        const stop = new AbortController()
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          signal: stop.signal,
+          sleep: async () => stop.abort(),
+          wire: fx.wire,
+          terminal: fakeTerminal(mode !== 'noninteractive'),
+          ...(mode === 'plain' ? { plain: true } : {}),
+          availableReleaseProbe: probe,
+        })
+      }
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: fx.wire,
+        terminal: fakeTerminal(),
+        availableReleaseProbe: probe,
+      })
+      expect(probes).toBe(0)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a hanging probe is aborted without delaying interactive shutdown', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    let probeSignal: AbortSignal | undefined
+    try {
+      await Promise.race([
+        abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          signal: stop.signal,
+          sleep: async () => stop.abort(),
+          wire: fx.wire,
+          terminal: fakeTerminal(),
+          availableReleaseProbe: (signal) => {
+            probeSignal = signal
+            return new Promise<string | undefined>(() => {})
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('dispatch shutdown waited for release probe')), 2_000),
+        ),
+      ])
+      expect(probeSignal?.aborted).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
 
 describe('abDispatch --once with an interactive terminal', () => {
   // The existing tests above pass an opts object with NO terminal, and they
