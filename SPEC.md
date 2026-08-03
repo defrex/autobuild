@@ -228,7 +228,8 @@ same BuildStore. Consequences, by design:
 - **State is a reduction of events.** Any state snapshot is a cache, never
   the source of truth. Resumability falls out.
 - **The UI layer is a subscriber** plus a command channel back. TUI, web —
-  same adapter pattern.
+  same adapter pattern. The shipped interactive terminal owns a supervised
+  kernel child, and the BuildStore is their only changing-state boundary.
 - **The audit trail is the log**, serialized.
 
 The event vocabulary (§15) is deliberately designed early and carefully: it
@@ -1039,6 +1040,26 @@ displays is a reduction of the logs, and anything it does is an event — so
 every frontend (terminal today, web later) is the same adapter pattern
 against the same store, and a dead runner still receives commands on resume.
 
+Interactive `ab dispatch` owns the terminal in a frontend process and supervises
+one private child containing the dispatcher, build runners, Harvest, config and
+plugin loading, and every ticket/forge/workspace/runtime adapter. The frontend
+has no handle on those adapters: it reads build and repository streams plus
+referenced artifacts, writes operator commands, and keeps only presentation
+state (selection, scroll, composer text, confirmation) in memory. The child
+publishes a run-correlated effective-config artifact before its first tick and
+records tick/queue diagnostics, reload outcomes, runner coordination, and
+normal/abnormal lifecycle as repository facts. Thus a rejected on-disk reload
+cannot change the displayed effective capacity, and a frontend restart can
+reconstruct every operational notice from the Store. Repository polling advances
+from the last observed sequence rather than replaying the growing journal on
+every frame. Ctrl-C restores terminal modes immediately and asks the child to
+stop; repeated signals remain graceful while a dispatcher tick is crossing the
+ticket-claim boundary, and a child also stops when its terminal-owning parent
+dies. A timed-out child is terminated unless such a tick is open, in which case
+that tick first reaches a recoverable durable boundary. `--plain`, non-TTY,
+and `--once` kernel semantics remain the line-oriented/direct compatibility
+path; `--once` still performs one tick and drains its in-flight work.
+
 Durable operator settings (intake, the repository-wide pause, the claim-time
 auto-merge default, the harvest gate) are repository-journal facts: they
 survive restarts, propagate between dispatchers by ordinary polling, and are
@@ -1138,7 +1159,7 @@ The families, with illustrative members:
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
-| Repository journal | dispatcher setting facts; the `harvest.*` workflow, recovery, and ledger facts |
+| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
 Abort cleanup is a dispatcher-owned ordered saga. It releases any lease, closes
 an open unmerged PR without overriding a racing merge, releases the workspace,

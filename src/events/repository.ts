@@ -26,6 +26,31 @@ const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const empty = z.strictObject({})
 const setting = z.strictObject({ enabled: z.boolean() })
+const dispatchRun = z.string().min(1)
+const boundedDiagnostics = z.array(z.string().min(1)).max(1_000)
+const tickCountersSchema = z.strictObject({
+  merged: z.number().int().nonnegative(),
+  closed: z.number().int().nonnegative(),
+  conflicted: z.number().int().nonnegative(),
+  abandoned: z.number().int().nonnegative(),
+  discarded: z.number().int().nonnegative(),
+  janitorFailed: z.number().int().nonnegative(),
+  recovered: z.number().int().nonnegative(),
+  dispatchFailed: z.number().int().nonnegative(),
+  resumed: z.number().int().nonnegative(),
+  swept: z.number().int().nonnegative(),
+  dispatched: z.number().int().nonnegative(),
+  authored: z.number().int().nonnegative(),
+  bounced: z.number().int().nonnegative(),
+  claimRaces: z.number().int().nonnegative(),
+  invalidTickets: z.number().int().nonnegative(),
+  dependencyBlocked: z.number().int().nonnegative(),
+  harvestStarted: z.number().int().nonnegative(),
+  harvestResumed: z.number().int().nonnegative(),
+  harvestCompleted: z.number().int().nonnegative(),
+  harvestEscalated: z.number().int().nonnegative(),
+  harvestFailed: z.number().int().nonnegative(),
+})
 const restartRequiredConfigPathSchema = z.enum([
   'forge',
   'plugins',
@@ -168,13 +193,77 @@ export const harvestEventPayloadSchemas = {
   }),
 } as const
 
+export const dispatcherStatusEventPayloadSchemas = {
+  /** A terminal frontend follows exactly one run. The referenced artifact is
+   * the composed Config the kernel is actually using, never an on-disk guess. */
+  'dispatcher.run-started': z.strictObject({
+    run: dispatchRun,
+    pid: z.number().int().positive(),
+    effectiveConfig: artifactRefSchema,
+    roleWarnings: boundedDiagnostics,
+  }),
+  'dispatcher.run-stopped': z.strictObject({
+    run: dispatchRun,
+    outcome: z.enum(['normal', 'abnormal', 'forced']),
+    exitCode: z.number().int().nullable().optional(),
+    signal: z.string().min(1).optional(),
+    error: z.string().min(1).optional(),
+  }),
+  'dispatcher.config-rejected': z.strictObject({ run: dispatchRun, error: z.string().min(1) }),
+  'dispatcher.config-publication-failed': z.strictObject({
+    run: dispatchRun,
+    error: z.string().min(1),
+  }),
+  /** Brackets the one unsafe-to-force dispatcher turn. A supervisor may kill
+   * an unresponsive child only when no started turn remains open. */
+  'dispatcher.tick-started': z.strictObject({ run: dispatchRun }),
+  'dispatcher.tick-completed': z.strictObject({
+    run: dispatchRun,
+    queued: z.number().int().nonnegative(),
+    observations: z.number().int().nonnegative(),
+    counters: tickCountersSchema,
+    janitorDiagnostics: boundedDiagnostics,
+    ticketDiagnostics: boundedDiagnostics,
+    dependencyDiagnostics: boundedDiagnostics,
+  }),
+  'dispatcher.tick-failed': z.strictObject({ run: dispatchRun, error: z.string().min(1) }),
+  'dispatcher.runner-settled': z.strictObject({
+    run: dispatchRun,
+    slug: z.string().min(1),
+    outcome: z.enum(['parked', 'lease-held', 'launch-failed', 'failed']),
+    status: z.string().min(1).optional(),
+    error: z.string().min(1).optional(),
+  }),
+  'dispatcher.harvest-runner-failed': z.strictObject({
+    run: dispatchRun,
+    error: z.string().min(1),
+  }),
+  /** Newer published release discovered by the private kernel. Keeping this
+   * run-correlated makes the release courtesy available to Store-only UIs. */
+  'dispatcher.upgrade-available': z.strictObject({
+    run: dispatchRun,
+    version: z.string().min(1),
+  }),
+  /** Durable acknowledgement text for controls whose exact bulk result is not
+   * otherwise one event. It is presentation-neutral operator evidence. */
+  'dispatcher.operator-reported': z.strictObject({
+    run: dispatchRun,
+    level: z.enum(['info', 'warning']),
+    message: z.string().min(1),
+  }),
+} as const
+
 export const dispatcherSettingEventPayloadSchemas = {
   /** Accepted main-checkout config revision. The exact TOML is deposited in
-   * the repository artifact stream atomically with this fact. */
+   * the repository artifact stream atomically with this fact. Historical
+   * events omit run/effectiveConfig and remain replayable. */
   'dispatcher.config-reloaded': z.strictObject({
     artifact: artifactRefSchema,
     restartRequired: restartRequiredConfigPathsSchema,
     effectiveChanged: z.boolean(),
+    run: dispatchRun.optional(),
+    effectiveConfig: artifactRefSchema.optional(),
+    roleWarnings: boundedDiagnostics.optional(),
   }),
   /** Current repository-wide intake gate sampled by every dispatcher tick. */
   'dispatcher.intake-set': setting,
@@ -190,6 +279,7 @@ export const dispatcherSettingEventPayloadSchemas = {
 
 export const repositoryEventPayloadSchemas = {
   ...harvestEventPayloadSchemas,
+  ...dispatcherStatusEventPayloadSchemas,
   ...dispatcherSettingEventPayloadSchemas,
 } as const
 
@@ -251,6 +341,17 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.completed': ['kernel'],
   'harvest.escalated': ['kernel', 'agent'],
   'harvest.failed': ['kernel'],
+  'dispatcher.run-started': ['dispatcher'],
+  'dispatcher.run-stopped': ['dispatcher'],
+  'dispatcher.config-rejected': ['dispatcher'],
+  'dispatcher.config-publication-failed': ['dispatcher'],
+  'dispatcher.tick-started': ['dispatcher'],
+  'dispatcher.tick-completed': ['dispatcher'],
+  'dispatcher.tick-failed': ['dispatcher'],
+  'dispatcher.runner-settled': ['dispatcher'],
+  'dispatcher.harvest-runner-failed': ['dispatcher'],
+  'dispatcher.upgrade-available': ['dispatcher'],
+  'dispatcher.operator-reported': ['human'],
   'dispatcher.config-reloaded': ['dispatcher'],
   'dispatcher.intake-set': ['human'],
   'dispatcher.pause-set': ['human'],
