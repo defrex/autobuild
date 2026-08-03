@@ -45,8 +45,8 @@ v1 proved the core loop works. Its structural limits, which motivate v2:
 
 ## 2. Constitution
 
-Principles carried from v1 — these are non-negotiable and every design
-decision below answers to them:
+Principles — the first four carried from v1 — that are non-negotiable and that
+every design decision below answers to:
 
 1. **Judgment in skills, determinism in code.** Agents never decide phase
    transitions, signal identity, or state. Agent surfaces own the fuzzy parts
@@ -62,6 +62,12 @@ decision below answers to them:
    waiver is explicit, repository-wide, and configured, and no code path
    reaches Ready without one.
 4. **Every step leaves a paper trail** — queryable, not carried in the repo.
+5. **Processes communicate only through durable state.** There is no private
+   channel between Autobuild processes — not kernel to operator UI, not parent
+   to child, not kernel to sandbox. A process's liveness may be observed; what
+   it has *done* is known only by reading the log. This is what keeps every
+   component relocatable, and why a new process boundary never needs a new
+   protocol.
 
 ## 3. System decomposition
 
@@ -1666,3 +1672,10 @@ or installs releases in the foreground or background.
 3. **[OPEN] Global capacity** — per-repo capacity is the top-level `capacity`
    scalar (§16.1); whether a cross-repo global cap is needed, and where it
    lives, is unresolved.
+4. **[OPEN] Hosted, multi-host deployment** — the remote store (§7.2) and
+   cross-sandbox resumption (§7.4) already permit kernel, operator UI, and
+   builds to run on separate hosts against one store. Undecided: whether those
+   processes reach a hosted store directly or through a service tier that owns
+   write-rule enforcement and version skew between independently deployed
+   clients, and whether artifacts stay content-by-value (§7.1) or become
+   references a front end fetches for itself.

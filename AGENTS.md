@@ -81,6 +81,7 @@ paragraph.
 2. **Resumption comes from durable state.** Build state is reduced from a typed, append-only event log; snapshots are never authoritative.
 3. **Ingesters propose, humans dispatch.** Generated work must be groomed before it can leave Triage, unless a repository waives that gate for its own harvest through `[tickets].proposalState` — as this one does.
 4. **Every step leaves a queryable paper trail.** Build metadata and artifacts belong in the BuildStore, not in the repository.
+5. **Processes communicate only through durable state.** No private channel between Autobuild processes — kernel to operator UI, parent to child, kernel to sandbox. Liveness may be observed; work done is known only by reading the log.
 
 The fixed pipeline is:
 
