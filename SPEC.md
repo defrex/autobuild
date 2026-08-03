@@ -1052,11 +1052,16 @@ normal/abnormal lifecycle as repository facts. Thus a rejected on-disk reload
 cannot change the displayed effective capacity, and a frontend restart can
 reconstruct every operational notice from the Store. Repository polling advances
 from the last observed sequence rather than replaying the growing journal on
-every frame. Ctrl-C restores terminal modes immediately and asks the child to
-stop; repeated signals remain graceful while a dispatcher tick is crossing the
-ticket-claim boundary, and a child also stops when its terminal-owning parent
-dies. A timed-out child is terminated unless such a tick is open, in which case
-that tick first reaches a recoverable durable boundary. `--plain`, non-TTY,
+every frame. SIGINT, SIGHUP, SIGQUIT, and SIGTERM restore terminal modes
+immediately and ask the child to stop; repeated signals remain graceful while a
+dispatcher tick is crossing the ticket-claim boundary. The frontend reaps the
+child before finishing, and for SIGHUP, SIGQUIT, or SIGTERM only then restores
+the default disposition by re-signalling itself. A child also stops when its
+terminal-owning parent dies. A timed-out child is terminated unless such a tick
+is open, in which case that tick first reaches a recoverable durable boundary.
+The run-stopped fact and frontend result distinguish a graceful drain, an actual
+forced termination requested by the operator, and an unsolicited abnormal exit,
+retaining available exit-code, signal, and error evidence. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 

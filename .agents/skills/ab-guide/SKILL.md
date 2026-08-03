@@ -169,10 +169,13 @@ The distinctions that change an administrator's answer:
   config, standing queue depth, diagnostics, reload outcomes, runner outcomes,
   and child health are run-correlated repository facts. Controls append directly
   to the Store, so a slow claim or agent turn cannot delay a keypress. Repository
-  reads advance incrementally. Ctrl-C restores the terminal immediately; repeated
-  signals stay graceful until an open claim tick reaches a recoverable boundary,
-  and parent-death detection prevents a detached kernel. `--plain`/non-TTY stay
-  on the direct path, and `--once` remains one tick plus drain.
+  reads advance incrementally. SIGINT, SIGHUP, SIGQUIT, and SIGTERM restore the
+  terminal immediately, drain and reap the child, and keep repeated signals
+  graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
+  termination is replayed only after that drain. Durable normal/forced/abnormal
+  evidence retains available process detail, and parent-death detection prevents
+  a detached kernel. `--plain`/non-TTY stay on the direct path, and `--once`
+  remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each
   pipeline step capture it at their action boundary, without interrupting an

@@ -114,20 +114,23 @@ export interface TerminalRestoreProcess {
 }
 
 export interface TerminalRestoreHook {
-  /** Restore active modes, then remove only this hook's listeners. Idempotent. */
+  /** Restore active modes, remove this hook's listeners, then replay a captured signal. */
   close(): void
 }
 
 /**
  * Install the synchronous process-boundary fallback used only by `ab dispatch`.
  * SIGINT is deliberately absent: raw Ctrl-C and the binary's AbortController
- * must retain the dashboard's normal final-frame teardown.
+ * retain the dashboard's normal final-frame teardown. Other terminating signals
+ * restore immediately but are replayed only after the async dispatch drain.
  */
 export function installTerminalRestoreHook(
   modes: TerminalModeController,
   boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
+  requestStop: (signal: (typeof TERMINATING_SIGNALS)[number]) => void = () => {},
 ): TerminalRestoreHook {
   let closed = false
+  let pendingSignal: (typeof TERMINATING_SIGNALS)[number] | undefined
   const registrations: Array<[string, (...args: unknown[]) => void]> = []
 
   const restore = (): void => {
@@ -150,10 +153,9 @@ export function installTerminalRestoreHook(
   for (const signal of TERMINATING_SIGNALS) {
     add(signal, () => {
       restore()
-      // Re-signal only after our own handlers are gone, preserving the
-      // operating system's ordinary terminating-signal semantics.
-      remove()
-      boundary.kill(boundary.pid, signal)
+      if (pendingSignal !== undefined) return
+      pendingSignal = signal
+      requestStop(signal)
     })
   }
 
@@ -164,6 +166,9 @@ export function installTerminalRestoreHook(
       // without depending on another promise turn or stream drain.
       restore()
       remove()
+      // Replay only after the supervised child has drained and the handlers are
+      // gone, preserving the operating system's terminating-signal semantics.
+      if (pendingSignal !== undefined) boundary.kill(boundary.pid, pendingSignal)
     },
   }
 }

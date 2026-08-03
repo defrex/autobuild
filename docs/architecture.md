@@ -153,12 +153,16 @@ feedback.
 single-flights build-runner launches per slug within its process. Interactive
 `ab dispatch` runs that owner in the private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
-`dispatch-process.ts` owns child supervision. Terminal modes restore immediately
-on interruption; persistent child signal handlers and a parent-liveness watch
-prevent either repeated Ctrl-C or direct frontend termination from leaving an
-unsafe or detached kernel. Timeout escalation is held while a durable
-`tick-started` fact remains open, because force-killing the ticket claim before
-build creation would not be recoverable. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
+`dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
+SIGTERM restore terminal modes immediately and begin one supervised drain;
+persistent frontend and child handlers keep repeated signals graceful until the
+child is reaped, after which a non-SIGINT terminating signal is replayed in the
+frontend. A parent-liveness watch remains the detached-kernel fallback. Timeout
+escalation is held while a durable `tick-started` fact remains open, because
+force-killing the ticket claim before build creation would not be recoverable.
+The supervisor rechecks child liveness at the force boundary and projects the
+same normal, forced, or abnormal result (with available process/error detail)
+that the repository run-stopped evidence records. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 

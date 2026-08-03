@@ -14,9 +14,13 @@ export interface DispatchChildOptions {
   intervalMs?: number
 }
 
+export type DispatchChildOutcome = 'normal' | 'abnormal' | 'forced'
+
 export interface DispatchChildResult {
+  outcome: DispatchChildOutcome
   exitCode: number
   signal?: string
+  error?: string
 }
 
 export interface DispatchChildHandle {
@@ -35,9 +39,18 @@ export interface DispatchProcessHook {
   close(): void
 }
 
+export const DISPATCH_KERNEL_SIGNALS = [
+  'SIGINT',
+  'SIGHUP',
+  'SIGQUIT',
+  'SIGTERM',
+] as const satisfies readonly NodeJS.Signals[]
+
+type DispatchKernelSignal = (typeof DISPATCH_KERNEL_SIGNALS)[number]
+
 export interface DispatchKernelSignalBoundary {
-  on(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown
-  removeListener(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown
+  on(signal: DispatchKernelSignal, listener: () => void): unknown
+  removeListener(signal: DispatchKernelSignal, listener: () => void): unknown
 }
 
 /** Keep graceful handlers active until the kernel has actually drained. Using
@@ -47,15 +60,13 @@ export function installDispatchKernelSignalHandlers(
   onStop: () => void,
   boundary: DispatchKernelSignalBoundary = process,
 ): DispatchProcessHook {
-  boundary.on('SIGINT', onStop)
-  boundary.on('SIGTERM', onStop)
+  for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.on(signal, onStop)
   let closed = false
   return {
     close(): void {
       if (closed) return
       closed = true
-      boundary.removeListener('SIGINT', onStop)
-      boundary.removeListener('SIGTERM', onStop)
+      for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.removeListener(signal, onStop)
     },
   }
 }
@@ -161,27 +172,49 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   // This is the sole supervisor writer of a missing stop fact. `stop()` only
   // chooses/awaits process termination, avoiding check-then-append races.
   const completed = child.exited.then(async (exitCode): Promise<DispatchChildResult> => {
-    const signal = child.signalCode === null ? undefined : String(child.signalCode)
+    const processSignal = child.signalCode === null ? undefined : String(child.signalCode)
     const events = await deps.store.getRepoEvents(deps.repo)
-    const hasStop = events.some(
+    const recorded = events.findLast(
       (event) => event.type === 'dispatcher.run-stopped' && event.payload.run === deps.run,
     )
-    if (!hasStop) {
-      await deps.store.appendRepo(deps.repo, {
-        actor: DISPATCHER,
-        type: 'dispatcher.run-stopped',
-        payload: {
-          run: deps.run,
-          outcome: forced ? 'forced' : stopping && exitCode === 0 ? 'normal' : 'abnormal',
-          exitCode,
-          ...(signal !== undefined ? { signal } : {}),
-          ...(forced || stopping || exitCode === 0
-            ? {}
-            : { error: `kernel process exited with status ${exitCode}` }),
-        },
-      })
+    if (recorded?.type === 'dispatcher.run-stopped') {
+      const signal = processSignal ?? recorded.payload.signal
+      return {
+        outcome: recorded.payload.outcome,
+        exitCode,
+        ...(signal !== undefined ? { signal } : {}),
+        ...(recorded.payload.error !== undefined ? { error: recorded.payload.error } : {}),
+      }
     }
-    return { exitCode, ...(signal !== undefined ? { signal } : {}) }
+
+    const outcome: DispatchChildOutcome = forced
+      ? 'forced'
+      : stopping && exitCode === 0 && processSignal === undefined
+        ? 'normal'
+        : 'abnormal'
+    const error =
+      outcome === 'abnormal'
+        ? `kernel process exited with status ${exitCode}${
+            processSignal !== undefined ? ` (signal ${processSignal})` : ''
+          }`
+        : undefined
+    await deps.store.appendRepo(deps.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: {
+        run: deps.run,
+        outcome,
+        exitCode,
+        ...(processSignal !== undefined ? { signal: processSignal } : {}),
+        ...(error !== undefined ? { error } : {}),
+      },
+    })
+    return {
+      outcome,
+      exitCode,
+      ...(processSignal !== undefined ? { signal: processSignal } : {}),
+      ...(error !== undefined ? { error } : {}),
+    }
   })
 
   return {
@@ -205,6 +238,10 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
         // normal boundary; all non-tick work is lease-backed/recoverable and a
         // child stuck there is safe to terminate.
         const events = await deps.store.getRepoEvents(deps.repo)
+        // The child may have exited while the asynchronous journal read was in
+        // flight. Re-check at the force boundary so evidence never claims a
+        // SIGKILL that was not actually sent.
+        if (child.exitCode !== null) return
         if (hasOpenTick(events, deps.run)) {
           await child.exited
           return

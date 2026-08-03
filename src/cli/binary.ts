@@ -28,15 +28,37 @@ export function usesGenericSessionlessSigintHandler(command: string | undefined)
   return command !== 'upgrade' && command !== 'update'
 }
 
+export interface SessionlessSigintBoundary {
+  on(event: 'SIGINT', listener: () => void): unknown
+  once(event: 'SIGINT', listener: () => void): unknown
+  removeListener(event: 'SIGINT', listener: () => void): unknown
+}
+
+/** Dispatch keeps its listener through the complete child drain; ordinary
+ * sessionless commands preserve the historical one-shot cancellation. */
+export function installSessionlessSigintHandler(
+  command: string | undefined,
+  onSigint: () => void,
+  boundary: SessionlessSigintBoundary = process,
+): () => void {
+  if (!usesGenericSessionlessSigintHandler(command)) return () => {}
+  if (command === 'dispatch') boundary.on('SIGINT', onSigint)
+  else boundary.once('SIGINT', onSigint)
+  return () => boundary.removeListener('SIGINT', onSigint)
+}
+
 /** Install the dispatch-only process fallback around the exact CLI lifetime. */
 export async function withDispatchTerminalRestore<T>(
   command: string | undefined,
   terminal: TerminalOut,
   run: () => Promise<T>,
   boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
+  requestStop: () => void = () => {},
 ): Promise<T> {
   const hook =
-    command === 'dispatch' ? installTerminalRestoreHook(terminal.modes, boundary) : undefined
+    command === 'dispatch'
+      ? installTerminalRestoreHook(terminal.modes, boundary, requestStop)
+      : undefined
   try {
     return await run()
   } finally {
@@ -77,25 +99,30 @@ export async function runBinary(
     const onSigint = (): void => controller.abort()
     const ownsSigint = usesGenericSessionlessSigintHandler(command)
     const terminal = processTerminal(process.stdout)
-    if (ownsSigint) process.once('SIGINT', onSigint)
+    const removeSigint = installSessionlessSigintHandler(command, onSigint)
     try {
-      return await withDispatchTerminalRestore(command, terminal, () =>
-        runCli(argv, {
-          ...unscopedDeps,
-          ...(ownsSigint ? { signal: controller.signal } : {}),
-          // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
-          // TTY, so a pipe or redirect silently gets plain output.
-          terminal,
-          input: processTerminalInput(process.stdin),
-          ...(command === 'init'
-            ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
-            : {}),
-          upgradeResolverFactory: createUpgradeAgentResolver,
-          ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
-        }),
+      return await withDispatchTerminalRestore(
+        command,
+        terminal,
+        () =>
+          runCli(argv, {
+            ...unscopedDeps,
+            ...(ownsSigint ? { signal: controller.signal } : {}),
+            // `ab dispatch`'s dashboard seam: interactive iff stdout is a real
+            // TTY, so a pipe or redirect silently gets plain output.
+            terminal,
+            input: processTerminalInput(process.stdin),
+            ...(command === 'init'
+              ? { initInteractive: process.stdin.isTTY === true && process.stdout.isTTY === true }
+              : {}),
+            upgradeResolverFactory: createUpgradeAgentResolver,
+            ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
+          }),
+        process as unknown as TerminalRestoreProcess,
+        onSigint,
       )
     } finally {
-      if (ownsSigint) process.removeListener('SIGINT', onSigint)
+      removeSigint()
     }
   }
 
