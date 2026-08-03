@@ -8,8 +8,10 @@
  */
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
+import { scopeLocalStoreToSession } from '../store/session-scope'
 import type { BuildStore } from '../store/types'
-import { resolveRepoState, type RepoStatePaths } from './repo-state'
+import type { CliEnv, HarvestCliEnv } from './env'
+import { isRemoteStoreRef, resolveRepoState, type RepoStatePaths } from './repo-state'
 import { resolveStore } from './store-ref'
 
 /** Shared injection seam used by every command that opens a BuildStore. */
@@ -29,6 +31,20 @@ export const openProductionStore: StoreOpener = (ref, token) => {
     remoteFactory: (url, remoteToken) => new RemoteBuildStore({ url, token: remoteToken }),
     ...(forwardedToken !== undefined ? { token: forwardedToken } : {}),
   })
+}
+
+/** Open the Store for a validated phase/Harvest ambient identity. Remote
+ * handles retain their token-backed authorization unchanged; local handles
+ * receive the equivalent in-process resource and session authority. */
+export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildStore {
+  const store = openProductionStore(env.store, env.token)
+  if (isRemoteStoreRef(env.store)) return store
+  return scopeLocalStoreToSession(
+    store,
+    'build' in env
+      ? { kind: 'build', id: env.build, session: env.session }
+      : { kind: 'repo', id: env.repo, session: env.session },
+  )
 }
 
 export interface OpenedStoreContext extends RepoStatePaths {

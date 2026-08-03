@@ -9,7 +9,7 @@ import { isSessionlessInvocation, runCli } from './main'
 import { createUpgradeAgentResolver } from './upgrade-agent'
 import { loadDotEnv } from './dotenv'
 import { MissingAmbientContextError, resolveCliEnv, resolveHarvestCliEnv } from './env'
-import { openProductionStore } from './store-opening'
+import { openProductionSessionStore } from './store-opening'
 import { processTerminal, processTerminalInput, type TerminalOut } from './terminal'
 import { installTerminalRestoreHook, type TerminalRestoreProcess } from './terminal-restore'
 import type { DashboardRendererResolver } from './dashboard/render'
@@ -137,7 +137,7 @@ export async function runBinary(
       console.error(error instanceof Error ? error.message : String(error))
       return 1
     }
-    const store = openProductionStore(harvestEnv.store, harvestEnv.token)
+    const store = openProductionSessionStore(harvestEnv)
     try {
       return await runCli(argv, {
         ...unscopedDeps,
@@ -182,7 +182,7 @@ export async function runBinary(
     return 1
   }
 
-  const store = openProductionStore(cliEnv.store, cliEnv.token)
+  const store = openProductionSessionStore(cliEnv)
   try {
     return await runCli(argv, {
       ...unscopedDeps,
