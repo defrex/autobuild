@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#198](https://github.com/defrex/autobuild/pull/198) — Make dispatch shutdown child-safe
 - [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 
 ## v0.4.0 — 2026-08-03
