@@ -32,8 +32,18 @@ await Bun.sleep(60_000)
         env: { ...process.env, RECORDS: records },
         stopTimeoutMs: 100,
       })
-      const first = await execution.start({ slug: 'first', storeRef: '/store', instance: 'i-1' })
-      const second = await execution.start({ slug: 'second', storeRef: '/store', instance: 'i-2' })
+      const first = await execution.start({
+        slug: 'first',
+        storeRef: '/store',
+        instance: 'i-1',
+        parentPid: process.pid,
+      })
+      const second = await execution.start({
+        slug: 'second',
+        storeRef: '/store',
+        instance: 'i-2',
+        parentPid: process.pid,
+      })
       expect(first.pid).toBeNumber()
       expect(second.pid).toBeNumber()
       expect(first.pid).not.toBe(second.pid)
@@ -55,8 +65,8 @@ await Bun.sleep(60_000)
         .map((line) => JSON.parse(line))
         .sort((a, b) => a.slug.localeCompare(b.slug))
       expect(lines).toEqual([
-        { slug: 'first', storeRef: '/store', instance: 'i-1' },
-        { slug: 'second', storeRef: '/store', instance: 'i-2' },
+        { slug: 'first', storeRef: '/store', instance: 'i-1', parentPid: process.pid },
+        { slug: 'second', storeRef: '/store', instance: 'i-2', parentPid: process.pid },
       ])
     } finally {
       await rm(tmp, { recursive: true, force: true })

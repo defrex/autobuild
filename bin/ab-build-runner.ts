@@ -16,7 +16,9 @@ try {
     typeof parsed.storeRef === 'string' &&
     parsed.storeRef.length > 0 &&
     typeof parsed.instance === 'string' &&
-    parsed.instance.length > 0
+    parsed.instance.length > 0 &&
+    Number.isInteger(parsed.parentPid) &&
+    parsed.parentPid! > 0
   ) {
     input = parsed as BuildExecutionStart
   }
@@ -31,7 +33,7 @@ if (input === undefined) process.exit(2)
 const stop = (code: number): never => process.exit(code)
 process.on('SIGINT', () => stop(130))
 process.on('SIGTERM', () => stop(143))
-const parentWatch = watchBuildParent(process.ppid, () => stop(143))
+const parentWatch = watchBuildParent(input.parentPid, () => stop(143))
 
 let exitCode = 0
 try {

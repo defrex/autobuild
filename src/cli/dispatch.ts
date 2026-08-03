@@ -1642,6 +1642,7 @@ class DispatchLoop {
         slug,
         storeRef: this.wiring.storeRef,
         instance,
+        parentPid: process.pid,
       })
       active.handle = handle
 

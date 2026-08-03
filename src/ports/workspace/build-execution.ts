@@ -5,6 +5,9 @@ export interface BuildExecutionStart {
   slug: string
   storeRef: string
   instance: string
+  /** Expected supervising kernel pid. The local child uses this immutable
+   * identity even if it is reparented before its modules finish loading. */
+  parentPid: number
 }
 
 /** Child exit is liveness evidence only. It carries no pipeline outcome. */
