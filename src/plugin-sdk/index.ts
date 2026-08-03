@@ -4,6 +4,7 @@
  * `import type`) and run these same contracts against their adapters.
  */
 export type * from '../ports/types'
+export type * from '../ports/workspace/build-execution'
 export type * from '../store/types'
 export type {
   RuntimeRegistration,

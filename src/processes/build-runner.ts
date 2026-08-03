@@ -74,7 +74,7 @@ import type {
   Forge,
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { BuildStore, Clock } from '../store/types'
+import type { BuildScopedStore, Clock } from '../store/types'
 
 // ── Seams ────────────────────────────────────────────────────────────────────
 
@@ -123,11 +123,11 @@ export interface BuildRunnerOpts {
 }
 
 export interface BuildRunnerDeps {
-  store: BuildStore
+  store: BuildScopedStore
   config: Config
   /** Current dispatcher snapshot. It is sampled once for setup and once for
    * each engine/action boundary; omission preserves static runner callers. */
-  getConfig?: () => Config
+  getConfig?: () => Config | Promise<Config>
   /** Runtime registry: name → adapter + compatibility data (§9). The resolver
    * applies `config.roles`, including its reserved `default` entry, to it. */
   runtimes: RuntimeRegistry
@@ -357,8 +357,8 @@ export class BuildRunner {
     this.boundaryResolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
   }
 
-  private captureConfig(): Config {
-    const config = this.deps.getConfig?.() ?? this.deps.config
+  private async captureConfig(): Promise<Config> {
+    const config = (await this.deps.getConfig?.()) ?? this.deps.config
     this.boundaryConfig = config
     this.boundaryResolver = createRuntimeResolver(this.deps.runtimes, config.roles)
     return config
@@ -430,7 +430,7 @@ export class BuildRunner {
    * setup succeeds; that fact then proves recovery and clears the projection.
    */
   async attach(): Promise<AttachmentResult> {
-    const config = this.captureConfig()
+    const config = await this.captureConfig()
     const { store, slug, instance } = this.deps
     const claimed = await store.claimLease(slug, instance, this.leaseTtlMs)
     if (!claimed) throw new LeaseHeldError(slug, instance)
@@ -543,7 +543,7 @@ export class BuildRunner {
    * decision it executed; `wait` decisions execute nothing.
    */
   async step(): Promise<Decision> {
-    const config = this.captureConfig()
+    const config = await this.captureConfig()
     const { store, slug } = this.deps
     const events = await store.getEvents(slug)
     const decision = decideNext(events, config)

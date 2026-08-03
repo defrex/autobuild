@@ -109,6 +109,10 @@ export interface SubscribeOptions {
 }
 
 export interface BuildStore {
+  /** Return an interface-enforced handle with authority over exactly `slug`.
+   * The handle retains this shape so foreign/admin calls fail loudly. */
+  scopeBuild(slug: string): BuildScopedStore
+
   createBuild(input: NewBuildInput): Promise<BuildRecord>
   getBuild(slug: string): Promise<BuildRecord | null>
   listBuilds(): Promise<BuildRecord[]>
@@ -197,6 +201,13 @@ export interface BuildStore {
   releaseRepoLease(repo: string, holder: string): Promise<void>
 
   close(): Promise<void>
+}
+
+/** A BuildStore constrained to one build stream. `buildScope` is immutable;
+ * attempting to re-scope to another slug is an authority error. */
+export interface BuildScopedStore extends BuildStore {
+  readonly buildScope: string
+  scopeBuild(slug: string): BuildScopedStore
 }
 
 /** Shared runtime guard for in-process conditional append callers. */

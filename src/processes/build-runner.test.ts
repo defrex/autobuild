@@ -498,7 +498,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const selectedConfig = options.configToml !== undefined ? parseConfig(options.configToml) : config
   selectedConfig.roles.default ??= { runtime: 'scripted' }
   const br = new BuildRunner({
-    store,
+    store: store.scopeBuild(SLUG),
     config: selectedConfig,
     ...(options.getConfig !== undefined ? { getConfig: options.getConfig } : {}),
     runtimes: {
