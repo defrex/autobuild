@@ -108,6 +108,32 @@ describe('dispatch recovery event protocol', () => {
   })
 })
 
+describe('reconcile progress event protocol', () => {
+  test('progress checks are strict kernel facts tied to one conflict and completed attempt', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'reconcile.progress-checked',
+        payload: { conflictSeq: 42, attempt: 3, baseSha: 'abc123' },
+      }),
+    ).toMatchObject({ type: 'reconcile.progress-checked' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'reconcile.progress-checked',
+        payload: { conflictSeq: 42, attempt: 3, baseSha: 'abc123' },
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'reconcile.progress-checked',
+        payload: { conflictSeq: 0, attempt: 0, baseSha: '', extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+})
+
 describe('escalation answer protocol', () => {
   test('a human revise-spec answer may authorize an exact artifact revision', () => {
     expect(

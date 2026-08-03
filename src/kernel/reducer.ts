@@ -242,9 +242,10 @@ export interface BuildState {
     currentStep?: string
     cycleSince: number
   }
-  /** Highest `reconcile.started.attempt` — the kernel's own counter, so a
-   * re-run of the same attempt after sandbox death does not double-count.
-   * `policy.maxReconcileAttempts` gates on this (§15.7). */
+  /** Highest `reconcile.started.attempt` — the kernel's own occurrence
+   * counter, so a re-run of the same attempt after sandbox death does not
+   * double-count. Progress-budget accounting is projected separately from
+   * authoritative repeat-conflict evidence (§15.7). */
   reconcileAttempts: number
   /** `observation.recorded` payloads in order — harvest input (§12). */
   observations: ObservationRecord[]

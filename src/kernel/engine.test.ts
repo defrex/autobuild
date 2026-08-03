@@ -2437,6 +2437,21 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     ]
   }
 
+  function withProgressCheck(
+    historyEndingInConflict: EventWrite[],
+    completedAttempt: number,
+    baseSha: string,
+  ): EventWrite[] {
+    return [
+      ...historyEndingInConflict,
+      ev('reconcile.progress-checked', {
+        conflictSeq: historyEndingInConflict.length,
+        attempt: completedAttempt,
+        baseSha,
+      }),
+    ]
+  }
+
   test('an open PR waits for the janitor', () => {
     expect(decide(throughFinalize)).toEqual(wait('awaiting-pr'))
   })
@@ -2513,97 +2528,161 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     )
   })
 
-  test('conflicts past maxReconcileAttempts → policy escalation, once per conflict', () => {
-    const thrash = [
+  test('post-reconcile verification failures remain bounded by maxVerifyAttempts', () => {
+    const report = (attempt: number) => ({ kind: 'verify-report:types', rev: attempt })
+    expect(
+      decide([
+        ...throughFinalize,
+        ev('pr.conflicted', { baseSha: 'sha-main-2' }),
+        ev('reconcile.started', { attempt: 1, baseSha: 'sha-main-2' }),
+        ev('reconcile.completed', {
+          mergeCommit: 'sha-mc-1',
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        }),
+        ...verifyRun('types', 2, false, report(2)),
+        ...implementRound(2, 'sha-r2'),
+        ...codeReview(2, 'approve'),
+        ...verifyRun('types', 3, false, report(3)),
+        ...implementRound(3, 'sha-r3'),
+        ...codeReview(3, 'approve'),
+        ...verifyRun('types', 4, false, report(4)),
+      ]),
+    ).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'verify:types',
+      question: 'maxVerifyAttempts (3) exhausted: verify:types is still failing',
+    })
+  })
+
+  test('a repeat conflict requests one authoritative progress check before routing', () => {
+    const history = [
+      ...throughFinalize,
+      ...reconcileCycle(1, 'sha-main-2'),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    expect(decide(history)).toEqual({
+      kind: 'check-reconcile-progress',
+      conflictSeq: history.length,
+      completedAttempt: 1,
+      nextAttempt: 2,
+    })
+  })
+
+  test('moving-base races do not consume the budget, even past the attempt high-water cap', () => {
+    const history = [
       ...throughFinalize,
       ...reconcileCycle(1, 'sha-main-2'),
       ...reconcileCycle(2, 'sha-main-3'),
       ...reconcileCycle(3, 'sha-main-4'),
-      ev('pr.conflicted', { baseSha: 'sha-main-5' }),
+      ...reconcileCycle(4, 'sha-main-5'),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
     ]
+    expect(decide(withProgressCheck(history, 4, 'sha-main-6'))).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 5,
+      reconcile: { attempt: 5 },
+    })
+  })
+
+  test('only unchanged-base outcomes exhaust maxReconcileAttempts, once per conflict', () => {
+    const stable = 'sha-main-stable'
+    const history = [
+      ...throughFinalize,
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    const checked = withProgressCheck(history, 3, stable)
+    const question =
+      'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base'
     const expected: Decision = {
       kind: 'raise-escalation',
       source: 'policy',
       phase: 'reconcile',
-      question: 'maxReconcileAttempts (3) exhausted',
+      question,
     }
-    expect(decide(thrash)).toEqual(expected)
+    expect(decide(checked)).toEqual(expected)
     expect(
       decide([
-        ...thrash,
+        ...checked,
         ev(
           'escalation.raised',
-          {
-            id: 'e_9',
-            phase: 'reconcile',
-            source: 'policy',
-            question: 'maxReconcileAttempts (3) exhausted',
-          },
+          { id: 'e_9', phase: 'reconcile', source: 'policy', question },
           KERNEL,
         ),
       ]),
     ).toEqual(wait('blocked'))
   })
 
-  test('a later answered setup exhaustion does not mask reconcile crash-gap repair', () => {
-    const thrash = [
+  test('mixed history counts historical next-start observations but not races', () => {
+    const stable = 'sha-main-stable'
+    const history = [
       ...throughFinalize,
-      ...reconcileCycle(1, 'sha-main-2'),
-      ...reconcileCycle(2, 'sha-main-3'),
-      ...reconcileCycle(3, 'sha-main-4'),
-      ev('pr.conflicted', { baseSha: 'sha-main-5' }),
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable), // attempt 1 made no progress
+      ...reconcileCycle(3, 'sha-main-advanced'), // attempt 2 lost a race
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
     ]
-    expect(
-      decide([
-        ...thrash,
-        ev(
-          'escalation.raised',
-          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
-          KERNEL,
-        ),
-        ev('escalation.answered', {
-          id: 'e_setup',
-          answer: 'environment repaired',
-          resolution: 'guidance',
-        }),
-      ]),
-    ).toEqual({
-      kind: 'raise-escalation',
-      source: 'policy',
-      phase: 'reconcile',
-      question: 'maxReconcileAttempts (3) exhausted',
-    })
-  })
-
-  test('an answered escalation lets reconcile proceed past the cap', () => {
-    expect(
-      decide([
-        ...throughFinalize,
-        ...reconcileCycle(1, 'sha-main-2'),
-        ...reconcileCycle(2, 'sha-main-3'),
-        ...reconcileCycle(3, 'sha-main-4'),
-        ev('pr.conflicted', { baseSha: 'sha-main-5' }),
-        ev(
-          'escalation.raised',
-          {
-            id: 'e_9',
-            phase: 'reconcile',
-            source: 'policy',
-            question: 'maxReconcileAttempts (3) exhausted',
-          },
-          KERNEL,
-        ),
-        ev('escalation.answered', {
-          id: 'e_9',
-          answer: 'Keep trying, base settled.',
-          resolution: 'guidance',
-        }),
-      ]),
-    ).toEqual({
+    // The explicit unchanged check is only the second budget-consuming
+    // outcome, so attempt 4 remains due.
+    expect(decide(withProgressCheck(history, 3, 'sha-main-advanced'))).toEqual({
       kind: 'run-phase',
       phase: 'reconcile',
       round: 4,
       reconcile: { attempt: 4 },
+    })
+  })
+
+  test('an answered no-progress escalation permits one retry and the next unchanged conflict re-arms it', () => {
+    const stable = 'sha-main-stable'
+    const firstConflict = [
+      ...throughFinalize,
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    const checked = withProgressCheck(firstConflict, 3, stable)
+    const question =
+      'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base'
+    const answered = [
+      ...checked,
+      ev(
+        'escalation.raised',
+        { id: 'e_9', phase: 'reconcile', source: 'policy', question },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_9',
+        answer: 'Keep trying, base settled.',
+        resolution: 'guidance',
+      }),
+    ]
+    expect(decide(answered)).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 4,
+      reconcile: { attempt: 4 },
+    })
+
+    const nextConflict = [
+      ...answered,
+      ev('reconcile.started', { attempt: 4, baseSha: stable }),
+      ev('reconcile.completed', {
+        mergeCommit: 'sha-mc-4',
+        artifact: { kind: 'reconcile-notes', rev: 3 },
+      }),
+      ...verifyAllPass(5),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    expect(decide(withProgressCheck(nextConflict, 4, stable))).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'reconcile',
+      question,
     })
   })
 })

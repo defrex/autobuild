@@ -678,10 +678,17 @@ Optional. Every field receives its own default. All are positive integers except
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
-| `maxReconcileAttempts` | `3` | positive integer | Bound conflict-reconciliation cycles. |
+| `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
 | `maxReviewRounds` | `6` | positive integer | Bound each plan/review and implement/review convergence loop. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
+
+For each repeat conflict, Autobuild compares the base merged by the most recent
+completed reconcile with a fresh authoritative base snapshot. An advanced base
+proves the attempt lost a race and permits another reconcile regardless of the
+attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
+escalates when the bound is exhausted. Post-reconcile verification still runs
+in full and remains independently bounded by `maxVerifyAttempts`.
 
 Harvest is driven by repository pressure during dispatcher ticks, not a wall
 clock, and is independent of build `capacity`. A run starts when observation
