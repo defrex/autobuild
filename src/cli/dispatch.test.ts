@@ -31,6 +31,7 @@ import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut
 import { createTerminalModeController } from './terminal-restore'
 import type { UpgradeNoticeScheduler, UpgradeNoticeTimer } from './upgrade-notice'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import type { RepositoryEvent } from '../events/repository'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceHarvest } from '../kernel/harvest'
@@ -1114,7 +1115,7 @@ model = "gpt-slug-name"
 
   test('resumes an open harvest on startup and a later --once tick does not re-file it', async () => {
     const fx = await makeFixture(
-      [],
+      readyTicket('T-standing'),
       happyHandlers(),
       DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
     )
@@ -1208,6 +1209,35 @@ model = "gpt-slug-name"
         await createGate
         return originalCreate(...args)
       }
+      const standingDiagnostic = 'ticket source retained diagnostic'
+      const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+      fx.tickets.listReady = async (criteria) => ({
+        ...(await originalListReady(criteria)),
+        diagnostics: [standingDiagnostic],
+      })
+
+      let releaseStatus!: () => void
+      const statusGate = new Promise<void>((resolve) => {
+        releaseStatus = resolve
+      })
+      let markStatusStarted!: () => void
+      const statusStarted = new Promise<void>((resolve) => {
+        markStatusStarted = resolve
+      })
+      const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
+      let delayedStatus = false
+      fx.store.appendRepo = async (repo, event) => {
+        if (
+          !delayedStatus &&
+          event.type === 'dispatcher.tick-completed' &&
+          (event.payload as { run?: string }).run === 'harvest-accounting'
+        ) {
+          delayedStatus = true
+          markStatusStarted()
+          await statusGate
+        }
+        return originalAppendRepo(repo, event)
+      }
 
       const dispatch = abDispatch({
         targetRepo: fx.origin,
@@ -1216,6 +1246,8 @@ model = "gpt-slug-name"
         stdout: (line) => out.push(line),
         stderr: (line) => fx.err.push(line),
         once: true,
+        intake: false,
+        kernelRunId: 'harvest-accounting',
         wire: fx.wire,
       })
       let dispatchSettled = false
@@ -1227,13 +1259,19 @@ model = "gpt-slug-name"
           dispatchSettled = true
         },
       )
-      await createStarted
+      await Promise.all([createStarted, statusStarted])
       await Promise.resolve()
       expect(dispatchSettled).toBe(false)
+      // Let Harvest settle while the operational tick's durable completion is
+      // still awaiting the Store. A reset-after-await implementation erases
+      // these newly arrived counters.
       releaseCreate()
+      await waitFor(() => out.includes(`harvest ${run} completed`))
+      releaseStatus()
       await dispatch
 
-      expect(reduceHarvest(await fx.store.getRepoEvents(fx.origin)).latest).toMatchObject({
+      const firstEvents = await fx.store.getRepoEvents(fx.origin)
+      expect(reduceHarvest(firstEvents).latest).toMatchObject({
         run,
         status: 'completed',
       })
@@ -1241,20 +1279,53 @@ model = "gpt-slug-name"
       expect(await fx.tickets.get('fake-2')).toBeNull()
       expect(out).toContain('tick: harvestResumed=1 harvestCompleted=1')
 
-      const eventCount = (await fx.store.getRepoEvents(fx.origin)).length
+      const firstTicks = firstEvents.filter(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }> =>
+          event.type === 'dispatcher.tick-completed' && event.payload.run === 'harvest-accounting',
+      )
+      expect(firstTicks).toHaveLength(2)
+      expect(
+        firstEvents.filter(
+          (event) =>
+            event.type === 'dispatcher.tick-started' && event.payload.run === 'harvest-accounting',
+        ),
+      ).toHaveLength(1)
+      expect(firstTicks.map((event) => event.payload.counters.harvestResumed)).toEqual([0, 1])
+      expect(firstTicks.map((event) => event.payload.counters.harvestCompleted)).toEqual([0, 1])
+      expect(firstTicks[1]!.payload).toMatchObject({
+        queued: 1,
+        ticketDiagnostics: [standingDiagnostic],
+        counters: { harvestResumed: 1, harvestCompleted: 1 },
+      })
+
+      const nextOut: string[] = []
       await abDispatch({
         targetRepo: fx.origin,
         env: {},
         exec: spawnExec,
-        stdout: () => {},
+        stdout: (line) => nextOut.push(line),
         stderr: (line) => fx.err.push(line),
         once: true,
+        kernelRunId: 'harvest-accounting-next',
         wire: fx.wire,
       })
       expect(await fx.tickets.get('fake-2')).toBeNull()
-      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(eventCount)
+      const nextTicks = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }> =>
+          event.type === 'dispatcher.tick-completed' &&
+          event.payload.run === 'harvest-accounting-next',
+      )
+      expect(nextTicks).toHaveLength(1)
+      expect(nextTicks[0]!.payload.counters).toMatchObject({
+        harvestStarted: 0,
+        harvestResumed: 0,
+        harvestCompleted: 0,
+        harvestEscalated: 0,
+        harvestFailed: 0,
+      })
+      expect(nextOut.some((line) => line.includes('harvestResumed='))).toBe(false)
       expect(fx.cliErrors).toEqual([])
-      expect(fx.err).toEqual([])
+      expect(fx.err).toEqual([standingDiagnostic, standingDiagnostic])
     } finally {
       await fx.cleanup()
     }
@@ -1727,6 +1798,42 @@ describe('abDispatch watch build-runner coordination', () => {
   }, 30_000)
 })
 
+async function seedOpenHarvest(
+  fx: Fixture,
+  run: string,
+  observationId: string,
+  summary: string,
+): Promise<void> {
+  await fx.store.ensureRepo(fx.origin)
+  const packet = {
+    repo: fx.origin,
+    run,
+    observations: [
+      {
+        occurrence: { build: 'observation-source', seq: 1 },
+        id: observationId,
+        kind: 'latent-bug' as const,
+        summary,
+        ts: '2026-07-15T12:00:00.000Z',
+      },
+    ],
+    ledger: [],
+  }
+  await fx.store.appendRepoWithArtifacts(
+    fx.origin,
+    [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+    (deposited) => ({
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run,
+        observations: [{ build: 'observation-source', seq: 1 }],
+        scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+      },
+    }),
+  )
+}
+
 describe('abDispatch watch harvest coordination', () => {
   test('long harvest work does not block later ticks or SIGINT', async () => {
     const fx = await makeFixture(
@@ -1756,33 +1863,11 @@ describe('abDispatch watch harvest coordination', () => {
     let sleeps = 0
 
     try {
-      await fx.store.ensureRepo(fx.origin)
-      const packet = {
-        repo: fx.origin,
+      await seedOpenHarvest(
+        fx,
         run,
-        observations: [
-          {
-            occurrence: { build: 'observation-source', seq: 1 },
-            id: 'obs-watch-responsive',
-            kind: 'latent-bug' as const,
-            summary: 'a long harvest must not stop the outer loop',
-            ts: '2026-07-15T12:00:00.000Z',
-          },
-        ],
-        ledger: [],
-      }
-      await fx.store.appendRepoWithArtifacts(
-        fx.origin,
-        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
-        (deposited) => ({
-          actor: KERNEL,
-          type: 'harvest.started',
-          payload: {
-            run,
-            observations: [{ build: 'observation-source', seq: 1 }],
-            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          },
-        }),
+        'obs-watch-responsive',
+        'a long harvest must not stop the outer loop',
       )
 
       const dispatch = abDispatch({
@@ -1840,6 +1925,92 @@ describe('abDispatch watch harvest coordination', () => {
       expect(fx.err).toEqual([])
     } finally {
       if (!turnReleased) releaseTurn()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('publishes a Harvest result that settles at the watch shutdown boundary', async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    let releaseTurn!: () => void
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve
+    })
+    let markStarted!: () => void
+    const agentStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const blockingAgents = new ScriptedAgentRunner({
+      script: async () => {
+        markStarted()
+        await turnGate
+        return defaultTurnResult('released without terminal')
+      },
+    })
+    const run = 'h_watch_shutdown'
+    const stop = new AbortController()
+    const out: string[] = []
+    let sleeps = 0
+
+    try {
+      await seedOpenHarvest(
+        fx,
+        run,
+        'obs-watch-shutdown',
+        'a settled shutdown result must reach dispatcher accounting',
+      )
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await agentStarted
+            return
+          }
+          releaseTurn()
+          await waitFor(() => out.includes(`harvest ${run} failed`))
+          stop.abort()
+        },
+        kernelRunId: 'harvest-shutdown-accounting',
+        wire: () => ({
+          ...fx.wire(),
+          runtimes: {
+            claude: { runner: blockingAgents, servesModels: [] },
+            scripted: { runner: blockingAgents, servesModels: [] },
+          },
+        }),
+      })
+
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const ticks = events.filter(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }> =>
+          event.type === 'dispatcher.tick-completed' &&
+          event.payload.run === 'harvest-shutdown-accounting',
+      )
+      const starts = events.filter(
+        (event) =>
+          event.type === 'dispatcher.tick-started' &&
+          event.payload.run === 'harvest-shutdown-accounting',
+      )
+      expect(ticks).toHaveLength(starts.length + 1)
+      expect(ticks.at(-1)!.payload.counters).toMatchObject({
+        harvestResumed: 1,
+        harvestFailed: 1,
+      })
+      expect(out).toContain('tick: harvestResumed=1 harvestFailed=1')
+      expect(fx.err).toEqual([])
+    } finally {
+      releaseTurn()
+      stop.abort()
       await fx.cleanup()
     }
   }, 30_000)
