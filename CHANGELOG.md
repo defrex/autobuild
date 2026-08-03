@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#200](https://github.com/defrex/autobuild/pull/200) — Align dispatch accounting with settled Harvest results
 - [#199](https://github.com/defrex/autobuild/pull/199) — Preserve observation pressure in the isolated frontend
 - [#197](https://github.com/defrex/autobuild/pull/197) — Reject stale abort confirmations in isolated dispatch frontend
 - [#196](https://github.com/defrex/autobuild/pull/196) — Show the happy path in the README headline

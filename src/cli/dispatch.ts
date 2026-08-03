@@ -368,13 +368,21 @@ class DispatchLoop {
   /** Process-local fast path; the repository lease is the cross-process gate. */
   private harvestInFlight: Promise<void> | undefined
   /** Outcomes settle outside Dispatcher.tick(), then merge into the next
-   * printed report (or the final --once report after drain). */
+   * report publication (or a settlement-only publication during teardown). */
   private pendingHarvest = {
     harvestStarted: 0,
     harvestResumed: 0,
     harvestCompleted: 0,
     harvestEscalated: 0,
     harvestFailed: 0,
+  }
+  /** Settlement-only publications carry the latest standing status instead of
+   * manufacturing a zero queue measurement or losing diagnostics. */
+  private lastTickStatus = {
+    queued: 0,
+    janitorDiagnostics: [] as string[],
+    ticketDiagnostics: [] as string[],
+    dependencyDiagnostics: [] as string[],
   }
   /**
    * Interactive dashboard on. `opts.terminal?.interactive === true` — an
@@ -588,34 +596,20 @@ class DispatchLoop {
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
       })
-      const displayedQueued = readyObservation?.queued ?? report.queued
-      this.queuedCount = displayedQueued
-      if (this.opts.kernelRunId !== undefined) {
-        const {
-          queued: _legacyQueued,
-          janitorDiagnostics,
-          ticketDiagnostics,
-          dependencyDiagnostics,
-          ...reportCounters
-        } = report
-        const counters = {
-          ...reportCounters,
-          invalidTickets: readyObservation?.invalidTickets ?? reportCounters.invalidTickets,
-        }
-        await this.appendStatus({
-          actor: DISPATCHER,
-          type: 'dispatcher.tick-completed',
-          payload: {
-            run: this.opts.kernelRunId,
-            queued: displayedQueued,
-            counters,
-            janitorDiagnostics,
-            ticketDiagnostics: readyObservation?.ticketDiagnostics ?? ticketDiagnostics,
-            dependencyDiagnostics,
-          },
-        })
+      const publishedReport: TickReport = {
+        ...report,
+        queued: readyObservation?.queued ?? report.queued,
+        invalidTickets: readyObservation?.invalidTickets ?? report.invalidTickets,
+        ticketDiagnostics: readyObservation?.ticketDiagnostics ?? report.ticketDiagnostics,
       }
-      return report
+      this.queuedCount = publishedReport.queued
+      this.lastTickStatus = {
+        queued: publishedReport.queued,
+        janitorDiagnostics: [...publishedReport.janitorDiagnostics],
+        ticketDiagnostics: [...publishedReport.ticketDiagnostics],
+        dependencyDiagnostics: [...publishedReport.dependencyDiagnostics],
+      }
+      return (await this.publishTickReport(publishedReport))!
     })
   }
 
@@ -1569,21 +1563,80 @@ class DispatchLoop {
     }
   }
 
-  /** Merge asynchronously settled harvest outcomes exactly once. */
-  private consumeHarvestResults(report: TickReport): TickReport {
-    report.harvestStarted += this.pendingHarvest.harvestStarted
-    report.harvestResumed += this.pendingHarvest.harvestResumed
-    report.harvestCompleted += this.pendingHarvest.harvestCompleted
-    report.harvestEscalated += this.pendingHarvest.harvestEscalated
-    report.harvestFailed += this.pendingHarvest.harvestFailed
-    this.pendingHarvest = {
-      harvestStarted: 0,
-      harvestResumed: 0,
-      harvestCompleted: 0,
-      harvestEscalated: 0,
-      harvestFailed: 0,
+  private hasPendingHarvestResults(): boolean {
+    return (
+      this.pendingHarvest.harvestStarted > 0 ||
+      this.pendingHarvest.harvestResumed > 0 ||
+      this.pendingHarvest.harvestCompleted > 0 ||
+      this.pendingHarvest.harvestEscalated > 0 ||
+      this.pendingHarvest.harvestFailed > 0
+    )
+  }
+
+  /** Publish one report from one Harvest snapshot. Acknowledgement subtracts
+   * only that snapshot after the durable append, preserving outcomes that
+   * settle while the Store write is in flight and retaining all counters when
+   * publication fails. */
+  private async publishTickReport(
+    report: TickReport,
+    settlementOnly = false,
+  ): Promise<TickReport | undefined> {
+    const snapshot = { ...this.pendingHarvest }
+    if (
+      settlementOnly &&
+      snapshot.harvestStarted === 0 &&
+      snapshot.harvestResumed === 0 &&
+      snapshot.harvestCompleted === 0 &&
+      snapshot.harvestEscalated === 0 &&
+      snapshot.harvestFailed === 0
+    ) {
+      return undefined
     }
-    return report
+
+    const merged: TickReport = {
+      ...report,
+      harvestStarted: report.harvestStarted + snapshot.harvestStarted,
+      harvestResumed: report.harvestResumed + snapshot.harvestResumed,
+      harvestCompleted: report.harvestCompleted + snapshot.harvestCompleted,
+      harvestEscalated: report.harvestEscalated + snapshot.harvestEscalated,
+      harvestFailed: report.harvestFailed + snapshot.harvestFailed,
+    }
+    const {
+      queued: _queued,
+      janitorDiagnostics: _janitorDiagnostics,
+      ticketDiagnostics: _ticketDiagnostics,
+      dependencyDiagnostics: _dependencyDiagnostics,
+      ...counters
+    } = merged
+    await this.appendStatus({
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run: this.opts.kernelRunId!,
+        ...this.lastTickStatus,
+        counters,
+      },
+    })
+
+    this.pendingHarvest.harvestStarted -= snapshot.harvestStarted
+    this.pendingHarvest.harvestResumed -= snapshot.harvestResumed
+    this.pendingHarvest.harvestCompleted -= snapshot.harvestCompleted
+    this.pendingHarvest.harvestEscalated -= snapshot.harvestEscalated
+    this.pendingHarvest.harvestFailed -= snapshot.harvestFailed
+    return merged
+  }
+
+  /** Settlement-only completions are serialized after operational ticks. Loop
+   * so a result arriving during an awaited status append gets its own report. */
+  private publishSettlementReports(): Promise<TickReport[]> {
+    return this.serialize(async () => {
+      const reports: TickReport[] = []
+      while (this.hasPendingHarvestResults()) {
+        const report = await this.publishTickReport(emptyTickReport(), true)
+        if (report !== undefined) reports.push(report)
+      }
+      return reports
+    })
   }
 
   /** Construct a BuildRunner over the shared store/workspace and start it
@@ -2110,13 +2163,14 @@ class DispatchLoop {
       try {
         this.startInput()
         this.startRendering()
-        const initial = this.consumeHarvestResults(await this.dispatcherTick(true))
+        const initial = await this.dispatcherTick(true)
         const initialPrinted = this.printReport(initial, false)
         await this.drainInFlight()
-        const settledPrinted = this.printReport(
-          this.consumeHarvestResults(emptyTickReport()),
-          false,
-        )
+        const settledReports = await this.publishSettlementReports()
+        let settledPrinted = false
+        for (const report of settledReports) {
+          settledPrinted = this.printReport(report, false) || settledPrinted
+        }
         if (!initialPrinted && !settledPrinted) {
           this.printReport(emptyTickReport())
         }
@@ -2143,7 +2197,7 @@ class DispatchLoop {
       let startup = true
       while (!this.stopped) {
         try {
-          const report = this.consumeHarvestResults(await this.dispatcherTick(startup))
+          const report = await this.dispatcherTick(startup)
           this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
@@ -2159,11 +2213,13 @@ class DispatchLoop {
         await sleep(intervalMs)
       }
     } finally {
-      // A result that settled after the final tick still gets one attributed
-      // counter line; active work is deliberately not awaited in watch mode.
-      this.printReport(this.consumeHarvestResults(emptyTickReport()), false)
-      // SIGINT lands here too: without it the region keeps the cursor hidden.
+      // Stop input and join teardown work first so every result that becomes
+      // reportable at that boundary is included. Active Harvest work is still
+      // deliberately not awaited in watch mode.
       await this.finishRendering()
+      for (const report of await this.publishSettlementReports()) {
+        this.printReport(report, false)
+      }
     }
     // The finished interactive frame stays on screen; never append a late line
     // beneath it. Plain mode retains its historical shutdown line.
