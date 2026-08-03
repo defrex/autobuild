@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#200](https://github.com/defrex/autobuild/pull/200) — Align dispatch accounting with settled Harvest results
 - [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 
 ## v0.4.0 — 2026-08-03
