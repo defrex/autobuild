@@ -59,6 +59,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'headline-happy-wide',
     'mixed-wide',
     'mixed-narrow',
     'unicode-transcript',
@@ -66,6 +67,10 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
+  expect(report).toContain('headline-happy-wide.png')
+  expect(report).toContain('## Headline visual verdict')
+  expect(report).toContain('Headline verdict: **[record pass or fail after opening the PNG]**')
+  expect(report).toContain('## Verification-fixture visual checklist')
   expect(report).toContain('mixed-wide.png')
   expect(report).toContain('mixed-narrow.txt')
   expect(report).toContain('- [ ] Every PNG opens and is non-empty.')
@@ -82,7 +87,14 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id.startsWith('mixed-')) {
+    if (frame.id === 'headline-happy-wide') {
+      expect(frame.text).toContain('AUT-131')
+      expect(frame.text).toContain('AUT-129')
+      expect(frame.text).toContain('AUT-133')
+      expect(frame.text).toContain('AUT-134')
+      expect(frame.text).toContain('AUT-136')
+      expect(frame.text).not.toContain('BLOCKED')
+    } else if (frame.id.startsWith('mixed-')) {
       expect(frame.text).toContain('CAP-PLAN')
       expect(frame.text).toContain('CAP-IMPLEMENT')
       expect(frame.text).toContain('CAP-COMPLETE')
@@ -95,9 +107,33 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Transcript  complete-dashboard-evidence')
       expect(frame.text).toContain('Agent: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦')
     }
-    if (frame.id !== 'unicode-transcript') expect(frame.text).toContain('BLOCKED')
+    if (frame.id !== 'unicode-transcript' && frame.id !== 'headline-happy-wide') {
+      expect(frame.text).toContain('BLOCKED')
+    }
     expect(frame.text).not.toContain('\x1b')
   }
+  const headline = first.result.frames.find((frame) => frame.id === 'headline-happy-wide')!.text
+  expect(headline).toContain('intake ON')
+  expect(headline).toContain('auto merge ON')
+  expect(headline).toContain('harvest ON')
+  expect(headline).toContain('active 5/6')
+  expect(headline).toMatch(/Harvest\s+3 observations\s+RUNNING/)
+  expect(headline).toMatch(/\[x\] scan\([^)]*\) \[>\] synthesize/)
+  expect(headline).toMatch(/AUT-136[\s\S]*?\[>\] plan/)
+  expect(headline).toMatch(/AUT-134[\s\S]*?\[>\] implement/)
+  expect(headline).toMatch(/AUT-133[\s\S]*?\[>\] code-review/)
+  expect(headline).toMatch(/AUT-129[\s\S]*?\[>\] verify:unit/)
+  expect(headline).toMatch(/AUT-131.*PR merged/)
+  expect(headline).toMatch(/plan\([^)]*\/2\)/)
+  expect(headline).toMatch(/plan-review\([^)]*\/2\)/)
+  expect(headline.match(/AUT-\d+/g)).toHaveLength(5)
+  expect(headline).not.toMatch(/\b(?:BLOCKED|PAUSED|held|error|failed|failure)\b/i)
+  expect(headline).not.toContain('CAP-')
+  expect(headline).not.toMatch(/(?:capture|fixture|harness)/i)
+  expect(headline).not.toContain('more rows - Enter details')
+  expect(headline).not.toContain('naïve — “日本語”')
+  expect(headline.split('\n').some((line) => line.endsWith('~'))).toBe(false)
+
   for (const id of ['mixed-wide', 'mixed-narrow']) {
     const mixed = first.result.frames.find((frame) => frame.id === id)!.text
     expect(mixed).toContain('repository PAUSED')
@@ -152,4 +188,29 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'implement-blocked-dashboard',
     'plan-blocked-dashboard',
   ])
+  expect(first.result.diagnostics.happy.buildEventsAfter).toEqual(
+    first.result.diagnostics.happy.buildEventsBefore,
+  )
+  expect(first.result.diagnostics.happy.repoJournalUnchanged).toBe(true)
+  expect(first.result.diagnostics.happy.forgePolls).toBeGreaterThan(0)
+  expect(first.result.diagnostics.happy.autoMergeCalls).toBe(0)
+  expect(first.result.diagnostics.happy.squashMergeCalls).toBe(0)
+  expect(first.result.diagnostics.happy.buildEventsAfter['cache-warm-on-deploy'].at(-1)).toBe(
+    'pr.merged',
+  )
+  expect(first.result.diagnostics.happy.buildEventsAfter['cache-warm-on-deploy']).not.toContain(
+    'build.completed',
+  )
+  expect(first.result.diagnostics.happy.buildEventsAfter['dashboard-key-legend'].at(-1)).toBe(
+    'implement.started',
+  )
+  expect(first.result.diagnostics.happy.buildEventsAfter['harvest-dedup-window'].at(-1)).toBe(
+    'plan.started',
+  )
+  expect(first.result.diagnostics.happy.buildEventsAfter['parallel-verify-steps'].at(-1)).toBe(
+    'verify.started',
+  )
+  expect(first.result.diagnostics.happy.buildEventsAfter['ticket-source-adapters'].at(-1)).toBe(
+    'code-review.started',
+  )
 }, 30_000)

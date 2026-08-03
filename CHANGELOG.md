@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#196](https://github.com/defrex/autobuild/pull/196) — Show the happy path in the README headline
 - [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 
 ## v0.4.0 — 2026-08-03
