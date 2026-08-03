@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#197](https://github.com/defrex/autobuild/pull/197) — Reject stale abort confirmations in isolated dispatch frontend
 - [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 
 ## v0.4.0 — 2026-08-03
