@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#196](https://github.com/defrex/autobuild/pull/196) — Show the happy path in the README headline
+
 ## v0.4.0 — 2026-08-03
 
 - [#194](https://github.com/defrex/autobuild/pull/194) — Notify interactive dispatchers about available upgrades
