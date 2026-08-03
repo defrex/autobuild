@@ -4,9 +4,11 @@ import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import { reduceHarvest } from '../kernel/harvest'
+import type { BuildState } from '../kernel/reducer'
+import { scanUnclaimedObservations } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
-import { buildControlUser, controlBuild } from './build-control'
+import { BuildControlError, buildControlUser, controlBuild } from './build-control'
 import { bulkControlReport, bulkControlRepository } from './bulk-control'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import {
@@ -41,6 +43,24 @@ import {
 
 const POLL_MS = 500
 const PAINT_MS = 250
+const ABORTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'blocked'])
+
+function validAbortConfirmation(state: BuildState | undefined): boolean {
+  return (
+    state !== undefined &&
+    ABORTABLE_STATUSES.has(state.status) &&
+    !state.pendingCommands.some((command) => command.command === 'abort')
+  )
+}
+
+function isStaleAbortControlError(error: unknown): error is BuildControlError {
+  return (
+    error instanceof BuildControlError &&
+    ['not-found', 'wrong-repository', 'inactive', 'no-longer-active', 'abort-pending'].includes(
+      error.code,
+    )
+  )
+}
 
 function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
   return (
@@ -97,6 +117,10 @@ export class DispatchFrontend {
   private config: Config | undefined
   private configRef: string | undefined
   private configRevision = 0
+  /** Display-only pressure is sampled by the Store-only frontend. Undefined
+   * means no factual sample has succeeded yet; failures retain the last value. */
+  private observationCount: number | undefined
+  private observationRefreshDiagnostic: string | undefined
   private model: DashboardModel | undefined
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private view: DashboardView | undefined
@@ -110,6 +134,7 @@ export class DispatchFrontend {
   private pollInFlight: Promise<void> | undefined
   private actionTail: Promise<void> = Promise.resolve()
   private presentationRestored = false
+  private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
     this.clock = opts.clock ?? systemClock
@@ -244,8 +269,8 @@ export class DispatchFrontend {
   }
 
   private async renderOnce(): Promise<void> {
-    const repositoryEvents = await this.events()
-    const status = this.dispatchStatus
+    let repositoryEvents = await this.events()
+    let status = this.dispatchStatus
     const ref = status.effectiveConfig
     // No filesystem fallback: the first frame waits for the child's durable,
     // run-correlated effective snapshot.
@@ -256,6 +281,22 @@ export class DispatchFrontend {
       return
     }
     const config = await this.loadConfig(ref.kind, ref.rev)
+    try {
+      const scan = await scanUnclaimedObservations(this.opts.store, this.opts.repo)
+      this.observationCount = scan.observations.length
+      this.observationRefreshDiagnostic = undefined
+    } catch (error) {
+      this.observationRefreshDiagnostic = `dashboard observation refresh failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      // Before the first successful sample there is no factual zero to place in
+      // a complete frame. Paint only the actionable diagnostic and retry on the
+      // next ordinary poll, without manufacturing a repository notice.
+      if (this.observationCount === undefined) {
+        this.region.update([this.observationRefreshDiagnostic])
+        return
+      }
+    }
     this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
     const snapshot = await this.cache.refresh(config, this.configRevision)
     if (!this.cache.isCurrent(snapshot)) return
@@ -268,12 +309,11 @@ export class DispatchFrontend {
       else this.resumePrompt = { ...this.resumePrompt, escalationIds: remaining }
     }
     if (this.abortConfirmation !== undefined) {
-      const state = snapshot.states.get(this.abortConfirmation.slug)
-      if (
-        state === undefined ||
-        state.pendingCommands.some((command) => command.command === 'abort')
-      ) {
-        this.abortConfirmation = undefined
+      const slug = this.abortConfirmation.slug
+      if (!validAbortConfirmation(snapshot.states.get(slug))) {
+        await this.dismissStaleAbortConfirmation(slug)
+        repositoryEvents = await this.events()
+        status = this.dispatchStatus
       }
     }
 
@@ -282,6 +322,9 @@ export class DispatchFrontend {
       ...status.roleWarnings,
       ...status.diagnostics,
       ...(status.notice !== undefined ? [status.notice] : []),
+      ...(this.observationRefreshDiagnostic !== undefined
+        ? [this.observationRefreshDiagnostic]
+        : []),
     ]
     const projected = buildDashboardFromProjected(
       snapshot.builds,
@@ -292,7 +335,8 @@ export class DispatchFrontend {
           (state) => state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: config.capacity,
-        observationCount: status.observations ?? 0,
+        observationCount: this.observationCount,
+        observationLimit: config.policy.harvestThreshold,
         ...(status.availableUpgrade !== undefined
           ? { availableUpgrade: status.availableUpgrade }
           : {}),
@@ -422,6 +466,40 @@ export class DispatchFrontend {
     else return
     this.syncControls()
     this.paint()
+  }
+
+  private async dismissStaleAbortConfirmation(slug: string): Promise<void> {
+    if (this.abortConfirmation?.slug === slug) this.abortConfirmation = undefined
+    await this.report(
+      `build ${slug}: abort confirmation dismissed because the build state changed`,
+      'warning',
+    )
+  }
+
+  private async confirmAbort(slug: string): Promise<void> {
+    await this.events()
+    const ref = this.dispatchStatus.effectiveConfig
+    if (ref === undefined) throw new Error('effective config is not available')
+    const config = await this.loadConfig(ref.kind, ref.rev)
+    this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
+    let snapshot = await this.cache.refresh(config, this.configRevision)
+    while (!this.cache.isCurrent(snapshot)) {
+      snapshot = await this.cache.refresh(config, this.configRevision)
+    }
+
+    if (!validAbortConfirmation(snapshot.states.get(slug))) {
+      await this.dismissStaleAbortConfirmation(slug)
+      await this.renderOnce()
+      return
+    }
+
+    try {
+      await this.buildAction('abort', slug)
+    } catch (error) {
+      if (!isStaleAbortControlError(error)) throw error
+      await this.dismissStaleAbortConfirmation(slug)
+      await this.renderOnce()
+    }
   }
 
   private async buildAction(
@@ -580,8 +658,7 @@ export class DispatchFrontend {
   private onInput(input: TerminalInputEvent): void {
     if (!this.accepting) return
     if (input.type === 'interrupt') {
-      this.restorePresentationForStop()
-      void this.child?.stop()
+      this.requestOperatorStop()
       return
     }
     if (this.resumePrompt !== undefined) {
@@ -593,7 +670,7 @@ export class DispatchFrontend {
       if (enter) {
         const slug = this.abortConfirmation.slug
         this.abortConfirmation = undefined
-        this.queue(() => this.buildAction('abort', slug))
+        this.queue(() => this.confirmAbort(slug))
       } else if (input.type === 'escape') {
         this.abortConfirmation = undefined
         this.syncControls()
@@ -712,6 +789,12 @@ export class DispatchFrontend {
     poll()
   }
 
+  private requestOperatorStop(): void {
+    this.operatorStopRequested = true
+    this.restorePresentationForStop()
+    void this.child?.stop()
+  }
+
   /** Stop terminal ownership synchronously before awaiting a kernel that may
    * still be finishing an unsafe ticket-claim tick. Normal/abnormal child exits
    * retain the final-frame path below; operator interruption prioritizes shell
@@ -788,17 +871,25 @@ export class DispatchFrontend {
       env: this.opts.env,
       options,
     })
-    const stop = (): void => {
-      this.restorePresentationForStop()
-      void this.child?.stop()
-    }
+    const stop = (): void => this.requestOperatorStop()
     this.opts.signal?.addEventListener('abort', stop, { once: true })
     try {
       this.startPresentation()
-      if (this.opts.signal?.aborted) await this.child.stop()
+      if (this.opts.signal?.aborted) this.requestOperatorStop()
       const result = await this.child.completed
-      if (result.exitCode !== 0 && !this.opts.signal?.aborted) {
-        throw new Error(`dispatcher kernel exited with status ${result.exitCode}`)
+      if (
+        !(result.outcome === 'normal' && result.exitCode === 0) &&
+        !(result.outcome === 'forced' && this.operatorStopRequested)
+      ) {
+        const processDetails = [
+          `exit code ${result.exitCode}`,
+          ...(result.signal !== undefined ? [`signal ${result.signal}`] : []),
+        ].join(', ')
+        throw new Error(
+          result.error !== undefined
+            ? `dispatcher kernel failed: ${result.error} (${processDetails})`
+            : `dispatcher kernel ${result.outcome} (${processDetails})`,
+        )
       }
     } finally {
       this.opts.signal?.removeEventListener('abort', stop)

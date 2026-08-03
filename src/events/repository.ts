@@ -44,6 +44,8 @@ const tickCountersSchema = z.strictObject({
   bounced: z.number().int().nonnegative(),
   claimRaces: z.number().int().nonnegative(),
   invalidTickets: z.number().int().nonnegative(),
+  /** Added in plugin/API-era 1.4; optional so historical tick facts replay. */
+  creationWithheld: z.number().int().nonnegative().optional(),
   dependencyBlocked: z.number().int().nonnegative(),
   harvestStarted: z.number().int().nonnegative(),
   harvestResumed: z.number().int().nonnegative(),
@@ -220,10 +222,13 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.tick-completed': z.strictObject({
     run: dispatchRun,
     queued: z.number().int().nonnegative(),
-    observations: z.number().int().nonnegative(),
+    /** Replay-only compatibility for journals written while the isolated
+     * dispatcher child transported a display sample in its tick fact. */
+    observations: z.number().int().nonnegative().optional(),
     counters: tickCountersSchema,
     janitorDiagnostics: boundedDiagnostics,
     ticketDiagnostics: boundedDiagnostics,
+    creationDiagnostics: boundedDiagnostics.optional(),
     dependencyDiagnostics: boundedDiagnostics,
   }),
   'dispatcher.tick-failed': z.strictObject({ run: dispatchRun, error: z.string().min(1) }),

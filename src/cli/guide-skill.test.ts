@@ -201,14 +201,19 @@ describe('ab-guide — dispatch dashboard summary', () => {
     const section = headingSection('## Dispatch dashboard')
     expect(section).toBeDefined()
     const compact = section?.replace(/\s+/g, ' ') ?? ''
-    expect(compact).toContain('`queue <depth> | active <current>/<limit> | observations <count>`')
+    expect(compact).toContain(
+      '`queue <depth> | active <current>/<limit> | observations <current>/<limit>`',
+    )
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
     expect(compact).toContain(
       '`active` is the current nonterminal-build count against root `capacity`',
     )
     expect(compact).toContain(
-      '`observations` is the count of recorded observation occurrences not yet claimed by a Harvest snapshot',
+      '`observations` is the count of recorded observation occurrences not yet claimed by a Harvest snapshot against `policy.harvestThreshold`',
     )
+    expect(compact).toContain('refreshes that display value directly from the BuildStore')
+    expect(compact).toContain('failed refresh retains the last successful count')
+    expect(compact).toContain('appends no transport event')
     expect(compact).not.toContain('`obs`')
     expect(compact).not.toContain('`drift`')
     expect(compact).not.toContain('renders as `/0`')

@@ -51,6 +51,7 @@ import { decideNext } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
+  harvestCreationsDuringReadyScan,
   reduceHarvest,
 } from '../kernel/harvest'
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
@@ -254,8 +255,8 @@ export function validateSlugCandidate(candidate: string | null | undefined): str
 // ── Tick report ──────────────────────────────────────────────────────────────
 
 /** Counts per action, for observability and tests. An idempotent re-run of
- * `tick()` over unchanged state reports all zeroes — except invalid-record and
- * dependency fields, which are standing queue reports rather than records of
+ * `tick()` over unchanged state reports all zeroes — except invalid-record,
+ * in-flight-creation, and dependency fields, which are standing queue reports rather than records of
  * action. They repeat on every ready scan by design, because that is the only
  * place the source problems are visible without provider inspection. */
 export interface TickReport {
@@ -299,6 +300,11 @@ export interface TickReport {
    * the queue this tick (dispatched, bounced, or claimed elsewhere). Like the
    * invalid/dependency fields it re-reports on every ready scan. */
   queued: number
+  /** Ready tickets withheld while Autobuild's own external creation is still
+   * between durable reservation and settled blocker recording. */
+  creationWithheld: number
+  /** One line per creation hold, with Harvest run/proposal provenance. */
+  creationDiagnostics: string[]
   /** Dependency gate (§13): ready tickets held back by unresolved blockers. */
   dependencyBlocked: number
   /** One line per held ticket naming its unresolved blockers — the operator's
@@ -334,6 +340,8 @@ export function emptyTickReport(): TickReport {
     invalidTickets: 0,
     ticketDiagnostics: [],
     queued: 0,
+    creationWithheld: 0,
+    creationDiagnostics: [],
     dependencyBlocked: 0,
     dependencyDiagnostics: [],
     harvestStarted: 0,
@@ -584,10 +592,13 @@ export class Dispatcher {
     }
   }
 
+  private async repositoryEvents() {
+    if ((await this.deps.store.getRepo(this.deps.repo)) === null) return []
+    return this.deps.store.getRepoEvents(this.deps.repo)
+  }
+
   private async repositoryPaused(): Promise<boolean> {
-    if ((await this.deps.store.getRepo(this.deps.repo)) === null) return false
-    const events = await this.deps.store.getRepoEvents(this.deps.repo)
-    return reduceDispatchSettings(events).paused
+    return reduceDispatchSettings(await this.repositoryEvents()).paused
   }
 
   private async triggerHarvest(): Promise<void> {
@@ -1435,11 +1446,32 @@ export class Dispatcher {
     // standing queue-depth report and must stay honest exactly when the
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
+    const journalBeforeReady = await this.repositoryEvents()
     const listing = await tickets.listReady(readyCriteria(config))
+    const journalAfterReady = await this.repositoryEvents()
+    const creationHolds = new Map(
+      harvestCreationsDuringReadyScan(journalBeforeReady, journalAfterReady).map((creation) => [
+        creation.creationKey.toLowerCase(),
+        creation,
+      ]),
+    )
     const ready = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id))
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length
+    const withheld = new Set<string>()
+    for (const ticket of ready) {
+      if (ticket.creationKey === undefined) continue
+      const creation = creationHolds.get(ticket.creationKey.toLowerCase())
+      if (creation === undefined) continue
+      withheld.add(ticket.ref.id)
+      report.creationWithheld += 1
+      report.creationDiagnostics.push(
+        `ticket ${ticket.ref.id}: creation withheld — Harvest run ${creation.run}, ` +
+          `proposal ${creation.proposalKey}, reservation repo seq ${creation.reservationSeq} ` +
+          'has not reached a safe post-create listing boundary',
+      )
+    }
     // This stage creates a build and launches it in one step, so it is also a
     // way to attach a runner to a queued build. A pause-all turns intake off,
     // so in practice this stage does not run while paused; it becomes reachable
@@ -1456,6 +1488,11 @@ export class Dispatcher {
 
     for (const ticket of ready) {
       if (capacity <= 0) break
+
+      // Autobuild's own in-flight create gate precedes even dependency reads:
+      // the ready projection may have been captured before blocker recording.
+      // It spends no capacity and leaves queue depth unchanged.
+      if (withheld.has(ticket.ref.id)) continue
 
       // The dependency gate runs FIRST — before the claim, before the spec
       // gate. A blocked ticket must not be claimed, must not be bounced, must

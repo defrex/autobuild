@@ -153,7 +153,10 @@ before invoking the adapter factory. Plugins using Forge abort-cleanup and
 AgentRunner turn-cancellation capabilities introduced in API 1.2 should require
 `^1.2.0`. The structured failure `cause` and provider-exhaustion contract
 scenario were added in API 1.3; a runtime plugin that relies on them should
-require `^1.3.0`.
+require `^1.3.0`. API 1.4 adds the optional `Ticket.creationKey` projection: a
+ticket-source plugin should return its stable external create/adoption key from
+create, get, and ready listings so dispatch can correlate Autobuild's durable
+in-flight creations. Legacy tickets may omit it and remain dispatchable.
 
 ```ts
 import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
@@ -675,10 +678,17 @@ Optional. Every field receives its own default. All are positive integers except
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
-| `maxReconcileAttempts` | `3` | positive integer | Bound conflict-reconciliation cycles. |
+| `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
 | `maxReviewRounds` | `6` | positive integer | Bound each plan/review and implement/review convergence loop. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
+
+For each repeat conflict, Autobuild compares the base merged by the most recent
+completed reconcile with a fresh authoritative base snapshot. An advanced base
+proves the attempt lost a race and permits another reconcile regardless of the
+attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
+escalates when the bound is exhausted. Post-reconcile verification still runs
+in full and remains independently bounded by `maxVerifyAttempts`.
 
 Harvest is driven by repository pressure during dispatcher ticks, not a wall
 clock, and is independent of build `capacity`. A run starts when observation
@@ -688,10 +698,14 @@ uses the oldest unclaimed observation, counts only later same-repository
 builds. Whichever trigger fires, Harvest claims the complete current
 accumulation and records `count`, `drift`, or `both` on the durable start fact.
 The dashboard header reports
-`queue <depth> | active <current>/<limit> | observations <count>`. The
-observation figure is the current unclaimed occurrence count; trigger thresholds
-are not dashboard state. The repository lease and fixed per-run recovery budget
-are implementation invariants, not additional configuration fields.
+`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
+The observation current value is the unclaimed occurrence count and its limit is
+`policy.harvestThreshold`. The interactive frontend refreshes that display-only
+count directly from the BuildStore, retains the last successful value with a
+diagnostic after a failed refresh, and appends no transport event. The separate
+`policy.harvestMaxDrift` trigger is configured here but is not shown in the
+header. The repository lease and fixed per-run recovery budget are implementation
+invariants, not additional configuration fields.
 
 ## `[tickets]`
 
@@ -1136,8 +1150,8 @@ acknowledged harvest gate, the dashboard's unclaimed `observations` count, and
 the configured triggers. Harvest starts when `policy.harvestThreshold`
 unclaimed observations exist or when `policy.harvestMaxDrift` other builds have
 merged since the oldest one; a drift limit of zero disables the second
-condition. Trigger progress is not shown in the dashboard. Harvest does not
-consume build capacity.
+condition. The header shows count pressure against `harvestThreshold`; drift
+progress is not shown. Harvest does not consume build capacity.
 
 ### Authentication failures
 

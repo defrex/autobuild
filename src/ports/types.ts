@@ -20,6 +20,10 @@ import type { BuildExecution } from './workspace/build-execution'
 
 export interface Ticket {
   ref: TicketRef
+  /** Stable source-native key used to correlate an externally created ticket
+   * with Autobuild's durable creation reservation. It is separate from the
+   * operator-facing `ref.id` and optional for legacy/plugin projections. */
+  creationKey?: string
   title: string
   /** The ticket body — pre-build, the spec lives here (§6.3). */
   body: string

@@ -108,6 +108,7 @@ describe('FileTicketSource', () => {
       { state: 'Triage', idempotencyKey: 'harvest-cluster-1' },
     )
     expect(first.ref.id).toBe('file-1')
+    expect(first.creationKey).toBe('harvest-cluster-1')
     await source().transition(first.ref.id, 'Done')
 
     const adopted = await source().create(
@@ -115,6 +116,8 @@ describe('FileTicketSource', () => {
       { state: 'Triage', idempotencyKey: 'harvest-cluster-1' },
     )
     expect(adopted.ref.id).toBe('file-1')
+    expect(adopted.creationKey).toBe('harvest-cluster-1')
+    expect((await source().get('file-1'))?.creationKey).toBe('harvest-cluster-1')
     expect(adopted.state).toBe('Done')
     expect(await readdir(join(dir, 'triage'))).toEqual([])
     expect(await readFile(path('done', 'file-1'), 'utf8')).toContain(

@@ -91,7 +91,7 @@ function model(builds: DashboardBuild[]): DashboardModel {
     repo: '/repos/app',
     queued: 2,
     active: { current: builds.length, limit: 5 },
-    observations: 5,
+    observations: { current: 5, limit: 8 },
     drained: false,
     repositoryPaused: false,
     defaultAutoMerge: false,
@@ -110,7 +110,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
-    expect(summary).toContain('queue 2 | active 1/5 | observations 5')
+    expect(summary).toContain('queue 2 | active 1/5 | observations 5/8')
     expect(lines.join('\n')).not.toMatch(/\bdrift\b/i)
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
@@ -277,28 +277,27 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines.join('\n')).toContain('no active builds')
   })
 
-  test('the summary keeps queue and observations bare while active retains its limit', () => {
+  test('the summary renders current/limit pressure for active builds and observations', () => {
     const [empty] = rd(
       {
         ...model([]),
         active: { current: 0, limit: 5 },
-        observations: 0,
+        observations: { current: 0, limit: 8 },
       },
       WIDE,
     )
-    expect(empty).toContain('queue 2 | active 0/5 | observations 0')
+    expect(empty).toContain('queue 2 | active 0/5 | observations 0/8')
 
     const [saturated] = rd(
       {
         ...model([]),
         active: { current: 5, limit: 5 },
-        observations: 7,
+        observations: { current: 7, limit: 8 },
       },
       WIDE,
     )
-    expect(saturated).toContain('queue 2 | active 5/5 | observations 7')
+    expect(saturated).toContain('queue 2 | active 5/5 | observations 7/8')
     expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
-    expect(saturated).not.toMatch(/observations 7\//)
   })
 
   test('process defaults and the acknowledged durable gate render explicit ON/OFF state', () => {

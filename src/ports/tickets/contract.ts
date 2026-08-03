@@ -127,6 +127,7 @@ export function describeTicketSourceContract(
 
         expect(created).toMatchObject({
           ref: { source: harness.source.name, title },
+          creationKey: expect.any(String),
           title,
           body: CONTRACT_TICKET_BODY,
           state: harness.states.ready,
@@ -519,7 +520,9 @@ export function describeTicketSourceContract(
           { state: harness.states.completed, idempotencyKey },
         )
 
+        expect(first.creationKey).toBe(idempotencyKey)
         expect(retry.ref.id).toBe(first.ref.id)
+        expect(retry.creationKey).toBe(idempotencyKey)
         expect(retry.title).toBe(originalTitle)
         expect(retry.body).toBe(CONTRACT_TICKET_BODY)
         expect(retry.state).toBe(harness.states.ready)
@@ -529,6 +532,7 @@ export function describeTicketSourceContract(
         expect(listing.diagnostics).toEqual([])
         const matching = listing.tickets.filter((ticket) => ticket.ref.id === first.ref.id)
         expect(matching).toHaveLength(1)
+        expect(matching[0]?.creationKey).toBe(idempotencyKey)
       })
     })
   })

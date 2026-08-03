@@ -8,6 +8,7 @@ import { resolveRepoState } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { createTerminalModeController } from './terminal-restore'
 import {
+  DISPATCH_KERNEL_SIGNALS,
   installDispatchKernelSignalHandlers,
   superviseDispatchChild,
   type DispatchSubprocess,
@@ -17,6 +18,7 @@ import { DISPATCHER } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { GIT_ID, git } from '../integration/harness'
 import { MemoryBuildStore } from '../store/memory'
+import type { BuildStore } from '../store/types'
 
 function fakeSubprocess(onKill?: (signal: 'SIGINT' | 'SIGKILL') => void): DispatchSubprocess & {
   finish(code: number, signal?: string): void
@@ -43,7 +45,7 @@ function fakeSubprocess(onKill?: (signal: 'SIGINT' | 'SIGKILL') => void): Dispat
   return child
 }
 
-function supervisorFixture(store: MemoryBuildStore, child: DispatchSubprocess, timeout = 5) {
+function supervisorFixture(store: BuildStore, child: DispatchSubprocess, timeout = 5) {
   return superviseDispatchChild({
     store,
     repo: '/repo',
@@ -63,14 +65,13 @@ describe('dispatch child supervision', () => {
       stops += 1
     }, boundary)
 
+    for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.emit(signal)
     boundary.emit('SIGINT')
-    boundary.emit('SIGINT')
-    boundary.emit('SIGTERM')
-    expect(stops).toBe(3)
-    expect(boundary.listenerCount('SIGINT')).toBe(1)
+    expect(stops).toBe(DISPATCH_KERNEL_SIGNALS.length + 1)
+    for (const signal of DISPATCH_KERNEL_SIGNALS) expect(boundary.listenerCount(signal)).toBe(1)
     handlers.close()
     handlers.close()
-    expect(boundary.listenerCount('SIGINT')).toBe(0)
+    for (const signal of DISPATCH_KERNEL_SIGNALS) expect(boundary.listenerCount(signal)).toBe(0)
   })
 
   test('an orphaned kernel notices parent death and requests shutdown once', async () => {
@@ -109,12 +110,110 @@ describe('dispatch child supervision', () => {
     const supervisor = supervisorFixture(store, child)
 
     await supervisor.stop()
-    await supervisor.completed
+    const result = await supervisor.completed
 
     const stopped = (await store.getRepoEvents('/repo')).filter(
       (event) => event.type === 'dispatcher.run-stopped',
     )
     expect(child.kills).toEqual(['SIGINT'])
+    expect(result).toEqual({ outcome: 'normal', exitCode: 0 })
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
+  })
+
+  test('a normal stop fact preserves a later nonzero cleanup exit without duplication', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'run-1', outcome: 'normal', exitCode: 0 },
+    })
+    const child = fakeSubprocess()
+    const supervisor = supervisorFixture(store, child)
+
+    child.finish(17)
+    const result = await supervisor.completed
+
+    expect(result).toEqual({ outcome: 'normal', exitCode: 17 })
+    const stopped = (await store.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0]?.payload).toEqual({ run: 'run-1', outcome: 'normal', exitCode: 0 })
+  })
+
+  test('an unsolicited signalled exit records and returns actionable evidence', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    const child = fakeSubprocess()
+    const supervisor = supervisorFixture(store, child)
+
+    child.finish(143, 'SIGTERM')
+    const result = await supervisor.completed
+
+    expect(result).toEqual({
+      outcome: 'abnormal',
+      exitCode: 143,
+      signal: 'SIGTERM',
+      error: 'kernel process exited with status 143 (signal SIGTERM)',
+    })
+    const stopped = (await store.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0]?.payload).toEqual({
+      run: 'run-1',
+      outcome: 'abnormal',
+      exitCode: 143,
+      signal: 'SIGTERM',
+      error: 'kernel process exited with status 143 (signal SIGTERM)',
+    })
+  })
+
+  test('a child exiting during the final journal read remains graceful', async () => {
+    const backing = new MemoryBuildStore()
+    await backing.ensureRepo('/repo')
+    let releaseRead!: () => void
+    let readEntered!: () => void
+    const entered = new Promise<void>((resolve) => {
+      readEntered = resolve
+    })
+    const release = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    let delayed = false
+    const store = new Proxy(backing, {
+      get(target, property) {
+        if (property === 'getRepoEvents') {
+          return async (...args: Parameters<BuildStore['getRepoEvents']>) => {
+            if (!delayed) {
+              delayed = true
+              readEntered()
+              await release
+            }
+            return target.getRepoEvents(...args)
+          }
+        }
+        const value = Reflect.get(target, property, target) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as BuildStore
+    const child = fakeSubprocess()
+    const supervisor = supervisorFixture(store, child)
+
+    const stopping = supervisor.stop()
+    await entered
+    child.finish(0)
+    releaseRead()
+    await stopping
+    const result = await supervisor.completed
+
+    const stopped = (await backing.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(child.kills).toEqual(['SIGINT'])
+    expect(result).toEqual({ outcome: 'normal', exitCode: 0 })
     expect(stopped).toHaveLength(1)
     expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
   })
@@ -128,14 +227,20 @@ describe('dispatch child supervision', () => {
     const supervisor = supervisorFixture(store, child)
 
     await supervisor.stop()
-    await supervisor.completed
+    const result = await supervisor.completed
 
     const stopped = (await store.getRepoEvents('/repo')).filter(
       (event) => event.type === 'dispatcher.run-stopped',
     )
     expect(child.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(result).toEqual({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
     expect(stopped).toHaveLength(1)
-    expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'forced' })
+    expect(stopped[0]?.payload).toEqual({
+      run: 'run-1',
+      outcome: 'forced',
+      exitCode: 137,
+      signal: 'SIGKILL',
+    })
   })
 
   test('timeout never kills an open ticket-claim tick', async () => {
@@ -158,7 +263,6 @@ describe('dispatch child supervision', () => {
       payload: {
         run: 'run-1',
         queued: 0,
-        observations: 0,
         counters: {
           merged: 0,
           closed: 0,
@@ -246,7 +350,11 @@ readyState = "ready"
       expect(started?.type).toBe('dispatcher.run-started')
       if (started?.type !== 'dispatcher.run-started') throw new Error('missing run start')
       expect(started.payload.pid).not.toBe(process.pid)
-      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+      const completed = events.find((event) => event.type === 'dispatcher.tick-completed')
+      expect(completed?.type).toBe('dispatcher.tick-completed')
+      if (completed?.type !== 'dispatcher.tick-completed')
+        throw new Error('missing tick completion')
+      expect(completed.payload).not.toHaveProperty('observations')
       expect(
         events.some(
           (event) => event.type === 'dispatcher.run-stopped' && event.payload.outcome === 'normal',
@@ -308,7 +416,7 @@ readyState = "ready"
         },
         input: { start: () => () => {} },
       }),
-    ).rejects.toThrow('dispatcher kernel exited with status 1')
+    ).rejects.toThrow(/dispatcher kernel failed: .*capacity.*\(exit code 1\)/s)
 
     const state = await resolveRepoState({ targetRepo: repo, exec: spawnExec })
     const opened = openStoreForRepoState(state, { env: {} })

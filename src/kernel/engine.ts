@@ -85,6 +85,13 @@ export type Decision =
     }
   | { kind: 'run-finalize-step'; step: string; action: FinalizeAction }
   | {
+      /** Authoritative repeat-conflict observation before policy routing. */
+      kind: 'check-reconcile-progress'
+      conflictSeq: number
+      completedAttempt: number
+      nextAttempt: number
+    }
+  | {
       kind: 'raise-escalation'
       source: 'agent' | 'stall' | 'policy'
       phase: Phase
@@ -163,6 +170,23 @@ interface GuidanceDelivery {
   seq: number
 }
 
+interface ReconcileStartRecord {
+  seq: number
+  attempt: number
+  baseSha: string
+}
+
+interface ReconcileCompletionRecord extends ReconcileStartRecord {
+  completedSeq: number
+}
+
+interface ReconcileProgressRecord {
+  seq: number
+  conflictSeq: number
+  attempt: number
+  baseSha: string
+}
+
 interface LogIndex {
   /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3). */
   restartSeq: number
@@ -203,6 +227,14 @@ interface LogIndex {
   /** A `reconcile.started` after lastConflict without its completion — a
    * crashed reconcile re-runs the SAME attempt from its start (§15.6-C). */
   conflictReconcileStarted?: { attempt: number }
+  /** Most recent completed reconcile, paired with the latest same-occurrence
+   * start so crash retries use the base that actually completed. */
+  lastReconcileCompleted?: ReconcileCompletionRecord
+  /** Explicit authoritative observation for the current repeat conflict. */
+  lastConflictProgressCheck?: ReconcileProgressRecord
+  /** Distinct completed attempts observed still conflicted at the same base.
+   * A later attempt start supplies the observation for pre-event logs. */
+  reconcileNoProgressCount: number
   /** Guidance carriers that reached a matching durable session launch.
    * Plan, implement, and agent-verify starts may cite feedback (§15.3), but a
    * citation alone remains recoverable across the pre-launch crash boundary.
@@ -506,18 +538,38 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
       }
     }
     const nextAttempt = state.reconcileAttempts + 1
-    if (
-      nextAttempt > config.policy.maxReconcileAttempts &&
-      !raisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
-    ) {
-      // Bounds thrash against a busy base (§15.7). One matching reconcile
-      // policy raise per conflict: an answer lets the build proceed, and the
-      // NEXT conflict past the cap re-escalates.
-      return {
-        kind: 'raise-escalation',
-        source: 'policy',
-        phase: 'reconcile',
-        question: `maxReconcileAttempts (${config.policy.maxReconcileAttempts}) exhausted`,
+    const completed = log.lastReconcileCompleted
+    if (completed !== undefined && completed.completedSeq < log.lastConflict.seq) {
+      const progress = log.lastConflictProgressCheck
+      if (progress === undefined || progress.attempt !== completed.attempt) {
+        // A repeat conflict cannot spend policy budget using the janitor's
+        // detection-time base. Ask execution for a fresh authoritative fact;
+        // replay after that append consumes the same durable decision.
+        return {
+          kind: 'check-reconcile-progress',
+          conflictSeq: log.lastConflict.seq,
+          completedAttempt: completed.attempt,
+          nextAttempt,
+        }
+      }
+
+      const baseUnchanged = progress.baseSha === completed.baseSha
+      if (
+        baseUnchanged &&
+        log.reconcileNoProgressCount >= config.policy.maxReconcileAttempts &&
+        !raisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
+      ) {
+        // Only reconciles that leave the PR conflicted against the same
+        // authoritative base consume this budget. A moving-base race always
+        // gets another monotonic attempt, even after prior no-progress outcomes.
+        return {
+          kind: 'raise-escalation',
+          source: 'policy',
+          phase: 'reconcile',
+          question:
+            `maxReconcileAttempts (${config.policy.maxReconcileAttempts}) exhausted: ` +
+            'reconciliation made no progress against an unchanged base',
+        }
       }
     }
     return {
@@ -698,6 +750,11 @@ function indexLog(events: AbEvent[]): LogIndex {
   let finalizeCompleted = false
   let lastConflict: { seq: number } | undefined
   let conflictReconcileStarted: { attempt: number } | undefined
+  const conflictSeqs = new Set<number>()
+  const reconcileStarts: ReconcileStartRecord[] = []
+  const reconcileCompletions: ReconcileCompletionRecord[] = []
+  const reconcileProgressChecks: ReconcileProgressRecord[] = []
+  let activeReconcileStart: ReconcileStartRecord | undefined
 
   /** Track a loop round: maxRoundEver over the full log; the per-round record
    * only for post-restart events (returns undefined pre-restart). */
@@ -847,15 +904,30 @@ function indexLog(events: AbEvent[]): LogIndex {
 
       case 'pr.conflicted':
         lastConflict = { seq: event.seq }
+        conflictSeqs.add(event.seq)
         conflictReconcileStarted = undefined
         break
-      case 'reconcile.started':
+      case 'reconcile.progress-checked':
+        reconcileProgressChecks.push({ seq: event.seq, ...event.payload })
+        break
+      case 'reconcile.started': {
+        const start = { seq: event.seq, ...event.payload }
+        reconcileStarts.push(start)
+        activeReconcileStart = start
         if (lastConflict !== undefined && event.seq > lastConflict.seq) {
           conflictReconcileStarted = { attempt: event.payload.attempt }
         }
         break
+      }
       case 'reconcile.completed':
         if (post) lastReconcileCompletedSeq = event.seq
+        if (activeReconcileStart !== undefined) {
+          reconcileCompletions.push({
+            ...activeReconcileStart,
+            completedSeq: event.seq,
+          })
+          activeReconcileStart = undefined
+        }
         conflictReconcileStarted = undefined
         break
 
@@ -863,6 +935,54 @@ function indexLog(events: AbEvent[]): LogIndex {
         break
     }
   }
+
+  // One completed occurrence per monotonic attempt. A later duplicate
+  // completion is safer to pair with its own latest start than with an older
+  // aggregate high-water, and malformed unmatched completions classify nothing.
+  const completedByAttempt = new Map<number, ReconcileCompletionRecord>()
+  for (const completion of reconcileCompletions) {
+    completedByAttempt.set(completion.attempt, completion)
+  }
+  const completed = [...completedByAttempt.values()].sort(
+    (left, right) => left.completedSeq - right.completedSeq,
+  )
+
+  let reconcileNoProgressCount = 0
+  for (const completion of completed) {
+    const nextStart = reconcileStarts.find(
+      (start) => start.seq > completion.completedSeq && start.attempt > completion.attempt,
+    )
+    const observationLimit = nextStart?.seq ?? Number.POSITIVE_INFINITY
+    // Explicit checks win over the historical fallback. Use the latest one
+    // that could have routed this next occurrence; duplicate conflict facts do
+    // not count one completed reconcile more than once.
+    const explicit = reconcileProgressChecks
+      .filter(
+        (check) =>
+          check.attempt === completion.attempt &&
+          check.seq > completion.completedSeq &&
+          check.seq < observationLimit &&
+          check.conflictSeq > completion.completedSeq &&
+          check.seq > check.conflictSeq &&
+          conflictSeqs.has(check.conflictSeq),
+      )
+      .at(-1)
+    const observedBase = explicit?.baseSha ?? nextStart?.baseSha
+    if (observedBase === completion.baseSha) reconcileNoProgressCount += 1
+  }
+
+  const lastReconcileCompleted = completed.at(-1)
+  const lastConflictProgressCheck =
+    lastConflict === undefined || lastReconcileCompleted === undefined
+      ? undefined
+      : reconcileProgressChecks
+          .filter(
+            (check) =>
+              check.conflictSeq === lastConflict.seq &&
+              check.attempt === lastReconcileCompleted.attempt &&
+              check.seq > lastConflict.seq,
+          )
+          .at(-1)
 
   return {
     restartSeq,
@@ -877,6 +997,9 @@ function indexLog(events: AbEvent[]): LogIndex {
     finalizeStepsDone,
     lastConflict,
     conflictReconcileStarted,
+    lastReconcileCompleted,
+    lastConflictProgressCheck,
+    reconcileNoProgressCount,
     guidanceDeliveries,
   }
 }

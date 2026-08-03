@@ -602,6 +602,41 @@ async function seedFinalized(store: BuildStore): Promise<void> {
   })
 }
 
+async function seedRepeatConflict(store: BuildStore, mergedBase: string): Promise<number> {
+  await seedFinalized(store)
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'pr.conflicted',
+    payload: { baseSha: 'stale-first-detection' },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.started',
+    payload: { attempt: 1, baseSha: mergedBase },
+  })
+  await store.append(SLUG, {
+    actor: agentActor('reconcile', 's_seed'),
+    type: 'reconcile.completed',
+    payload: {
+      mergeCommit: 'sha-merge-1',
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    },
+  })
+  for (const step of ['types', 'unit', 'e2e']) {
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step, attempt: 2, pass: true },
+    })
+  }
+  const conflict = await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'pr.conflicted',
+    payload: { baseSha: 'stale-repeat-detection' },
+  })
+  return conflict.seq
+}
+
 async function typesOf(store: BuildStore): Promise<string[]> {
   return (await store.getEvents(SLUG)).map((event) => event.type)
 }
@@ -1167,6 +1202,108 @@ describe('step', () => {
         (event) => event.payload.baseSha,
       ),
     ).toEqual([firstStartBase, CURRENT_BASE])
+  })
+
+  test('repeat-conflict progress checks persist an origin-fetched base, then phase startup refreshes again', async () => {
+    const PHASE_BASE = '3'.repeat(40)
+    const h = await makeHarness({
+      reconcileRefreshes: [{ sha: CURRENT_BASE }, { sha: PHASE_BASE }],
+    })
+    const conflictSeq = await seedRepeatConflict(h.store, DETECTED_BASE)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'check-reconcile-progress',
+      conflictSeq,
+      completedAttempt: 1,
+      nextAttempt: 2,
+    })
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.progress-checked')).toHaveLength(1)
+    expect(ofType(events, 'reconcile.progress-checked')[0]!.payload).toEqual({
+      conflictSeq,
+      attempt: 1,
+      baseSha: CURRENT_BASE,
+    })
+    expect(ofType(events, 'reconcile.started')).toHaveLength(1)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 2,
+      reconcile: { attempt: 2 },
+    })
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.started').at(-1)!.payload).toEqual({
+      attempt: 2,
+      baseSha: PHASE_BASE,
+    })
+    expect(h.execCalls.filter(({ cmd }) => cmd[1] === 'fetch')).toHaveLength(2)
+  })
+
+  test('a capable forge supplies the durable progress check without origin fetch', async () => {
+    class SnapshotForge extends FakeForge {
+      readonly snapshots: string[] = []
+
+      async snapshotBase(): Promise<string> {
+        this.snapshots.push('snapshot')
+        return CURRENT_BASE
+      }
+    }
+
+    const forge = new SnapshotForge()
+    const h = await makeHarness({ forge })
+    const conflictSeq = await seedRepeatConflict(h.store, DETECTED_BASE)
+    await h.br.step()
+
+    expect(forge.snapshots).toHaveLength(1)
+    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
+    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.progress-checked')[0]!.payload).toEqual(
+      {
+        conflictSeq,
+        attempt: 1,
+        baseSha: CURRENT_BASE,
+      },
+    )
+  })
+
+  test('restart after a persisted progress check consumes it without duplicating the fact', async () => {
+    const h = await makeHarness({ reconcileRefreshes: [{ sha: CURRENT_BASE }] })
+    await seedRepeatConflict(h.store, DETECTED_BASE)
+    h.store.faultAfterNext('reconcile.progress-checked')
+
+    await expect(h.br.step()).rejects.toThrow('injected crash after reconcile.progress-checked')
+    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.progress-checked')).toHaveLength(1)
+    expect(await h.br.step()).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 2,
+      reconcile: { attempt: 2 },
+    })
+    expect(ofType(await h.store.getEvents(SLUG), 'reconcile.progress-checked')).toHaveLength(1)
+  })
+
+  test('a failed progress refresh records retryable failure without a progress fact or phase start', async () => {
+    const h = await makeHarness({
+      reconcileRefreshes: [{ fetchError: 'fatal: progress origin unavailable' }],
+    })
+    const conflictSeq = await seedRepeatConflict(h.store, DETECTED_BASE)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'check-reconcile-progress',
+      conflictSeq,
+      completedAttempt: 1,
+      nextAttempt: 2,
+    })
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
+    expect(ofType(events, 'reconcile.started')).toHaveLength(1)
+    expect(ofType(events, 'phase.failed').at(-1)!.payload).toEqual({
+      phase: 'reconcile',
+      round: 2,
+      attempt: 1,
+      error: expect.stringContaining('progress origin unavailable'),
+      willRetry: true,
+    })
   })
 
   test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {

@@ -539,6 +539,7 @@ export class FileTicketSource implements TicketSource {
   private toTicket(front: Frontmatter, body: string, state: TicketState): Ticket {
     return {
       ref: { source: this.name, id: front.id, title: front.title },
+      ...(front.idempotencyKey !== undefined ? { creationKey: front.idempotencyKey } : {}),
       title: front.title,
       body,
       state,

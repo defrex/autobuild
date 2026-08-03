@@ -160,15 +160,20 @@ instance-correlated diagnostics remain build artifacts; process exit is only a
 liveness/reaping signal. Interactive `ab dispatch` runs the kernel owner in the
 private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
-`dispatch-process.ts` owns child supervision. Terminal modes restore immediately
-on interruption; persistent child signal handlers and a parent-liveness watch
-prevent either repeated Ctrl-C or direct frontend termination from leaving an
-unsafe or detached kernel. Timeout escalation is held while a durable
-`tick-started` fact remains open, because force-killing the ticket claim before
-build creation would not be recoverable. Ordinary kernel teardown stops and
-reaps all build children; parent-death detection and lease expiry recover an
-abrupt death. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
-not suppressed polls. Open session history is never a lock — a dead session
+`dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
+SIGTERM restore terminal modes immediately and begin one supervised drain;
+persistent frontend and child handlers keep repeated signals graceful until the
+kernel child is reaped, after which a non-SIGINT terminating signal is replayed
+in the frontend. A parent-liveness watch remains the detached-kernel fallback.
+Timeout escalation is held while a durable `tick-started` fact remains open,
+because force-killing the ticket claim before build creation would not be
+recoverable. The supervisor rechecks kernel-child liveness at the force boundary
+and projects the same normal, forced, or abnormal result (with available
+process/error detail) that the repository run-stopped evidence records. Ordinary
+kernel teardown stops and reaps all build children; their own parent-death
+watch and lease expiry recover an abrupt kernel death. The BuildStore lease
+remains the cross-process gate. `src/processes/dispatcher.ts` counts actual
+schedules, not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
 **Store authority.** `src/store/build-scope.ts` wraps every adapter with one
@@ -201,7 +206,12 @@ resolution, occurrence identity, and the exhaustion partition),
 `harvest-runner.ts` executes the staged workflow under the heartbeated
 repository lease, records declared/derived blocker provenance, and
 `src/kernel/harvest.ts` reduces runs, claims, recovery history, and the
-committed ledger with ordered parked/exhaustion/open selectors. The recovery
+committed ledger with ordered parked/exhaustion/open selectors. Its pure
+creation selectors pair reservation/filing facts, bound unmatched keys to
+active runs, and conservatively union reservations first seen between the
+repository snapshots bracketing a ready listing. `src/processes/dispatcher.ts`
+correlates those keys before dependency reads or claims, retaining queue depth
+and emitting creation-specific tick diagnostics. The recovery
 invariants are SPEC §12; the mechanics live in the reducer and its tests.
 
 **Ticket sources.** `src/ports/tickets/`. `listReady` is an explicit
@@ -209,7 +219,11 @@ partial-listing seam: individually malformed records come back as
 diagnostics (surfaced by the dispatcher's tick report and `ab ticket list`
 stderr) while tracker-wide invariant violations stay fatal — one broken
 ticket never blocks unrelated dispatch, but nothing that could permit double
-dispatch is tolerated.
+dispatch is tolerated. `Ticket.creationKey` is the optional stable external
+create/adoption correlation, distinct from `Ticket.ref.id`; Linear projects its
+issue UUID and file/fake preserve their idempotency metadata through create,
+adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
+unchanged.
 
 **Workspace, execution, and review base selection.**
 `src/ports/workspace/create.ts` resolves `[workspace].provider` against the
@@ -336,8 +350,15 @@ It follows one dispatch run's repository facts incrementally through
 `src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. Navigation is synchronous presentation state; only Store reads and
-writes enter its UI action queue. The supervised kernel child owns every slow
+intervals. The same polling path calls the canonical
+`scanUnclaimedObservations` BuildStore reduction for the header's current count
+and pairs it with the effective config's `policy.harvestThreshold`. That sample
+is process-local presentation state: a failed refresh preserves the last
+successful value and adds a local diagnostic, while an initial failure delays
+the complete frame rather than inventing zero. No repository fact transports
+it, and the headless child does not scan for presentation. Navigation is
+synchronous presentation state; only Store reads and writes enter its UI action
+queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 

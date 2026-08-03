@@ -136,6 +136,7 @@ describe('LinearTicketSource', () => {
             url: 'https://linear.app/acme/issue/ENG-42',
             title: 'Rate-limit auth',
           },
+          creationKey: 'uuid-42',
           title: 'Rate-limit auth',
           body: '# Spec\n\nToken bucket on /auth/*.',
           state: 'Ready',
@@ -364,6 +365,7 @@ describe('LinearTicketSource', () => {
   })
 
   test('a duplicate idempotent create adopts the exact reserved issue id', async () => {
+    const reservedId = crypto.randomUUID()
     const { fetchFn, calls } = fakeLinear([
       TEAM_INFO_RESPONSE,
       {
@@ -376,14 +378,14 @@ describe('LinearTicketSource', () => {
           ],
         },
       },
-      { body: { data: { issue: gqlIssue({ identifier: 'ENG-88' }) } } },
+      { body: { data: { issue: gqlIssue({ id: reservedId, identifier: 'ENG-88' }) } } },
     ])
-    const reservedId = crypto.randomUUID()
     const adopted = await makeSource(fetchFn).create(
       { title: 'X', body: 'y' },
       { idempotencyKey: reservedId },
     )
     expect(adopted.ref.id).toBe('ENG-88')
+    expect(adopted.creationKey).toBe(reservedId)
     expect(calls[1]?.variables).toMatchObject({
       input: { id: reservedId },
     })

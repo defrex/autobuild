@@ -158,6 +158,7 @@ type RunAgentVerifyDecision = Extract<Decision, { kind: 'run-agent-verify' }>
 type EvaluateVerifyDecision = Extract<Decision, { kind: 'evaluate-verify' }>
 type SkipVerifyDecision = Extract<Decision, { kind: 'skip-verify' }>
 type RunFinalizeStepDecision = Extract<Decision, { kind: 'run-finalize-step' }>
+type CheckReconcileProgressDecision = Extract<Decision, { kind: 'check-reconcile-progress' }>
 type RaiseEscalationDecision = Extract<Decision, { kind: 'raise-escalation' }>
 
 /** Lease acquisition can finish either workspace-backed attachment or one
@@ -574,6 +575,9 @@ export class BuildRunner {
       case 'run-finalize-step':
         await this.runFinalizeStep(decision, events)
         return decision
+      case 'check-reconcile-progress':
+        await this.checkReconcileProgress(decision, events)
+        return decision
     }
   }
 
@@ -655,6 +659,51 @@ export class BuildRunner {
         ...(decision.refs !== undefined ? { refs: decision.refs } : {}),
       },
     } satisfies EventWrite<'escalation.raised'>)
+  }
+
+  /**
+   * Resolve and persist the authoritative base for one repeat conflict before
+   * the engine spends reconcile policy budget. This deliberately does not
+   * reuse the snapshot as the merge target: actual phase startup refreshes
+   * again, preserving the execution-boundary freshness guarantee.
+   */
+  private async checkReconcileProgress(
+    decision: CheckReconcileProgressDecision,
+    events: AbEvent[],
+  ): Promise<void> {
+    const { nextAttempt } = decision
+    const failures = this.phaseFailures(events, 'reconcile', nextAttempt)
+    if (failures.count >= this.maxPhaseAttempts) {
+      await this.raisePolicyExhausted('reconcile', nextAttempt, failures)
+      return
+    }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable('reconcile', nextAttempt, failures)
+      return
+    }
+
+    let baseSha: string
+    try {
+      baseSha = await this.refreshReconcileBase(events)
+    } catch (error) {
+      await this.failPhase(
+        'reconcile',
+        nextAttempt,
+        failures.count,
+        `failed to check reconcile progress: ${errorMessage(error)}`,
+      )
+      return
+    }
+
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'reconcile.progress-checked',
+      payload: {
+        conflictSeq: decision.conflictSeq,
+        attempt: decision.completedAttempt,
+        baseSha,
+      },
+    } satisfies EventWrite<'reconcile.progress-checked'>)
   }
 
   /** A core-phase run: retry guard (D5), started event (§15.3), session. */

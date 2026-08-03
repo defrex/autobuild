@@ -9,6 +9,30 @@ const request = {
   limit: 2,
 }
 
+const tickCounters = {
+  merged: 0,
+  closed: 0,
+  conflicted: 0,
+  abandoned: 0,
+  discarded: 0,
+  janitorFailed: 0,
+  recovered: 0,
+  dispatchFailed: 0,
+  resumed: 0,
+  swept: 0,
+  dispatched: 0,
+  authored: 0,
+  bounced: 0,
+  claimRaces: 0,
+  invalidTickets: 0,
+  dependencyBlocked: 0,
+  harvestStarted: 0,
+  harvestResumed: 0,
+  harvestCompleted: 0,
+  harvestEscalated: 0,
+  harvestFailed: 0,
+}
+
 const exhausted = {
   run: 'h_1',
   step: 'file' as const,
@@ -192,6 +216,58 @@ describe('repository event catalog', () => {
       ).toThrow(/invalid payload/)
     }
 
+    const historicalCounters = {
+      merged: 0,
+      closed: 0,
+      conflicted: 0,
+      abandoned: 0,
+      discarded: 0,
+      janitorFailed: 0,
+      recovered: 0,
+      dispatchFailed: 0,
+      resumed: 0,
+      swept: 0,
+      dispatched: 0,
+      authored: 0,
+      bounced: 0,
+      claimRaces: 0,
+      invalidTickets: 0,
+      dependencyBlocked: 0,
+      harvestStarted: 0,
+      harvestResumed: 0,
+      harvestCompleted: 0,
+      harvestEscalated: 0,
+      harvestFailed: 0,
+    }
+    const historicalTick = {
+      run: 'dispatch-1',
+      queued: 1,
+      observations: 0,
+      counters: historicalCounters,
+      janitorDiagnostics: [],
+      ticketDiagnostics: [],
+      dependencyDiagnostics: [],
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: historicalTick,
+      }),
+    ).toEqual({ actor: DISPATCHER, type: 'dispatcher.tick-completed', payload: historicalTick })
+    const currentTick = {
+      ...historicalTick,
+      counters: { ...historicalCounters, creationWithheld: 1 },
+      creationDiagnostics: ['ticket AUT-1: creation withheld'],
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: currentTick,
+      }),
+    ).toEqual({ actor: DISPATCHER, type: 'dispatcher.tick-completed', payload: currentTick })
+
     const upgrade = { run: 'dispatch-1', version: '0.5.0' }
     expect(
       validateRepositoryEventWrite({
@@ -212,6 +288,38 @@ describe('repository event catalog', () => {
         actor: DISPATCHER,
         type: 'dispatcher.upgrade-available',
         payload: { ...upgrade, extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('current tick facts omit display pressure while the legacy field remains replayable', () => {
+    const current = {
+      run: 'dispatch-1',
+      queued: 2,
+      counters: tickCounters,
+      janitorDiagnostics: [],
+      ticketDiagnostics: [],
+      dependencyDiagnostics: [],
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: current,
+      }).payload,
+    ).toEqual(current)
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: { ...current, observations: 9 },
+      }).payload,
+    ).toEqual({ ...current, observations: 9 })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: { ...current, displayCount: 9 },
       }),
     ).toThrow(/invalid payload/)
   })

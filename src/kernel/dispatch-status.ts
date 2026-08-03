@@ -9,7 +9,8 @@ export interface DispatchStatus {
   health: DispatchHealth
   effectiveConfig?: ArtifactRef
   queued?: number
-  observations?: number
+  /** Standing count from newer tick facts; absent for historical events. */
+  creationWithheld?: number
   availableUpgrade?: string
   roleWarnings: string[]
   diagnostics: string[]
@@ -23,8 +24,8 @@ function errorNotice(prefix: string, error: string): string {
 
 /** Reduce one correlated dispatch run without consulting process-local state.
  * An optional prior projection permits strictly newer repository deltas.
- * Successful observations supersede standing diagnostics; failures retain the
- * last known queue/config values instead of fabricating replacements. */
+ * Successful ticks supersede standing diagnostics; failures retain the last
+ * known queue/config values instead of fabricating replacements. */
 export function reduceDispatchStatus(
   events: readonly RepositoryEvent[],
   run: string,
@@ -82,10 +83,11 @@ export function reduceDispatchStatus(
         break
       case 'dispatcher.tick-completed':
         state.queued = event.payload.queued
-        state.observations = event.payload.observations
+        state.creationWithheld = event.payload.counters.creationWithheld
         state.diagnostics = [
           ...event.payload.janitorDiagnostics,
           ...event.payload.ticketDiagnostics,
+          ...(event.payload.creationDiagnostics ?? []),
           ...event.payload.dependencyDiagnostics,
         ]
         break

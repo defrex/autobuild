@@ -120,7 +120,11 @@ matching-source origins are refreshed and every still-existing unresolved one
 is unioned with the agent-declared `blockedBy` ids; missing, resolved, foreign,
 and absent origins are dropped. Filing records declared and origin-derived
 blockers separately, while duplicate ids appear only once on the created ticket.
-A repository journal, artifact stream, dedup ledger, and lease make every step
+If the ticket is already visible as ready while that create is still unfinished,
+dispatch correlates its source creation key with the durable reservation and
+withholds it without consuming capacity; it remains in queue depth with a
+distinct durable diagnostic, then proceeds normally after filing settles or the
+owning workflow stops. A repository journal, artifact stream, dedup ledger, and lease make every step
 queryable and crash-safe without polluting `ab builds` or the fixed phase grammar. Claims
 exclude observations until they are dispositioned or selectively released;
 idle ticks launch no harvest agent. A non-retrying infrastructure failure parks
@@ -169,10 +173,13 @@ The distinctions that change an administrator's answer:
   config, standing queue depth, diagnostics, reload outcomes, runner outcomes,
   and child health are run-correlated repository facts. Controls append directly
   to the Store, so a slow claim or agent turn cannot delay a keypress. Repository
-  reads advance incrementally. Ctrl-C restores the terminal immediately; repeated
-  signals stay graceful until an open claim tick reaches a recoverable boundary,
-  and parent-death detection prevents a detached kernel. `--plain`/non-TTY stay
-  on the direct path, and `--once` remains one tick plus drain.
+  reads advance incrementally. SIGINT, SIGHUP, SIGQUIT, and SIGTERM restore the
+  terminal immediately, drain and reap the child, and keep repeated signals
+  graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
+  termination is replayed only after that drain. Durable normal/forced/abnormal
+  evidence retains available process detail, and parent-death detection prevents
+  a detached kernel. `--plain`/non-TTY stay on the direct path, and `--once`
+  remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each
   pipeline step capture it at their action boundary, without interrupting an
@@ -570,10 +577,17 @@ nonnegative integer so zero can disable that trigger.
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
-| `maxReconcileAttempts` | `3` | positive integer | Caps the epilogue's `pr.conflicted → reconcile` cycle before escalation. |
+| `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
 | `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
+
+For each repeat conflict, Autobuild compares the base merged by the latest
+completed reconcile with a fresh authoritative base snapshot. An advanced base
+proves the attempt lost a race and permits another reconcile regardless of the
+attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
+escalates when the budget is exhausted. Post-reconcile verification still runs
+in full and remains independently bounded by `maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect
@@ -927,11 +941,15 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | observations <count>`.
+`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
 `queue` is the ready-ticket queue depth; `active` is the current
 nonterminal-build count against root `capacity`; and `observations` is the count
-of recorded observation occurrences not yet claimed by a Harvest snapshot. An
-indented controls line follows for
+of recorded observation occurrences not yet claimed by a Harvest snapshot
+against `policy.harvestThreshold`. The Store-only interactive frontend refreshes
+that display value directly from the BuildStore; a failed refresh retains the
+last successful count, shows a diagnostic, and appends no transport event.
+Non-interactive dispatch performs no frontend-only sampling, and the separate
+drift trigger is not displayed. An indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title
