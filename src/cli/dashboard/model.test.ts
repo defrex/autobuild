@@ -501,7 +501,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       repo: '/repos/app',
       queued: 2,
       active: { current: 3, limit: 1 },
-      observations: 4,
+      observations: { current: 4, limit: 5 },
       drained: false,
       repositoryPaused: false,
       defaultAutoMerge: false,
@@ -522,10 +522,11 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       activeCount: 3,
       capacity: 1,
       observationCount: 4,
+      observationLimit: 5,
     })
     expect(preprojected).toEqual(model)
     expect(preprojected).not.toHaveProperty('drift')
-    expect(preprojected.observations).toBe(4)
+    expect(preprojected.observations).toEqual({ current: 4, limit: 5 })
     expect(preprojected.builds[0]).toBe(alpha)
     expect(preprojected.builds[1]).toBe(queuedRow)
     expect(preprojected.builds[2]).toBe(zebra)

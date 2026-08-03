@@ -173,10 +173,13 @@ The distinctions that change an administrator's answer:
   config, standing queue depth, diagnostics, reload outcomes, runner outcomes,
   and child health are run-correlated repository facts. Controls append directly
   to the Store, so a slow claim or agent turn cannot delay a keypress. Repository
-  reads advance incrementally. Ctrl-C restores the terminal immediately; repeated
-  signals stay graceful until an open claim tick reaches a recoverable boundary,
-  and parent-death detection prevents a detached kernel. `--plain`/non-TTY stay
-  on the direct path, and `--once` remains one tick plus drain.
+  reads advance incrementally. SIGINT, SIGHUP, SIGQUIT, and SIGTERM restore the
+  terminal immediately, drain and reap the child, and keep repeated signals
+  graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
+  termination is replayed only after that drain. Durable normal/forced/abnormal
+  evidence retains available process detail, and parent-death detection prevents
+  a detached kernel. `--plain`/non-TTY stay on the direct path, and `--once`
+  remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each
   pipeline step capture it at their action boundary, without interrupting an
@@ -931,11 +934,15 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | observations <count>`.
+`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
 `queue` is the ready-ticket queue depth; `active` is the current
 nonterminal-build count against root `capacity`; and `observations` is the count
-of recorded observation occurrences not yet claimed by a Harvest snapshot. An
-indented controls line follows for
+of recorded observation occurrences not yet claimed by a Harvest snapshot
+against `policy.harvestThreshold`. The Store-only interactive frontend refreshes
+that display value directly from the BuildStore; a failed refresh retains the
+last successful count, shows a diagnostic, and appends no transport event.
+Non-interactive dispatch performs no frontend-only sampling, and the separate
+drift trigger is not displayed. An indented controls line follows for
 `intake ON`/`intake OFF`, `auto merge ON`/`auto merge OFF`, and `harvest
 ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title

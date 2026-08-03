@@ -153,12 +153,16 @@ feedback.
 single-flights build-runner launches per slug within its process. Interactive
 `ab dispatch` runs that owner in the private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
-`dispatch-process.ts` owns child supervision. Terminal modes restore immediately
-on interruption; persistent child signal handlers and a parent-liveness watch
-prevent either repeated Ctrl-C or direct frontend termination from leaving an
-unsafe or detached kernel. Timeout escalation is held while a durable
-`tick-started` fact remains open, because force-killing the ticket claim before
-build creation would not be recoverable. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
+`dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
+SIGTERM restore terminal modes immediately and begin one supervised drain;
+persistent frontend and child handlers keep repeated signals graceful until the
+child is reaped, after which a non-SIGINT terminating signal is replayed in the
+frontend. A parent-liveness watch remains the detached-kernel fallback. Timeout
+escalation is held while a durable `tick-started` fact remains open, because
+force-killing the ticket claim before build creation would not be recoverable.
+The supervisor rechecks child liveness at the force boundary and projects the
+same normal, forced, or abnormal result (with available process/error detail)
+that the repository run-stopped evidence records. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
@@ -328,8 +332,15 @@ It follows one dispatch run's repository facts incrementally through
 `src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. Navigation is synchronous presentation state; only Store reads and
-writes enter its UI action queue. The supervised kernel child owns every slow
+intervals. The same polling path calls the canonical
+`scanUnclaimedObservations` BuildStore reduction for the header's current count
+and pairs it with the effective config's `policy.harvestThreshold`. That sample
+is process-local presentation state: a failed refresh preserves the last
+successful value and adds a local diagnostic, while an initial failure delays
+the complete frame rather than inventing zero. No repository fact transports
+it, and the headless child does not scan for presentation. Navigation is
+synchronous presentation state; only Store reads and writes enter its UI action
+queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 

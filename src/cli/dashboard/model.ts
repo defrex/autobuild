@@ -222,8 +222,9 @@ export interface DashboardModel {
   queued: number
   /** Every nonterminal build consumes one configured dispatch capacity slot. */
   active: DashboardCounter
-  /** Recorded observation occurrences not claimed by a Harvest snapshot. */
-  observations: number
+  /** Recorded observation occurrences not claimed by a Harvest snapshot,
+   * against the configured count-pressure trigger. */
+  observations: DashboardCounter
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
   /** Durable repository-wide hold (`true` means queued builds cannot launch). */
@@ -1088,6 +1089,7 @@ interface DashboardFrameHeader {
 export interface DashboardHeader extends DashboardFrameHeader {
   activeCount: number
   capacity: number
+  observationLimit: number
 }
 
 /**
@@ -1107,7 +1109,7 @@ export function buildDashboardFromProjected(
     repo: header.repo,
     queued: header.queued,
     active: { current: header.activeCount, limit: header.capacity },
-    observations: header.observationCount,
+    observations: { current: header.observationCount, limit: header.observationLimit },
     drained: !settings.intake,
     repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
@@ -1142,6 +1144,7 @@ export function buildDashboard(
       ...header,
       activeCount,
       capacity: config.capacity,
+      observationLimit: config.policy.harvestThreshold,
     },
     repositoryEvents,
   )

@@ -1062,13 +1062,27 @@ publishes a run-correlated effective-config artifact before its first tick and
 records tick/queue diagnostics, reload outcomes, runner coordination, and
 normal/abnormal lifecycle as repository facts. Thus a rejected on-disk reload
 cannot change the displayed effective capacity, and a frontend restart can
-reconstruct every operational notice from the Store. Repository polling advances
-from the last observed sequence rather than replaying the growing journal on
-every frame. Ctrl-C restores terminal modes immediately and asks the child to
-stop; repeated signals remain graceful while a dispatcher tick is crossing the
-ticket-claim boundary, and a child also stops when its terminal-owning parent
-dies. A timed-out child is terminated unless such a tick is open, in which case
-that tick first reaches a recoverable durable boundary. `--plain`, non-TTY,
+reconstruct every operational notice from the Store. Observation pressure is a
+separate display-only reduction: the interactive frontend scans the shared
+BuildStore directly, pairs the current unclaimed count with the effective
+config's `policy.harvestThreshold`, and retains the last successful count while
+showing a refresh diagnostic after a failed read. It appends no event and does
+not use `dispatcher.tick-completed` to transport the sample; the headless child
+therefore runs ticks without a dashboard, terminal, or frontend connection.
+Before the first successful sample the frontend renders only the diagnostic,
+never a fabricated zero. Non-interactive dispatch performs no frontend-only
+sampling. Repository polling advances from the last observed sequence rather
+than replaying the growing journal on every frame. SIGINT, SIGHUP, SIGQUIT, and
+SIGTERM restore terminal modes immediately and ask the child to stop; repeated
+signals remain graceful while a dispatcher tick is crossing the ticket-claim
+boundary. The frontend reaps the child before finishing, and for SIGHUP,
+SIGQUIT, or SIGTERM only then restores the default disposition by re-signalling
+itself. A child also stops when its terminal-owning parent dies. A timed-out
+child is terminated unless such a tick is open, in which case that tick first
+reaches a recoverable durable boundary. The run-stopped fact and frontend result
+distinguish a graceful drain, an actual forced termination requested by the
+operator, and an unsolicited abnormal exit, retaining available exit-code,
+signal, and error evidence. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 
