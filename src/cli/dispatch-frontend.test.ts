@@ -4,6 +4,7 @@ import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
 import { DispatchFrontend } from './dispatch-frontend'
+import { renderDashboard } from './dashboard/render'
 import type { TerminalInputEvent } from './terminal'
 
 function deferred<T>() {
@@ -186,10 +187,19 @@ test('frontend input and captured controls remain responsive while the kernel is
       beta.some((event) => event.type === 'build.discard-requested')
     )
   }, 'captured build-control writes')
+  const alphaEvents = await backing.getEvents('alpha')
   const betaEvents = await backing.getEvents('beta')
+  expect(alphaEvents.filter((event) => event.type === 'build.abort-requested')).toHaveLength(1)
   expect(betaEvents.some((event) => event.type === 'build.abort-requested')).toBe(false)
   expect(betaEvents.some((event) => event.type === 'build.discard-requested')).toBe(true)
   let repoEvents = await backing.getRepoEvents(repo)
+  expect(
+    repoEvents.some(
+      (event) =>
+        event.type === 'dispatcher.operator-reported' &&
+        event.payload.message === 'build alpha: abort requested',
+    ),
+  ).toBe(true)
   expect(
     repoEvents.some(
       (event) => event.type === 'dispatcher.intake-set' && event.payload.enabled === false,
@@ -493,6 +503,160 @@ test('frontend owns live observation pressure and retains the last factual sampl
   expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
   expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
 
+  childDone.resolve({ exitCode: 0 })
+  await running
+})
+
+test('frontend rejects an abort confirmation that becomes terminal while its action is queued', async () => {
+  const repo = '/stale-abort-repo'
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo(repo)
+  for (const slug of ['alpha', 'beta']) {
+    const ticket = { source: 'fake', id: slug, title: slug }
+    await backing.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+    await backing.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket, baseBranch: 'main' },
+    })
+  }
+
+  const intakeEntered = deferred<void>()
+  const releaseIntake = deferred<void>()
+  let delayed = false
+  const store = new Proxy(backing, {
+    get(target, property) {
+      if (property === 'appendRepo') {
+        return async (...args: Parameters<BuildStore['appendRepo']>) => {
+          if (!delayed && args[1].type === 'dispatcher.intake-set') {
+            delayed = true
+            intakeEntered.resolve()
+            await releaseIntake.promise
+          }
+          return target.appendRepo(...args)
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+
+  let input: ((event: TerminalInputEvent) => void) | undefined
+  let output = ''
+  const write = (chunk: string): void => {
+    output += chunk
+  }
+  const childDone = deferred<{ exitCode: number }>()
+  let confirmationSlug: string | undefined
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: { USER: 'operator' },
+    terminal: {
+      write,
+      modes: createTerminalModeController(write, write),
+      columns: 100,
+      rows: 30,
+      interactive: true,
+    },
+    input: {
+      start(handler) {
+        input = handler
+        return () => {
+          input = undefined
+        }
+      },
+    },
+    once: false,
+    resolveDashboardRenderer: () => (model, options) => {
+      confirmationSlug = model.abortConfirmation?.slug
+      return renderDashboard(model, options)
+    },
+    launchChild: ({ run }) => {
+      const startup = backing.appendRepoWithArtifacts(
+        repo,
+        [
+          {
+            kind: 'dispatcher-effective-config',
+            content: JSON.stringify({
+              capacity: 1,
+              roles: { default: { runtime: 'claude' } },
+              tickets: { source: 'file', readyState: 'ready' },
+            }),
+          },
+        ],
+        (artifacts) => ({
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run,
+            pid: 999,
+            effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+            roleWarnings: [],
+          },
+        }),
+      )
+      return {
+        completed: startup.then(() => childDone.promise),
+        async stop() {},
+      }
+    },
+  })
+
+  const running = frontend.run()
+  await waitFor(() => output.includes('alpha') && input !== undefined, 'first dashboard frame')
+
+  input!({ type: 'text', text: 'i' })
+  await intakeEntered.promise
+  input!({ type: 'down' })
+  input!({ type: 'text', text: 'a' })
+  expect(output).toContain('Abort alpha and delete its workspace')
+  expect(confirmationSlug).toBe('alpha')
+
+  await backing.append('alpha', {
+    actor: DISPATCHER,
+    type: 'build.completed',
+    payload: { outcome: 'abandoned' },
+  })
+  input!({ type: 'enter' })
+
+  // The stale alpha confirmation is queued, but a new beta confirmation is
+  // process-local state and must survive alpha's eventual stale dismissal.
+  input!({ type: 'down' })
+  input!({ type: 'text', text: 'a' })
+  expect(confirmationSlug).toBe('beta')
+  releaseIntake.resolve()
+
+  await waitFor(async () => {
+    const events = await backing.getRepoEvents(repo)
+    return events.some(
+      (event) =>
+        event.type === 'dispatcher.operator-reported' &&
+        event.payload.level === 'warning' &&
+        event.payload.message ===
+          'build alpha: abort confirmation dismissed because the build state changed',
+    )
+  }, 'stale abort warning')
+
+  const buildEvents = await backing.getEvents('alpha')
+  expect(buildEvents.some((event) => event.type === 'build.abort-requested')).toBe(false)
+  expect(confirmationSlug).toBe('beta')
+  const repoEvents = await backing.getRepoEvents(repo)
+  expect(
+    repoEvents.some(
+      (event) =>
+        event.type === 'dispatcher.operator-reported' &&
+        (event.payload.message === 'build alpha: abort requested' ||
+          event.payload.message === 'build alpha: action recorded'),
+    ),
+  ).toBe(false)
+  await waitFor(
+    () => output.includes('abort confirmation dismissed because the build state changed'),
+    'operator-visible stale abort warning',
+  )
+
+  input!({ type: 'interrupt' })
   childDone.resolve({ exitCode: 0 })
   await running
 })
