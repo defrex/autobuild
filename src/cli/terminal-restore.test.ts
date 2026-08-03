@@ -154,9 +154,10 @@ describe('process terminal restore hook', () => {
   })
 
   for (const signal of TERMINATING_SIGNALS) {
-    test(`${signal} restores, removes the hooks, and re-terminates with the same signal`, () => {
+    test(`${signal} restores immediately and replays only after the dispatch drain`, () => {
       const boundary = new FakeProcess()
       const emergency: string[] = []
+      const requested: NodeJS.Signals[] = []
       const modes = createTerminalModeController(
         () => {},
         (chunk) => {
@@ -164,12 +165,20 @@ describe('process terminal restore hook', () => {
           boundary.actions.push(`restore:${JSON.stringify(chunk)}`)
         },
       )
-      installTerminalRestoreHook(modes, boundary)
+      const hook = installTerminalRestoreHook(modes, boundary, (received) =>
+        requested.push(received),
+      )
       modes.enter(BRACKETED_PASTE_MODE)
 
       boundary.emit(signal)
+      boundary.emit(signal)
 
       expect(emergency).toEqual([BRACKETED_PASTE_MODE.restore])
+      expect(requested).toEqual([signal])
+      expect(boundary.actions.some((action) => action === `kill:${signal}`)).toBe(false)
+      expect(boundary.listenerCount(signal)).toBe(1)
+
+      hook.close()
       expect(boundary.actions.at(-1)).toBe(`kill:${signal}`)
       expect(boundary.listenerCount('exit')).toBe(0)
       expect(boundary.listenerCount('uncaughtExceptionMonitor')).toBe(0)
