@@ -158,6 +158,41 @@ describe('repository event catalog', () => {
     }
   })
 
+  test('dispatch status facts are run-correlated, strict, and dispatcher-owned', () => {
+    const payload = {
+      run: 'dispatch-1',
+      pid: 123,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: ['roles.old is not consumed'],
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload,
+      }),
+    ).toEqual({ actor: DISPATCHER, type: 'dispatcher.run-started', payload })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatcher.run-started',
+        payload,
+      }),
+    ).toThrow(/may not emit/)
+    for (const bad of [
+      { ...payload, run: '' },
+      { ...payload, extra: true },
+    ]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: bad,
+        }),
+      ).toThrow(/invalid payload/)
+    }
+  })
+
   test('dispatcher setting facts require strict booleans and human actors', () => {
     for (const type of [
       'dispatcher.intake-set',

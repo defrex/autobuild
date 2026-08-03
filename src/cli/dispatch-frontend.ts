@@ -1,0 +1,731 @@
+import { configSchema, type Config } from '../config/schema'
+import { humanActor } from '../events/envelope'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
+import { reduceDispatchStatus } from '../kernel/dispatch-status'
+import { reduceHarvest } from '../kernel/harvest'
+import type { BuildStore, Clock } from '../store/types'
+import { systemClock } from '../store/types'
+import { buildControlUser, controlBuild } from './build-control'
+import { bulkControlReport, bulkControlRepository } from './bulk-control'
+import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
+import {
+  buildDashboardFromProjected,
+  dashboardBuildControl,
+  projectHarvest,
+  type DashboardBuild,
+  type DashboardModel,
+  type DashboardSelection,
+  type DashboardView,
+} from './dashboard/model'
+import { DashboardBuildPollCache } from './dashboard/poll'
+import {
+  dashboardContentWidth,
+  detailScrollLimit,
+  moveDetailScroll,
+  moveTranscriptScroll,
+  renderDashboard,
+  revealDetailFocus,
+  type DashboardRendererResolver,
+} from './dashboard/render'
+import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
+import { parseTranscript } from './dashboard/transcript'
+import { LiveRegion, paintableRows } from './dashboard/live'
+import { createKeyboardProtocol } from './keyboard'
+import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
+import {
+  superviseDispatchChild,
+  type DispatchChildHandle,
+  type DispatchChildOptions,
+} from './dispatch-process'
+
+const POLL_MS = 500
+const PAINT_MS = 250
+
+interface ResumePrompt {
+  slug: string
+  escalationIds: string[]
+  value: string
+  cursor: number
+}
+
+export interface DispatchFrontendOptions {
+  repo: string
+  storeRef: string
+  store: BuildStore
+  env: Record<string, string | undefined>
+  terminal: TerminalOut
+  input: TerminalInput
+  signal?: AbortSignal
+  once: boolean
+  intervalMs?: number
+  intake?: boolean
+  defaultAutoMerge?: boolean
+  clock?: Clock
+  resolveDashboardRenderer?: DashboardRendererResolver
+  launchChild?: (input: {
+    store: BuildStore
+    repo: string
+    run: string
+    env: Record<string, string | undefined>
+    options: DispatchChildOptions
+  }) => DispatchChildHandle
+}
+
+/** Terminal controller with a deliberately narrow wiring surface: terminal,
+ * BuildStore, immutable repository identity, clock, and child supervision. */
+export class DispatchFrontend {
+  private readonly runId = crypto.randomUUID()
+  private readonly clock: Clock
+  private readonly region: LiveRegion
+  private readonly keyboard
+  private child: DispatchChildHandle | undefined
+  private cache: DashboardBuildPollCache | undefined
+  private config: Config | undefined
+  private configRef: string | undefined
+  private configRevision = 0
+  private model: DashboardModel | undefined
+  private selection: DashboardSelection | undefined = { kind: 'global' }
+  private view: DashboardView | undefined
+  private resumePrompt: ResumePrompt | undefined
+  private abortConfirmation: { slug: string } | undefined
+  private accepting = false
+  private cleanupInput: (() => void) | undefined
+  private pollTimer: ReturnType<typeof setInterval> | undefined
+  private paintTimer: ReturnType<typeof setInterval> | undefined
+  private polling = false
+  private pollInFlight: Promise<void> | undefined
+  private actionTail: Promise<void> = Promise.resolve()
+
+  constructor(private readonly opts: DispatchFrontendOptions) {
+    this.clock = opts.clock ?? systemClock
+    this.keyboard = createKeyboardProtocol(
+      (chunk) => opts.terminal.write(chunk),
+      opts.terminal.modes,
+    )
+    this.region = new LiveRegion(opts.terminal, this.keyboard)
+  }
+
+  private async events() {
+    const repo = await this.opts.store.getRepo(this.opts.repo)
+    return repo === null ? [] : this.opts.store.getRepoEvents(this.opts.repo)
+  }
+
+  private async report(message: string, level: 'info' | 'warning' = 'info'): Promise<void> {
+    await this.opts.store.appendRepo(this.opts.repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type: 'dispatcher.operator-reported',
+      payload: { run: this.runId, level, message },
+    })
+  }
+
+  private queue(operation: () => Promise<void>): void {
+    const result = this.actionTail.then(operation)
+    this.actionTail = result.then(
+      () => undefined,
+      async (error) => {
+        try {
+          await this.report(
+            `dashboard action failed: ${error instanceof Error ? error.message : String(error)}`,
+            'warning',
+          )
+          await this.renderOnce()
+        } catch {
+          // The next poll remains the recovery boundary.
+        }
+      },
+    )
+  }
+
+  private selectedSlug(): string | undefined {
+    return this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
+  }
+
+  private selectedBuild(): DashboardBuild | undefined {
+    const slug = this.selectedSlug()
+    return this.model?.builds.find((build) => build.slug === slug)
+  }
+
+  private syncControls(): void {
+    if (this.model === undefined) return
+    const {
+      selection: _selection,
+      resumeInput: _resume,
+      abortConfirmation: _abort,
+      view: _view,
+      ...base
+    } = this.model
+    let next: DashboardModel = {
+      ...base,
+      ...(this.selection !== undefined ? { selection: this.selection } : {}),
+      ...(this.resumePrompt !== undefined
+        ? {
+            resumeInput: {
+              slug: this.resumePrompt.slug,
+              value: this.resumePrompt.value,
+              cursor: this.resumePrompt.cursor,
+            },
+          }
+        : {}),
+      ...(this.abortConfirmation !== undefined
+        ? { abortConfirmation: this.abortConfirmation }
+        : {}),
+      ...(this.view !== undefined ? { view: this.view } : {}),
+    }
+    if (this.view?.kind === 'detail') {
+      this.view = {
+        ...this.view,
+        scroll: Math.max(
+          0,
+          Math.min(
+            this.view.scroll,
+            detailScrollLimit(
+              next,
+              dashboardContentWidth(this.opts.terminal.columns),
+              paintableRows(this.opts.terminal.rows),
+            ),
+          ),
+        ),
+      }
+      next = { ...next, view: this.view }
+    }
+    this.model = next
+  }
+
+  private paint(): void {
+    if (this.model === undefined) return
+    const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
+    this.region.update(
+      renderer(this.model, {
+        color: true,
+        width: this.opts.terminal.columns,
+        height: paintableRows(this.opts.terminal.rows),
+        now: this.clock().getTime(),
+      }),
+    )
+  }
+
+  private async loadConfig(kind: string, rev: number): Promise<Config> {
+    const key = `${kind}@${rev}`
+    if (this.config !== undefined && this.configRef === key) return this.config
+    const artifact = await this.opts.store.getRepoArtifact(this.opts.repo, kind, rev)
+    if (artifact === null) throw new Error(`effective config ${key} is not retrievable`)
+    const parsed = configSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
+    this.config = parsed
+    this.configRef = key
+    this.configRevision += 1
+    return parsed
+  }
+
+  private async renderOnce(): Promise<void> {
+    const repositoryEvents = await this.events()
+    const status = reduceDispatchStatus(repositoryEvents, this.runId)
+    const ref = status.effectiveConfig
+    // No filesystem fallback: the first frame waits for the child's durable,
+    // run-correlated effective snapshot.
+    if (ref === undefined) {
+      if (status.health === 'failed' && status.notice !== undefined) {
+        this.region.update([status.notice])
+      }
+      return
+    }
+    const config = await this.loadConfig(ref.kind, ref.rev)
+    this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
+    const snapshot = await this.cache.refresh(config, this.configRevision)
+    if (!this.cache.isCurrent(snapshot)) return
+
+    if (this.resumePrompt !== undefined) {
+      const state = snapshot.states.get(this.resumePrompt.slug)
+      const open = new Set(state?.openEscalations.map((item) => item.id) ?? [])
+      const remaining = this.resumePrompt.escalationIds.filter((id) => open.has(id))
+      if (remaining.length === 0) this.resumePrompt = undefined
+      else this.resumePrompt = { ...this.resumePrompt, escalationIds: remaining }
+    }
+    if (this.abortConfirmation !== undefined) {
+      const state = snapshot.states.get(this.abortConfirmation.slug)
+      if (
+        state === undefined ||
+        state.pendingCommands.some((command) => command.command === 'abort')
+      ) {
+        this.abortConfirmation = undefined
+      }
+    }
+
+    const previous = this.model === undefined ? [] : dashboardSelections(this.model)
+    const warningLines = [
+      ...status.roleWarnings,
+      ...status.diagnostics,
+      ...(status.notice !== undefined ? [status.notice] : []),
+    ]
+    const projected = buildDashboardFromProjected(
+      snapshot.builds,
+      {
+        repo: this.opts.repo,
+        queued: status.queued ?? 0,
+        activeCount: [...snapshot.states.values()].filter(
+          (state) => state.status !== 'done' && state.status !== 'aborted',
+        ).length,
+        capacity: config.capacity,
+        observationCount: status.observations ?? 0,
+        ...(warningLines.length > 0 ? { warningLines } : {}),
+      },
+      repositoryEvents,
+    )
+    this.selection = reconcileSelection(previous, dashboardSelections(projected), this.selection)
+    if (
+      this.view !== undefined &&
+      !projected.builds.some((build) => build.slug === this.view!.slug)
+    ) {
+      this.view = undefined
+    }
+    this.model = projected
+    this.syncControls()
+    this.paint()
+  }
+
+  private moveVertical(delta: number): void {
+    if (this.view?.kind === 'transcript') {
+      this.view = {
+        ...this.view,
+        scroll: moveTranscriptScroll(
+          this.view.transcript,
+          this.opts.terminal.columns,
+          paintableRows(this.opts.terminal.rows),
+          this.view.scroll,
+          delta,
+        ),
+      }
+    } else if (this.view?.kind === 'detail' && this.model !== undefined) {
+      this.view = {
+        ...this.view,
+        scroll: moveDetailScroll(
+          this.model,
+          dashboardContentWidth(this.opts.terminal.columns),
+          paintableRows(this.opts.terminal.rows),
+          this.view.scroll,
+          delta,
+        ),
+      }
+    } else {
+      const rows =
+        this.model === undefined ? [{ kind: 'global' } as const] : dashboardSelections(this.model)
+      this.selection = moveSelection(rows, this.selection, delta)
+    }
+    this.syncControls()
+    this.paint()
+  }
+
+  private moveSession(delta: number): void {
+    if (this.view?.kind !== 'detail') return
+    const build = this.model?.builds.find((item) => item.slug === this.view!.slug)
+    const sessions = build?.sessions ?? []
+    if (sessions.length === 0) return
+    const current = sessions.findIndex((session) => session.id === this.view!.sessionId)
+    const sessionId =
+      sessions[Math.max(0, Math.min(sessions.length - 1, (current < 0 ? 0 : current) + delta))]!.id
+    const candidate = { ...this.view, sessionId }
+    this.view = {
+      ...candidate,
+      scroll: revealDetailFocus(
+        { ...this.model!, view: candidate },
+        dashboardContentWidth(this.opts.terminal.columns),
+        paintableRows(this.opts.terminal.rows),
+        'session',
+        candidate.scroll,
+      ),
+    }
+    this.syncControls()
+    this.paint()
+  }
+
+  private async openSelected(): Promise<void> {
+    if (this.view === undefined) {
+      const build = this.selectedBuild()
+      if (build === undefined) return
+      this.view = {
+        kind: 'detail',
+        slug: build.slug,
+        scroll: 0,
+        ...(build.sessions?.[0] !== undefined ? { sessionId: build.sessions[0].id } : {}),
+      }
+      this.syncControls()
+      this.paint()
+      return
+    }
+    if (this.view.kind !== 'detail') return
+    const captured = this.view
+    const session = this.selectedBuild()?.sessions?.find((item) => item.id === captured.sessionId)
+    if (session?.transcript === undefined || session.status === 'open') return
+    const artifact = await this.opts.store.getArtifact(
+      captured.slug,
+      session.transcript.kind,
+      session.transcript.rev,
+    )
+    if (
+      artifact === null ||
+      this.view?.kind !== 'detail' ||
+      this.view.slug !== captured.slug ||
+      this.view.sessionId !== captured.sessionId
+    ) {
+      return
+    }
+    this.view = {
+      kind: 'transcript',
+      slug: captured.slug,
+      sessionId: session.id,
+      transcript: parseTranscript(new TextDecoder().decode(artifact.content)),
+      scroll: 0,
+    }
+    this.syncControls()
+    this.paint()
+  }
+
+  private leaveView(): void {
+    if (this.view?.kind === 'transcript') {
+      this.view = {
+        kind: 'detail',
+        slug: this.view.slug,
+        sessionId: this.view.sessionId,
+        scroll: 0,
+      }
+    } else if (this.view?.kind === 'detail') this.view = undefined
+    else return
+    this.syncControls()
+    this.paint()
+  }
+
+  private async buildAction(kind: 'pause' | 'resume' | 'discard' | 'toggle-auto-merge' | 'abort') {
+    const slug = this.selectedSlug()
+    if (slug === undefined) return
+    const result = await controlBuild({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      slug,
+      env: this.opts.env,
+      action:
+        kind === 'pause'
+          ? { kind: 'dashboard-pause' }
+          : kind === 'resume'
+            ? { kind: 'dashboard-resume' }
+            : { kind },
+    })
+    if (result.kind === 'answer-required') {
+      this.resumePrompt = { slug, escalationIds: result.escalationIds, value: '', cursor: 0 }
+      this.syncControls()
+      this.paint()
+      return
+    }
+    const message =
+      result.kind !== 'command'
+        ? `build ${slug}: action recorded`
+        : result.command === 'pause'
+          ? `build ${slug}: pause requested`
+          : result.command === 'resume'
+            ? kind === 'pause'
+              ? `build ${slug}: pending pause cancelled`
+              : `build ${slug}: resume requested`
+            : result.command === 'discard'
+              ? `build ${slug}: discard requested`
+              : result.command === 'abort'
+                ? `build ${slug}: abort requested`
+                : result.command === 'auto-merge-on'
+                  ? `build ${slug}: auto-merge requested`
+                  : `build ${slug}: auto-merge cancelled`
+    await this.report(message)
+    await this.renderOnce()
+  }
+
+  private async toggleIntake(): Promise<void> {
+    if (this.selection?.kind !== 'global') return
+    const enabled = !reduceDispatchSettings(await this.events()).intake
+    await this.opts.store.appendRepo(this.opts.repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type: 'dispatcher.intake-set',
+      payload: { enabled },
+    })
+    await this.report(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
+    await this.renderOnce()
+  }
+
+  private async toggleAutoMerge(): Promise<void> {
+    if (this.view === undefined && this.selection?.kind === 'global') {
+      const enabled = !reduceDispatchSettings(await this.events()).defaultAutoMerge
+      await this.opts.store.appendRepo(this.opts.repo, {
+        actor: humanActor(buildControlUser(this.opts.env)),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled },
+      })
+      await this.report(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
+      await this.renderOnce()
+      return
+    }
+    await this.buildAction('toggle-auto-merge')
+  }
+
+  private async bulk(direction: 'pause' | 'resume'): Promise<void> {
+    if (this.selection?.kind !== 'global' || this.view !== undefined) return
+    const summary = await bulkControlRepository({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      env: this.opts.env,
+      direction,
+    })
+    await this.report(bulkControlReport(summary))
+    await this.renderOnce()
+  }
+
+  private async toggleHarvest(): Promise<void> {
+    if (this.selection?.kind !== 'global') return
+    const state = reduceHarvest(await this.events())
+    const pending = state.pendingCommands.at(-1)
+    const paused = pending === undefined ? state.paused : pending.command === 'pause'
+    const type = paused ? 'harvest.resume-requested' : 'harvest.pause-requested'
+    await this.opts.store.appendRepo(this.opts.repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type,
+      payload: {},
+    })
+    await this.report(`harvest gate: ${paused ? 'resume' : 'pause'} requested`)
+    await this.renderOnce()
+  }
+
+  private async harvestRun(): Promise<void> {
+    const events = await this.events()
+    const projected = projectHarvest(events)
+    if (projected?.action === undefined) return
+    await this.opts.store.appendRepo(this.opts.repo, {
+      actor: humanActor(buildControlUser(this.opts.env)),
+      type: 'harvest.resume-requested',
+      payload: {},
+    })
+    await this.report(`harvest: ${projected.action} requested`)
+    await this.renderOnce()
+  }
+
+  private async submitResume(prompt: ResumePrompt): Promise<void> {
+    const result = await controlBuild({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      slug: prompt.slug,
+      env: this.opts.env,
+      action: { kind: 'answer', text: prompt.value, escalationIds: prompt.escalationIds },
+    })
+    this.resumePrompt = undefined
+    await this.report(
+      `build ${prompt.slug}: blocked resume requested${
+        result.kind === 'answered' && result.resolution === 'guidance' ? ' with guidance' : ''
+      }`,
+    )
+    await this.renderOnce()
+  }
+
+  private editResume(input: TerminalInputEvent): void {
+    const prompt = this.resumePrompt
+    if (prompt === undefined) return
+    const update = (value: string, cursor: number): void => {
+      this.resumePrompt = { ...prompt, value, cursor }
+      this.syncControls()
+      this.paint()
+    }
+    if (input.type === 'text' || input.type === 'paste') {
+      const next = insertText(prompt.value, prompt.cursor, input.text)
+      update(next.value, next.cursor)
+    } else if (input.type === 'newline') {
+      const next = insertText(prompt.value, prompt.cursor, '\n')
+      update(next.value, next.cursor)
+    } else if (input.type === 'backspace') {
+      const next = deleteBefore(prompt.value, prompt.cursor)
+      update(next.value, next.cursor)
+    } else if (['left', 'right', 'up', 'down', 'home', 'end'].includes(input.type)) {
+      update(prompt.value, moveCursor(prompt.value, prompt.cursor, input.type as ComposerMotion))
+    } else if (input.type === 'escape') {
+      this.resumePrompt = undefined
+      this.syncControls()
+      this.paint()
+    } else if (input.type === 'enter') this.queue(() => this.submitResume(prompt))
+  }
+
+  private onInput(input: TerminalInputEvent): void {
+    if (!this.accepting) return
+    if (input.type === 'interrupt') {
+      this.accepting = false
+      void this.child?.stop()
+      return
+    }
+    if (this.resumePrompt !== undefined) {
+      this.editResume(input)
+      return
+    }
+    const enter = input.type === 'enter' || input.type === 'newline'
+    if (this.abortConfirmation !== undefined) {
+      if (enter) {
+        const slug = this.abortConfirmation.slug
+        this.abortConfirmation = undefined
+        this.queue(() => this.buildAction('abort'))
+        void slug
+      } else if (input.type === 'escape') {
+        this.abortConfirmation = undefined
+        this.syncControls()
+        this.paint()
+      }
+      return
+    }
+    if (input.type === 'up' || input.type === 'down') {
+      this.moveVertical(input.type === 'up' ? -1 : 1)
+      return
+    }
+    if (input.type === 'left' || input.type === 'right') {
+      this.moveSession(input.type === 'left' ? -1 : 1)
+      return
+    }
+    if (enter) {
+      this.queue(() => this.openSelected())
+      return
+    }
+    if (input.type === 'escape') {
+      this.leaveView()
+      return
+    }
+    if (input.type !== 'text') return
+    switch (input.text.toLowerCase()) {
+      case 'i':
+        if (this.selection?.kind === 'global' && this.view === undefined)
+          this.queue(() => this.toggleIntake())
+        break
+      case 'm':
+        this.queue(() => this.toggleAutoMerge())
+        break
+      case 'p':
+        if (this.selection?.kind === 'global' && this.view === undefined)
+          this.queue(() => this.bulk('pause'))
+        else if (this.selection?.kind === 'harvest' && this.view === undefined)
+          this.queue(() => this.harvestRun())
+        else if (dashboardBuildControl(this.selectedBuild()?.status ?? 'queued')?.key === 'p')
+          this.queue(() => this.buildAction('pause'))
+        break
+      case 'r':
+        if (this.selection?.kind === 'global' && this.view === undefined)
+          this.queue(() => this.bulk('resume'))
+        else if (dashboardBuildControl(this.selectedBuild()?.status ?? 'queued')?.key === 'r')
+          this.queue(() => this.buildAction('resume'))
+        break
+      case 'd':
+        if (this.selectedBuild()?.status === 'queued') this.queue(() => this.buildAction('discard'))
+        break
+      case 'a':
+        if (this.selectedBuild() !== undefined && this.view?.kind !== 'transcript') {
+          this.abortConfirmation = { slug: this.selectedBuild()!.slug }
+          this.syncControls()
+          this.paint()
+        }
+        break
+      case 'h':
+        if (this.selection?.kind === 'global' && this.view === undefined)
+          this.queue(() => this.toggleHarvest())
+        break
+    }
+  }
+
+  private startPresentation(): void {
+    this.accepting = true
+    this.cleanupInput = this.opts.input.start((input) => this.onInput(input), {
+      onListening: () => this.keyboard.query(),
+      onKeyboardFlags: (flags) => this.keyboard.reported(flags),
+      onDeviceAttributes: () => this.keyboard.deviceAttributes(),
+    })
+    const poll = (): void => {
+      if (this.polling) return
+      this.polling = true
+      const current = this.renderOnce()
+        .catch(async (error) => {
+          try {
+            await this.report(
+              `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
+              'warning',
+            )
+          } catch {
+            // retry on the next poll
+          }
+        })
+        .finally(() => {
+          if (this.pollInFlight === current) this.pollInFlight = undefined
+          this.polling = false
+        })
+      this.pollInFlight = current
+    }
+    this.pollTimer = setInterval(poll, POLL_MS)
+    this.paintTimer = setInterval(() => this.paint(), PAINT_MS)
+    this.pollTimer.unref?.()
+    this.paintTimer.unref?.()
+    poll()
+  }
+
+  private async finishPresentation(): Promise<void> {
+    this.accepting = false
+    try {
+      this.cleanupInput?.()
+    } finally {
+      this.cleanupInput = undefined
+    }
+    if (this.pollTimer !== undefined) clearInterval(this.pollTimer)
+    if (this.paintTimer !== undefined) clearInterval(this.paintTimer)
+    this.pollTimer = undefined
+    this.paintTimer = undefined
+    try {
+      await this.pollInFlight
+      await this.actionTail
+      await this.renderOnce()
+    } catch {
+      // final frame is best-effort
+    } finally {
+      this.region.finish()
+    }
+  }
+
+  async run(): Promise<void> {
+    await this.opts.store.ensureRepo(this.opts.repo)
+    const actor = humanActor(buildControlUser(this.opts.env))
+    if (this.opts.intake !== undefined) {
+      await this.opts.store.appendRepo(this.opts.repo, {
+        actor,
+        type: 'dispatcher.intake-set',
+        payload: { enabled: this.opts.intake },
+      })
+    }
+    if (this.opts.defaultAutoMerge !== undefined) {
+      await this.opts.store.appendRepo(this.opts.repo, {
+        actor,
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: this.opts.defaultAutoMerge },
+      })
+    }
+
+    const options: DispatchChildOptions = {
+      targetRepo: this.opts.repo,
+      storeRef: this.opts.storeRef,
+      run: this.runId,
+      once: this.opts.once,
+      ...(this.opts.intervalMs !== undefined ? { intervalMs: this.opts.intervalMs } : {}),
+    }
+    this.child = (this.opts.launchChild ?? ((input) => superviseDispatchChild(input)))({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      run: this.runId,
+      env: this.opts.env,
+      options,
+    })
+    const stop = (): void => void this.child?.stop()
+    this.opts.signal?.addEventListener('abort', stop, { once: true })
+    try {
+      this.startPresentation()
+      if (this.opts.signal?.aborted) await this.child.stop()
+      const result = await this.child.completed
+      if (result.exitCode !== 0 && !this.opts.signal?.aborted) {
+        throw new Error(`dispatcher kernel exited with status ${result.exitCode}`)
+      }
+    } finally {
+      this.opts.signal?.removeEventListener('abort', stop)
+      await this.child.stop()
+      await this.finishPresentation()
+    }
+  }
+}

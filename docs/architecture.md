@@ -46,12 +46,12 @@ K unclaimed observation.recorded events
 | `src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `src/store/` | BuildStore plus repository-journal contract; memory, SQLite/blob, and remote HTTP adapters | §7 |
-| `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §15.4–15.5 |
+| `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
-| `src/cli/` and `bin/ab.ts` | The `ab` CLI — the only agent↔store channel — plus init/upgrade and the dispatch loop | §8, §16.3 |
+| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus init/upgrade, the Store-only dispatch frontend, and its private supervised kernel entry | §8, §14, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -149,8 +149,11 @@ once. Guidance answering the policy escalation after failed-report exhaustion
 instead routes to `implement` and outranks the pending report. A bare retry carries no
 feedback.
 
-**Launch ownership.** `src/cli/dispatch.ts` single-flights build-runner
-launches per slug within one process; the BuildStore lease remains the
+**Launch ownership.** `src/cli/dispatch.ts` is the kernel owner and
+single-flights build-runner launches per slug within its process. Interactive
+`ab dispatch` runs that owner in the private `bin/ab-dispatch-kernel.ts` child;
+`dispatch-frontend.ts` owns only terminal/Store adapters and
+`dispatch-process.ts` owns bounded child supervision. The BuildStore lease remains the
 cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
@@ -158,12 +161,14 @@ may never close.
 **Live configuration.** `src/config/live.ts` owns the running dispatcher's
 immutable last-valid main-checkout snapshot, exhaustive hot/restart field
 classification, and eager role resolver. The watch loop refreshes it before
-each serialized tick and publishes the exact accepted TOML atomically with a
-`dispatcher.config-reloaded` repository fact before making the snapshot
-visible. Missing, unreadable, malformed, and routing-invalid candidates retain
-that snapshot with deduplicated operator notice; restoring a valid file resumes
-ordinary reload. Dispatcher ticks, build/harvest actions, and dashboard
-projections each capture one snapshot at their own boundary, so an in-progress
+each tick and publishes the exact accepted TOML and the composed effective JSON
+atomically with a run-correlated `dispatcher.config-reloaded` repository fact
+before making the snapshot visible. Startup similarly publishes the effective
+artifact before the first tick. Missing, unreadable, malformed, and
+routing-invalid candidates retain that snapshot with a durable deduplicated
+operator notice; restoring a valid file resumes ordinary reload. Dispatcher
+ticks and build/harvest actions capture one snapshot at their own boundary; the
+dashboard validates and projects only the referenced effective artifact, so an in-progress
 turn or command is never interrupted. Scoped phase CLI processes retain their
 separate build-worktree config boundary. Startup-built plugin, forge, ticket,
 and workspace adapter fields stay pinned; changed values are durable restart
@@ -304,7 +309,17 @@ AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
 behavior.
 
-**Dashboard.** `src/cli/dashboard/model.ts` is the build-row projection;
+**Dashboard.** `src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
+it has no ticket, forge, workspace-provider, LiveConfig, or runtime dependency.
+It follows one dispatch run's repository facts through
+`src/kernel/dispatch-status.ts`, validates/caches its effective-config artifact,
+and polls build streams independently while elapsed paints continue from cached
+intervals. Navigation is synchronous presentation state; only Store reads and
+writes enter its UI action queue. The supervised kernel child owns every slow
+adapter operation, so slug naming, provisioning, runners, and Harvest cannot
+block input.
+
+`src/cli/dashboard/model.ts` is the build-row projection;
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript as
