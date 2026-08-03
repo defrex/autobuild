@@ -60,7 +60,7 @@ describe('reduceDispatchStatus', () => {
       event(3, 'dispatcher.tick-completed', {
         run: 'run-a',
         queued: 4,
-        observations: 2,
+        observations: 2, // legacy replay field is accepted but display-owned
         counters,
         janitorDiagnostics: ['janitor warning'],
         ticketDiagnostics: [],
@@ -72,7 +72,7 @@ describe('reduceDispatchStatus', () => {
     const status = reduceDispatchStatus(events, 'run-a')
     expect(status.effectiveConfig).toEqual({ kind: 'dispatcher-effective-config', rev: 0 })
     expect(status.queued).toBe(4)
-    expect(status.observations).toBe(2)
+    expect(status).not.toHaveProperty('observations')
     expect(status.diagnostics).toEqual(['janitor warning'])
     expect(status.notice).toBe('tick failed: tracker offline')
     expect(status.lastSeq).toBe(5)
@@ -88,7 +88,6 @@ describe('reduceDispatchStatus', () => {
     const completed = event(3, 'dispatcher.tick-completed', {
       run: 'run-a',
       queued: 2,
-      observations: 1,
       counters,
       janitorDiagnostics: [],
       ticketDiagnostics: [],
@@ -108,7 +107,7 @@ describe('reduceDispatchStatus', () => {
     )
   })
 
-  test('successful observations supersede diagnostics and accepted config replaces warnings', () => {
+  test('successful ticks supersede diagnostics and accepted config replaces warnings', () => {
     const events = [
       event(1, 'dispatcher.run-started', {
         run: 'run-a',
@@ -119,7 +118,6 @@ describe('reduceDispatchStatus', () => {
       event(2, 'dispatcher.tick-completed', {
         run: 'run-a',
         queued: 1,
-        observations: 0,
         counters,
         janitorDiagnostics: [],
         ticketDiagnostics: ['broken ticket'],
@@ -136,7 +134,6 @@ describe('reduceDispatchStatus', () => {
       event(4, 'dispatcher.tick-completed', {
         run: 'run-a',
         queued: 0,
-        observations: 3,
         counters,
         janitorDiagnostics: [],
         ticketDiagnostics: [],

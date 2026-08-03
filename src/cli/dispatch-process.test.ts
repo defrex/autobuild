@@ -121,6 +121,28 @@ describe('dispatch child supervision', () => {
     expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
   })
 
+  test('a normal stop fact preserves a later nonzero cleanup exit without duplication', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'run-1', outcome: 'normal', exitCode: 0 },
+    })
+    const child = fakeSubprocess()
+    const supervisor = supervisorFixture(store, child)
+
+    child.finish(17)
+    const result = await supervisor.completed
+
+    expect(result).toEqual({ outcome: 'normal', exitCode: 17 })
+    const stopped = (await store.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0]?.payload).toEqual({ run: 'run-1', outcome: 'normal', exitCode: 0 })
+  })
+
   test('an unsolicited signalled exit records and returns actionable evidence', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')
@@ -241,7 +263,6 @@ describe('dispatch child supervision', () => {
       payload: {
         run: 'run-1',
         queued: 0,
-        observations: 0,
         counters: {
           merged: 0,
           closed: 0,
@@ -329,7 +350,11 @@ readyState = "ready"
       expect(started?.type).toBe('dispatcher.run-started')
       if (started?.type !== 'dispatcher.run-started') throw new Error('missing run start')
       expect(started.payload.pid).not.toBe(process.pid)
-      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+      const completed = events.find((event) => event.type === 'dispatcher.tick-completed')
+      expect(completed?.type).toBe('dispatcher.tick-completed')
+      if (completed?.type !== 'dispatcher.tick-completed')
+        throw new Error('missing tick completion')
+      expect(completed.payload).not.toHaveProperty('observations')
       expect(
         events.some(
           (event) => event.type === 'dispatcher.run-stopped' && event.payload.outcome === 'normal',

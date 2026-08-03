@@ -688,10 +688,14 @@ uses the oldest unclaimed observation, counts only later same-repository
 builds. Whichever trigger fires, Harvest claims the complete current
 accumulation and records `count`, `drift`, or `both` on the durable start fact.
 The dashboard header reports
-`queue <depth> | active <current>/<limit> | observations <count>`. The
-observation figure is the current unclaimed occurrence count; trigger thresholds
-are not dashboard state. The repository lease and fixed per-run recovery budget
-are implementation invariants, not additional configuration fields.
+`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
+The observation current value is the unclaimed occurrence count and its limit is
+`policy.harvestThreshold`. The interactive frontend refreshes that display-only
+count directly from the BuildStore, retains the last successful value with a
+diagnostic after a failed refresh, and appends no transport event. The separate
+`policy.harvestMaxDrift` trigger is configured here but is not shown in the
+header. The repository lease and fixed per-run recovery budget are implementation
+invariants, not additional configuration fields.
 
 ## `[tickets]`
 
@@ -1136,8 +1140,8 @@ acknowledged harvest gate, the dashboard's unclaimed `observations` count, and
 the configured triggers. Harvest starts when `policy.harvestThreshold`
 unclaimed observations exist or when `policy.harvestMaxDrift` other builds have
 merged since the oldest one; a drift limit of zero disables the second
-condition. Trigger progress is not shown in the dashboard. Harvest does not
-consume build capacity.
+condition. The header shows count pressure against `harvestThreshold`; drift
+progress is not shown. Harvest does not consume build capacity.
 
 ### Authentication failures
 
