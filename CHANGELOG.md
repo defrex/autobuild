@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#199](https://github.com/defrex/autobuild/pull/199) — Preserve observation pressure in the isolated frontend
 - [#195](https://github.com/defrex/autobuild/pull/195) — Isolate the dispatch dashboard from kernel work
 
 ## v0.4.0 — 2026-08-03
