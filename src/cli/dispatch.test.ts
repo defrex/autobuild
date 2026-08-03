@@ -210,6 +210,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
   const title = over.title ?? 'Add rate limiting'
   return {
     ref: { source: 'fake', id, title },
+    ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
@@ -978,6 +979,60 @@ model = "gpt-slug-name"
       // see readyCriteria.)
       const builds = await fx.store.listBuilds()
       expect(builds.map((b) => b.ticket?.id)).toEqual(['T-free'])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('prints creation-withheld diagnostics and persists a distinct standing reason', async () => {
+    const creationKey = crypto.randomUUID()
+    const fx = await makeFixture(
+      [
+        readyTicket('T-creating', { title: 'Generated work', creationKey }),
+        readyTicket('T-free', { title: 'Independent work' }),
+      ],
+      happyHandlers(),
+    )
+    const out: string[] = []
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_creating',
+          observations: [{ build: 'origin', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_creating', proposalKey: 'cluster-creating', id: creationKey },
+      })
+      // Keep this fixture's incomplete Harvest run from being executed by the
+      // post-tick coordinator; pause is orthogonal to creation activity.
+      await fx.store.appendRepo(fx.origin, { actor: KERNEL, type: 'harvest.paused', payload: {} })
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      expect(out).toContainEqual(
+        expect.stringContaining(
+          'ticket T-creating: creation withheld — Harvest run h_creating, proposal cluster-creating',
+        ),
+      )
+      const tick = out.find((line) => line.startsWith('tick: '))
+      expect(tick).toContain('creationWithheld=1')
+      expect(tick).not.toContain('creationDiagnostics')
+      expect((await fx.store.listBuilds()).map((build) => build.ticket?.id)).toEqual(['T-free'])
     } finally {
       await fx.cleanup()
     }
@@ -1926,6 +1981,210 @@ describe('abDispatch watch harvest coordination', () => {
       expect(fx.err).toEqual([])
     } finally {
       if (!turnReleased) releaseTurn()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('retains settled Harvest counters when tick completion publication fails', async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const firstTurnGate = deferred()
+    const firstAgentStarted = deferred()
+    const publicationGate = deferred()
+    const publicationStarted = deferred()
+    const secondLeaseGate = deferred()
+    const secondLeaseStarted = deferred()
+    const agents = new ScriptedAgentRunner({
+      script: async () => {
+        firstAgentStarted.resolve()
+        await firstTurnGate.promise
+        return defaultTurnResult('released without terminal')
+      },
+    })
+    const run = 'h_watch_publish_failure'
+    const kernelRun = 'harvest-publish-failure-accounting'
+    const stop = new AbortController()
+    const out: string[] = []
+    const standingDiagnostic = 'retained ticket-source diagnostic'
+    let sleeps = 0
+    let leaseClaims = 0
+    let rejectedPayload:
+      | Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }>['payload']
+      | undefined
+    let dispatch: Promise<void> | undefined
+
+    const originalListReady = fx.tickets.listReady.bind(fx.tickets)
+    fx.tickets.listReady = async (criteria) => ({
+      ...(await originalListReady(criteria)),
+      diagnostics: [standingDiagnostic],
+    })
+
+    const originalClaimRepoLease = fx.store.claimRepoLease.bind(fx.store)
+    fx.store.claimRepoLease = async (...args) => {
+      leaseClaims += 1
+      if (leaseClaims === 2) {
+        secondLeaseStarted.resolve()
+        await secondLeaseGate.promise
+        throw new Error('injected Harvest lease publication-race failure')
+      }
+      // A later operational tick may try this still-open run again. Returning
+      // held keeps that retry from adding unrelated accounting to the assertion.
+      if (leaseClaims > 2) return false
+      return originalClaimRepoLease(...args)
+    }
+
+    const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
+    fx.store.appendRepo = async (repo, event) => {
+      if (event.type === 'dispatcher.tick-completed') {
+        // RepositoryEventWrite omits envelope fields from the catalog union as
+        // a whole, so its `type` does not preserve payload discrimination.
+        const payload = event.payload as Extract<
+          RepositoryEvent,
+          { type: 'dispatcher.tick-completed' }
+        >['payload']
+        if (
+          rejectedPayload === undefined &&
+          payload.run === kernelRun &&
+          payload.counters.harvestResumed === 1 &&
+          payload.counters.harvestFailed === 1
+        ) {
+          rejectedPayload = payload
+          publicationStarted.resolve()
+          await publicationGate.promise
+          throw new Error('injected dispatcher.tick-completed rejection')
+        }
+      }
+      return originalAppendRepo(repo, event)
+    }
+
+    try {
+      await seedOpenHarvest(
+        fx,
+        run,
+        'obs-watch-publish-failure',
+        'Harvest accounting must survive rejected status publication',
+      )
+
+      dispatch = abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            // The first operational completion is already durable. Settle the
+            // resumed run before the next tick snapshots pending counters.
+            await firstAgentStarted.promise
+            firstTurnGate.resolve()
+            await waitFor(() => out.includes(`harvest ${run} failed`))
+            return
+          }
+          if (sleeps === 2) return
+          stop.abort()
+        },
+        kernelRunId: kernelRun,
+        wire: () => ({
+          ...fx.wire(),
+          runtimes: {
+            claude: { runner: agents, servesModels: [] },
+            scripted: { runner: agents, servesModels: [] },
+          },
+        }),
+      })
+
+      await Promise.all([publicationStarted.promise, secondLeaseStarted.promise])
+      // This failure settles after publishTickReport has captured its snapshot,
+      // while that snapshot's durable append is still in flight.
+      secondLeaseGate.resolve()
+      await waitFor(async () =>
+        (await fx.store.getRepoEvents(fx.origin)).some(
+          (event) =>
+            event.type === 'dispatcher.harvest-runner-failed' && event.payload.run === kernelRun,
+        ),
+      )
+      publicationGate.resolve()
+      await dispatch
+
+      expect(rejectedPayload).toMatchObject({
+        run: kernelRun,
+        queued: 0,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [standingDiagnostic],
+        dependencyDiagnostics: [],
+        counters: { invalidTickets: 1, harvestResumed: 1, harvestFailed: 1 },
+      })
+      expect(rejectedPayload).not.toHaveProperty('observations')
+
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const ticks = events.filter(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }> =>
+          event.type === 'dispatcher.tick-completed' && event.payload.run === kernelRun,
+      )
+      expect(
+        events.filter(
+          (event) => event.type === 'dispatcher.tick-started' && event.payload.run === kernelRun,
+        ),
+      ).toHaveLength(3)
+      expect(
+        events.filter(
+          (event) => event.type === 'dispatcher.tick-failed' && event.payload.run === kernelRun,
+        ),
+      ).toHaveLength(1)
+      // The rejected second tick has no substitute completion. The next tick
+      // publishes both its retained snapshot and the concurrent arrival once.
+      expect(ticks).toHaveLength(2)
+      expect(ticks[0]!.payload.counters).toMatchObject({
+        harvestStarted: 0,
+        harvestResumed: 0,
+        harvestCompleted: 0,
+        harvestEscalated: 0,
+        harvestFailed: 0,
+      })
+      expect(ticks[1]!.payload).toMatchObject({
+        run: kernelRun,
+        queued: 0,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [standingDiagnostic],
+        dependencyDiagnostics: [],
+        counters: {
+          invalidTickets: 1,
+          harvestStarted: 0,
+          harvestResumed: 1,
+          harvestCompleted: 0,
+          harvestEscalated: 0,
+          harvestFailed: 2,
+        },
+      })
+      expect(ticks[1]!.payload).not.toHaveProperty('observations')
+      expect(
+        ticks.reduce(
+          (totals, event) => ({
+            resumed: totals.resumed + event.payload.counters.harvestResumed,
+            failed: totals.failed + event.payload.counters.harvestFailed,
+          }),
+          { resumed: 0, failed: 0 },
+        ),
+      ).toEqual({ resumed: 1, failed: 2 })
+      expect(fx.err).toEqual([
+        standingDiagnostic,
+        'harvest runner failed: injected Harvest lease publication-race failure',
+        'tick failed: injected dispatcher.tick-completed rejection',
+        standingDiagnostic,
+      ])
+      expect(fx.cliErrors).toEqual([])
+    } finally {
+      firstTurnGate.resolve()
+      secondLeaseGate.resolve()
+      publicationGate.resolve()
+      stop.abort()
+      await dispatch?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)

@@ -153,7 +153,10 @@ before invoking the adapter factory. Plugins using Forge abort-cleanup and
 AgentRunner turn-cancellation capabilities introduced in API 1.2 should require
 `^1.2.0`. The structured failure `cause` and provider-exhaustion contract
 scenario were added in API 1.3; a runtime plugin that relies on them should
-require `^1.3.0`.
+require `^1.3.0`. API 1.4 adds the optional `Ticket.creationKey` projection: a
+ticket-source plugin should return its stable external create/adoption key from
+create, get, and ready listings so dispatch can correlate Autobuild's durable
+in-flight creations. Legacy tickets may omit it and remain dispatchable.
 
 ```ts
 import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'

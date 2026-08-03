@@ -183,7 +183,7 @@ function requireRun(
 
 /** Total for valid journals; malformed cross-event references throw loudly so
  * storage corruption cannot masquerade as an idle harvester. */
-export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
+export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState {
   const runs = new Map<string, HarvestRunState>()
   const order: HarvestRunState[] = []
   const claimed = new Map<string, { occurrence: OccurrenceKey; run: string }>()
@@ -653,6 +653,72 @@ export function reduceHarvest(events: RepositoryEvent[]): HarvestState {
 
 export function claimedOccurrenceKeys(state: HarvestState): Set<string> {
   return new Set(state.claimed.map(occurrenceKey))
+}
+
+/** Durable correlation for a ticket whose external create may still be between
+ * source creation and blocker recording. Only running workflows contribute;
+ * every terminal/parked status releases unmatched reservations. */
+export interface InFlightHarvestCreation {
+  run: string
+  proposalKey: string
+  creationKey: string
+  reservationSeq: number
+}
+
+export function inFlightHarvestCreations(state: HarvestState): InFlightHarvestCreation[] {
+  const creations: InFlightHarvestCreation[] = []
+  for (const run of state.runs) {
+    if (run.status !== 'running') continue
+    const filed = new Set(run.filed.map((entry) => entry.proposalKey))
+    for (const reservation of run.reservations) {
+      if (filed.has(reservation.proposalKey)) continue
+      creations.push({
+        run: run.run,
+        proposalKey: reservation.proposalKey,
+        creationKey: reservation.id,
+        reservationSeq: reservation.seq,
+      })
+    }
+  }
+  return creations
+}
+
+/** Bracket a ready-source listing with repository snapshots. Creations active
+ * before the listing remain withheld for this scan even if they settle during
+ * it. A reservation first written during the listing is also withheld once,
+ * including when its filing/terminal fact lands before the second snapshot:
+ * the ready projection may have captured the source between those writes. */
+export function harvestCreationsDuringReadyScan(
+  beforeEvents: readonly RepositoryEvent[],
+  afterEvents: readonly RepositoryEvent[],
+): InFlightHarvestCreation[] {
+  const before = reduceHarvest(beforeEvents)
+  // Validate the complete second snapshot before using its event suffix.
+  reduceHarvest(afterEvents)
+  const creations = new Map<string, InFlightHarvestCreation>()
+  const keyOf = (run: string, proposalKey: string): string => `${run}\0${proposalKey}`
+  const known = new Set<string>()
+  for (const run of before.runs) {
+    for (const reservation of run.reservations) {
+      known.add(keyOf(run.run, reservation.proposalKey))
+    }
+  }
+  for (const creation of inFlightHarvestCreations(before)) {
+    creations.set(keyOf(creation.run, creation.proposalKey), creation)
+  }
+  for (const event of afterEvents) {
+    if (event.seq <= before.lastSeq || event.type !== 'harvest.proposal.id-reserved') continue
+    const key = keyOf(event.payload.run, event.payload.proposalKey)
+    if (known.has(key)) continue
+    known.add(key)
+    creations.set(key, {
+      run: event.payload.run,
+      proposalKey: event.payload.proposalKey,
+      creationKey: event.payload.id,
+      reservationSeq: event.seq,
+    })
+  }
+  return [...creations.values()]
 }
 
 /** Runs are always returned in durable start order. `latest` remains useful for

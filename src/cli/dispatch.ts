@@ -382,6 +382,7 @@ class DispatchLoop {
     queued: 0,
     janitorDiagnostics: [] as string[],
     ticketDiagnostics: [] as string[],
+    creationDiagnostics: [] as string[],
     dependencyDiagnostics: [] as string[],
   }
   /**
@@ -607,6 +608,7 @@ class DispatchLoop {
         queued: publishedReport.queued,
         janitorDiagnostics: [...publishedReport.janitorDiagnostics],
         ticketDiagnostics: [...publishedReport.ticketDiagnostics],
+        creationDiagnostics: [...publishedReport.creationDiagnostics],
         dependencyDiagnostics: [...publishedReport.dependencyDiagnostics],
       }
       return (await this.publishTickReport(publishedReport))!
@@ -1605,6 +1607,7 @@ class DispatchLoop {
       queued: _queued,
       janitorDiagnostics: _janitorDiagnostics,
       ticketDiagnostics: _ticketDiagnostics,
+      creationDiagnostics: _creationDiagnostics,
       dependencyDiagnostics: _dependencyDiagnostics,
       ...counters
     } = merged
@@ -1842,12 +1845,14 @@ class DispatchLoop {
     const {
       janitorDiagnostics,
       ticketDiagnostics,
+      creationDiagnostics,
       dependencyDiagnostics,
       queued: _queued,
       ...counts
     } = report
     for (const line of janitorDiagnostics) this.warn(line)
     for (const line of ticketDiagnostics) this.warn(line)
+    for (const line of creationDiagnostics) this.say(line)
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
       .filter(([, count]) => typeof count === 'number' && count > 0)
@@ -1865,6 +1870,7 @@ class DispatchLoop {
     return (
       janitorDiagnostics.length > 0 ||
       ticketDiagnostics.length > 0 ||
+      creationDiagnostics.length > 0 ||
       dependencyDiagnostics.length > 0
     )
   }

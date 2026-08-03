@@ -9,6 +9,8 @@ export interface DispatchStatus {
   health: DispatchHealth
   effectiveConfig?: ArtifactRef
   queued?: number
+  /** Standing count from newer tick facts; absent for historical events. */
+  creationWithheld?: number
   availableUpgrade?: string
   roleWarnings: string[]
   diagnostics: string[]
@@ -81,9 +83,11 @@ export function reduceDispatchStatus(
         break
       case 'dispatcher.tick-completed':
         state.queued = event.payload.queued
+        state.creationWithheld = event.payload.counters.creationWithheld
         state.diagnostics = [
           ...event.payload.janitorDiagnostics,
           ...event.payload.ticketDiagnostics,
+          ...(event.payload.creationDiagnostics ?? []),
           ...event.payload.dependencyDiagnostics,
         ]
         break

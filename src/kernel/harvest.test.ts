@@ -4,6 +4,8 @@ import {
   actionableHarvestRun,
   claimedOccurrenceKeys,
   decideHarvestControl,
+  harvestCreationsDuringReadyScan,
+  inFlightHarvestCreations,
   openHarvestRun,
   parkedHarvestRuns,
   reduceHarvest,
@@ -11,6 +13,146 @@ import {
 } from './harvest'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
+
+describe('Harvest in-flight ticket creations', () => {
+  async function startedStore(run = 'h_create') {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run,
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    return store
+  }
+
+  test('pairs reservations with filings and releases unmatched keys at terminal stops', async () => {
+    for (const terminal of ['harvest.completed', 'harvest.escalated', 'harvest.failed'] as const) {
+      const store = await startedStore()
+      const unfinished = crypto.randomUUID()
+      const settled = crypto.randomUUID()
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_create', proposalKey: 'unfinished', id: unfinished },
+      })
+      // Exact durable replay remains one logical reservation.
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_create', proposalKey: 'unfinished', id: unfinished },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.id-reserved',
+        payload: { run: 'h_create', proposalKey: 'settled', id: settled },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.proposal.filed',
+        payload: {
+          run: 'h_create',
+          proposalKey: 'settled',
+          ticket: { source: 'fake', id: 'AUT-2', title: 'Settled' },
+        },
+      })
+      expect(inFlightHarvestCreations(reduceHarvest(await store.getRepoEvents('/repo')))).toEqual([
+        expect.objectContaining({ proposalKey: 'unfinished', creationKey: unfinished }),
+      ])
+
+      if (terminal === 'harvest.completed') {
+        await store.appendRepo('/repo', {
+          actor: KERNEL,
+          type: terminal,
+          payload: {
+            run: 'h_create',
+            dispositions: [
+              {
+                occurrence: { build: 'origin', seq: 1 },
+                action: 'suppressed',
+                proposalKey: 'settled',
+              },
+            ],
+            report: { kind: 'harvest-report', rev: 0 },
+          },
+        })
+      } else if (terminal === 'harvest.escalated') {
+        await store.appendRepo('/repo', {
+          actor: KERNEL,
+          type: terminal,
+          payload: {
+            run: 'h_create',
+            source: 'agent',
+            reason: 'needs judgment',
+            observations: [{ build: 'origin', seq: 1 }],
+          },
+        })
+      } else {
+        await store.appendRepo('/repo', {
+          actor: KERNEL,
+          type: terminal,
+          payload: {
+            run: 'h_create',
+            step: 'file',
+            attempt: 1,
+            error: 'source stopped',
+            willRetry: false,
+          },
+        })
+      }
+      expect(inFlightHarvestCreations(reduceHarvest(await store.getRepoEvents('/repo')))).toEqual(
+        [],
+      )
+    }
+  })
+
+  test('ready-scan bracket holds pre-existing and newly observed reservations for one scan', async () => {
+    const store = await startedStore()
+    const beforeKey = crypto.randomUUID()
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: { run: 'h_create', proposalKey: 'before', id: beforeKey },
+    })
+    const before = await store.getRepoEvents('/repo')
+
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.filed',
+      payload: {
+        run: 'h_create',
+        proposalKey: 'before',
+        ticket: { source: 'fake', id: 'AUT-1', title: 'Before' },
+      },
+    })
+    const duringKey = crypto.randomUUID()
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.id-reserved',
+      payload: { run: 'h_create', proposalKey: 'during', id: duringKey },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.proposal.filed',
+      payload: {
+        run: 'h_create',
+        proposalKey: 'during',
+        ticket: { source: 'fake', id: 'AUT-2', title: 'During' },
+      },
+    })
+    const after = await store.getRepoEvents('/repo')
+
+    expect(harvestCreationsDuringReadyScan(before, after)).toEqual([
+      expect.objectContaining({ proposalKey: 'before', creationKey: beforeKey }),
+      expect.objectContaining({ proposalKey: 'during', creationKey: duringKey }),
+    ])
+    expect(harvestCreationsDuringReadyScan(after, after)).toEqual([])
+  })
+})
 
 describe('reduceHarvest', () => {
   test('derives claims, resumable failures, terminal dispositions, and the ledger only from events', async () => {

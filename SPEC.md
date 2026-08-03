@@ -949,7 +949,15 @@ The fixed workflow is:
    Filing is crash-safe by construction: an idempotency ID is durably reserved
    *before* each external create, so a restart adopts the already-created
    ticket instead of duplicating it, and a partially filed approved set creates
-   only its missing tickets. The label is informational: Autobuild never reads
+   only its missing tickets. Ready projections expose that stable external
+   creation key separately from the human-facing ticket id. Dispatch brackets
+   each ready listing with repository-journal reads and withholds a ticket when
+   its key matches an unfinished reservation, including a reservation first
+   observed during the listing interval. The ticket remains counted as queued,
+   consumes no capacity, and receives a distinct durable standing diagnostic.
+   A later tick releases it after filing settles or the owning run completes,
+   escalates, fails non-retryingly, or exhausts recovery; tickets without a
+   matching reservation are unchanged. The label is informational: Autobuild never reads
    it as readiness policy and does not remove it during grooming.
 
 Beyond the workflow, harvest is governed by a small set of invariants (their
@@ -1026,9 +1034,13 @@ status is for builds awaiting a human.
 
 **Crash-safe filing.** Creation supports a state override (harvest targets
 Triage explicitly) and an idempotency key that must adopt the same ticket on
-retry across process restarts. The reservation fact precedes the external
-side effect — that ordering, not provider behavior, is what makes filing
-crash-safe.
+retry across process restarts. Ticket projections may carry this stable
+external creation key separately from their source-facing identifier; adapters
+that support idempotent creation preserve it through create, adoption, get, and
+ready listing. The reservation fact precedes the external side effect — that
+ordering, not provider behavior, is what makes filing crash-safe. Dispatch
+uses the key only to withhold unfinished Autobuild creates; its absence fails
+open for legacy/plugin tickets and introduces no new readiness gate.
 
 ## 14. Operator UI
 
