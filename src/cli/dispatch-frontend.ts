@@ -4,6 +4,7 @@ import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import { reduceHarvest } from '../kernel/harvest'
+import { scanUnclaimedObservations } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
 import { buildControlUser, controlBuild } from './build-control'
@@ -97,6 +98,10 @@ export class DispatchFrontend {
   private config: Config | undefined
   private configRef: string | undefined
   private configRevision = 0
+  /** Display-only pressure is sampled by the Store-only frontend. Undefined
+   * means no factual sample has succeeded yet; failures retain the last value. */
+  private observationCount: number | undefined
+  private observationRefreshDiagnostic: string | undefined
   private model: DashboardModel | undefined
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private view: DashboardView | undefined
@@ -256,6 +261,22 @@ export class DispatchFrontend {
       return
     }
     const config = await this.loadConfig(ref.kind, ref.rev)
+    try {
+      const scan = await scanUnclaimedObservations(this.opts.store, this.opts.repo)
+      this.observationCount = scan.observations.length
+      this.observationRefreshDiagnostic = undefined
+    } catch (error) {
+      this.observationRefreshDiagnostic = `dashboard observation refresh failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      // Before the first successful sample there is no factual zero to place in
+      // a complete frame. Paint only the actionable diagnostic and retry on the
+      // next ordinary poll, without manufacturing a repository notice.
+      if (this.observationCount === undefined) {
+        this.region.update([this.observationRefreshDiagnostic])
+        return
+      }
+    }
     this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
     const snapshot = await this.cache.refresh(config, this.configRevision)
     if (!this.cache.isCurrent(snapshot)) return
@@ -282,6 +303,9 @@ export class DispatchFrontend {
       ...status.roleWarnings,
       ...status.diagnostics,
       ...(status.notice !== undefined ? [status.notice] : []),
+      ...(this.observationRefreshDiagnostic !== undefined
+        ? [this.observationRefreshDiagnostic]
+        : []),
     ]
     const projected = buildDashboardFromProjected(
       snapshot.builds,
@@ -292,7 +316,8 @@ export class DispatchFrontend {
           (state) => state.status !== 'done' && state.status !== 'aborted',
         ).length,
         capacity: config.capacity,
-        observationCount: status.observations ?? 0,
+        observationCount: this.observationCount,
+        observationLimit: config.policy.harvestThreshold,
         ...(status.availableUpgrade !== undefined
           ? { availableUpgrade: status.availableUpgrade }
           : {}),

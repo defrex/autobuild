@@ -2360,9 +2360,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | observations 5')
+      expect(firstFrame).toContain('queue 0 | active 1/5 | observations 5/7')
       expect(firstFrame).not.toMatch(/\bdrift\b/i)
-      expect(firstFrame).not.toContain('observations 5/')
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
       expect(firstFrame).toContain('QUEUED')
@@ -2404,9 +2403,8 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | observations 0')
+      expect(claimedFrame).toContain('queue 0 | active 1/5 | observations 0/7')
       expect(claimedFrame).not.toMatch(/\bdrift\b/i)
-      expect(claimedFrame).not.toContain('observations 0/')
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
     } finally {
@@ -2992,9 +2990,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('observations 2')
-      expect(frame).not.toContain('observations 0')
-      expect(frame).not.toContain('observations 2/')
+      expect(frame).toContain('observations 2/7')
+      expect(frame).not.toContain('observations 0/7')
       expect(frame).not.toMatch(/\bdrift\b/i)
       expect(frame).toContain('pressure scan unavailable')
       expect(fx.err).toEqual([])

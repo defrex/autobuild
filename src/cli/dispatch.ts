@@ -562,7 +562,7 @@ class DispatchLoop {
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick. A failed scan must neither fail dispatch nor replace
       // the last complete measurement with a fabricated zero.
-      if (this.dashboard || this.opts.kernelRunId !== undefined) {
+      if (this.dashboard) {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
           this.observationCount = scan.observations.length
@@ -608,7 +608,6 @@ class DispatchLoop {
           payload: {
             run: this.opts.kernelRunId,
             queued: displayedQueued,
-            observations: this.observationCount,
             counters,
             janitorDiagnostics,
             ticketDiagnostics: readyObservation?.ticketDiagnostics ?? ticketDiagnostics,
@@ -1882,6 +1881,7 @@ class DispatchLoop {
         ).length,
         capacity: configSnapshot.config.capacity,
         observationCount: this.observationCount,
+        observationLimit: configSnapshot.config.policy.harvestThreshold,
       },
       repositoryEvents,
     )

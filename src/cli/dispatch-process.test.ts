@@ -158,7 +158,6 @@ describe('dispatch child supervision', () => {
       payload: {
         run: 'run-1',
         queued: 0,
-        observations: 0,
         counters: {
           merged: 0,
           closed: 0,
@@ -246,7 +245,11 @@ readyState = "ready"
       expect(started?.type).toBe('dispatcher.run-started')
       if (started?.type !== 'dispatcher.run-started') throw new Error('missing run start')
       expect(started.payload.pid).not.toBe(process.pid)
-      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+      const completed = events.find((event) => event.type === 'dispatcher.tick-completed')
+      expect(completed?.type).toBe('dispatcher.tick-completed')
+      if (completed?.type !== 'dispatcher.tick-completed')
+        throw new Error('missing tick completion')
+      expect(completed.payload).not.toHaveProperty('observations')
       expect(
         events.some(
           (event) => event.type === 'dispatcher.run-stopped' && event.payload.outcome === 'normal',
