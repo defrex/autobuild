@@ -443,7 +443,7 @@ export class DispatchFrontend {
   }
 
   private async dismissStaleAbortConfirmation(slug: string): Promise<void> {
-    this.abortConfirmation = undefined
+    if (this.abortConfirmation?.slug === slug) this.abortConfirmation = undefined
     await this.report(
       `build ${slug}: abort confirmation dismissed because the build state changed`,
       'warning',

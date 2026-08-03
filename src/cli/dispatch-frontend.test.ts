@@ -217,17 +217,15 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   const repo = '/stale-abort-repo'
   const backing = new MemoryBuildStore()
   await backing.ensureRepo(repo)
-  await backing.createBuild({
-    slug: 'alpha',
-    repo,
-    ticket: { source: 'fake', id: 'alpha', title: 'alpha' },
-    branch: 'ab/alpha',
-  })
-  await backing.append('alpha', {
-    actor: DISPATCHER,
-    type: 'build.created',
-    payload: { repo, ticket: { source: 'fake', id: 'alpha', title: 'alpha' }, baseBranch: 'main' },
-  })
+  for (const slug of ['alpha', 'beta']) {
+    const ticket = { source: 'fake', id: slug, title: slug }
+    await backing.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+    await backing.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo, ticket, baseBranch: 'main' },
+    })
+  }
 
   const intakeEntered = deferred<void>()
   const releaseIntake = deferred<void>()
@@ -255,7 +253,7 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
     output += chunk
   }
   const childDone = deferred<{ exitCode: number }>()
-  let confirmationVisible = false
+  let confirmationSlug: string | undefined
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
@@ -278,7 +276,7 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
     },
     once: false,
     resolveDashboardRenderer: () => (model, options) => {
-      confirmationVisible = model.abortConfirmation !== undefined
+      confirmationSlug = model.abortConfirmation?.slug
       return renderDashboard(model, options)
     },
     launchChild: ({ run }) => {
@@ -320,7 +318,7 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
   input!({ type: 'down' })
   input!({ type: 'text', text: 'a' })
   expect(output).toContain('Abort alpha and delete its workspace')
-  expect(confirmationVisible).toBe(true)
+  expect(confirmationSlug).toBe('alpha')
 
   await backing.append('alpha', {
     actor: DISPATCHER,
@@ -328,6 +326,12 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
     payload: { outcome: 'abandoned' },
   })
   input!({ type: 'enter' })
+
+  // The stale alpha confirmation is queued, but a new beta confirmation is
+  // process-local state and must survive alpha's eventual stale dismissal.
+  input!({ type: 'down' })
+  input!({ type: 'text', text: 'a' })
+  expect(confirmationSlug).toBe('beta')
   releaseIntake.resolve()
 
   await waitFor(async () => {
@@ -343,7 +347,7 @@ test('frontend rejects an abort confirmation that becomes terminal while its act
 
   const buildEvents = await backing.getEvents('alpha')
   expect(buildEvents.some((event) => event.type === 'build.abort-requested')).toBe(false)
-  expect(confirmationVisible).toBe(false)
+  expect(confirmationSlug).toBe('beta')
   const repoEvents = await backing.getRepoEvents(repo)
   expect(
     repoEvents.some(
