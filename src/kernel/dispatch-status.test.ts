@@ -78,6 +78,36 @@ describe('reduceDispatchStatus', () => {
     expect(status.lastSeq).toBe(5)
   })
 
+  test('continues a projection from repository deltas without replaying prior facts', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    const completed = event(3, 'dispatcher.tick-completed', {
+      run: 'run-a',
+      queued: 2,
+      observations: 1,
+      counters,
+      janitorDiagnostics: [],
+      ticketDiagnostics: [],
+      dependencyDiagnostics: [],
+    })
+    const initial = reduceDispatchStatus([started], 'run-a')
+    const incremental = reduceDispatchStatus(
+      [started, event(2, 'dispatcher.tick-started', { run: 'run-b' }), completed],
+      'run-a',
+      initial,
+    )
+
+    expect(incremental).toEqual(reduceDispatchStatus([started, completed], 'run-a'))
+    expect(initial.queued).toBeUndefined()
+    expect(() => reduceDispatchStatus([], 'run-b', incremental)).toThrow(
+      'cannot continue dispatch run "run-b" from "run-a" status',
+    )
+  })
+
   test('successful observations supersede diagnostics and accepted config replaces warnings', () => {
     const events = [
       event(1, 'dispatcher.run-started', {

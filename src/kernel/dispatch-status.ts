@@ -21,20 +21,33 @@ function errorNotice(prefix: string, error: string): string {
 }
 
 /** Reduce one correlated dispatch run without consulting process-local state.
+ * An optional prior projection permits strictly newer repository deltas.
  * Successful observations supersede standing diagnostics; failures retain the
  * last known queue/config values instead of fabricating replacements. */
 export function reduceDispatchStatus(
   events: readonly RepositoryEvent[],
   run: string,
+  previous?: Readonly<DispatchStatus>,
 ): DispatchStatus {
-  const state: DispatchStatus = {
-    run,
-    health: 'starting',
-    roleWarnings: [],
-    diagnostics: [],
-    lastSeq: 0,
+  if (previous !== undefined && previous.run !== run) {
+    throw new Error(`cannot continue dispatch run "${run}" from "${previous.run}" status`)
   }
+  const state: DispatchStatus =
+    previous === undefined
+      ? {
+          run,
+          health: 'starting',
+          roleWarnings: [],
+          diagnostics: [],
+          lastSeq: 0,
+        }
+      : {
+          ...previous,
+          roleWarnings: [...previous.roleWarnings],
+          diagnostics: [...previous.diagnostics],
+        }
   for (const event of events) {
+    if (event.seq <= state.lastSeq) continue
     const payload = event.payload as { run?: string }
     if (payload.run !== run) continue
     state.lastSeq = event.seq

@@ -1044,10 +1044,13 @@ publishes a run-correlated effective-config artifact before its first tick and
 records tick/queue diagnostics, reload outcomes, runner coordination, and
 normal/abnormal lifecycle as repository facts. Thus a rejected on-disk reload
 cannot change the displayed effective capacity, and a frontend restart can
-reconstruct every operational notice from the Store. Ctrl-C restores terminal
-modes immediately and asks the child to stop; a timed-out child is terminated
-unless a dispatcher tick is still crossing the ticket-claim boundary, in which
-case that tick first reaches a recoverable durable boundary. `--plain`, non-TTY,
+reconstruct every operational notice from the Store. Repository polling advances
+from the last observed sequence rather than replaying the growing journal on
+every frame. Ctrl-C restores terminal modes immediately and asks the child to
+stop; repeated signals remain graceful while a dispatcher tick is crossing the
+ticket-claim boundary, and a child also stops when its terminal-owning parent
+dies. A timed-out child is terminated unless such a tick is open, in which case
+that tick first reaches a recoverable durable boundary. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 

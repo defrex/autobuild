@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,7 +7,12 @@ import { abDispatch } from './dispatch'
 import { resolveRepoState } from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { createTerminalModeController } from './terminal-restore'
-import { superviseDispatchChild, type DispatchSubprocess } from './dispatch-process'
+import {
+  installDispatchKernelSignalHandlers,
+  superviseDispatchChild,
+  type DispatchSubprocess,
+  watchDispatchParent,
+} from './dispatch-process'
 import { DISPATCHER } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { GIT_ID, git } from '../integration/harness'
@@ -50,6 +56,50 @@ function supervisorFixture(store: MemoryBuildStore, child: DispatchSubprocess, t
 }
 
 describe('dispatch child supervision', () => {
+  test('kernel signal handlers remain armed through repeated stop signals', () => {
+    const boundary = new EventEmitter()
+    let stops = 0
+    const handlers = installDispatchKernelSignalHandlers(() => {
+      stops += 1
+    }, boundary)
+
+    boundary.emit('SIGINT')
+    boundary.emit('SIGINT')
+    boundary.emit('SIGTERM')
+    expect(stops).toBe(3)
+    expect(boundary.listenerCount('SIGINT')).toBe(1)
+    handlers.close()
+    handlers.close()
+    expect(boundary.listenerCount('SIGINT')).toBe(0)
+  })
+
+  test('an orphaned kernel notices parent death and requests shutdown once', async () => {
+    let currentParent = 42
+    let alive = true
+    let stops = 0
+    const watch = watchDispatchParent(
+      42,
+      () => {
+        stops += 1
+      },
+      {
+        intervalMs: 1,
+        currentParentPid: () => currentParent,
+        isAlive: () => alive,
+      },
+    )
+
+    await Bun.sleep(3)
+    expect(stops).toBe(0)
+    currentParent = 1
+    alive = false
+    await Bun.sleep(5)
+    expect(stops).toBe(1)
+    await Bun.sleep(3)
+    expect(stops).toBe(1)
+    watch.close()
+  })
+
   test('graceful SIGINT records one normal stop', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')

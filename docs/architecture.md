@@ -154,9 +154,11 @@ single-flights build-runner launches per slug within its process. Interactive
 `ab dispatch` runs that owner in the private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. Terminal modes restore immediately
-on interruption; timeout escalation is held while a durable `tick-started` fact
-remains open, because force-killing the ticket claim before build creation would
-not be recoverable. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
+on interruption; persistent child signal handlers and a parent-liveness watch
+prevent either repeated Ctrl-C or direct frontend termination from leaving an
+unsafe or detached kernel. Timeout escalation is held while a durable
+`tick-started` fact remains open, because force-killing the ticket claim before
+build creation would not be recoverable. The BuildStore lease remains the cross-process gate. `src/processes/dispatcher.ts` counts actual schedules,
 not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
@@ -313,8 +315,9 @@ behavior.
 
 **Dashboard.** `src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
 it has no ticket, forge, workspace-provider, LiveConfig, or runtime dependency.
-It follows one dispatch run's repository facts through
-`src/kernel/dispatch-status.ts`, validates/caches its effective-config artifact,
+It follows one dispatch run's repository facts incrementally through
+`src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
+facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
 intervals. Navigation is synchronous presentation state; only Store reads and
 writes enter its UI action queue. The supervised kernel child owns every slow

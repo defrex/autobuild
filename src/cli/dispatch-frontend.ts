@@ -1,7 +1,8 @@
 import { configSchema, type Config } from '../config/schema'
 import { humanActor } from '../events/envelope'
+import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import { reduceDispatchStatus } from '../kernel/dispatch-status'
+import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import { reduceHarvest } from '../kernel/harvest'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
@@ -41,6 +42,15 @@ import {
 const POLL_MS = 500
 const PAINT_MS = 250
 
+function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
+  return (
+    event.type.startsWith('harvest.') ||
+    event.type === 'dispatcher.intake-set' ||
+    event.type === 'dispatcher.pause-set' ||
+    event.type === 'dispatcher.auto-merge-default-set'
+  )
+}
+
 interface ResumePrompt {
   slug: string
   escalationIds: string[]
@@ -79,6 +89,10 @@ export class DispatchFrontend {
   private readonly region: LiveRegion
   private readonly keyboard
   private child: DispatchChildHandle | undefined
+  private repositorySeq = 0
+  private repositoryEvents: RepositoryEvent[] = []
+  private dispatchStatus: DispatchStatus = reduceDispatchStatus([], this.runId)
+  private eventRefreshTail: Promise<void> = Promise.resolve()
   private cache: DashboardBuildPollCache | undefined
   private config: Config | undefined
   private configRef: string | undefined
@@ -106,9 +120,21 @@ export class DispatchFrontend {
     this.region = new LiveRegion(opts.terminal, this.keyboard)
   }
 
-  private async events() {
-    const repo = await this.opts.store.getRepo(this.opts.repo)
-    return repo === null ? [] : this.opts.store.getRepoEvents(this.opts.repo)
+  /** Advance the repository cursor exactly once even when polling overlaps an
+   * operator action. High-frequency dispatcher status is folded from deltas;
+   * only the low-volume settings/Harvest facts needed by the dashboard model
+   * are retained for their existing replay reducers. */
+  private async events(): Promise<RepositoryEvent[]> {
+    const refresh = this.eventRefreshTail.then(async () => {
+      const delta = await this.opts.store.getRepoEvents(this.opts.repo, this.repositorySeq)
+      if (delta.length === 0) return
+      this.repositorySeq = delta.at(-1)!.seq
+      this.dispatchStatus = reduceDispatchStatus(delta, this.runId, this.dispatchStatus)
+      this.repositoryEvents.push(...delta.filter(isDashboardRepositoryEvent))
+    })
+    this.eventRefreshTail = refresh.catch(() => {})
+    await refresh
+    return this.repositoryEvents
   }
 
   private async report(message: string, level: 'info' | 'warning' = 'info'): Promise<void> {
@@ -219,7 +245,7 @@ export class DispatchFrontend {
 
   private async renderOnce(): Promise<void> {
     const repositoryEvents = await this.events()
-    const status = reduceDispatchStatus(repositoryEvents, this.runId)
+    const status = this.dispatchStatus
     const ref = status.effectiveConfig
     // No filesystem fallback: the first frame waits for the child's durable,
     // run-correlated effective snapshot.

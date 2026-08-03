@@ -42,8 +42,15 @@ test('frontend input and captured controls remain responsive while the kernel is
   const intakeEntered = deferred<void>()
   const releaseIntake = deferred<void>()
   let delayed = false
+  const repositoryReads: number[] = []
   const store = new Proxy(backing, {
     get(target, property) {
+      if (property === 'getRepoEvents') {
+        return async (requestedRepo: string, sinceSeq = 0) => {
+          repositoryReads.push(sinceSeq)
+          return target.getRepoEvents(requestedRepo, sinceSeq)
+        }
+      }
       if (property === 'appendRepo') {
         return async (...args: Parameters<BuildStore['appendRepo']>) => {
           const event = args[1]
@@ -123,6 +130,9 @@ test('frontend input and captured controls remain responsive while the kernel is
 
   const running = frontend.run()
   await waitFor(() => output.includes('alpha') && input !== undefined, 'first dashboard frame')
+  await waitFor(() => repositoryReads.some((sinceSeq) => sinceSeq > 0), 'incremental repo cursor')
+  const incrementalAt = repositoryReads.findIndex((sinceSeq) => sinceSeq > 0)
+  expect(repositoryReads.slice(incrementalAt).every((sinceSeq) => sinceSeq > 0)).toBe(true)
 
   // Occupy the Store-action queue, then navigate and confirm abort while both
   // that action and the child kernel remain unresolved.
