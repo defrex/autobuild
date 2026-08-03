@@ -319,8 +319,15 @@ It follows one dispatch run's repository facts incrementally through
 `src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. Navigation is synchronous presentation state; only Store reads and
-writes enter its UI action queue. The supervised kernel child owns every slow
+intervals. The same polling path calls the canonical
+`scanUnclaimedObservations` BuildStore reduction for the header's current count
+and pairs it with the effective config's `policy.harvestThreshold`. That sample
+is process-local presentation state: a failed refresh preserves the last
+successful value and adds a local diagnostic, while an initial failure delays
+the complete frame rather than inventing zero. No repository fact transports
+it, and the headless child does not scan for presentation. Navigation is
+synchronous presentation state; only Store reads and writes enter its UI action
+queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
