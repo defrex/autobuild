@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.5.0 — 2026-08-04
+
+This release moves build execution into supervised, isolated processes, separating the dispatch dashboard from kernel work so the frontend stays responsive under load while preserving observation pressure and handling shutdown, cleanup failures, and stale abort confirmations safely. Harvest and dispatch accounting were hardened as well: tickets are withheld while a Harvest is being created, counters survive tick publication failures, and dispatch accounting now reflects settled Harvest results. Reconcile budgets became progress-aware, local phase stores are scoped to the ambient session identity, and the README headline now leads with the happy path.
+
 - [#206](https://github.com/defrex/autobuild/pull/206) — Isolate each build in a supervised process
 - [#205](https://github.com/defrex/autobuild/pull/205) — Scope local phase stores to ambient session identity
 - [#204](https://github.com/defrex/autobuild/pull/204) — Make reconcile budgets progress-aware
