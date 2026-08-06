@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#207](https://github.com/defrex/autobuild/pull/207) — Add JSON output to ticket mutators
 ## v0.5.0 — 2026-08-04
 
 This release moves build execution into supervised, isolated processes, separating the dispatch dashboard from kernel work so the frontend stays responsive under load while preserving observation pressure and handling shutdown, cleanup failures, and stale abort confirmations safely. Harvest and dispatch accounting were hardened as well: tickets are withheld while a Harvest is being created, counters survive tick publication failures, and dispatch accounting now reflects settled Harvest results. Reconcile budgets became progress-aware, local phase stores are scoped to the ambient session identity, and the README headline now leads with the happy path.
