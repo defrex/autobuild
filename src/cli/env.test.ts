@@ -5,8 +5,10 @@
  */
 import { describe, expect, test } from 'bun:test'
 import {
+  InvalidAmbientContextError,
   MissingAmbientContextError,
   parseAbPhase,
+  resolveAmbientReadSession,
   resolveCliEnv,
   resolveHarvestCliEnv,
 } from './env'
@@ -144,6 +146,44 @@ describe('resolveHarvestCliEnv', () => {
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(MissingAmbientContextError)
     expect((error as Error).message).toMatch(/AB_PHASE "review" is not a harvest session phase/)
+  })
+})
+
+describe('resolveAmbientReadSession', () => {
+  test('treats AB_STORE and AB_TOKEN alone as operator selection, not identity', () => {
+    expect(resolveAmbientReadSession({})).toBeUndefined()
+    expect(
+      resolveAmbientReadSession({ AB_STORE: '/operator/store', AB_TOKEN: 'operator-token' }),
+    ).toBeUndefined()
+  })
+
+  test('resolves complete build and Harvest tuples through the strict parsers', () => {
+    expect(resolveAmbientReadSession(FULL_ENV)).toEqual(resolveCliEnv(FULL_ENV))
+    expect(resolveAmbientReadSession(FULL_HARVEST_ENV)).toEqual(
+      resolveHarvestCliEnv(FULL_HARVEST_ENV),
+    )
+  })
+
+  test.each([
+    { AB_BUILD: 'build-a' },
+    { AB_BUILD: '' },
+    { AB_REPO: 'acme/project' },
+    { AB_HARVEST: 'h_1' },
+    { AB_PHASE: 'implement@1' },
+    { AB_SESSION: 's_1' },
+    { ...FULL_ENV, AB_SESSION: '' },
+    { ...FULL_ENV, AB_PHASE: 'implement@nope' },
+  ])('fails closed for partial, empty, or malformed identity %#', (env) => {
+    expect(() => resolveAmbientReadSession(env)).toThrow(InvalidAmbientContextError)
+    expect(() => resolveAmbientReadSession(env)).toThrow(
+      /invalid ambient context.*complete build tuple/s,
+    )
+  })
+
+  test('rejects mixed build and Harvest identity as ambiguous', () => {
+    expect(() =>
+      resolveAmbientReadSession({ ...FULL_ENV, AB_REPO: 'acme/project', AB_HARVEST: 'h_1' }),
+    ).toThrow(/invalid ambient context.*mixed.*ambiguous/s)
   })
 })
 

@@ -936,11 +936,13 @@ subcommand accepts `--json`, which emits one bare JSON value and no prose: a
 ## Retrieving build artifacts
 
 `ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>]`
-is the read-only, sessionless binary retrieval form. It works after a build is
-terminal, writes exact bytes (creating parent directories), verifies that the
-build belongs to this repository, and uses the standard explicit `--store` >
-nonblank `AB_STORE` > repository-local selection. Use the exact pinned `@rev`
-from a PR attachment command.
+is the read-only binary retrieval form. Operators need no session identity: it
+works after a build is terminal, writes exact bytes (creating parent
+directories), verifies that the build belongs to this repository, and uses the
+standard explicit `--store` > nonblank `AB_STORE` > repository-local selection.
+Inside a phase, a complete ambient tuple permits only the ambient build; a
+foreign build or malformed/partial identity is rejected. Use the exact pinned
+`@rev` from a PR attachment command.
 
 In a build session, `ab artifact put <kind> <file> --attach` atomically deposits
 the exact bytes and designates that revision for the PR. A later designation of
@@ -1253,9 +1255,13 @@ rows, `i` and `h` are also no-ops.
 ## Checking build status
 
 The read-only status commands answer "what is happening?" without inspecting
-SQLite, worktrees, or OS processes. They run *outside* build sessions, need no
-phase-session `AB_*` identity, append no events, take no leases, and are safe to
-run at any time.
+SQLite, worktrees, or OS processes. Operators need no phase-session `AB_*`
+identity; those invocations remain repository-wide. Inside a phase, a complete
+ambient tuple permits `ab build status` only for the ambient build and denies
+`ab builds` because it requires repository-wide collection access. Any partial,
+malformed, shared-only, or mixed build/Harvest identity is rejected rather than
+falling back to operator access. The commands append no events, take no leases,
+and are safe to run at any time.
 
 **`ab repository status [--json] [--store <ref>]`** reports the three durable
 dispatcher settings in one answer: ticket intake (`intake`, default `true`), the

@@ -10,7 +10,12 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
 import { scopeLocalStoreToSession } from '../store/session-scope'
 import type { BuildStore } from '../store/types'
-import type { CliEnv, HarvestCliEnv } from './env'
+import {
+  resolveAmbientReadSession,
+  type AmbientReadSession,
+  type CliEnv,
+  type HarvestCliEnv,
+} from './env'
 import { isRemoteStoreRef, resolveRepoState, type RepoStatePaths } from './repo-state'
 import { resolveStore } from './store-ref'
 
@@ -33,18 +38,27 @@ export const openProductionStore: StoreOpener = (ref, token) => {
   })
 }
 
-/** Open the Store for a validated phase/Harvest ambient identity. Remote
- * handles retain their token-backed authorization unchanged; local handles
- * receive the equivalent in-process resource and session authority. */
-export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildStore {
-  const store = openProductionStore(env.store, env.token)
-  if (isRemoteStoreRef(env.store)) return store
+/** Apply validated ambient authority to a selected Store handle. Remote
+ * handles retain token-backed server authorization; filesystem handles receive
+ * the equivalent in-process scope. Keeping this primitive shared prevents
+ * phase commands and ambient-aware query commands from drifting. */
+function scopeSelectedStoreToSession(
+  store: BuildStore,
+  ref: string,
+  env: AmbientReadSession,
+): BuildStore {
+  if (isRemoteStoreRef(ref)) return store
   return scopeLocalStoreToSession(
     store,
     'build' in env
       ? { kind: 'build', id: env.build, session: env.session }
       : { kind: 'repo', id: env.repo, session: env.session },
   )
+}
+
+/** Open the Store for a validated phase/Harvest ambient identity. */
+export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildStore {
+  return scopeSelectedStoreToSession(openProductionStore(env.store, env.token), env.store, env)
 }
 
 export interface OpenedStoreContext extends RepoStatePaths {
@@ -100,6 +114,40 @@ export async function withSessionlessStore<T>(
   use: (context: OpenedStoreContext) => Promise<T> | T,
 ): Promise<T> {
   const context = await openSessionlessStore(opts)
+  try {
+    return await use(context)
+  } finally {
+    await context.store.close()
+  }
+}
+
+/** Dedicated opener for the finite query commands whose operator-sessionless
+ * syntax is also useful inside a phase. Invalid ambient identity fails before
+ * repository canonicalization or Store opening; absent identity preserves the
+ * ordinary unscoped operator path. */
+export async function openAmbientReadStore(
+  opts: SessionlessStoreOpts,
+): Promise<OpenedStoreContext> {
+  const ambient = resolveAmbientReadSession(opts.env)
+  const state = await resolveRepoState({
+    targetRepo: opts.targetRepo,
+    exec: opts.exec,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+  })
+  const context = openStoreForRepoState(state, opts)
+  if (ambient === undefined) return context
+  return {
+    ...context,
+    store: scopeSelectedStoreToSession(context.store, state.storeRef, ambient),
+  }
+}
+
+export async function withAmbientReadStore<T>(
+  opts: SessionlessStoreOpts,
+  use: (context: OpenedStoreContext) => Promise<T> | T,
+): Promise<T> {
+  const context = await openAmbientReadStore(opts)
   try {
     return await use(context)
   } finally {

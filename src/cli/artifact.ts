@@ -1,8 +1,8 @@
 /**
  * Artifact command core (SPEC §8.2). In-session `put|get` are own-build by
  * construction: their store handle and remote token come from the phase tuple.
- * Sessionless `download` is the read-only operator path; it resolves and
- * verifies the repository/build explicitly and writes exact bytes to a file.
+ * `download` is the read-only operator form; when invoked with complete
+ * ambient phase identity it keeps that identity's Store authority.
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
@@ -11,7 +11,7 @@ import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import type { CliEnv } from './env'
-import { withSessionlessStore, type StoreOpener } from './store-opening'
+import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 export interface ArtifactDeps {
   store: BuildStore
@@ -139,8 +139,8 @@ export interface ArtifactDownloadResult {
   outputPath: string
 }
 
-/** Read-only, sessionless binary retrieval. It deliberately accepts terminal
- * builds: artifacts are evidence, not a control operation. */
+/** Read-only binary retrieval whose invocation requires no session. It
+ * deliberately accepts terminal builds: artifacts are evidence, not control. */
 export async function artifactDownload(
   opts: ArtifactDownloadOpts,
 ): Promise<ArtifactDownloadResult> {
@@ -151,7 +151,7 @@ export async function artifactDownload(
   if (kind.trim() === '') {
     throw new Error("'ab artifact download' requires a non-empty <kind>[@rev]")
   }
-  return withSessionlessStore(opts, async ({ store, repo }) => {
+  return withAmbientReadStore(opts, async ({ store, repo }) => {
     const record = await store.getBuild(opts.build)
     if (record === null) {
       throw new Error(

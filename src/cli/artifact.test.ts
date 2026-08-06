@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
+import { SessionScopeError } from '../store/session-scope'
 import { textContent } from '../store/types'
 import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
 import { makeEnv, seedStore } from './testkit'
@@ -230,6 +231,88 @@ describe('artifact download', () => {
     })
     expect(new Uint8Array(await readFile(remoteOutput))).toEqual(second)
     expect(closeCount).toBe(2)
+  })
+
+  test('complete ambient identity permits own download and denies foreign or Harvest reads', async () => {
+    const repo = resolve(tmp)
+    await store.createBuild({ slug: 'ambient', repo })
+    await store.createBuild({ slug: 'foreign', repo })
+    const bytes = new Uint8Array([0, 1, 2, 255])
+    await store.putArtifact('ambient', { kind: 'evidence', content: bytes })
+    await store.putArtifact('foreign', { kind: 'evidence', content: bytes })
+    const ownOutput = join(tmp, 'ambient.bin')
+    const ambient = {
+      AB_STORE: '/phase/store',
+      AB_BUILD: 'ambient',
+      AB_PHASE: 'implement@1',
+      AB_SESSION: 's_phase',
+    }
+
+    await artifactDownload({
+      targetRepo: tmp,
+      env: ambient,
+      exec: spawnExec,
+      build: 'ambient',
+      spec: 'evidence',
+      outputPath: ownOutput,
+      openStore: () => store,
+    })
+    expect(new Uint8Array(await readFile(ownOutput))).toEqual(bytes)
+
+    const deniedOutput = join(tmp, 'denied.bin')
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: ambient,
+        exec: spawnExec,
+        build: 'foreign',
+        spec: 'evidence',
+        outputPath: deniedOutput,
+        openStore: () => store,
+      }),
+    ).rejects.toBeInstanceOf(SessionScopeError)
+    expect(await Bun.file(deniedOutput).exists()).toBe(false)
+
+    await store.ensureRepo(repo)
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_REPO: repo,
+          AB_HARVEST: 'h_1',
+          AB_PHASE: 'synthesize@1',
+          AB_SESSION: 'hs_1',
+        },
+        exec: spawnExec,
+        build: 'ambient',
+        spec: 'evidence',
+        outputPath: deniedOutput,
+        openStore: () => store,
+      }),
+    ).rejects.toBeInstanceOf(SessionScopeError)
+    expect(await Bun.file(deniedOutput).exists()).toBe(false)
+  })
+
+  test('rejects malformed ambient identity before opening or creating output', async () => {
+    let opens = 0
+    const output = join(tmp, 'partial.bin')
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: { AB_PHASE: 'implement@1' },
+        exec: spawnExec,
+        build: 'ambient',
+        spec: 'evidence',
+        outputPath: output,
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/invalid ambient context/)
+    expect(opens).toBe(0)
+    expect(await Bun.file(output).exists()).toBe(false)
   })
 
   test('rejects unknown builds, wrong-repository builds, and absent refs without creating output', async () => {

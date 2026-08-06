@@ -19,6 +19,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
+import { SessionScopeError } from '../store/session-scope'
 import type { BuildRecord, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import {
@@ -1317,6 +1318,92 @@ describe('abBuildStatus', () => {
     const parsed = JSON.parse(raw)
     expect(parsed.slug).toBe('b1')
     expect(parsed.events).toHaveLength(1)
+  })
+})
+
+describe('ambient read authority', () => {
+  const buildEnv = {
+    AB_STORE: '/phase/store',
+    AB_BUILD: 'mine',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_phase',
+  }
+
+  test('own status succeeds while foreign status and repository listing are denied', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'mine' })
+    await seedBuild(store, { slug: 'foreign' })
+
+    const out: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: buildEnv,
+      exec: fakeExec,
+      stdout: (line) => out.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'mine',
+    })
+    expect(out.join('\n')).toContain('build mine')
+
+    await expect(
+      abBuildStatus({
+        targetRepo: '/anywhere',
+        env: buildEnv,
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'foreign',
+      }),
+    ).rejects.toBeInstanceOf(SessionScopeError)
+    await expect(
+      abBuilds({
+        targetRepo: '/anywhere',
+        env: buildEnv,
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+      }),
+    ).rejects.toMatchObject({ operation: 'listBuilds' })
+  })
+
+  test('complete Harvest and malformed ambient identities fail without build access', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'mine' })
+    await store.ensureRepo(REPO)
+    await expect(
+      abBuildStatus({
+        targetRepo: '/anywhere',
+        env: {
+          AB_STORE: '/phase/store',
+          AB_REPO: REPO,
+          AB_HARVEST: 'h_1',
+          AB_PHASE: 'review@1',
+          AB_SESSION: 'hs_1',
+        },
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => store,
+        slug: 'mine',
+      }),
+    ).rejects.toBeInstanceOf(SessionScopeError)
+
+    let opens = 0
+    await expect(
+      abBuilds({
+        targetRepo: '/anywhere',
+        env: { AB_SESSION: 'partial' },
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/invalid ambient context/)
+    expect(opens).toBe(0)
   })
 })
 

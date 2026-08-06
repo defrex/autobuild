@@ -1,7 +1,7 @@
 /**
  * `ab builds` and `ab build status <slug>` — the read-only query surface on
- * build state (SPEC §8.2, §15.5). Both run OUTSIDE build sessions like
- * init/upgrade/ticket/dispatch (§16.3): they take a repo, not a build.
+ * build state (SPEC §8.2, §15.5). Their invocation forms require no session,
+ * while a complete ambient phase identity narrows Store authority.
  *
  * The shape is one decision: **the projection is pure, the IO is a thin
  * shell.** The functions below map build facts plus an optional build-config
@@ -52,7 +52,7 @@ import type {
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { resolveMainRepo } from './repo-state'
-import { withSessionlessStore, type StoreOpener } from './store-opening'
+import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
 export const currentRepo = resolveMainRepo
@@ -567,7 +567,7 @@ export interface AbBuildsOpts extends StatusOpts {
 /** `ab builds` — this repo's builds, active by default. Read-only. */
 export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  await withSessionlessStore(opts, async ({ store, repo }) => {
+  await withAmbientReadStore(opts, async ({ store, repo }) => {
     const wanted = new Set(statusFilter(opts.all, opts.queued))
     // Cross-repo aggregation is out of scope (§12: one dispatcher per repo,
     // one repo's builds per answer).
@@ -660,7 +660,7 @@ async function projectBuildDecision(
 /** `ab build status <slug>` — one build in detail. Read-only. */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  await withSessionlessStore(opts, async ({ store, repo }) => {
+  await withAmbientReadStore(opts, async ({ store, repo }) => {
     const record = await store.getBuild(opts.slug)
     if (record === null) {
       throw new Error(
