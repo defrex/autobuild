@@ -21,6 +21,9 @@ import { join } from 'node:path'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
+import { MemoryBuildStore } from '../store/memory'
+import { startStoreServer } from '../store/remote/server'
+import { mintToken } from '../store/remote/token'
 
 const ROOT = join(import.meta.dir, '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
@@ -342,6 +345,173 @@ test('artifact download alone is sessionless and preserves binary bytes', async 
   expect(result.stderr).toBe('')
   expect(result.stdout).toContain('visual:mixed-wide@0')
   expect(await Bun.file(join(tmp, 'downloads', 'frame.png')).bytes()).toEqual(bytes)
+})
+
+test('ambient build identity scopes all three production-routed local reads', async () => {
+  const repo = await realpath(tmp)
+  const local = openLocalStore(join(tmp, 'store'))
+  for (const slug of ['ambient-own', 'ambient-foreign']) {
+    await local.createBuild({ slug, repo })
+    await local.putArtifact(slug, {
+      kind: 'evidence',
+      content: new TextEncoder().encode(slug),
+    })
+  }
+  const beforeOwnEvents = await local.getEvents('ambient-own')
+  const beforeForeignEvents = await local.getEvents('ambient-foreign')
+  await local.close()
+
+  const env = {
+    AB_BUILD: 'ambient-own',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_ambient_read',
+  }
+  const ownStatus = await runBin(['build', 'status', 'ambient-own', '--json'], env)
+  expect(ownStatus.code).toBe(0)
+  expect(JSON.parse(ownStatus.stdout).slug).toBe('ambient-own')
+
+  const ownDownload = await runBin(
+    ['artifact', 'download', 'ambient-own', 'evidence', '--output', 'downloads/ambient-own.txt'],
+    env,
+  )
+  expect(ownDownload.code).toBe(0)
+  expect(await Bun.file(join(tmp, 'downloads', 'ambient-own.txt')).text()).toBe('ambient-own')
+
+  for (const argv of [
+    ['builds', '--all', '--json'],
+    ['build', 'status', 'ambient-foreign', '--json'],
+    [
+      'artifact',
+      'download',
+      'ambient-foreign',
+      'evidence',
+      '--output',
+      'downloads/ambient-foreign.txt',
+    ],
+  ]) {
+    const denied = await runBin(argv, env)
+    expect(denied.code).toBe(1)
+    expect(denied.stderr).toContain('local session store scoped to build "ambient-own"')
+  }
+  expect(await Bun.file(join(tmp, 'downloads', 'ambient-foreign.txt')).exists()).toBe(false)
+
+  const reopened = openLocalStore(join(tmp, 'store'))
+  expect(await reopened.getEvents('ambient-own')).toEqual(beforeOwnEvents)
+  expect(await reopened.getEvents('ambient-foreign')).toEqual(beforeForeignEvents)
+  await reopened.close()
+})
+
+test('complete remote phase identity has the same query allow/deny matrix', async () => {
+  const repo = await realpath(tmp)
+  const backing = new MemoryBuildStore()
+  for (const slug of ['remote-own', 'remote-foreign']) {
+    await backing.createBuild({ slug, repo })
+    await backing.putArtifact(slug, { kind: 'evidence', content: slug })
+  }
+  const secret = 'ambient-read-secret'
+  const server = startStoreServer({ store: backing, secret })
+  const env = {
+    AB_STORE: server.url,
+    AB_BUILD: 'remote-own',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_remote_read',
+    AB_TOKEN: mintToken(secret, {
+      build: 'remote-own',
+      session: 's_remote_read',
+      exp: Date.now() + 60_000,
+    }),
+  }
+  try {
+    const ownStatus = await runBin(['build', 'status', 'remote-own', '--json'], env)
+    expect(ownStatus.code).toBe(0)
+    expect(JSON.parse(ownStatus.stdout).slug).toBe('remote-own')
+
+    const ownDownload = await runBin(
+      ['artifact', 'download', 'remote-own', 'evidence', '--output', 'downloads/remote-own.txt'],
+      env,
+    )
+    expect(ownDownload.code).toBe(0)
+    expect(await Bun.file(join(tmp, 'downloads', 'remote-own.txt')).text()).toBe('remote-own')
+
+    for (const argv of [
+      ['builds', '--all'],
+      ['build', 'status', 'remote-foreign'],
+      [
+        'artifact',
+        'download',
+        'remote-foreign',
+        'evidence',
+        '--output',
+        'downloads/remote-foreign.txt',
+      ],
+    ]) {
+      const denied = await runBin(argv, env)
+      expect(denied.code).toBe(1)
+      expect(denied.stderr).toContain('token scoped to build "remote-own"')
+    }
+    expect(await Bun.file(join(tmp, 'downloads', 'remote-foreign.txt')).exists()).toBe(false)
+  } finally {
+    await server.stop()
+    await backing.close()
+  }
+})
+
+test.each([
+  ['builds', ['builds']],
+  ['build status', ['build', 'status', 'anything']],
+  [
+    'artifact download',
+    ['artifact', 'download', 'anything', 'evidence', '--output', 'partial-output.bin'],
+  ],
+] as const)('ab %s rejects invalid ambient identity before Store access', async (_name, argv) => {
+  const invalidContexts: Array<Record<string, string>> = [
+    { AB_BUILD: 'partial-build' },
+    { AB_SESSION: 'shared-only' },
+    {
+      AB_BUILD: 'mixed-build',
+      AB_REPO: await realpath(tmp),
+      AB_HARVEST: 'h_mixed',
+      AB_PHASE: 'implement@1',
+      AB_SESSION: 's_mixed',
+    },
+    {
+      AB_BUILD: 'malformed-build',
+      AB_PHASE: 'implement@nope',
+      AB_SESSION: 's_malformed',
+    },
+    { AB_BUILD: '' },
+  ]
+  for (const env of invalidContexts) {
+    const result = await runBin([...argv], env)
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('invalid ambient context')
+  }
+  expect(await Bun.file(join(tmp, 'partial-output.bin')).exists()).toBe(false)
+})
+
+test('complete Harvest identity cannot cross into build/admin query reads', async () => {
+  const repo = await realpath(tmp)
+  const local = openLocalStore(join(tmp, 'store'))
+  await local.ensureRepo(repo)
+  await local.createBuild({ slug: 'harvest-denied', repo })
+  await local.putArtifact('harvest-denied', { kind: 'evidence', content: 'private' })
+  await local.close()
+  const env = {
+    AB_REPO: repo,
+    AB_HARVEST: 'h_ambient',
+    AB_PHASE: 'review@1',
+    AB_SESSION: 'hs_ambient',
+  }
+  for (const argv of [
+    ['builds'],
+    ['build', 'status', 'harvest-denied'],
+    ['artifact', 'download', 'harvest-denied', 'evidence', '--output', 'harvest-denied.bin'],
+  ]) {
+    const denied = await runBin(argv, env)
+    expect(denied.code).toBe(1)
+    expect(denied.stderr).toContain('local session store scoped to repo')
+  }
+  expect(await Bun.file(join(tmp, 'harvest-denied.bin')).exists()).toBe(false)
 })
 
 test('artifact put --attach uses the real binary grammar and records the assigned revision', async () => {

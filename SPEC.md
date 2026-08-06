@@ -443,8 +443,11 @@ conformance suite):
    nonempty `AB_STORE` > repository default. When a phase or Harvest CLI
    process reopens this store, a handle wrapper derives exact build-or-repository
    authority and agent-event session attribution from its validated ambient
-   identity. This preserves the remote adapter's observable resource boundary
-   without making the SQLite adapter itself ambient-aware.
+   identity. The same wrapper applies when `ab builds`, `ab build status`, or
+   `ab artifact download` is invoked with a complete ambient phase identity;
+   without identity those read forms retain unscoped operator access. This
+   preserves the remote adapter's observable resource boundary without making
+   the SQLite adapter itself ambient-aware.
 2. **Remote** — the same store interface behind a small self-hosted HTTP API
    binary, selected by an `http(s)://` reference. What remote sandboxes talk
    to. The documented [remote store protocol](docs/remote-store-protocol.md)
@@ -572,11 +575,20 @@ repository resources cannot cross, and naming another resource to a Store
 operation cannot widen either handle. Event-bearing writes attributed to an
 agent must name the ambient `AB_SESSION`; non-agent writes remain allowed so the
 CLI can perform its existing trusted kernel plumbing, including finalize.
-Sessionless operator and kernel processes with no complete agent-session
-identity retain unscoped Store access. Remote tokens transport the corresponding
-resource and session authority over the wire; build-process resource scope is
-already enforced by the Store interface. Least privilege comes from the Store
-and runner, not prompt instructions.
+Operator and kernel processes with no agent identity markers retain unscoped
+Store access. Three read-only forms are also valid inside a phase: `ab build
+status` and `ab artifact download` may read only `AB_BUILD`, while `ab builds`
+is denied because collection access cannot represent one build. A complete
+Harvest identity has repository scope and cannot use those build/admin reads.
+If any build or Harvest identity marker is present, the corresponding
+`AB_STORE`/resource/phase/session tuple must be complete, valid, and unambiguous;
+partial, empty, malformed, shared-only, or mixed identity fails before Store
+access rather than falling back to operator authority. `AB_STORE` and
+`AB_TOKEN` alone remain operator selection and credentials, not identity.
+Remote tokens transport the corresponding resource and session authority over
+the wire; build-process resource scope is already enforced by the Store
+interface. Least privilege comes from the Store and runner, not prompt
+instructions.
 
 Every phase and harvest turn also receives a runner-controlled `PATH` prefix
 containing a private `ab` launcher from the same Autobuild distribution that
@@ -591,11 +603,19 @@ sessions need no separate global installation.
 | `ab context` | hydrate `.ab/` with the phase's inputs; print the manifest | no |
 | `ab artifact put <kind> <file> [--attach]` | deposit a versioned artifact → returns rev; optionally designate that exact revision for the PR | no |
 | `ab artifact get <kind>[@rev]` | fetch an artifact within own build | no |
-| `ab artifact download …` | sessionless, read-only exact-byte retrieval; works after build termination | no |
+| `ab artifact download …` | read-only exact-byte retrieval; operator-wide without identity, own-build only with ambient phase identity; works after build termination | no |
 | `ab observe --kind <followup\|refactor\|latent-bug> …` | structured observation, any phase, any time | no |
 | `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
 | `ab escalate <question>` | park the build for human input | **yes** |
+
+The read-only `ab builds`, `ab build status`, and `ab artifact download` forms
+require no session identity for operator use and preserve their repository-wide
+results and store-selection precedence in that case. When a complete ambient
+phase tuple is present, they retain its local or remote Store authority:
+own-build status/download succeed, foreign and repository-scoped targets fail,
+and `ab builds` fails at repository-wide `listBuilds` access rather than
+filtering. Malformed ambient identity fails closed as defined in §8.1.
 
 The verdict vocabulary is phase-dependent and the CLI enforces it: review
 phases accept `approve|revise|escalate`; agent-verify steps accept

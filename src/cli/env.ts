@@ -35,7 +35,24 @@ export interface CliEnv {
   token?: string
 }
 
+export type AmbientReadSession = CliEnv | HarvestCliEnv
+
 const PHASE_FORMAT = "'<phase>[@<round>]' (e.g. 'implement@2', 'verify:e2e@1')"
+const BUILD_AMBIENT_TUPLE = 'AB_STORE/AB_BUILD/AB_PHASE/AB_SESSION'
+const HARVEST_AMBIENT_TUPLE = 'AB_STORE/AB_REPO/AB_HARVEST/AB_PHASE/AB_SESSION'
+
+/** Optional ambient identity is present but cannot safely select one scope. */
+export class InvalidAmbientContextError extends Error {
+  override readonly name = 'InvalidAmbientContextError'
+
+  constructor(detail: string) {
+    super(
+      `invalid ambient context: ${detail}. Expected no agent identity markers, ` +
+        `a complete build tuple (${BUILD_AMBIENT_TUPLE}), or a complete Harvest tuple ` +
+        `(${HARVEST_AMBIENT_TUPLE})`,
+    )
+  }
+}
 
 /** A required runner-provided session value is absent or empty. Callers that
  * resolve ambient auth directly still receive the variable-specific message;
@@ -149,5 +166,41 @@ export function resolveCliEnv(env: Record<string, string | undefined>): CliEnv {
     round,
     session,
     ...(token !== undefined && token !== '' ? { token } : {}),
+  }
+}
+
+/**
+ * Classify the optional ambient authority used by the finite read-only query
+ * commands. AB_STORE and AB_TOKEN remain ordinary operator selection and
+ * credentials when no identity marker is present. Once any build/Harvest
+ * identity marker appears, however, the context must be complete and
+ * unambiguous; a partial agent environment must never fall back to operator
+ * authority.
+ */
+export function resolveAmbientReadSession(
+  env: Record<string, string | undefined>,
+): AmbientReadSession | undefined {
+  const present = (name: string): boolean => env[name] !== undefined
+  const hasBuildMarker = present('AB_BUILD')
+  const hasHarvestMarker = present('AB_REPO') || present('AB_HARVEST')
+  const hasSharedMarker = present('AB_PHASE') || present('AB_SESSION')
+
+  if (!hasBuildMarker && !hasHarvestMarker && !hasSharedMarker) return undefined
+  if (hasBuildMarker && hasHarvestMarker) {
+    throw new InvalidAmbientContextError(
+      'build and Harvest identity markers are mixed, so resource authority is ambiguous',
+    )
+  }
+  if (!hasBuildMarker && !hasHarvestMarker) {
+    throw new InvalidAmbientContextError(
+      'AB_PHASE or AB_SESSION is present without AB_BUILD or AB_REPO/AB_HARVEST',
+    )
+  }
+
+  try {
+    return hasBuildMarker ? resolveCliEnv(env) : resolveHarvestCliEnv(env)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new InvalidAmbientContextError(detail)
   }
 }

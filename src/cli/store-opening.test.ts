@@ -6,12 +6,18 @@ import { agentActor, humanActor, KERNEL } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
+import { MemoryBuildStore } from '../store/memory'
 import { RemoteBuildStore } from '../store/remote/client'
 import { SessionScopeError } from '../store/session-scope'
 import { buildCreatedWrite, sampleEventWrite } from '../store/contract'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { done } from './terminals'
-import { openProductionSessionStore, openProductionStore } from './store-opening'
+import {
+  openAmbientReadStore,
+  openProductionSessionStore,
+  openProductionStore,
+  withAmbientReadStore,
+} from './store-opening'
 
 const dirs: string[] = []
 
@@ -49,6 +55,132 @@ function harvestEnv(store: string, repo = 'acme/project', session = 's_harvest')
 async function caught(run: () => Promise<unknown>): Promise<unknown> {
   return run().catch((error: unknown) => error)
 }
+
+describe('ambient-aware finite read opening', () => {
+  test('leaves absent operator identity unscoped and scopes complete local build identity', async () => {
+    const root = tempRoot()
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'build-a', repo: root })
+    await store.createBuild({ slug: 'build-b', repo: root })
+
+    await withAmbientReadStore(
+      {
+        targetRepo: root,
+        env: { AB_STORE: '/operator/override' },
+        exec: spawnExec,
+        openStore: () => store,
+      },
+      async ({ store: opened }) => {
+        expect((await opened.listBuilds()).map((build) => build.slug)).toEqual([
+          'build-a',
+          'build-b',
+        ])
+      },
+    )
+
+    await withAmbientReadStore(
+      {
+        targetRepo: root,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_BUILD: 'build-a',
+          AB_PHASE: 'implement@1',
+          AB_SESSION: 's_build',
+        },
+        exec: spawnExec,
+        openStore: () => store,
+      },
+      async ({ store: opened }) => {
+        expect((await opened.getBuild('build-a'))?.slug).toBe('build-a')
+        expect(await caught(() => opened.getBuild('build-b'))).toBeInstanceOf(SessionScopeError)
+        expect(await caught(() => opened.listBuilds())).toBeInstanceOf(SessionScopeError)
+      },
+    )
+  })
+
+  test('applies Harvest repository scope and preserves explicit precedence', async () => {
+    const root = tempRoot()
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(root)
+    await store.createBuild({ slug: 'build-a', repo: root })
+    const refs: string[] = []
+    const context = await openAmbientReadStore({
+      targetRepo: root,
+      storeRef: '/explicit/store',
+      env: {
+        AB_STORE: '/ambient/store',
+        AB_REPO: root,
+        AB_HARVEST: 'h_1',
+        AB_PHASE: 'review@1',
+        AB_SESSION: 's_harvest',
+      },
+      exec: spawnExec,
+      openStore: (ref) => {
+        refs.push(ref)
+        return store
+      },
+    })
+    try {
+      expect(refs).toEqual(['/explicit/store'])
+      expect((await context.store.getRepo(root))?.repo).toBe(root)
+      expect(await caught(() => context.store.getBuild('build-a'))).toBeInstanceOf(
+        SessionScopeError,
+      )
+    } finally {
+      await context.store.close()
+    }
+  })
+
+  test('leaves remote handles unwrapped and forwards opaque token', async () => {
+    const root = tempRoot()
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'build-a', repo: root })
+    const opens: Array<{ ref: string; token?: string }> = []
+    const context = await openAmbientReadStore({
+      targetRepo: root,
+      storeRef: 'https://store.example.test',
+      env: {
+        AB_STORE: '/ambient/local',
+        AB_BUILD: 'build-a',
+        AB_PHASE: 'implement@1',
+        AB_SESSION: 's_build',
+        AB_TOKEN: ' opaque ',
+      },
+      exec: spawnExec,
+      openStore: (ref, token) => {
+        opens.push({ ref, ...(token !== undefined ? { token } : {}) })
+        return store
+      },
+    })
+    try {
+      expect(opens).toEqual([{ ref: 'https://store.example.test', token: ' opaque ' }])
+      expect(await context.store.listBuilds()).toHaveLength(1)
+    } finally {
+      await context.store.close()
+    }
+  })
+
+  test('rejects invalid identity before repository resolution or Store opening', async () => {
+    let execCalls = 0
+    let openCalls = 0
+    await expect(
+      openAmbientReadStore({
+        targetRepo: '/unused',
+        env: { AB_BUILD: 'build-a' },
+        exec: async () => {
+          execCalls += 1
+          return { stdout: '', stderr: '', exitCode: 1 }
+        },
+        openStore: () => {
+          openCalls += 1
+          return new MemoryBuildStore()
+        },
+      }),
+    ).rejects.toThrow(/invalid ambient context/)
+    expect(execCalls).toBe(0)
+    expect(openCalls).toBe(0)
+  })
+})
 
 describe('openProductionSessionStore', () => {
   test('opens a real local build handle with ambient resource and session authority', async () => {

@@ -76,13 +76,18 @@ consults a snapshot in place of the append-only log.
 
 **Session Store authority.** `src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through
-`src/cli/store-opening.ts`. Remote references keep the existing token-backed
-client unchanged. Local references are wrapped by `src/store/session-scope.ts`,
-which permits only the exact ambient build or repository resource and rejects
-agent-attributed event writes for any session other than `AB_SESSION`. The
-wrapper deliberately allows non-agent actors because phase terminals also run
-trusted kernel plumbing in that CLI process; resource authority still applies
-to every operation. Generic and sessionless opening remains unwrapped.
+`src/cli/store-opening.ts`. `src/cli/env.ts` also classifies optional ambient
+identity for the finite `builds`, `build status`, and `artifact download` read
+shells: no identity retains operator authority, while any partial, malformed,
+shared-only, or mixed identity fails closed before Store opening. Remote
+references keep the existing token-backed client unchanged. Local references
+are wrapped by `src/store/session-scope.ts`, which permits only the exact
+ambient build or repository resource and rejects agent-attributed event writes
+for any session other than `AB_SESSION`. The wrapper deliberately allows
+non-agent actors because phase terminals also run trusted kernel plumbing in
+that CLI process; resource authority still applies to every operation. Generic
+sessionless opening remains unwrapped; only those three reads use the dedicated
+ambient-aware finite opener.
 
 **Phase decisions.** `src/kernel/phases.ts` owns the phase table,
 `src/kernel/engine.ts` the deterministic transitions;
@@ -320,8 +325,11 @@ conflict.
 `src/cli/repo-state.ts` owns repository identity and store precedence
 (`--store` > `AB_STORE` > `.autobuild/`); `src/cli/store-opening.ts` is the
 production store composition boundary shared by finite sessionless queries and
-phase sessions. Its phase-session opener preserves remote token composition and
-adds the local ambient authority wrapper only for filesystem stores.
+phase sessions. Its shared scoping primitive preserves remote token composition
+and adds local ambient authority only for filesystem stores. The dedicated
+ambient-read opener classifies identity before repository or Store opening and
+is adopted only by `ab builds`, `ab build status`, and `ab artifact download`;
+all other sessionless commands keep the generic unwrapped opener.
 `src/cli/repository-status.ts` consumes that boundary and the kernel's
 `reduceDispatchSettings` projection to report journal-backed dispatcher
 controls without ensuring a repository stream or starting dispatcher work.

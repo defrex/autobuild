@@ -80,11 +80,12 @@ import {
  *
  * `src/cli/binary.ts` routes through `isSessionlessInvocation` below. This set
  * owns flat command names; that helper additionally owns the few mixed nested
- * namespaces (`artifact download`, `harvest status`). Everything else first
- * attempts strict ambient resolution in `binary.ts`. A complete tuple gets a
- * scoped store; an absent value routes here with unscoped dependencies so the
- * command-specific guard below can name the full build or harvest context.
- * Keeping the classification here beside the switch makes it unit-testable.
+ * namespaces (`artifact download`, `harvest status`). The `builds`, `build
+ * status`, and `artifact download` shells remain on this operator-sessionless
+ * route but use their dedicated Store opener to honor a complete ambient phase
+ * identity and reject malformed identity. Everything else first attempts
+ * strict ambient resolution in `binary.ts`. Keeping classification beside the
+ * switch makes it unit-testable.
  */
 export const SESSIONLESS_COMMANDS = new Set([
   'init',
@@ -108,8 +109,9 @@ export const SESSIONLESS_COMMANDS = new Set([
   '--version',
 ])
 
-/** Nested namespaces can mix operator and phase forms. In particular only
- * `artifact download` is sessionless; put/get retain ambient build scoping. */
+/** Nested namespaces can mix operator and phase forms. `artifact download`
+ * uses operator-sessionless routing plus ambient-aware read authority; put/get
+ * remain phase-only. */
 export function isSessionlessInvocation(argv: readonly string[]): boolean {
   const command = argv[0]
   return (
@@ -183,8 +185,8 @@ export interface SessionlessCliDeps {
   }) => ResolveConflict
   /** Injectable child-process seam for plugin contract CLI tests. */
   pluginSubprocess?: PluginContractSubprocess
-  /** Injectable store-adapter seam for sessionless commands that open a store;
-   * production leaves it unset and `store-opening.ts` composes the real one. */
+  /** Injectable store-adapter seam for operator-sessionless commands, including
+   * ambient-authority-aware reads; production composes the real adapter. */
   openStore?: StoreOpener
   store?: BuildStore
   env?: CliEnv

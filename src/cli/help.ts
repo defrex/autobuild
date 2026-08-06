@@ -203,7 +203,9 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'shows every status and subsumes --queued. --json emits the projection as a',
       'bare JSON value, and --store overrides the BuildStore path or URL.',
       '',
-      'This command is read-only and runs outside sessions.',
+      'This command is read-only and requires no session identity for operator use.',
+      'Inside a phase, a complete ambient tuple retains its build scope, so the',
+      'repository-wide list is denied; malformed or partial identity is rejected.',
     ]),
   },
   {
@@ -220,7 +222,9 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'order. --json emits the complete projection; --store overrides the',
       'BuildStore path or URL.',
       '',
-      'This command is read-only and runs outside sessions.',
+      'This command is read-only and requires no session identity for operator use.',
+      'Inside a phase, a complete ambient tuple permits only the ambient build;',
+      'foreign builds and malformed or partial identity are rejected.',
     ]),
   },
   {
@@ -394,7 +398,9 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'run inside build sessions.',
       '',
       'download retrieves exact artifact bytes after a build into --output. It is',
-      'read-only and sessionless; --store overrides the BuildStore path or URL.',
+      'read-only and requires no session identity for operator use; --store overrides',
+      'the BuildStore path or URL. Inside a phase, a complete ambient tuple permits',
+      'only the ambient build; foreign builds and malformed or partial identity fail.',
     ]),
   },
   {
