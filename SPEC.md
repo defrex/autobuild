@@ -941,12 +941,20 @@ and attempts the build from durable state. This unattended startup path is an
 explicit process-restart retry boundary; agent and stall escalations remain
 human judgment gates until an operator answers them.
 
-Crash-gap and exhaustion deduplication is exact to the escalation's source/class
-and target. A triggering event is considered acknowledged only by a later
-`escalation.raised` with that same `source` and `phase`; a raise for another
-class or target cannot suppress it. The triggering event's sequence is the
-boundary, so newer qualifying failure, verdict, or conflict evidence re-arms
-that exact condition after an answer.
+Crash-gap and exhaustion deduplication is exact to the escalation's source/class,
+target, and any durable scope that distinguishes policy conditions. A triggering
+event is considered acknowledged only by a later `escalation.raised` matching
+those dimensions; another class, target, or required scope cannot suppress it.
+The triggering event's sequence is the boundary, so newer qualifying failure,
+verdict, or conflict evidence re-arms that exact condition after an answer.
+
+Reconcile has two distinct policy scopes. Runner retry exhaustion and
+non-retryable failures at progress-check or base-refresh boundaries are scoped
+to a concrete reconcile `round`. Unchanged-base no-progress exhaustion is
+scoped to the current conflict and its `escalation.raised` deliberately omits
+`round`. Only that later roundless `policy`/`reconcile` raise acknowledges the
+no-progress guard; a round-scoped runner raise does not. Routing uses these
+typed event fields and never parses the human-facing `question`.
 
 ## 12. The outer loop
 
@@ -1489,11 +1497,22 @@ completed attempt. The kernel compares it with that attempt's matching latest
 race against a moving base, so another monotonic attempt runs regardless of the
 configured limit. An equal SHA consumes `policy.maxReconcileAttempts`; reaching
 the limit escalates because reconciliation made no progress against an unchanged
-base. The classification is reduced from the durable log, with the next
-attempt's authoritative `reconcile.started` serving as the observation for
-historical logs that predate the progress-check event. A started but incomplete
-attempt re-runs at the same number and consumes nothing. Every completed
-reconcile still starts a fresh, fully bounded `verify:*` cycle.
+base. This no-progress escalation is conflict-scoped and roundless. By contrast,
+a runner retry exhaustion or non-retryable failure while obtaining the progress
+check or refreshing the base is scoped to the concrete next reconcile round.
+Answering that runner condition re-arms its phase-round failure budget so the
+authoritative decision can complete, but it does not acknowledge no-progress:
+if the unchanged-base budget is already exhausted, the separate roundless
+escalation is raised before another reconcile session starts. Answering that
+roundless escalation continues to authorize one subsequent reconcile for the
+same conflict. Routing distinguishes the conditions from durable `round` scope,
+never from `question` text.
+
+The classification is reduced from the durable log, with the next attempt's
+authoritative `reconcile.started` serving as the observation for historical logs
+that predate the progress-check event. A started but incomplete attempt re-runs
+at the same number and consumes nothing. Every completed reconcile still starts
+a fresh, fully bounded `verify:*` cycle.
 
 The grammar's tail is thus an epilogue loop, outside the mainline:
 

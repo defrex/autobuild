@@ -687,8 +687,12 @@ For each repeat conflict, Autobuild compares the base merged by the most recent
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
-escalates when the bound is exhausted. Post-reconcile verification still runs
-in full and remains independently bounded by `maxVerifyAttempts`.
+escalates when the bound is exhausted. Runner failures while checking progress
+or refreshing the base are acknowledged separately from this no-progress
+condition. Answering one lets the authoritative decision finish, but if the
+unchanged-base bound is already exhausted, Autobuild raises the no-progress
+escalation before starting another reconcile. Post-reconcile verification still
+runs in full and remains independently bounded by `maxVerifyAttempts`.
 
 Harvest is driven by repository pressure during dispatcher ticks, not a wall
 clock, and is independent of build `capacity`. A run starts when observation

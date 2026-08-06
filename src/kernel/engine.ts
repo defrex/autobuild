@@ -307,6 +307,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   const allRaised = [...state.openEscalations, ...state.answeredEscalations]
   const raisedAfter = (seq: number, source: EscalationSource, phase: EscalationTarget): boolean =>
     allRaised.some((e) => e.seq > seq && e.source === source && e.phase === phase)
+  const unscopedRaisedAfter = (
+    seq: number,
+    source: EscalationSource,
+    phase: EscalationTarget,
+  ): boolean =>
+    allRaised.some(
+      (e) => e.seq > seq && e.source === source && e.phase === phase && e.round === undefined,
+    )
 
   // Latest-only guidance for an explicit destination (§15.6-B). Plan/code
   // escalations feed their producer; an agent verifier's own escalation feeds
@@ -557,11 +565,14 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
       if (
         baseUnchanged &&
         log.reconcileNoProgressCount >= config.policy.maxReconcileAttempts &&
-        !raisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
+        !unscopedRaisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
       ) {
         // Only reconciles that leave the PR conflicted against the same
-        // authoritative base consume this budget. A moving-base race always
-        // gets another monotonic attempt, even after prior no-progress outcomes.
+        // authoritative base consume this budget. The roundless raise is this
+        // conflict-scoped condition's durable identity; a round-scoped runner
+        // failure must be answered and retried without waiving this guard.
+        // A moving-base race always gets another monotonic attempt, even after
+        // prior no-progress outcomes.
         return {
           kind: 'raise-escalation',
           source: 'policy',

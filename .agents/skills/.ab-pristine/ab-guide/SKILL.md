@@ -586,8 +586,14 @@ For each repeat conflict, Autobuild compares the base merged by the latest
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
-escalates when the budget is exhausted. Post-reconcile verification still runs
-in full and remains independently bounded by `maxVerifyAttempts`.
+escalates when the budget is exhausted. Runner failures while checking progress
+or refreshing the base are round-scoped; this no-progress condition is
+conflict-scoped and its escalation is roundless. Answering a runner failure lets
+the authoritative decision finish but does not waive an already exhausted
+no-progress budget, which raises separately before another reconcile. Routing
+uses that durable scope and never parses escalation question text. Post-reconcile
+verification still runs in full and remains independently bounded by
+`maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect
