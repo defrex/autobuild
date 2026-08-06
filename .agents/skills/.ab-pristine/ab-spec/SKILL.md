@@ -68,6 +68,25 @@ The ids are source-local — whatever the repo's `[tickets]` source uses (e.g.
 `AUT-8` for linear, `file-1` for file). The dispatcher will hold the ticket
 unclaimed until every blocker completes.
 
+For a dependency chain, create in dependency order and obtain each new id from
+the command's complete JSON result. For example, to make B depend on A and C
+depend on B:
+
+```sh
+ab ticket create "A" --body a.md --json > a-ticket.json
+a_id="$(jq -r '.ref.id' a-ticket.json)"
+ab ticket create "B" --body b.md --blocked-by "$a_id" --json > b-ticket.json
+b_id="$(jq -r '.ref.id' b-ticket.json)"
+ab ticket create "C" --body c.md --blocked-by "$b_id" --json > c-ticket.json
+```
+
+Never parse an id from the human-readable confirmation line: it can contain the
+new ticket id and blocker ids in the same source-local form. This order is
+especially important when `[tickets].createState` equals
+`[tickets].readyState`, or when `--state` files directly into the ready state.
+Blockers are evaluated when the dispatcher claims a ticket; adding a blocker
+after a ticket has already been claimed does not stop its active build.
+
 ## With a ticket argument: flesh out
 
 Fetch the ticket. Diff it against the standard: which of the four parts are

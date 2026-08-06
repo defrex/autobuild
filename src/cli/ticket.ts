@@ -38,6 +38,7 @@ export interface TicketCommandOpts {
 
 export interface TicketCreateOpts extends TicketCommandOpts {
   title: string
+  json?: boolean
   /** Path to the ticket body — the spec (docs/spec-standard.md). */
   bodyFile: string
   labels?: string[]
@@ -51,6 +52,7 @@ export interface TicketCreateOpts extends TicketCommandOpts {
 
 export interface TicketUpdateOpts extends TicketCommandOpts {
   id: string
+  json?: boolean
   title?: string
   /** Replacement body file. Omission preserves the current body. */
   bodyFile?: string
@@ -60,7 +62,8 @@ export interface TicketUpdateOpts extends TicketCommandOpts {
 
 export interface TicketBlockerOpts extends TicketCommandOpts {
   id: string
-  blockerId: string
+  blockerIds: string[]
+  json?: boolean
 }
 
 export interface TicketListOpts extends TicketCommandOpts {
@@ -191,6 +194,49 @@ async function requireTicket(source: TicketSource, id: string): Promise<Ticket> 
   return ticket
 }
 
+function emitTicketJson(opts: TicketCommandOpts, ticket: Ticket): void {
+  opts.stdout(JSON.stringify(ticket, null, 2))
+}
+
+async function requirePostMutationTicket(
+  source: TicketSource,
+  id: string,
+  operation: string,
+): Promise<Ticket> {
+  const ticket = await source.get(id)
+  if (ticket === null) {
+    throw new Error(
+      `ticket "${id}" disappeared from the configured ${source.name} ` +
+        `ticket source after ${operation}`,
+    )
+  }
+  return ticket
+}
+
+async function preflightBlockers(
+  source: TicketSource,
+  id: string,
+  blockerIds: string[],
+  operation: 'block' | 'unblock',
+): Promise<string[]> {
+  await requireTicket(source, id)
+  const deduplicated = [...new Set(blockerIds)]
+  const states = await source.dependencyStates(deduplicated)
+  const unknown = states.filter((state) => !state.exists).map((state) => state.id)
+  if (unknown.length > 0) {
+    throw new Error(
+      `no ticket ${unknown.map((candidate) => `"${candidate}"`).join(', ')} ` +
+        `in the configured ${source.name} ticket source — blocker ids are source-local`,
+    )
+  }
+  if (operation === 'block' && deduplicated.includes(id)) {
+    throw new Error(
+      `ticket "${id}" in the configured ${source.name} ticket source cannot block itself`,
+    )
+  }
+  return deduplicated
+}
+
 export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   // Read the complete body before constructing or calling a mutable source.
   const body = await readBody(opts.bodyFile)
@@ -224,6 +270,10 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     opts.state === undefined
       ? await source.create(draft)
       : await source.create(draft, { state: opts.state })
+  if (opts.json === true) {
+    emitTicketJson(opts, ticket)
+    return
+  }
   const state = ticket.state ?? 'created'
   const url = ticket.ref.url !== undefined ? ` — ${ticket.ref.url}` : ''
   const blockers =
@@ -242,20 +292,36 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
   }
   await source.update(opts.id, patch)
+  if (opts.json === true) {
+    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'the update'))
+    return
+  }
   opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
 }
 
 export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'block')
-  await source.addBlocker(opts.id, opts.blockerId)
-  opts.stdout(`ticket blocker added: ${source.name}:${opts.id} — blocked by ${opts.blockerId}`)
+  const blockerIds = await preflightBlockers(source, opts.id, opts.blockerIds, 'block')
+  for (const blockerId of blockerIds) await source.addBlocker(opts.id, blockerId)
+  if (opts.json === true) {
+    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'adding blockers'))
+    return
+  }
+  opts.stdout(
+    `ticket blocker added: ${source.name}:${opts.id} — blocked by ${blockerIds.join(', ')}`,
+  )
 }
 
 export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'unblock')
-  await source.removeBlocker(opts.id, opts.blockerId)
+  const blockerIds = await preflightBlockers(source, opts.id, opts.blockerIds, 'unblock')
+  for (const blockerId of blockerIds) await source.removeBlocker(opts.id, blockerId)
+  if (opts.json === true) {
+    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'removing blockers'))
+    return
+  }
   opts.stdout(
-    `ticket blocker removed: ${source.name}:${opts.id} — no longer blocked by ${opts.blockerId}`,
+    `ticket blocker removed: ${source.name}:${opts.id} — no longer blocked by ${blockerIds.join(', ')}`,
   )
 }
 
@@ -316,11 +382,11 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
 }
 
 const CREATE_USAGE =
-  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] (§8.8)'
+  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json] (§8.8)'
 const UPDATE_USAGE =
-  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] (§8.8)'
-const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id> (§8.8)'
-const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id> (§8.8)'
+  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json] (§8.8)'
+const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
+const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
 const LIST_USAGE = 'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
 const SHOW_USAGE = 'usage: ab ticket show <id> [--json] (§8.8)'
 const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
@@ -354,7 +420,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'create': {
       const parsed = parseArgs(
         args,
-        { body: 'value', state: 'value', labels: 'value', 'blocked-by': 'value' },
+        { body: 'value', state: 'value', labels: 'value', 'blocked-by': 'value', json: 'boolean' },
         TICKET_USAGE,
       )
       const title = parsed.positionals.join(' ')
@@ -373,6 +439,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(state !== undefined ? { state } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
+        json: parsed.flags.has('json'),
       })
       return
     }
@@ -380,11 +447,12 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'update': {
       const parsed = parseArgs(
         args,
-        { title: 'value', body: 'value', labels: 'value' },
+        { title: 'value', body: 'value', labels: 'value', json: 'boolean' },
         TICKET_USAGE,
       )
       const [id, ...extra] = parsed.positionals
-      if (id === undefined || id.trim() === '' || extra.length > 0 || parsed.flags.size === 0) {
+      const hasUpdate = ['title', 'body', 'labels'].some((flag) => parsed.flags.has(flag))
+      if (id === undefined || id.trim() === '' || extra.length > 0 || !hasUpdate) {
         throw new Error(TICKET_USAGE)
       }
       const title = stringFlag(parsed, 'title')
@@ -399,24 +467,27 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(title !== undefined ? { title } : {}),
         ...(bodyFile !== undefined ? { bodyFile } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        json: parsed.flags.has('json'),
       })
       return
     }
 
     case 'block':
     case 'unblock': {
-      const parsed = parseArgs(args, {}, TICKET_USAGE)
-      const [id, blockerId, ...extra] = parsed.positionals
+      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const [id, blockerList, ...extra] = parsed.positionals
       if (
         id === undefined ||
         id.trim() === '' ||
-        blockerId === undefined ||
-        blockerId.trim() === '' ||
+        blockerList === undefined ||
+        blockerList.trim() === '' ||
         extra.length > 0
       ) {
         throw new Error(TICKET_USAGE)
       }
-      const blockerOpts = { ...opts, id, blockerId }
+      const blockerIds = commaList(blockerList)
+      if (blockerIds.length === 0) throw new Error(TICKET_USAGE)
+      const blockerOpts = { ...opts, id, blockerIds, json: parsed.flags.has('json') }
       if (command === 'block') await abTicketBlock(blockerOpts)
       else await abTicketUnblock(blockerOpts)
       return
