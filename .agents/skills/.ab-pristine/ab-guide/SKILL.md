@@ -876,15 +876,18 @@ The sessionless `ab ticket` namespace constructs whichever TicketSource the
 repository's `[tickets]` table selects. These forms therefore work unchanged
 with Linear and the file tracker, without provider-specific API/MCP calls:
 
-- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]`
+- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]`
   files a ticket. Without `--state`, the source uses `[tickets].createState` or
   its own default. A named state is passed through unchanged and the selected
   source validates it before creating anything. Blocker ids belong to the same
   source and are also checked before the single create call.
-- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]`
-  partially replaces editable fields. At least one flag is required.
-- `ab ticket block <id> <blocker-id>` adds one blocking relationship.
-- `ab ticket unblock <id> <blocker-id>` removes one blocking relationship.
+- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]`
+  partially replaces editable fields. At least one editable flag is required;
+  `--json` alone is not an update.
+- `ab ticket block <id> <blocker-id[,blocker-id...]> [--json]` adds one or more
+  blocking relationships.
+- `ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]` removes one or
+  more blocking relationships.
 - `ab ticket list [--state <state>] [--labels a,b] [--json]` lists tickets. With
   no filters it uses exactly dispatch's configured ready state and source-aware
   default labels. If either filter is present, only explicitly supplied
@@ -894,12 +897,22 @@ with Linear and the file tracker, without provider-specific API/MCP calls:
 - `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
   post-transition value.
 
-State names and ids are source-local. For block and unblock, the first id is the ticket being changed
-and the second is its blocker. Create validates every
-`--blocked-by` id before filing. A later block requires both tickets to exist
-and rejects a direct self-block; unblock only requires the target. Adding an
-existing relationship and removing an absent one both succeed as no-ops, so
-either command is safe to retry.
+State names and ids are source-local. For block and unblock, the first id is the
+ticket being changed and the comma-separated second operand names its blockers.
+Create validates every `--blocked-by` id before filing. The relationship forms
+deduplicate their list and validate the target plus every blocker id before
+writing any edge; block also rejects a direct self-block. An unknown id fails
+the whole invocation without a partial write. Adding an existing relationship
+and removing an absent relationship to an existing ticket both succeed as
+no-ops, so either command is safe to retry.
+
+Blockers gate a ticket when the dispatcher tries to claim it. Adding a blocker
+to a ticket that has already been claimed into a build does not stop that build.
+When `[tickets].createState` equals `[tickets].readyState` (or an explicit
+`--state` creates directly into that ready state), create a dependency chain in
+dependency order: create the earliest prerequisite first, obtain its id from
+`--json`, and pass that id as the next ticket's `--blocked-by` before proceeding
+to later dependents.
 
 Update is partial: omitted fields remain untouched, including labels, assignee,
 and provider metadata. `--labels` is a complete replacement and an explicitly
@@ -915,8 +928,10 @@ transitions, so an invalid state fails with the
 source's known states. A missing id fails nonzero with an error naming both the
 id and configured source.
 
-Human-readable output is the default. `--json` emits one bare JSON value and no
-prose: a `Ticket[]` for `list`, and the complete `Ticket` for `show` or `move`.
+Human-readable output is the default and must not be parsed for ids. Every
+subcommand accepts `--json`, which emits one bare JSON value and no prose: a
+`Ticket[]` for `list`, and the complete resulting `Ticket` for `create`,
+`update`, `block`, `unblock`, `show`, or `move`.
 
 ## Retrieving build artifacts
 

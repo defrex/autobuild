@@ -730,7 +730,20 @@ implementer:  ab context   (findings.json now materialized) → …
 Human/pre-build ticket grooming uses one configured-source namespace
 (`ab ticket create|update|block|unblock|list|show|move`). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
-mutation path.
+mutation path. Every subcommand accepts `--json` and then writes exactly one
+bare value: `list` emits `Ticket[]`; every other form emits the complete
+created, read, or post-mutation `Ticket`. Human-readable confirmations are not
+a data format and callers must not parse ids from them.
+
+`block` and `unblock` accept a comma-separated blocker-id list. The CLI
+first deduplicates and validates the complete list, including blocker existence
+for both operations and direct self-block rejection when adding, then applies
+the existing idempotent one-edge port methods; invalid input writes no edge.
+Dependencies gate only the dispatcher's claim. Changing blockers after a ticket
+has already been claimed does not stop its active build. A repository that
+creates tickets directly in its ready state must therefore create a dependency
+chain in dependency order, carrying each predecessor id into the next create,
+before a later ticket can be claimed.
 
 Observation harvest uses a separate typed, repository-scoped namespace
 (`ab harvest context|submit|verdict|status`), mirroring the build session

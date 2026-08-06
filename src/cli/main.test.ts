@@ -83,10 +83,10 @@ describe('runCli — routing and exit codes', () => {
     expect(await runCli(['help', 'ticket'], d)).toBe(0)
     const help = d.out.join('\n')
     for (const form of [
-      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]',
-      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
-      'ab ticket block <id> <blocker-id>',
-      'ab ticket unblock <id> <blocker-id>',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]',
+      'ab ticket block <id> <blocker-id[,blocker-id...]> [--json]',
+      'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
       'ab ticket show <id> [--json]',
       'ab ticket move <id> <state> [--json]',

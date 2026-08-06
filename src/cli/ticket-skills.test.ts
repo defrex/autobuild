@@ -6,6 +6,7 @@ const DIST_ROOT = resolve(import.meta.dir, '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
 const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
 const ticketGuides = [tickets] as const
+const body = (source: string) => source.replace(/^---\n[\s\S]*?\n---\n/, '')
 
 describe('ticket grooming skill guidance', () => {
   test('spec syncs an accepted body and dependencies through exact CLI forms', () => {
@@ -14,6 +15,27 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).toContain('ab ticket unblock <ticket> <blocker-id>')
     expect(spec).toContain('Omitted metadata is preserved')
     expect(spec).not.toContain("Changing* an existing ticket's dependencies is not available")
+  })
+
+  test('spec builds dependency chains from JSON ids instead of prose', () => {
+    expect(spec).toContain('ab ticket create "A" --body a.md --json')
+    expect(spec).toContain("jq -r '.ref.id' a-ticket.json")
+    expect(spec).toContain('ab ticket create "B" --body b.md --blocked-by "$a_id" --json')
+    expect(spec).toContain("jq -r '.ref.id' b-ticket.json")
+    expect(spec).toContain('ab ticket create "C" --body c.md --blocked-by "$b_id" --json')
+    expect(spec).toContain('Never parse an id from the human-readable confirmation line')
+    expect(spec).toContain(
+      'adding a blocker\nafter a ticket has already been claimed does not stop its active build',
+    )
+  })
+
+  test('canonical spec guidance matches live and pristine installed copies', async () => {
+    for (const path of [
+      join(DIST_ROOT, '.agents', 'skills', 'ab-spec', 'SKILL.md'),
+      join(DIST_ROOT, '.agents', 'skills', '.ab-pristine', 'ab-spec', 'SKILL.md'),
+    ]) {
+      expect(body(await readFile(path, 'utf8'))).toBe(body(spec))
+    }
   })
 
   test('spec honors stated create placement without asking or inferring it', () => {

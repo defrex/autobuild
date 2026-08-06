@@ -609,26 +609,57 @@ describe('abTicket update/block/unblock', () => {
 
   test('block and unblock preserve target/blocker ordering through the source', async () => {
     await writeRepo(FILE_TICKETS_TOML)
-    const created: Parameters<typeof fakeFactory>[0] = {}
+    const target = seededTicket({ ref: { source: 'fake', id: 'AUT-9' }, blockedBy: undefined })
+    const blocker = seededTicket({ ref: { source: 'fake', id: 'AUT-8' }, blockedBy: undefined })
+    const source = new FakeTicketSource([target, blocker])
     const out: string[] = []
     const common = {
       targetRepo: tmp,
       id: 'AUT-9',
-      blockerId: 'AUT-8',
+      blockerIds: ['AUT-8'],
       env: {},
       stdout: (line: string) => out.push(line),
-      sourceFactory: fakeFactory(created),
+      sourceFactory: () => source,
     }
 
     await abTicketBlock(common)
     await abTicketUnblock(common)
 
-    expect(created.blockerAdds).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
-    expect(created.blockerRemovals).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
+    expect(source.blockerAdds).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
+    expect(source.blockerRemovals).toEqual([{ id: 'AUT-9', blockerId: 'AUT-8' }])
     expect(out).toEqual([
       'ticket blocker added: fake:AUT-9 — blocked by AUT-8',
       'ticket blocker removed: fake:AUT-9 — no longer blocked by AUT-8',
     ])
+  })
+
+  test('preflights complete blocker lists before writing any relationship', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const source = new FakeTicketSource([
+      seededTicket({ ref: { source: 'fake', id: 'AUT-9' }, blockedBy: undefined }),
+      seededTicket({ ref: { source: 'fake', id: 'AUT-8' }, blockedBy: undefined }),
+    ])
+    const common = {
+      targetRepo: tmp,
+      id: 'AUT-9',
+      env: {},
+      stdout: () => {},
+      sourceFactory: () => source,
+    }
+
+    await expect(abTicketBlock({ ...common, blockerIds: ['AUT-8', 'AUT-404'] })).rejects.toThrow(
+      'AUT-404',
+    )
+    await expect(abTicketUnblock({ ...common, blockerIds: ['AUT-8', 'AUT-404'] })).rejects.toThrow(
+      'AUT-404',
+    )
+    await expect(abTicketBlock({ ...common, blockerIds: ['AUT-8', 'AUT-9'] })).rejects.toThrow(
+      'AUT-9',
+    )
+
+    expect(source.blockerAdds).toEqual([])
+    expect(source.blockerRemovals).toEqual([])
+    expect((await source.get('AUT-9'))?.blockedBy).toBeUndefined()
   })
 
   test('a missing update body file fails before constructing or mutating a source', async () => {
@@ -1040,6 +1071,92 @@ describe('runCli — ticket routing', () => {
     expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('Done')
   })
 
+  test('every mutator JSON form emits the complete resulting ticket and no prose', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'original body\n')
+    const { deps, out } = sessionlessDeps()
+
+    expect(
+      await runCli(['ticket', 'create', 'First blocker', '--body', bodyFile, '--json'], deps),
+    ).toBe(0)
+    const first = JSON.parse(out.at(-1)!) as Ticket
+    expect(first.ref.id).toBe('file-1')
+    expect(out).toHaveLength(1)
+    expect(await runCli(['ticket', 'show', 'file-1', '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.at(-1)!)).toEqual(first)
+
+    expect(
+      await runCli(['ticket', 'create', 'Second blocker', '--body', bodyFile, '--json'], deps),
+    ).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).ref.id).toBe('file-2')
+
+    expect(await runCli(['ticket', 'create', 'Target', '--body', bodyFile, '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).ref.id).toBe('file-3')
+
+    expect(
+      await runCli(['ticket', 'update', 'file-3', '--title', 'Updated target', '--json'], deps),
+    ).toBe(0)
+    const updated = JSON.parse(out.at(-1)!) as Ticket
+    expect(updated.title).toBe('Updated target')
+    expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.at(-1)!)).toEqual(updated)
+
+    expect(
+      await runCli(['ticket', 'block', 'file-3', 'file-2,file-1,file-2', '--json'], deps),
+    ).toBe(0)
+    const blocked = JSON.parse(out.at(-1)!) as Ticket
+    expect(blocked.blockedBy).toEqual(['file-2', 'file-1'])
+    expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.at(-1)!)).toEqual(blocked)
+
+    expect(await runCli(['ticket', 'unblock', 'file-3', 'file-1,file-2', '--json'], deps)).toBe(0)
+    const unblocked = JSON.parse(out.at(-1)!) as Ticket
+    expect(unblocked.blockedBy).toBeUndefined()
+
+    expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.at(-1)!)).toEqual(unblocked)
+    for (const line of out) expect(() => JSON.parse(line)).not.toThrow()
+  })
+
+  test('comma-separated block and unblock are atomic, deduplicated, and idempotent', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out, err } = sessionlessDeps()
+    for (const title of ['First', 'Second', 'Target']) {
+      expect(await runCli(['ticket', 'create', title, '--body', bodyFile], deps)).toBe(0)
+    }
+    const path = join(tmp, 'tickets', 'triage', 'file-3.md')
+
+    expect(await runCli(['ticket', 'block', 'file-3', 'file-2,file-1,file-2'], deps)).toBe(0)
+    expect(out.at(-1)).toBe('ticket blocker added: file:file-3 — blocked by file-2, file-1')
+    expect(await runCli(['ticket', 'block', 'file-3', 'file-1,file-2'], deps)).toBe(0)
+    let written = await readFile(path, 'utf8')
+    expect(written.match(/file-1/g) ?? []).toHaveLength(1)
+    expect(written.match(/file-2/g) ?? []).toHaveLength(1)
+
+    expect(await runCli(['ticket', 'block', 'file-3', 'file-1,file-404'], deps)).toBe(1)
+    expect(err.at(-1)).toContain('file-404')
+    expect(await readFile(path, 'utf8')).toBe(written)
+
+    expect(await runCli(['ticket', 'block', 'file-3', 'file-1,file-3'], deps)).toBe(1)
+    expect(err.at(-1)).toContain('file-3')
+    expect(await readFile(path, 'utf8')).toBe(written)
+
+    expect(await runCli(['ticket', 'unblock', 'file-3', 'file-1,file-404'], deps)).toBe(1)
+    expect(err.at(-1)).toContain('file-404')
+    expect(await readFile(path, 'utf8')).toBe(written)
+
+    expect(await runCli(['ticket', 'unblock', 'file-3', 'file-2,file-1,file-2'], deps)).toBe(0)
+    expect(out.at(-1)).toBe(
+      'ticket blocker removed: file:file-3 — no longer blocked by file-2, file-1',
+    )
+    expect(await runCli(['ticket', 'unblock', 'file-3', 'file-1,file-2'], deps)).toBe(0)
+    written = await readFile(path, 'utf8')
+    expect(written).not.toContain('blockedBy')
+  })
+
   test('list routes malformed-record diagnostics to stderr while JSON stdout stays bare', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')
@@ -1108,7 +1225,9 @@ describe('runCli — ticket routing', () => {
     expect(blocked.match(/file-1/g) ?? []).toHaveLength(1)
 
     expect(await runCli(['ticket', 'unblock', 'file-2', 'file-1'], deps)).toBe(0)
-    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-404'], deps)).toBe(0)
+    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-1'], deps)).toBe(0)
+    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-2'], deps)).toBe(0)
+    expect(await runCli(['ticket', 'unblock', 'file-2', 'file-404'], deps)).toBe(1)
     expect(await readFile(path, 'utf8')).not.toContain('blockedBy')
     expect(out).toContain('ticket blocker added: file:file-2 — blocked by file-1')
     expect(out).toContain('ticket blocker removed: file:file-2 — no longer blocked by file-1')
@@ -1177,7 +1296,15 @@ describe('runCli — ticket routing', () => {
       },
       {
         argv: ['ticket', 'update', 'file-1', '--json'],
-        diagnostic: 'unknown flag --json',
+        diagnostic: 'usage: ab ticket update',
+      },
+      {
+        argv: ['ticket', 'create', 'Title', '--body', 'spec.md', '--json', '--json'],
+        diagnostic: '--json may be supplied only once',
+      },
+      {
+        argv: ['ticket', 'block', 'file-1', 'file-2', '--json', '--json'],
+        diagnostic: '--json may be supplied only once',
       },
       {
         argv: ['ticket', 'block', 'file-1', 'file-2', '--force'],
@@ -1213,7 +1340,9 @@ describe('runCli — ticket routing', () => {
       ['ticket', 'update', 'file-1', '--title', 'x', 'extra'],
       ['ticket', 'update', 'file-1', '--state', 'Done'],
       ['ticket', 'block', 'file-1'],
+      ['ticket', 'block', 'file-1', ','],
       ['ticket', 'block', 'file-1', 'file-2', 'extra'],
+      ['ticket', 'unblock', 'file-1', ','],
       ['ticket', 'unblock', 'file-1', 'file-2', '--force'],
     ]
     for (const argv of cases) {

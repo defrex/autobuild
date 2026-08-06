@@ -359,14 +359,14 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
 describe('ab-guide — ticket grooming coverage', () => {
   test('documents every configured-source write form and its state boundary', () => {
     for (const form of [
-      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]',
-      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b]',
-      'ab ticket block <id> <blocker-id>',
-      'ab ticket unblock <id> <blocker-id>',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]',
+      'ab ticket block <id> <blocker-id[,blocker-id...]> [--json]',
+      'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]',
     ]) {
       expect(guide).toContain(form)
     }
-    expect(guide).toContain('the first id is the ticket being changed')
+    expect(guide.replace(/\s+/g, ' ')).toContain('the first id is the ticket being changed')
     expect(guide).toContain('`transition()` remains its sole owner')
     expect(guide).toContain("`--labels ''`)")
   })
@@ -462,15 +462,32 @@ describe('ab-guide — durable build-control coverage', () => {
 describe('ab-guide — source-agnostic ticket operations', () => {
   test('documents every command form and machine-readable option', () => {
     for (const form of [
-      '`ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id]`',
+      '`ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]`',
+      '`ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]`',
+      '`ab ticket block <id> <blocker-id[,blocker-id...]> [--json]`',
+      '`ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]`',
       '`ab ticket list [--state <state>] [--labels a,b] [--json]`',
       '`ab ticket show <id> [--json]`',
       '`ab ticket move <id> <state> [--json]`',
     ]) {
       expect(guide).toContain(form)
     }
-    expect(guide).toContain('a `Ticket[]` for `list`')
-    expect(guide).toContain('complete `Ticket` for `show` or `move`')
+    expect(guide).toContain('a\n`Ticket[]` for `list`')
+    expect(guide).toContain(
+      'complete resulting `Ticket` for `create`,\n`update`, `block`, `unblock`, `show`, or `move`',
+    )
+  })
+
+  test('documents list-wide validation and the claim-time dependency boundary', () => {
+    for (const behavior of [
+      'deduplicate their list and validate the target plus every blocker id before',
+      'fails\nthe whole invocation without a partial write',
+      'Adding a blocker\nto a ticket that has already been claimed into a build does not stop that build',
+      'create a dependency chain in\ndependency order',
+      'must not be parsed for ids',
+    ]) {
+      expect(guide).toContain(behavior)
+    }
   })
 
   test('explains defaults, filters, body output, and source-owned validation', () => {
