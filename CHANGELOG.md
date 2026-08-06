@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#208](https://github.com/defrex/autobuild/pull/208) — Keep reconcile policy causes distinct
 - [#207](https://github.com/defrex/autobuild/pull/207) — Add JSON output to ticket mutators
 ## v0.5.0 — 2026-08-04
 
