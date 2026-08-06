@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#209](https://github.com/defrex/autobuild/pull/209) — Scope phase-invoked read commands to ambient identity
 - [#207](https://github.com/defrex/autobuild/pull/207) — Add JSON output to ticket mutators
 ## v0.5.0 — 2026-08-04
 
