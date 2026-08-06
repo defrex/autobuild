@@ -2569,16 +2569,19 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     })
   })
 
-  test('moving-base races do not consume the budget, even past the attempt high-water cap', () => {
+  test('an advanced base permits another reconcile even after the no-progress budget is exhausted', () => {
+    const stable = 'sha-main-stable'
     const history = [
       ...throughFinalize,
-      ...reconcileCycle(1, 'sha-main-2'),
-      ...reconcileCycle(2, 'sha-main-3'),
-      ...reconcileCycle(3, 'sha-main-4'),
-      ...reconcileCycle(4, 'sha-main-5'),
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ...reconcileCycle(4, stable),
       ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
     ]
-    expect(decide(withProgressCheck(history, 4, 'sha-main-6'))).toEqual({
+    // Attempts 1–3 have already made no progress. The authoritative check for
+    // attempt 4 proves a moving-base race, so the exhausted budget is bypassed.
+    expect(decide(withProgressCheck(history, 4, 'sha-main-advanced'))).toEqual({
       kind: 'run-phase',
       phase: 'reconcile',
       round: 5,
@@ -2615,6 +2618,52 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         ),
       ]),
     ).toEqual(wait('blocked'))
+  })
+
+  test('a round-scoped runner policy escalation does not acknowledge no-progress exhaustion', () => {
+    const stable = 'sha-main-stable'
+    const history = [
+      ...throughFinalize,
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    const conflictSeq = history.length
+    const runnerQuestion =
+      'reconcile round 4 failed 2 times (maxPhaseAttempts 2); last error: origin unavailable'
+    const checkedAfterAnswer = [
+      ...history,
+      ev(
+        'escalation.raised',
+        {
+          id: 'e_runner',
+          phase: 'reconcile',
+          round: 4,
+          source: 'policy',
+          question: runnerQuestion,
+        },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_runner',
+        answer: 'Origin is available again.',
+        resolution: 'guidance',
+      }),
+      ev('reconcile.progress-checked', {
+        conflictSeq,
+        attempt: 3,
+        baseSha: stable,
+      }),
+    ]
+
+    expect(decide(checkedAfterAnswer)).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'reconcile',
+      question:
+        'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base',
+    })
   })
 
   test('mixed history counts historical next-start observations but not races', () => {

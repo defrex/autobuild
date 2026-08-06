@@ -602,32 +602,40 @@ async function seedFinalized(store: BuildStore): Promise<void> {
   })
 }
 
-async function seedRepeatConflict(store: BuildStore, mergedBase: string): Promise<number> {
+async function seedRepeatConflict(
+  store: BuildStore,
+  mergedBase: string,
+  completedAttempts = 1,
+): Promise<number> {
   await seedFinalized(store)
-  await store.append(SLUG, {
-    actor: DISPATCHER,
-    type: 'pr.conflicted',
-    payload: { baseSha: 'stale-first-detection' },
-  })
-  await store.append(SLUG, {
-    actor: KERNEL,
-    type: 'reconcile.started',
-    payload: { attempt: 1, baseSha: mergedBase },
-  })
-  await store.append(SLUG, {
-    actor: agentActor('reconcile', 's_seed'),
-    type: 'reconcile.completed',
-    payload: {
-      mergeCommit: 'sha-merge-1',
-      artifact: { kind: 'reconcile-notes', rev: 0 },
-    },
-  })
-  for (const step of ['types', 'unit', 'e2e']) {
+  for (let attempt = 1; attempt <= completedAttempts; attempt += 1) {
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: {
+        baseSha: attempt === 1 ? 'stale-first-detection' : `stale-detection-${attempt}`,
+      },
+    })
     await store.append(SLUG, {
       actor: KERNEL,
-      type: 'verify.completed',
-      payload: { step, attempt: 2, pass: true },
+      type: 'reconcile.started',
+      payload: { attempt, baseSha: mergedBase },
     })
+    await store.append(SLUG, {
+      actor: agentActor('reconcile', 's_seed'),
+      type: 'reconcile.completed',
+      payload: {
+        mergeCommit: `sha-merge-${attempt}`,
+        artifact: { kind: 'reconcile-notes', rev: attempt - 1 },
+      },
+    })
+    for (const step of ['types', 'unit', 'e2e']) {
+      await store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step, attempt: attempt + 1, pass: true },
+      })
+    }
   }
   const conflict = await store.append(SLUG, {
     actor: DISPATCHER,
@@ -1304,6 +1312,75 @@ describe('step', () => {
       error: expect.stringContaining('progress origin unavailable'),
       willRetry: true,
     })
+  })
+
+  test('answering a runner progress failure still raises exhausted no-progress policy before reconcile', async () => {
+    const stable = '4'.repeat(40)
+    const h = await makeHarness({
+      reconcileRefreshes: [
+        { fetchError: 'fatal: progress origin unavailable' },
+        { fetchError: 'fatal: progress origin unavailable' },
+        { sha: stable },
+      ],
+      runnerOpts: { maxPhaseAttempts: 2 },
+    })
+    const conflictSeq = await seedRepeatConflict(h.store, stable, 3)
+    const progressDecision = {
+      kind: 'check-reconcile-progress' as const,
+      conflictSeq,
+      completedAttempt: 3,
+      nextAttempt: 4,
+    }
+
+    expect(await h.br.step()).toEqual(progressDecision)
+    expect(await h.br.step()).toEqual(progressDecision)
+    expect(await h.br.step()).toEqual(progressDecision)
+
+    let events = await h.store.getEvents(SLUG)
+    const runnerEscalation = ofType(events, 'escalation.raised')[0]!
+    expect(runnerEscalation.payload).toMatchObject({
+      phase: 'reconcile',
+      round: 4,
+      source: 'policy',
+      question: expect.stringContaining('maxPhaseAttempts 2'),
+    })
+    expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
+    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
+    expect(h.runner.sessions.size).toBe(0)
+
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: runnerEscalation.payload.id,
+        answer: 'Origin is available again.',
+        resolution: 'guidance',
+      },
+    })
+
+    expect(await h.br.step()).toEqual(progressDecision)
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'reconcile.progress-checked')[0]!.payload).toEqual({
+      conflictSeq,
+      attempt: 3,
+      baseSha: stable,
+    })
+    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
+
+    expect(await h.br.step()).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      phase: 'reconcile',
+      question:
+        'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base',
+    })
+    events = await h.store.getEvents(SLUG)
+    const escalations = ofType(events, 'escalation.raised')
+    expect(escalations).toHaveLength(2)
+    expect(escalations[0]!.payload.round).toBe(4)
+    expect(escalations[1]!.payload.round).toBeUndefined()
+    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
+    expect(h.runner.sessions.size).toBe(0)
   })
 
   test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {
