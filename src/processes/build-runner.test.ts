@@ -2493,6 +2493,213 @@ describe('session memory (§10)', () => {
   })
 })
 
+// ── Durable terminal followed by a runtime throw ─────────────────────────────
+
+function terminalThrowConfig(withAlternates: boolean): string {
+  const alternates = withAlternates
+    ? 'alternates = [{ runtime = "pi", model = "kimi-alternate" }]'
+    : ''
+  return `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+[roles.default]
+runtime = "scripted"
+[roles.plan]
+runtime = "scripted"
+model = "m-plan"
+${alternates}
+[roles.implement]
+runtime = "scripted"
+model = "m-implement"
+${alternates}
+`
+}
+
+function terminalThrowContinuationHandlers(
+  store: BuildStore,
+  beforeThrow?: () => void,
+): Record<string, SkillHandler> {
+  const table = happyHandlers(store)
+  const implement = table.implement!
+  table.implement = async (ctx) => {
+    if (roundOf(ctx) === 2) {
+      await implement(ctx)
+      beforeThrow?.()
+      throw new Error('runtime transport failed after implement terminal')
+    }
+    return implement(ctx)
+  }
+  table['code-review'] = async (ctx) => {
+    const round = roundOf(ctx)
+    await reviewVerdict(
+      store,
+      ctx,
+      'code-review',
+      round < 3 ? 'revise' : 'approve',
+      round < 3 ? [{ ...FINDING, id: `f_terminal_${round}` }] : [],
+    )
+    return defaultTurnResult(`reviewed r${round}`)
+  }
+  return table
+}
+
+describe('durable terminal followed by a runtime throw', () => {
+  for (const mode of [
+    { name: 'single runtime', alternates: false },
+    { name: 'runtime chain', alternates: true },
+  ]) {
+    test(`${mode.name}: a rejected fresh start keeps its terminal authoritative`, async () => {
+      const h = await makeHarness({
+        configToml: terminalThrowConfig(mode.alternates),
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          const plan = table.plan!
+          table.plan = async (ctx) => {
+            await plan(ctx)
+            throw new Error('runtime transport failed after plan terminal')
+          }
+          return table
+        },
+      })
+      await h.br.attach()
+      await h.br.step()
+
+      const events = await h.store.getEvents(SLUG)
+      const planStarts = ofType(events, 'session.started').filter(
+        (event) => event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(1)
+      expect(ofType(events, 'plan.completed')).toHaveLength(1)
+      expect(
+        ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'plan'),
+      ).toEqual([])
+      expect(planStarts[0]?.payload.substitution).toBeUndefined()
+      // A rejected start exposes no handle through the current port, so the
+      // durable open bracket remains for crash recovery rather than inventing
+      // an unavailable transcript.
+      expect(
+        ofType(events, 'session.ended').filter(
+          (event) => event.payload.session === planStarts[0]?.payload.session,
+        ),
+      ).toEqual([])
+    })
+
+    test(`${mode.name}: a continued producer throw retains one atomic transcript bracket`, async () => {
+      const h = await makeHarness({
+        configToml: terminalThrowConfig(mode.alternates),
+        handlers: (store) => terminalThrowContinuationHandlers(store),
+      })
+      await h.br.run()
+
+      const events = await h.store.getEvents(SLUG)
+      const implementStarts = ofType(events, 'session.started').filter(
+        (event) => event.payload.phase === 'implement',
+      )
+      expect(implementStarts.map((event) => event.payload.round)).toEqual([1, 2, 3])
+      expect(implementStarts.every((event) => event.payload.runner === 'scripted')).toBe(true)
+      expect(implementStarts.every((event) => event.payload.substitution === undefined)).toBe(true)
+      expect(ofType(events, 'implement.completed')).toHaveLength(3)
+      expect(
+        ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'implement'),
+      ).toEqual([])
+
+      const recoveredSession = implementStarts[1]!.payload.session
+      const recoveredEnds = ofType(events, 'session.ended').filter(
+        (event) => event.payload.session === recoveredSession,
+      )
+      expect(recoveredEnds).toHaveLength(1)
+      const recoveredTranscripts = (await h.store.listArtifacts(SLUG, 'transcript')).filter(
+        (artifact) => artifact.metadata.session === recoveredSession,
+      )
+      expect(recoveredTranscripts).toHaveLength(1)
+      expect(recoveredEnds[0]!.payload.transcript).toEqual({
+        kind: 'transcript',
+        rev: recoveredTranscripts[0]!.revision,
+      })
+      expect(recoveredEnds[0]!.payload.usage).toEqual({
+        inputTokens: 1,
+        outputTokens: 1,
+        turns: 1,
+      })
+      expect(recoveredTranscripts[0]!.metadata).toEqual({
+        phase: 'implement',
+        round: 2,
+        role: 'implement',
+        runner: 'scripted',
+        model: 'm-implement',
+        session: recoveredSession,
+        usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+      })
+
+      const implementJournals = [...h.runner.sessions.values()].filter(
+        (journal) => journal.opts.skill === 'ab-implement',
+      )
+      expect(implementJournals).toHaveLength(2)
+      expect(implementJournals[0]!.ended).toBe(true)
+      expect(implementJournals[1]!.turns).toHaveLength(1)
+      expect(implementJournals[1]!.messages).toEqual([])
+    })
+  }
+
+  test('runtime chain: an unrecoverable close still cannot override the terminal or select an alternate', async () => {
+    let failNextImplementEnd = false
+    const h = await makeHarness({
+      configToml: terminalThrowConfig(true),
+      handlers: (store) =>
+        terminalThrowContinuationHandlers(store, () => {
+          failNextImplementEnd = true
+        }),
+    })
+    const ordinaryEnd = h.runner.end.bind(h.runner)
+    h.runner.end = async (session) => {
+      if (failNextImplementEnd && session.model === 'm-implement') {
+        failNextImplementEnd = false
+        throw new Error('provider handle could not close')
+      }
+      return ordinaryEnd(session)
+    }
+
+    await h.br.run()
+
+    const events = await h.store.getEvents(SLUG)
+    const implementStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'implement',
+    )
+    expect(implementStarts.map((event) => [event.payload.round, event.payload.runner])).toEqual([
+      [1, 'scripted'],
+      [2, 'scripted'],
+      [3, 'scripted'],
+    ])
+    expect(ofType(events, 'implement.completed')).toHaveLength(3)
+    expect(
+      ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'implement'),
+    ).toEqual([])
+    const unrecoveredSession = implementStarts[1]!.payload.session
+    expect(
+      ofType(events, 'session.ended').filter(
+        (event) => event.payload.session === unrecoveredSession,
+      ),
+    ).toEqual([])
+    expect(
+      (await h.store.listArtifacts(SLUG, 'transcript')).filter(
+        (artifact) => artifact.metadata.session === unrecoveredSession,
+      ),
+    ).toEqual([])
+    const implementJournals = [...h.runner.sessions.values()].filter(
+      (journal) => journal.opts.skill === 'ab-implement',
+    )
+    expect(implementJournals).toHaveLength(2)
+    expect(implementJournals[1]!.turns).toHaveLength(1)
+    expect(implementJournals[1]!.messages).toEqual([])
+  })
+})
+
 // ── Provider/runner failures (§8.4, §9) ──────────────────────────────────────
 
 describe('structured provider failure policy', () => {
@@ -3001,6 +3208,192 @@ describe('phase-session budget', () => {
       'phase session budget expired after 3600 seconds',
       'phase session budget expired after 3600 seconds',
     ])
+  })
+
+  test('operator abort keeps the deadline armed for an abort-ignoring start and skips alternates', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let observedSignal: AbortSignal | undefined
+    let starts = 0
+    const stuck: AgentRunner = {
+      name: 'abort-ignoring-start',
+      start: (opts) => {
+        starts += 1
+        observedSignal = opts.signal
+        return new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {})
+      },
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: {
+          runner: 'abort-ignoring-start',
+          usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        },
+      }),
+    }
+    const configToml = CONFIG_TOML.replace(
+      'plan = { runtime = "scripted", model = "m-plan" }',
+      'default = { runtime = "scripted" }\n' +
+        'plan = { runtime = "scripted", model = "m-plan", ' +
+        'alternates = [{ runtime = "pi", model = "kimi-k3" }] }',
+    )
+    const h = await makeHarness({
+      configToml,
+      runtimeRunner: stuck,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+    })
+
+    const running = h.br.run()
+    for (let spin = 0; spin < 100 && observedSignal === undefined; spin += 1) {
+      await Bun.sleep(1)
+    }
+    if (observedSignal === undefined) throw new Error('plan start did not receive a signal')
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop the stuck primary' },
+    })
+    await Promise.race([
+      (async () => {
+        while (!observedSignal.aborted) await Bun.sleep(1)
+      })(),
+      Bun.sleep(1000).then(() => {
+        throw new Error('operator abort did not cancel the start promptly')
+      }),
+    ])
+
+    expect(timers.activeCount).toBe(1)
+    await timers.expireNext()
+    expect((await running).status).toBe('aborted')
+
+    const events = await h.store.getEvents(SLUG)
+    expect(starts).toBe(1)
+    expect(
+      ofType(events, 'session.started')
+        .filter((event) => event.payload.phase === 'plan')
+        .map((event) => event.payload.runner),
+    ).toEqual(['scripted'])
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect(ofType(events, 'build.aborted')).toHaveLength(1)
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
+  })
+
+  test('operator-first deadline release bounds a continued producer and preserves its terminal', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let store: BuildStore | undefined
+    let continuedSignal: AbortSignal | undefined
+    let continues = 0
+    const ended: string[] = []
+    const continuing: AgentRunner = {
+      name: 'abort-ignoring-continue',
+      start: async (opts) => {
+        if (store === undefined) throw new Error('test store was not initialized')
+        const session = opts.env.AB_SESSION
+        if (session === undefined) throw new Error('session env was not supplied')
+        if (opts.skill === 'ab-plan') {
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'plan', content: 'plan round 1' }],
+            (deposited) => ({
+              actor: agentActor('plan', session),
+              type: 'plan.completed',
+              payload: { round: 1, artifact: refOf(deposited) },
+            }),
+          )
+          return {
+            session: { id: 'producer-handle', runner: 'abort-ignoring-continue' },
+            result: defaultTurnResult('planned'),
+          }
+        }
+        if (opts.skill === 'ab-plan-review') {
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'plan-review', content: 'revise plan' }],
+            (deposited) => ({
+              actor: agentActor('plan-review', session),
+              type: 'plan-review.verdict',
+              payload: {
+                round: 1,
+                verdict: 'revise',
+                findings: [FINDING],
+                artifact: refOf(deposited),
+              },
+            }),
+          )
+          return {
+            session: { id: 'review-handle', runner: 'abort-ignoring-continue' },
+            result: defaultTurnResult('revision requested'),
+          }
+        }
+        throw new Error(`unexpected skill ${opts.skill}`)
+      },
+      continue: (_session, _message, opts) => {
+        continues += 1
+        continuedSignal = opts?.signal
+        return new Promise<AgentTurnResult>(() => {})
+      },
+      end: async (session) => {
+        ended.push(session.id)
+        return {
+          content: '',
+          metadata: {
+            runner: 'abort-ignoring-continue',
+            usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+          },
+        }
+      },
+    }
+    const h = await makeHarness({
+      handlers: (availableStore) => {
+        store = availableStore
+        return {}
+      },
+      runtimeRunner: continuing,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+    })
+
+    const running = h.br.run()
+    for (let spin = 0; spin < 100 && continuedSignal === undefined; spin += 1) {
+      await Bun.sleep(1)
+    }
+    if (continuedSignal === undefined) throw new Error('plan continuation did not start')
+    const currentPlanSession = ofType(await h.store.getEvents(SLUG), 'session.started')
+      .filter((event) => event.payload.phase === 'plan')
+      .at(-1)
+    if (currentPlanSession === undefined) throw new Error('continued plan bracket was not recorded')
+    await h.store.appendWithArtifacts(
+      SLUG,
+      [{ kind: 'plan', content: 'plan round 2 landed before abort observation' }],
+      (deposited) => ({
+        actor: agentActor('plan', currentPlanSession.payload.session),
+        type: 'plan.completed',
+        payload: { round: 2, artifact: refOf(deposited) },
+      }),
+    )
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop the continued producer' },
+    })
+    await Promise.race([
+      (async () => {
+        while (!continuedSignal.aborted) await Bun.sleep(1)
+      })(),
+      Bun.sleep(1000).then(() => {
+        throw new Error('operator abort did not cancel the continuation promptly')
+      }),
+    ])
+
+    expect(timers.activeCount).toBe(1)
+    await timers.expireNext()
+    expect((await running).status).toBe('aborted')
+
+    const events = await h.store.getEvents(SLUG)
+    expect(continues).toBe(1)
+    expect(ofType(events, 'plan.completed').map((event) => event.payload.round)).toEqual([1, 2])
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect(ofType(events, 'build.aborted')).toHaveLength(1)
+    expect(ended).toContain('producer-handle')
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 
   test('a typed terminal deposited before expiry remains authoritative', async () => {
@@ -4023,8 +4416,10 @@ describe('operator commands (D2)', () => {
   })
 
   test('an abort cancels a live turn, deposits its transcript, and retains the execution lease', async () => {
+    const timers = new ManualSessionBudgetScheduler()
     let observedSignal: AbortSignal | undefined
     const h = await makeHarness({
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
       handlers: () => ({
         plan: async (ctx) => {
           observedSignal = ctx.opts.signal
@@ -4050,6 +4445,7 @@ describe('operator commands (D2)', () => {
 
     expect(observedSignal.aborted).toBe(true)
     expect(state.status).toBe('aborted')
+    expect(timers.activeCount).toBe(0)
     const events = await h.store.getEvents(SLUG)
     expect(events.some((event) => event.type === 'session.ended')).toBe(true)
     expect(events.some((event) => event.type === 'phase.failed')).toBe(false)
