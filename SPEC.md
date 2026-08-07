@@ -906,8 +906,11 @@ deterministic fail-safe.
   verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
   the complete ordered attempt list.
 - **Transcripts come back through the interface**, not scraped from disk, so
-  every adapter must produce one: the corpus is guaranteed complete,
-  including turns rejected by a provider after a session handle exists.
+  every adapter must produce one whenever its owning runner reaches the session
+  end boundary, including turns rejected by a provider after a handle exists.
+  A runner process that dies before deposition is the explicit exception: a
+  takeover records transcriptless reclamation rather than fabricating corpus
+  bytes it cannot recover.
 - Adapters without native session resumption implement `continue` as
   start-with-rehydrate-from-store — which must exist anyway per §7.4.
 
@@ -1293,7 +1296,7 @@ The families, with illustrative members:
 | Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
-| Sessions | `session.started`, `session.ended` (with transcript ref and usage — the analysis corpus) |
+| Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
@@ -1354,7 +1357,11 @@ outstanding `build.discard-requested` fact. `build.completed {outcome:
 "discarded"}` settles that intent without changing the status vocabulary.
 Runner state retains ordered `runner.setup-failed {command,attempt,exitStatus,
 output}` facts and projects the latest one until a later `runner.attached`
-proves successful setup recovery.
+proves successful setup recovery. A legacy `session.started` with no ending
+continues to project as open. On takeover, the recovering runner explicitly
+appends a reclaimed `session.ended` for every session open at its captured
+resume boundary before it appends `runner.attached`; only a subsequently
+started rerun session can then be open.
 
 Every projection — operator UI, CLI status, dispatcher decisions — is a
 reduction of the logs. Status surfaces additionally present the reduced last
@@ -1445,18 +1452,31 @@ executes no setup, appends no `runner.attached`, and starts no phase or session.
 Resume and all decisions that use the workspace still require successful setup.
 The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
-**D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
-goes stale → dispatcher expires the lease, provisions a fresh sandbox →
-`workspace.provisioned {base: {source: existing, sha}}` → the workspace
-execution capability starts a fresh build process. The supervising kernel first
-claims the lease for that execution instance; the process reads its workspace
-location from the durable event, renews the same-holder lease, and appends
-`runner.attached {resumedFromSeq}` → reducer says implement r2
-started-not-completed → re-run the phase from its start. The provider restores the already-created branch at
-round 1's pushed head [D3]; the Git adapter never re-cuts it from a newer
-base (§7.4). `ab context` rehydrates scratch from the store into a fresh
-session. Uncommitted round-2 work is lost by design (§7.3 — phase boundaries
-are the resume points).
+**D — sandbox death:** log ends at `session.started {session: old}` after
+`implement.started {round: 2}`; heartbeat goes stale → dispatcher expires the
+lease, provisions a fresh sandbox → `workspace.provisioned {base: {source:
+existing, sha}}` → the workspace execution capability starts a fresh build
+process. The supervising kernel first claims the lease for that execution
+instance; the process reads its workspace location from the durable event,
+renews the same-holder lease, captures the current resume boundary, and appends
+`session.ended {session: old, outcome: reclaimed, reclaimedBy: {instance,
+resumedFromSeq}}` before `runner.attached {resumedFromSeq}`. The reducer now
+shows no pre-boundary session as open and says implement r2
+started-not-completed, so the process re-runs the phase from its start and opens
+one fresh session. A crash while closing several sessions lands no attachment;
+the next recovery closes only those still open, so repeated takeover converges.
+Historical orphan-only logs remain valid and require no repair.
+
+The re-run retains another `implement.started {round: 2}` as evidence of the
+execution attempt. Duplicate starts for one logical round or attempt are not
+policy units: review budget follows verdict rounds, phase retry budget follows
+`phase.failed`, verify budget follows failed completions while a crashed step
+reuses its attempt, and reconcile no-progress budget follows distinct completed
+attempts. Recovery alone therefore consumes none of those budgets. The provider
+restores the already-created branch at round 1's pushed head [D3]; the Git
+adapter never re-cuts it from a newer base (§7.4). `ab context` rehydrates
+scratch from the store into a fresh session. Uncommitted round-2 work is lost by
+design (§7.3 — phase boundaries are the resume points).
 
 Two liveness rules complete the picture. Within one dispatcher process,
 build-runner launches are single-flighted by slug through supervised process

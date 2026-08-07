@@ -79,20 +79,27 @@ describe('BuildChildExitCoordinator', () => {
   })
 })
 
-test('natural exit with no descendants leaves no helper and stays on the fast path', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-exit-empty-'))
-  const helperFile = join(tmp, 'helper.pid')
-  const childScript = join(tmp, 'child.ts')
-  const terminalUrl = pathToFileURL(join(import.meta.dir, 'build-child-exit.ts')).href
-  const reaperUrl = pathToFileURL(join(import.meta.dir, 'process-group-reaper.ts')).href
-  await writeFile(
-    childScript,
-    `import { writeFileSync } from 'node:fs'
+// Keep the grace path well beyond the lifecycle bound so it cannot masquerade as the fast path.
+const FAST_PATH_CLEANUP_GRACE_MS = 30_000
+const FAST_PATH_EVENT_TIMEOUT_MS = 5_000
+const FAST_PATH_TEST_TIMEOUT_MS = 15_000
+
+test(
+  'natural exit with no descendants leaves no helper and stays on the fast path',
+  async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-exit-empty-'))
+    const helperFile = join(tmp, 'helper.pid')
+    const childScript = join(tmp, 'child.ts')
+    const terminalUrl = pathToFileURL(join(import.meta.dir, 'build-child-exit.ts')).href
+    const reaperUrl = pathToFileURL(join(import.meta.dir, 'process-group-reaper.ts')).href
+    await writeFile(
+      childScript,
+      `import { writeFileSync } from 'node:fs'
 import { BuildChildExitCoordinator } from ${JSON.stringify(terminalUrl)}
 import { launchProcessGroupReaper } from ${JSON.stringify(reaperUrl)}
 const terminal = new BuildChildExitCoordinator({
   groupId: process.pid,
-  stopTimeoutMs: 2_000,
+  stopTimeoutMs: ${FAST_PATH_CLEANUP_GRACE_MS},
   launchReaper: (options) => {
     const pid = launchProcessGroupReaper(options)
     writeFileSync(${JSON.stringify(helperFile)}, String(pid))
@@ -102,28 +109,28 @@ const terminal = new BuildChildExitCoordinator({
 process.on('SIGTERM', () => terminal.terminate(143))
 terminal.terminate(0)
 `,
-  )
+    )
 
-  const started = Date.now()
-  const child = Bun.spawn([process.execPath, childScript], {
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-    detached: true,
-  })
-  let helperPid: number | undefined
-  try {
-    expect(await child.exited).toBe(0)
-    await waitFor(() => Bun.file(helperFile).size > 0)
-    helperPid = Number(await Bun.file(helperFile).text())
-    await waitFor(() => !alive(helperPid!))
-    expect(Date.now() - started).toBeLessThan(1_000)
-  } finally {
-    forceCleanup(child.pid)
-    if (helperPid !== undefined && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
-    await rm(tmp, { recursive: true, force: true })
-  }
-})
+    const child = Bun.spawn([process.execPath, childScript], {
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+      detached: true,
+    })
+    let helperPid: number | undefined
+    try {
+      expect(await child.exited).toBe(0)
+      await waitFor(() => Bun.file(helperFile).size > 0, FAST_PATH_EVENT_TIMEOUT_MS)
+      helperPid = Number(await Bun.file(helperFile).text())
+      await waitFor(() => !alive(helperPid!), FAST_PATH_EVENT_TIMEOUT_MS)
+    } finally {
+      forceCleanup(child.pid)
+      if (helperPid !== undefined && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
+      await rm(tmp, { recursive: true, force: true })
+    }
+  },
+  FAST_PATH_TEST_TIMEOUT_MS,
+)
 
 test('natural leader exit hands stubborn descendants to a reaper that survives kernel death', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-exit-'))

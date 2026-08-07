@@ -1343,6 +1343,15 @@ JSON exposes `outcome: "skipped"` and `reason`, never a synthetic pass.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.
 
+The open-session list is literal durable state. Historical logs with a
+`session.started` but no ending remain readable and show that session as open;
+Autobuild does not reinterpret or repair them. When a runner actually takes a
+build over, it first records each session open at the resume boundary as
+`reclaimed`, without inventing a transcript, and then records its attachment.
+The rerun opens one fresh session, so after attachment only work that could
+still be alive appears in `ab build status`. Dashboard session history keeps the
+reclaimed entry visibly distinct and reports that its transcript is unavailable.
+
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 durable repository gate and an ordered collection of every unresolved failed
 run plus relevant open/latest context from the same journal the runner resumes.

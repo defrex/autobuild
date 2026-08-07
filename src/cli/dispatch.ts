@@ -1202,6 +1202,15 @@ class DispatchLoop {
       this.paint()
       return
     }
+    if (session.status === 'reclaimed') {
+      this.view = this.detailMessage(
+        captured,
+        'This session was reclaimed by a recovering runner; transcript unavailable.',
+      )
+      this.syncModelControls()
+      this.paint()
+      return
+    }
     if (session.transcript === undefined) {
       this.view = this.detailMessage(captured, 'This session ended without a transcript deposit.')
       this.syncModelControls()

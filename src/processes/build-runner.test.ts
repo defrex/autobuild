@@ -687,6 +687,11 @@ function ofType<T extends EventType>(events: AbEvent[], type: T): Extract<AbEven
   return events.filter((event): event is Extract<AbEvent, { type: T }> => event.type === type)
 }
 
+function completedSessionEnd(event: Extract<AbEvent, { type: 'session.ended' }>) {
+  if (!('transcript' in event.payload)) throw new Error('expected transcript-bearing session end')
+  return event.payload
+}
+
 // ── attach (§7.4) ────────────────────────────────────────────────────────────
 
 describe('attach', () => {
@@ -715,6 +720,109 @@ describe('attach', () => {
     const attached = ofType(events, 'runner.attached')[0]!
     expect(attached.seq).toBe(4)
     expect(attached.payload.resumedFromSeq).toBe(3)
+  })
+
+  test('reclaims every pre-boundary open session before attachment without a transcript', async () => {
+    const h = await makeHarness()
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_dead',
+        role: 'code-review',
+        runner: 'pi',
+        phase: 'code-review',
+        round: 2,
+      },
+    })
+    const boundary = (await h.store.getEvents(SLUG)).at(-1)!.seq
+
+    await h.br.attach()
+
+    const events = await h.store.getEvents(SLUG)
+    const reclaimed = ofType(events, 'session.ended')[0]!
+    const attached = ofType(events, 'runner.attached')[0]!
+    expect(reclaimed.seq).toBeLessThan(attached.seq)
+    expect(reclaimed.payload).toEqual({
+      session: 's_dead',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'runner-1', resumedFromSeq: boundary },
+    })
+    expect(reclaimed.payload).not.toHaveProperty('transcript')
+    expect(reclaimed.payload).not.toHaveProperty('usage')
+    expect(attached.payload.resumedFromSeq).toBe(boundary)
+    expect(reduceBuild(events).sessions.open).toEqual([])
+  })
+
+  test('an interrupted multi-session reclaim lands no attachment and retry closes only the remainder', async () => {
+    const h = await makeHarness()
+    for (const session of ['s_dead_1', 's_dead_2']) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session,
+          role: 'code-review',
+          runner: 'pi',
+          phase: 'code-review',
+          round: 2,
+        },
+      })
+    }
+    h.store.faultAfterNext('session.ended')
+
+    await expect(h.br.attach()).rejects.toThrow(/injected crash after session.ended/)
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'runner.attached')).toHaveLength(0)
+    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual([
+      's_dead_2',
+    ])
+
+    await h.br.attach()
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.ended').map((event) => event.payload.session)).toEqual([
+      's_dead_1',
+      's_dead_2',
+    ])
+    expect(ofType(events, 'runner.attached')).toHaveLength(1)
+    expect(reduceBuild(events).sessions.open).toEqual([])
+  })
+
+  test('three successive recoveries leave only the newest rerun session open', async () => {
+    const h = await makeHarness()
+    for (let recovery = 1; recovery <= 3; recovery += 1) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: `s_run_${recovery}`,
+          role: 'implement',
+          runner: 'pi',
+          phase: 'implement',
+          round: 2,
+        },
+      })
+      await h.br.attach()
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_run_4',
+        role: 'implement',
+        runner: 'pi',
+        phase: 'implement',
+        round: 2,
+      },
+    })
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.ended').map((event) => event.payload.session)).toEqual([
+      's_run_1',
+      's_run_2',
+      's_run_3',
+    ])
+    expect(reduceBuild(events).sessions.open.map((session) => session.session)).toEqual(['s_run_4'])
   })
 
   test('throws LeaseHeldError while another holder is live (§7.4)', async () => {
@@ -1037,6 +1145,44 @@ describe('setup command (§16.1)', () => {
     expect(recovered?.payload.resumedFromSeq).toBe(ofType(events, 'runner.setup-failed')[0]?.seq)
     expect(reduceBuild(events).setupFailure).toBeUndefined()
     expect(ofType(events, 'escalation.raised')).toHaveLength(0)
+  })
+
+  test('setup recovery reclaims sessions before its delayed attachment', async () => {
+    const h = await makeHarness({
+      configToml: TOML_WITH_SETUP,
+      setupResults: [{ stdout: 'installed', stderr: '', exitCode: 0 }],
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_before_setup_recovery',
+        role: 'plan',
+        runner: 'pi',
+        phase: 'plan',
+        round: 1,
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'runner.setup-failed',
+      payload: { command: 'bun install', attempt: 1, exitStatus: 1, output: 'offline' },
+    })
+    const boundary = (await h.store.getEvents(SLUG)).at(-1)!.seq
+
+    await h.br.attach()
+
+    const events = await h.store.getEvents(SLUG)
+    expect(events.slice(-2).map((event) => event.type)).toEqual([
+      'session.ended',
+      'runner.attached',
+    ])
+    expect(ofType(events, 'session.ended').at(-1)?.payload).toEqual({
+      session: 's_before_setup_recovery',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'runner-1', resumedFromSeq: boundary },
+    })
+    expect(ofType(events, 'runner.attached').at(-1)?.payload.resumedFromSeq).toBe(boundary)
   })
 
   test('a human answer re-arms the exhausted setup budget', async () => {
@@ -1601,13 +1747,14 @@ describe('happy path (§15.6)', () => {
     const corpus: Array<[unknown, unknown, unknown]> = []
     for (const event of ended) {
       expect(event.actor).toEqual({ kind: 'kernel' })
-      expect(event.payload.transcript.kind).toBe('transcript')
-      const artifact = await h.store.getArtifact(SLUG, 'transcript', event.payload.transcript.rev)
+      const endedPayload = completedSessionEnd(event)
+      expect(endedPayload.transcript.kind).toBe('transcript')
+      const artifact = await h.store.getArtifact(SLUG, 'transcript', endedPayload.transcript.rev)
       expect(artifact).not.toBeNull()
       const meta = artifact!.meta.metadata
-      expect(meta.session).toBe(event.payload.session)
+      expect(meta.session).toBe(endedPayload.session)
       expect(meta.runner).toBe('scripted')
-      expect(meta.usage).toEqual(event.payload.usage)
+      expect(meta.usage).toEqual(endedPayload.usage)
       corpus.push([meta.phase, meta.round, meta.role])
     }
     expect(corpus).toEqual([
@@ -1658,7 +1805,11 @@ describe('happy path (§15.6)', () => {
     const ended = ofType(events, 'session.ended').find(
       (e) => e.payload.session === planSession.payload.session,
     )!
-    const transcript = await h.store.getArtifact(SLUG, 'transcript', ended.payload.transcript.rev)
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      completedSessionEnd(ended).transcript.rev,
+    )
     expect(transcript?.meta.metadata.model).toBe('m-plan')
   })
 
@@ -2690,11 +2841,16 @@ describe('durable terminal followed by a runtime throw', () => {
         (artifact) => artifact.metadata.session === recoveredSession,
       )
       expect(recoveredTranscripts).toHaveLength(1)
-      expect(recoveredEnds[0]!.payload.transcript).toEqual({
+      const recoveredEnd = recoveredEnds[0]!
+      expect('transcript' in recoveredEnd.payload).toBe(true)
+      if (!('transcript' in recoveredEnd.payload)) {
+        throw new Error('expected transcript-bearing session ending')
+      }
+      expect(recoveredEnd.payload.transcript).toEqual({
         kind: 'transcript',
         rev: recoveredTranscripts[0]!.revision,
       })
-      expect(recoveredEnds[0]!.payload.usage).toEqual({
+      expect(recoveredEnd.payload.usage).toEqual({
         inputTokens: 1,
         outputTokens: 1,
         turns: 1,
@@ -2928,7 +3084,7 @@ alternates = [{ runtime = "pi", model = "kimi-alternate" }]
     )
     expect(alternateEnded).toBeDefined()
     const alternateTranscript = (await h.store.listArtifacts(SLUG, 'transcript')).find(
-      (artifact) => artifact.revision === alternateEnded!.payload.transcript.rev,
+      (artifact) => artifact.revision === completedSessionEnd(alternateEnded!).transcript.rev,
     )
     expect(alternateTranscript?.metadata).toMatchObject({
       phase: 'implement',
@@ -3190,7 +3346,11 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     expect(calls).toBe(1)
 
     const ended = ofType(events, 'session.ended')[0]!
-    const transcript = await h.store.getArtifact(SLUG, 'transcript', ended.payload.transcript.rev)
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      completedSessionEnd(ended).transcript.rev,
+    )
     const transcriptJson = JSON.parse(new TextDecoder().decode(transcript!.content))
     expect(transcriptJson.turns[0].result.failure.message).toBe(KIMI_QUOTA)
     const escalation = ofType(events, 'escalation.raised')[0]!
@@ -3717,7 +3877,11 @@ describe('no-terminal retry policy (D5)', () => {
       willRetry: true,
     })
     const ended = ofType(events, 'session.ended')[0]!
-    const transcript = await h.store.getArtifact(SLUG, 'transcript', ended.payload.transcript.rev)
+    const transcript = await h.store.getArtifact(
+      SLUG,
+      'transcript',
+      completedSessionEnd(ended).transcript.rev,
+    )
     expect(transcript).not.toBeNull()
     expect(transcript!.meta.metadata.phase).toBe('plan')
   })
@@ -4372,8 +4536,9 @@ describe('agent verification', () => {
 
     expect(h.ops).toEqual(['session:ab-verify-e2e'])
     const events = await h.store.getEvents(SLUG)
-    // The thrown start never returned a handle, so no session.ended arrives —
-    // the dead session stays open (§15.6-C) and the failure is recorded.
+    // The thrown start never returned a handle, so no session.ended arrives
+    // yet. It stays open until a later attachment explicitly reclaims it, and
+    // this runner records the phase failure.
     expect(events.slice(-3).map((e) => e.type)).toEqual([
       'verify.started',
       'session.started',

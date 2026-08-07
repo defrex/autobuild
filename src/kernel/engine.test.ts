@@ -395,6 +395,74 @@ describe('decideNext: §15.6 happy path — prefix walk', () => {
   })
 })
 
+describe('decideNext: recovery starts are evidence, not policy budget', () => {
+  test('duplicate starts preserve review, phase retry, verify, and reconcile decisions', () => {
+    const reviewLog = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_a')]),
+      ...planRound(2, 'revise', [finding('f_b')]),
+      ...planRound(3, 'revise', [finding('f_c')]),
+      ...planRound(4, 'revise', [finding('f_d')]),
+      ...planRound(5, 'revise', [finding('f_e')]),
+      ...planRound(6, 'revise', [finding('f_f')]),
+    ]
+    const duplicateStarts = (writes: EventWrite[], selected: Set<string>): EventWrite[] =>
+      writes.flatMap((write) => (selected.has(write.type) ? [write, write] : [write]))
+    expect(
+      decide(duplicateStarts(reviewLog, new Set(['plan.started', 'plan-review.started']))),
+    ).toEqual(decide(reviewLog))
+
+    const failedPhase = [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('phase.failed', {
+        phase: 'plan',
+        round: 1,
+        attempt: 1,
+        error: 'runner vanished',
+        willRetry: true,
+      }),
+    ]
+    expect(decide(duplicateStarts(failedPhase, new Set(['plan.started'])))).toEqual(
+      decide(failedPhase),
+    )
+
+    const crashedVerify = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('types', 1, true),
+      ev('verify.started', { step: 'unit', attempt: 1 }),
+    ]
+    const verifyDecision = decide(crashedVerify)
+    expect(decide(duplicateStarts(crashedVerify, new Set(['verify.started'])))).toEqual(
+      verifyDecision,
+    )
+    expect(verifyDecision).toMatchObject({ kind: 'run-check', step: 'unit', attempt: 1 })
+
+    const crashedReconcile = [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyAllPass(1),
+      ...finalized(),
+      ev('pr.conflicted', { baseSha: 'sha-main-2' }),
+      ev('reconcile.started', { attempt: 1, baseSha: 'sha-main-2' }),
+    ]
+    const reconcileDecision = decide(crashedReconcile)
+    expect(decide(duplicateStarts(crashedReconcile, new Set(['reconcile.started'])))).toEqual(
+      reconcileDecision,
+    )
+    expect(reconcileDecision).toMatchObject({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      reconcile: { attempt: 1 },
+    })
+  })
+})
+
 // ── Rule 1: terminal states ──────────────────────────────────────────────────
 
 describe('decideNext: rule 1 — terminal states', () => {

@@ -14,9 +14,10 @@ export interface DashboardSession {
   runtime: string
   model?: string
   startedSeq: number
-  status: 'open' | 'ended'
+  status: 'open' | 'ended' | 'reclaimed'
   usage?: SessionUsage
   transcript?: { kind: string; rev: number }
+  reclaimedBy?: { instance: string; resumedFromSeq: number }
 }
 
 /**
@@ -47,9 +48,14 @@ export function projectSessions(events: readonly AbEvent[]): DashboardSession[] 
     if (event.type !== 'session.ended') continue
     const started = open.get(event.payload.session)
     if (started === undefined) continue
-    started.status = 'ended'
-    started.usage = { ...event.payload.usage }
-    started.transcript = { ...event.payload.transcript }
+    if ('transcript' in event.payload) {
+      started.status = 'ended'
+      started.usage = { ...event.payload.usage }
+      started.transcript = { ...event.payload.transcript }
+    } else {
+      started.status = 'reclaimed'
+      started.reclaimedBy = { ...event.payload.reclaimedBy }
+    }
     open.delete(started.id)
   }
 

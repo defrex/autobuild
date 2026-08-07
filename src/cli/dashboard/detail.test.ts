@@ -36,6 +36,18 @@ describe('projectSessions', () => {
         phase: 'plan-review',
         round: 1,
       }),
+      event(4, 'session.started', {
+        session: 's_reclaimed',
+        role: 'implement',
+        runner: 'pi',
+        phase: 'implement',
+        round: 2,
+      }),
+      event(5, 'session.ended', {
+        session: 's_reclaimed',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 4 },
+      }),
     ])
 
     expect(sessions).toEqual([
@@ -59,6 +71,16 @@ describe('projectSessions', () => {
         runtime: 'claude',
         startedSeq: 3,
         status: 'open',
+      },
+      {
+        id: 's_reclaimed',
+        role: 'implement',
+        phase: 'implement',
+        round: 2,
+        runtime: 'pi',
+        startedSeq: 4,
+        status: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 4 },
       },
     ])
   })
