@@ -1450,9 +1450,14 @@ The lease remains the cross-process recovery and workspace-teardown gate (the
 in-memory guard is deliberately not durable: a dead process's memory disappears
 with it). Ordinary dispatcher shutdown gracefully signals each local process
 group, escalates the whole group after the bounded stop delay, and reaps it.
-After abrupt dispatcher death, the build child's immutable-parent watchdog
-launches a detached group reaper that applies the same bounded policy; lease
-expiry remains the durable fallback. A new `ab dispatch` process attempts
+Before every build-child terminal path exits — natural success or failure,
+SIGINT/SIGTERM, or immutable-parent watchdog death — it launches one detached
+group reaper while the leader still pins the group's identity. That owner
+applies the same bounded TERM-then-KILL policy and survives abrupt dispatcher
+death. The live local supervisor independently awaits full-group teardown before
+publishing execution completion and releasing the lease; lease expiry remains
+the durable recovery fallback when the dispatcher dies. A new `ab dispatch`
+process attempts
 every actionable build on its first tick rather than waiting for the sweep;
 lease claiming stays the exclusivity gate, so a genuinely live old runner
 wins harmlessly.

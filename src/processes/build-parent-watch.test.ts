@@ -35,7 +35,7 @@ async function runParentDeathScenario(scenario: ParentDeathScenario): Promise<vo
   const childScript = join(tmp, 'child.ts')
   const parentScript = join(tmp, 'parent.ts')
   const watchHelper = pathToFileURL(join(import.meta.dir, 'build-parent-watch.ts')).href
-  const reaperHelper = pathToFileURL(join(import.meta.dir, 'process-group-reaper.ts')).href
+  const terminalHelper = pathToFileURL(join(import.meta.dir, 'build-child-exit.ts')).href
   const descendantSetup = scenario.stubbornDescendant
     ? `Bun.spawn(['sh', '-c', ${JSON.stringify(
         `trap '' TERM; echo $$ > ${descendantFile}; while :; do sleep 1; done`,
@@ -45,17 +45,16 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
   await writeFile(
     childScript,
     `import { watchBuildParent } from ${JSON.stringify(watchHelper)}
-import { launchProcessGroupReaper } from ${JSON.stringify(reaperHelper)}
+import { BuildChildExitCoordinator } from ${JSON.stringify(terminalHelper)}
 ${scenario.delayWatch ? 'await Bun.sleep(250)' : ''}
 ${descendantSetup}
 const expectedParent = Number(process.env.EXPECTED_PARENT)
-const watch = watchBuildParent(expectedParent, () => {
-  launchProcessGroupReaper({ groupId: process.pid, stopTimeoutMs: 100 })
-  process.exit(143)
-}, 10)
+const terminal = new BuildChildExitCoordinator({ groupId: process.pid, stopTimeoutMs: 100 })
+terminal.setParentWatch(watchBuildParent(expectedParent, () => {
+  terminal.terminate(143)
+}, 10))
 await Bun.write(${JSON.stringify(readyFile)}, 'ready')
 await Bun.sleep(60_000)
-watch.close()
 `,
   )
   await writeFile(

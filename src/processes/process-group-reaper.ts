@@ -13,11 +13,13 @@ export function processGroupReaperOptions(groupId: number): ProcessGroupReaperOp
 }
 
 /** Start an owner outside the dying build's session so group-wide SIGKILL
- * cannot kill the process responsible for escalating to it. */
+ * cannot kill the process responsible for escalating to it. The synchronous
+ * return means the target leader can retain its process-group identity until
+ * the helper has been created. */
 export function launchProcessGroupReaper(
   options: ProcessGroupReaperOptions,
   spawn: typeof Bun.spawn = Bun.spawn,
-): void {
+): number {
   const child = spawn(
     [process.execPath, resolve(import.meta.dir, '../../bin/ab-process-group-reaper.ts')],
     {
@@ -32,4 +34,5 @@ export function launchProcessGroupReaper(
     },
   )
   child.unref()
+  return child.pid
 }
