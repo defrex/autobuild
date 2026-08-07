@@ -60,6 +60,7 @@ function build(overrides: Partial<DashboardBuild> = {}): DashboardBuild {
   return {
     slug: 'auth-rate-limit',
     status: 'running',
+    progress: { lastEventAt: new Date(NOW - 25 * 60_000).toISOString(), terminal: false },
     alsoPaused: false,
     ticketId: 'ENG-42',
     steps: [
@@ -1328,6 +1329,63 @@ describe('renderDashboard: message previews', () => {
     expect(rd(dashboard, opts)).toEqual(first)
     expect(first.join('\n')).not.toContain('\x1b')
     for (const line of first) expect(cellWidth(line)).toBeLessThanOrEqual(opts.width)
+  })
+})
+
+describe('renderDashboard: durable progress', () => {
+  test('renders the incident age and literal marker without ANSI while normal work stays unmarked', () => {
+    const incident = build({
+      slug: 'incident',
+      progress: {
+        lastEventAt: new Date(NOW - 15 * 60 * 60_000).toISOString(),
+        heartbeatAt: new Date(NOW - 30_000).toISOString(),
+        leaseExpiresAt: new Date(NOW + 30_000).toISOString(),
+        terminal: false,
+      },
+      pr: undefined,
+    })
+    const healthy = build({
+      slug: 'healthy',
+      progress: {
+        lastEventAt: new Date(NOW - 25 * 60_000).toISOString(),
+        heartbeatAt: new Date(NOW - 30_000).toISOString(),
+        leaseExpiresAt: new Date(NOW + 30_000).toISOString(),
+        terminal: false,
+      },
+      pr: undefined,
+    })
+    const text = rd(model([incident, healthy]), { color: false, width: 120 }).join('\n')
+    const incidentLine = text.split('\n').find((line) => line.includes('incident'))!
+    const healthyLine = text.split('\n').find((line) => line.includes('healthy'))!
+    expect(incidentLine).toContain('progress 15h00m diverged')
+    expect(healthyLine).toContain('progress 25m00s')
+    expect(healthyLine).not.toContain('diverged')
+    expect(text).not.toContain('\x1b')
+  })
+
+  test('terminal cleanup is unmarked and narrow rows keep lifecycle status right-pinned', () => {
+    const progress = {
+      lastEventAt: new Date(NOW - 15 * 60 * 60_000).toISOString(),
+      heartbeatAt: new Date(NOW - 30_000).toISOString(),
+      leaseExpiresAt: new Date(NOW + 30_000).toISOString(),
+      terminal: true,
+    }
+    const cleanup = rd(
+      model([build({ slug: 'cleanup', status: 'cleaning', progress, pr: undefined })]),
+      { color: false, width: 100 },
+    ).join('\n')
+    expect(cleanup).toContain('progress 15h00m')
+    expect(cleanup).not.toContain('diverged')
+
+    const narrow = rd(
+      model([
+        build({ slug: 'incident', progress: { ...progress, terminal: false }, pr: undefined }),
+      ]),
+      { color: false, width: 40 },
+    )
+    const row = narrow.find((line) => line.includes('incident'))!
+    expect(row.trimEnd().endsWith('RUNNING')).toBe(true)
+    expect(cellWidth(row)).toBeLessThanOrEqual(40)
   })
 })
 

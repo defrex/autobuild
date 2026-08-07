@@ -217,7 +217,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '  ab build status <slug> [--events <n>] [--json] [--store <ref>]',
       '',
       'Show detailed state for one build: unresolved escalations, open sessions,',
-      'verify progress, PR state, the latest event, heartbeat, and lease.',
+      'verify progress, PR state, durable-event progress, heartbeat, and lease health.',
       '--events <n> appends the newest positive number of events in chronological',
       'order. --json emits the complete projection; --store overrides the',
       'BuildStore path or URL.',

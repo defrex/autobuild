@@ -1282,7 +1282,11 @@ and starts no dispatcher work.
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those
-are the ones something can still be done about.
+are the ones something can still be done about. `HEARTBEAT` is mutable runner
+liveness; `PROGRESS` is the age of the latest durable event. A literal
+`diverged` suffix means a nonterminal build still holds a live lease but its
+heartbeat is at least one hour newer than its latest event. It is a visibility
+signal, not a stalled/dead verdict.
 
 | Flag | Effect |
 |---|---|
@@ -1297,8 +1301,8 @@ or `--all` before concluding a build doesn't exist.
 
 **`ab build status <slug>`** details one build: unresolved escalations, open
 sessions, chronological durable observations, verify progress for the current
-cycle, PR lifecycle, latest event, heartbeat, and lease. Observations are shown
-without `--events`; for `forge = "local-git"`, this is where a deferred landing
+cycle, PR lifecycle, latest event, durable progress age, heartbeat, and lease.
+Observations are shown without `--events`; for `forge = "local-git"`, this is where a deferred landing
 names uncommitted work that collides with the squash. Autobuild leaves that work
 untouched and later dispatcher ticks retry automatically after the operator
 resolves it. `--events <n>` appends the newest `n` event envelopes in
@@ -1328,27 +1332,35 @@ internal run id and represents one deterministically selected open run or
 unresolved attention; its contextual `p` issues the repository-wide resume or
 acknowledgement, and `m` remains the build-only no-op.
 
-### Lease health is not build status
+### Status, durable progress, and lease health are separate
 
-These are **two independent axes**, and reading one as the other is the mistake
+These are **three independent axes**, and reading one as another is the mistake
 worth avoiding.
 
 **Status** is reduced from the event log (§15.5) — authoritative, and the same
-projection the engine itself routes on. **Lease health** comes from the mutable
-lease columns (§15.2.6), because liveness is not an event: nothing appends when
-a sandbox dies, so a build whose runner is gone still reduces to `running`
-forever. That gap is exactly why the lease column is reported separately.
+projection the engine itself routes on. **Durable progress** is the timestamp of
+the latest reduced event; its age says how long the log has been silent.
+**Lease health** comes from the mutable lease columns (§15.2.6), because
+liveness is not an event: nothing appends when a sandbox dies, so a build whose
+runner is gone still reduces to `running` forever. That gap is exactly why all
+three are reported separately.
+
+`diverged` is shown only when a nonterminal build has an unexpired lease and its
+heartbeat is at least one hour newer than its latest event. Finished, aborted,
+no-lease, and expired-lease builds are never marked. The marker does not alter
+status, lease health, routing, or recovery.
 
 | Lease | Meaning |
 |---|---|
-| `held` | A live runner holds an unexpired lease. Work is genuinely in flight. |
+| `held` | A runner holds an unexpired lease. The runner is live; inspect `PROGRESS` to see when it last wrote a durable fact. |
 | `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
-| `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with `updated`, not alone. |
+| `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with progress, not alone. |
 
-So `running` + `held` is healthy; for `running` + `expired`, inspect the build
-detail to distinguish actionable work that will return through the lease sweep
-from an ended PR awaiting repository-level completion. `no-lease` on a build
-updated seconds ago is almost certainly a runner still starting up.
+So `running` + `held` confirms liveness, while its progress age says whether
+the durable log is moving. For `running` + `expired`, inspect the build detail
+to distinguish actionable work that will return through the lease sweep from
+an ended PR awaiting repository-level completion. `no-lease` with recent
+progress is usually a runner still starting up.
 
 ## The installed skills
 

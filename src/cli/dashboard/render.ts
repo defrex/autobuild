@@ -20,6 +20,7 @@
  * posture change to win a color map.
  */
 import { basename } from 'node:path'
+import { isDiverged } from '../build-progress'
 import type {
   DashboardBuild,
   DashboardHarvest,
@@ -285,6 +286,13 @@ function rightPinnedLine(prefix: string, flexible: string, right: string, width:
   return truncate(`${prefix}${left}${gap}${right}`, width)
 }
 
+function buildProgressText(build: DashboardBuild, now: number): string {
+  const parsed =
+    build.progress.lastEventAt === undefined ? Number.NaN : Date.parse(build.progress.lastEventAt)
+  const age = Number.isFinite(parsed) ? formatDuration(Math.max(0, now - parsed)) : '—'
+  return `progress ${age}${isDiverged(build.progress, now) ? ' diverged' : ''}`
+}
+
 function renderBuild(
   build: DashboardBuild,
   repositoryPaused: boolean,
@@ -299,9 +307,9 @@ function renderBuild(
   //
   // Explicit left / flexible / right layout, NOT "join then truncate the whole
   // line" — the latter eats the rightmost token (the status, the PR link) first,
-  // exactly what this change moves away from. Ticket id is the left column, the
-  // slug is the sole flexible/truncatable element, and the right cluster hugs
-  // `width` so the status word ends at the same column on every row (AC 1).
+  // exactly what this change moves away from. Ticket id is the left column;
+  // slug plus progress are the flexible/truncatable identity segment; and the
+  // right cluster hugs `width` so status ends at the same column on every row.
 
   // Left column: ticket id, padded frame-wide so slugs align even for a build
   // with no ticket (AC 2). No column at all when the frame has zero ticket ids.
@@ -333,10 +341,11 @@ function renderBuild(
   )
   const rightStr = rightTokens.join('  ')
 
-  // The slug is the only element that truncates; ticket id and status never do.
-  // Final truncation inside `rightPinnedLine` is only a safety net for widths
-  // narrower than the fixed columns.
-  const lines = [rightPinnedLine(leftPrefix, paint(build.slug, 'bold', color), rightStr, width)]
+  // Slug and progress share the flexible segment; narrow frames truncate them
+  // before the right-pinned lifecycle status. The divergence signal is a word,
+  // never a color-only state.
+  const identity = `${paint(build.slug, 'bold', color)}  ${buildProgressText(build, now)}`
+  const lines = [rightPinnedLine(leftPrefix, identity, rightStr, width)]
 
   if (build.abortProgress !== undefined) {
     for (const line of wrappedText(build.abortProgress, width - 4, '')) {
