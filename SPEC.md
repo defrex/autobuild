@@ -198,9 +198,11 @@ Small, independently runnable, crash-safe:
 
 - **build-runner** — one operating-system process per build; owns one pipeline
   execution end to end. The local implementation starts the process beside its
-  Git worktree. Workspace execution is a substitutable capability, so a future
-  sandbox provider can place both checkout and process elsewhere without the
-  dispatcher spawning a local proxy. Per-build processes are deliberate: crash
+  Git worktree in its own POSIX session/process group and owns teardown of that
+  complete group, including agent-tool grandchildren. Workspace execution is a
+  substitutable capability, so a future sandbox provider can place both checkout
+  and process elsewhere without the dispatcher spawning a local proxy; that
+  provider owns equivalent complete-environment teardown. Per-build processes are deliberate: crash
   isolation, and the natural shape once builds run in remote sandboxes.
 - **dispatcher** — watches the TicketSource for tickets passing the configured
   ready gate, claims, establishes the final conforming spec, chooses a short
@@ -1259,7 +1261,8 @@ accidentally interpret repository state.
    commands and escalation answers on resume. While a turn is live, the runner
    subscribes from its session boundary and forwards an abort as caller-owned
    cancellation to the AgentRunner; it closes the session transcript without
-   recording `phase.failed`, acknowledges abort, and releases its lease.
+   recording `phase.failed` and acknowledges abort. The supervising execution
+   retains the lease until the build's complete process tree has been reaped.
 
 ### 15.3 Catalog
 
@@ -1279,8 +1282,10 @@ The families, with illustrative members:
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
-Abort cleanup is a dispatcher-owned ordered saga. It releases any lease, closes
-an open unmerged PR without overriding a racing merge, releases the workspace,
+Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
+live, the janitor defers the saga so it cannot race process-tree teardown. Once
+that supervisor releases the lease, or an abruptly orphaned lease expires, cleanup
+closes an open unmerged PR without overriding a racing merge, releases the workspace,
 deletes the exact published remote branch and exact local branch, unions the
 `autobuild:aborted` label into the current ticket labels, returns the ticket to
 configured Triage, and only then completes as `abandoned`. External effects are
@@ -1366,9 +1371,10 @@ attribution retained by `build.created` is materialized as the ordinary
 human-authored request before launch. A failed boundary appends `dispatch.failed
 {stage,attempt,error}` and stays queued for another tick. A discard request is
 honored only while the build remains queued; one that races with runner
-attachment is inert and cannot tear down live work. A human discard instead
-releases any partial workspace and lease, returns the ticket to Ready, then
-appends `build.completed {outcome: discarded}` last. No runner is required.
+attachment is inert and cannot tear down live work. A human discard waits out
+any unexpired execution lease, then releases a partial workspace and stale
+lease, returns the ticket to Ready, and appends `build.completed {outcome:
+discarded}` last. No runner is required.
 
 **A — verify failure:** `verify.completed {step: e2e, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started
@@ -1423,8 +1429,9 @@ The setup target belongs only to escalation metadata and is not a pipeline `Phas
 **D — sandbox death:** log ends at `implement.started {round: 2}`; heartbeat
 goes stale → dispatcher expires the lease, provisions a fresh sandbox →
 `workspace.provisioned {base: {source: existing, sha}}` → the workspace
-execution capability starts a fresh build process. That process reads its
-workspace location from the durable event, claims the lease, and appends
+execution capability starts a fresh build process. The supervising kernel first
+claims the lease for that execution instance; the process reads its workspace
+location from the durable event, renews the same-holder lease, and appends
 `runner.attached {resumedFromSeq}` → reducer says implement r2
 started-not-completed → re-run the phase from its start. The provider restores the already-created branch at
 round 1's pushed head [D3]; the Git adapter never re-cuts it from a newer
@@ -1434,13 +1441,18 @@ are the resume points).
 
 Two liveness rules complete the picture. Within one dispatcher process,
 build-runner launches are single-flighted by slug through supervised process
-liveness — a child exit is only a reaping signal, never a pipeline outcome.
-Build progress, config, diagnostics, and outcomes cross the process boundary
-only through build-owned Store state. The durable lease remains the
-cross-process recovery gate (the in-memory guard is deliberately not durable:
-a dead process's memory disappears with it). Ordinary dispatcher shutdown
-stops and reaps every child; abrupt dispatcher death is recovered by parent
-liveness detection plus lease expiry. A new `ab dispatch` process attempts
+liveness — execution completion means the complete environment has been reaped,
+but remains only a liveness signal, never a pipeline outcome. Build progress,
+config, diagnostics, and outcomes cross the process boundary only through
+build-owned Store state. The kernel claims each execution's durable lease before
+launch and releases that exact holder only after completion; the child renews it.
+The lease remains the cross-process recovery and workspace-teardown gate (the
+in-memory guard is deliberately not durable: a dead process's memory disappears
+with it). Ordinary dispatcher shutdown gracefully signals each local process
+group, escalates the whole group after the bounded stop delay, and reaps it.
+After abrupt dispatcher death, the build child's immutable-parent watchdog
+launches a detached group reaper that applies the same bounded policy; lease
+expiry remains the durable fallback. A new `ab dispatch` process attempts
 every actionable build on its first tick rather than waiting for the sweep;
 lease claiming stays the exclusivity gate, so a genuinely live old runner
 wins harmlessly.
@@ -1452,7 +1464,9 @@ PR, but *something* must watch it to merge/close, release the workspace, and
 emit `build.completed`. v2 makes it a deterministic **janitor duty of the
 dispatcher** (which already polls on cron): it checks open PRs for its
 builds, emits `pr.merged`/`pr.closed`/`pr.conflicted`, releases workspaces,
-and completes builds. After any terminal outcome it also reclaims every
+and completes builds. Destructive discard, abort, and terminal-PR cleanup defer
+while an unexpired execution lease exists, so no workspace is released under a
+live process tree. After any terminal outcome it also reclaims every
 pending hosted PR-attachment copy. Reclamation success and failure are durable
 correlated facts; a failed delete remains pending and retries on later ticks,
 including after the build is already done. A merged-PR fixup request is a *new
