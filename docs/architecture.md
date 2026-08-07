@@ -104,12 +104,16 @@ exhaustion.
 `sessionBudgetSeconds` value for each logical role, with the policy default as
 its final fallback. `BuildRunner` captures it at the session action boundary,
 starts an unref'ed timer after `session.started`, and composes expiry with the
-existing operator `AbortController`. Expiry stops waiting even if an adapter
-ignores cancellation, best-effort ends an available or late-returning handle,
-drops producer continuation state, and reuses retryable `phase.failed`; it does
-not enter the provider-alternate classifier. The event log is checked before
-failure so a typed terminal racing the deadline wins. Finalize agent post-steps
-reuse the timer but drain expiry through their existing failure-tolerant
+existing operator `AbortController`. Operator abort and deadline remain
+independent: abort cancels promptly, while the captured deadline still stops
+waiting if the adapter ignores that cancellation. First cause owns
+classification, so an operator-first deadline release returns to abort
+acknowledgement without `phase.failed` or provider substitution. Ordinary
+expiry best-effort ends an available or late-returning handle, drops producer
+continuation state, and reuses retryable `phase.failed`; it does not enter the
+provider-alternate classifier. The event log is checked before failure so a
+typed terminal racing either boundary remains authoritative. Finalize agent
+post-steps reuse the timer but drain expiry through their existing failure-tolerant
 completion and observation path. Harvest and deterministic commands do not use
 this build-phase timer.
 
@@ -179,13 +183,16 @@ feedback.
 
 **Launch ownership.** `src/cli/dispatch.ts` is the kernel owner and
 single-flights supervised build executions per slug within its process. It
-publishes effective config into the build artifact namespace, then calls the
-workspace-adjacent `BuildExecution` capability; it never constructs a
-`BuildRunner`. The shipped local capability starts `bin/ab-build-runner.ts`
-with ignored stdio. That child immediately scopes its Store handle, discovers
+publishes effective config into the build artifact namespace, claims the exact
+execution-instance lease, then calls the workspace-adjacent `BuildExecution`
+capability; it never constructs a `BuildRunner`. The shipped local capability
+starts `bin/ab-build-runner.ts` with ignored stdio as a detached POSIX
+session/process-group leader. That child immediately scopes its Store handle, discovers
 its workspace from durable events, and composes the existing runner. Config and
-instance-correlated diagnostics remain build artifacts; process exit is only a
-liveness/reaping signal. Interactive `ab dispatch` runs the kernel owner in the
+instance-correlated diagnostics remain build artifacts. Local completion first
+reaps the complete inherited process group, escalating group-wide from SIGTERM
+through the existing bounded delay to SIGKILL; only then is it a liveness signal
+and only then does the kernel release the exact lease. Interactive `ab dispatch` runs the kernel owner in the
 private `bin/ab-dispatch-kernel.ts` child;
 `dispatch-frontend.ts` owns only terminal/Store adapters and
 `dispatch-process.ts` owns child supervision. SIGINT, SIGHUP, SIGQUIT, and
@@ -198,9 +205,11 @@ because force-killing the ticket claim before build creation would not be
 recoverable. The supervisor rechecks kernel-child liveness at the force boundary
 and projects the same normal, forced, or abnormal result (with available
 process/error detail) that the repository run-stopped evidence records. Ordinary
-kernel teardown stops and reaps all build children; their own parent-death
-watch and lease expiry recover an abrupt kernel death. The BuildStore lease
-remains the cross-process gate. `src/processes/dispatcher.ts` counts actual
+kernel teardown stops and reaps all build groups. On abrupt kernel death, the
+build child's parent watch starts detached `bin/ab-process-group-reaper.ts`
+before exiting; that helper applies the same bounded group teardown while lease
+expiry remains the durable recovery fallback. The BuildStore lease remains the
+cross-process and workspace-release gate. `src/processes/dispatcher.ts` counts actual
 schedules, not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
@@ -367,9 +376,11 @@ acknowledges an already-pending pause or abort before workspace setup, without
 appending `runner.attached`; resume and workspace-using decisions stay behind
 successful setup. For a request arriving during an AgentRunner turn, the runner
 observes the BuildStore subscription, forwards an `AbortSignal`, deposits/ends
-the session without a phase failure, acknowledges abort, and releases its lease.
-`dispatcher.ts` then resumes the unchanged event-checkpointed janitor saga that
-closes an unmerged PR, releases the workspace, deletes exact remote/local branch
+the session without a phase failure, and acknowledges abort. The execution
+supervisor keeps the lease until every local descendant is reaped. `dispatcher.ts`
+defers destructive abort, discard, and terminal-PR cleanup while that lease is
+live, then resumes the event-checkpointed janitor saga that closes an unmerged PR,
+releases the workspace, deletes exact remote/local branch
 refs, unions `autobuild:aborted` into current ticket labels, returns the ticket to
 Triage, and appends abandoned completion last. Forge close/delete operations are
 optional API 1.2 capabilities so older plugins load but leave cleanup visibly due.

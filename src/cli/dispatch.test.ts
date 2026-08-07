@@ -1179,6 +1179,57 @@ model = "gpt-slug-name"
     }
   }, 30_000)
 
+  test('a failed execution start releases its reserved lease for the next invocation', async () => {
+    const fx = await makeFixture(readyTicket('T-start-failure'), happyHandlers())
+    const baseWire = fx.wire()
+    let starts = 0
+    const execution: BuildExecution = {
+      async start(input) {
+        starts += 1
+        if (starts === 1) throw new Error('executor unavailable')
+        return baseWire.buildExecution.start(input)
+      },
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: () => ({ ...baseWire, buildExecution: execution }),
+      })
+
+      const [record] = await fx.store.listBuilds()
+      expect(record).toBeDefined()
+      expect((await fx.store.getBuild(record!.slug))?.lease).toBeUndefined()
+      expect(
+        (await fx.store.getEvents(record!.slug)).some(
+          (event) => event.type === 'dispatch.failed' && event.payload.stage === 'launch',
+        ),
+      ).toBe(true)
+
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: () => ({ ...baseWire, buildExecution: execution }),
+      })
+      expect(
+        (await fx.store.getEvents(record!.slug)).some(
+          (event) => event.type === 'finalize.completed',
+        ),
+      ).toBe(true)
+      expect((await fx.store.getBuild(record!.slug))?.lease).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('a new invocation retries a current build parked by an infrastructure policy failure', async () => {
     const handlers = happyHandlers()
     const happyPlan = handlers.plan!
@@ -1208,11 +1259,9 @@ model = "gpt-slug-name"
       const slug = record!.slug
       expect((await fx.store.getEvents(slug)).at(-1)?.type).toBe('escalation.raised')
 
-      // Simulate the prior dispatch process being gone long enough for its
-      // lease to lapse. MemoryBuildStore has no manual clock in this e2e seam,
-      // so release by the recorded holder is the equivalent lease state.
-      expect(record!.lease).toBeDefined()
-      await fx.store.releaseLease(slug, record!.lease!.holder)
+      // The supervising invocation releases the exact execution lease only
+      // after its in-process execution has fully settled.
+      expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
 
       await abDispatch({
         targetRepo: fx.origin,
@@ -1595,9 +1644,11 @@ describe('abDispatch watch build-runner coordination', () => {
     const completion = deferred()
     let startCalls = 0
     let stopCalls = 0
+    const startedSlugs: string[] = []
     const execution: BuildExecution = {
-      async start() {
+      async start(input) {
         startCalls += 1
+        startedSlugs.push(input.slug)
         return {
           completion: completion.promise.then(() => ({ exitCode: 0 })),
           async stop() {
@@ -1627,15 +1678,24 @@ describe('abDispatch watch build-runner coordination', () => {
 
     try {
       await waitFor(() => startCalls === 2)
+      for (const slug of startedSlugs) {
+        expect((await fx.store.getBuild(slug))?.lease).toBeDefined()
+      }
       stop.abort()
       await stopEntered.promise
       await Bun.sleep(20)
       expect(stopCalls).toBe(2)
       expect(returned).toBe(false)
+      for (const slug of startedSlugs) {
+        expect((await fx.store.getBuild(slug))?.lease).toBeDefined()
+      }
 
       releaseStop.resolve()
       await dispatch
       expect(returned).toBe(true)
+      for (const slug of startedSlugs) {
+        expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
+      }
     } finally {
       releaseStop.resolve()
       completion.resolve()
@@ -1975,6 +2035,7 @@ describe('abDispatch watch build-runner coordination', () => {
       const events = await fx.store.getEvents(record!.slug)
       expect(events.filter((event) => event.type === 'dispatch.failed')).toHaveLength(0)
       expect(events.filter((event) => event.type === 'runner.attached')).toHaveLength(1)
+      expect((await fx.store.getBuild(record!.slug))?.lease).toBeUndefined()
       expect(fx.cliErrors).toEqual([])
     } finally {
       stop.abort()
@@ -3738,7 +3799,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(
         (await fx.store.getEvents(slug)).filter((event) => event.type === 'runner.attached'),
       ).toHaveLength(1)
-      expect((await fx.store.getBuild(slug))?.lease?.holder).toBe(leaseHolder)
+      expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
 
       stop.abort()
       wakeSleep()

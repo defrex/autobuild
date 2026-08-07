@@ -266,7 +266,7 @@ export interface E2eHarness {
   /** BuildRunners constructed by the dispatcher's launchRunner, in order.
    * launchRunner only CONSTRUCTS (the dispatcher never awaits a pipeline);
    * tests run them via runLatest(). */
-  launched: Array<{ slug: string; runner: BuildRunner }>
+  launched: Array<{ slug: string; runner: BuildRunner; instance: string }>
   /** Nonzero-exit `ab` invocations (message + stderr). Scenarios assert []. */
   cliErrors: string[]
   /** Advance bare origin through an independent checkout, deliberately
@@ -354,7 +354,7 @@ export async function makeHarness(opts: {
       ? new GitWorktreeProvider({ root: worktreeRoot })
       : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
 
-  const launched: Array<{ slug: string; runner: BuildRunner }> = []
+  const launched: Array<{ slug: string; runner: BuildRunner; instance: string }> = []
   const cliErrors: string[] = []
 
   // The script IS the agent (§9): route by skill, hand the handler the real
@@ -435,38 +435,45 @@ export async function makeHarness(opts: {
   // the SAME store and the provisioned workspace path; the dispatcher never
   // runs agents itself.
   let instances = 0
-  const makeRunner = async (slug: string, instance?: string): Promise<BuildRunner> => {
+  const makeRunner = async (
+    slug: string,
+    instance?: string,
+  ): Promise<{ runner: BuildRunner; instance: string }> => {
     const record = await store.getBuild(slug)
     const workspacePath = openWorkspacePath(await store.getEvents(slug))
     if (record === null || workspacePath === null) {
       throw new Error(`launchRunner("${slug}"): no build record or open workspace`)
     }
     instances += 1
-    return new BuildRunner({
-      store: store.scopeBuild(slug),
-      config,
-      // Two-axis registry (§9): every runtime is backed by the SAME scripted
-      // runner instance, so the `s_1…s_N` session numbering scenarios rely on
-      // is preserved regardless of which runtime a role selects. `scripted`
-      // is the configured default and runs only with its un-named built-in model; `pi`
-      // serves the Kimi family for exact configured-pair validation.
-      runtimes,
-      workspacePath,
-      branch: record.branch ?? `ab/${slug}`,
-      slug,
-      exec: spawnExec,
-      forge: selectedForge,
-      ids,
-      clock,
-      instance: instance ?? `runner-${instances}`,
-      host: 'e2e-host',
-      // Long lease/heartbeat: liveness is driven by the shared stepping
-      // clock; scenarios advance it explicitly to expire a lease.
-      opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
-    })
+    const resolvedInstance = instance ?? `runner-${instances}`
+    return {
+      instance: resolvedInstance,
+      runner: new BuildRunner({
+        store: store.scopeBuild(slug),
+        config,
+        // Two-axis registry (§9): every runtime is backed by the SAME scripted
+        // runner instance, so the `s_1…s_N` session numbering scenarios rely on
+        // is preserved regardless of which runtime a role selects. `scripted`
+        // is the configured default and runs only with its un-named built-in model; `pi`
+        // serves the Kimi family for exact configured-pair validation.
+        runtimes,
+        workspacePath,
+        branch: record.branch ?? `ab/${slug}`,
+        slug,
+        exec: spawnExec,
+        forge: selectedForge,
+        ids,
+        clock,
+        instance: resolvedInstance,
+        host: 'e2e-host',
+        // Long lease/heartbeat: liveness is driven by the shared stepping
+        // clock; scenarios advance it explicitly to expire a lease.
+        opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+      }),
+    }
   }
   const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
-    launched.push({ slug, runner: await makeRunner(slug) })
+    launched.push({ slug, ...(await makeRunner(slug)) })
     return 'scheduled'
   }
 
@@ -488,7 +495,7 @@ export async function makeHarness(opts: {
     forge: selectedForge,
     workspaces,
     buildExecution: new InProcessBuildExecution(async (input) => {
-      const runner = await makeRunner(input.slug, input.instance)
+      const { runner } = await makeRunner(input.slug, input.instance)
       await runner.run().catch(async (error) => {
         await store.putArtifact(
           input.slug,
@@ -547,7 +554,13 @@ export async function makeHarness(opts: {
     async runLatest(): Promise<BuildState> {
       const entry = launched.at(-1)
       if (entry === undefined) throw new Error('runLatest: nothing launched')
-      return entry.runner.run()
+      try {
+        return await entry.runner.run()
+      } finally {
+        // Direct Dispatcher integration bypasses DispatchLoop's execution
+        // supervisor; mirror its exact post-completion lease release here.
+        await store.releaseLease(entry.slug, entry.instance)
+      }
     },
     events: (slug) => store.getEvents(slug),
     cleanup: async () => {

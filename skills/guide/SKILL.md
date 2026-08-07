@@ -567,9 +567,13 @@ A build phase session that reaches its captured budget is aborted and ended
 best-effort. The kernel records retryable `phase.failed` with `phase session
 budget expired after <seconds> seconds`, retries from the primary under the
 existing phase-attempt cap, and raises an answerable policy escalation when
-exhausted. Kernel expiry never selects an alternate. A typed terminal racing
-the deadline remains authoritative. Agent finalize post-step expiry is
-failure-tolerant; Harvest and direct check commands are outside this budget.
+exhausted. Kernel expiry never selects an alternate. Operator cancellation does
+not disable the captured deadline: cooperative adapters return promptly, while
+the deadline releases a turn that ignores cancellation. If operator abort
+arrived first, that release remains an abort control outcome with no alternate
+or `phase.failed`. A typed terminal racing either boundary remains authoritative.
+Agent finalize post-step expiry is failure-tolerant; Harvest and direct check
+commands are outside this budget.
 
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed
@@ -1154,17 +1158,21 @@ failed, and which were never attempted. Neither form starts a dispatcher, so
 reaching for one to quiesce the repository does not launch the work it is trying
 to park.
 
-Discard is dashboard-only and queued-only. The dispatcher releases any partial
-workspace and lease, returns the ticket to `[tickets].readyState`, and completes
-the old build as `discarded`; a later tick may claim the ticket into a fresh
-build. This is not abort: abort returns the ticket to Triage.
+Discard is dashboard-only and queued-only. After any launching execution has
+released its process-tree lease, the dispatcher releases a partial workspace,
+returns the ticket to `[tickets].readyState`, and completes the old build as
+`discarded`; a later tick may claim the ticket into a fresh build. This is not
+abort: abort returns the ticket to Triage.
 
 Abort accepts queued, running, paused, or blocked builds. A live turn receives a
-cancellation signal and the runner releases its lease after acknowledging the
-request. The dispatcher then performs checkpointed, retry-safe cleanup: close an
-open unmerged PR, release the workspace, delete the exact remote and local build
-branches, preserve existing ticket labels while adding `autobuild:aborted`, and
-return the ticket to configured Triage before completing as `abandoned`. Missing
+cancellation signal and the runner acknowledges the request. Its execution
+supervisor gracefully stops and reaps the complete process tree, force-terminating
+it after the bounded stop delay when necessary, and only then releases the lease.
+The dispatcher defers cleanup while that lease is live, then performs the
+checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
+delete the exact remote and local build branches, preserve existing ticket labels
+while adding `autobuild:aborted`, and return the ticket to configured Triage before
+completing as `abandoned`. Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.
 

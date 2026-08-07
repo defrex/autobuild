@@ -677,8 +677,12 @@ producer continuation state, and records `phase.failed` with
 `phase session budget expired after <seconds> seconds`. It does not select an
 alternate because it is kernel policy, not a provider failure. The ordinary
 phase-attempt guard retries from the primary and raises an answerable policy
-escalation when exhausted. A typed terminal deposited at the deadline remains
-authoritative. Agent finalize post-step expiry instead records that
+escalation when exhausted. Operator cancellation does not disable the captured
+deadline: a cooperative adapter still returns promptly, while an adapter that
+ignores cancellation is released when the deadline arrives. If operator abort
+arrived first, that release stays an abort control outcome, starts no alternate,
+and records no `phase.failed`. A typed terminal deposited before either boundary
+remains authoritative. Agent finalize post-step expiry instead records that
 failure-tolerant step as `ok = false` and files its follow-up observation.
 Harvest sessions and direct verify/finalize check commands are not covered by
 this setting.
