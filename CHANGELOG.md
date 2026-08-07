@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#214](https://github.com/defrex/autobuild/pull/214) — Recover transcripts after terminal turn errors
+- [#213](https://github.com/defrex/autobuild/pull/213) — Reap build descendant processes
 - [#212](https://github.com/defrex/autobuild/pull/212) — Bound phase agent sessions with wall-clock budgets
 - [#211](https://github.com/defrex/autobuild/pull/211) — Expose durable build progress in status surfaces
 - [#209](https://github.com/defrex/autobuild/pull/209) — Scope phase-invoked read commands to ambient identity

@@ -10,6 +10,8 @@ export interface BuildExecutionStart {
   parentPid: number
 }
 
+export const BUILD_EXECUTION_LEASE_TTL_MS = 60_000
+
 /** Child exit is liveness evidence only. It carries no pipeline outcome. */
 export interface BuildExecutionExit {
   exitCode: number | null
@@ -19,14 +21,17 @@ export interface BuildExecutionExit {
 export interface BuildExecutionHandle {
   /** Available for supervision/tests, never used as build state. */
   readonly pid?: number
+  /** Resolves only after the execution environment has reaped everything the
+   * build started. The exit projection still describes the build leader. */
   readonly completion: Promise<BuildExecutionExit>
-  /** Idempotent bounded shutdown. */
+  /** Idempotent shutdown: graceful, bounded force escalation, then full reap. */
   stop(): Promise<void>
 }
 
 /** The substitutable seam at the workspace boundary. A remote workspace
  * provider may implement this by starting the fixed build process beside its
- * checkout; the kernel need not know where that is. */
+ * checkout; the kernel need not know where that is. Every provider owns full
+ * teardown of the environment and descendants it starts before completion. */
 export interface BuildExecution {
   start(input: BuildExecutionStart): Promise<BuildExecutionHandle>
 }
