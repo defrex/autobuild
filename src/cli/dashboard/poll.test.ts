@@ -3,6 +3,7 @@ import { parseConfig } from '../../config/load'
 import { KERNEL } from '../../events/envelope'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
+import { isDiverged } from '../build-progress'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
 
 const REPO = '/repos/dashboard-cache'
@@ -92,6 +93,31 @@ function row(snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>, 
 }
 
 describe('DashboardBuildPollCache', () => {
+  test('refreshes progress when heartbeat advances without an event delta', async () => {
+    let now = Date.parse('2026-07-14T21:00:00.000Z')
+    const store = new MemoryBuildStore({ clock: () => new Date(now) })
+    await addRunning(store, 'silent')
+    await store.claimLease('silent', 'runner-silent', 24 * 60 * 60 * 1000)
+    const reader = new CountingReader(store)
+    const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+    const first = await cache.refresh()
+    const firstRow = row(first, 'silent')!
+    expect(isDiverged(firstRow.progress, now)).toBe(false)
+
+    now += 15 * 60 * 60 * 1000
+    await store.heartbeat('silent', 'runner-silent')
+    reader.resetCalls()
+    const second = await cache.refresh()
+    const secondRow = row(second, 'silent')!
+
+    expect(reader.eventCalls).toEqual([{ slug: 'silent', since: 1 }])
+    expect(secondRow).not.toBe(firstRow)
+    expect(secondRow.progress.lastEventAt).toBe(firstRow.progress.lastEventAt)
+    expect(secondRow.progress.heartbeatAt).not.toBe(firstRow.progress.heartbeatAt)
+    expect(isDiverged(secondRow.progress, now)).toBe(true)
+    expect((await store.getEvents('silent')).map((event) => event.seq)).toEqual([1])
+  })
+
   test('a config-only revision reprojects unchanged live streams', async () => {
     const store = new MemoryBuildStore()
     await addRunning(store, 'live')

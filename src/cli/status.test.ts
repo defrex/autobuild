@@ -34,6 +34,7 @@ import {
   summarize,
 } from './status'
 import { describeStoreOpeningContract } from './store-opening.contract'
+import { isDiverged, PROGRESS_DIVERGENCE_MS } from './build-progress'
 
 const NOW = new Date('2026-07-15T12:00:00.000Z')
 const REPO = '/Users/dev/code/acme-app'
@@ -213,6 +214,30 @@ async function seedAwaitingPr(
 }
 
 const MINIMAL_CONFIG = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
+
+describe('durable progress divergence', () => {
+  const live = {
+    lastEventAt: '2026-07-15T10:59:30.000Z',
+    heartbeatAt: '2026-07-15T11:59:30.000Z',
+    leaseExpiresAt: '2026-07-15T12:01:00.000Z',
+    terminal: false,
+  }
+
+  test('pins the one-hour boundary independently of the lease TTL', () => {
+    expect(PROGRESS_DIVERGENCE_MS).toBe(60 * 60 * 1000)
+    expect(isDiverged(live, NOW)).toBe(true)
+    expect(isDiverged({ ...live, lastEventAt: '2026-07-15T10:59:30.001Z' }, NOW)).toBe(false)
+    expect(isDiverged({ ...live, lastEventAt: '2026-07-15T11:34:30.000Z' }, NOW)).toBe(false)
+  })
+
+  test('fails safe for terminal, absent, expired, and malformed inputs', () => {
+    expect(isDiverged({ ...live, terminal: true }, NOW)).toBe(false)
+    expect(isDiverged({ ...live, leaseExpiresAt: undefined }, NOW)).toBe(false)
+    expect(isDiverged({ ...live, leaseExpiresAt: NOW.toISOString() }, NOW)).toBe(false)
+    expect(isDiverged({ ...live, heartbeatAt: undefined }, NOW)).toBe(false)
+    expect(isDiverged({ ...live, lastEventAt: 'not-a-date' }, NOW)).toBe(false)
+  })
+})
 
 describe('leaseHealth', () => {
   test('held when the lease has not expired', () => {
@@ -861,6 +886,51 @@ describe('renderers', () => {
       NOW,
     )
     expect(renderSummaries([held], NOW, 'none').join('\n')).toContain('held')
+  })
+
+  test('incident-shaped silence is distinct from a healthy long turn in list and detail text', async () => {
+    const incidentStore = new MemoryBuildStore({
+      clock: steppingClock('2026-07-14T20:59:00.000Z'),
+    })
+    await seedBuild(incidentStore, { slug: 'incident' })
+    const healthyStore = new MemoryBuildStore({
+      clock: steppingClock('2026-07-15T11:34:30.000Z'),
+    })
+    await seedBuild(healthyStore, { slug: 'healthy' })
+    const liveness = {
+      lease: { holder: 'runner', expiresAt: '2026-07-15T12:01:00.000Z' },
+      heartbeatAt: '2026-07-15T11:59:30.000Z',
+      updatedAt: '2026-07-15T11:59:30.000Z',
+    }
+    const incidentEvents = await incidentStore.getEvents('incident')
+    const healthyEvents = await healthyStore.getEvents('healthy')
+    const incidentRecord = record({ slug: 'incident', ...liveness })
+    const healthyRecord = record({ slug: 'healthy', ...liveness })
+    const incident = summarize(incidentRecord, incidentEvents, NOW)
+    const healthy = summarize(healthyRecord, healthyEvents, NOW)
+
+    const list = renderSummaries([incident, healthy], NOW, 'none').join('\n')
+    const incidentRow = list.split('\n').find((line) => line.startsWith('incident'))!
+    const healthyRow = list.split('\n').find((line) => line.startsWith('healthy'))!
+    expect(list).toContain('HEARTBEAT')
+    expect(list).toContain('PROGRESS')
+    expect(incidentRow).toContain('15h ago diverged')
+    expect(healthyRow).toContain('25m ago')
+    expect(healthyRow).not.toContain('diverged')
+
+    const incidentDetail = renderDetail(detail(incidentRecord, incidentEvents, NOW), NOW).join('\n')
+    const healthyDetail = renderDetail(detail(healthyRecord, healthyEvents, NOW), NOW).join('\n')
+    expect(incidentDetail).toContain('heartbeat:')
+    expect(incidentDetail).toContain('progress:')
+    expect(incidentDetail).toContain('15h ago) — diverged')
+    expect(healthyDetail).toContain('25m ago)')
+    expect(healthyDetail).not.toContain('diverged')
+    expect(incident.progress).toEqual({
+      lastEventAt: incidentEvents.at(-1)!.ts,
+      heartbeatAt: liveness.heartbeatAt,
+      leaseExpiresAt: liveness.lease.expiresAt,
+      terminal: false,
+    })
   })
 
   // The AC enumerates what a summary identifies: ticket id AND title, PR state

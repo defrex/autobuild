@@ -16,12 +16,12 @@
  * log and reads the projection's fields, never re-deriving status from
  * records, worktrees, or OS processes.
  *
- * **Lease health is a separate axis from effective status.** `reduceBuild`
- * reports `running` from `runner.attached`; a build whose runner died reduces
- * to `running` forever, because nothing appends on sandbox death — liveness
- * lives in the mutable `lease`/`heartbeatAt` columns (§15.2.6), not the log.
- * So `lease.health` is its own field and its own column, never folded into
- * the status word.
+ * **Status, durable progress, and lease health are separate axes.**
+ * `reduceBuild` reports both effective status and the latest durable event;
+ * mutable `lease`/`heartbeatAt` columns report runner liveness (§15.2.6).
+ * A runner can therefore stay live while its event log is silent. The shared
+ * presentation helper exposes that divergence without folding it into status
+ * or lease health.
  *
  * Output carries no ANSI, ever: §16 puts themes and colors out of scope, and
  * "understandable without relying solely on color" plus "--json without ANSI
@@ -51,6 +51,7 @@ import type {
 } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
+import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
 import { resolveMainRepo } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
@@ -85,6 +86,8 @@ export interface BuildSummary {
   pr?: { number: number; url: string; state?: PrLifecycle }
   updatedAt: string
   lease: LeaseInfo
+  /** Durable-event progress, separate from mutable lease renewal. */
+  progress: BuildProgress
 }
 
 export interface VerifyProgress {
@@ -205,6 +208,7 @@ function summarizeFrom(record: BuildRecord, state: BuildState, now: Date): Build
       : {}),
     updatedAt: record.updatedAt,
     lease: leaseInfo(record, now),
+    progress: buildProgress(record, state),
   }
 }
 
@@ -379,14 +383,23 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
   if (summaries.length === 0) return [emptyNote]
   // The two free-text columns (ticket title, PR link) go last, where their
   // width costs no alignment on the scannable columns to their left.
-  const rows: string[][] = [['BUILD', 'STATUS', 'PHASE', 'LEASE', 'UPDATED', 'TICKET', 'PR']]
+  const rows: string[][] = [
+    ['BUILD', 'STATUS', 'PHASE', 'LEASE', 'HEARTBEAT', 'PROGRESS', 'TICKET', 'PR'],
+  ]
   for (const summary of summaries) {
+    const progressAge =
+      summary.progress.lastEventAt === undefined
+        ? '—'
+        : relativeTime(summary.progress.lastEventAt, now)
     rows.push([
       summary.slug,
       summary.status,
       phaseCell(summary),
       healthWord(summary.lease.health),
-      relativeTime(summary.updatedAt, now),
+      summary.progress.heartbeatAt === undefined
+        ? '—'
+        : relativeTime(summary.progress.heartbeatAt, now),
+      `${progressAge}${isDiverged(summary.progress, now) ? ' diverged' : ''}`,
       ticketCell(summary),
       prCell(summary),
     ])
@@ -412,9 +425,18 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.lease.holder !== undefined) lease.push(`holder ${d.lease.holder}`)
   if (d.lease.expiresAt !== undefined) lease.push(`expires ${d.lease.expiresAt}`)
   lines.push(lease.join('  '))
-  if (d.lease.heartbeatAt !== undefined) {
-    lines.push(`  heartbeat: ${d.lease.heartbeatAt} (${relativeTime(d.lease.heartbeatAt, now)})`)
-  }
+  lines.push(
+    d.progress.heartbeatAt === undefined
+      ? '  heartbeat: —'
+      : `  heartbeat: ${d.progress.heartbeatAt} (${relativeTime(d.progress.heartbeatAt, now)})`,
+  )
+  lines.push(
+    d.progress.lastEventAt === undefined
+      ? '  progress:  —'
+      : `  progress:  ${d.progress.lastEventAt} (${relativeTime(d.progress.lastEventAt, now)})${
+          isDiverged(d.progress, now) ? ' — diverged' : ''
+        }`,
+  )
   if (d.status === 'running' && d.lease.health === 'expired') {
     if (d.decision?.kind === 'awaiting-pr') {
       lines.push(

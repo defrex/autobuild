@@ -1160,10 +1160,16 @@ tick may attach a runner to a build that does not have one yet.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
-any build's trail. Every nonterminal build, including `queued`, has a dashboard
-row; a pre-run row names its pending dispatch boundary or latest durable
-failure. A human may discard only such a queued build. Discard is dispatcher
-cleanup, returns the ticket to its configured Ready state, and completes with
+any build's trail. Operator rows keep three independent axes visible: lifecycle
+status reduced from events, durable progress age from the most recent event,
+and mutable lease health/heartbeat. A nonterminal build with a live lease whose
+heartbeat is at least one hour newer than its last event is presentation-marked
+`diverged`; this does not change routing, status, or lease health. Terminal,
+no-lease, and expired-lease builds are never marked. Every nonterminal build,
+including `queued`, has a dashboard row; a pre-run row names its pending
+dispatch boundary or latest durable failure. A human may discard only such a
+queued build. Discard is dispatcher cleanup, returns the ticket to its
+configured Ready state, and completes with
 `discarded`; it is deliberately distinct from abort, which returns work to
 Triage for human judgment. Any selected nonterminal build can be aborted from
 the list or detail view with `a`; Enter confirms and Escape cancels, so the first
@@ -1306,10 +1312,14 @@ output}` facts and projects the latest one until a later `runner.attached`
 proves successful setup recovery.
 
 Every projection — operator UI, CLI status, dispatcher decisions — is a
-reduction of the logs. Caches may key a reduction by last event sequence,
-but no decision ever consults a snapshot in place of the append-only log.
-Separate reducers derive dispatcher settings and harvest state from the
-repository journal; each ignores the other's facts.
+reduction of the logs. Status surfaces additionally present the reduced last
+event as durable progress beside mutable heartbeat and lease health; progress
+age and the presentation-only `diverged` marker never feed a reducer or engine
+decision. Caches may key a reduction by last event sequence, but record-only
+heartbeat renewal must still refresh these presentation inputs. No decision
+ever consults a snapshot in place of the append-only log. Separate reducers
+derive dispatcher settings and harvest state from the repository journal; each
+ignores the other's facts.
 
 ### 15.6 Walkthroughs
 
