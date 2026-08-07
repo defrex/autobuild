@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#213](https://github.com/defrex/autobuild/pull/213) — Reap build descendant processes
 - [#209](https://github.com/defrex/autobuild/pull/209) — Scope phase-invoked read commands to ambient identity
 - [#208](https://github.com/defrex/autobuild/pull/208) — Keep reconcile policy causes distinct
 - [#207](https://github.com/defrex/autobuild/pull/207) — Add JSON output to ticket mutators
