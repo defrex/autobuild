@@ -459,8 +459,24 @@ export class BuildRunner {
     } satisfies EventWrite<'escalation.raised'>)
   }
 
-  private async appendAttached(resumedFromSeq: number): Promise<void> {
+  /** Close every session open in the captured pre-attachment prefix, then
+   * announce takeover against that same boundary. If a write is interrupted,
+   * no attachment lands; the next runner reduces the newer prefix and closes
+   * only sessions that remain open. */
+  private async reclaimSessionsAndAttach(events: readonly AbEvent[]): Promise<void> {
     const { store, slug, instance, host } = this.deps
+    const resumedFromSeq = events.at(-1)?.seq ?? 0
+    for (const session of reduceBuild([...events]).sessions.open) {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: session.session,
+          outcome: 'reclaimed',
+          reclaimedBy: { instance, resumedFromSeq },
+        },
+      } satisfies EventWrite<'session.ended'>)
+    }
     await store.append(slug, {
       actor: KERNEL,
       type: 'runner.attached',
@@ -514,7 +530,7 @@ export class BuildRunner {
     }
 
     const recovering = currentFailure !== undefined
-    if (!recovering) await this.appendAttached(events.at(-1)?.seq ?? 0)
+    if (!recovering) await this.reclaimSessionsAndAttach(events)
 
     // First beat immediately (liveness visible without waiting an interval),
     // then keep-alive. Setup runs under this heartbeat so a slow install cannot
@@ -577,7 +593,7 @@ export class BuildRunner {
     if (recovering) {
       try {
         events = await store.getEvents(slug)
-        await this.appendAttached(events.at(-1)?.seq ?? 0)
+        await this.reclaimSessionsAndAttach(events)
       } catch (error) {
         this.stopHeartbeat()
         this.attached = false
@@ -1972,7 +1988,8 @@ export class BuildRunner {
           transcript.metadata.model ?? model,
         )
       } catch {
-        // A dead session's `session.ended` never arrives (§15.6-C).
+        // Transcript deposition can still fail. A later recovering runner
+        // explicitly reclaims this open session before announcing attachment.
       }
     }
     if (spec.producerPhase !== undefined) {

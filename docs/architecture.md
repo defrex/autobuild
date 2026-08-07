@@ -91,9 +91,12 @@ ambient-aware finite opener.
 
 **Phase decisions.** `src/kernel/phases.ts` owns the phase table,
 `src/kernel/engine.ts` the deterministic transitions;
-`src/processes/build-runner.ts` executes the decisions. Agents reach state
-only through `src/cli/` terminals, which convert artifact deposits into
-event facts atomically — the engine never reads blobs. Engine crash-gap and
+`src/processes/build-runner.ts` executes the decisions. Repeated phase starts
+left by recovery are execution evidence, not policy counters: logical verdict
+rounds, `phase.failed`, failed verify completions, and distinct completed
+reconcile attempts own their respective budgets. Agents reach state only
+through `src/cli/` terminals, which convert artifact deposits into event facts
+atomically — the engine never reads blobs. Engine crash-gap and
 exhaustion guards query the event log for a later escalation raise with the
 exact same source/class and target phase; the triggering sequence remains the
 re-arm boundary. `BuildRunner` applies the same independent targeting at the
@@ -195,14 +198,20 @@ kernel child is reaped, after which a non-SIGINT terminating signal is replayed
 in the frontend. A parent-liveness watch remains the detached-kernel fallback.
 Timeout escalation is held while a durable `tick-started` fact remains open,
 because force-killing the ticket claim before build creation would not be
-recoverable. The supervisor rechecks kernel-child liveness at the force boundary
+recoverable. After a build child claims a takeover lease, it reduces one
+captured event prefix and appends transcriptless reclaimed `session.ended`
+facts for every session open there before `runner.attached` cites that same
+boundary. Partial closure is retry-safe and an observed attachment therefore
+proves all pre-boundary sessions closed; historical orphan-only logs keep their
+old projection until an actual takeover records those facts. The supervisor
+rechecks kernel-child liveness at the force boundary
 and projects the same normal, forced, or abnormal result (with available
 process/error detail) that the repository run-stopped evidence records. Ordinary
 kernel teardown stops and reaps all build children; their own parent-death
 watch and lease expiry recover an abrupt kernel death. The BuildStore lease
 remains the cross-process gate. `src/processes/dispatcher.ts` counts actual
-schedules, not suppressed polls. Open session history is never a lock — a dead session
-may never close.
+schedules, not suppressed polls. Open session history is never a lock: a legacy
+dead session may remain open, while an actual takeover closes it explicitly.
 
 **Store authority.** `src/store/build-scope.ts` wraps every adapter with one
 build's authority. Own-build record/event/artifact/lease/subscription calls
@@ -402,8 +411,9 @@ lease health remain independent. `src/cli/dashboard/model.ts` is the build-row
 projection; `poll.ts` reprojects mutable heartbeat/lease changes even when its
 incremental event read is empty, while retaining the cached log and reduction.
 `detail.ts` projects chronological session history from the same retained log,
-and `transcript.ts` heuristically presents opaque transcript artifacts with a
-raw fallback. `render.ts` composes the list, build-detail, and transcript as
+including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
+heuristically presents ordinary opaque transcript artifacts with a raw
+fallback. `render.ts` composes the list, build-detail, and transcript as
 cell-honest Unicode frames; `keyboard.ts` owns Kitty keyboard-protocol
 negotiation and CSI-u decoding, while `live.ts` owns normal teardown and
 sequences its push and pop with the alternate-screen region because the

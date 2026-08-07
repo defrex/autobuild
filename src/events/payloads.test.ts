@@ -163,6 +163,55 @@ describe('escalation answer protocol', () => {
   })
 })
 
+describe('session ending protocol', () => {
+  test('keeps historical transcript endings and accepts strict transcriptless reclamation', () => {
+    const completed = {
+      session: 's_done',
+      transcript: { kind: 'transcript', rev: 2 },
+      usage: { inputTokens: 10, outputTokens: 4, turns: 1 },
+    }
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.ended', payload: completed }).payload,
+    ).toEqual(completed)
+
+    const reclaimed = {
+      session: 's_orphan',
+      outcome: 'reclaimed' as const,
+      reclaimedBy: { instance: 'runner-2', resumedFromSeq: 41 },
+    }
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.ended', payload: reclaimed }).payload,
+    ).toEqual(reclaimed)
+  })
+
+  test('reclamation requires takeover evidence and cannot fabricate transcript or usage', () => {
+    for (const payload of [
+      { session: 's', outcome: 'reclaimed', reclaimedBy: { instance: '', resumedFromSeq: 1 } },
+      {
+        session: 's',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: -1 },
+      },
+      {
+        session: 's',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 1 },
+        transcript: { kind: 'transcript', rev: 0 },
+      },
+      {
+        session: 's',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 1 },
+        usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+      },
+    ]) {
+      expect(() => validateEventWrite({ actor: KERNEL, type: 'session.ended', payload })).toThrow(
+        /invalid payload/,
+      )
+    }
+  })
+})
+
 describe('runner setup failure protocol', () => {
   test('setup failures are strict kernel facts with an explicit unavailable status', () => {
     expect(

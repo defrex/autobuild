@@ -615,7 +615,8 @@ describe('reduceBuild: walkthrough C — sandbox death and resume (§15.6-C)', (
     expect(state.currentPhase).toEqual({ phase: 'implement', round: 2, seq: deadSeq })
     expect(state.phase).toBe('implement')
     expect(state.round).toBe(2)
-    // The dead session is visibly still open — its session.ended never came.
+    // Legacy orphan-only logs remain readable and visibly open until a future
+    // runner records explicit reclamation.
     expect(state.sessions.open.map((s) => s.session)).toEqual(['s_impl_2'])
     // Resume anchor (D3): round 1's pushed head is where the fresh sandbox fetches.
     expect(state.implement.commits).toEqual({ base: 'sha-base', head: 'sha-r1' })
@@ -630,6 +631,11 @@ describe('reduceBuild: walkthrough C — sandbox death and resume (§15.6-C)', (
         ref: 'sb-2',
         branch: 'ab/auth-rate-limit',
         base: { source: 'existing', sha: 'sha-r1' },
+      }),
+      ev('session.ended', {
+        session: 's_impl_2',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: deadSeq },
       }),
       ev('runner.attached', {
         instance: 'runner-2',
@@ -656,8 +662,29 @@ describe('reduceBuild: walkthrough C — sandbox death and resume (§15.6-C)', (
     expect(state.lastCompletedPhase?.round).toBe(2)
     expect(state.implement.commits).toEqual({ base: 'sha-base', head: 'sha-r2' })
     expect(state.implement.artifactRev).toBe(1)
-    // The orphaned session stays listed alongside the fresh one — honest history.
-    expect(state.sessions.open.map((s) => s.session)).toEqual(['s_impl_2', 's_impl_3'])
+    // Reclamation closes the orphan; only the rerun can still be alive.
+    expect(state.sessions.open.map((s) => s.session)).toEqual(['s_impl_3'])
+  })
+
+  test('unmatched and repeated reclaimed endings remain total', () => {
+    const endings: EventWrite[] = [
+      ev('session.ended', {
+        session: 'missing',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: deadSeq },
+      }),
+      ev('session.ended', {
+        session: 's_impl_2',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: deadSeq },
+      }),
+      ev('session.ended', {
+        session: 's_impl_2',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-3', resumedFromSeq: deadSeq + 1 },
+      }),
+    ]
+    expect(reduceBuild(toLog([...deadEnd, ...endings])).sessions.open).toEqual([])
   })
 })
 

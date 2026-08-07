@@ -2238,6 +2238,16 @@ describe('renderDashboard: build detail and transcript views', () => {
         startedSeq: 9,
         status: 'open',
       },
+      {
+        id: 's_reclaimed',
+        role: 'implement',
+        phase: 'implement',
+        round: 2,
+        runtime: 'pi',
+        startedSeq: 12,
+        status: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 12 },
+      },
     ],
   })
 
@@ -2259,6 +2269,8 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(out).toContain('>   plan phase plan round 1 runtime pi model openai/gpt ended')
     expect(out).toContain('tokens 90 in/30 out, 2 turns')
     expect(out).toContain('plan-review phase plan-review round 1 runtime claude open')
+    expect(out).toContain('implement phase implement round 2 runtime pi reclaimed')
+    expect(out).toContain('by runner-2 at resume boundary 12 transcript unavailable')
     expect(out).not.toContain('Autobuild')
   })
 

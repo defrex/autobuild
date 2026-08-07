@@ -429,7 +429,30 @@ export class DispatchFrontend {
     if (this.view.kind !== 'detail') return
     const captured = this.view
     const session = this.selectedBuild()?.sessions?.find((item) => item.id === captured.sessionId)
-    if (session?.transcript === undefined || session.status === 'open') return
+    if (session === undefined) return
+    if (session.status === 'reclaimed') {
+      const { message: _message, messageWhileSessionOpen: _fence, ...stable } = captured
+      const candidate = {
+        ...stable,
+        message: 'This session was reclaimed by a recovering runner; transcript unavailable.',
+      }
+      this.view = candidate
+      this.syncControls()
+      this.view = {
+        ...candidate,
+        scroll: revealDetailFocus(
+          this.model!,
+          dashboardContentWidth(this.opts.terminal.columns),
+          paintableRows(this.opts.terminal.rows),
+          'message',
+          candidate.scroll,
+        ),
+      }
+      this.syncControls()
+      this.paint()
+      return
+    }
+    if (session.status === 'open' || session.transcript === undefined) return
     const artifact = await this.opts.store.getArtifact(
       captured.slug,
       session.transcript.kind,

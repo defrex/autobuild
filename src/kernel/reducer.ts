@@ -79,9 +79,9 @@ export interface PendingCommand {
   actor: Actor
 }
 
-/** A `session.started` without its `session.ended`. On resume after sandbox
- * death (§15.6-C) the dead session stays listed — its `session.ended` never
- * arrives — so the engine can see what was in flight. */
+/** A `session.started` without its `session.ended`. Historical orphan-only
+ * logs remain open and readable; a recovering runner explicitly ends every
+ * session open at its resume boundary before announcing attachment (§15.6-C). */
 export interface OpenSession {
   session: string
   role: string
