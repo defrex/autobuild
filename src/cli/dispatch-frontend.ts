@@ -436,12 +436,10 @@ export class DispatchFrontend {
         ...stable,
         message: 'This session was reclaimed by a recovering runner; transcript unavailable.',
       }
-      this.view = candidate
-      this.syncControls()
       this.view = {
         ...candidate,
         scroll: revealDetailFocus(
-          this.model!,
+          { ...this.model!, view: candidate },
           dashboardContentWidth(this.opts.terminal.columns),
           paintableRows(this.opts.terminal.rows),
           'message',
