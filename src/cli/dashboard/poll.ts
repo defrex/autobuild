@@ -36,6 +36,14 @@ interface TerminalEntry {
 
 type PollEntry = LiveEntry | TerminalEntry
 
+function progressRecordChanged(previous: BuildRecord, next: BuildRecord): boolean {
+  return (
+    previous.heartbeatAt !== next.heartbeatAt ||
+    previous.lease?.holder !== next.lease?.holder ||
+    previous.lease?.expiresAt !== next.lease?.expiresAt
+  )
+}
+
 function isTerminal(state: BuildState): boolean {
   // `build.aborted` acknowledges cancellation but begins the checkpointed
   // cleanup saga. Keep polling until its final `build.completed` fact.
@@ -124,12 +132,14 @@ export class DashboardBuildPollCache {
       validateDelta(record.slug, sinceSeq, delta)
 
       if (current !== undefined && delta.length === 0) {
-        // BuildRecord liveness fields may change without events. A config-only
-        // revision still reprojects rows immediately; otherwise preserve the
-        // expensive reduction/projected row by identity.
+        // Heartbeats and lease renewal are mutable record facts, not events.
+        // Reproject when those inputs move so progress divergence cannot stay
+        // hidden behind an unchanged event sequence. Otherwise preserve the
+        // expensive projected row by identity.
+        const reproject = configChanged || progressRecordChanged(current.record, record)
         next.set(
           record.slug,
-          configChanged
+          reproject
             ? {
                 ...current,
                 record,
