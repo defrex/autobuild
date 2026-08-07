@@ -602,14 +602,19 @@ proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
 escalates when the budget is exhausted. Every current policy escalation carries
 a closed `policyCause`; reconcile no-progress uses `reconcile-no-progress`,
-while `round` remains occurrence scope. Runner failures while checking progress
-or refreshing the base therefore remain separate even if another legitimate
-condition is roundless. Answering one lets the authoritative decision finish
-but does not waive an already exhausted no-progress budget, which raises the
+while `round` remains occurrence scope. Answering a runner-failure cause re-arms
+only its matching phase and round. The phase-level `verify-failure-limit` cause
+explicitly re-arms all rounds for its verify target, while
+`reconcile-no-progress` and the setup-only cause reset no phase-runner failures.
+The closed cause map forces every future policy condition to choose one of these
+semantics instead of inheriting behavior from a missing `round`. Runner failures
+while checking progress or refreshing the base therefore remain counted after a
+roundless no-progress answer. An already exhausted no-progress budget raises its
 matching cause separately before another reconcile. Cause-less historical
-roundless policy/reconcile raises retain their former no-progress meaning on
-replay without migration. Post-reconcile verification still runs in full and
-remains independently bounded by `maxVerifyAttempts`.
+raises retain their former round-shaped reset behavior, and roundless
+policy/reconcile raises retain their former no-progress meaning, on replay
+without migration. Post-reconcile verification still runs in full and remains
+independently bounded by `maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel
 only follows. A finding's `persists` ids name prior-round findings whose defect

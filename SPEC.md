@@ -973,6 +973,20 @@ another cause, target, or required scope cannot suppress it. The triggering
 event's sequence is the boundary, so newer qualifying failure, verdict, or
 conflict evidence re-arms that exact condition after an answer.
 
+Occurrence scope and phase-runner failure-budget reset scope are separate.
+Answering `phase-attempt-limit` or `non-retryable-phase-failure` re-arms only
+the matching phase and `round`; a missing round cannot broaden either cause.
+`review-round-limit` retains the same matching-round effect.
+`verify-failure-limit` is the explicit phase-level case and re-arms every
+phase-runner failure round for its verify target. `reconcile-no-progress` and
+`setup-failure-limit` have no phase-runner failure-budget effect (setup's own
+answer/retry accounting remains separate). Agent and stall raises, and
+cause-less historical policy raises, retain the legacy shape rule: a matching
+round resets that round and an absent round resets all rounds for the target.
+The closed `policyCause` union has an exhaustive reset-scope mapping, so adding
+a policy cause requires choosing matching-round, all-round, or no-reset
+semantics rather than acquiring behavior by omitting `round`.
+
 Reconcile has two distinct policy scopes. Runner retry exhaustion and
 non-retryable failures at progress-check or base-refresh boundaries are scoped
 to a concrete reconcile `round`. Unchanged-base no-progress exhaustion is
@@ -1561,11 +1575,13 @@ budget so the authoritative decision can complete, but it does not acknowledge
 no-progress: if the unchanged-base budget is already exhausted, the separate
 no-progress escalation is raised before another reconcile session starts.
 Answering the matching no-progress escalation continues to authorize one
-subsequent reconcile for the same conflict. An explicitly different cause
-cannot acknowledge that guard even when roundless. Cause-less historical
-roundless `policy`/`reconcile` raises retain the former no-progress
-interpretation on replay without migration. Routing uses cause for class
-identity, `round` for occurrence scope, and never `question` text.
+subsequent reconcile for the same conflict without resetting runner failures
+already counted for any reconcile round. An explicitly different cause cannot
+acknowledge that guard even when roundless. Cause-less historical roundless
+`policy`/`reconcile` raises retain the former no-progress and phase-level
+failure-reset interpretations on replay without migration. Routing uses cause
+for class identity and reset semantics, `round` for occurrence scope, and never
+`question` text.
 
 The classification is reduced from the durable log, with the next attempt's
 authoritative `reconcile.started` serving as the observation for historical logs
