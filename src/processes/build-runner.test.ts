@@ -2493,6 +2493,213 @@ describe('session memory (§10)', () => {
   })
 })
 
+// ── Durable terminal followed by a runtime throw ─────────────────────────────
+
+function terminalThrowConfig(withAlternates: boolean): string {
+  const alternates = withAlternates
+    ? 'alternates = [{ runtime = "pi", model = "kimi-alternate" }]'
+    : ''
+  return `
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+[roles.default]
+runtime = "scripted"
+[roles.plan]
+runtime = "scripted"
+model = "m-plan"
+${alternates}
+[roles.implement]
+runtime = "scripted"
+model = "m-implement"
+${alternates}
+`
+}
+
+function terminalThrowContinuationHandlers(
+  store: BuildStore,
+  beforeThrow?: () => void,
+): Record<string, SkillHandler> {
+  const table = happyHandlers(store)
+  const implement = table.implement!
+  table.implement = async (ctx) => {
+    if (roundOf(ctx) === 2) {
+      await implement(ctx)
+      beforeThrow?.()
+      throw new Error('runtime transport failed after implement terminal')
+    }
+    return implement(ctx)
+  }
+  table['code-review'] = async (ctx) => {
+    const round = roundOf(ctx)
+    await reviewVerdict(
+      store,
+      ctx,
+      'code-review',
+      round < 3 ? 'revise' : 'approve',
+      round < 3 ? [{ ...FINDING, id: `f_terminal_${round}` }] : [],
+    )
+    return defaultTurnResult(`reviewed r${round}`)
+  }
+  return table
+}
+
+describe('durable terminal followed by a runtime throw', () => {
+  for (const mode of [
+    { name: 'single runtime', alternates: false },
+    { name: 'runtime chain', alternates: true },
+  ]) {
+    test(`${mode.name}: a rejected fresh start keeps its terminal authoritative`, async () => {
+      const h = await makeHarness({
+        configToml: terminalThrowConfig(mode.alternates),
+        handlers: (store) => {
+          const table = happyHandlers(store)
+          const plan = table.plan!
+          table.plan = async (ctx) => {
+            await plan(ctx)
+            throw new Error('runtime transport failed after plan terminal')
+          }
+          return table
+        },
+      })
+      await h.br.attach()
+      await h.br.step()
+
+      const events = await h.store.getEvents(SLUG)
+      const planStarts = ofType(events, 'session.started').filter(
+        (event) => event.payload.phase === 'plan',
+      )
+      expect(planStarts).toHaveLength(1)
+      expect(ofType(events, 'plan.completed')).toHaveLength(1)
+      expect(
+        ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'plan'),
+      ).toEqual([])
+      expect(planStarts[0]?.payload.substitution).toBeUndefined()
+      // A rejected start exposes no handle through the current port, so the
+      // durable open bracket remains for crash recovery rather than inventing
+      // an unavailable transcript.
+      expect(
+        ofType(events, 'session.ended').filter(
+          (event) => event.payload.session === planStarts[0]?.payload.session,
+        ),
+      ).toEqual([])
+    })
+
+    test(`${mode.name}: a continued producer throw retains one atomic transcript bracket`, async () => {
+      const h = await makeHarness({
+        configToml: terminalThrowConfig(mode.alternates),
+        handlers: (store) => terminalThrowContinuationHandlers(store),
+      })
+      await h.br.run()
+
+      const events = await h.store.getEvents(SLUG)
+      const implementStarts = ofType(events, 'session.started').filter(
+        (event) => event.payload.phase === 'implement',
+      )
+      expect(implementStarts.map((event) => event.payload.round)).toEqual([1, 2, 3])
+      expect(implementStarts.every((event) => event.payload.runner === 'scripted')).toBe(true)
+      expect(implementStarts.every((event) => event.payload.substitution === undefined)).toBe(true)
+      expect(ofType(events, 'implement.completed')).toHaveLength(3)
+      expect(
+        ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'implement'),
+      ).toEqual([])
+
+      const recoveredSession = implementStarts[1]!.payload.session
+      const recoveredEnds = ofType(events, 'session.ended').filter(
+        (event) => event.payload.session === recoveredSession,
+      )
+      expect(recoveredEnds).toHaveLength(1)
+      const recoveredTranscripts = (await h.store.listArtifacts(SLUG, 'transcript')).filter(
+        (artifact) => artifact.metadata.session === recoveredSession,
+      )
+      expect(recoveredTranscripts).toHaveLength(1)
+      expect(recoveredEnds[0]!.payload.transcript).toEqual({
+        kind: 'transcript',
+        rev: recoveredTranscripts[0]!.revision,
+      })
+      expect(recoveredEnds[0]!.payload.usage).toEqual({
+        inputTokens: 1,
+        outputTokens: 1,
+        turns: 1,
+      })
+      expect(recoveredTranscripts[0]!.metadata).toEqual({
+        phase: 'implement',
+        round: 2,
+        role: 'implement',
+        runner: 'scripted',
+        model: 'm-implement',
+        session: recoveredSession,
+        usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+      })
+
+      const implementJournals = [...h.runner.sessions.values()].filter(
+        (journal) => journal.opts.skill === 'ab-implement',
+      )
+      expect(implementJournals).toHaveLength(2)
+      expect(implementJournals[0]!.ended).toBe(true)
+      expect(implementJournals[1]!.turns).toHaveLength(1)
+      expect(implementJournals[1]!.messages).toEqual([])
+    })
+  }
+
+  test('runtime chain: an unrecoverable close still cannot override the terminal or select an alternate', async () => {
+    let failNextImplementEnd = false
+    const h = await makeHarness({
+      configToml: terminalThrowConfig(true),
+      handlers: (store) =>
+        terminalThrowContinuationHandlers(store, () => {
+          failNextImplementEnd = true
+        }),
+    })
+    const ordinaryEnd = h.runner.end.bind(h.runner)
+    h.runner.end = async (session) => {
+      if (failNextImplementEnd && session.model === 'm-implement') {
+        failNextImplementEnd = false
+        throw new Error('provider handle could not close')
+      }
+      return ordinaryEnd(session)
+    }
+
+    await h.br.run()
+
+    const events = await h.store.getEvents(SLUG)
+    const implementStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'implement',
+    )
+    expect(implementStarts.map((event) => [event.payload.round, event.payload.runner])).toEqual([
+      [1, 'scripted'],
+      [2, 'scripted'],
+      [3, 'scripted'],
+    ])
+    expect(ofType(events, 'implement.completed')).toHaveLength(3)
+    expect(
+      ofType(events, 'phase.failed').filter((event) => event.payload.phase === 'implement'),
+    ).toEqual([])
+    const unrecoveredSession = implementStarts[1]!.payload.session
+    expect(
+      ofType(events, 'session.ended').filter(
+        (event) => event.payload.session === unrecoveredSession,
+      ),
+    ).toEqual([])
+    expect(
+      (await h.store.listArtifacts(SLUG, 'transcript')).filter(
+        (artifact) => artifact.metadata.session === unrecoveredSession,
+      ),
+    ).toEqual([])
+    const implementJournals = [...h.runner.sessions.values()].filter(
+      (journal) => journal.opts.skill === 'ab-implement',
+    )
+    expect(implementJournals).toHaveLength(2)
+    expect(implementJournals[1]!.turns).toHaveLength(1)
+    expect(implementJournals[1]!.messages).toEqual([])
+  })
+})
+
 // ── Provider/runner failures (§8.4, §9) ──────────────────────────────────────
 
 describe('structured provider failure policy', () => {
