@@ -2493,7 +2493,7 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     expect(builds.filter((record) => record.ticket?.id === 'T-recover')).toHaveLength(2)
   })
 
-  test('discard releases a partially provisioned workspace before terminal completion', async () => {
+  test('discard waits for a live execution lease before releasing a partial workspace', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
     await seedInterrupted(h, 'partial-discard')
     const handle = await h.workspaces.provision({
@@ -2511,8 +2511,15 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
       type: 'build.discard-requested',
       payload: {},
     })
+    await h.store.claimLease('partial-discard', 'launching-execution', 60_000)
 
-    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    expect(h.workspaces.releases).toEqual([])
+    await h.store.releaseLease('partial-discard', 'launching-execution')
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+      ...emptyTickReport(),
+      discarded: 1,
+    })
     expect(h.workspaces.releases).toHaveLength(1)
     expect(
       (await h.store.getEvents('partial-discard')).map((event) => event.type).slice(-2),
@@ -2638,6 +2645,8 @@ describe('Dispatcher janitor', () => {
     expect(pollCounts.get(92)).toBe(2)
 
     failedPolls.clear()
+    await h.store.releaseLease(failedA, 'poll-a-live')
+    await h.store.releaseLease(failedB, 'poll-b-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 2 })
     expect(reduceBuild(await h.store.getEvents(failedA)).status).toBe('done')
     expect(reduceBuild(await h.store.getEvents(failedB)).status).toBe('done')
@@ -2659,7 +2668,6 @@ describe('Dispatcher janitor', () => {
     })
     h.forge.setPrState(11, { state: 'merged', sha: 'squash-bad' })
     h.forge.setPrState(12, { state: 'merged', sha: 'squash-good' })
-    await h.store.claimLease(failed, 'ticket-outage-live', 60_000)
     const comment = h.tickets.comment.bind(h.tickets)
     let outage = true
     h.tickets.comment = async (id, body) => {
@@ -2673,6 +2681,7 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual({
       ...emptyTickReport(),
       merged: 1,
+      swept: 1,
       janitorFailed: 1,
       janitorDiagnostics: ['build ticket-outage: janitor failed — ticket comment unavailable'],
     })
@@ -2897,6 +2906,9 @@ describe('Dispatcher janitor', () => {
     await h.dispatcher.tick()
 
     h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.workspaces.releases).toEqual([])
+    await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     expect((await h.store.getEvents(slug)).map((e) => e.type).slice(-3)).toEqual([
       'pr.merged',
@@ -2938,6 +2950,7 @@ describe('Dispatcher janitor', () => {
     h.forge.setGatePresence(1, 'absent')
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(h.forge.squashMergeCalls).toHaveLength(1)
+    await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   })
 
@@ -2967,8 +2980,11 @@ describe('Dispatcher janitor', () => {
     expect(afterMergeCall.some((e) => e.type === 'pr.auto-merge-enabled')).toBe(false)
     expect(afterMergeCall.some((e) => e.type === 'pr.merged')).toBe(false)
 
-    // The forge call is not a speculative event. The ordinary next poll sees
-    // the landed PR and emits the existing completion facts.
+    // The forge call is not a speculative event. Completion waits until the
+    // supervising execution releases its process-tree lease.
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.workspaces.releases).toEqual([])
+    await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     const final = await h.store.getEvents(slug)
     expect(final.map((e) => e.type).slice(-3)).toEqual([
@@ -3489,6 +3505,11 @@ describe('Dispatcher janitor', () => {
     await h.store.claimLease(slug, 'runner-live', 60_000)
     await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    expect(h.workspaces.releases).toEqual([])
+    expect((await h.store.getBuild(slug))?.lease?.holder).toBe('runner-live')
+    await h.store.releaseLease(slug, 'runner-live')
+
     const failed = await h.dispatcher.tick()
     expect(failed.janitorFailed).toBe(1)
     expect(failed.janitorDiagnostics[0]).toContain('remote branch deletion')
@@ -3773,6 +3794,7 @@ describe('Dispatcher startup resume', () => {
         phase: 'plan',
         round: 1,
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question: 'plan failed twice',
       },
     })
@@ -3815,6 +3837,7 @@ describe('Dispatcher startup resume', () => {
         id: 'esc_setup',
         phase: 'setup',
         source: 'policy',
+        policyCause: 'setup-failure-limit',
         question: 'setup failed three times',
       },
     })

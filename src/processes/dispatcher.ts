@@ -33,8 +33,8 @@
  * stale leases both resolve by re-attaching a build-runner via
  * `launchRunner`. Optional pre-build judgment (spec authoring and short slug
  * naming) lives behind bounded seams before a build exists; deterministic
- * validation and fallback remain here. The runner claims the build's lease
- * itself; the dispatcher only ever reads lease expiry.
+ * validation and fallback remain here. The supervising kernel reserves each
+ * execution lease before launch; the child renews that same-holder lease.
  */
 import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
@@ -638,6 +638,7 @@ export class Dispatcher {
         // Existing partial facts leave the same work due on the next tick.
         const events = await this.deps.store.getEvents(record.slug)
         const state = reduceBuild(events)
+        const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
         // has its own crash window after build.completed. Revisit only pending
         // hosted handles; this never relaunches a runner or consumes capacity.
@@ -648,6 +649,7 @@ export class Dispatcher {
         // Abort is destructive human judgment and therefore outranks a queued
         // discard when both requests raced into the same stream.
         if (
+          !executionLeaseLive &&
           state.status === 'queued' &&
           state.pendingCommands.some((command) => command.command === 'abort')
         ) {
@@ -663,21 +665,33 @@ export class Dispatcher {
         // Discard is a queued-only recovery control. A request that raced with
         // runner attachment is deliberately inert: it must never tear a live
         // runner's workspace down or return its ticket for a duplicate build.
-        if (state.status === 'queued' && state.discardRequest !== undefined) {
+        if (
+          !executionLeaseLive &&
+          state.status === 'queued' &&
+          state.discardRequest !== undefined
+        ) {
           await this.cleanupDiscarded(record, events, report)
           continue
         }
-        if (state.status === 'aborted') {
+        if (!executionLeaseLive && state.status === 'aborted') {
           await this.cleanupAborted(record, events, report)
           continue
         }
-        if (state.pr) await this.checkPr(record, events, state, report, launched)
+        if (state.pr)
+          await this.checkPr(record, events, state, report, launched, executionLeaseLive)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         report.janitorFailed += 1
         report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
       }
     }
+  }
+
+  private hasLiveExecutionLease(record: BuildRecord): boolean {
+    return (
+      record.lease !== undefined &&
+      new Date(record.lease.expiresAt).getTime() > this.deps.clock().getTime()
+    )
   }
 
   /** Complete abort cleanup as an ordered checkpointed saga. External effects
@@ -861,6 +875,7 @@ export class Dispatcher {
     state: BuildState,
     report: TickReport,
     launched: Set<string>,
+    executionLeaseLive: boolean,
   ): Promise<void> {
     const { store, tickets, forge } = this.deps
     const pr = state.pr
@@ -950,6 +965,7 @@ export class Dispatcher {
 
     switch (prState.state) {
       case 'merged': {
+        if (executionLeaseLive) return
         // Emit the fact once (a crash between steps re-runs this block; the
         // reduced prState dedupes the event, the log dedupes the release).
         if (state.prState !== 'merged') {
@@ -974,6 +990,7 @@ export class Dispatcher {
         return
       }
       case 'closed': {
+        if (executionLeaseLive) return
         // Closed without merge is a human decision — back to Triage (§15.7).
         if (state.prState !== 'closed') {
           await store.append(record.slug, {
@@ -1386,8 +1403,8 @@ export class Dispatcher {
    *
    * Every `wait` reason is correctly parked: blocked/paused (human), awaiting
    * spec (human lands rev N+1; the next tick sees run-phase plan), awaiting
-   * PR (janitor duty), done/aborted (janitor duty). The relaunched runner
-   * claims the lease itself; the reduced log tells it where to resume
+   * PR (janitor duty), done/aborted (janitor duty). The supervising launcher
+   * reserves the execution lease and the child renews it; the reduced log tells it where to resume
    * (started-without-terminal work re-runs from the phase start).
    */
   private async leaseSweep(

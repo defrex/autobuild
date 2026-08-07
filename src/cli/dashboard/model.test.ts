@@ -252,6 +252,7 @@ function reviseSpec(escalationSeq: number, phase: Phase): EventWrite[] {
       id: 'e_respec',
       phase,
       source: 'policy',
+      policyCause: 'phase-attempt-limit',
       question: 'the spec does not say what to do here',
     }),
     ev('escalation.answered', {
@@ -1252,6 +1253,7 @@ maxVerifyAttempts = 1
         id: 'e_policy',
         phase: 'verify:test',
         source: 'policy',
+        policyCause: 'verify-failure-limit',
         question: 'maxVerifyAttempts (1) exhausted: verify:test is still failing',
       }),
     ])

@@ -20,6 +20,7 @@ import type {
   EscalationTarget,
   Finding,
   Phase,
+  PolicyEscalationCause,
   VerifyOutcome,
 } from '../ontology'
 import { verifyPhase } from '../ontology'
@@ -32,6 +33,8 @@ export interface OpenEscalation {
   phase: EscalationTarget
   round?: number
   source: EscalationSource
+  /** Policy guard identity. Absent only on historical policy raises. */
+  policyCause?: PolicyEscalationCause
   question: string
   refs?: string[]
   /** seq of the `escalation.raised` event — what `spec.revised` cites (§15.3). */
@@ -592,6 +595,9 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           phase: event.payload.phase,
           round: event.payload.round,
           source: event.payload.source,
+          ...(event.payload.policyCause !== undefined
+            ? { policyCause: event.payload.policyCause }
+            : {}),
           question: event.payload.question,
           refs: event.payload.refs,
           seq: event.seq,

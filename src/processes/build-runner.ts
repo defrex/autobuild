@@ -9,14 +9,16 @@
  * the log and `decideNext` re-decides the same started-but-unterminated phase
  * from its start (§15.6-C) — resumability is not a feature (§2.2).
  *
- * Ownership: `attach` claims the build's lease (§7.4) so a second sandbox can
- * never execute the same build. It may then acknowledge a pending pause or
+ * Ownership: `attach` claims or renews the build's execution lease (§7.4) so a
+ * second sandbox can never execute the same build. The local supervising kernel
+ * reserves that same holder before launch. The runner may then acknowledge a pending pause or
  * abort without preparing the workspace; workspace-backed work starts a
  * heartbeat interval before setup (liveness is mutable columns, never events
  * — §15.2.6). `run` exits when the build
  * parks (§11: a parked build's runner exits; cron re-attaches when
- * actionable). Nothing is released on exit — leases expire on their own and
- * the dispatcher's sweep re-attaches (§15.6-C).
+ * actionable). The runner releases nothing on exit: a local execution supervisor
+ * releases ownership after full tree teardown, while abrupt loss falls back to
+ * expiry and the dispatcher's sweep re-attaches (§15.6-C).
  *
  * Documented pragmatisms (where SPEC forces are in tension, the choice and
  * its reason live here):
@@ -74,6 +76,7 @@ import type {
   AgentTurnResult,
   Forge,
 } from '../ports/types'
+import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 
@@ -394,7 +397,7 @@ export class BuildRunner {
   constructor(private readonly deps: BuildRunnerDeps) {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
-    this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
+    this.leaseTtlMs = deps.opts?.leaseTtlMs ?? BUILD_EXECUTION_LEASE_TTL_MS
     this.boundaryConfig = deps.config
     this.boundaryResolver = createRuntimeResolver(
       deps.runtimes,
@@ -454,6 +457,7 @@ export class BuildRunner {
         id: this.deps.ids('esc'),
         phase: 'setup',
         source: 'policy',
+        policyCause: 'setup-failure-limit',
         question: this.setupQuestion(failure),
       },
     } satisfies EventWrite<'escalation.raised'>)
@@ -701,10 +705,8 @@ export class BuildRunner {
       await store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
     } else {
       await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-      // Abort is terminal runner work, not an ordinary park. Release ownership
-      // immediately so janitor cleanup never waits for the TTL.
-      await store.releaseLease(slug, this.deps.instance)
-      this.attached = false
+      // The execution supervisor retains ownership until the complete process
+      // tree is gone; janitor cleanup is gated by that live lease.
     }
   }
 
@@ -720,6 +722,7 @@ export class BuildRunner {
         phase: decision.phase,
         ...(decision.round !== undefined ? { round: decision.round } : {}),
         source: decision.source,
+        ...(decision.source === 'policy' ? { policyCause: decision.policyCause } : {}),
         question: decision.question,
         ...(decision.refs !== undefined ? { refs: decision.refs } : {}),
       },
@@ -1408,9 +1411,10 @@ export class BuildRunner {
   // ── The session bracket (§15.3) ────────────────────────────────────────────
 
   /** Run one adapter turn under the logical role's wall-clock budget. The
-   * expiry promise is resolved one microtask after abort so a conforming
-   * adapter can return its endable handle first; an adapter that ignores
-   * cancellation cannot keep the kernel waiting. */
+   * expiry promise is resolved one microtask after the deadline so a conforming
+   * adapter can return its endable handle first. An earlier operator abort owns
+   * classification, but does not disarm this backstop for an adapter that
+   * ignores cancellation. */
   private async runBudgetedTurn<T>(
     preSeq: number,
     budgetSeconds: number,
@@ -1437,9 +1441,10 @@ export class BuildRunner {
     })
     const schedule = this.deps.opts?.scheduleSessionBudget ?? defaultSessionBudgetScheduler
     const cancelTimer = schedule(() => {
-      if (controller.signal.aborted) return
-      abortCause = 'budget'
-      controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+      if (!controller.signal.aborted) {
+        abortCause = 'budget'
+        controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+      }
       queueMicrotask(() => resolveExpiry({ kind: 'expired' }))
     }, budgetSeconds * 1000)
 
@@ -1485,8 +1490,8 @@ export class BuildRunner {
   /** A start call can ignore cancellation and return a handle after the kernel
    * has advanced. End that late handle in the background so it never becomes
    * reusable continuation state. The stale durable bracket is intentionally
-   * left for the existing recovery model; process-tree reaping is out of
-   * scope. */
+   * left for the existing recovery model; complete descendant reaping remains
+   * the execution supervisor's exit boundary. */
   private releaseLateStart(
     pending: Promise<Exclude<TurnSettlement<{ session: AgentSessionHandle }>, { kind: 'expired' }>>,
     runner: AgentRunner,
@@ -1687,9 +1692,17 @@ export class BuildRunner {
       if (terminal) {
         if (handle !== undefined) {
           try {
-            await owner.end(handle)
+            const transcript = await owner.end(handle)
+            await this.depositTranscriptAndEnd(
+              session,
+              bracket,
+              transcript.content,
+              transcript.metadata.usage,
+              transcript.metadata.model ?? target.model,
+            )
           } catch {
-            // The durable terminal remains authoritative over adapter failure.
+            // The durable terminal remains authoritative over adapter failure
+            // and best-effort transcript cleanup.
           }
         }
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
@@ -1946,9 +1959,17 @@ export class BuildRunner {
       if (handle !== undefined) {
         const owner = live?.runner ?? runner
         try {
-          await owner.end(handle)
+          const transcript = await owner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? model,
+          )
         } catch {
-          // The durable terminal remains authoritative over adapter failure.
+          // The durable terminal remains authoritative over adapter failure
+          // and best-effort transcript cleanup.
         }
       }
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
@@ -2218,6 +2239,7 @@ export class BuildRunner {
         phase,
         round,
         source: 'policy',
+        policyCause: 'non-retryable-phase-failure',
         question:
           `${phase} round ${round} stopped after a non-retryable ` +
           `provider/runner failure on attempt ${failures.count}; last error: ` +
@@ -2246,6 +2268,7 @@ export class BuildRunner {
         phase,
         round,
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question:
           `${phase} round ${round} failed ${failures.count} times ` +
           `(maxPhaseAttempts ${this.maxPhaseAttempts}); last error: ` +

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** Private shipped child: one operating-system process per build. */
 import { runBuildChild } from '../src/processes/build-child'
+import { BuildChildExitCoordinator } from '../src/processes/build-child-exit'
 import { watchBuildParent } from '../src/processes/build-parent-watch'
 import { BUILD_RUNNER_OPTIONS_ENV } from '../src/ports/workspace/local-build-execution'
 import type { BuildExecutionStart } from '../src/ports/workspace/build-execution'
@@ -27,20 +28,22 @@ try {
 }
 if (input === undefined) process.exit(2)
 
-// A build child must not outlive an abruptly dead local kernel. Stopping is
-// intentionally abrupt: no synthetic pipeline outcome or lease release is
-// manufactured; ordinary lease expiry drives recovery.
-const stop = (code: number): never => process.exit(code)
-process.on('SIGINT', () => stop(130))
-process.on('SIGTERM', () => stop(143))
-const parentWatch = watchBuildParent(input.parentPid, () => stop(143))
+// Every exit first transfers group teardown to an owner outside this session.
+// The live kernel independently reaps the same group before releasing its
+// lease; after abrupt kernel death, the detached owner finishes the job.
+const terminal = new BuildChildExitCoordinator({ groupId: process.pid })
+process.on('SIGINT', () => terminal.terminate(130))
+process.on('SIGTERM', () => terminal.terminate(143))
+terminal.setParentWatch(
+  watchBuildParent(input.parentPid, () => {
+    terminal.terminate(143)
+  }),
+)
 
 let exitCode = 0
 try {
   await runBuildChild(input, process.env)
 } catch {
   exitCode = 1
-} finally {
-  parentWatch.close()
 }
-process.exit(exitCode)
+terminal.terminate(exitCode)

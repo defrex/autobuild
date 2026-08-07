@@ -154,6 +154,19 @@ export function validateEventWrite(input: {
       payloadResult.error.issues,
     )
   }
+  if (input.type === 'escalation.raised') {
+    const escalation = payloadResult.data as EventPayload<'escalation.raised'>
+    if (escalation.source === 'policy' && escalation.policyCause === undefined) {
+      throw new EventValidationError(
+        'invalid payload for "escalation.raised": source "policy" requires a recognized policyCause',
+      )
+    }
+    if (escalation.source !== 'policy' && escalation.policyCause !== undefined) {
+      throw new EventValidationError(
+        `invalid payload for "escalation.raised": policyCause is only allowed when source is "policy", not ${JSON.stringify(escalation.source)}`,
+      )
+    }
+  }
   if (
     input.type === 'escalation.answered' &&
     actor.kind === 'dispatcher' &&

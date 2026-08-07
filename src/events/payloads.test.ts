@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { validateEventWrite, type EventWrite } from './catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from './envelope'
-import { normalizeVerifyCompletion } from './payloads'
+import { eventPayloadSchemas, normalizeVerifyCompletion } from './payloads'
 
 function plan(payload: unknown): EventWrite<'plan.completed'> {
   return validateEventWrite({
@@ -134,6 +134,53 @@ describe('reconcile progress event protocol', () => {
   })
 })
 
+describe('escalation policy-cause protocol', () => {
+  const base = {
+    id: 'esc_policy',
+    phase: 'reconcile',
+    source: 'policy',
+    question: 'policy exhausted',
+  } as const
+
+  test('current policy writes require a recognized cause', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { ...base, policyCause: 'reconcile-no-progress' },
+      }).payload,
+    ).toMatchObject({ policyCause: 'reconcile-no-progress' })
+    expect(() =>
+      validateEventWrite({ actor: KERNEL, type: 'escalation.raised', payload: base }),
+    ).toThrow(/policyCause/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { ...base, policyCause: 'future-unclassified-condition' },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('non-policy raises forbid policyCause', () => {
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          ...base,
+          source: 'stall',
+          policyCause: 'reconcile-no-progress',
+        },
+      }),
+    ).toThrow(/only allowed when source is "policy"/)
+  })
+
+  test('persisted payload decoding still accepts a cause-less historical policy raise', () => {
+    expect(eventPayloadSchemas['escalation.raised'].parse(base)).toEqual(base)
+  })
+})
+
 describe('escalation answer protocol', () => {
   test('a human revise-spec answer may authorize an exact artifact revision', () => {
     expect(
@@ -253,6 +300,7 @@ describe('runner setup failure protocol', () => {
           id: 'esc_setup',
           phase: 'setup',
           source: 'policy',
+          policyCause: 'setup-failure-limit',
           question: 'setup is still failing',
         },
       }).payload,

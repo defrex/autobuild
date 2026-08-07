@@ -648,7 +648,13 @@ describe('decideNext: rule 3 — escalation gating', () => {
       decide([
         ...prelude(),
         ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'one?' }),
-        ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'policy', question: 'two?' }),
+        ev('escalation.raised', {
+          id: 'e_2',
+          phase: 'plan',
+          source: 'policy',
+          policyCause: 'phase-attempt-limit',
+          question: 'two?',
+        }),
         ev('escalation.answered', { id: 'e_2', answer: 'B', resolution: 'guidance' }),
       ]),
     ).toEqual(wait('blocked'))
@@ -663,6 +669,7 @@ describe('decideNext: rule 3 — escalation gating', () => {
           phase: 'plan',
           round: 1,
           source,
+          ...(source === 'policy' ? { policyCause: 'phase-attempt-limit' as const } : {}),
           question: `${source} condition still needs a retry`,
         },
         source === 'agent' ? { kind: 'agent', role: 'plan', session: `s_${source}` } : KERNEL,
@@ -821,7 +828,13 @@ describe('decideNext: rule 5 — plan loop', () => {
         ...verdict,
         ev(
           'escalation.raised',
-          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          {
+            id: 'e_setup',
+            phase: 'setup',
+            source: 'policy',
+            policyCause: 'setup-failure-limit',
+            question: 'setup exhausted',
+          },
           KERNEL,
         ),
         ev('escalation.answered', {
@@ -1174,6 +1187,7 @@ describe('decideNext: rule 5 — plan loop', () => {
             id: 'e_policy',
             phase: 'plan-review',
             source: 'policy',
+            policyCause: 'review-round-limit',
             question: 'another policy condition',
           },
           KERNEL,
@@ -1207,6 +1221,7 @@ describe('decideNext: rule 5 — plan loop', () => {
     const expected: Decision = {
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'review-round-limit',
       phase: 'plan-review',
       round: 6,
       question: 'maxReviewRounds (6) exhausted without approval',
@@ -1217,7 +1232,13 @@ describe('decideNext: rule 5 — plan loop', () => {
         ...exhausted,
         ev(
           'escalation.raised',
-          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          {
+            id: 'e_setup',
+            phase: 'setup',
+            source: 'policy',
+            policyCause: 'setup-failure-limit',
+            question: 'setup exhausted',
+          },
           KERNEL,
         ),
         ev('escalation.answered', {
@@ -1245,6 +1266,7 @@ describe('decideNext: rule 5 — plan loop', () => {
           phase: 'plan-review',
           round: 6,
           source: 'policy',
+          policyCause: 'review-round-limit',
           question: 'maxReviewRounds (6) exhausted without approval',
         },
         KERNEL,
@@ -1278,6 +1300,7 @@ describe('decideNext: rule 5 — plan loop', () => {
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'review-round-limit',
       phase: 'plan-review',
       round: 7,
       question: 'maxReviewRounds (6) exhausted without approval',
@@ -1378,6 +1401,7 @@ describe('decideNext: rule 6 — code loop (walkthroughs B & C)', () => {
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'review-round-limit',
       phase: 'code-review',
       round: 6,
       question: 'maxReviewRounds (6) exhausted without approval',
@@ -1818,6 +1842,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     const expected: Decision = {
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
       question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
     }
@@ -1832,6 +1857,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
             id: 'e_1',
             phase: 'verify:unit',
             source: 'policy',
+            policyCause: 'verify-failure-limit',
             question: expected.kind === 'raise-escalation' ? expected.question : '',
           },
           KERNEL,
@@ -1846,7 +1872,13 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         ...exhausted,
         ev(
           'escalation.raised',
-          { id: 'e_setup', phase: 'setup', source: 'policy', question: 'setup exhausted' },
+          {
+            id: 'e_setup',
+            phase: 'setup',
+            source: 'policy',
+            policyCause: 'setup-failure-limit',
+            question: 'setup exhausted',
+          },
           KERNEL,
         ),
         ev('escalation.answered', {
@@ -1858,6 +1890,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
       question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
     })
@@ -1869,7 +1902,13 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         ...exhausted,
         ev(
           'escalation.raised',
-          { id: 'e_1', phase: 'verify:unit', source: 'policy', question: 'stuck' },
+          {
+            id: 'e_1',
+            phase: 'verify:unit',
+            source: 'policy',
+            policyCause: 'verify-failure-limit',
+            question: 'stuck',
+          },
           KERNEL,
         ),
         ev('escalation.answered', {
@@ -1892,7 +1931,13 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
         ...exhausted,
         ev(
           'escalation.raised',
-          { id: 'e_1', phase: 'verify:unit', source: 'policy', question: 'stuck' },
+          {
+            id: 'e_1',
+            phase: 'verify:unit',
+            source: 'policy',
+            policyCause: 'verify-failure-limit',
+            question: 'stuck',
+          },
           KERNEL,
         ),
         ev('escalation.answered', {
@@ -1908,6 +1953,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
       question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
     })
@@ -1934,6 +1980,7 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
           id: 'e_verify',
           phase: 'verify:unit',
           source: 'policy',
+          policyCause: 'verify-failure-limit',
           question: 'How should the failed verification be handled?',
         },
         KERNEL,
@@ -2618,6 +2665,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     ).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'verify-failure-limit',
       phase: 'verify:types',
       question: 'maxVerifyAttempts (3) exhausted: verify:types is still failing',
     })
@@ -2672,6 +2720,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     const expected: Decision = {
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'reconcile-no-progress',
       phase: 'reconcile',
       question,
     }
@@ -2681,7 +2730,13 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
         ...checked,
         ev(
           'escalation.raised',
-          { id: 'e_9', phase: 'reconcile', source: 'policy', question },
+          {
+            id: 'e_9',
+            phase: 'reconcile',
+            source: 'policy',
+            policyCause: 'reconcile-no-progress',
+            question,
+          },
           KERNEL,
         ),
       ]),
@@ -2709,6 +2764,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
           phase: 'reconcile',
           round: 4,
           source: 'policy',
+          policyCause: 'phase-attempt-limit',
           question: runnerQuestion,
         },
         KERNEL,
@@ -2728,9 +2784,120 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     expect(decide(checkedAfterAnswer)).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'reconcile-no-progress',
       phase: 'reconcile',
       question:
         'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base',
+    })
+  })
+
+  test('only the matching cause deduplicates among two roundless reconcile policy conditions', () => {
+    const stable = 'sha-main-stable'
+    const history = [
+      ...throughFinalize,
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    const conflictSeq = history.length
+    const distinctAnswered = [
+      ...history,
+      ev(
+        'escalation.raised',
+        {
+          id: 'e_distinct',
+          phase: 'reconcile',
+          source: 'policy',
+          policyCause: 'non-retryable-phase-failure',
+          question: 'A distinct roundless reconcile policy condition',
+        },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_distinct',
+        answer: 'Retry that condition.',
+        resolution: 'retry',
+      }),
+      ev('reconcile.progress-checked', { conflictSeq, attempt: 3, baseSha: stable }),
+    ]
+
+    const required: Decision = {
+      kind: 'raise-escalation',
+      source: 'policy',
+      policyCause: 'reconcile-no-progress',
+      phase: 'reconcile',
+      question:
+        'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base',
+    }
+    expect(decide(distinctAnswered)).toEqual(required)
+
+    expect(
+      decide([
+        ...distinctAnswered,
+        ev(
+          'escalation.raised',
+          {
+            id: 'e_no_progress',
+            phase: 'reconcile',
+            source: 'policy',
+            policyCause: 'reconcile-no-progress',
+            question: required.kind === 'raise-escalation' ? required.question : '',
+          },
+          KERNEL,
+        ),
+        ev('escalation.answered', {
+          id: 'e_no_progress',
+          answer: 'Try one more reconcile.',
+          resolution: 'retry',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 4,
+      reconcile: { attempt: 4 },
+    })
+  })
+
+  test('a historical cause-less roundless reconcile policy raise retains no-progress meaning', () => {
+    const stable = 'sha-main-stable'
+    const history = [
+      ...throughFinalize,
+      ...reconcileCycle(1, stable),
+      ...reconcileCycle(2, stable),
+      ...reconcileCycle(3, stable),
+      ev('pr.conflicted', { baseSha: 'stale-detection-sha' }),
+    ]
+    const checked = withProgressCheck(history, 3, stable)
+    // Deliberately bypass validateEventWrite: this is the persisted pre-field
+    // shape, not a legal current append.
+    const legacyRaise = {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'e_legacy',
+        phase: 'reconcile',
+        source: 'policy',
+        question: 'legacy no-progress exhaustion',
+      },
+    } satisfies EventWrite<'escalation.raised'>
+
+    expect(
+      decide([
+        ...checked,
+        legacyRaise,
+        ev('escalation.answered', {
+          id: 'e_legacy',
+          answer: 'Try one more reconcile.',
+          resolution: 'retry',
+        }),
+      ]),
+    ).toEqual({
+      kind: 'run-phase',
+      phase: 'reconcile',
+      round: 4,
+      reconcile: { attempt: 4 },
     })
   })
 
@@ -2769,7 +2936,13 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       ...checked,
       ev(
         'escalation.raised',
-        { id: 'e_9', phase: 'reconcile', source: 'policy', question },
+        {
+          id: 'e_9',
+          phase: 'reconcile',
+          source: 'policy',
+          policyCause: 'reconcile-no-progress',
+          question,
+        },
         KERNEL,
       ),
       ev('escalation.answered', {
@@ -2798,6 +2971,7 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
     expect(decide(withProgressCheck(nextConflict, 4, stable))).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'reconcile-no-progress',
       phase: 'reconcile',
       question,
     })

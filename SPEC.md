@@ -198,9 +198,11 @@ Small, independently runnable, crash-safe:
 
 - **build-runner** — one operating-system process per build; owns one pipeline
   execution end to end. The local implementation starts the process beside its
-  Git worktree. Workspace execution is a substitutable capability, so a future
-  sandbox provider can place both checkout and process elsewhere without the
-  dispatcher spawning a local proxy. Per-build processes are deliberate: crash
+  Git worktree in its own POSIX session/process group and owns teardown of that
+  complete group, including agent-tool grandchildren. Workspace execution is a
+  substitutable capability, so a future sandbox provider can place both checkout
+  and process elsewhere without the dispatcher spawning a local proxy; that
+  provider owns equivalent complete-environment teardown. Per-build processes are deliberate: crash
   isolation, and the natural shape once builds run in remote sandboxes.
 - **dispatcher** — watches the TicketSource for tickets passing the configured
   ready gate, claims, establishes the final conforming spec, chooses a short
@@ -682,10 +684,15 @@ aborts the turn, ends any available handle, drops producer continuation state,
 and emits retryable `phase.failed` with `phase session budget expired after
 <seconds> seconds`; it is kernel policy and therefore does not select a provider
 alternate. The existing phase-attempt guard retries and then raises an
-answerable policy escalation. Agent finalize post-step expiry remains
-failure-tolerant. Harvest sessions and direct check commands are outside this
-budget. If the turn already wrote a valid typed terminal, that terminal remains
-authoritative and no contradictory failure is appended.
+answerable policy escalation. Operator cancellation and the captured deadline
+remain independent safeguards: an operator request aborts the adapter promptly,
+but the deadline still releases the wait if the adapter ignores cancellation.
+When the operator request arrived first, that release remains an abort control
+outcome and appends no phase failure or provider substitution. Agent finalize
+post-step expiry remains failure-tolerant. Harvest sessions and direct check
+commands are outside this budget. If the turn already wrote a valid typed
+terminal, that terminal remains authoritative and no contradictory failure is
+appended.
 
 This completes the sentinel-parsing replacement: success is only expressible
 through the typed channel, so "the agent rambled and exited" can never be
@@ -740,7 +747,9 @@ implementer:  ab context   (findings.json now materialized) → …
   policy [D5].
 - *Session budget expiry* → abort and best-effort `end`, then retryable
   `phase.failed {error: "phase session budget expired after … seconds"}`; retry
-  from the primary and escalate under the existing attempt cap [D5].
+  from the primary and escalate under the existing attempt cap. If operator
+  abort already owns cancellation, the same deadline only bounds the wait and
+  the runner acknowledges abort without a phase failure [D5].
 - *Provider rejection* → transcript deposited; eligible failures walk the
   role's declared alternates within one attempt. A stopped/exhausted chain
   emits one `phase.failed` with the final verbatim error and every tried target;
@@ -959,19 +968,24 @@ explicit process-restart retry boundary; agent and stall escalations remain
 human judgment gates until an operator answers them.
 
 Crash-gap and exhaustion deduplication is exact to the escalation's source/class,
-target, and any durable scope that distinguishes policy conditions. A triggering
-event is considered acknowledged only by a later `escalation.raised` matching
-those dimensions; another class, target, or required scope cannot suppress it.
-The triggering event's sequence is the boundary, so newer qualifying failure,
-verdict, or conflict evidence re-arms that exact condition after an answer.
+target, and any durable scope that distinguishes policy conditions. Every new
+policy-authored `escalation.raised` names a closed `policyCause`; `round` scopes
+the occurrence but does not identify the policy class. A triggering event is
+considered acknowledged only by a later raise matching those dimensions;
+another cause, target, or required scope cannot suppress it. The triggering
+event's sequence is the boundary, so newer qualifying failure, verdict, or
+conflict evidence re-arms that exact condition after an answer.
 
 Reconcile has two distinct policy scopes. Runner retry exhaustion and
 non-retryable failures at progress-check or base-refresh boundaries are scoped
 to a concrete reconcile `round`. Unchanged-base no-progress exhaustion is
-scoped to the current conflict and its `escalation.raised` deliberately omits
-`round`. Only that later roundless `policy`/`reconcile` raise acknowledges the
-no-progress guard; a round-scoped runner raise does not. Routing uses these
-typed event fields and never parses the human-facing `question`.
+scoped to the current conflict, omits `round`, and has `policyCause =
+"reconcile-no-progress"`. Only a later open or answered raise with that cause
+acknowledges the no-progress guard; an explicitly different cause does not,
+even if it is also roundless. Cause-less historical roundless
+`policy`/`reconcile` raises retain their former no-progress meaning on replay,
+without migration. Routing uses these typed event fields and never parses the
+human-facing `question`.
 
 ## 12. The outer loop
 
@@ -1255,7 +1269,8 @@ accidentally interpret repository state.
    commands and escalation answers on resume. While a turn is live, the runner
    subscribes from its session boundary and forwards an abort as caller-owned
    cancellation to the AgentRunner; it closes the session transcript without
-   recording `phase.failed`, acknowledges abort, and releases its lease.
+   recording `phase.failed` and acknowledges abort. The supervising execution
+   retains the lease until the build's complete process tree has been reaped.
 
 ### 15.3 Catalog
 
@@ -1275,8 +1290,10 @@ The families, with illustrative members:
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
-Abort cleanup is a dispatcher-owned ordered saga. It releases any lease, closes
-an open unmerged PR without overriding a racing merge, releases the workspace,
+Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
+live, the janitor defers the saga so it cannot race process-tree teardown. Once
+that supervisor releases the lease, or an abruptly orphaned lease expires, cleanup
+closes an open unmerged PR without overriding a racing merge, releases the workspace,
 deletes the exact published remote branch and exact local branch, unions the
 `autobuild:aborted` label into the current ticket labels, returns the ticket to
 configured Triage, and only then completes as `abandoned`. External effects are
@@ -1366,9 +1383,10 @@ attribution retained by `build.created` is materialized as the ordinary
 human-authored request before launch. A failed boundary appends `dispatch.failed
 {stage,attempt,error}` and stays queued for another tick. A discard request is
 honored only while the build remains queued; one that races with runner
-attachment is inert and cannot tear down live work. A human discard instead
-releases any partial workspace and lease, returns the ticket to Ready, then
-appends `build.completed {outcome: discarded}` last. No runner is required.
+attachment is inert and cannot tear down live work. A human discard waits out
+any unexpired execution lease, then releases a partial workspace and stale
+lease, returns the ticket to Ready, and appends `build.completed {outcome:
+discarded}` last. No runner is required.
 
 **A — verify failure:** `verify.completed {step: e2e, outcome: fail,
 report}` → kernel routes back into the code loop: `implement.started
@@ -1420,12 +1438,13 @@ executes no setup, appends no `runner.attached`, and starts no phase or session.
 Resume and all decisions that use the workspace still require successful setup.
 The setup target belongs only to escalation metadata and is not a pipeline `Phase`.
 
-**D — sandbox death:** log ends at `session.started {session: old}` →
+**D — sandbox death:** log ends at `session.started {session: old}` after
 `implement.started {round: 2}`; heartbeat goes stale → dispatcher expires the
 lease, provisions a fresh sandbox → `workspace.provisioned {base: {source:
 existing, sha}}` → the workspace execution capability starts a fresh build
-process. That process reads its workspace location from durable state, claims
-the lease, captures the current resume boundary, and appends
+process. The supervising kernel first claims the lease for that execution
+instance; the process reads its workspace location from the durable event,
+renews the same-holder lease, captures the current resume boundary, and appends
 `session.ended {session: old, outcome: reclaimed, reclaimedBy: {instance,
 resumedFromSeq}}` before `runner.attached {resumedFromSeq}`. The reducer now
 shows no pre-boundary session as open and says implement r2
@@ -1447,13 +1466,23 @@ design (§7.3 — phase boundaries are the resume points).
 
 Two liveness rules complete the picture. Within one dispatcher process,
 build-runner launches are single-flighted by slug through supervised process
-liveness — a child exit is only a reaping signal, never a pipeline outcome.
-Build progress, config, diagnostics, and outcomes cross the process boundary
-only through build-owned Store state. The durable lease remains the
-cross-process recovery gate (the in-memory guard is deliberately not durable:
-a dead process's memory disappears with it). Ordinary dispatcher shutdown
-stops and reaps every child; abrupt dispatcher death is recovered by parent
-liveness detection plus lease expiry. A new `ab dispatch` process attempts
+liveness — execution completion means the complete environment has been reaped,
+but remains only a liveness signal, never a pipeline outcome. Build progress,
+config, diagnostics, and outcomes cross the process boundary only through
+build-owned Store state. The kernel claims each execution's durable lease before
+launch and releases that exact holder only after completion; the child renews it.
+The lease remains the cross-process recovery and workspace-teardown gate (the
+in-memory guard is deliberately not durable: a dead process's memory disappears
+with it). Ordinary dispatcher shutdown gracefully signals each local process
+group, escalates the whole group after the bounded stop delay, and reaps it.
+Before every build-child terminal path exits — natural success or failure,
+SIGINT/SIGTERM, or immutable-parent watchdog death — it launches one detached
+group reaper while the leader still pins the group's identity. That owner
+applies the same bounded TERM-then-KILL policy and survives abrupt dispatcher
+death. The live local supervisor independently awaits full-group teardown before
+publishing execution completion and releasing the lease; lease expiry remains
+the durable recovery fallback when the dispatcher dies. A new `ab dispatch`
+process attempts
 every actionable build on its first tick rather than waiting for the sweep;
 lease claiming stays the exclusivity gate, so a genuinely live old runner
 wins harmlessly.
@@ -1465,7 +1494,9 @@ PR, but *something* must watch it to merge/close, release the workspace, and
 emit `build.completed`. v2 makes it a deterministic **janitor duty of the
 dispatcher** (which already polls on cron): it checks open PRs for its
 builds, emits `pr.merged`/`pr.closed`/`pr.conflicted`, releases workspaces,
-and completes builds. After any terminal outcome it also reclaims every
+and completes builds. Destructive discard, abort, and terminal-PR cleanup defer
+while an unexpired execution lease exists, so no workspace is released under a
+live process tree. After any terminal outcome it also reclaims every
 pending hosted PR-attachment copy. Reclamation success and failure are durable
 correlated facts; a failed delete remains pending and retries on later ticks,
 including after the build is already done. A merged-PR fixup request is a *new
@@ -1541,16 +1572,20 @@ completed attempt. The kernel compares it with that attempt's matching latest
 race against a moving base, so another monotonic attempt runs regardless of the
 configured limit. An equal SHA consumes `policy.maxReconcileAttempts`; reaching
 the limit escalates because reconciliation made no progress against an unchanged
-base. This no-progress escalation is conflict-scoped and roundless. By contrast,
-a runner retry exhaustion or non-retryable failure while obtaining the progress
-check or refreshing the base is scoped to the concrete next reconcile round.
-Answering that runner condition re-arms its phase-round failure budget so the
-authoritative decision can complete, but it does not acknowledge no-progress:
-if the unchanged-base budget is already exhausted, the separate roundless
-escalation is raised before another reconcile session starts. Answering that
-roundless escalation continues to authorize one subsequent reconcile for the
-same conflict. Routing distinguishes the conditions from durable `round` scope,
-never from `question` text.
+base. This no-progress escalation is conflict-scoped, roundless, and identified
+by `policyCause = "reconcile-no-progress"`. By contrast, a runner retry
+exhaustion or non-retryable failure while obtaining the progress check or
+refreshing the base is scoped to the concrete next reconcile round and carries
+its own cause. Answering that runner condition re-arms its phase-round failure
+budget so the authoritative decision can complete, but it does not acknowledge
+no-progress: if the unchanged-base budget is already exhausted, the separate
+no-progress escalation is raised before another reconcile session starts.
+Answering the matching no-progress escalation continues to authorize one
+subsequent reconcile for the same conflict. An explicitly different cause
+cannot acknowledge that guard even when roundless. Cause-less historical
+roundless `policy`/`reconcile` raises retain the former no-progress
+interpretation on replay without migration. Routing uses cause for class
+identity, `round` for occurrence scope, and never `question` text.
 
 The classification is reduced from the durable log, with the next attempt's
 authoritative `reconcile.started` serving as the observation for historical logs

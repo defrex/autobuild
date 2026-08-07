@@ -233,6 +233,7 @@ describe('reduceBuild: durable setup failure', () => {
         id: 'esc_setup',
         phase: 'setup',
         source: 'policy',
+        policyCause: 'setup-failure-limit',
         question: 'setup still fails',
       }),
       ev('escalation.answered', {
@@ -241,9 +242,36 @@ describe('reduceBuild: durable setup failure', () => {
         resolution: 'guidance',
       }),
     ])
-    expect(stateAfter(log, 'escalation.raised').status).toBe('blocked')
+    const open = stateAfter(log, 'escalation.raised')
+    expect(open.status).toBe('blocked')
+    expect(open.openEscalations[0]?.policyCause).toBe('setup-failure-limit')
     expect(reduceBuild(log).status).toBe('queued')
-    expect(reduceBuild(log).answeredEscalations[0]?.phase).toBe('setup')
+    expect(reduceBuild(log).answeredEscalations[0]).toMatchObject({
+      phase: 'setup',
+      policyCause: 'setup-failure-limit',
+    })
+  })
+
+  test('a persisted cause-less historical policy raise remains reducible', () => {
+    // Deliberately bypass validateEventWrite: current appends require a cause,
+    // while replay must retain the pre-field payload shape.
+    const legacyRaise = {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_legacy',
+        phase: 'reconcile',
+        source: 'policy',
+        question: 'legacy no-progress exhaustion',
+      },
+    } satisfies EventWrite<'escalation.raised'>
+    const state = reduceBuild(toLog([legacyRaise]))
+    expect(state.openEscalations[0]).toMatchObject({
+      id: 'esc_legacy',
+      phase: 'reconcile',
+      source: 'policy',
+    })
+    expect(state.openEscalations[0]).not.toHaveProperty('policyCause')
   })
 })
 
@@ -972,7 +1000,13 @@ describe('reduceBuild: multiple escalations, out-of-order answers', () => {
   const log = toLog([
     ...prelude(),
     ev('escalation.raised', { id: 'e_1', phase: 'plan', source: 'agent', question: 'first?' }),
-    ev('escalation.raised', { id: 'e_2', phase: 'plan', source: 'policy', question: 'second?' }),
+    ev('escalation.raised', {
+      id: 'e_2',
+      phase: 'plan',
+      source: 'policy',
+      policyCause: 'phase-attempt-limit',
+      question: 'second?',
+    }),
     ev('escalation.answered', { id: 'e_9', answer: 'stray', resolution: 'guidance' }), // no match: ignored
     ev('escalation.answered', { id: 'e_2', answer: 'B', resolution: 'dismiss-finding' }),
     ev('escalation.answered', { id: 'e_1', answer: 'A', resolution: 'guidance' }),
@@ -1189,6 +1223,7 @@ describe('reduceBuild: restartSince', () => {
         id: 'e_1',
         phase: 'code-review',
         source: 'policy',
+        policyCause: 'review-round-limit',
         question: 'stuck',
       }),
       ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
@@ -1278,6 +1313,7 @@ describe('reduceBuild: finalize projections', () => {
         id: 'e_1',
         phase: 'finalize',
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question: 'stuck',
       }),
       ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
@@ -1314,6 +1350,7 @@ describe('reduceBuild: finalize projections', () => {
         id: 'e_1',
         phase: 'finalize',
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question: 'stuck',
       }),
       ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),
@@ -1450,6 +1487,7 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
         id: 'e_1',
         phase: 'verify:types',
         source: 'policy',
+        policyCause: 'verify-failure-limit',
         question: 'stuck',
       }),
       ev('escalation.answered', { id: 'e_1', answer: 'respec', resolution: 'revise-spec' }),

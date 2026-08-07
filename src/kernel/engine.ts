@@ -34,6 +34,7 @@ import {
   type Feedback,
   type Finding,
   type Phase,
+  type PolicyEscalationCause,
   type ReviewVerdictKind,
   type VerifyOutcome,
 } from '../ontology'
@@ -93,7 +94,16 @@ export type Decision =
     }
   | {
       kind: 'raise-escalation'
-      source: 'agent' | 'stall' | 'policy'
+      source: 'agent' | 'stall'
+      phase: Phase
+      round?: number
+      question: string
+      refs?: string[]
+    }
+  | {
+      kind: 'raise-escalation'
+      source: 'policy'
+      policyCause: PolicyEscalationCause
       phase: Phase
       round?: number
       question: string
@@ -307,13 +317,16 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
   const allRaised = [...state.openEscalations, ...state.answeredEscalations]
   const raisedAfter = (seq: number, source: EscalationSource, phase: EscalationTarget): boolean =>
     allRaised.some((e) => e.seq > seq && e.source === source && e.phase === phase)
-  const unscopedRaisedAfter = (
-    seq: number,
-    source: EscalationSource,
-    phase: EscalationTarget,
-  ): boolean =>
+  const reconcileNoProgressRaisedAfter = (seq: number): boolean =>
     allRaised.some(
-      (e) => e.seq > seq && e.source === source && e.phase === phase && e.round === undefined,
+      (e) =>
+        e.seq > seq &&
+        e.source === 'policy' &&
+        e.phase === 'reconcile' &&
+        (e.policyCause === 'reconcile-no-progress' ||
+          // Compatibility for durable logs written before policyCause existed.
+          // An explicit different cause must never inherit this old meaning.
+          (e.policyCause === undefined && e.round === undefined)),
     )
 
   // Latest-only guidance for an explicit destination (§15.6-B). Plan/code
@@ -415,6 +428,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     return {
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'verify-failure-limit',
       phase: verifyPhase(lastFail.step),
       question: `maxVerifyAttempts (${config.policy.maxVerifyAttempts}) exhausted: verify:${lastFail.step} is still failing`,
     }
@@ -565,17 +579,17 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
       if (
         baseUnchanged &&
         log.reconcileNoProgressCount >= config.policy.maxReconcileAttempts &&
-        !unscopedRaisedAfter(log.lastConflict.seq, 'policy', 'reconcile')
+        !reconcileNoProgressRaisedAfter(log.lastConflict.seq)
       ) {
         // Only reconciles that leave the PR conflicted against the same
-        // authoritative base consume this budget. The roundless raise is this
-        // conflict-scoped condition's durable identity; a round-scoped runner
-        // failure must be answered and retried without waiving this guard.
-        // A moving-base race always gets another monotonic attempt, even after
-        // prior no-progress outcomes.
+        // authoritative base consume this budget. policyCause is this
+        // conflict-scoped condition's durable identity; round remains only
+        // occurrence scope. A moving-base race always gets another monotonic
+        // attempt, even after prior no-progress outcomes.
         return {
           kind: 'raise-escalation',
           source: 'policy',
+          policyCause: 'reconcile-no-progress',
           phase: 'reconcile',
           question:
             `maxReconcileAttempts (${config.policy.maxReconcileAttempts}) exhausted: ` +
@@ -682,6 +696,7 @@ function decideLoop(args: LoopArgs): Decision | 'approved' {
     return {
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'review-round-limit',
       phase: reviewer,
       round: verdict.round,
       question: `maxReviewRounds (${policy.maxReviewRounds}) exhausted without approval`,

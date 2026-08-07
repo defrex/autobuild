@@ -677,8 +677,12 @@ producer continuation state, and records `phase.failed` with
 `phase session budget expired after <seconds> seconds`. It does not select an
 alternate because it is kernel policy, not a provider failure. The ordinary
 phase-attempt guard retries from the primary and raises an answerable policy
-escalation when exhausted. A typed terminal deposited at the deadline remains
-authoritative. Agent finalize post-step expiry instead records that
+escalation when exhausted. Operator cancellation does not disable the captured
+deadline: a cooperative adapter still returns promptly, while an adapter that
+ignores cancellation is released when the deadline arrives. If operator abort
+arrived first, that release stays an abort control outcome, starts no alternate,
+and records no `phase.failed`. A typed terminal deposited before either boundary
+remains authoritative. Agent finalize post-step expiry instead records that
 failure-tolerant step as `ok = false` and files its follow-up observation.
 Harvest sessions and direct verify/finalize check commands are not covered by
 this setting.
@@ -703,12 +707,16 @@ For each repeat conflict, Autobuild compares the base merged by the most recent
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the
 attempt high-water. An unchanged base consumes `maxReconcileAttempts` and
-escalates when the bound is exhausted. Runner failures while checking progress
-or refreshing the base are acknowledged separately from this no-progress
-condition. Answering one lets the authoritative decision finish, but if the
-unchanged-base bound is already exhausted, Autobuild raises the no-progress
-escalation before starting another reconcile. Post-reconcile verification still
-runs in full and remains independently bounded by `maxVerifyAttempts`.
+escalates when the bound is exhausted. Every current policy escalation carries
+a closed `policyCause`; reconcile no-progress uses `reconcile-no-progress`,
+while `round` remains occurrence scope. Runner failures while checking progress
+or refreshing the base therefore remain separate even if another legitimate
+condition is roundless. Answering one lets the authoritative decision finish,
+but if the unchanged-base bound is already exhausted, Autobuild raises the
+matching no-progress escalation before starting another reconcile. Cause-less
+historical roundless policy/reconcile raises retain their former no-progress
+meaning on replay without migration. Post-reconcile verification still runs in
+full and remains independently bounded by `maxVerifyAttempts`.
 
 Harvest is driven by repository pressure during dispatcher ticks, not a wall
 clock, and is independent of build `capacity`. A run starts when observation

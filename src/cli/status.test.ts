@@ -730,6 +730,7 @@ describe('detail', () => {
         phase: 'code-review',
         round: 1,
         source: 'policy',
+        policyCause: 'non-retryable-phase-failure',
         question: `code-review stopped after a non-retryable provider failure: ${KIMI_QUOTA}`,
       },
     })

@@ -1,4 +1,8 @@
 import { resolve } from 'node:path'
+import {
+  DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS,
+  terminateProcessGroup,
+} from '../../processes/process-group'
 import type {
   BuildExecution,
   BuildExecutionExit,
@@ -26,7 +30,7 @@ export class LocalBuildExecution implements BuildExecution {
   constructor(opts: LocalBuildExecutionOptions = {}) {
     this.entrypoint = opts.entrypoint ?? resolve(import.meta.dir, '../../../bin/ab-build-runner.ts')
     this.env = opts.env ?? process.env
-    this.stopTimeoutMs = opts.stopTimeoutMs ?? 5_000
+    this.stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS
     this.spawn = opts.spawn ?? Bun.spawn
   }
 
@@ -39,30 +43,30 @@ export class LocalBuildExecution implements BuildExecution {
       stdin: 'ignore',
       stdout: 'ignore',
       stderr: 'ignore',
+      // On POSIX this makes the build child a new session and process-group
+      // leader. Every agent tool descendant inherits that group by default.
+      detached: true,
     })
-    let stopping: Promise<void> | undefined
-    const completion: Promise<BuildExecutionExit> = child.exited.then((exitCode) => ({
-      exitCode,
-      ...(child.signalCode !== null ? { signal: child.signalCode } : {}),
-    }))
+    let reaping: Promise<void> | undefined
+    const reap = (): Promise<void> =>
+      (reaping ??= terminateProcessGroup(child.pid, this.stopTimeoutMs))
+    const leaderExit = child.exited.then(
+      (exitCode): BuildExecutionExit => ({
+        exitCode,
+        ...(child.signalCode !== null ? { signal: child.signalCode } : {}),
+      }),
+    )
+    const completion = leaderExit.then(async (exit) => {
+      // A naturally exited leader may leave inherited descendants behind.
+      await reap()
+      return exit
+    })
 
     return {
       pid: child.pid,
       completion,
-      stop: () => {
-        stopping ??= (async () => {
-          if (child.exitCode !== null) return
-          child.kill('SIGTERM')
-          const exited = await Promise.race([
-            child.exited.then(() => true),
-            Bun.sleep(this.stopTimeoutMs).then(() => false),
-          ])
-          if (!exited && child.exitCode === null) {
-            child.kill('SIGKILL')
-            await child.exited
-          }
-        })()
-        return stopping
+      stop: async () => {
+        await Promise.all([reap(), leaderExit])
       },
     }
   }

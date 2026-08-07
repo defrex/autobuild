@@ -218,6 +218,7 @@ readyState = "ready"
         phase: 'plan',
         round: 1,
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question: 'Which cached behavior should be used?',
       },
     })
