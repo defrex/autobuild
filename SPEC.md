@@ -684,10 +684,15 @@ aborts the turn, ends any available handle, drops producer continuation state,
 and emits retryable `phase.failed` with `phase session budget expired after
 <seconds> seconds`; it is kernel policy and therefore does not select a provider
 alternate. The existing phase-attempt guard retries and then raises an
-answerable policy escalation. Agent finalize post-step expiry remains
-failure-tolerant. Harvest sessions and direct check commands are outside this
-budget. If the turn already wrote a valid typed terminal, that terminal remains
-authoritative and no contradictory failure is appended.
+answerable policy escalation. Operator cancellation and the captured deadline
+remain independent safeguards: an operator request aborts the adapter promptly,
+but the deadline still releases the wait if the adapter ignores cancellation.
+When the operator request arrived first, that release remains an abort control
+outcome and appends no phase failure or provider substitution. Agent finalize
+post-step expiry remains failure-tolerant. Harvest sessions and direct check
+commands are outside this budget. If the turn already wrote a valid typed
+terminal, that terminal remains authoritative and no contradictory failure is
+appended.
 
 This completes the sentinel-parsing replacement: success is only expressible
 through the typed channel, so "the agent rambled and exited" can never be
@@ -742,7 +747,9 @@ implementer:  ab context   (findings.json now materialized) → …
   policy [D5].
 - *Session budget expiry* → abort and best-effort `end`, then retryable
   `phase.failed {error: "phase session budget expired after … seconds"}`; retry
-  from the primary and escalate under the existing attempt cap [D5].
+  from the primary and escalate under the existing attempt cap. If operator
+  abort already owns cancellation, the same deadline only bounds the wait and
+  the runner acknowledges abort without a phase failure [D5].
 - *Provider rejection* → transcript deposited; eligible failures walk the
   role's declared alternates within one attempt. A stopped/exhausted chain
   emits one `phase.failed` with the final verbatim error and every tried target;

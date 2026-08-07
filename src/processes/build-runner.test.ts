@@ -3210,6 +3210,192 @@ describe('phase-session budget', () => {
     ])
   })
 
+  test('operator abort keeps the deadline armed for an abort-ignoring start and skips alternates', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let observedSignal: AbortSignal | undefined
+    let starts = 0
+    const stuck: AgentRunner = {
+      name: 'abort-ignoring-start',
+      start: (opts) => {
+        starts += 1
+        observedSignal = opts.signal
+        return new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {})
+      },
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: {
+          runner: 'abort-ignoring-start',
+          usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        },
+      }),
+    }
+    const configToml = CONFIG_TOML.replace(
+      'plan = { runtime = "scripted", model = "m-plan" }',
+      'default = { runtime = "scripted" }\n' +
+        'plan = { runtime = "scripted", model = "m-plan", ' +
+        'alternates = [{ runtime = "pi", model = "kimi-k3" }] }',
+    )
+    const h = await makeHarness({
+      configToml,
+      runtimeRunner: stuck,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+    })
+
+    const running = h.br.run()
+    for (let spin = 0; spin < 100 && observedSignal === undefined; spin += 1) {
+      await Bun.sleep(1)
+    }
+    if (observedSignal === undefined) throw new Error('plan start did not receive a signal')
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop the stuck primary' },
+    })
+    await Promise.race([
+      (async () => {
+        while (!observedSignal.aborted) await Bun.sleep(1)
+      })(),
+      Bun.sleep(1000).then(() => {
+        throw new Error('operator abort did not cancel the start promptly')
+      }),
+    ])
+
+    expect(timers.activeCount).toBe(1)
+    await timers.expireNext()
+    expect((await running).status).toBe('aborted')
+
+    const events = await h.store.getEvents(SLUG)
+    expect(starts).toBe(1)
+    expect(
+      ofType(events, 'session.started')
+        .filter((event) => event.payload.phase === 'plan')
+        .map((event) => event.payload.runner),
+    ).toEqual(['scripted'])
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect(ofType(events, 'build.aborted')).toHaveLength(1)
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
+  })
+
+  test('operator-first deadline release bounds a continued producer and preserves its terminal', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let store: BuildStore | undefined
+    let continuedSignal: AbortSignal | undefined
+    let continues = 0
+    const ended: string[] = []
+    const continuing: AgentRunner = {
+      name: 'abort-ignoring-continue',
+      start: async (opts) => {
+        if (store === undefined) throw new Error('test store was not initialized')
+        const session = opts.env.AB_SESSION
+        if (session === undefined) throw new Error('session env was not supplied')
+        if (opts.skill === 'ab-plan') {
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'plan', content: 'plan round 1' }],
+            (deposited) => ({
+              actor: agentActor('plan', session),
+              type: 'plan.completed',
+              payload: { round: 1, artifact: refOf(deposited) },
+            }),
+          )
+          return {
+            session: { id: 'producer-handle', runner: 'abort-ignoring-continue' },
+            result: defaultTurnResult('planned'),
+          }
+        }
+        if (opts.skill === 'ab-plan-review') {
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'plan-review', content: 'revise plan' }],
+            (deposited) => ({
+              actor: agentActor('plan-review', session),
+              type: 'plan-review.verdict',
+              payload: {
+                round: 1,
+                verdict: 'revise',
+                findings: [FINDING],
+                artifact: refOf(deposited),
+              },
+            }),
+          )
+          return {
+            session: { id: 'review-handle', runner: 'abort-ignoring-continue' },
+            result: defaultTurnResult('revision requested'),
+          }
+        }
+        throw new Error(`unexpected skill ${opts.skill}`)
+      },
+      continue: (_session, _message, opts) => {
+        continues += 1
+        continuedSignal = opts?.signal
+        return new Promise<AgentTurnResult>(() => {})
+      },
+      end: async (session) => {
+        ended.push(session.id)
+        return {
+          content: '',
+          metadata: {
+            runner: 'abort-ignoring-continue',
+            usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+          },
+        }
+      },
+    }
+    const h = await makeHarness({
+      handlers: (availableStore) => {
+        store = availableStore
+        return {}
+      },
+      runtimeRunner: continuing,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+    })
+
+    const running = h.br.run()
+    for (let spin = 0; spin < 100 && continuedSignal === undefined; spin += 1) {
+      await Bun.sleep(1)
+    }
+    if (continuedSignal === undefined) throw new Error('plan continuation did not start')
+    const currentPlanSession = ofType(await h.store.getEvents(SLUG), 'session.started')
+      .filter((event) => event.payload.phase === 'plan')
+      .at(-1)
+    if (currentPlanSession === undefined) throw new Error('continued plan bracket was not recorded')
+    await h.store.appendWithArtifacts(
+      SLUG,
+      [{ kind: 'plan', content: 'plan round 2 landed before abort observation' }],
+      (deposited) => ({
+        actor: agentActor('plan', currentPlanSession.payload.session),
+        type: 'plan.completed',
+        payload: { round: 2, artifact: refOf(deposited) },
+      }),
+    )
+    await h.store.append(SLUG, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'stop the continued producer' },
+    })
+    await Promise.race([
+      (async () => {
+        while (!continuedSignal.aborted) await Bun.sleep(1)
+      })(),
+      Bun.sleep(1000).then(() => {
+        throw new Error('operator abort did not cancel the continuation promptly')
+      }),
+    ])
+
+    expect(timers.activeCount).toBe(1)
+    await timers.expireNext()
+    expect((await running).status).toBe('aborted')
+
+    const events = await h.store.getEvents(SLUG)
+    expect(continues).toBe(1)
+    expect(ofType(events, 'plan.completed').map((event) => event.payload.round)).toEqual([1, 2])
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect(ofType(events, 'build.aborted')).toHaveLength(1)
+    expect(ended).toContain('producer-handle')
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
+  })
+
   test('a typed terminal deposited before expiry remains authoritative', async () => {
     const timers = new ManualSessionBudgetScheduler()
     const stuck: AgentRunner = {
@@ -4230,8 +4416,10 @@ describe('operator commands (D2)', () => {
   })
 
   test('an abort cancels a live turn, deposits its transcript, and retains the execution lease', async () => {
+    const timers = new ManualSessionBudgetScheduler()
     let observedSignal: AbortSignal | undefined
     const h = await makeHarness({
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
       handlers: () => ({
         plan: async (ctx) => {
           observedSignal = ctx.opts.signal
@@ -4257,6 +4445,7 @@ describe('operator commands (D2)', () => {
 
     expect(observedSignal.aborted).toBe(true)
     expect(state.status).toBe('aborted')
+    expect(timers.activeCount).toBe(0)
     const events = await h.store.getEvents(SLUG)
     expect(events.some((event) => event.type === 'session.ended')).toBe(true)
     expect(events.some((event) => event.type === 'phase.failed')).toBe(false)

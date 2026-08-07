@@ -104,12 +104,16 @@ exhaustion.
 `sessionBudgetSeconds` value for each logical role, with the policy default as
 its final fallback. `BuildRunner` captures it at the session action boundary,
 starts an unref'ed timer after `session.started`, and composes expiry with the
-existing operator `AbortController`. Expiry stops waiting even if an adapter
-ignores cancellation, best-effort ends an available or late-returning handle,
-drops producer continuation state, and reuses retryable `phase.failed`; it does
-not enter the provider-alternate classifier. The event log is checked before
-failure so a typed terminal racing the deadline wins. Finalize agent post-steps
-reuse the timer but drain expiry through their existing failure-tolerant
+existing operator `AbortController`. Operator abort and deadline remain
+independent: abort cancels promptly, while the captured deadline still stops
+waiting if the adapter ignores that cancellation. First cause owns
+classification, so an operator-first deadline release returns to abort
+acknowledgement without `phase.failed` or provider substitution. Ordinary
+expiry best-effort ends an available or late-returning handle, drops producer
+continuation state, and reuses retryable `phase.failed`; it does not enter the
+provider-alternate classifier. The event log is checked before failure so a
+typed terminal racing either boundary remains authoritative. Finalize agent
+post-steps reuse the timer but drain expiry through their existing failure-tolerant
 completion and observation path. Harvest and deterministic commands do not use
 this build-phase timer.
 

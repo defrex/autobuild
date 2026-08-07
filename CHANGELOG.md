@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#215](https://github.com/defrex/autobuild/pull/215) — Keep phase turns bounded after operator abort
 - [#214](https://github.com/defrex/autobuild/pull/214) — Recover transcripts after terminal turn errors
 - [#213](https://github.com/defrex/autobuild/pull/213) — Reap build descendant processes
 - [#212](https://github.com/defrex/autobuild/pull/212) — Bound phase agent sessions with wall-clock budgets

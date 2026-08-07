@@ -1393,9 +1393,10 @@ export class BuildRunner {
   // ── The session bracket (§15.3) ────────────────────────────────────────────
 
   /** Run one adapter turn under the logical role's wall-clock budget. The
-   * expiry promise is resolved one microtask after abort so a conforming
-   * adapter can return its endable handle first; an adapter that ignores
-   * cancellation cannot keep the kernel waiting. */
+   * expiry promise is resolved one microtask after the deadline so a conforming
+   * adapter can return its endable handle first. An earlier operator abort owns
+   * classification, but does not disarm this backstop for an adapter that
+   * ignores cancellation. */
   private async runBudgetedTurn<T>(
     preSeq: number,
     budgetSeconds: number,
@@ -1422,9 +1423,10 @@ export class BuildRunner {
     })
     const schedule = this.deps.opts?.scheduleSessionBudget ?? defaultSessionBudgetScheduler
     const cancelTimer = schedule(() => {
-      if (controller.signal.aborted) return
-      abortCause = 'budget'
-      controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+      if (!controller.signal.aborted) {
+        abortCause = 'budget'
+        controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+      }
       queueMicrotask(() => resolveExpiry({ kind: 'expired' }))
     }, budgetSeconds * 1000)
 
@@ -1470,8 +1472,8 @@ export class BuildRunner {
   /** A start call can ignore cancellation and return a handle after the kernel
    * has advanced. End that late handle in the background so it never becomes
    * reusable continuation state. The stale durable bracket is intentionally
-   * left for the existing recovery model; process-tree reaping is out of
-   * scope. */
+   * left for the existing recovery model; complete descendant reaping remains
+   * the execution supervisor's exit boundary. */
   private releaseLateStart(
     pending: Promise<Exclude<TurnSettlement<{ session: AgentSessionHandle }>, { kind: 'expired' }>>,
     runner: AgentRunner,
