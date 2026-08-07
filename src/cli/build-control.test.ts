@@ -60,6 +60,7 @@ async function raise(
       phase: 'implement',
       round: 1,
       source,
+      ...(source === 'policy' ? { policyCause: 'phase-attempt-limit' as const } : {}),
       question: `Question ${id}?`,
       ...(refs !== undefined ? { refs } : {}),
     },

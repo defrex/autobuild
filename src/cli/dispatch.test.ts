@@ -6046,6 +6046,7 @@ describe('abDispatch interactive keyboard controls', () => {
             id,
             phase: 'finalize',
             source,
+            ...(source === 'policy' ? { policyCause: 'phase-attempt-limit' as const } : {}),
             question: `${source} blocker remains unresolved`,
           },
         })

@@ -722,6 +722,7 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start
         id: 'esc_r1',
         phase: 'reconcile',
         source: 'policy',
+        policyCause: 'reconcile-no-progress',
         question: 'maxReconcileAttempts (3) exhausted',
       },
     })

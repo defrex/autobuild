@@ -938,6 +938,7 @@ describe('setup command (§16.1)', () => {
     expect(ofType(events, 'escalation.raised')[0]?.payload).toMatchObject({
       phase: 'setup',
       source: 'policy',
+      policyCause: 'setup-failure-limit',
     })
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('bun install')
     expect(ofType(events, 'escalation.raised')[0]?.payload.question).toContain('typecheck failed')
@@ -992,6 +993,7 @@ describe('setup command (§16.1)', () => {
         id: 'esc_other',
         phase: 'code-review',
         source: 'policy',
+        policyCause: 'review-round-limit',
         question: 'review policy exhausted',
       },
     })
@@ -1376,6 +1378,7 @@ describe('step', () => {
       phase: 'reconcile',
       round: 4,
       source: 'policy',
+      policyCause: 'phase-attempt-limit',
       question: expect.stringContaining('maxPhaseAttempts 2'),
     })
     expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
@@ -1404,6 +1407,7 @@ describe('step', () => {
     expect(await h.br.step()).toEqual({
       kind: 'raise-escalation',
       source: 'policy',
+      policyCause: 'reconcile-no-progress',
       phase: 'reconcile',
       question:
         'maxReconcileAttempts (3) exhausted: reconciliation made no progress against an unchanged base',
@@ -1412,6 +1416,9 @@ describe('step', () => {
     const escalations = ofType(events, 'escalation.raised')
     expect(escalations).toHaveLength(2)
     expect(escalations[0]!.payload.round).toBe(4)
+    expect(escalations[1]!.payload).toMatchObject({
+      policyCause: 'reconcile-no-progress',
+    })
     expect(escalations[1]!.payload.round).toBeUndefined()
     expect(ofType(events, 'reconcile.started')).toHaveLength(3)
     expect(h.runner.sessions.size).toBe(0)
@@ -2916,6 +2923,7 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     expect(transcriptJson.turns[0].result.failure.message).toBe(KIMI_QUOTA)
     const escalation = ofType(events, 'escalation.raised')[0]!
     expect(escalation.payload.source).toBe('policy')
+    expect(escalation.payload.policyCause).toBe('non-retryable-phase-failure')
     expect(escalation.payload.question).toContain('non-retryable')
     expect(escalation.payload.question).toContain(KIMI_QUOTA)
 
@@ -3289,6 +3297,7 @@ describe('no-terminal retry policy (D5)', () => {
     const escalation = ofType(events, 'escalation.raised')[0]!
     expect(escalation.actor).toEqual({ kind: 'kernel' })
     expect(escalation.payload.source).toBe('policy')
+    expect(escalation.payload.policyCause).toBe('phase-attempt-limit')
     expect(escalation.payload.phase).toBe('plan')
     expect(escalation.payload.round).toBe(1)
     expect(escalation.payload.question).toContain('maxPhaseAttempts')

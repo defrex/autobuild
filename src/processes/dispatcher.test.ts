@@ -3773,6 +3773,7 @@ describe('Dispatcher startup resume', () => {
         phase: 'plan',
         round: 1,
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question: 'plan failed twice',
       },
     })
@@ -3815,6 +3816,7 @@ describe('Dispatcher startup resume', () => {
         id: 'esc_setup',
         phase: 'setup',
         source: 'policy',
+        policyCause: 'setup-failure-limit',
         question: 'setup failed three times',
       },
     })

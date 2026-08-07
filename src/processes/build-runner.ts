@@ -454,6 +454,7 @@ export class BuildRunner {
         id: this.deps.ids('esc'),
         phase: 'setup',
         source: 'policy',
+        policyCause: 'setup-failure-limit',
         question: this.setupQuestion(failure),
       },
     } satisfies EventWrite<'escalation.raised'>)
@@ -704,6 +705,7 @@ export class BuildRunner {
         phase: decision.phase,
         ...(decision.round !== undefined ? { round: decision.round } : {}),
         source: decision.source,
+        ...(decision.source === 'policy' ? { policyCause: decision.policyCause } : {}),
         question: decision.question,
         ...(decision.refs !== undefined ? { refs: decision.refs } : {}),
       },
@@ -2201,6 +2203,7 @@ export class BuildRunner {
         phase,
         round,
         source: 'policy',
+        policyCause: 'non-retryable-phase-failure',
         question:
           `${phase} round ${round} stopped after a non-retryable ` +
           `provider/runner failure on attempt ${failures.count}; last error: ` +
@@ -2229,6 +2232,7 @@ export class BuildRunner {
         phase,
         round,
         source: 'policy',
+        policyCause: 'phase-attempt-limit',
         question:
           `${phase} round ${round} failed ${failures.count} times ` +
           `(maxPhaseAttempts ${this.maxPhaseAttempts}); last error: ` +

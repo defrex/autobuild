@@ -102,6 +102,18 @@ export type ObservationKind = z.infer<typeof observationKindSchema>
 export const escalationSourceSchema = z.enum(['agent', 'stall', 'policy'])
 export type EscalationSource = z.infer<typeof escalationSourceSchema>
 
+/** Closed identity for every policy-authored escalation condition. `round`
+ * scopes an occurrence; it does not identify which policy guard raised it. */
+export const policyEscalationCauseSchema = z.enum([
+  'review-round-limit',
+  'verify-failure-limit',
+  'reconcile-no-progress',
+  'setup-failure-limit',
+  'phase-attempt-limit',
+  'non-retryable-phase-failure',
+])
+export type PolicyEscalationCause = z.infer<typeof policyEscalationCauseSchema>
+
 /** Setup may block a build through the escalation protocol without becoming a
  * pipeline phase. Keeping this target separate preserves the fixed phase
  * grammar while allowing the ordinary answer/retry machinery to re-arm setup. */
