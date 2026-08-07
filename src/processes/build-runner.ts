@@ -9,14 +9,16 @@
  * the log and `decideNext` re-decides the same started-but-unterminated phase
  * from its start (§15.6-C) — resumability is not a feature (§2.2).
  *
- * Ownership: `attach` claims the build's lease (§7.4) so a second sandbox can
- * never execute the same build. It may then acknowledge a pending pause or
+ * Ownership: `attach` claims or renews the build's execution lease (§7.4) so a
+ * second sandbox can never execute the same build. The local supervising kernel
+ * reserves that same holder before launch. The runner may then acknowledge a pending pause or
  * abort without preparing the workspace; workspace-backed work starts a
  * heartbeat interval before setup (liveness is mutable columns, never events
  * — §15.2.6). `run` exits when the build
  * parks (§11: a parked build's runner exits; cron re-attaches when
- * actionable). Nothing is released on exit — leases expire on their own and
- * the dispatcher's sweep re-attaches (§15.6-C).
+ * actionable). The runner releases nothing on exit: a local execution supervisor
+ * releases ownership after full tree teardown, while abrupt loss falls back to
+ * expiry and the dispatcher's sweep re-attaches (§15.6-C).
  *
  * Documented pragmatisms (where SPEC forces are in tension, the choice and
  * its reason live here):
@@ -73,6 +75,7 @@ import type {
   AgentTurnResult,
   Forge,
 } from '../ports/types'
+import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 
@@ -353,7 +356,7 @@ export class BuildRunner {
   constructor(private readonly deps: BuildRunnerDeps) {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
-    this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
+    this.leaseTtlMs = deps.opts?.leaseTtlMs ?? BUILD_EXECUTION_LEASE_TTL_MS
     this.boundaryConfig = deps.config
     this.boundaryResolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
   }
@@ -636,10 +639,8 @@ export class BuildRunner {
       await store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
     } else {
       await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
-      // Abort is terminal runner work, not an ordinary park. Release ownership
-      // immediately so janitor cleanup never waits for the TTL.
-      await store.releaseLease(slug, this.deps.instance)
-      this.attached = false
+      // The execution supervisor retains ownership until the complete process
+      // tree is gone; janitor cleanup is gated by that live lease.
     }
   }
 

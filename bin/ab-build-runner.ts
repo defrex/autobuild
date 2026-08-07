@@ -2,6 +2,10 @@
 /** Private shipped child: one operating-system process per build. */
 import { runBuildChild } from '../src/processes/build-child'
 import { watchBuildParent } from '../src/processes/build-parent-watch'
+import {
+  launchProcessGroupReaper,
+  processGroupReaperOptions,
+} from '../src/processes/process-group-reaper'
 import { BUILD_RUNNER_OPTIONS_ENV } from '../src/ports/workspace/local-build-execution'
 import type { BuildExecutionStart } from '../src/ports/workspace/build-execution'
 
@@ -27,13 +31,16 @@ try {
 }
 if (input === undefined) process.exit(2)
 
-// A build child must not outlive an abruptly dead local kernel. Stopping is
-// intentionally abrupt: no synthetic pipeline outcome or lease release is
-// manufactured; ordinary lease expiry drives recovery.
+// A build child must not outlive an abruptly dead local kernel. The detached
+// reaper survives group-wide escalation; no synthetic pipeline outcome or
+// lease release is manufactured, so ordinary lease expiry drives recovery.
 const stop = (code: number): never => process.exit(code)
 process.on('SIGINT', () => stop(130))
 process.on('SIGTERM', () => stop(143))
-const parentWatch = watchBuildParent(input.parentPid, () => stop(143))
+const parentWatch = watchBuildParent(input.parentPid, () => {
+  launchProcessGroupReaper(processGroupReaperOptions(process.pid))
+  stop(143)
+})
 
 let exitCode = 0
 try {

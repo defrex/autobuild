@@ -68,7 +68,11 @@ import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { createWorkspaceRuntime } from '../ports/workspace/create'
-import type { BuildExecution, BuildExecutionHandle } from '../ports/workspace/build-execution'
+import {
+  BUILD_EXECUTION_LEASE_TTL_MS,
+  type BuildExecution,
+  type BuildExecutionHandle,
+} from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
@@ -1682,7 +1686,8 @@ class DispatchLoop {
 
   /** Start one workspace-adjacent executor without handing it workspace,
    * config, or outcome channels. Capacity and local single-flight remain
-   * kernel decisions; the child claims the durable lease itself. */
+   * kernel decisions; the kernel reserves the durable execution lease before
+   * launch and retains it until the executor has reaped its complete tree. */
   private async launchRunner(slug: string): Promise<LaunchRunnerResult> {
     if (!this.acceptingBuildLaunches || this.activeBuildRuns.has(slug)) return 'already-active'
 
@@ -1690,9 +1695,25 @@ class DispatchLoop {
     const instance = `${this.host}-${slug}-${this.wiring.ids('inst')}`
     const active: ActiveBuildExecution = { reservation, instance, stopping: false }
     this.activeBuildRuns.set(slug, active)
+    let leaseClaimed = false
 
     try {
       await this.publishBuildConfig(slug)
+      leaseClaimed = await this.wiring.store.claimLease(
+        slug,
+        instance,
+        BUILD_EXECUTION_LEASE_TTL_MS,
+      )
+      if (!leaseClaimed) {
+        this.activeBuildRuns.delete(slug)
+        await this.appendStatus({
+          actor: DISPATCHER,
+          type: 'dispatcher.runner-settled',
+          payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+        })
+        this.say(`build ${slug} already held by another runner — skipped`)
+        return 'already-active'
+      }
       const handle = await this.wiring.buildExecution.start({
         slug,
         storeRef: this.wiring.storeRef,
@@ -1703,46 +1724,56 @@ class DispatchLoop {
 
       let tracked: Promise<void>
       tracked = handle.completion
-        .then(async (exit) => {
-          if (active.stopping) return
-          const diagnostic = await this.matchingRunnerDiagnostic(slug, instance)
-          if (diagnostic?.outcome === 'lease-held') {
-            await this.appendStatus({
-              actor: DISPATCHER,
-              type: 'dispatcher.runner-settled',
-              payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
-            })
-            this.say(`build ${slug} already held by another runner — skipped`)
-            return
-          }
+        .then(
+          async (exit) => {
+            try {
+              if (active.stopping) return
+              const diagnostic = await this.matchingRunnerDiagnostic(slug, instance)
+              if (diagnostic?.outcome === 'lease-held') {
+                await this.appendStatus({
+                  actor: DISPATCHER,
+                  type: 'dispatcher.runner-settled',
+                  payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+                })
+                this.say(`build ${slug} already held by another runner — skipped`)
+                return
+              }
 
-          const state = reduceBuild(await this.wiring.store.getEvents(slug))
-          if (diagnostic === null && exit.exitCode === 0) {
-            await this.appendStatus({
-              actor: DISPATCHER,
-              type: 'dispatcher.runner-settled',
-              payload: {
-                run: this.opts.kernelRunId!,
-                slug,
-                outcome: 'parked',
-                status: state.status,
-              },
-            })
-            this.say(`build ${slug} parked (${state.status})`)
-            return
-          }
+              const state = reduceBuild(await this.wiring.store.getEvents(slug))
+              if (diagnostic === null && exit.exitCode === 0) {
+                await this.appendStatus({
+                  actor: DISPATCHER,
+                  type: 'dispatcher.runner-settled',
+                  payload: {
+                    run: this.opts.kernelRunId!,
+                    slug,
+                    outcome: 'parked',
+                    status: state.status,
+                  },
+                })
+                this.say(`build ${slug} parked (${state.status})`)
+                return
+              }
 
-          const detail =
-            diagnostic?.error ??
-            `child exited ${exit.exitCode ?? 'without status'}${exit.signal ? ` (${exit.signal})` : ''}`
-          await this.appendStatus({
-            actor: DISPATCHER,
-            type: 'dispatcher.runner-settled',
-            payload: { run: this.opts.kernelRunId!, slug, outcome: 'failed', error: detail },
-          })
-          if (diagnostic?.outcome === 'setup-failed' && this.dashboard) return
-          this.warn(`build ${slug} runner failed: ${detail}`)
-        })
+              const detail =
+                diagnostic?.error ??
+                `child exited ${exit.exitCode ?? 'without status'}${exit.signal ? ` (${exit.signal})` : ''}`
+              await this.appendStatus({
+                actor: DISPATCHER,
+                type: 'dispatcher.runner-settled',
+                payload: { run: this.opts.kernelRunId!, slug, outcome: 'failed', error: detail },
+              })
+              if (diagnostic?.outcome === 'setup-failed' && this.dashboard) return
+              this.warn(`build ${slug} runner failed: ${detail}`)
+            } finally {
+              await this.wiring.store.releaseLease(slug, instance)
+            }
+          },
+          async (error) => {
+            await this.wiring.store.releaseLease(slug, instance)
+            throw error
+          },
+        )
         .finally(() => {
           this.inFlight.delete(tracked)
           if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
@@ -1756,6 +1787,7 @@ class DispatchLoop {
       if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
         this.activeBuildRuns.delete(slug)
       }
+      if (leaseClaimed) await this.wiring.store.releaseLease(slug, instance)
       await this.appendStatus({
         actor: DISPATCHER,
         type: 'dispatcher.runner-settled',
@@ -1781,8 +1813,8 @@ class DispatchLoop {
   }
 
   /** Ordinary kernel teardown reaps every build process. Deliberate stops are
-   * liveness-only and do not manufacture runner-failure notices or release a
-   * lease that must lapse naturally after abrupt termination. */
+   * liveness-only and do not manufacture runner-failure notices; each exact
+   * execution lease is released only after its complete tree has settled. */
   private async stopBuildExecutions(): Promise<void> {
     this.acceptingBuildLaunches = false
     const active = [...this.activeBuildRuns.values()]
