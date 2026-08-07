@@ -660,6 +660,54 @@ describe('detail', () => {
     expect(d.lastEvent?.actor.kind).toBe('kernel')
   })
 
+  test('a resumed phase reports only its fresh rerun session as open', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_dead',
+        role: 'code-review',
+        runner: 'pi',
+        phase: 'code-review',
+        round: 2,
+      },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session: 's_dead',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 4 },
+      },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'runner-2', host: 'host-2', resumedFromSeq: 4 },
+    })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 's_fresh',
+        role: 'code-review',
+        runner: 'pi',
+        phase: 'code-review',
+        round: 2,
+      },
+    })
+
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.openSessions.map((session) => session.session)).toEqual(['s_fresh'])
+    const rendered = renderDetail(d, NOW).join('\n')
+    expect(rendered).toContain('open sessions (1):')
+    expect(rendered).toContain('s_fresh')
+    expect(rendered).not.toContain('s_dead')
+  })
+
   test('renders the provider text from a non-retryable policy escalation', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })

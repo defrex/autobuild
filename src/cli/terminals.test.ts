@@ -1924,6 +1924,30 @@ describe('terminals — zombie sessions (D5)', () => {
     await expect(escalate(deps, { question: 'zombie question' })).rejects.toThrow(/already ended/)
   })
 
+  test('a terminal from a session reclaimed during recovery is rejected as a zombie', async () => {
+    await store.putArtifact(BUILD, { kind: 'plan', content: 'plan\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_test', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session: 's_test',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'runner-2', resumedFromSeq: 2 },
+      },
+    })
+
+    const deps = planDeps({ round: 1 })
+    await expect(done(deps)).rejects.toThrow(/session "s_test" already ended.*only the live retry/s)
+    await expect(escalate(deps, { question: 'late zombie question' })).rejects.toThrow(
+      /already ended/,
+    )
+  })
+
   test('a terminal after this session’s phase round failed is rejected; the retry’s own is not', async () => {
     // s_test started, the runner recorded phase.failed for plan@1 (its
     // session.ended never landed — the transcript deposit can fail §15.6-C),

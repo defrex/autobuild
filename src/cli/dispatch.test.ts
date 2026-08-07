@@ -5793,6 +5793,44 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => !latestPaintedFrame(term).includes('still open'))
       expect(latestPaintedFrame(term)).toContain('tokens 1 in/1 out, 1 turns')
 
+      await fx.store.append('session-close', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_reclaimed',
+          role: 'reconcile',
+          runner: 'pi',
+          phase: 'reconcile',
+          round: 1,
+        },
+      })
+      const resumeBoundary = (await fx.store.getEvents('session-close')).at(-1)!.seq
+      await fx.store.append('session-close', {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: 's_reclaimed',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'runner-2', resumedFromSeq: resumeBoundary },
+        },
+      })
+      Object.assign(term, { rows: 30 })
+      await waitFor(() => latestPaintedFrame(term).includes('reconcile phase reconcile round 1'))
+      input.press('right')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes('>   reconcile phase reconcile round 1'),
+      )
+      expect(latestPaintedFrame(term)).toContain('reclaimed')
+      expect(latestPaintedFrame(term)).toContain('transcript unavailable')
+      input.press('enter')
+      await waitFor(() =>
+        latestPaintedFrame(term).includes(
+          'This session was reclaimed by a recovering runner; transcript unavailable.',
+        ),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(latestPaintedFrame(term)).toContain('reclaimed by a recovering runner')
+
       input.press('interrupt')
       await run
       run = undefined
