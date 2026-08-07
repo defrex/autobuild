@@ -567,9 +567,13 @@ A build phase session that reaches its captured budget is aborted and ended
 best-effort. The kernel records retryable `phase.failed` with `phase session
 budget expired after <seconds> seconds`, retries from the primary under the
 existing phase-attempt cap, and raises an answerable policy escalation when
-exhausted. Kernel expiry never selects an alternate. A typed terminal racing
-the deadline remains authoritative. Agent finalize post-step expiry is
-failure-tolerant; Harvest and direct check commands are outside this budget.
+exhausted. Kernel expiry never selects an alternate. Operator cancellation does
+not disable the captured deadline: cooperative adapters return promptly, while
+the deadline releases a turn that ignores cancellation. If operator abort
+arrived first, that release remains an abort control outcome with no alternate
+or `phase.failed`. A typed terminal racing either boundary remains authoritative.
+Agent finalize post-step expiry is failure-tolerant; Harvest and direct check
+commands are outside this budget.
 
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed
