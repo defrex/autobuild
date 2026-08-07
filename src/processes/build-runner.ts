@@ -1671,9 +1671,17 @@ export class BuildRunner {
       if (terminal) {
         if (handle !== undefined) {
           try {
-            await owner.end(handle)
+            const transcript = await owner.end(handle)
+            await this.depositTranscriptAndEnd(
+              session,
+              bracket,
+              transcript.content,
+              transcript.metadata.usage,
+              transcript.metadata.model ?? target.model,
+            )
           } catch {
-            // The durable terminal remains authoritative over adapter failure.
+            // The durable terminal remains authoritative over adapter failure
+            // and best-effort transcript cleanup.
           }
         }
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
@@ -1930,9 +1938,17 @@ export class BuildRunner {
       if (handle !== undefined) {
         const owner = live?.runner ?? runner
         try {
-          await owner.end(handle)
+          const transcript = await owner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? model,
+          )
         } catch {
-          // The durable terminal remains authoritative over adapter failure.
+          // The durable terminal remains authoritative over adapter failure
+          // and best-effort transcript cleanup.
         }
       }
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
