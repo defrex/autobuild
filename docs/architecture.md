@@ -205,11 +205,15 @@ because force-killing the ticket claim before build creation would not be
 recoverable. The supervisor rechecks kernel-child liveness at the force boundary
 and projects the same normal, forced, or abnormal result (with available
 process/error detail) that the repository run-stopped evidence records. Ordinary
-kernel teardown stops and reaps all build groups. On abrupt kernel death, the
-build child's parent watch starts detached `bin/ab-process-group-reaper.ts`
-before exiting; that helper applies the same bounded group teardown while lease
-expiry remains the durable recovery fallback. The BuildStore lease remains the
-cross-process and workspace-release gate. `src/processes/dispatcher.ts` counts actual
+kernel teardown stops and reaps all build groups. Every build-child terminal
+path — natural completion, failure, SIGINT/SIGTERM, and parent-watch death —
+first starts exactly one detached `bin/ab-process-group-reaper.ts` while the
+leader still pins its process-group identity. The helper targets only that
+negative group id and applies the same bounded TERM-then-KILL teardown, so it
+survives abrupt kernel death. The live local supervisor independently awaits
+full-group disappearance before publishing completion and releasing its exact
+lease; lease expiry remains the durable recovery fallback. The BuildStore lease
+remains the cross-process and workspace-release gate. `src/processes/dispatcher.ts` counts actual
 schedules, not suppressed polls. Open session history is never a lock — a dead session
 may never close.
 
