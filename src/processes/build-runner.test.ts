@@ -894,7 +894,7 @@ describe('setup command (§16.1)', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
-  test('a pre-existing abort bypasses broken setup and releases the lease without workspace work', async () => {
+  test('a pre-existing abort bypasses broken setup and retains the execution lease', async () => {
     const h = await makeHarness({
       configToml: TOML_WITH_SETUP,
       failCommands: ['bun install'],
@@ -914,7 +914,7 @@ describe('setup command (§16.1)', () => {
     expect(ofType(events, 'runner.setup-failed')).toHaveLength(0)
     expect(events.some((event) => event.type.endsWith('.started'))).toBe(false)
     expect(h.runner.sessions.size).toBe(0)
-    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 
   test('bounds repeated setup failures, raises once, and parks further attaches', async () => {
@@ -968,7 +968,7 @@ describe('setup command (§16.1)', () => {
     expect(ofType(events, 'escalation.raised')).toHaveLength(1)
     expect(events.at(-1)?.type).toBe('build.aborted')
     expect(h.runner.sessions.size).toBe(0)
-    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 
   test('repairs setup exhaustion despite a later answered policy raise for another target', async () => {
@@ -4022,7 +4022,7 @@ describe('operator commands (D2)', () => {
     expect(h.runner.sessions.size).toBe(0) // no phase ever ran
   })
 
-  test('an abort cancels a live turn, deposits its transcript, and releases the lease', async () => {
+  test('an abort cancels a live turn, deposits its transcript, and retains the execution lease', async () => {
     let observedSignal: AbortSignal | undefined
     const h = await makeHarness({
       handlers: () => ({
@@ -4054,7 +4054,7 @@ describe('operator commands (D2)', () => {
     expect(events.some((event) => event.type === 'session.ended')).toBe(true)
     expect(events.some((event) => event.type === 'phase.failed')).toBe(false)
     expect(events.some((event) => event.type === 'plan.completed')).toBe(false)
-    expect((await h.store.getBuild(SLUG))?.lease).toBeUndefined()
+    expect((await h.store.getBuild(SLUG))?.lease?.holder).toBe('runner-1')
   })
 })
 
