@@ -3,10 +3,11 @@ import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
-import { renderDashboard } from './dashboard/render'
+import { dashboardContentWidth, detailScrollLimit, renderDashboard } from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
 import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
+import { paintableRows } from './dashboard/live'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -503,6 +504,160 @@ test('frontend owns live observation pressure and retains the last factual sampl
   )
   expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
   expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
+
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
+  await running
+})
+
+test('frontend reveals a reclaimed-session message against the candidate detail model', async () => {
+  const repo = '/reclaimed-message-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const slug = 'reclaimed-message'
+  const ticket = { source: 'fake', id: 'AUT-1', title: 'Reclaimed message' }
+  await store.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo, ticket, baseBranch: 'main' },
+  })
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 's_reclaimed',
+      role: 'implement',
+      runner: 'pi',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'session.ended',
+    payload: {
+      session: 's_reclaimed',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'runner-2', resumedFromSeq: 2 },
+    },
+  })
+  for (let round = 2; round <= 9; round += 1) {
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: `s_open_${round}`,
+        role: 'implement',
+        runner: 'pi',
+        phase: 'implement',
+        round,
+      },
+    })
+  }
+
+  const columns = 100
+  const rows = 12
+  const message = 'This session was reclaimed by a recovering runner; transcript unavailable.'
+  const detailPaints: Array<{
+    message?: string
+    scroll: number
+    limit: number
+    frame: string
+  }> = []
+  let buildPainted = false
+  let input: ((event: TerminalInputEvent) => void) | undefined
+  const childDone = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns,
+      rows,
+      interactive: true,
+    },
+    input: {
+      start(handler) {
+        input = handler
+        return () => {
+          input = undefined
+        }
+      },
+    },
+    once: false,
+    resolveDashboardRenderer: () => (model, options) => {
+      const frame = renderDashboard(model, { ...options, color: false })
+      buildPainted ||= model.builds.some((build) => build.slug === slug)
+      if (model.view?.kind === 'detail') {
+        detailPaints.push({
+          ...(model.view.message !== undefined ? { message: model.view.message } : {}),
+          scroll: model.view.scroll,
+          limit: detailScrollLimit(model, dashboardContentWidth(columns), paintableRows(rows)),
+          frame: frame.join('\n'),
+        })
+      }
+      return frame
+    },
+    launchChild: ({ run }) => {
+      const startup = store.appendRepoWithArtifacts(
+        repo,
+        [
+          {
+            kind: 'dispatcher-effective-config',
+            content: JSON.stringify({
+              capacity: 1,
+              roles: { default: { runtime: 'claude' } },
+              tickets: { source: 'file', readyState: 'ready' },
+            }),
+          },
+        ],
+        (artifacts) => ({
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run,
+            pid: 999,
+            effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+            roleWarnings: [],
+          },
+        }),
+      )
+      return { completed: startup.then(() => childDone.promise), async stop() {} }
+    },
+  })
+
+  const running = frontend.run()
+  await waitFor(() => input !== undefined && buildPainted, 'first build frame')
+  input!({ type: 'down' })
+  input!({ type: 'enter' })
+  await waitFor(() => detailPaints.length > 0, 'build detail')
+
+  for (let index = 0; index < 100; index += 1) input!({ type: 'down' })
+  const before = detailPaints.at(-1)!
+  expect(before.message).toBeUndefined()
+  expect(before.limit).toBeGreaterThan(0)
+  expect(before.scroll).toBe(before.limit)
+
+  const paintBoundary = detailPaints.length
+  input!({ type: 'enter' })
+  await waitFor(
+    () => detailPaints.slice(paintBoundary).some((paint) => paint.message === message),
+    'reclaimed-session message paint',
+  )
+  const firstMessagePaint = detailPaints
+    .slice(paintBoundary)
+    .find((paint) => paint.message === message)!
+  expect(firstMessagePaint.limit).toBeGreaterThan(before.limit)
+  expect(firstMessagePaint.scroll).toBeGreaterThan(before.scroll)
+  expect(firstMessagePaint.scroll).toBe(firstMessagePaint.limit)
+  expect(firstMessagePaint.scroll).toBeLessThanOrEqual(firstMessagePaint.limit)
+  expect(firstMessagePaint.frame).toContain(message)
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
