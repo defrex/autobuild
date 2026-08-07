@@ -100,6 +100,19 @@ re-arm boundary. `BuildRunner` applies the same independent targeting at the
 setup seam, where only a setup-targeted policy raise can satisfy setup
 exhaustion.
 
+**Phase-session budgets.** `src/ports/runner/routing.ts` resolves one inherited
+`sessionBudgetSeconds` value for each logical role, with the policy default as
+its final fallback. `BuildRunner` captures it at the session action boundary,
+starts an unref'ed timer after `session.started`, and composes expiry with the
+existing operator `AbortController`. Expiry stops waiting even if an adapter
+ignores cancellation, best-effort ends an available or late-returning handle,
+drops producer continuation state, and reuses retryable `phase.failed`; it does
+not enter the provider-alternate classifier. The event log is checked before
+failure so a typed terminal racing the deadline wins. Finalize agent post-steps
+reuse the timer but drain expiry through their existing failure-tolerant
+completion and observation path. Harvest and deterministic commands do not use
+this build-phase timer.
+
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
 answer` and the dashboard's blocked-build resume control are two surfaces over
@@ -459,8 +472,9 @@ behavioral assertions against every implementation:
   ambient environment refresh and cancellation, distribution-managed `ab`
   resolution, and the optional tool-free one-shot capability.
 
-`src/ports/runner/routing.ts` eagerly resolves every role's primary and ordered
-alternate targets. `build-runner.ts` and `harvest-runner.ts` own the deterministic
+`src/ports/runner/routing.ts` eagerly resolves every role's primary, ordered
+alternate targets, and independently inherited build-session budget.
+`build-runner.ts` and `harvest-runner.ts` own the deterministic
 primary-first attempt loop: each substitution opens a new session bracket,
 records provenance on its start, and only complete-chain exhaustion consumes an
 existing phase/session attempt. This keeps runtime availability routing out of

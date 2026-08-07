@@ -30,7 +30,7 @@ import {
   type Script,
   type ScriptContext,
 } from '../ports/runner/fake'
-import type { AgentTurnResult } from '../ports/types'
+import type { AgentRunner, AgentSessionHandle, AgentTurnResult } from '../ports/types'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -43,6 +43,7 @@ import {
   parseNulChangedPaths,
   selectPublishedBranchHead,
   selectVerifyDiffBase,
+  type BuildRunnerOpts,
 } from './build-runner'
 
 const SLUG = 'auth-rate-limit'
@@ -316,7 +317,9 @@ interface HarnessOptions {
   finalizeAncestors?: Array<FinalizeGitResult<boolean>>
   forge?: FakeForge
   sessionEnv?: Record<string, string>
-  runnerOpts?: { maxPhaseAttempts?: number; heartbeatMs?: number; leaseTtlMs?: number }
+  /** Optional nonconforming/runtime-specific seam; scripted journals remain on Harness.runner. */
+  runtimeRunner?: AgentRunner
+  runnerOpts?: BuildRunnerOpts
   clock?: Clock
   /** Seed build.created + workspace.provisioned + spec@0 + spec.imported
    * (§15.6 prelude). Default true. */
@@ -329,6 +332,37 @@ interface HarnessOptions {
 }
 
 let nextHarnessWorkspace = 0
+
+class ManualSessionBudgetScheduler {
+  readonly delays: number[] = []
+  private readonly entries: Array<{ active: boolean; expire: () => void }> = []
+
+  readonly schedule: NonNullable<BuildRunnerOpts['scheduleSessionBudget']> = (expire, delayMs) => {
+    const entry = { active: true, expire }
+    this.delays.push(delayMs)
+    this.entries.push(entry)
+    return () => {
+      entry.active = false
+    }
+  }
+
+  get activeCount(): number {
+    return this.entries.filter((entry) => entry.active).length
+  }
+
+  async expireNext(): Promise<void> {
+    for (let spin = 0; spin < 100; spin += 1) {
+      const entry = this.entries.find((candidate) => candidate.active)
+      if (entry !== undefined) {
+        entry.active = false
+        entry.expire()
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    throw new Error('no active phase-session budget timer appeared')
+  }
+}
 
 interface Harness {
   store: OneShotPostAppendFaultStore
@@ -505,9 +539,9 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       // `scripted` (the default runtime) serves the `m-` family so the routed
       // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
       // pi/claude entries prove a second runtime is selectable.
-      scripted: { runner, servesModels: ['m-'] },
-      claude: { runner, servesModels: ['claude-'] },
-      pi: { runner, servesModels: ['kimi-'] },
+      scripted: { runner: options.runtimeRunner ?? runner, servesModels: ['m-'] },
+      claude: { runner: options.runtimeRunner ?? runner, servesModels: ['claude-'] },
+      pi: { runner: options.runtimeRunner ?? runner, servesModels: ['kimi-'] },
     },
     workspacePath: handle.path,
     branch: BRANCH,
@@ -2924,6 +2958,270 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     })
     expect(ofType(events, 'plan.started')).toHaveLength(2)
     expect(calls).toBe(2)
+  })
+})
+
+// ── Phase-session wall-clock budget ──────────────────────────────────────────
+
+describe('phase-session budget', () => {
+  test('the kernel stops awaiting a runtime that ignores cancellation', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const signals: AbortSignal[] = []
+    let starts = 0
+    const stuck: AgentRunner = {
+      name: 'stuck',
+      start: (opts) => {
+        starts += 1
+        if (opts.signal !== undefined) signals.push(opts.signal)
+        return new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {})
+      },
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: {
+          runner: 'stuck',
+          usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        },
+      }),
+    }
+    const h = await makeHarness({
+      runtimeRunner: stuck,
+      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
+    })
+
+    const run = h.br.run()
+    await timers.expireNext()
+    await timers.expireNext()
+    expect((await run).status).toBe('blocked')
+    expect(starts).toBe(2)
+    expect(signals).toHaveLength(2)
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
+    const failures = ofType(await h.store.getEvents(SLUG), 'phase.failed')
+    expect(failures.map((event) => event.payload.error)).toEqual([
+      'phase session budget expired after 3600 seconds',
+      'phase session budget expired after 3600 seconds',
+    ])
+  })
+
+  test('a typed terminal deposited before expiry remains authoritative', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const stuck: AgentRunner = {
+      name: 'terminal-then-stuck',
+      start: () => new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {}),
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: {
+          runner: 'terminal-then-stuck',
+          usage: { inputTokens: 0, outputTokens: 0, turns: 0 },
+        },
+      }),
+    }
+    const h = await makeHarness({
+      runtimeRunner: stuck,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+    })
+    await h.br.attach()
+
+    const step = h.br.step()
+    let started: EventEnvelope<'session.started'> | undefined
+    for (let spin = 0; spin < 100 && started === undefined; spin += 1) {
+      started = ofType(await h.store.getEvents(SLUG), 'session.started').at(-1)
+      if (started === undefined) await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    if (started === undefined) throw new Error('plan session did not start')
+    await h.store.appendWithArtifacts(
+      SLUG,
+      [{ kind: 'plan', content: 'terminal landed while runtime stayed busy' }],
+      (deposited) => ({
+        actor: agentActor('plan', started.payload.session),
+        type: 'plan.completed',
+        payload: { round: 1, artifact: refOf(deposited) },
+      }),
+    )
+    await timers.expireNext()
+    await step
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'plan.completed')).toHaveLength(1)
+    expect(ofType(events, 'phase.failed')).toEqual([])
+  })
+
+  test('a stuck end call cannot extend an expired phase', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let ends = 0
+    const stuckEnd: AgentRunner = {
+      name: 'stuck-end',
+      start: (opts) =>
+        new Promise((resolve) => {
+          opts.signal?.addEventListener(
+            'abort',
+            () =>
+              resolve({
+                session: { id: 'stuck-end-1', runner: 'stuck-end' },
+                result: failedTurnResult('aborted', false),
+              }),
+            { once: true },
+          )
+        }),
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: () => {
+        ends += 1
+        return new Promise(() => {})
+      },
+    }
+    const h = await makeHarness({
+      runtimeRunner: stuckEnd,
+      runnerOpts: { maxPhaseAttempts: 1, scheduleSessionBudget: timers.schedule },
+    })
+
+    const run = h.br.run()
+    await timers.expireNext()
+    expect((await run).status).toBe('blocked')
+    expect(ends).toBe(1)
+    expect(ofType(await h.store.getEvents(SLUG), 'phase.failed')[0]?.payload.error).toBe(
+      'phase session budget expired after 3600 seconds',
+    )
+  })
+
+  test('a hung role expires, retries without alternates, escalates, and an answer re-arms it', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let attempts = 0
+    const configToml = `${CONFIG_TOML.replace(
+      'plan = { runtime = "scripted", model = "m-plan" }',
+      'default = { runtime = "scripted" }\n' +
+        'plan = { runtime = "scripted", model = "m-plan", sessionBudgetSeconds = 7, ' +
+        'alternates = [{ runtime = "pi", model = "kimi-k3" }] }',
+    )}\n[policy]\nsessionBudgetSeconds = 2\n`
+    const h = await makeHarness({
+      configToml,
+      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const healthyPlan = table.plan!
+        table.plan = async (ctx) => {
+          attempts += 1
+          if (attempts <= 2) return new Promise<AgentTurnResult>(() => {})
+          return healthyPlan(ctx)
+        }
+        return table
+      },
+    })
+
+    const blocked = h.br.run()
+    await timers.expireNext()
+    await timers.expireNext()
+    expect((await blocked).status).toBe('blocked')
+
+    let events = await h.store.getEvents(SLUG)
+    const failures = ofType(events, 'phase.failed')
+    expect(failures.map((event) => event.payload)).toEqual([
+      {
+        phase: 'plan',
+        round: 1,
+        attempt: 1,
+        error: 'phase session budget expired after 7 seconds',
+        willRetry: true,
+      },
+      {
+        phase: 'plan',
+        round: 1,
+        attempt: 2,
+        error: 'phase session budget expired after 7 seconds',
+        willRetry: false,
+      },
+    ])
+    const planStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(planStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'scripted'])
+    expect(timers.delays.slice(0, 2)).toEqual([7000, 7000])
+    expect([...h.runner.sessions.values()].every((journal) => journal.ended)).toBe(true)
+
+    const escalation = ofType(events, 'escalation.raised')[0]!
+    expect(escalation.payload.question).toContain('phase session budget expired after 7 seconds')
+    expect(reduceBuild(events).status).toBe('blocked')
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: escalation.payload.id,
+        answer: 'the provider is healthy again',
+        resolution: 'retry',
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('running')
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'plan.completed')).toHaveLength(1)
+    expect(
+      ofType(events, 'session.started').filter((event) => event.payload.phase === 'plan'),
+    ).toHaveLength(3)
+    expect(attempts).toBe(3)
+    expect(timers.activeCount).toBe(0)
+  })
+
+  test('agent-verify expiry uses phase retry failure and releases its handle', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const h = await makeHarness({
+      configToml: `${CONFIG_TOML}\n[policy]\nsessionBudgetSeconds = 11\n`,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'verify-e2e': () => new Promise<AgentTurnResult>(() => {}),
+      }),
+    })
+    await seedPlanApproved(h.store)
+    await seedCodeApproved(h.store)
+    for (const step of ['types', 'unit']) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step, attempt: 1, pass: true },
+      })
+    }
+    await h.br.attach()
+
+    const step = h.br.step()
+    await timers.expireNext()
+    await step
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'phase.failed').at(-1)?.payload).toMatchObject({
+      phase: 'verify:e2e',
+      round: 1,
+      error: 'phase session budget expired after 11 seconds',
+      willRetry: true,
+    })
+    expect([...h.runner.sessions.values()].at(-1)?.ended).toBe(true)
+  })
+
+  test('finalize post-step expiry is observed but cannot turn the build red', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const h = await makeHarness({
+      configToml: `${CONFIG_TOML}\n[policy]\nsessionBudgetSeconds = 13\n`,
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'release-notes': () => new Promise<AgentTurnResult>(() => {}),
+      }),
+    })
+    await seedReadyForFinalizeStep(h.store)
+    await h.br.attach()
+
+    const step = h.br.step()
+    await timers.expireNext()
+    await step
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'finalize.step-completed').at(-1)?.payload).toEqual({
+      step: 'release-notes',
+      ok: false,
+      note: 'phase session budget expired after 13 seconds',
+    })
+    expect(ofType(events, 'observation.recorded').at(-1)?.payload.summary).toContain(
+      'phase session budget expired after 13 seconds',
+    )
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect([...h.runner.sessions.values()].at(-1)?.ended).toBe(true)
   })
 })
 

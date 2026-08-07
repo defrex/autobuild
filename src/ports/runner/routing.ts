@@ -21,6 +21,8 @@ export interface ResolvedRuntime {
 
 /** A role's primary target plus its failure-triggered targets in declaration order. */
 export interface ResolvedRole extends ResolvedRuntime {
+  /** Wall-clock budget shared by the logical role's primary and alternates. */
+  sessionBudgetSeconds: number
   alternates: readonly ResolvedRuntime[]
 }
 
@@ -32,6 +34,8 @@ export interface RuntimeAxes {
 
 /** One role entry as it arrives from `[roles]`: all fields are optional. */
 export interface RuntimeSpec extends RuntimeAxes {
+  /** Inherits from [roles.default], then the policy fallback. */
+  sessionBudgetSeconds?: number
   alternates?: readonly RuntimeAxes[]
 }
 
@@ -116,6 +120,7 @@ function resolveAxes(
 function resolveRole(
   spec: RuntimeSpec,
   defaultSpec: RuntimeSpec,
+  policySessionBudgetSeconds: number,
   registry: RuntimeRegistry,
   label: string,
   problems: string[],
@@ -133,22 +138,46 @@ function resolveRole(
     )
     if (resolved !== undefined) alternates.push(resolved)
   })
-  return primary === undefined ? undefined : { ...primary, alternates }
+  return primary === undefined
+    ? undefined
+    : {
+        ...primary,
+        sessionBudgetSeconds:
+          spec.sessionBudgetSeconds ??
+          defaultSpec.sessionBudgetSeconds ??
+          policySessionBudgetSeconds,
+        alternates,
+      }
 }
 
 /** Build and eagerly validate the complete role resolver. */
 export function createRuntimeResolver(
   registry: RuntimeRegistry,
   roles: Record<string, RuntimeSpec>,
+  policySessionBudgetSeconds = 3600,
 ): RuntimeResolver {
   const problems: string[] = []
   const defaultSpec = roles.default ?? {}
-  const resolvedDefault = resolveRole(defaultSpec, {}, registry, '[roles.default]', problems)
+  const resolvedDefault = resolveRole(
+    defaultSpec,
+    {},
+    policySessionBudgetSeconds,
+    registry,
+    '[roles.default]',
+    problems,
+  )
 
   const resolvedRoles: Record<string, ResolvedRole> = Object.create(null)
   for (const [role, spec] of Object.entries(roles)) {
     if (role === 'default') continue
-    const resolved = resolveRole(spec, defaultSpec, registry, `[roles.${role}]`, problems)
+    const resolved = resolveRole(
+      spec,
+      defaultSpec,
+      policySessionBudgetSeconds,
+      registry,
+      `[roles.${role}]`,
+      problems,
+    )
     if (resolved !== undefined) resolvedRoles[role] = resolved
   }
 

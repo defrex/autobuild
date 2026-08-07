@@ -260,6 +260,11 @@ const runtimeAxesSchema = z.strictObject({
 })
 
 export const roleSchema = runtimeAxesSchema.extend({
+  // Wall-clock budget for each session dispatched through this logical role.
+  // Absent ⇒ inherit [roles.default], then [policy].sessionBudgetSeconds.
+  // Alternates deliberately use runtimeAxesSchema: one logical role owns one
+  // budget regardless of which provider target executes the attempt.
+  sessionBudgetSeconds: z.number().int().positive().optional(),
   // Per-role extension allowlist (SPEC §9). Absent ⇒ inherit
   // [roles.default].extensions; absent there too ⇒ hermetic. A set list,
   // including [], replaces the default wholesale rather than unioning with it.
@@ -274,6 +279,8 @@ export type RoleConfig = z.infer<typeof roleSchema>
 // ── [policy] ─────────────────────────────────────────────────────────────────
 
 export const policySchema = z.strictObject({
+  /** Wall-clock bound for an agent phase session; roles may override it. */
+  sessionBudgetSeconds: z.number().int().positive().default(3600),
   /** Same-finding survival threshold before auto-escalate (§10, §15.4). */
   stallRounds: z.number().int().positive().default(3),
   maxVerifyAttempts: z.number().int().positive().default(3),

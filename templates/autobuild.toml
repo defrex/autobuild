@@ -22,6 +22,7 @@ runtime = "@ab-init/runtime@"
 
 # Pipeline limits.
 [policy]
+sessionBudgetSeconds = 3600
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3

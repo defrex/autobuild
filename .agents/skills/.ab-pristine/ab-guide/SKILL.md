@@ -497,8 +497,8 @@ step as failed and file an observation while the green build continues.
 
 ### `[roles]`
 
-An **open map** of role name → `{ runtime?, model?, extensions?, alternates? }`.
-The three primary axes and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
+An **open map** of role name → `{ runtime?, model?, extensions?, sessionBudgetSeconds?, alternates? }`.
+The three primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
 with a copyable fix and all registered runtime names. Three runtimes ship:
@@ -536,6 +536,7 @@ consumed by the core `plan` phase, and nothing is reported.
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
+| `sessionBudgetSeconds` | policy fallback | optional positive integer | Wall-clock budget for each build phase session on this logical role. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
 | `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. |
 
 Inheritance is mechanical and **independent per field**: merge each configured
@@ -562,6 +563,14 @@ the final failure controls retry behavior. Substitution starts and exhausted
 failures retain the targets and verbatim errors durably. Core phases, agent
 verify/finalize, and Harvest use the chain; tool-free one-shots do not.
 
+A build phase session that reaches its captured budget is aborted and ended
+best-effort. The kernel records retryable `phase.failed` with `phase session
+budget expired after <seconds> seconds`, retries from the primary under the
+existing phase-attempt cap, and raises an answerable policy escalation when
+exhausted. Kernel expiry never selects an alternate. A typed terminal racing
+the deadline remains authoritative. Agent finalize post-step expiry is
+failure-tolerant; Harvest and direct check commands are outside this budget.
+
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed
 legacy `[agent]` table is not an alias: config loading rejects it and directs
@@ -574,6 +583,7 @@ nonnegative integer so zero can disable that trigger.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
+| `sessionBudgetSeconds` | `3600` | positive integer | Wall-clock bound for each build agent session unless its logical role overrides it. |
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
