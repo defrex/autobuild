@@ -26,6 +26,7 @@ import {
   mediaTypeSchema,
   observationKindSchema,
   phaseSchema,
+  policyEscalationCauseSchema,
   reviewVerdictKindSchema,
   ticketRefSchema,
   workspaceBaseSchema,
@@ -387,6 +388,9 @@ export const eventPayloadSchemas = {
     phase: escalationTargetSchema,
     round: round.optional(),
     source: escalationSourceSchema,
+    /** Optional only so cause-less historical policy facts remain replayable.
+     * validateEventWrite requires it on every current policy append. */
+    policyCause: policyEscalationCauseSchema.optional(),
     question: z.string().min(1),
     refs: z.array(z.string()).optional(),
   }),
