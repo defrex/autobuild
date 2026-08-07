@@ -63,6 +63,7 @@ import {
 } from '../ontology'
 import {
   createRuntimeResolver,
+  type ResolvedRole,
   type ResolvedRuntime,
   type RuntimeResolver,
 } from '../ports/runner/routing'
@@ -123,6 +124,8 @@ export interface BuildRunnerOpts {
   heartbeatMs?: number
   /** Lease TTL passed to claimLease (§7.4). Default 60s. */
   leaseTtlMs?: number
+  /** Test seam for phase-session deadlines. Production uses an unref'ed timer. */
+  scheduleSessionBudget?: (expire: () => void, delayMs: number) => () => void
 }
 
 export interface BuildRunnerDeps {
@@ -179,6 +182,19 @@ interface ProducerSession {
 
 type ProviderAttempt = NonNullable<EventPayload<'phase.failed'>['providerAttempts']>[number]
 
+type TurnSettlement<T> =
+  | { kind: 'value'; value: T }
+  | { kind: 'error'; error: unknown }
+  | { kind: 'expired' }
+
+interface BudgetedTurn<T> {
+  settlement: TurnSettlement<T>
+  /** The first kernel cancellation cause. A provider result cannot overwrite it. */
+  abortCause?: 'operator' | 'budget'
+  /** Eventually settles even when the kernel has stopped waiting. */
+  pending: Promise<Exclude<TurnSettlement<T>, { kind: 'expired' }>>
+}
+
 /** One bracketed agent run (§15.3 sessions). */
 interface SessionSpec {
   /** Event/AB_PHASE identity: core phase or `verify:<step>`. */
@@ -213,6 +229,31 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function sessionBudgetError(seconds: number): string {
+  return `phase session budget expired after ${seconds} seconds`
+}
+
+function defaultSessionBudgetScheduler(expire: () => void, delayMs: number): () => void {
+  // Node/Bun timers clamp larger delays. Chunk against an absolute deadline so
+  // a valid large positive config value can never become an immediate expiry.
+  const maxDelayMs = 2_147_483_647
+  const deadline = Date.now() + delayMs
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = (): void => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      expire()
+      return
+    }
+    timer = setTimeout(arm, Math.min(remaining, maxDelayMs))
+    timer.unref?.()
+  }
+  arm()
+  return () => {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 function providerAttemptSummary(attempts: readonly ProviderAttempt[] | undefined): string {
@@ -358,13 +399,21 @@ export class BuildRunner {
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? BUILD_EXECUTION_LEASE_TTL_MS
     this.boundaryConfig = deps.config
-    this.boundaryResolver = createRuntimeResolver(deps.runtimes, deps.config.roles)
+    this.boundaryResolver = createRuntimeResolver(
+      deps.runtimes,
+      deps.config.roles,
+      deps.config.policy.sessionBudgetSeconds,
+    )
   }
 
   private async captureConfig(): Promise<Config> {
     const config = (await this.deps.getConfig?.()) ?? this.deps.config
     this.boundaryConfig = config
-    this.boundaryResolver = createRuntimeResolver(this.deps.runtimes, config.roles)
+    this.boundaryResolver = createRuntimeResolver(
+      this.deps.runtimes,
+      config.roles,
+      config.policy.sessionBudgetSeconds,
+    )
     return config
   }
 
@@ -1065,32 +1114,47 @@ export class BuildRunner {
             : {}),
         },
       } satisfies EventWrite<'session.started'>)
-      const controller = new AbortController()
-      const unsubscribe = store.subscribe(slug, { fromSeq: started.seq, pollMs: 25 }, (event) => {
-        if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
-          controller.abort(new Error(`build ${slug} aborted by operator`))
-        }
-      })
       let handle: AgentSessionHandle | undefined
       let result: AgentTurnResult | undefined
       let turnError: unknown
-      try {
-        const turn = await target.runner.start({
-          skill,
-          invocation: slug,
-          buildSlug: slug,
-          workspacePath,
-          ...(target.model !== undefined ? { model: target.model } : {}),
-          ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
-          env: this.sessionEnvFor('finalize@1', session),
-          signal: controller.signal,
-        })
-        handle = turn.session
-        result = turn.result
-      } catch (error) {
-        turnError = error
-      } finally {
-        unsubscribe()
+      const turn = await this.runBudgetedTurn(
+        started.seq,
+        resolved.sessionBudgetSeconds,
+        (signal) =>
+          target.runner.start({
+            skill,
+            invocation: slug,
+            buildSlug: slug,
+            workspacePath,
+            ...(target.model !== undefined ? { model: target.model } : {}),
+            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            env: this.sessionEnvFor('finalize@1', session),
+            signal,
+          }),
+      )
+      if (turn.settlement.kind === 'value') {
+        handle = turn.settlement.value.session
+        result = turn.settlement.value.result
+      } else if (turn.settlement.kind === 'error') {
+        turnError = turn.settlement.error
+      } else {
+        this.releaseLateStart(turn.pending, target.runner)
+      }
+      if (turn.abortCause === 'budget') {
+        if (handle !== undefined) {
+          this.releaseExpiredSession(
+            target.runner,
+            handle,
+            session,
+            { phase: 'finalize', round: 1, role: step, runnerName: target.runtime },
+            target.model,
+          )
+        }
+        return {
+          actor: agentActor(step, session),
+          failureNote: sessionBudgetError(resolved.sessionBudgetSeconds),
+          cancelled: false,
+        }
       }
       if (handle !== undefined) {
         try {
@@ -1106,7 +1170,7 @@ export class BuildRunner {
           // The failure-tolerant post-step still records its outcome below.
         }
       }
-      if (controller.signal.aborted) {
+      if (turn.abortCause === 'operator') {
         return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
       }
       if (turnError === undefined && result?.kind !== 'failed') {
@@ -1151,7 +1215,13 @@ export class BuildRunner {
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const { runner, runtime: runnerName, model, extensions } = this.boundaryResolver.resolve(step)
+    const {
+      runner,
+      runtime: runnerName,
+      model,
+      extensions,
+      sessionBudgetSeconds,
+    } = this.boundaryResolver.resolve(step)
 
     const started = await store.append(slug, {
       actor: KERNEL,
@@ -1166,16 +1236,10 @@ export class BuildRunner {
       },
     } satisfies EventWrite<'session.started'>)
 
-    const controller = new AbortController()
-    const unsubscribe = store.subscribe(slug, { fromSeq: started.seq, pollMs: 25 }, (event) => {
-      if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
-        controller.abort(new Error(`build ${slug} aborted by operator`))
-      }
-    })
     let handle: AgentSessionHandle | undefined
     let failureNote: string | undefined
-    try {
-      const turn = await runner.start({
+    const turn = await this.runBudgetedTurn(started.seq, sessionBudgetSeconds, (signal) =>
+      runner.start({
         skill,
         invocation: slug,
         buildSlug: slug,
@@ -1183,16 +1247,34 @@ export class BuildRunner {
         ...(model !== undefined ? { model } : {}),
         ...(extensions !== undefined ? { extensions } : {}),
         env: this.sessionEnvFor('finalize@1', session),
-        signal: controller.signal,
-      })
-      handle = turn.session
-      if (turn.result.kind === 'failed') {
-        failureNote = `agent turn failed: ${turn.result.failure.message}`
+        signal,
+      }),
+    )
+    if (turn.settlement.kind === 'value') {
+      handle = turn.settlement.value.session
+      if (turn.settlement.value.result.kind === 'failed') {
+        failureNote = `agent turn failed: ${turn.settlement.value.result.failure.message}`
       }
-    } catch (error) {
-      failureNote = `agent session failed: ${errorMessage(error)}`
-    } finally {
-      unsubscribe()
+    } else if (turn.settlement.kind === 'error') {
+      failureNote = `agent session failed: ${errorMessage(turn.settlement.error)}`
+    } else {
+      this.releaseLateStart(turn.pending, runner)
+    }
+    if (turn.abortCause === 'budget') {
+      if (handle !== undefined) {
+        this.releaseExpiredSession(
+          runner,
+          handle,
+          session,
+          { phase: 'finalize', round: 1, role: step, runnerName },
+          model,
+        )
+      }
+      return {
+        actor: agentActor(step, session),
+        failureNote: sessionBudgetError(sessionBudgetSeconds),
+        cancelled: false,
+      }
     }
 
     if (handle !== undefined) {
@@ -1213,7 +1295,7 @@ export class BuildRunner {
     return {
       actor: agentActor(step, session),
       failureNote,
-      cancelled: controller.signal.aborted,
+      cancelled: turn.abortCause === 'operator',
     }
   }
 
@@ -1310,6 +1392,100 @@ export class BuildRunner {
 
   // ── The session bracket (§15.3) ────────────────────────────────────────────
 
+  /** Run one adapter turn under the logical role's wall-clock budget. The
+   * expiry promise is resolved one microtask after abort so a conforming
+   * adapter can return its endable handle first; an adapter that ignores
+   * cancellation cannot keep the kernel waiting. */
+  private async runBudgetedTurn<T>(
+    preSeq: number,
+    budgetSeconds: number,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<BudgetedTurn<T>> {
+    const { store, slug } = this.deps
+    const controller = new AbortController()
+    let abortCause: 'operator' | 'budget' | undefined
+    let resolveExpiry!: (settlement: { kind: 'expired' }) => void
+    const expiry = new Promise<{ kind: 'expired' }>((resolve) => {
+      resolveExpiry = resolve
+    })
+    const pending = Promise.resolve()
+      .then(() => run(controller.signal))
+      .then(
+        (value): { kind: 'value'; value: T } => ({ kind: 'value', value }),
+        (error): { kind: 'error'; error: unknown } => ({ kind: 'error', error }),
+      )
+    const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
+      if (event.type === 'build.abort-requested' && !controller.signal.aborted) {
+        abortCause = 'operator'
+        controller.abort(new Error(`build ${slug} aborted by operator`))
+      }
+    })
+    const schedule = this.deps.opts?.scheduleSessionBudget ?? defaultSessionBudgetScheduler
+    const cancelTimer = schedule(() => {
+      if (controller.signal.aborted) return
+      abortCause = 'budget'
+      controller.abort(new Error(sessionBudgetError(budgetSeconds)))
+      queueMicrotask(() => resolveExpiry({ kind: 'expired' }))
+    }, budgetSeconds * 1000)
+
+    try {
+      const settlement = await Promise.race([pending, expiry])
+      return {
+        settlement,
+        ...(abortCause !== undefined ? { abortCause } : {}),
+        pending,
+      }
+    } finally {
+      cancelTimer()
+      unsubscribe()
+    }
+  }
+
+  /** Start resource cleanup without allowing a stuck `end()` or transcript
+   * deposit to extend an already-expired phase. Conforming adapters still end
+   * immediately; every cleanup/deposit failure remains best-effort. */
+  private releaseExpiredSession(
+    runner: AgentRunner,
+    handle: AgentSessionHandle,
+    session: string,
+    bracket: { phase: Phase; round: number; role: string; runnerName: string },
+    model?: string,
+  ): void {
+    void (async () => {
+      try {
+        const transcript = await runner.end(handle)
+        await this.depositTranscriptAndEnd(
+          session,
+          bracket,
+          transcript.content,
+          transcript.metadata.usage,
+          transcript.metadata.model ?? model,
+        )
+      } catch {
+        // The expiry failure must remain bounded even when cleanup is not.
+      }
+    })()
+  }
+
+  /** A start call can ignore cancellation and return a handle after the kernel
+   * has advanced. End that late handle in the background so it never becomes
+   * reusable continuation state. The stale durable bracket is intentionally
+   * left for the existing recovery model; process-tree reaping is out of
+   * scope. */
+  private releaseLateStart(
+    pending: Promise<Exclude<TurnSettlement<{ session: AgentSessionHandle }>, { kind: 'expired' }>>,
+    runner: AgentRunner,
+  ): void {
+    void pending.then(async (settlement) => {
+      if (settlement.kind !== 'value') return
+      try {
+        await runner.end(settlement.value.session)
+      } catch {
+        // Best-effort resource release after a non-conforming late return.
+      }
+    })
+  }
+
   /**
    * One bracketed agent run: `session.started` → turn → terminal check →
    * crash-gap repair → `session.ended` (with transcript) or `phase.failed`.
@@ -1329,7 +1505,7 @@ export class BuildRunner {
    * its own durable session bracket; only exhaustion writes phase.failed. */
   private async executeSessionChain(
     spec: SessionSpec,
-    primary: ResolvedRuntime,
+    primary: ResolvedRole,
     alternates: readonly ResolvedRuntime[],
   ): Promise<void> {
     const { store, slug, ids, workspacePath } = this.deps
@@ -1377,52 +1553,45 @@ export class BuildRunner {
       const preSeq = startedEnvelope.seq
       const live = index === 0 ? primaryLive : undefined
 
-      let handle: AgentSessionHandle | undefined
+      let handle: AgentSessionHandle | undefined = live?.handle
       let result: AgentTurnResult | undefined
       let turnError: unknown
-      const turnAbort = new AbortController()
-      const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
-        if (event.type === 'build.abort-requested' && !turnAbort.signal.aborted) {
-          turnAbort.abort(new Error(`build ${slug} aborted by operator`))
-        }
-      })
-      try {
-        if (live !== undefined) {
-          handle = live.handle
-          result = await live.runner.continue(handle, continueMessage(spec), {
-            env: this.sessionEnvFor(spec.abPhase, session),
-            signal: turnAbort.signal,
-          })
-        } else {
-          const turn = await target.runner.start({
-            skill: spec.skill,
-            invocation: slug,
-            buildSlug: slug,
-            workspacePath,
-            ...(target.model !== undefined ? { model: target.model } : {}),
-            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
-            env: this.sessionEnvFor(spec.abPhase, session),
-            signal: turnAbort.signal,
-          })
-          handle = turn.session
-          result = turn.result
-        }
-      } catch (error) {
-        turnError = error
-      } finally {
-        unsubscribe()
+      const turn = await this.runBudgetedTurn(preSeq, primary.sessionBudgetSeconds, (signal) =>
+        live !== undefined
+          ? live.runner
+              .continue(live.handle, continueMessage(spec), {
+                env: this.sessionEnvFor(spec.abPhase, session),
+                signal,
+              })
+              .then((continued) => ({ session: live.handle, result: continued }))
+          : target.runner.start({
+              skill: spec.skill,
+              invocation: slug,
+              buildSlug: slug,
+              workspacePath,
+              ...(target.model !== undefined ? { model: target.model } : {}),
+              ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+              env: this.sessionEnvFor(spec.abPhase, session),
+              signal,
+            }),
+      )
+      if (turn.settlement.kind === 'value') {
+        handle = turn.settlement.value.session
+        result = turn.settlement.value.result
+      } else if (turn.settlement.kind === 'error') {
+        turnError = turn.settlement.error
+      } else if (live === undefined) {
+        this.releaseLateStart(turn.pending, target.runner)
       }
 
       const since = await store.getEvents(slug, preSeq)
-      const terminal =
-        turnError === undefined &&
-        since.some(
-          (event) =>
-            spec.isTerminal(event) ||
-            (event.type === 'escalation.raised' &&
-              event.actor.kind === 'agent' &&
-              event.actor.session === session),
-        )
+      const terminal = since.some(
+        (event) =>
+          spec.isTerminal(event) ||
+          (event.type === 'escalation.raised' &&
+            event.actor.kind === 'agent' &&
+            event.actor.session === session),
+      )
       if (spec.phase === 'plan-review' || spec.phase === 'code-review') {
         await this.repairEscalateGap(since, spec.phase, spec.round)
       }
@@ -1435,7 +1604,7 @@ export class BuildRunner {
       }
       const owner = live?.runner ?? target.runner
 
-      if (turnAbort.signal.aborted) {
+      if (turn.abortCause === 'operator') {
         if (handle !== undefined) {
           try {
             const transcript = await owner.end(handle)
@@ -1449,6 +1618,16 @@ export class BuildRunner {
           } catch {
             // Cancellation remains a control boundary, never phase failure.
           }
+        }
+        if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+        return
+      }
+
+      // A typed terminal deposited at the deadline remains authoritative even
+      // when the adapter has not yet returned its handle/result.
+      if (terminal && turn.abortCause === 'budget') {
+        if (handle !== undefined) {
+          this.releaseExpiredSession(owner, handle, session, bracket, target.model)
         }
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         return
@@ -1487,6 +1666,33 @@ export class BuildRunner {
           )
           if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         }
+        return
+      }
+
+      if (terminal) {
+        if (handle !== undefined) {
+          try {
+            await owner.end(handle)
+          } catch {
+            // The durable terminal remains authoritative over adapter failure.
+          }
+        }
+        if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+        return
+      }
+
+      if (turn.abortCause === 'budget') {
+        if (handle !== undefined) {
+          this.releaseExpiredSession(owner, handle, session, bracket, target.model)
+        }
+        if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+        await this.failPhase(
+          spec.phase,
+          spec.round,
+          spec.priorFailures,
+          sessionBudgetError(primary.sessionBudgetSeconds),
+          true,
+        )
         return
       }
 
@@ -1555,6 +1761,7 @@ export class BuildRunner {
       runtime: runnerName,
       model,
       extensions,
+      sessionBudgetSeconds,
     } = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
     const route = JSON.stringify({ runtime: runnerName, model, extensions })
     let live =
@@ -1586,16 +1793,10 @@ export class BuildRunner {
     } satisfies EventWrite<'session.started'>)
     const preSeq = startedEnvelope.seq
 
-    let handle: AgentSessionHandle | undefined
+    let handle: AgentSessionHandle | undefined = live?.handle
     let result: AgentTurnResult | undefined
     let turnError: unknown
-    const turnAbort = new AbortController()
-    const unsubscribe = store.subscribe(slug, { fromSeq: preSeq, pollMs: 25 }, (event) => {
-      if (event.type === 'build.abort-requested' && !turnAbort.signal.aborted) {
-        turnAbort.abort(new Error(`build ${slug} aborted by operator`))
-      }
-    })
-    try {
+    const turn = await this.runBudgetedTurn(preSeq, sessionBudgetSeconds, (signal) => {
       if (live !== undefined) {
         // §10: the producer continues its session; the feedback message
         // points at the .ab/ inputs — `ab context` is the real carrier. The
@@ -1603,44 +1804,44 @@ export class BuildRunner {
         // this round, AB_SESSION = this bracket's id — so the CLI's terminal
         // lands on the continued round instead of being rejected as round
         // 1's second terminal (§8.4 D5).
-        handle = live.handle
-        result = await live.runner.continue(handle, continueMessage(spec), {
-          env: this.sessionEnvFor(spec.abPhase, session),
-          signal: turnAbort.signal,
-        })
-      } else {
-        const turn = await runner.start({
-          skill: spec.skill,
-          invocation: slug,
-          buildSlug: slug,
-          workspacePath,
-          ...(model !== undefined ? { model } : {}),
-          ...(extensions !== undefined ? { extensions } : {}),
-          env: this.sessionEnvFor(spec.abPhase, session),
-          signal: turnAbort.signal,
-        })
-        handle = turn.session
-        result = turn.result
+        return live.runner
+          .continue(live.handle, continueMessage(spec), {
+            env: this.sessionEnvFor(spec.abPhase, session),
+            signal,
+          })
+          .then((continued) => ({ session: live.handle, result: continued }))
       }
-    } catch (error) {
-      turnError = error
-    } finally {
-      unsubscribe()
+      return runner.start({
+        skill: spec.skill,
+        invocation: slug,
+        buildSlug: slug,
+        workspacePath,
+        ...(model !== undefined ? { model } : {}),
+        ...(extensions !== undefined ? { extensions } : {}),
+        env: this.sessionEnvFor(spec.abPhase, session),
+        signal,
+      })
+    })
+    if (turn.settlement.kind === 'value') {
+      handle = turn.settlement.value.session
+      result = turn.settlement.value.result
+    } else if (turn.settlement.kind === 'error') {
+      turnError = turn.settlement.error
+    } else if (live === undefined) {
+      this.releaseLateStart(turn.pending, runner)
     }
 
     // The turn is over: what did the CLI leave in the log? Terminal = the
     // phase's terminal event for this round, or an `ab escalate` from this
     // session (§8.4: escalate is always an allowed terminal).
     const since = await store.getEvents(slug, preSeq)
-    const terminal =
-      turnError === undefined &&
-      since.some(
-        (event) =>
-          spec.isTerminal(event) ||
-          (event.type === 'escalation.raised' &&
-            event.actor.kind === 'agent' &&
-            event.actor.session === session),
-      )
+    const terminal = since.some(
+      (event) =>
+        spec.isTerminal(event) ||
+        (event.type === 'escalation.raised' &&
+          event.actor.kind === 'agent' &&
+          event.actor.session === session),
+    )
 
     // CRASH-GAP REPAIR (§8.5 makes verdict+escalation near-atomic; this keeps
     // the log routable when the CLI died between the two).
@@ -1658,7 +1859,7 @@ export class BuildRunner {
     // Operator cancellation is not an infrastructure failure. Close whatever
     // handle the adapter created, retain its transcript, and return to the
     // engine loop; the pending durable command is acknowledged there.
-    if (turnAbort.signal.aborted) {
+    if (turn.abortCause === 'operator') {
       if (handle !== undefined) {
         const owner = live?.runner ?? runner
         try {
@@ -1674,6 +1875,17 @@ export class BuildRunner {
           // A provider that died before yielding an endable handle leaves the
           // open session for stale-runner recovery, but never a phase failure.
         }
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      return
+    }
+
+    // The typed terminal is the phase authority even when it lands on the
+    // same boundary tick as the kernel deadline.
+    if (terminal && turn.abortCause === 'budget') {
+      if (handle !== undefined) {
+        const owner = live?.runner ?? runner
+        this.releaseExpiredSession(owner, handle, session, bracket, model)
       }
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
       return
@@ -1712,6 +1924,35 @@ export class BuildRunner {
           transcript.metadata.model ?? model,
         )
       }
+      return
+    }
+
+    if (terminal) {
+      if (handle !== undefined) {
+        const owner = live?.runner ?? runner
+        try {
+          await owner.end(handle)
+        } catch {
+          // The durable terminal remains authoritative over adapter failure.
+        }
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      return
+    }
+
+    if (turn.abortCause === 'budget') {
+      if (handle !== undefined) {
+        const owner = live?.runner ?? runner
+        this.releaseExpiredSession(owner, handle, session, bracket, model)
+      }
+      if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+      await this.failPhase(
+        spec.phase,
+        spec.round,
+        spec.priorFailures,
+        sessionBudgetError(sessionBudgetSeconds),
+        true,
+      )
       return
     }
 

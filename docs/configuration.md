@@ -74,8 +74,8 @@ These fields hot-reload:
 | `[pr]` | Next build creation. |
 | `[commands]` | Next setup, verify check, or finalize check selected. |
 | `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
-| `[roles]` | Next agent session for that role. Runtime, model, and extensions are captured together. |
-| `[policy]` | Next policy or convergence gate evaluation. Prior evaluations are not revisited. |
+| `[roles]` | Next agent session for that role. Runtime, model, extensions, alternates, and the session budget are captured together. |
+| `[policy]` | Next policy, convergence, or agent-session boundary. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
 
@@ -563,8 +563,9 @@ failures become failure-tolerant follow-up observations.
 
 ## `[roles]`
 
-An open map from a nonempty role name to three primary agent axes plus an
-ordered alternate list. All four fields inherit independently. The reserved
+An open map from a nonempty role name to three primary agent axes, one
+wall-clock session budget, and an ordered alternate list. All five fields
+inherit independently. The reserved
 `default` entry is required to name a runtime, is the raw base for every other
 role, and is never dispatched itself. Missing it fails eagerly before any
 session starts, with a copyable table and all registered runtime names.
@@ -574,6 +575,7 @@ session starts, with a copyable table and all registered runtime names.
 | `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
 | `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
 | `extensions` | inherited; otherwise `[]` (hermetic) | optional array of nonempty strings; `[]` allowed | Pi package/extension allowlist. A supplied list replaces, rather than unions with, the inherited list. |
+| `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Wall-clock budget for each build phase session routed through this logical role. One budget covers the primary and every alternate target. |
 | `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets. A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. |
 
 <!-- config-fragment:roles -->
@@ -593,6 +595,7 @@ alternates = [] # replace the inherited list for this role
 runtime = "pi"
 model = "kimi-coding/k3"
 extensions = ["web-access"]
+sessionBudgetSeconds = 7200
 ```
 
 Inheritance is mechanical per field. For example, changing only a child
@@ -668,6 +671,18 @@ failure records every tried target and verbatim error for policy escalation.
 The chain applies to core phases, agent verify/finalize steps, and Harvest.
 Tool-free one-shot completions such as slug and upgrade use only the primary.
 
+For build sessions, the kernel starts the captured role budget after the durable
+`session.started` event. Expiry aborts and ends the session best-effort, drops
+producer continuation state, and records `phase.failed` with
+`phase session budget expired after <seconds> seconds`. It does not select an
+alternate because it is kernel policy, not a provider failure. The ordinary
+phase-attempt guard retries from the primary and raises an answerable policy
+escalation when exhausted. A typed terminal deposited at the deadline remains
+authoritative. Agent finalize post-step expiry instead records that
+failure-tolerant step as `ok = false` and files its follow-up observation.
+Harvest sessions and direct verify/finalize check commands are not covered by
+this setting.
+
 ## `[policy]`
 
 Optional. Every field receives its own default. All are positive integers except
@@ -675,6 +690,7 @@ Optional. Every field receives its own default. All are positive integers except
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
+| `sessionBudgetSeconds` | `3600` | positive integer | Wall-clock bound for each build agent session unless its logical role overrides it. |
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
@@ -883,8 +899,10 @@ extensions = ["subagents", "web-access"]
 runtime = "pi"
 model = "kimi-coding/k3"
 extensions = ["web-access"]
+sessionBudgetSeconds = 7200
 
 [policy]
+sessionBudgetSeconds = 3600
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3

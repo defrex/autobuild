@@ -63,8 +63,10 @@ runtime = "claude"
 [roles.code-review]
 runtime = "pi"
 model = "kimi-k3"
+sessionBudgetSeconds = 7200
 
 [policy]
+sessionBudgetSeconds = 1800
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
@@ -135,9 +137,10 @@ describe('parseConfig — complete flattened surface', () => {
       },
       roles: {
         default: { runtime: 'claude' },
-        'code-review': { runtime: 'pi', model: 'kimi-k3' },
+        'code-review': { runtime: 'pi', model: 'kimi-k3', sessionBudgetSeconds: 7200 },
       },
       policy: {
+        sessionBudgetSeconds: 1800,
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxSetupAttempts: 3,
@@ -174,6 +177,7 @@ describe('parseConfig — defaults', () => {
       finalize: { steps: [], stepConfigs: {} },
       roles: {},
       policy: {
+        sessionBudgetSeconds: 3600,
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxSetupAttempts: 3,
@@ -360,6 +364,12 @@ harvestThreshold = 2
       expect(() => parseConfig(`${READY}[policy]\nharvestThreshold = ${value}\n`)).toThrow(
         /policy\.harvestThreshold/,
       )
+      expect(() => parseConfig(`${READY}[policy]\nsessionBudgetSeconds = ${value}\n`)).toThrow(
+        /policy\.sessionBudgetSeconds/,
+      )
+      expect(() =>
+        parseConfig(`${READY}[roles.default]\nruntime = "pi"\nsessionBudgetSeconds = ${value}\n`),
+      ).toThrow(/roles\.default\.sessionBudgetSeconds/)
     }
   })
 
@@ -379,6 +389,7 @@ skill = "ab-verify-e2e"
 
   test('partial [policy] keeps every other per-key default', () => {
     expect(parseConfig(`${READY}[policy]\nstallRounds = 7\n`).policy).toEqual({
+      sessionBudgetSeconds: 3600,
       stallRounds: 7,
       maxVerifyAttempts: 3,
       maxSetupAttempts: 3,
@@ -748,6 +759,11 @@ alternates = []
       parseError(`${READY}[roles.default]\nruntime = "pi"\nalternates = [{ extra = true }]\n`)
         .message,
     ).toContain('extra')
+    expect(
+      parseError(
+        `${READY}[roles.default]\nruntime = "pi"\nalternates = [{ sessionBudgetSeconds = 2 }]\n`,
+      ).message,
+    ).toContain('sessionBudgetSeconds')
   })
 
   test('unknown root/table/step keys are rejected', () => {

@@ -151,7 +151,7 @@ export class LiveConfig {
     this.acceptedContent = startupContent
     this.snapshot = {
       config: startup,
-      resolver: createRuntimeResolver(runtimes, startup.roles),
+      resolver: createRuntimeResolver(runtimes, startup.roles, startup.policy.sessionBudgetSeconds),
       revision: 0,
     }
   }
@@ -202,7 +202,11 @@ export class LiveConfig {
     const config = composeReloadedConfig(this.startup, candidate)
     let resolver: RuntimeResolver
     try {
-      resolver = createRuntimeResolver(this.runtimes, config.roles)
+      resolver = createRuntimeResolver(
+        this.runtimes,
+        config.roles,
+        config.policy.sessionBudgetSeconds,
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const notify = this.rejectedContent !== content

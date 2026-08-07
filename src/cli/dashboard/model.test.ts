@@ -33,6 +33,7 @@ import { verifyPhase } from '../../ontology'
 import { steppingClock } from '../../testing/fixed'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
+import { isDiverged } from '../build-progress'
 import {
   buildDashboard,
   buildDashboardFromProjected,
@@ -392,6 +393,32 @@ function guardB(log: AbEvent[], build: DashboardBuild, config: Config): void {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe('projectBuild: the dashboard-visible build filter', () => {
+  test('projects progress inputs and keeps abort cleanup terminal for divergence', () => {
+    const runningLog = toLog(prelude())
+    const lastEventAt = runningLog.at(-1)!.ts
+    const heartbeatAt = new Date(Date.parse(lastEventAt) + 15 * 60 * 60 * 1000).toISOString()
+    const now = Date.parse(heartbeatAt) + 30_000
+    const record = {
+      ...RECORD,
+      heartbeatAt,
+      lease: { holder: 'runner-1', expiresAt: new Date(now + 30_000).toISOString() },
+    }
+    const running = projectBuild(record, reduceBuild(runningLog), CONFIG, runningLog)!
+    expect(running.progress).toEqual({
+      lastEventAt,
+      heartbeatAt,
+      leaseExpiresAt: record.lease.expiresAt,
+      terminal: false,
+    })
+    expect(isDiverged(running.progress, now)).toBe(true)
+
+    const abortedLog = toLog([...prelude(), ev('build.aborted', {})])
+    const cleaning = projectBuild(record, reduceBuild(abortedLog), CONFIG, abortedLog)!
+    expect(cleaning.status).toBe('cleaning')
+    expect(cleaning.progress.terminal).toBe(true)
+    expect(isDiverged(cleaning.progress, now)).toBe(false)
+  })
+
   test('lifecycle rows and abort cleanup are listed; only completed builds are excluded', () => {
     const queued = toLog(prelude().slice(0, 3)) // no runner.attached
     expect(projectBuild(RECORD, reduceBuild(queued), CONFIG, queued)).toMatchObject({

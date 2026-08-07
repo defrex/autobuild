@@ -51,7 +51,7 @@ K unclaimed observation.recorded events
 | `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
-| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
+| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -99,6 +99,19 @@ exact same source/class and target phase; the triggering sequence remains the
 re-arm boundary. `BuildRunner` applies the same independent targeting at the
 setup seam, where only a setup-targeted policy raise can satisfy setup
 exhaustion.
+
+**Phase-session budgets.** `src/ports/runner/routing.ts` resolves one inherited
+`sessionBudgetSeconds` value for each logical role, with the policy default as
+its final fallback. `BuildRunner` captures it at the session action boundary,
+starts an unref'ed timer after `session.started`, and composes expiry with the
+existing operator `AbortController`. Expiry stops waiting even if an adapter
+ignores cancellation, best-effort ends an available or late-returning handle,
+drops producer continuation state, and reuses retryable `phase.failed`; it does
+not enter the provider-alternate classifier. The event log is checked before
+failure so a typed terminal racing the deadline wins. Finalize agent post-steps
+reuse the timer but drain expiry through their existing failure-tolerant
+completion and observation path. Harvest and deterministic commands do not use
+this build-phase timer.
 
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
@@ -389,7 +402,12 @@ queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
-`src/cli/dashboard/model.ts` is the build-row projection;
+`src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
+inputs shared by `ab builds`, `ab build status`, and dashboard rows. Its one-hour
+`diverged` predicate is presentation-only: reducer status, engine routing, and
+lease health remain independent. `src/cli/dashboard/model.ts` is the build-row
+projection; `poll.ts` reprojects mutable heartbeat/lease changes even when its
+incremental event read is empty, while retaining the cached log and reduction.
 `detail.ts` projects chronological session history from the same retained log,
 and `transcript.ts` heuristically presents opaque transcript artifacts with a
 raw fallback. `render.ts` composes the list, build-detail, and transcript as
@@ -461,8 +479,9 @@ behavioral assertions against every implementation:
   ambient environment refresh and cancellation, distribution-managed `ab`
   resolution, and the optional tool-free one-shot capability.
 
-`src/ports/runner/routing.ts` eagerly resolves every role's primary and ordered
-alternate targets. `build-runner.ts` and `harvest-runner.ts` own the deterministic
+`src/ports/runner/routing.ts` eagerly resolves every role's primary, ordered
+alternate targets, and independently inherited build-session budget.
+`build-runner.ts` and `harvest-runner.ts` own the deterministic
 primary-first attempt loop: each substitution opens a new session bracket,
 records provenance on its start, and only complete-chain exhaustion consumes an
 existing phase/session attempt. This keeps runtime availability routing out of
