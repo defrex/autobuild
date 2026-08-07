@@ -1570,6 +1570,71 @@ describe('step', () => {
     expect(h.runner.sessions.size).toBe(0)
   })
 
+  test('an answered roundless reconcile policy cause does not reset counted runner failures', async () => {
+    const stable = '5'.repeat(40)
+    const h = await makeHarness({
+      reconcileRefreshes: [{ sha: stable }],
+      runnerOpts: { maxPhaseAttempts: 2 },
+    })
+    const conflictSeq = await seedRepeatConflict(h.store, stable, 3)
+    for (const [attempt, willRetry] of [
+      [1, true],
+      [2, false],
+    ] as const) {
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: {
+          phase: 'reconcile',
+          round: 4,
+          attempt,
+          error: 'progress snapshot failed',
+          willRetry,
+        },
+      })
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_no_progress',
+        phase: 'reconcile',
+        source: 'policy',
+        policyCause: 'reconcile-no-progress',
+        question: 'reconciliation made no progress',
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc_no_progress',
+        answer: 'try the conflict again',
+        resolution: 'guidance',
+      },
+    })
+
+    expect(await h.br.step()).toEqual({
+      kind: 'check-reconcile-progress',
+      conflictSeq,
+      completedAttempt: 3,
+      nextAttempt: 4,
+    })
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'escalation.raised').at(-1)!.payload).toMatchObject({
+      phase: 'reconcile',
+      round: 4,
+      source: 'policy',
+      policyCause: 'phase-attempt-limit',
+      question: expect.stringContaining('maxPhaseAttempts 2'),
+    })
+    expect(ofType(events, 'reconcile.progress-checked')).toEqual([])
+    expect(ofType(events, 'reconcile.started')).toHaveLength(3)
+    expect(h.execCalls.some(({ cmd }) => cmd[0] === 'git' && cmd[1] === 'fetch')).toBe(false)
+    expect(h.runner.sessions.size).toBe(0)
+  })
+
   test('a failed base fetch records phase.failed and never falls back to pr.conflicted', async () => {
     const h = await makeHarness({
       reconcileRefreshes: [{ fetchError: 'fatal: could not read from origin' }],

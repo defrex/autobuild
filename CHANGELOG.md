@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#221](https://github.com/defrex/autobuild/pull/221) — Make phase-failure budget resets semantic
 - [#220](https://github.com/defrex/autobuild/pull/220) — Make reclaimed-message reveal geometry explicit
 - [#219](https://github.com/defrex/autobuild/pull/219) — Harden descendant fast-path timing coverage
 - [#218](https://github.com/defrex/autobuild/pull/218) — Reclaim abandoned sessions when runners attach

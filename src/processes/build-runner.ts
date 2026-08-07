@@ -57,7 +57,6 @@ import {
   verifyPhase,
   verifyReportKind,
   type CorePhase,
-  type EscalationTarget,
   type Feedback,
   type Phase,
 } from '../ontology'
@@ -79,6 +78,7 @@ import type {
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
+import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
 
 // ── Seams ────────────────────────────────────────────────────────────────────
 
@@ -2131,14 +2131,13 @@ export class BuildRunner {
   /**
    * phase.failed tally for one phase+round — D5's retry-guard input.
    *
-   * An answered escalation for this phase RE-ARMS the budget (§15.6-B): the
-   * count restarts at the answer, so the next run actually executes with the
-   * human's guidance as feedback. Without the reset, a maxPhaseAttempts raise
-   * would re-raise on every answer forever — the count never changes, the
-   * guard fires before the session starts, and the designed recovery channel
-   * (answer → next producer round) deadlocks. Failures AFTER the answer count
-   * again, so a still-failing phase re-escalates on new evidence — the same
-   * dedupe-and-re-arm shape as the engine's `raisedAfter` policy raises.
+   * An answered escalation re-arms this budget only when its semantic class
+   * acknowledges phase-runner failures (§15.6-B). Runner-failure causes reset
+   * their matching round, the phase-level verify cause resets all rounds, and
+   * unrelated policy causes reset nothing. Cause-less historical and
+   * non-policy raises retain the legacy round-shaped behavior. Failures after
+   * an applicable answer count again, so a still-failing phase re-escalates on
+   * new evidence instead of deadlocking before its recovery session starts.
    */
   private phaseFailures(
     events: AbEvent[],
@@ -2150,8 +2149,8 @@ export class BuildRunner {
     lastWillRetry?: boolean
     lastProviderAttempts?: readonly ProviderAttempt[]
   } {
-    /** id → the raise's {phase, round} — answers are matched by id (§15.3). */
-    const raised = new Map<string, { phase: EscalationTarget; round?: number }>()
+    /** id → the raise's reset semantics — answers are matched by id (§15.3). */
+    const raised = new Map<string, PhaseFailureResetEscalation>()
     let count = 0
     let lastError: string | undefined
     let lastWillRetry: boolean | undefined
@@ -2161,14 +2160,16 @@ export class BuildRunner {
         case 'escalation.raised':
           raised.set(event.payload.id, {
             phase: event.payload.phase,
+            source: event.payload.source,
+            ...(event.payload.policyCause !== undefined
+              ? { policyCause: event.payload.policyCause }
+              : {}),
             ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
           })
           break
         case 'escalation.answered': {
           const raise = raised.get(event.payload.id)
-          // Round-less raises (e.g. the engine's verify-policy raises) reset
-          // every round of the phase; the human unblocked the phase itself.
-          if (raise?.phase === phase && (raise.round === undefined || raise.round === round)) {
+          if (raise !== undefined && resetsPhaseFailureBudget(raise, phase, round)) {
             count = 0
             lastError = undefined
             lastWillRetry = undefined
