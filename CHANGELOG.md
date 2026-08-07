@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#218](https://github.com/defrex/autobuild/pull/218) — Reclaim abandoned sessions when runners attach
 - [#217](https://github.com/defrex/autobuild/pull/217) — Classify reconcile policy escalations by durable cause
 - [#216](https://github.com/defrex/autobuild/pull/216) — Reap descendants after every build-child exit
 - [#215](https://github.com/defrex/autobuild/pull/215) — Keep phase turns bounded after operator abort

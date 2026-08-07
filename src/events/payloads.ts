@@ -262,15 +262,29 @@ export const eventPayloadSchemas = {
     /** Present only when this target substituted for the preceding failed one. */
     substitution: providerSubstitutionSchema.optional(),
   }),
-  'session.ended': z.strictObject({
-    session: z.string().min(1),
-    transcript: artifactRefSchema,
-    usage: z.strictObject({
-      inputTokens: z.number().int().nonnegative(),
-      outputTokens: z.number().int().nonnegative(),
-      turns: z.number().int().nonnegative(),
+  'session.ended': z.union([
+    /** Ordinary completion retains the historical transcript-bearing shape. */
+    z.strictObject({
+      session: z.string().min(1),
+      transcript: artifactRefSchema,
+      usage: z.strictObject({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        turns: z.number().int().nonnegative(),
+      }),
     }),
-  }),
+    /** A recovering runner closes work whose transcript died with its prior
+     * instance. Takeover evidence replaces, rather than fabricates, a corpus
+     * artifact. */
+    z.strictObject({
+      session: z.string().min(1),
+      outcome: z.literal('reclaimed'),
+      reclaimedBy: z.strictObject({
+        instance: z.string().min(1),
+        resumedFromSeq: z.number().int().nonnegative(),
+      }),
+    }),
+  ]),
 
   // ── Plan loop / code loop (symmetric by design) ────────────────────────────
   'plan.started': z.strictObject({

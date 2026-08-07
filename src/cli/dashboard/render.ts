@@ -577,6 +577,12 @@ function sessionLines(session: DashboardSession, selected: boolean, opts: Render
     `runtime ${session.runtime}`,
     ...(session.model !== undefined ? [`model ${session.model}`] : []),
     session.status,
+    ...(session.reclaimedBy !== undefined
+      ? [
+          `by ${session.reclaimedBy.instance} at resume boundary ${session.reclaimedBy.resumedFromSeq}`,
+          'transcript unavailable',
+        ]
+      : []),
     ...(usage !== undefined
       ? [`tokens ${usage.inputTokens} in/${usage.outputTokens} out, ${usage.turns} turns`]
       : []),
