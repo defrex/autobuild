@@ -181,6 +181,7 @@ describe('agent-driven ab init', () => {
     expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
     expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
     expect(config.roles.default).toEqual({ runtime: 'claude' })
+    expect(config.policy.sessionBudgetSeconds).toBe(3600)
     expect(config.policy.maxReviewRounds).toBe(6)
     expect(cargoSource).not.toContain('bun install')
   })

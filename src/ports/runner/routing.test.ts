@@ -84,6 +84,24 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
     })
   })
 
+  test('session budgets fall back to policy, inherit default, and override per role', () => {
+    const policyOnly = createRuntimeResolver(registry, { default: { runtime: 'pi' } }, 90)
+    expect(policyOnly.resolve('plan').sessionBudgetSeconds).toBe(90)
+
+    const roles = createRuntimeResolver(
+      registry,
+      {
+        default: { runtime: 'pi', sessionBudgetSeconds: 120 },
+        plan: {},
+        implement: { sessionBudgetSeconds: 240 },
+      },
+      90,
+    )
+    expect(roles.resolve('plan').sessionBudgetSeconds).toBe(120)
+    expect(roles.resolve('implement').sessionBudgetSeconds).toBe(240)
+    expect(roles.resolve('implement').alternates).toEqual([])
+  })
+
   test('a runtime gets its own default only when no configured model exists anywhere', () => {
     const r = resolver({
       // This resolves to pi×kimi-k3, but kimi-k3 remains implicit rather than

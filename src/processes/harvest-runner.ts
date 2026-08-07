@@ -169,7 +169,7 @@ export class HarvestRunner {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
     // Preserve eager validation for static callers and startup failures.
-    createRuntimeResolver(deps.runtimes, deps.config.roles)
+    createRuntimeResolver(deps.runtimes, deps.config.roles, deps.config.policy.sessionBudgetSeconds)
   }
 
   private currentConfig(): Config {
@@ -177,7 +177,12 @@ export class HarvestRunner {
   }
 
   private currentResolver(): RuntimeResolver {
-    return createRuntimeResolver(this.deps.runtimes, this.currentConfig().roles)
+    const config = this.currentConfig()
+    return createRuntimeResolver(
+      this.deps.runtimes,
+      config.roles,
+      config.policy.sessionBudgetSeconds,
+    )
   }
 
   async run(): Promise<HarvestRunnerResult> {

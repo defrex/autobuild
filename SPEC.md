@@ -676,6 +676,14 @@ Each failed target's transcript is deposited. Only a stopped or exhausted chain
 emits one `phase.failed` with the final provider message verbatim; that final
 failure controls retry policy. Provider exhaustion skips the retry budget and
 raises a policy escalation, while availability uses the existing bounded
+budget. Every build-agent session also has a kernel-owned wall-clock budget,
+resolved from its logical role and then `[policy].sessionBudgetSeconds`. Expiry
+aborts the turn, ends any available handle, drops producer continuation state,
+and emits retryable `phase.failed` with `phase session budget expired after
+<seconds> seconds`; it is kernel policy and therefore does not select a provider
+alternate. The existing phase-attempt guard retries and then raises an
+answerable policy escalation. Agent finalize post-step expiry remains
+failure-tolerant. Harvest sessions and direct check commands are outside this
 budget. If the turn already wrote a valid typed terminal, that terminal remains
 authoritative and no contradictory failure is appended.
 
@@ -730,6 +738,9 @@ implementer:  ab context   (findings.json now materialized) → …
 
 - *Completed turn, no terminal* → `phase.failed {no-terminal}`, retry per
   policy [D5].
+- *Session budget expiry* → abort and best-effort `end`, then retryable
+  `phase.failed {error: "phase session budget expired after … seconds"}`; retry
+  from the primary and escalate under the existing attempt cap [D5].
 - *Provider rejection* → transcript deposited; eligible failures walk the
   role's declared alternates within one attempt. A stopped/exhausted chain
   emits one `phase.failed` with the final verbatim error and every tried target;
@@ -826,9 +837,12 @@ deterministic fail-safe.
   *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
   AgentRunner contract suite.
-- **Routing — explicit role inheritance (§16.1):** runtime, model, and
-  extension allowlist live in one open `[roles]` map whose reserved `default`
-  entry is the inheritance base and must explicitly name a runtime.
+- **Routing — explicit role inheritance (§16.1):** runtime, model, extension
+  allowlist, and build-session budget live in one open `[roles]` map whose
+  reserved `default` entry is the inheritance base and must explicitly name a
+  runtime. The budget inherits independently, then falls back to
+  `[policy].sessionBudgetSeconds`; it belongs to the logical role, so provider
+  alternates cannot override it.
 
   **Which key a session selects.** One rule for both kinds of agent step: an
   agent verify step and an agent finalize step each select `[roles.<step>]` by
@@ -857,7 +871,7 @@ deterministic fail-safe.
      `[roles.default]` wholesale. That is undeclared-key fallback, not outage
      routing.
   3. A role may declare `alternates = [{ runtime?, model?, extensions? }, …]`.
-     The list is a fourth independently inherited field: a role's own list,
+     The list is independently inherited: a role's own list,
      including `[]`, replaces the default list wholesale. Each entry overlays
      that concrete role's effective primary axes and is resolved and validated
      eagerly with indexed problems in the aggregate startup error.
@@ -1595,8 +1609,10 @@ runtime = "claude"
 [roles.code-review]             # fields override default independently
 runtime = "pi"
 model = "moonshotai/kimi-k3"
+sessionBudgetSeconds = 7200       # optional role override
 
 [policy]
+sessionBudgetSeconds = 3600       # non-infinite default for build agent sessions
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
