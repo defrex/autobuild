@@ -161,3 +161,7 @@ propose; humans dispatch.
   complete HTTP server contract and BuildStore conformance instructions.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and its
   terminology.
+
+## License
+
+[Apache License 2.0](LICENSE).

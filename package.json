@@ -2,6 +2,7 @@
   "name": "autobuild",
   "version": "0.5.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "ab": "bin/ab.ts"
@@ -18,6 +19,7 @@
     "src",
     "skills",
     "templates",
+    "LICENSE",
     "README.md",
     "SPEC.md",
     "docs"
