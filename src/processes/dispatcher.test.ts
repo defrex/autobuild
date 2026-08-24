@@ -3778,14 +3778,77 @@ describe('Dispatcher startup resume', () => {
     expect(h.launches).toEqual([slug, slug])
   })
 
-  test('re-arms a policy-exhausted phase and records an auditable retry answer', async () => {
+  test('repeated startup passes preserve every policy escalation cause and report the parked build', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { slug: 'policy-blocked' })
+    const escalations = [
+      {
+        id: 'esc_phase_attempt',
+        phase: 'plan',
+        round: 1,
+        policyCause: 'phase-attempt-limit',
+      },
+      {
+        id: 'esc_non_retryable',
+        phase: 'implement',
+        round: 1,
+        policyCause: 'non-retryable-phase-failure',
+      },
+      {
+        id: 'esc_review_round',
+        phase: 'plan-review',
+        round: 6,
+        policyCause: 'review-round-limit',
+      },
+      {
+        id: 'esc_verify',
+        phase: 'verify:unit',
+        policyCause: 'verify-failure-limit',
+      },
+      {
+        id: 'esc_reconcile',
+        phase: 'reconcile',
+        policyCause: 'reconcile-no-progress',
+      },
+      {
+        id: 'esc_setup',
+        phase: 'setup',
+        policyCause: 'setup-failure-limit',
+      },
+    ] as const
+    for (const escalation of escalations) {
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          ...escalation,
+          source: 'policy',
+          question: `${escalation.policyCause} remains unresolved`,
+        },
+      })
+    }
+    const before = await h.store.getEvents(slug)
+    const diagnostic = `build ${slug} skipped: open escalations ${escalations
+      .map(({ id }) => id)
+      .join(', ')}`
+
+    expect(reduceBuild(before).status).toBe('blocked')
+    for (let pass = 0; pass < 3; pass += 1) {
+      expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
+        ...emptyTickReport(),
+        blockedDiagnostics: [diagnostic],
+      })
+      expect(await h.store.getEvents(slug)).toEqual(before)
+      expect(
+        reduceBuild(await h.store.getEvents(slug)).openEscalations.map(({ id }) => id),
+      ).toEqual(escalations.map(({ id }) => id))
+    }
+    expect(h.launches).toEqual([])
+  })
+
+  test('an already-recorded human answer is actionable on startup without another answer', async () => {
     const h = harness()
     const slug = await seedBuild(h)
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'phase.failed',
-      payload: { phase: 'plan', round: 1, attempt: 2, error: 'no-terminal', willRetry: false },
-    })
     await h.store.append(slug, {
       actor: KERNEL,
       type: 'escalation.raised',
@@ -3798,67 +3861,70 @@ describe('Dispatcher startup resume', () => {
         question: 'plan failed twice',
       },
     })
-
-    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.launches).toEqual([])
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: { id: 'esc_policy', answer: 'retry', resolution: 'retry' },
+    })
+    const before = await h.store.getEvents(slug)
 
     expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
       ...emptyTickReport(),
       resumed: 1,
     })
     expect(h.launches).toEqual([slug])
-    const answer = (await h.store.getEvents(slug)).at(-1)
-    expect(answer?.type).toBe('escalation.answered')
-    expect(answer?.actor).toEqual({ kind: 'dispatcher' })
-    expect(answer?.payload).toEqual({
-      id: 'esc_policy',
-      answer: 'ab dispatch restarted this build from durable state',
-      resolution: 'retry',
-    })
+    expect(await h.store.getEvents(slug)).toEqual(before)
   })
 
-  test('never auto-answers setup exhaustion; only a human answer allows relaunch', async () => {
-    const h = harness()
-    const slug = await seedBuild(h)
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'runner.setup-failed',
-      payload: {
-        command: 'bun install',
-        attempt: 3,
-        exitStatus: 1,
-        output: 'missing package.json',
-      },
-    })
-    await h.store.append(slug, {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: {
-        id: 'esc_setup',
-        phase: 'setup',
-        source: 'policy',
-        policyCause: 'setup-failure-limit',
-        question: 'setup failed three times',
-      },
-    })
-    await h.store.claimLease(slug, 'runner-1', 1000)
-    h.clock.advance(2000)
+  test('startup still launches blocked builds with pending abort, pause, or resume commands', async () => {
+    for (const command of ['abort', 'pause', 'resume'] as const) {
+      const h = harness()
+      const slug = await seedBuild(h, { slug: `blocked-${command}` })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: `esc_${command}`,
+          phase: 'plan',
+          source: 'agent',
+          question: 'operator command must still be acknowledged',
+        },
+      })
+      if (command === 'resume') {
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.pause-requested',
+          payload: {},
+        })
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      }
+      await h.store.append(
+        slug,
+        command === 'abort'
+          ? {
+              actor: humanActor('operator'),
+              type: 'build.abort-requested',
+              payload: { reason: 'stop this build' },
+            }
+          : command === 'pause'
+            ? {
+                actor: humanActor('operator'),
+                type: 'build.pause-requested',
+                payload: {},
+              }
+            : {
+                actor: humanActor('operator'),
+                type: 'build.resume-requested',
+                payload: {},
+              },
+      )
 
-    expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
-    expect(h.launches).toEqual([])
-    expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('escalation.raised')
-
-    await h.store.append(slug, {
-      actor: humanActor('operator'),
-      type: 'escalation.answered',
-      payload: {
-        id: 'esc_setup',
-        answer: 'fixed the environment',
-        resolution: 'guidance',
-      },
-    })
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), swept: 1 })
-    expect(h.launches).toEqual([slug])
+      expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
+        ...emptyTickReport(),
+        resumed: 1,
+      })
+      expect(h.launches).toEqual([slug])
+    }
   })
 
   test('does not override human pauses or agent judgment escalations', async () => {
@@ -3880,7 +3946,10 @@ describe('Dispatcher startup resume', () => {
         question: 'Which compatibility policy should we use?',
       },
     })
-    expect(await blocked.dispatcher.tick({ resumeCurrent: true })).toEqual(emptyTickReport())
+    expect(await blocked.dispatcher.tick({ resumeCurrent: true })).toEqual({
+      ...emptyTickReport(),
+      blockedDiagnostics: ['build blocked skipped: open escalations esc_agent'],
+    })
     expect(blocked.launches).toEqual([])
     expect((await blocked.store.getEvents('blocked')).at(-1)?.type).toBe('escalation.raised')
   })

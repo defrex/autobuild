@@ -552,21 +552,26 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
-      test('dispatcher escalation answers are limited to the retry resolution', async () => {
+      test('only humans may append escalation answers, including bare retry', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('val-dispatcher-answer'))
-          const err = await store
-            .append('val-dispatcher-answer', {
-              actor: DISPATCHER,
-              type: 'escalation.answered',
-              payload: { id: 'esc_1', answer: 'continue', resolution: 'guidance' },
-            })
-            .catch((e: unknown) => e)
-          expect(err).toBeInstanceOf(EventValidationError)
-          expect(await store.getEvents('val-dispatcher-answer')).toEqual([])
+          for (const payload of [
+            { id: 'esc_1', answer: 'continue', resolution: 'guidance' as const },
+            { id: 'esc_1', answer: 'retry', resolution: 'retry' as const },
+          ]) {
+            const err = await store
+              .append('val-dispatcher-answer', {
+                actor: DISPATCHER,
+                type: 'escalation.answered',
+                payload,
+              })
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(EventValidationError)
+            expect(await store.getEvents('val-dispatcher-answer')).toEqual([])
+          }
 
           await store.append('val-dispatcher-answer', {
-            actor: DISPATCHER,
+            actor: humanActor('operator'),
             type: 'escalation.answered',
             payload: { id: 'esc_1', answer: 'retry', resolution: 'retry' },
           })

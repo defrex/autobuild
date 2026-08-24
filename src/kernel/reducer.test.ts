@@ -16,6 +16,7 @@ import {
 import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
+import { resetsPhaseFailureBudget } from '../processes/phase-failure-budget'
 import { reduceBuild, type BuildState } from './reducer'
 
 const BUILD = 'auth-rate-limit'
@@ -272,6 +273,38 @@ describe('reduceBuild: durable setup failure', () => {
       source: 'policy',
     })
     expect(state.openEscalations[0]).not.toHaveProperty('policyCause')
+  })
+
+  test('a persisted dispatcher retry answer still replays and re-arms its policy budget', () => {
+    // Deliberately bypass validateEventWrite: dispatchers cannot append new
+    // answers, but already-persisted envelopes remain authoritative history.
+    const legacyAnswer = {
+      actor: { kind: 'dispatcher' },
+      type: 'escalation.answered',
+      payload: { id: 'esc_policy', answer: 'restart retry', resolution: 'retry' },
+    } satisfies EventWrite<'escalation.answered'>
+    const state = reduceBuild(
+      toLog([
+        ev('escalation.raised', {
+          id: 'esc_policy',
+          phase: 'plan',
+          round: 2,
+          source: 'policy',
+          policyCause: 'phase-attempt-limit',
+          question: 'plan attempts exhausted',
+        }),
+        legacyAnswer,
+      ]),
+    )
+
+    expect(state.openEscalations).toEqual([])
+    expect(state.answeredEscalations[0]).toMatchObject({
+      id: 'esc_policy',
+      answer: 'restart retry',
+      resolution: 'retry',
+      policyCause: 'phase-attempt-limit',
+    })
+    expect(resetsPhaseFailureBudget(state.answeredEscalations[0]!, 'plan', 2)).toBe(true)
   })
 })
 

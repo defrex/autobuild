@@ -93,10 +93,10 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
 
   'observation.recorded': ['kernel', 'agent'],
   'escalation.raised': ['agent', 'kernel'],
-  // Humans may use every resolution, including a bare `retry`. Dispatcher-
-  // authored answers are restricted to `retry` below; matching those to an
-  // all-policy open set requires log context and lives in Dispatcher.
-  'escalation.answered': ['human', 'dispatcher'],
+  // Answering an escalation is always a deliberate human act. Historical
+  // dispatcher-authored retries remain reducible because replay does not
+  // revalidate already-persisted envelopes.
+  'escalation.answered': ['human'],
   'phase.failed': ['kernel'],
 }
 
@@ -167,16 +167,6 @@ export function validateEventWrite(input: {
       )
     }
   }
-  if (
-    input.type === 'escalation.answered' &&
-    actor.kind === 'dispatcher' &&
-    (payloadResult.data as EventPayload<'escalation.answered'>).resolution !== 'retry'
-  ) {
-    throw new EventValidationError(
-      'dispatcher may only emit "escalation.answered" with resolution "retry"',
-    )
-  }
-
   return {
     actor,
     type: input.type,

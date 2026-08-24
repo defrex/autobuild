@@ -1230,18 +1230,15 @@ model = "gpt-slug-name"
     }
   }, 30_000)
 
-  test('a new invocation retries a current build parked by an infrastructure policy failure', async () => {
+  test('repeated --once and watch startups leave a policy-blocked build parked and report it', async () => {
     const handlers = happyHandlers()
-    const happyPlan = handlers.plan!
     let planAttempts = 0
-    handlers.plan = async (cli) => {
+    handlers.plan = async () => {
       planAttempts += 1
-      if (planAttempts <= 2) return defaultTurnResult('ended without a terminal')
-      return happyPlan(cli)
+      return defaultTurnResult('ended without a terminal')
     }
     const fx = await makeFixture(readyTicket('T-retry'), handlers)
     const firstOut: string[] = []
-    const secondOut: string[] = []
     try {
       // The first invocation exhausts the runner's two-attempt infra budget
       // and parks on a policy escalation.
@@ -1257,30 +1254,49 @@ model = "gpt-slug-name"
       const [record] = await fx.store.listBuilds()
       expect(record).toBeDefined()
       const slug = record!.slug
-      expect((await fx.store.getEvents(slug)).at(-1)?.type).toBe('escalation.raised')
-
-      // The supervising invocation releases the exact execution lease only
-      // after its in-process execution has fully settled.
+      const parked = await fx.store.getEvents(slug)
+      const openIds = parked
+        .filter((event) => event.type === 'escalation.raised')
+        .map((event) => event.payload.id)
+      expect(openIds).toHaveLength(1)
+      expect(parked.at(-1)?.type).toBe('escalation.raised')
       expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
+      const diagnostic = `build ${slug} skipped: open escalations ${openIds.join(', ')}`
 
+      for (let pass = 0; pass < 2; pass += 1) {
+        const out: string[] = []
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: (line) => out.push(line),
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+        })
+        expect(out).toContain(diagnostic)
+        expect(out).not.toContain('tick: idle')
+        expect(await fx.store.getEvents(slug)).toEqual(parked)
+      }
+
+      const stop = new AbortController()
+      const watchOut: string[] = []
       await abDispatch({
         targetRepo: fx.origin,
         env: {},
         exec: spawnExec,
-        stdout: (line) => secondOut.push(line),
+        stdout: (line) => watchOut.push(line),
         stderr: (line) => fx.err.push(line),
-        once: true,
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => stop.abort(),
         wire: fx.wire,
       })
-
-      const events = await fx.store.getEvents(slug)
-      const retry = events.find(
-        (event) => event.type === 'escalation.answered' && event.payload.resolution === 'retry',
-      )
-      expect(retry?.actor).toEqual({ kind: 'dispatcher' })
-      expect(events.map((event) => event.type)).toContain('finalize.completed')
-      expect(secondOut).toContain('tick: resumed=1')
-      expect(planAttempts).toBe(3)
+      expect(watchOut.filter((line) => line === diagnostic)).toHaveLength(1)
+      expect(watchOut).not.toContain('tick: idle')
+      expect(await fx.store.getEvents(slug)).toEqual(parked)
+      expect(parked.some((event) => event.type === 'escalation.answered')).toBe(false)
+      expect(planAttempts).toBe(2)
     } finally {
       await fx.cleanup()
     }

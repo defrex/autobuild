@@ -15,7 +15,9 @@ disagree, the code is authoritative.
    slug naming and skill-conflict proposals remains behind deterministic
    validation and fail-safe fallback.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
-   current build; each phase resumes as a function of durable state.
+   actionable current build; each phase resumes as a function of durable state.
+   Open escalations remain parked until a human answer is recorded, while
+   pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
    that gate explicitly with `[tickets].proposalState`.
