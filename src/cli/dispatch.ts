@@ -1645,6 +1645,7 @@ class DispatchLoop {
     const {
       queued: _queued,
       janitorDiagnostics: _janitorDiagnostics,
+      blockedDiagnostics: _blockedDiagnostics,
       ticketDiagnostics: _ticketDiagnostics,
       creationDiagnostics: _creationDiagnostics,
       dependencyDiagnostics: _dependencyDiagnostics,
@@ -1904,6 +1905,7 @@ class DispatchLoop {
     // repeating it in the notice would make every saturated tick look busy.
     const {
       janitorDiagnostics,
+      blockedDiagnostics,
       ticketDiagnostics,
       creationDiagnostics,
       dependencyDiagnostics,
@@ -1911,6 +1913,7 @@ class DispatchLoop {
       ...counts
     } = report
     for (const line of janitorDiagnostics) this.warn(line)
+    for (const line of blockedDiagnostics) this.say(line)
     for (const line of ticketDiagnostics) this.warn(line)
     for (const line of creationDiagnostics) this.say(line)
     for (const line of dependencyDiagnostics) this.say(line)
@@ -1921,18 +1924,20 @@ class DispatchLoop {
       this.say(`tick: ${parts.join(' ')}`)
       return true
     }
+    const reportedDiagnostic =
+      janitorDiagnostics.length > 0 ||
+      blockedDiagnostics.length > 0 ||
+      ticketDiagnostics.length > 0 ||
+      creationDiagnostics.length > 0 ||
+      dependencyDiagnostics.length > 0
+    if (reportedDiagnostic) return true
     // A tick that did something is worth a plain line. Interactive mode
     // suppresses both action counts and the every-10s idle noise.
     if (!this.dashboard && printIdle) {
       this.opts.stdout('tick: idle')
       return true
     }
-    return (
-      janitorDiagnostics.length > 0 ||
-      ticketDiagnostics.length > 0 ||
-      creationDiagnostics.length > 0 ||
-      dependencyDiagnostics.length > 0
-    )
+    return false
   }
 
   // ── The live region ───────────────────────────────────────────────────────

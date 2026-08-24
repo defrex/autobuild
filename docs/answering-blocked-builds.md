@@ -18,6 +18,11 @@ The dashboard's blocked-build `r` field supports guidance and a blank retry.
 Its build detail names the CLI-only dismissal and revision commands; it does not
 provide a spec editor.
 
+Restarting `ab dispatch` or running `ab dispatch --once` is not an answer or a
+retry action. Every open escalation, including every policy and setup cause,
+survives dispatcher startup until a human uses one of the paths above. Startup
+still recovers unblocked work and acknowledges pending operator commands.
+
 ## Dismissing findings
 
 Dismissal is evaluated per escalation. A blocker that cites no real

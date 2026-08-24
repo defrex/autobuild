@@ -182,6 +182,18 @@ describe('escalation policy-cause protocol', () => {
 })
 
 describe('escalation answer protocol', () => {
+  test('dispatcher-authored guidance and retry answers are rejected', () => {
+    for (const resolution of ['guidance', 'retry'] as const) {
+      expect(() =>
+        validateEventWrite({
+          actor: DISPATCHER,
+          type: 'escalation.answered',
+          payload: { id: 'esc-policy', answer: resolution, resolution },
+        }),
+      ).toThrow(/actor kind "dispatcher" may not emit "escalation.answered"/)
+    }
+  })
+
   test('a human revise-spec answer may authorize an exact artifact revision', () => {
     expect(
       validateEventWrite({

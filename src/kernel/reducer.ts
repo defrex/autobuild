@@ -45,8 +45,8 @@ export interface OpenEscalation {
  * (§15.6-B, §6.3): `guidance` feeds the next producer round as authoritative
  * feedback, `dismiss-finding` marks the chain human-resolved for the next
  * reviewer, `revise-spec` restarts the build from plan, `abort` ends it, and
- * dispatcher-authored `retry` re-arms a policy-exhausted budget without
- * inventing human guidance. */
+ * bare `retry` re-arms the applicable policy-exhausted budget without
+ * inventing guidance. */
 export interface AnsweredEscalation extends OpenEscalation {
   answer: string
   resolution: EscalationResolution

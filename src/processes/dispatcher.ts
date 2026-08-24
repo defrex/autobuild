@@ -280,6 +280,8 @@ export interface TickReport {
   dispatchFailed: number
   /** Dispatch-command startup: current builds for which a runner was launched. */
   resumed: number
+  /** One line per current build left parked by open escalations on startup. */
+  blockedDiagnostics: string[]
   /** Lease sweep (§15.6-C): runners re-attached to stale builds. */
   swept: number
   /** Dispatch (§12): builds created and launched. */
@@ -332,6 +334,7 @@ export function emptyTickReport(): TickReport {
     recovered: 0,
     dispatchFailed: 0,
     resumed: 0,
+    blockedDiagnostics: [],
     swept: 0,
     dispatched: 0,
     authored: 0,
@@ -387,8 +390,8 @@ export interface TickOpts {
   /**
    * Attempt every actionable, non-terminal build for this repo before the
    * ordinary stale-lease sweep. `ab dispatch` sets this only on its first
-   * tick: a process restart is an explicit retry boundary, not an endless
-   * reset of the per-phase failure budget on every watch tick.
+   * tick so crash recovery does not repeatedly probe healthy runners. Open
+   * escalations remain human gates and are only reported as parked.
    */
   resumeCurrent?: boolean
   /**
@@ -1323,12 +1326,10 @@ export class Dispatcher {
    * the exclusivity gate: a genuinely live runner wins and the attempted
    * replacement harmlessly skips.
    *
-   * `decideNext` keeps human judgment gates intact. Paused builds, builds
-   * awaiting a PR/spec, and agent/stall escalations remain parked. The one
-   * automatic unpark is an all-policy escalation set: `phase.failed` retry
-   * exhaustion describes an infrastructure budget, and restarting dispatch
-   * is the operator's explicit request to re-arm that budget. Each policy
-   * raise gets an auditable dispatcher-authored `escalation.answered{retry}`.
+   * `decideNext` keeps every human judgment gate intact while still selecting
+   * pending operator-command acknowledgements before it returns a blocked
+   * wait. Open escalations are reported for plain-mode observability but never
+   * answered by process startup.
    */
   private async resumeCurrent(
     report: TickReport,
@@ -1339,7 +1340,7 @@ export class Dispatcher {
     for (const record of await store.listBuilds()) {
       if (record.repo !== this.deps.repo || launched.has(record.slug)) continue
 
-      let events = await store.getEvents(record.slug)
+      const events = await store.getEvents(record.slug)
       const state = reduceBuild(events)
       if (
         state.status === 'done' ||
@@ -1350,33 +1351,17 @@ export class Dispatcher {
         continue
       }
 
-      let decision = decideNext(events, config)
-      if (
-        decision.kind === 'wait' &&
-        decision.reason === 'blocked' &&
-        state.openEscalations.length > 0 &&
-        state.openEscalations.every(
-          (escalation) => escalation.source === 'policy' && escalation.phase !== 'setup',
-        )
-      ) {
-        for (const escalation of state.openEscalations) {
-          await store.append(record.slug, {
-            actor: DISPATCHER,
-            type: 'escalation.answered',
-            payload: {
-              id: escalation.id,
-              answer: 'ab dispatch restarted this build from durable state',
-              resolution: 'retry',
-            },
-          } satisfies EventWrite<'escalation.answered'>)
+      const decision = decideNext(events, config)
+      if (decision.kind === 'wait') {
+        if (decision.reason === 'blocked' && state.openEscalations.length > 0) {
+          report.blockedDiagnostics.push(
+            `build ${record.slug} skipped: open escalations ${state.openEscalations
+              .map((escalation) => escalation.id)
+              .join(', ')}`,
+          )
         }
-        events = await store.getEvents(record.slug)
-        decision = decideNext(events, config)
+        continue
       }
-
-      // Human pauses and judgment escalations are not "failures" for dispatch
-      // to override; awaiting-pr/spec and terminal states have no runner work.
-      if (decision.kind === 'wait') continue
       const result = await this.launch(record.slug, launched)
       if (result === 'scheduled') report.resumed += 1
     }

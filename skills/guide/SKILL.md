@@ -1267,8 +1267,10 @@ is inside the walk.
 These commands request normal kernel work; they do not wake a runner, operate
 the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
 guarantee: if the condition still fails, a phase may raise a new escalation and
-block again. A fresh `ab dispatch` still auto-retries only an all-policy
-escalation set and never invents guidance.
+block again. Every open escalation, including all policy and setup causes,
+survives `ab dispatch` and `ab dispatch --once` startup until a human answers
+it. Startup still recovers actionable builds and delivers pending operator
+commands, but it never records an answer or re-arms a budget.
 
 Durable repository intake and the claim-time auto-merge default have launch-flag
 setters and global-row toggles but no standalone sessionless control commands.

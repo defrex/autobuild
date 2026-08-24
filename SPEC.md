@@ -960,12 +960,12 @@ escalation after an exhausted failed verify report feeds `implement`, where its
 guidance outranks
 the pending report.
 
-Policy escalations caused by an exhausted bounded retry/round budget are the
-narrow exception to the human-answer rule: a fresh `ab dispatch` invocation
-answers an all-policy open set with dispatcher-authored `resolution: retry`
-and attempts the build from durable state. This unattended startup path is an
-explicit process-restart retry boundary; agent and stall escalations remain
-human judgment gates until an operator answers them.
+Every open escalation remains a human judgment gate until an operator answers
+it. This includes all policy and setup causes. Starting either `ab dispatch` or
+`ab dispatch --once` never appends `escalation.answered` and never re-arms a
+budget. Startup still recovers every actionable current build and delivers
+pending operator commands, whose decisions take precedence over a blocked wait;
+an otherwise blocked build is reported as parked and left unchanged.
 
 Crash-gap and exhaustion deduplication is exact to the escalation's source/class,
 target, and any durable scope that distinguishes policy conditions. Every new
