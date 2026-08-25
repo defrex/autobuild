@@ -507,6 +507,37 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     ).toBeUndefined()
   })
 
+  test('carries reducer-projected review round ceilings and clears them on spec revision', () => {
+    const withCeiling = toLog([
+      ...prelude(),
+      ev('escalation.raised', {
+        id: 'esc-rounds',
+        phase: 'code-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'round limit',
+      }),
+      ev('escalation.answered', {
+        id: 'esc-rounds',
+        answer: 'continue',
+        resolution: 'retry',
+        reviewRoundCeiling: 10,
+      }),
+    ])
+    expect(
+      projectBuild(RECORD, reduceBuild(withCeiling), CONFIG, withCeiling)?.reviewRoundCeilings,
+    ).toEqual({ code: 10 })
+
+    const revised = toLog([
+      ...withCeiling.map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(revised), CONFIG, revised)).not.toHaveProperty(
+      'reviewRoundCeilings',
+    )
+  })
+
   test('buildDashboard drops only terminals and sorts by slug for a stable frame', () => {
     const activeLog = toLog(prelude())
     const queuedLog = toLog(prelude().slice(0, 3))

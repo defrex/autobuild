@@ -171,6 +171,8 @@ export interface DashboardBuild {
   /** Every unresolved blocker's question. Resolved ones drop out by
    * construction — the reducer moves them to answeredEscalations. */
   blockers: string[]
+  /** Current-spec per-loop review budget overrides. */
+  reviewRoundCeilings?: { plan?: number; code?: number }
   /** Native auto-merge desired/applied state. */
   autoMerge: AutoMergeDisplay
   pr?: { url: string; state: PrLifecycle }
@@ -563,6 +565,10 @@ export function projectBuild(
       steps: [],
       abortProgress,
       blockers: state.openEscalations.map((escalation) => escalation.question),
+      ...(state.reviewRoundCeilings.plan !== undefined ||
+      state.reviewRoundCeilings.code !== undefined
+        ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
+        : {}),
       autoMerge: autoMergeDisplay(state),
       ...(state.pr !== undefined && state.prState !== undefined
         ? { pr: { url: state.pr.url, state: state.prState } }
@@ -859,6 +865,9 @@ export function projectBuild(
       ...state.openEscalations.map((e) => e.question),
       ...(mergeWaitReason !== undefined ? [mergeWaitReason] : []),
     ],
+    ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
+      ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
+      : {}),
     autoMerge: autoMergeDisplay(state),
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }

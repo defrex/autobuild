@@ -49,6 +49,8 @@ export type BuildControlAction =
       text?: string
       /** Omitted preserves the historical nonblank-guidance/blank-retry rule. */
       resolve?: AnswerResolutionRequest
+      /** Absolute cap for the review loop named by an open round-limit escalation. */
+      reviewRoundCeiling?: number
       /** Dashboard prompts answer only blockers captured when the field
        * opened. Omitted by the CLI, which answers every currently open one. */
       escalationIds?: readonly string[]
@@ -83,6 +85,7 @@ export type BuildControlResult =
       specRev?: number
       authorizedEarlier?: boolean
       remainingOpen?: number
+      reviewRoundCeiling?: { loop: 'plan' | 'code'; value: number }
       /** A durable post-append fact says this build cannot restart. */
       terminalSignal?: TerminalSignal
     }
@@ -104,6 +107,8 @@ export type BuildControlErrorCode =
   | 'missing-authorization'
   | 'no-longer-active'
   | 'abort-pending'
+  | 'review-round-ceiling-unavailable'
+  | 'incompatible-answer-options'
 
 /** Typed codes let the dashboard turn stale selections/prompts into warnings
  * while the CLI can surface the same underlying conflict as a command error. */
@@ -194,6 +199,26 @@ function selectedOpen(state: BuildState, captured?: Set<string>): OpenEscalation
   return captured === undefined
     ? state.openEscalations
     : state.openEscalations.filter((item) => captured.has(item.id))
+}
+
+function reviewRoundLimitEscalation(
+  slug: string,
+  open: OpenEscalation[],
+): OpenEscalation & { phase: 'plan-review' | 'code-review' } {
+  const eligible = open.filter(
+    (item): item is OpenEscalation & { phase: 'plan-review' | 'code-review' } =>
+      item.source === 'policy' &&
+      item.policyCause === 'review-round-limit' &&
+      (item.phase === 'plan-review' || item.phase === 'code-review'),
+  )
+  if (eligible.length !== 1) {
+    throw new BuildControlError(
+      'review-round-ceiling-unavailable',
+      `cannot set a review round ceiling for build "${slug}": ` +
+        'exactly one open review-round-limit escalation is required; nothing was recorded',
+    )
+  }
+  return eligible[0]!
 }
 
 function hasPendingAbort(state: BuildState): boolean {
@@ -447,6 +472,32 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         opts.action.escalationIds === undefined ? undefined : new Set(opts.action.escalationIds)
       const guidance = (opts.action.text ?? '').trim()
       const actor = humanActor(user)
+      const requestedCeiling = opts.action.reviewRoundCeiling
+      if (
+        requestedCeiling !== undefined &&
+        (!Number.isInteger(requestedCeiling) || requestedCeiling <= 0)
+      ) {
+        throw new BuildControlError(
+          'review-round-ceiling-unavailable',
+          'review round ceiling must be a positive integer; nothing was recorded',
+        )
+      }
+      if (requestedCeiling !== undefined && opts.action.resolve?.kind === 'revise-spec') {
+        throw new BuildControlError(
+          'incompatible-answer-options',
+          'cannot combine a review round ceiling with a spec revision: revision resets the loop round budget on its own; nothing was recorded',
+        )
+      }
+      if (requestedCeiling !== undefined && opts.action.resolve?.kind === 'dismiss-finding') {
+        throw new BuildControlError(
+          'incompatible-answer-options',
+          'cannot combine a review round ceiling with --dismiss; use guidance or a bare retry to answer the review-round-limit escalation; nothing was recorded',
+        )
+      }
+      const ceilingEscalation =
+        requestedCeiling === undefined
+          ? undefined
+          : reviewRoundLimitEscalation(opts.slug, selectedOpen(state, captured))
 
       if (opts.action.resolve?.kind === 'revise-spec') {
         const initial = decideRevise(opts.slug, state, captured)
@@ -625,7 +676,14 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         await opts.store.append(opts.slug, {
           actor,
           type: 'escalation.answered',
-          payload: { id: escalation.id, answer, resolution },
+          payload: {
+            id: escalation.id,
+            answer,
+            resolution,
+            ...(ceilingEscalation?.id === escalation.id
+              ? { reviewRoundCeiling: requestedCeiling }
+              : {}),
+          },
         })
       }
       if (alsoPaused) {
@@ -641,6 +699,15 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         count: open.length,
         resolution,
         resumed: alsoPaused,
+        ...(ceilingEscalation !== undefined && requestedCeiling !== undefined
+          ? {
+              reviewRoundCeiling: {
+                loop:
+                  ceilingEscalation.phase === 'plan-review' ? ('plan' as const) : ('code' as const),
+                value: requestedCeiling,
+              },
+            }
+          : {}),
       }
     }
   }

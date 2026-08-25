@@ -255,6 +255,12 @@ export function buildControlConfirmation(result: BuildControlResult): string {
               : `the PR ${terminal.state}; build completion is underway and it will not restart`
         return `build ${result.slug}: answered ${result.count} escalation${plural} with ${result.resolution}; ${ending}`
       }
+      if (result.reviewRoundCeiling !== undefined) {
+        const ceiling = result.reviewRoundCeiling
+        return `build ${result.slug}: answered ${result.count} open escalation${plural} with ${result.resolution}; ${ceiling.loop} review round ceiling set to ${ceiling.value}${
+          result.resumed ? '; resume requested' : ''
+        }`
+      }
       if (result.resolution === 'revise-spec') {
         const revision = result.specRev === undefined ? '' : ` (spec rev ${result.specRev})`
         if (result.authorizedEarlier === true) {
@@ -817,7 +823,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'answer': {
       const usage =
-        'usage: ab answer <slug> [<text>] [--dismiss | --revise-spec <file> | --revise-spec-from-ticket] [--store <ref>]'
+        'usage: ab answer <slug> [<text>] [--review-round-ceiling <n> | --dismiss | --revise-spec <file> | --revise-spec-from-ticket] [--store <ref>]'
       const parsed = parseArgs(
         rest,
         {
@@ -825,6 +831,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           dismiss: 'boolean',
           'revise-spec': 'value',
           'revise-spec-from-ticket': 'boolean',
+          'review-round-ceiling': 'value',
         },
         usage,
       )
@@ -839,6 +846,27 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       const answer = text.join(' ')
       const storeRef = stringFlag(parsed, 'store')
       const specPath = stringFlag(parsed, 'revise-spec')
+      const ceilingFlag = stringFlag(parsed, 'review-round-ceiling')
+      let reviewRoundCeiling: number | undefined
+      if (ceilingFlag !== undefined) {
+        const parsedCeiling = Number(ceilingFlag)
+        if (!Number.isInteger(parsedCeiling) || parsedCeiling <= 0) {
+          throw new Error(
+            `--review-round-ceiling requires a positive integer, got "${ceilingFlag}" — ${usage}`,
+          )
+        }
+        if (specPath !== undefined || parsed.flags.has('revise-spec-from-ticket')) {
+          throw new Error(
+            'cannot combine --review-round-ceiling with a spec revision: revision resets the loop round budget on its own',
+          )
+        }
+        if (parsed.flags.has('dismiss')) {
+          throw new Error(
+            'cannot combine --review-round-ceiling with --dismiss; use guidance or a bare retry to answer the review-round-limit escalation',
+          )
+        }
+        reviewRoundCeiling = parsedCeiling
+      }
       const resolve = parsed.flags.has('dismiss')
         ? ({ kind: 'dismiss-finding' } as const)
         : specPath !== undefined
@@ -903,6 +931,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           kind: 'answer',
           ...(answer !== '' ? { text: answer } : {}),
           ...(resolve !== undefined ? { resolve } : {}),
+          ...(reviewRoundCeiling !== undefined ? { reviewRoundCeiling } : {}),
         },
         storeRef,
         readTicketBody,

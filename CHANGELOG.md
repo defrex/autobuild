@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#223](https://github.com/defrex/autobuild/pull/223) — Add per-build review round ceilings
 - [#222](https://github.com/defrex/autobuild/pull/222) — Keep policy-blocked builds parked across dispatch restarts
 - [#221](https://github.com/defrex/autobuild/pull/221) — Make phase-failure budget resets semantic
 - [#220](https://github.com/defrex/autobuild/pull/220) — Make reclaimed-message reveal geometry explicit

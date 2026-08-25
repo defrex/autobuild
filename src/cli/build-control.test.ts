@@ -344,6 +344,104 @@ describe('controlBuild — shared durable controls', () => {
     await store.close()
   })
 
+  test('sets an absolute ceiling only on the matching review-limit answer while answering other blockers', async () => {
+    const store = await makeStore()
+    await raise(store, 'esc-agent')
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-rounds',
+        phase: 'plan-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'round limit',
+      },
+    })
+    const result = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'operator' },
+      action: { kind: 'answer', text: 'continue', reviewRoundCeiling: 12 },
+    })
+    expect(result).toMatchObject({
+      kind: 'answered',
+      count: 2,
+      resolution: 'guidance',
+      reviewRoundCeiling: { loop: 'plan', value: 12 },
+    })
+    const answers = (await store.getEvents(SLUG)).filter(
+      (event) => event.type === 'escalation.answered',
+    )
+    expect(answers[0]?.payload).not.toHaveProperty('reviewRoundCeiling')
+    expect(answers[1]?.payload).toMatchObject({ id: 'esc-rounds', reviewRoundCeiling: 12 })
+    expect(reduceBuild(await store.getEvents(SLUG)).reviewRoundCeilings).toEqual({ plan: 12 })
+    await store.close()
+  })
+
+  test('refuses a ceiling without an exact open review-limit escalation before appending', async () => {
+    const store = await makeStore()
+    await raise(store, 'esc-wrong', 'policy')
+    const before = await store.getEvents(SLUG)
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: { kind: 'answer', reviewRoundCeiling: 12 },
+      }),
+    ).rejects.toMatchObject({ code: 'review-round-ceiling-unavailable' })
+    expect(await store.getEvents(SLUG)).toEqual(before)
+    await store.close()
+  })
+
+  test('refuses a ceiling with spec revision before reading or recording the replacement', async () => {
+    const store = await makeStore()
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-rounds',
+        phase: 'code-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'round limit',
+      },
+    })
+    const before = await store.getEvents(SLUG)
+    let read = false
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: {
+          kind: 'answer',
+          reviewRoundCeiling: 12,
+          resolve: {
+            kind: 'revise-spec',
+            body: {
+              kind: 'supplied',
+              origin: 'replacement.md',
+              read: async () => {
+                read = true
+                return CONFORMING_SPEC
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'incompatible-answer-options' })
+    expect(read).toBe(false)
+    expect(await store.getEvents(SLUG)).toEqual(before)
+    await store.close()
+  })
+
   test('a retry after a partial multi-answer failure skips the answer already recorded', async () => {
     const store = await makeStore()
     await raise(store, 'esc-first')

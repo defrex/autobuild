@@ -293,6 +293,19 @@ function buildProgressText(build: DashboardBuild, now: number): string {
   return `progress ${age}${isDiverged(build.progress, now) ? ' diverged' : ''}`
 }
 
+function reviewRoundCeilingText(build: DashboardBuild): string | undefined {
+  if (build.reviewRoundCeilings === undefined) return undefined
+  const values = [
+    ...(build.reviewRoundCeilings.plan !== undefined
+      ? [`plan ${build.reviewRoundCeilings.plan}`]
+      : []),
+    ...(build.reviewRoundCeilings.code !== undefined
+      ? [`code ${build.reviewRoundCeilings.code}`]
+      : []),
+  ]
+  return values.length === 0 ? undefined : `review round ceiling: ${values.join(', ')}`
+}
+
 function renderBuild(
   build: DashboardBuild,
   repositoryPaused: boolean,
@@ -346,6 +359,8 @@ function renderBuild(
   // never a color-only state.
   const identity = `${paint(build.slug, 'bold', color)}  ${buildProgressText(build, now)}`
   const lines = [rightPinnedLine(leftPrefix, identity, rightStr, width)]
+  const ceiling = reviewRoundCeilingText(build)
+  if (ceiling !== undefined) lines.push(truncate(`  ${ceiling}`, width))
 
   if (build.abortProgress !== undefined) {
     for (const line of wrappedText(build.abortProgress, width - 4, '')) {
@@ -621,6 +636,8 @@ function detailBody(
   const body: string[] = []
   if (build.ticketId !== undefined) body.push(`  ticket ${displayText(build.ticketId)}`)
   body.push(`  auto merge ${build.autoMerge}`)
+  const ceiling = reviewRoundCeilingText(build)
+  if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)
     body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
   if (build.abortProgress !== undefined) {

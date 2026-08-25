@@ -940,6 +940,12 @@ converge<A>(
   auto-escalates rather than burning rounds (mechanics in §15.4: the
   reviewer marks persistence — judgment; the kernel applies the threshold —
   determinism).
+- **Round ceiling:** `policy.maxReviewRounds` is the default absolute cap for
+  each loop. Once its `review-round-limit` escalation is open, a human may
+  answer it with an optional positive `reviewRoundCeiling`. That value replaces
+  the configured cap for only the escalation's plan or code loop and current
+  spec revision. It is absolute, durable, and cleared by `spec.revised`; the
+  stall check retains precedence.
 
 ## 11. Escalation
 
@@ -959,6 +965,14 @@ bare retry reruns the step without guidance. The intentionally different policy
 escalation after an exhausted failed verify report feeds `implement`, where its
 guidance outranks
 the pending report.
+
+Only an operator answering an open `review-round-limit` policy escalation may
+set `escalation.answered.reviewRoundCeiling`. The same event both clears the
+human gate and replaces the cap; no standalone or pre-emptive form exists. A
+ceiling cannot accompany a spec revision because `spec.revised` resets both
+loops to the configured default. The value is attached only to the matching
+review-limit answer, so unrelated blockers answered in the same command do not
+acquire it and agents cannot widen their own build's loop.
 
 Every open escalation remains a human judgment gate until an operator answers
 it. This includes all policy and setup causes. Starting either `ab dispatch` or
@@ -1294,7 +1308,7 @@ The families, with illustrative members:
 | Family | Examples |
 |---|---|
 | Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` |
+| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`) |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
@@ -1345,9 +1359,12 @@ chain survives `policy.stallRounds` rounds.
 ### 15.5 Derived state (the reducer)
 
 `status ∈ queued | running | paused | blocked | done | aborted`, plus
-`{phase, round, openEscalations[], pr?, autoMerge, lastEvent}`. `blocked` ≡
-an `escalation.raised` without a matching `escalation.answered`, matched by
-id. `paused` ≡ a `build.paused` without a later `build.resumed`, and takes
+`{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
+lastEvent}`. `blocked` ≡ an `escalation.raised` without a matching
+`escalation.answered`, matched by id. `reviewRoundCeilings` projects valid
+review-limit answers independently for the plan and code loops after the latest
+`spec.revised`; status and dashboard surfaces expose any projected values.
+`paused` ≡ a `build.paused` without a later `build.resumed`, and takes
 reducer precedence over blocked. Auto-merge state tracks the latest human
 *desired* value separately from the latest *applied* fact, settled only when
 both match — a stale acknowledgement can never erase newer intent.

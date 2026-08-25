@@ -1250,6 +1250,47 @@ describe('decideNext: rule 5 — plan loop', () => {
     ).toEqual(expected)
   })
 
+  test('an answered review ceiling widens only this loop and reports the effective absolute cap', () => {
+    const exhausted = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_a')]),
+      ...planRound(2, 'revise', [finding('f_b')]),
+      ...planRound(3, 'revise', [finding('f_c')]),
+      ...planRound(4, 'revise', [finding('f_d')]),
+      ...planRound(5, 'revise', [finding('f_e')]),
+      ...planRound(6, 'revise', [finding('f_f')]),
+      ev(
+        'escalation.raised',
+        {
+          id: 'e_ceiling',
+          phase: 'plan-review',
+          round: 6,
+          source: 'policy',
+          policyCause: 'review-round-limit',
+          question: 'maxReviewRounds (6) exhausted without approval',
+        },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_ceiling',
+        answer: 'continue',
+        resolution: 'retry',
+        reviewRoundCeiling: 8,
+      }),
+    ]
+    expect(decide(exhausted)).toEqual(runPhase('plan', 7, { findings: ['f_f'] }))
+    const throughSeven = [...exhausted, ...planRound(7, 'revise', [finding('f_g')])]
+    expect(decide(throughSeven)).toEqual(runPhase('plan', 8, { findings: ['f_g'] }))
+    expect(decide([...throughSeven, ...planRound(8, 'revise', [finding('f_h')])])).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      policyCause: 'review-round-limit',
+      phase: 'plan-review',
+      round: 8,
+      question: 'maxReviewRounds (8) exhausted without approval',
+    })
+  })
+
   test('policy escalation dedupes after raising; answered guidance burns another round', () => {
     const writes = [
       ...prelude(),
@@ -3082,6 +3123,66 @@ describe('decideNext: spec revision restart (§6.3)', () => {
     expect(decide([...twoFailCycles, ev('verify.started', { step: 'types', attempt: 3 })])).toEqual(
       { kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 3 },
     )
+  })
+
+  test('spec revision clears a widened ceiling and counts the default budget from zero', () => {
+    const oldRounds: EventWrite[] = [
+      ...prelude(),
+      ...planRound(1, 'revise', [finding('f_old_1')]),
+      ...planRound(2, 'revise', [finding('f_old_2')]),
+      ...planRound(3, 'revise', [finding('f_old_3')]),
+      ...planRound(4, 'revise', [finding('f_old_4')]),
+      ...planRound(5, 'revise', [finding('f_old_5')]),
+      ...planRound(6, 'revise', [finding('f_old_6')]),
+      ev(
+        'escalation.raised',
+        {
+          id: 'e_old_limit',
+          phase: 'plan-review',
+          round: 6,
+          source: 'policy',
+          policyCause: 'review-round-limit',
+          question: 'old limit',
+        },
+        KERNEL,
+      ),
+      ev('escalation.answered', {
+        id: 'e_old_limit',
+        answer: 'widen',
+        resolution: 'retry',
+        reviewRoundCeiling: 12,
+      }),
+      ev('escalation.raised', {
+        id: 'e_respec',
+        phase: 'plan',
+        round: 7,
+        source: 'agent',
+        question: 'revise the spec',
+      }),
+      ev('escalation.answered', {
+        id: 'e_respec',
+        answer: 'revised',
+        resolution: 'revise-spec',
+      }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 18 }),
+    ]
+    const throughFive = [
+      ...oldRounds,
+      ...planRound(7, 'revise', [finding('f_new_1')]),
+      ...planRound(8, 'revise', [finding('f_new_2')]),
+      ...planRound(9, 'revise', [finding('f_new_3')]),
+      ...planRound(10, 'revise', [finding('f_new_4')]),
+      ...planRound(11, 'revise', [finding('f_new_5')]),
+    ]
+    expect(decide(throughFive)).toEqual(runPhase('plan', 12, { findings: ['f_new_5'] }))
+    expect(decide([...throughFive, ...planRound(12, 'revise', [finding('f_new_6')])])).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      policyCause: 'review-round-limit',
+      phase: 'plan-review',
+      round: 12,
+      question: 'maxReviewRounds (6) exhausted without approval',
+    })
   })
 
   test('a crashed plan round after the restart re-runs at the continued number', () => {

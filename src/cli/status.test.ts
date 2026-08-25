@@ -462,6 +462,46 @@ describe('summarize', () => {
 })
 
 describe('detail', () => {
+  test('projects review round ceilings in JSON data and human output until spec revision', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-rounds',
+        phase: 'plan-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'round limit',
+      },
+    })
+    await store.append('b1', {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-rounds',
+        answer: 'continue',
+        resolution: 'retry',
+        reviewRoundCeiling: 12,
+      },
+    })
+    const projected = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(projected.reviewRoundCeilings).toEqual({ plan: 12 })
+    expect(renderDetail(projected, NOW).join('\n')).toContain('review round ceiling: plan 12')
+
+    await store.append('b1', {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 2 },
+    })
+    expect(
+      detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW),
+    ).not.toHaveProperty('reviewRoundCeilings')
+    await store.close()
+  })
+
   // §15.6-A: a re-run after a failed verify restarts from the first step at
   // attempt+1, so attempt 1's pass must NOT read as current progress.
   //

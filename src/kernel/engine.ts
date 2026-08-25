@@ -389,6 +389,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     producer: 'plan',
     reviewer: 'plan-review',
     policy: config.policy,
+    reviewRoundCeiling: state.reviewRoundCeilings.plan,
     dismissedIds,
     raisedAfter,
     // Feedback: unconsumed guidance, else the latest revise verdict's ids.
@@ -402,6 +403,7 @@ export function decideNext(events: AbEvent[], config: Config): Decision {
     producer: 'implement',
     reviewer: 'code-review',
     policy: config.policy,
+    reviewRoundCeiling: state.reviewRoundCeilings.code,
     dismissedIds,
     raisedAfter,
     // Feedback priority: guidance > verify failure > findings (§15.6-A/B).
@@ -616,13 +618,23 @@ interface LoopArgs {
   producer: 'plan' | 'implement'
   reviewer: 'plan-review' | 'code-review'
   policy: Config['policy']
+  reviewRoundCeiling?: number
   dismissedIds: ReadonlySet<string>
   raisedAfter: (seq: number, source: EscalationSource, phase: EscalationTarget) => boolean
   producerFeedback: () => Feedback | undefined
 }
 
 function decideLoop(args: LoopArgs): Decision | 'approved' {
-  const { loop, producer, reviewer, policy, dismissedIds, raisedAfter, producerFeedback } = args
+  const {
+    loop,
+    producer,
+    reviewer,
+    policy,
+    reviewRoundCeiling,
+    dismissedIds,
+    raisedAfter,
+    producerFeedback,
+  } = args
   const runProducer = (round: number): Decision => {
     const feedback = producerFeedback()
     return feedback === undefined
@@ -692,14 +704,18 @@ function decideLoop(args: LoopArgs): Decision | 'approved' {
       refs: chain.ids,
     }
   }
-  if (loop.maxRound >= policy.maxReviewRounds && !raisedAfter(verdict.seq, 'policy', reviewer)) {
+  const effectiveCeiling = reviewRoundCeiling ?? policy.maxReviewRounds
+  const reviewedRounds = [...loop.rounds.values()].filter(
+    (record) => record.verdict !== undefined,
+  ).length
+  if (reviewedRounds >= effectiveCeiling && !raisedAfter(verdict.seq, 'policy', reviewer)) {
     return {
       kind: 'raise-escalation',
       source: 'policy',
       policyCause: 'review-round-limit',
       phase: reviewer,
       round: verdict.round,
-      question: `maxReviewRounds (${policy.maxReviewRounds}) exhausted without approval`,
+      question: `maxReviewRounds (${effectiveCeiling}) exhausted without approval`,
     }
   }
   return runProducer(loop.maxRound + 1)
