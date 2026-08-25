@@ -1146,6 +1146,17 @@ describe('renderDashboard: never color-only', () => {
     expect(ansiSkip).toContain('[x] verify:e2e(skipped)')
   })
 
+  test('review round ceilings are literal in both list and detail views', () => {
+    const row = build({ reviewRoundCeilings: { plan: 12, code: 9 } })
+    const list = rd(model([row]), WIDE).join('\n')
+    expect(list).toContain('review round ceiling: plan 12, code 9')
+    const detailModel = {
+      ...model([row]),
+      view: { kind: 'detail' as const, slug: row.slug, scroll: 0 },
+    }
+    expect(rd(detailModel, WIDE).join('\n')).toContain('review round ceiling: plan 12, code 9')
+  })
+
   test('auto-merge intent is conveyed by one common token that is absent when off', () => {
     const lines = rd(
       model([

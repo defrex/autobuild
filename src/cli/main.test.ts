@@ -126,6 +126,7 @@ describe('runCli — routing and exit codes', () => {
       'ab resume <slug>',
       'ab auto-merge <slug> <on|off>',
       'ab answer <slug>',
+      'ab answer <slug> [<text>] --review-round-ceiling <n>',
       'ab answer <slug> [<text>] --dismiss',
       'ab answer <slug> [<text>] --revise-spec <file>',
       'ab answer <slug> [<text>] --revise-spec-from-ticket',
@@ -871,6 +872,50 @@ describe('runCli — sessionless build controls', () => {
     await local.close()
   })
 
+  test('parses, records, and confirms a review round ceiling', async () => {
+    const storeRef = join(tmp, 'review-ceiling-store')
+    await seedControlStore(storeRef)
+    const local = openLocalStore(storeRef)
+    await local.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-rounds',
+        phase: 'code-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'round limit',
+      },
+    })
+    await local.close()
+
+    const d = controlDeps(storeRef)
+    expect(await runCli(['answer', slug, '--review-round-ceiling', '12'], d)).toBe(0)
+    expect(d.out.join('\n')).toContain('code review round ceiling set to 12')
+    const after = openLocalStore(storeRef)
+    const event = (await after.getEvents(slug)).at(-1)
+    expect(event?.type).toBe('escalation.answered')
+    if (event?.type === 'escalation.answered') expect(event.payload.reviewRoundCeiling).toBe(12)
+    await after.close()
+  })
+
+  test('rejects invalid ceilings and spec-revision combinations before opening the store', async () => {
+    for (const value of ['0', '-1', '1.5', 'nope']) {
+      const d = controlDeps(join(tmp, `invalid-ceiling-${value}`))
+      expect(await runCli(['answer', slug, '--review-round-ceiling', value], d)).toBe(1)
+      expect(d.err.join('\n')).toContain('requires a positive integer')
+    }
+    const d = controlDeps(join(tmp, 'ceiling-revision-conflict'))
+    expect(
+      await runCli(
+        ['answer', slug, '--review-round-ceiling', '12', '--revise-spec-from-ticket'],
+        d,
+      ),
+    ).toBe(1)
+    expect(d.err.join('\n')).toContain('revision resets the loop round budget on its own')
+  })
+
   test('routes --revise-spec lazily and confirms the new revision', async () => {
     const storeRef = join(tmp, 'revise-store')
     await seedControlStore(storeRef, { escalations: ['esc-spec'] })
@@ -959,6 +1004,16 @@ describe('runCli — sessionless build controls', () => {
         remainingOpen: 1,
       }),
     ).toContain('1 blocker remains')
+    expect(
+      buildControlConfirmation({
+        kind: 'answered',
+        slug,
+        count: 1,
+        resolution: 'retry',
+        resumed: false,
+        reviewRoundCeiling: { loop: 'plan', value: 12 },
+      }),
+    ).toContain('plan review round ceiling set to 12')
 
     const terminalResults = [
       {

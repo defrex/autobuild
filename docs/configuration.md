@@ -699,7 +699,7 @@ Optional. Every field receives its own default. All are positive integers except
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
-| `maxReviewRounds` | `6` | positive integer | Bound each plan/review and implement/review convergence loop. |
+| `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
 

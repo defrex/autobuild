@@ -9,6 +9,7 @@ Every action below is sessionless, records a human-authored fact, and accepts
 |---|---|---|
 | Give the phase a decision or missing information | `ab answer <slug> <text>` | Records `guidance`. In a review loop it feeds the next producer round. |
 | Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent. |
+| Widen an exhausted review loop | `ab answer <slug> [<text>] --review-round-ceiling <n>` | Answers the open `review-round-limit` escalation and replaces the configured cap with absolute ceiling `n` for that loop and spec revision only. |
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
 | Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts at `plan`. |
 | Re-import an amended ticket | `ab answer <slug> --revise-spec-from-ticket` | Reads the build's recorded ticket and performs the same revision. |
@@ -22,6 +23,22 @@ Restarting `ab dispatch` or running `ab dispatch --once` is not an answer or a
 retry action. Every open escalation, including every policy and setup cause,
 survives dispatcher startup until a human uses one of the paths above. Startup
 still recovers unblocked work and acknowledges pending operator commands.
+
+## Widening an exhausted review loop
+
+`--review-round-ceiling` is available only while the selected build has one open
+`review-round-limit` policy escalation. The positive integer is an absolute
+ceiling, not an increment: setting 12 again leaves the cap at 12. The answer and
+override are one durable human-authored event, so no dispatcher restart is
+needed and replay preserves the value.
+
+The escalation's phase selects the plan or code loop. The other loop and every
+other build keep the configured `maxReviewRounds`; `spec.revised` clears both
+loop overrides. The stall threshold still applies before the widened round cap.
+A ceiling cannot be supplied pre-emptively, as a standalone control, or together
+with `--revise-spec`/`--revise-spec-from-ticket` because revision resets the
+round budget itself. Current overrides appear in `ab build status` and on the
+dashboard.
 
 ## Dismissing findings
 

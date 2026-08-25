@@ -52,6 +52,8 @@ export interface AnsweredEscalation extends OpenEscalation {
   resolution: EscalationResolution
   /** Exact replacement spec revision authorized by a `revise-spec` answer. */
   artifact?: ArtifactRef
+  /** Absolute review budget accepted with a review-round-limit answer. */
+  reviewRoundCeiling?: number
   /** seq of the `escalation.answered` event. */
   answeredSeq: number
 }
@@ -167,6 +169,8 @@ export interface BuildState {
   openEscalations: OpenEscalation[]
   /** In answer order, with resolutions for engine routing (§15.6-B). */
   answeredEscalations: AnsweredEscalation[]
+  /** Human-selected absolute caps for the current spec's independent loops. */
+  reviewRoundCeilings: { plan?: number; code?: number }
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
@@ -278,6 +282,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   let lastCompletedPhase: PhaseContext | undefined
   const openEscalations = new Map<string, OpenEscalation>()
   const answeredEscalations: AnsweredEscalation[] = []
+  const reviewRoundCeilings: BuildState['reviewRoundCeilings'] = {}
   let pr: BuildState['pr']
   let prState: PrLifecycle | undefined
   const autoMerge: AutoMergeProjection = { requested: false }
@@ -430,6 +435,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         // matching engine.ts:710-712.
         restartSince = event.seq
         verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        delete reviewRoundCeilings.plan
+        delete reviewRoundCeilings.code
         break
 
       case 'session.started':
@@ -614,8 +621,22 @@ export function reduceBuild(events: AbEvent[]): BuildState {
             answer: event.payload.answer,
             resolution: event.payload.resolution,
             ...(event.payload.artifact !== undefined ? { artifact: event.payload.artifact } : {}),
+            ...(event.payload.reviewRoundCeiling !== undefined
+              ? { reviewRoundCeiling: event.payload.reviewRoundCeiling }
+              : {}),
             answeredSeq: event.seq,
           })
+          if (
+            event.payload.reviewRoundCeiling !== undefined &&
+            open.source === 'policy' &&
+            open.policyCause === 'review-round-limit'
+          ) {
+            if (open.phase === 'plan-review') {
+              reviewRoundCeilings.plan = event.payload.reviewRoundCeiling
+            } else if (open.phase === 'code-review') {
+              reviewRoundCeilings.code = event.payload.reviewRoundCeiling
+            }
+          }
           // Abort is accepted through either supported operator surface. Keep
           // the answer as the audit reason and project its event identity as
           // the same pending command an explicit abort request creates; the
@@ -656,6 +677,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     lastCompletedPhase,
     openEscalations: [...openEscalations.values()],
     answeredEscalations,
+    reviewRoundCeilings,
     pr,
     prState,
     autoMerge,

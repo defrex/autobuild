@@ -194,6 +194,35 @@ describe('escalation answer protocol', () => {
     }
   })
 
+  test('review round ceilings are optional positive integers on human answers', () => {
+    expect(
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: {
+          id: 'esc-rounds',
+          answer: 'continue',
+          resolution: 'retry',
+          reviewRoundCeiling: 12,
+        },
+      }).payload,
+    ).toMatchObject({ reviewRoundCeiling: 12 })
+    for (const reviewRoundCeiling of [0, -1, 1.5]) {
+      expect(() =>
+        validateEventWrite({
+          actor: humanActor('operator'),
+          type: 'escalation.answered',
+          payload: {
+            id: 'esc-rounds',
+            answer: 'continue',
+            resolution: 'retry',
+            reviewRoundCeiling,
+          },
+        }),
+      ).toThrow(/invalid payload/)
+    }
+  })
+
   test('a human revise-spec answer may authorize an exact artifact revision', () => {
     expect(
       validateEventWrite({

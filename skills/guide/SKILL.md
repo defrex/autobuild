@@ -592,7 +592,7 @@ nonnegative integer so zero can disable that trigger.
 | `maxVerifyAttempts` | `3` | positive integer | Caps the `verify → implement → verify` cycle before escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
-| `maxReviewRounds` | `6` | positive integer | `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. |
+| `maxReviewRounds` | `6` | positive integer | Default `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. When that cap parks a build, `ab answer <slug> --review-round-ceiling <n>` may replace it for only the escalation's loop and current spec revision. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation required to start a run; `0` disables drift. |
 

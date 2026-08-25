@@ -414,6 +414,8 @@ export const eventPayloadSchemas = {
     resolution: escalationResolutionSchema,
     /** Exact replacement spec authorized by a `revise-spec` answer. */
     artifact: artifactRefSchema.optional(),
+    /** Absolute per-loop/current-spec review budget selected by the operator. */
+    reviewRoundCeiling: z.number().int().positive().optional(),
   }),
   /** Infra failure — distinct from verdicts (a verdict is a fact, not a failure). */
   'phase.failed': z.strictObject({

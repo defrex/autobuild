@@ -125,6 +125,8 @@ export interface BuildDetail extends BuildSummary {
    * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
   openEscalations: OpenEscalation[]
+  /** Per-loop review overrides for the current spec; omitted when none are set. */
+  reviewRoundCeilings?: { plan?: number; code?: number }
   openSessions: OpenSession[]
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
@@ -253,6 +255,9 @@ export function detail(
     ...summary,
     ...(decision !== undefined ? { decision } : {}),
     openEscalations: state.openEscalations,
+    ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
+      ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
+      : {}),
     openSessions: state.sessions.open,
     // Observations are historical facts rather than a derived current-state
     // opinion. Preserve event order and exact optional evidence fields.
@@ -417,6 +422,13 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   }
   lines.push(`  status:   ${d.status}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
+  if (d.reviewRoundCeilings !== undefined) {
+    const ceilings = [
+      ...(d.reviewRoundCeilings.plan !== undefined ? [`plan ${d.reviewRoundCeilings.plan}`] : []),
+      ...(d.reviewRoundCeilings.code !== undefined ? [`code ${d.reviewRoundCeilings.code}`] : []),
+    ]
+    lines.push(`  review round ceiling: ${ceilings.join(', ')}`)
+  }
   lines.push(`  updated:  ${d.updatedAt} (${relativeTime(d.updatedAt, now)})`)
 
   // Its own line, never folded into status: a running build with an expired

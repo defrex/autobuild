@@ -1532,6 +1532,89 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
     expect(state.verify.results.filter((r) => r.seq > state.verify.cycleSince)).toEqual([])
   })
 
+  test('review round ceilings are loop-scoped, absolute, durable, and reset by spec revision', () => {
+    const beforeRevision = toLog([
+      ev('escalation.raised', {
+        id: 'e_plan_1',
+        phase: 'plan-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'plan exhausted',
+      }),
+      ev('escalation.answered', {
+        id: 'e_plan_1',
+        answer: 'continue',
+        resolution: 'retry',
+        reviewRoundCeiling: 12,
+      }),
+      ev('escalation.raised', {
+        id: 'e_plan_2',
+        phase: 'plan-review',
+        round: 12,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'plan exhausted again',
+      }),
+      ev('escalation.answered', {
+        id: 'e_plan_2',
+        answer: 'same ceiling',
+        resolution: 'retry',
+        reviewRoundCeiling: 12,
+      }),
+      ev('escalation.raised', {
+        id: 'e_code',
+        phase: 'code-review',
+        round: 6,
+        source: 'policy',
+        policyCause: 'review-round-limit',
+        question: 'code exhausted',
+      }),
+      ev('escalation.answered', {
+        id: 'e_code',
+        answer: 'continue',
+        resolution: 'guidance',
+        reviewRoundCeiling: 9,
+      }),
+    ])
+    const projected = reduceBuild(beforeRevision)
+    expect(projected.reviewRoundCeilings).toEqual({ plan: 12, code: 9 })
+    expect(projected.answeredEscalations.at(-1)?.reviewRoundCeiling).toBe(9)
+    expect(reduceBuild([...beforeRevision]).reviewRoundCeilings).toEqual({ plan: 12, code: 9 })
+
+    const revised = reduceBuild(
+      toLog([
+        ...beforeRevision.map(
+          ({ actor, type, payload }) => ({ actor, type, payload }) as EventWrite,
+        ),
+        ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 5 }),
+      ]),
+    )
+    expect(revised.reviewRoundCeilings).toEqual({})
+  })
+
+  test('a ceiling on a nonmatching answer is retained for audit but cannot change routing state', () => {
+    const state = reduceBuild(
+      toLog([
+        ev('escalation.raised', {
+          id: 'e_agent',
+          phase: 'plan-review',
+          round: 1,
+          source: 'agent',
+          question: 'question',
+        }),
+        ev('escalation.answered', {
+          id: 'e_agent',
+          answer: 'continue',
+          resolution: 'retry',
+          reviewRoundCeiling: 20,
+        }),
+      ]),
+    )
+    expect(state.reviewRoundCeilings).toEqual({})
+    expect(state.answeredEscalations[0]?.reviewRoundCeiling).toBe(20)
+  })
+
   test('cycleSince does NOT retreat when a later code-review revise lands', () => {
     // The step 1(d) warning, pinned: `cycleSince` answers "when did the code
     // last become approved-and-verifiable" (never cleared — engine.ts:637),
