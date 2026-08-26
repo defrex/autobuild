@@ -1,0 +1,4 @@
+{
+  "enabledMcpjsonServers": ["linear"],
+  "enableAllProjectMcpServers": true
+}
