@@ -1,14 +1,6 @@
-/**
- * `ab models` (§9 companion) — a human lookup from a friendly model name to the
- * provider-qualified id the two-axis config wants. Pi's catalog is large and
- * its ids are provider-native (`openai/gpt-5.6-sol`, `moonshotai/kimi-k3`), so
- * "I want GLM 5.2 for code-review" needs a way to find `.../glm-5.2` before
- * editing autobuild.toml. This lists Pi's catalog filtered by a substring so
- * the id can be pasted straight into `[roles.default]` or a concrete role.
- *
- * The SDK import sits behind an injectable seam (like PiAgentRunner's factory)
- * so the command is unit-testable offline.
- */
+/** `ab models` lists the catalog resolved by the operator's local Pi CLI. */
+import { checkLocalPi } from '../ports/runner/pi'
+import { readLocalPiCatalog } from '../ports/runner/pi-rpc'
 
 /** One catalog entry — a provider-qualified id, split for display. */
 export interface PiCatalogEntry {
@@ -24,19 +16,13 @@ export interface PiCatalogEntry {
 export type PiModelCatalogFn = (opts: { availableOnly: boolean }) => Promise<PiCatalogEntry[]>
 
 const defaultCatalog: PiModelCatalogFn = async ({ availableOnly }) => {
-  let sdk: typeof import('@earendil-works/pi-coding-agent')
-  try {
-    sdk = await import('@earendil-works/pi-coding-agent')
-  } catch (error) {
-    throw new Error(
-      `ab models: could not load the pi SDK ("@earendil-works/pi-coding-agent") — ` +
-        `install it. Original error: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
-  // Full catalog is available offline; the availability check needs the network.
-  const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: availableOnly })
-  const models = availableOnly ? await runtime.getAvailable() : runtime.getModels()
-  return models.map((m) => ({ provider: m.provider, id: m.id }))
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  )
+  await checkLocalPi(process.cwd(), env)
+  return readLocalPiCatalog({ cwd: process.cwd(), env, availableOnly })
 }
 
 export interface AbModelsOptions {
@@ -45,7 +31,7 @@ export interface AbModelsOptions {
   /** Restrict to models with configured credentials. */
   availableOnly: boolean
   stdout: (line: string) => void
-  /** Injectable for tests; defaults to the real Pi SDK catalog. */
+  /** Injectable for tests; defaults to the local Pi CLI catalog. */
   catalog?: PiModelCatalogFn
 }
 

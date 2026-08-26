@@ -21,6 +21,13 @@ describe('runtime registration validation', () => {
       'initUsable must be a function when provided',
     )
   })
+
+  test('accepts only the explicit provider-qualified wildcard syntax', () => {
+    expect(validateRuntimeRegistration(reg(['*/*'])).servesModels).toEqual(['*/*'])
+    expect(() => validateRuntimeRegistration(reg(['openai/*']))).toThrow(
+      'provider-qualified wildcard',
+    )
+  })
 })
 
 describe('serves — prefix-family matching', () => {
@@ -42,5 +49,11 @@ describe('serves — prefix-family matching', () => {
   test('a bare prefix is a genuine prefix, not an exact id', () => {
     // The family is a prefix: any successor id under it serves without editing.
     expect(serves(reg(['kimi-']), 'kimi-k4-turbo')).toBe(true)
+  })
+
+  test('the wildcard accepts arbitrary provider-qualified local-Pi models only', () => {
+    expect(serves(reg(['*/*']), 'future-provider/new-model')).toBe(true)
+    expect(serves(reg(['*/*']), 'unqualified-model')).toBe(false)
+    expect(serves(reg(['*/*']), '/missing-provider')).toBe(false)
   })
 })

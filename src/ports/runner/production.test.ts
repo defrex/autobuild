@@ -15,6 +15,18 @@ describe('production runtime registry', () => {
     expect(codex?.defaultModel).toBeUndefined()
   })
 
+  test('registers Pi against the local provider-qualified catalog wildcard', () => {
+    const pi = createProductionRuntimes().runtimes.pi
+    expect(pi?.runner.name).toBe('pi')
+    expect(pi?.servesModels).toEqual(['*/*'])
+    expect(pi?.defaultModel).toBe('kimi-coding/k3')
+
+    const future = createRuntimeResolver(createProductionRuntimes().runtimes, {
+      default: { runtime: 'pi', model: 'future-provider/new-model' },
+    })
+    expect(future.resolve('plan').model).toBe('future-provider/new-model')
+  })
+
   test('validates Codex model families eagerly and delegates an omitted model', () => {
     const production = createProductionRuntimes()
     const omitted = createRuntimeResolver(production.runtimes, {

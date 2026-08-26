@@ -103,9 +103,16 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
   const servesModels = value.servesModels
   if (
     !Array.isArray(servesModels) ||
-    servesModels.some((family) => typeof family !== 'string' || family.trim().length === 0)
+    servesModels.some(
+      (family) =>
+        typeof family !== 'string' ||
+        family.trim().length === 0 ||
+        (family.includes('*') && family !== '*/*'),
+    )
   ) {
-    throw new Error('servesModels must be an array of nonblank strings')
+    throw new Error(
+      'servesModels must be an array of nonblank strings containing prefixes or the provider-qualified wildcard "*/*"',
+    )
   }
 
   const defaultModel = value.defaultModel
@@ -142,5 +149,12 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
  * un-named built-in default, never with a configured model id).
  */
 export function serves(reg: RuntimeRegistration, model: string): boolean {
-  return reg.servesModels.some((prefix) => model.startsWith(prefix))
+  return reg.servesModels.some((family) =>
+    family === '*/*' ? isProviderQualified(model) : model.startsWith(family),
+  )
+}
+
+function isProviderQualified(model: string): boolean {
+  const slash = model.indexOf('/')
+  return slash > 0 && slash < model.length - 1
 }

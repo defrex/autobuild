@@ -36,7 +36,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.3",
     "drizzle-orm": "^0.45.2",
     "semver": "^7.7.4",
     "smol-toml": "^1.7.0",

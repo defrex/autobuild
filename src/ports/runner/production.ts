@@ -39,18 +39,9 @@ export function createProductionRuntimes(): ProductionRuntimes {
         runner: pi,
         oneShot: pi,
         initUsable: isPiRuntimeUsable,
-        servesModels: [
-          // OAuth coding providers, for credentials stored in auth.json by
-          // `/login` inside an interactive Pi session.
-          'openai-codex/',
-          'kimi-coding/',
-          // API-key providers, for keys supplied via env/auth.json.
-          'openai/',
-          'moonshotai/',
-          'cloudflare-workers-ai/',
-          'anthropic/',
-          'openrouter/',
-        ],
+        // The local Pi installation owns the provider catalog. Any
+        // provider-qualified model it resolves is valid here.
+        servesModels: ['*/*'],
         defaultModel: 'kimi-coding/k3',
       },
     },
