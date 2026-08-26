@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#224](https://github.com/defrex/autobuild/pull/224) — Remove durable progress from dashboard rows
 - [#223](https://github.com/defrex/autobuild/pull/223) — Add per-build review round ceilings
 - [#222](https://github.com/defrex/autobuild/pull/222) — Keep policy-blocked builds parked across dispatch restarts
 - [#221](https://github.com/defrex/autobuild/pull/221) — Make phase-failure budget resets semantic

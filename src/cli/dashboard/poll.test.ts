@@ -3,7 +3,6 @@ import { parseConfig } from '../../config/load'
 import { KERNEL } from '../../events/envelope'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
-import { isDiverged } from '../build-progress'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
 
 const REPO = '/repos/dashboard-cache'
@@ -93,7 +92,7 @@ function row(snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>, 
 }
 
 describe('DashboardBuildPollCache', () => {
-  test('refreshes progress when heartbeat advances without an event delta', async () => {
+  test('reuses the row when heartbeat and lease advance without an event delta', async () => {
     let now = Date.parse('2026-07-14T21:00:00.000Z')
     const store = new MemoryBuildStore({ clock: () => new Date(now) })
     await addRunning(store, 'silent')
@@ -102,19 +101,21 @@ describe('DashboardBuildPollCache', () => {
     const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
     const first = await cache.refresh()
     const firstRow = row(first, 'silent')!
-    expect(isDiverged(firstRow.progress, now)).toBe(false)
+    const firstRecord = (await store.listBuilds()).find((record) => record.slug === 'silent')!
 
     now += 15 * 60 * 60 * 1000
     await store.heartbeat('silent', 'runner-silent')
+    const renewedRecord = (await store.listBuilds()).find((record) => record.slug === 'silent')!
+    expect(renewedRecord.heartbeatAt).not.toBe(firstRecord.heartbeatAt)
+    expect(renewedRecord.lease?.expiresAt).not.toBe(firstRecord.lease?.expiresAt)
+
     reader.resetCalls()
     const second = await cache.refresh()
     const secondRow = row(second, 'silent')!
 
     expect(reader.eventCalls).toEqual([{ slug: 'silent', since: 1 }])
-    expect(secondRow).not.toBe(firstRow)
-    expect(secondRow.progress.lastEventAt).toBe(firstRow.progress.lastEventAt)
-    expect(secondRow.progress.heartbeatAt).not.toBe(firstRow.progress.heartbeatAt)
-    expect(isDiverged(secondRow.progress, now)).toBe(true)
+    expect(secondRow).toBe(firstRow)
+    expect(secondRow).toEqual(firstRow)
     expect((await store.getEvents('silent')).map((event) => event.seq)).toEqual([1])
   })
 
