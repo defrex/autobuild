@@ -303,13 +303,17 @@ third, deliberately separate boundary and also fails closed.
 **Agent runtimes.** `src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
 `production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct
-Codex `exec --json` subprocess protocol with native thread resume), `one-shot.ts` (optional
-tool-free non-phase completions — slug naming via `src/cli/dispatch.ts`,
-skill-conflict proposals via `src/cli/upgrade-agent.ts`), `provider-error.ts`
-(positive-only permanent-failure classifier), and `session-env.ts` (per-turn
-environment merge that fronts `bin/agent/ab` on `PATH`). Adapters own SDK-native
-error extraction; processes own durable failure policy — the transcript is
-always deposited, and a turn's typed terminal always beats a late failure
+Codex `exec --json` subprocess protocol with native thread resume), `pi.ts` and
+`pi-rpc.ts` (the local pi CLI prerequisite/auth probe and long-lived headless
+RPC protocol, minimum version 0.84.3), `one-shot.ts` (optional tool-free
+non-phase completions — slug naming via `src/cli/dispatch.ts`, skill-conflict
+proposals via `src/cli/upgrade-agent.ts`), `provider-error.ts` (positive-only
+permanent-failure classifier), and `session-env.ts` (per-turn environment merge
+that fronts `bin/agent/ab` on `PATH`). The pi CLI owns its login and model
+catalog; the shipped bridge limits tools and refreshes each turn's subprocess
+environment without writing session state into the workspace. Adapters own
+native error extraction; processes own durable failure policy — the transcript
+is always deposited, and a turn's typed terminal always beats a late failure
 signal.
 
 **Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves
@@ -518,7 +522,7 @@ agent judgment while preserving transcript and artifact actor attribution.
 A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and
 local-git adapters, the injected Claude and Codex CLI subprocess contracts,
-and the injected Pi SDK contract.
+and the injected Pi CLI/RPC contract.
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
 through readiness, dependency, harvest, and completion paths. The Linear,
@@ -589,8 +593,9 @@ and covers direct argv, native resume, stream-json parsing, usage, transcripts,
 and failure classification without launching the CLI. Codex similarly uses the
 locally installed `codex` executable after `codex login`; its offline suite
 pins direct argv, `$skill` invocation, JSONL parsing, native thread resume,
-startup diagnostics, and tool-free one-shot rejection. Pi uses the credentials
-required by the provider named in `AB_PI_CONTRACT_MODEL`. The live fixtures
+startup diagnostics, and tool-free one-shot rejection. Pi requires a locally installed `pi` executable at version 0.84.3 or newer and
+uses that installation's login and model catalog for the provider named in
+`AB_PI_CONTRACT_MODEL`. The live fixtures
 create isolated temporary project skills and probe files and remove them after
 each run; provider failures remain in the deterministic injected adapter
 contracts because they cannot be manufactured safely against a live account.
