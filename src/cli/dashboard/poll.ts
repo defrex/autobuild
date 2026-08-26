@@ -23,7 +23,6 @@ export interface DashboardPollSnapshot {
 
 interface LiveEntry {
   kind: 'live'
-  record: BuildRecord
   events: AbEvent[]
   state: BuildState
   build: DashboardBuild | null
@@ -35,14 +34,6 @@ interface TerminalEntry {
 }
 
 type PollEntry = LiveEntry | TerminalEntry
-
-function progressRecordChanged(previous: BuildRecord, next: BuildRecord): boolean {
-  return (
-    previous.heartbeatAt !== next.heartbeatAt ||
-    previous.lease?.holder !== next.lease?.holder ||
-    previous.lease?.expiresAt !== next.lease?.expiresAt
-  )
-}
 
 function isTerminal(state: BuildState): boolean {
   // `build.aborted` acknowledges cancellation but begins the checkpointed
@@ -132,20 +123,17 @@ export class DashboardBuildPollCache {
       validateDelta(record.slug, sinceSeq, delta)
 
       if (current !== undefined && delta.length === 0) {
-        // Heartbeats and lease renewal are mutable record facts, not events.
-        // Reproject when those inputs move so progress divergence cannot stay
-        // hidden behind an unchanged event sequence. Otherwise preserve the
-        // expensive projected row by identity.
-        const reproject = configChanged || progressRecordChanged(current.record, record)
+        // Dashboard rows derive from event streams and effective config only.
+        // Heartbeat and lease renewals are mutable record facts, so they leave
+        // both the cached reduction and projected row untouched.
         next.set(
           record.slug,
-          reproject
+          configChanged
             ? {
                 ...current,
-                record,
                 build: projectBuild(record, current.state, config, current.events),
               }
-            : { ...current, record },
+            : current,
         )
         continue
       }
@@ -158,7 +146,6 @@ export class DashboardBuildPollCache {
       }
       next.set(record.slug, {
         kind: 'live',
-        record,
         events,
         state,
         build: projectBuild(record, state, config, events),

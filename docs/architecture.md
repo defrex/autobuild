@@ -423,11 +423,12 @@ adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
 `src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
-inputs shared by `ab builds`, `ab build status`, and dashboard rows. Its one-hour
-`diverged` predicate is presentation-only: reducer status, engine routing, and
-lease health remain independent. `src/cli/dashboard/model.ts` is the build-row
-projection; `poll.ts` reprojects mutable heartbeat/lease changes even when its
-incremental event read is empty, while retaining the cached log and reduction.
+inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its
+one-hour `diverged` predicate is presentation-only: reducer status, engine
+routing, and lease health remain independent. `src/cli/dashboard/model.ts` is
+the event-derived build-row projection; `poll.ts` reprojects rows for event or
+effective-config changes and reuses them across heartbeat/lease-only renewals
+while retaining the cached log and reduction.
 `detail.ts` projects chronological session history from the same retained log,
 including a distinct transcriptless `reclaimed` ending, and `transcript.ts`
 heuristically presents ordinary opaque transcript artifacts with a raw

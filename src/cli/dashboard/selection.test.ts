@@ -29,7 +29,6 @@ describe('dashboard row selection', () => {
           {
             slug: 'a',
             status: 'running',
-            progress: { terminal: false },
             alsoPaused: false,
             steps: [],
             blockers: [],

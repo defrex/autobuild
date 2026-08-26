@@ -43,7 +43,6 @@ import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
 import { decideNext } from '../../kernel/engine'
 import { verifyPhase } from '../../ontology'
 import type { BuildRecord } from '../../store/types'
-import { buildProgress, type BuildProgress } from '../build-progress'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
 import type { TranscriptPresentation } from './transcript'
@@ -152,8 +151,6 @@ export interface DashboardHarvest {
 export interface DashboardBuild {
   slug: string
   status: EffectiveStatus
-  /** Exact durable-progress inputs; ages and divergence are render-time views. */
-  progress: BuildProgress
   /** True when the build is BOTH paused and blocked: blocked wins the status
    * (the spec's visual override), and this keeps the pause visible so no
    * information is lost. */
@@ -544,7 +541,6 @@ export function projectBuild(
     return {
       slug: record.slug,
       status,
-      progress: buildProgress(record, state),
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
       steps: [],
@@ -559,7 +555,6 @@ export function projectBuild(
     return {
       slug: record.slug,
       status,
-      progress: buildProgress(record, state),
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
       steps: [],
@@ -856,7 +851,6 @@ export function projectBuild(
   return {
     slug: record.slug,
     status,
-    progress: buildProgress(record, state),
     alsoPaused: state.status === 'paused' && status === 'blocked',
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps,
