@@ -331,8 +331,14 @@ factory, and preserves the returned adapter's optional capabilities. The
 local-git adapter in `src/ports/forge/local-git.ts` stores versioned JSON PR
 records as blobs behind private `refs/autobuild/local-git/` refs in the shared
 Git database. It computes mergeability with `git merge-tree`, leaves the build
-branch reachable, and lands a guarded single-parent squash locally. For a
-checked-out base, dry-run and real `git read-tree -m -u <old> <landed>` calls
+branch reachable, and lands a guarded single-parent squash locally. Immediately
+before offering an ungated landing candidate, `git var GIT_AUTHOR_IDENT` and
+`git var GIT_COMMITTER_IDENT` prove that ordinary Git identity resolution can
+succeed; a failure becomes a reason-bearing, retryable consent deferral. The
+`git commit-tree` seam inherits that resolved identity without injecting an
+Autobuild author or committer, while `-c commit.gpgSign=false` keeps the landing
+unsigned. For a checked-out base, dry-run and real
+`git read-tree -m -u <old> <landed>` calls
 let Git carry forward non-overlapping operator changes and report colliding
 paths. The pending landing precedes the guarded ref update; a later poll retries
 the same two-tree checkout transition across the crash window and observes the

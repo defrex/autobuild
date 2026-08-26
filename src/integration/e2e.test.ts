@@ -21,6 +21,7 @@ import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion } from '../events/payloads'
 import { randomUuids, sequentialIds } from '../ids'
+import { autoMergeDeferralRef } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
 import { reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
@@ -896,7 +897,7 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   expect(typesOf(final)).not.toContain('escalation.raised')
 }, 30_000)
 
-test('local-git runs the complete no-remote lifecycle and lands only after independent observation', async () => {
+test('local-git defers for missing identity, then lands under repository identity after retry', async () => {
   const configToml = CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"')
   const h = await track(
     makeHarness({
@@ -908,6 +909,8 @@ test('local-git runs the complete no-remote lifecycle and lands only after indep
   )
 
   expect(await git(['remote', '-v'], h.origin)).toBe('')
+  await git(['config', 'user.name', ''], h.origin)
+  await git(['config', 'user.email', ''], h.origin)
   await h.dispatcher.tick()
   const initialBase = await git(['rev-parse', 'main'], h.origin)
   const parked = await h.runLatest()
@@ -928,13 +931,35 @@ test('local-git runs the complete no-remote lifecycle and lands only after indep
   expect(await git(['rev-parse', 'main'], h.origin)).toBe(initialBase)
   expect(typesOf(await h.events(SLUG))).not.toContain('pr.merged')
 
-  await h.store.append(SLUG, {
+  const command = await h.store.append(SLUG, {
     actor: humanActor('operator'),
     type: 'build.auto-merge-requested',
     payload: {},
   })
 
-  // First boundary performs only the guarded squash; no merge fact is assumed.
+  // Missing repository identity is a durable, deduplicated landing blocker.
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(await git(['rev-parse', 'main'], h.origin)).toBe(initialBase)
+  events = await h.events(SLUG)
+  const identityObservations = ofType(events, 'observation.recorded').filter((event) =>
+    event.payload.refs?.includes(autoMergeDeferralRef(1, command.seq)),
+  )
+  expect(identityObservations).toHaveLength(1)
+  expect(identityObservations[0]!.payload.summary).toContain('Git author and committer identity')
+  expect(identityObservations[0]!.payload.summary).toContain('git config user.name')
+  expect(typesOf(events)).not.toContain('pr.merged')
+
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
+  expect(
+    ofType(await h.events(SLUG), 'observation.recorded').filter((event) =>
+      event.payload.refs?.includes(autoMergeDeferralRef(1, command.seq)),
+    ),
+  ).toHaveLength(1)
+
+  await git(['config', 'user.name', 'Lifecycle Operator'], h.origin)
+  await git(['config', 'user.email', 'lifecycle@example.test'], h.origin)
+
+  // The next boundary retries consent and performs only the guarded squash.
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport() })
   const landed = await git(['rev-parse', 'main'], h.origin)
   expect(landed).not.toBe(initialBase)
@@ -947,6 +972,9 @@ test('local-git runs the complete no-remote lifecycle and lands only after indep
   expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
   expect(ofType(final, 'pr.merged')[0]!.payload.sha).toBe(landed)
   expect(await git(['show', '-s', '--format=%P', landed], h.origin)).toBe(initialBase)
+  expect(await git(['show', '-s', '--format=%an <%ae>%n%cn <%ce>', landed], h.origin)).toBe(
+    'Lifecycle Operator <lifecycle@example.test>\nLifecycle Operator <lifecycle@example.test>',
+  )
   const description = textContent((await h.store.getArtifact(SLUG, 'pr-description'))!)
   expect(await git(['show', '-s', '--format=%B', landed], h.origin)).toBe(description.trimEnd())
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)

@@ -178,6 +178,25 @@ describe('auto-merge deferral observations', () => {
     expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
   })
 
+  test('describes missing local Git identity with setup guidance and stable consent marker', () => {
+    const write = autoMergeDeferralObservation(
+      {
+        code: 'local-git-identity-missing',
+        detail:
+          'Configure the repository identity with `git config user.name "Your Name"` and `git config user.email "you@example.com"`.',
+      },
+      42,
+      17,
+      'obs_identity',
+    )
+    expect(write.payload.summary).toContain(
+      'local squash requires a configured Git author and committer identity',
+    )
+    expect(write.payload.summary).toContain('git config user.name')
+    expect(write.payload.summary).toContain('git config user.email')
+    expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
+  })
+
   test('a single writer records a newly encountered deferral', async () => {
     const store = new MemoryBuildStore()
     await store.createBuild(sampleBuildInput('deferral-single'))

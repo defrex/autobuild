@@ -426,6 +426,28 @@ export class LocalGitForge implements Forge {
         }
       }
     }
+
+    const identityFailures: string[] = []
+    for (const variable of ['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT']) {
+      const result = await this.command(['var', variable], workspacePath, true)
+      if (result.exitCode !== 0) {
+        identityFailures.push(
+          `${variable}: ${result.stderr.trim() || result.stdout.trim() || `git var failed (exit ${result.exitCode})`}`,
+        )
+      }
+    }
+    if (identityFailures.length > 0) {
+      return {
+        kind: 'deferred',
+        reason: {
+          code: 'local-git-identity-missing',
+          detail:
+            'Configure the repository identity with `git config user.name "Your Name"` and ' +
+            '`git config user.email "you@example.com"`. ' +
+            identityFailures.join(' | '),
+        },
+      }
+    }
     return { kind: 'ungated', headSha }
   }
 
@@ -451,20 +473,7 @@ export class LocalGitForge implements Forge {
       const path = join(dir, 'message.md')
       await writeFile(path, message, 'utf8')
       const result = await this.command(
-        [
-          '-c',
-          'commit.gpgSign=false',
-          '-c',
-          'user.name=Autobuild',
-          '-c',
-          'user.email=autobuild@localhost',
-          'commit-tree',
-          treeSha,
-          '-p',
-          baseSha,
-          '-F',
-          path,
-        ],
+        ['-c', 'commit.gpgSign=false', 'commit-tree', treeSha, '-p', baseSha, '-F', path],
         cwd,
       )
       const sha = result.stdout.trim()

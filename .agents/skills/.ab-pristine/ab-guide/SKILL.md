@@ -197,8 +197,11 @@ The distinctions that change an administrator's answer:
   successful content-producing finalize post-step; neither path force-pushes.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
   operation: durable PR records live under private Git refs, the review locator
-  is `refs/heads/ab/<slug>`, and consent lands a local guarded squash whose
-  message is the deposited PR description. Without consent it remains open for
+  is `refs/heads/ab/<slug>`, and consent lands a local guarded, unsigned squash
+  whose message is the deposited PR description and whose author and committer
+  come from the repository's ordinary Git identity. If Git cannot resolve that
+  identity, the PR remains open with actionable `user.name` / `user.email`
+  guidance and later dispatcher ticks retry. Without consent it remains open for
   ordinary `git diff` inspection; it has no review UI or image host.
 
 ## `autobuild.toml` reference
