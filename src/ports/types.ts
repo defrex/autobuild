@@ -181,6 +181,7 @@ export type AutoMergeDeferralCode =
   | 'repository-auto-merge-disabled'
   | 'unproven-gate-state'
   | 'local-base-checkout-dirty'
+  | 'local-git-identity-missing'
 
 export interface AutoMergeDeferralReason {
   /** Stable machine-readable family used by durable operator observations. */

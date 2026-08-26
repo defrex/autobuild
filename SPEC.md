@@ -1573,9 +1573,15 @@ with native auto-merge disabled is left open for a human; Autobuild never
 changes the setting. The local-git forge has no external gate or native
 setting: consent produces the same inspected-head guarded squash candidate,
 mergeability is recomputed against the current local base, and the exact
-`pr-description` becomes the single-parent squash commit message. When the base
-branch is checked out, Git's two-tree `read-tree -m -u` transition preflights and
-lands the old-to-squash tree: tracked/index changes on untouched paths and
+`pr-description` becomes the single-parent squash commit message. Its author and
+committer are Git's ordinary resolved repository identity, exactly as for a plain
+local commit; commit signing remains disabled. Before offering the candidate,
+the adapter resolves both identities through Git. If either is unavailable,
+consent remains pending and one reason-bearing follow-up names the missing
+`user.name` / `user.email` configuration; later polls retry after the operator
+configures it. When the base branch is checked out, Git's two-tree
+`read-tree -m -u` transition preflights and lands the old-to-squash tree:
+tracked/index changes on untouched paths and
 untracked non-colliding files survive, while a tracked or untracked overwrite
 leaves consent pending and records one path-bearing follow-up instead of failing
 the dispatcher. Its durable pending-landing record is written before moving the

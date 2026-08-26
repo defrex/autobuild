@@ -1100,8 +1100,14 @@ set or copy them into `.env`; the runner stamps them for each session.
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
 credentials or network access: it keeps durable PR records under private Git
 refs, leaves each build at `refs/heads/ab/<slug>`, and squash-merges locally only
-after auto-merge consent. A dirty checked-out base does not by itself block the
-landing: tracked and untracked work on paths untouched by the squash survives.
+after auto-merge consent. The squash author and committer come from the
+repository's ordinary Git identity, as resolved for a plain `git commit`; the
+landing is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
+resolve that identity, the PR remains open and `ab build status <slug>` names
+`user.name` / `user.email` setup commands; dispatcher ticks retry automatically
+after the operator configures them. A dirty checked-out base does not by itself
+block the landing: tracked and untracked work on paths untouched by the squash
+survives.
 If the squash would overwrite operator work, the PR remains open, `ab build
 status <slug>` shows a path-bearing observation, and later dispatcher ticks retry
 automatically after the operator commits, stashes, or discards the collision;

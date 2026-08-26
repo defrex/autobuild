@@ -27,8 +27,8 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ab-local-forge-test-'))
   roots.push(root)
   await git(root, 'init', '-b', 'main')
-  await git(root, 'config', 'user.name', 'Autobuild Test')
-  await git(root, 'config', 'user.email', 'autobuild@example.test')
+  await git(root, 'config', 'user.name', 'Repository Operator')
+  await git(root, 'config', 'user.email', 'operator@example.test')
   await writeFile(join(root, 'shared.txt'), 'base\n')
   await git(root, 'add', 'shared.txt')
   await git(root, 'commit', '-m', 'initial')
@@ -124,6 +124,7 @@ describe('LocalGitForge', () => {
     })
     expect(await git(f.root, 'rev-parse', 'refs/autobuild/test/base')).toBe(snapshot)
 
+    await git(f.root, 'config', 'commit.gpgsign', 'true')
     const candidate = await fresh.setAutoMerge(f.workspace, pr.number, true)
     expect(candidate).toEqual({ kind: 'ungated', headSha: pr.headSha })
     await fresh.squashMerge(f.workspace, pr.number, pr.headSha)
@@ -131,8 +132,50 @@ describe('LocalGitForge', () => {
     expect(await fresh.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
     expect(await git(f.root, 'show', '-s', '--format=%P', landed)).toBe(snapshot)
     expect(await git(f.root, 'show', '-s', '--format=%B', landed)).toBe(description.trimEnd())
+    expect(await git(f.root, 'show', '-s', '--format=%an <%ae>%n%cn <%ce>', landed)).toBe(
+      'Repository Operator <operator@example.test>\nRepository Operator <operator@example.test>',
+    )
+    expect(await git(f.root, 'cat-file', '-p', landed)).not.toContain('gpgsig ')
     expect(await git(f.root, 'status', '--porcelain')).toBe('')
     expect(await git(f.root, 'rev-parse', `refs/heads/${f.head}`)).toBe(pr.headSha)
+  })
+
+  test('missing Git identity defers without landing and retries under the configured identity', async () => {
+    const f = await fixture()
+    const pr = await f.forge.openPr({
+      workspacePath: f.workspace,
+      head: f.head,
+      base: 'main',
+      title: 'identity retry',
+      body: '',
+    })
+    const before = await git(f.root, 'rev-parse', 'main')
+    await git(f.root, 'config', 'user.name', '')
+    await git(f.root, 'config', 'user.email', '')
+
+    const deferred = await f.forge.setAutoMerge(f.workspace, pr.number, true)
+    expect(deferred.kind).toBe('deferred')
+    if (deferred.kind !== 'deferred') throw new Error('expected identity deferral')
+    expect(deferred.reason?.code).toBe('local-git-identity-missing')
+    expect(deferred.reason?.detail).toContain('git config user.name')
+    expect(deferred.reason?.detail).toContain('git config user.email')
+    expect(deferred.reason?.detail).toContain('GIT_AUTHOR_IDENT')
+    expect(deferred.reason?.detail).toContain('GIT_COMMITTER_IDENT')
+    expect(await git(f.root, 'rev-parse', 'main')).toBe(before)
+    expect(await f.forge.getPrState(f.root, pr.number)).toEqual({ state: 'open', mergeable: true })
+
+    await git(f.root, 'config', 'user.name', 'Configured Operator')
+    await git(f.root, 'config', 'user.email', 'configured@example.test')
+    expect(await f.forge.setAutoMerge(f.workspace, pr.number, true)).toEqual({
+      kind: 'ungated',
+      headSha: pr.headSha,
+    })
+    await f.forge.squashMerge(f.workspace, pr.number, pr.headSha)
+    const landed = await git(f.root, 'rev-parse', 'main')
+    expect(await f.forge.getPrState(f.root, pr.number)).toEqual({ state: 'merged', sha: landed })
+    expect(await git(f.root, 'show', '-s', '--format=%an <%ae>%n%cn <%ce>', landed)).toBe(
+      'Configured Operator <configured@example.test>\nConfigured Operator <configured@example.test>',
+    )
   })
 
   test('compatible base advances remain mergeable and conflicting advances do not', async () => {
