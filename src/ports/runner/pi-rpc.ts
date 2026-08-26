@@ -353,8 +353,10 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
     '--no-themes',
   ]
   if (opts.model !== undefined) args.push('--model', `${opts.model.provider}/${opts.model.id}`)
+  // `--tools` filters both builtin and package tools out of Pi's registry.
+  // Keep the complete registry for build sessions and let the bridge activate
+  // exactly the configured builtin/package subset before every agent prompt.
   if (opts.tools.length === 0) args.push('--no-tools')
-  else args.push('--tools', opts.tools.join(','))
   args.push('--no-skills')
   if (opts.skill !== undefined) args.push('--skill', `${opts.cwd}/.agents/skills/${opts.skill}`)
   if (opts.extensions.length === 0) args.push('--no-extensions')

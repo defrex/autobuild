@@ -178,8 +178,6 @@ describe('Pi RPC JSONL', () => {
       '--no-themes',
       '--model',
       'future-provider/future-model',
-      '--tools',
-      'read,bash',
       '--no-skills',
       '--skill',
       '/repo/.agents/skills/ab-plan',
