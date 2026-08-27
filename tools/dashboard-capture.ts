@@ -745,6 +745,9 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
   const terminal = new CaptureTerminal(spec.columns, spec.rows)
   const stderr: string[] = []
   let captured: string[] | undefined
+  const sentinelLeaseNotices = new Set(
+    HAPPY_BUILDS.map(({ slug }) => `build ${slug} already held by another runner — skipped`),
+  )
 
   await abDispatch({
     targetRepo: harness.origin,
@@ -757,11 +760,24 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
     input: NO_INPUT,
     wire: () => harness.wiring,
     resolveDashboardRenderer: () => (model, options) => {
+      // The happy fixture pins its pre-seeded builds with sentinel leases so
+      // this real dispatch pass cannot mutate their journals. Those deliberate
+      // claim losses are capture mechanics, not scenario health; remove only
+      // their exact notices while preserving any unexpected warning as visual
+      // and test evidence.
+      const warningLines =
+        spec.scenario === 'happy'
+          ? (model.warningLines ?? []).filter((line) => !sentinelLeaseNotices.has(line))
+          : []
       const presented = {
         ...model,
-        ...(spec.scenario === 'mixed' && spec.detail === undefined && spec.transcript === undefined
-          ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
-          : {}),
+        ...(spec.scenario === 'happy'
+          ? warningLines.length > 0
+            ? { warningLines }
+            : { warningLines: undefined }
+          : spec.detail === undefined && spec.transcript === undefined
+            ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
+            : {}),
         ...(spec.detail !== undefined
           ? {
               view: {
