@@ -45,7 +45,10 @@ function forwardText(text: string, sink: (line: string) => void): void {
 
 export const spawnPluginContract: PluginContractSubprocess = async (input) => {
   const entry = join(import.meta.dir, '..', 'plugins', 'contract-entry.ts')
-  const child = Bun.spawn(['bun', 'test', entry], {
+  // Use the current Bun executable by absolute path: the plugin's declared
+  // environment may intentionally omit PATH, but contract execution must not
+  // depend on executable lookup inside that replacement environment.
+  const child = Bun.spawn([process.execPath, 'test', entry], {
     cwd: input.repoRoot,
     env: {
       ...definedEnv(input.env),
