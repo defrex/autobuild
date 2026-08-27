@@ -661,7 +661,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     // models runs OUTSIDE build sessions (§9): it lists Pi's model catalog so a
     // human can find the provider-qualified id to paste into autobuild.toml. No
-    // store/env needed — only the Pi SDK (behind an injectable seam).
+    // store needed — the local Pi CLI is behind an injectable catalog seam.
     case 'models': {
       const usage = 'usage: ab models [query] [--available] (§9)'
       const parsed = parseArgs(rest, { available: 'boolean' }, usage)

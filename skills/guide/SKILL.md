@@ -506,10 +506,13 @@ runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
 with a copyable fix and all registered runtime names. Three runtimes ship:
 **`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
-`gpt-*` ids), and **`pi`** (SDK mode; provider-qualified ids such as the
-independent `openai-codex/gpt-5.6-sol` route — `ab models [query]` looks them
-up). Claude and Codex delegate an omitted model to their CLI default; Pi
-declares `kimi-coding/k3`. Trusted plugins may register additional runtime names;
+`gpt-*` ids), and **`pi`** (local Pi CLI 0.84.3 or newer; provider-qualified ids
+such as the independent `openai-codex/gpt-5.6-sol` route). Pi runs headlessly
+through RPC and uses that local installation's login and model catalog;
+Autobuild does not install it. `ab models [query]` lists the local catalog, and
+`ab models --available` filters it to configured credentials. Claude and Codex
+delegate an omitted model to their CLI default; Pi declares `kimi-coding/k3`.
+Trusted plugins may register additional runtime names;
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
 

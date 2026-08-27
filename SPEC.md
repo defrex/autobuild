@@ -86,7 +86,7 @@ Interfaces to the world, each with swappable adapters:
 | Port | Duty | Initial adapters |
 |---|---|---|
 | `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; third-party in-process registrations; later GitHub Issues |
-| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); pi (SDK mode); third-party in-process registrations |
+| `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); local pi CLI (`--mode rpc`, minimum 0.84.3); third-party in-process registrations |
 | `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub; local Git; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
@@ -838,12 +838,13 @@ deterministic fail-safe.
 
 - **Adapters:** three builtins sit behind the interface: the locally installed
   Claude Code CLI in headless mode for Claude models; the locally installed
-  Codex CLI for unqualified `gpt-*` models; and pi in SDK mode for
-  provider-qualified model families, including its independent
-  `openai-codex/*` route. The Claude and Codex adapters use their CLI's local
-  authenticated login and native session resume. All three provide tool-free
-  one-shot completion. Plugins may register additional adapters, each under a
-  *distinct runtime name*, never
+  Codex CLI for unqualified `gpt-*` models; and the locally installed pi CLI
+  (minimum version 0.84.3), driven headlessly through `--mode rpc`, for every
+  provider-qualified model that installation resolves. Each adapter uses its
+  CLI's local authenticated login; pi also owns its local model catalog and
+  keeps one ephemeral RPC process alive across review-loop continuations. All
+  three provide tool-free one-shot completion. Plugins may register additional
+  adapters, each under a *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
   AgentRunner contract suite.
 - **Routing — explicit role inheritance (§16.1):** runtime, model, extension

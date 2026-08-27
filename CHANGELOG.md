@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#226](https://github.com/defrex/autobuild/pull/226) — Use the operator's local pi install
 - [#225](https://github.com/defrex/autobuild/pull/225) — Inherit repository identity for local Git landings
 - [#224](https://github.com/defrex/autobuild/pull/224) — Remove durable progress from dashboard rows
 - [#223](https://github.com/defrex/autobuild/pull/223) — Add per-build review round ceilings

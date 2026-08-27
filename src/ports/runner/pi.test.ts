@@ -1,10 +1,4 @@
-/**
- * PiAgentRunner tests run entirely against an injected fake PiCreateSessionFn —
- * the pi SDK is never loaded. The default factory (`piSdkCreateSession`, the
- * cast point that dynamically imports `@earendil-works/pi-coding-agent`, builds
- * a ModelRuntime, and wraps a real AgentSession) is deliberately untested: it
- * is pure interop with no logic beyond the SDK calls.
- */
+/** PiAgentRunner contract tests inject the local RPC-session boundary. */
 import { describe, expect, test } from 'bun:test'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -22,13 +16,15 @@ import {
 } from './contract'
 import {
   isPiRuntimeUsable,
+  MINIMUM_PI_VERSION,
   PiAgentRunner,
-  PiTurnCapture,
-  type PiAuthRuntimeFactory,
+  type PiCliInvocation,
+  type PiCliRunFn,
   type PiCreateSessionFn,
   type PiModelRef,
   type PiTurn,
 } from './pi'
+import { classifyProviderError } from './provider-error'
 import { AGENT_BIN_DIR } from './session-env'
 
 describe('Pi init usability', () => {
@@ -38,42 +34,71 @@ describe('Pi init usability', () => {
     models: ['openai/gpt-test', 'kimi-coding/k3'],
   }
 
-  test('requires every configured model to exist and resolve auth with the operator env', async () => {
-    const authCalls: Array<{ model: unknown; env: Record<string, string> }> = []
-    const factory: PiAuthRuntimeFactory = async () => ({
-      getModel: (provider, id) => ({ provider, id }),
-      getAuth: async (model, overrides) => {
-        authCalls.push({ model, env: overrides.env })
-        return { type: 'api-key', key: 'configured' }
+  function fakeCli(
+    handler: (call: PiCliInvocation) => { stdout: string; stderr?: string; exitCode?: number },
+  ): {
+    calls: PiCliInvocation[]
+    run: PiCliRunFn
+  } {
+    const calls: PiCliInvocation[] = []
+    return {
+      calls,
+      run: async (call) => {
+        calls.push(call)
+        const result = handler(call)
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr ?? '',
+          exitCode: result.exitCode ?? 0,
+        }
       },
-    })
-    expect(await isPiRuntimeUsable(input, factory)).toEqual({
+    }
+  }
+
+  test('requires the minimum local version and local auth for every model', async () => {
+    const cli = fakeCli((call) =>
+      call.args[0] === '--version'
+        ? { stdout: `${MINIMUM_PI_VERSION}\n` }
+        : { stdout: '{"status":"ready","provider":"test","authType":"oauth"}\n' },
+    )
+    expect(await isPiRuntimeUsable(input, cli.run)).toEqual({
       usable: true,
-      reason: 'Pi model and authentication are available',
+      reason: 'Local Pi CLI, model catalog, and authentication are available',
     })
-    expect(authCalls).toHaveLength(2)
-    expect(authCalls[0]?.env.OPENAI_API_KEY).toBe('secret')
+    expect(cli.calls.map((call) => call.args)).toEqual([
+      ['--version'],
+      ['auth', 'check', '--model', 'openai/gpt-test', '--json'],
+      ['auth', 'check', '--model', 'kimi-coding/k3', '--json'],
+    ])
+    expect(cli.calls[1]?.env.OPENAI_API_KEY).toBe('secret')
   })
 
-  test('rejects missing models, missing auth, and an empty prospective model set', async () => {
-    expect(
-      await isPiRuntimeUsable(input, async () => ({
-        getModel: () => undefined,
-        getAuth: async () => ({ key: 'unused' }),
-      })),
-    ).toEqual({ usable: false, reason: 'Pi model "openai/gpt-test" is unavailable' })
-    expect(
-      await isPiRuntimeUsable(input, async () => ({
-        getModel: (_provider, id) => ({ id }),
-        getAuth: async (model) => ((model as { id: string }).id === 'k3' ? undefined : {}),
-      })),
-    ).toEqual({ usable: false, reason: 'Pi has no authentication for model "kimi-coding/k3"' })
-    expect(await isPiRuntimeUsable({ ...input, models: [] }, async () => Promise.reject())).toEqual(
-      {
-        usable: false,
-        reason: 'Pi has no default model configured to probe',
-      },
+  test('reports old, missing, and unready local Pi installations actionably', async () => {
+    const old = fakeCli(() => ({ stdout: '0.80.10\n' }))
+    expect(await isPiRuntimeUsable(input, old.run)).toEqual({
+      usable: false,
+      reason: expect.stringContaining(
+        `detected Pi 0.80.10, but Autobuild requires Pi ${MINIMUM_PI_VERSION}`,
+      ),
+    })
+
+    const missing: PiCliRunFn = async () => {
+      throw Object.assign(new Error('spawn pi ENOENT'), { code: 'ENOENT' })
+    }
+    expect(await isPiRuntimeUsable(input, missing)).toEqual({
+      usable: false,
+      reason: expect.stringContaining('executable "pi" was not found'),
+    })
+
+    const unready = fakeCli((call) =>
+      call.args[0] === '--version'
+        ? { stdout: `${MINIMUM_PI_VERSION}\n` }
+        : { stdout: '{"status":"not_ready","reason":"credentials_not_configured"}', exitCode: 1 },
     )
+    expect(await isPiRuntimeUsable(input, unready.run)).toEqual({
+      usable: false,
+      reason: expect.stringContaining('is not ready in the local Pi login'),
+    })
   })
 })
 
@@ -118,16 +143,11 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
               : scenario === 'exhaustion-failure'
                 ? CONTRACT_EXHAUSTION_FAILURE
                 : CONTRACT_RETRYABLE_FAILURE
-          const capture = new PiTurnCapture()
-          capture.observe({
-            type: 'message_end',
-            message: {
-              role: 'assistant',
-              stopReason: 'error',
-              errorMessage: message,
-            },
-          })
-          return capture.result({ inputTokens: 0, outputTokens: 0 })
+          return {
+            text: '',
+            usage: { inputTokens: 0, outputTokens: 0 },
+            failure: classifyProviderError(message),
+          }
         }
         return {
           text: text === CONTRACT_FOLLOW_UP ? 'contract continued' : 'contract started',
@@ -171,7 +191,7 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
   }
 }
 
-describeAgentRunnerContract('PiAgentRunner (injected SDK)', piContractFactory)
+describeAgentRunnerContract('PiAgentRunner (injected Pi RPC session)', piContractFactory)
 
 const KIMI_QUOTA =
   '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
@@ -279,61 +299,6 @@ async function invokeAbHelp(env: Record<string, string>): Promise<{
   return { stdout, stderr, code }
 }
 
-describe('PiTurnCapture', () => {
-  test('extracts the reproduced provider error and classifies it without rewriting', () => {
-    const capture = new PiTurnCapture()
-    capture.observe({
-      type: 'message_update',
-      assistantMessageEvent: {
-        type: 'error',
-        error: {
-          role: 'assistant',
-          stopReason: 'error',
-          errorMessage: KIMI_QUOTA,
-        },
-      },
-    })
-    capture.observe({
-      type: 'message_end',
-      message: {
-        role: 'assistant',
-        stopReason: 'error',
-        errorMessage: KIMI_QUOTA,
-      },
-    })
-
-    expect(capture.result({ inputTokens: 0, outputTokens: 0 })).toEqual({
-      text: '',
-      usage: { inputTokens: 0, outputTokens: 0 },
-      failure: { message: KIMI_QUOTA, permanent: true, cause: 'exhaustion' },
-    })
-  })
-
-  test('a successful completion after Pi internal retry clears the stale error', () => {
-    const capture = new PiTurnCapture()
-    capture.observe({
-      type: 'message_end',
-      message: { role: 'assistant', stopReason: 'error', errorMessage: '503 overloaded' },
-    })
-    capture.observe({
-      type: 'message_update',
-      assistantMessageEvent: {
-        type: 'text_delta',
-        delta: 'recovered',
-      },
-    })
-    capture.observe({
-      type: 'message_end',
-      message: { role: 'assistant', stopReason: 'stop' },
-    })
-
-    expect(capture.result({ inputTokens: 2, outputTokens: 1 })).toEqual({
-      text: 'recovered',
-      usage: { inputTokens: 2, outputTokens: 1 },
-    })
-  })
-})
-
 describe('PiAgentRunner.start', () => {
   test('formats the prompt as /{skill} {buildSlug} and flows the model from config (§4, §9)', async () => {
     const { creates, prompts, createSessionFn } = fakeSessions([
@@ -342,7 +307,7 @@ describe('PiAgentRunner.start', () => {
     const runner = new PiAgentRunner({ createSessionFn })
     const { session } = await runner.start(startOpts({ model: 'openai/gpt-5.6-sol' }))
 
-    expect(prompts[0]?.text).toBe('/ab-plan auth-rate-limit')
+    expect(prompts[0]?.text).toBe('/skill:ab-plan auth-rate-limit')
     expect(creates[0]?.cwd).toBe('/ws/auth-rate-limit')
     // Provider-qualified model id is parsed into (provider, id), from config.
     expect(creates[0]?.model).toEqual({ provider: 'openai', id: 'gpt-5.6-sol' })
@@ -393,7 +358,7 @@ describe('PiAgentRunner.start', () => {
     expect(creates[1]?.extensions).toEqual([])
   })
 
-  test('captures the SDK session id as the handle id', async () => {
+  test('captures the local RPC session id as the handle id', async () => {
     const { createSessionFn } = fakeSessions([
       { sessionId: 'pi-session-42', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
     ])
@@ -410,6 +375,25 @@ describe('PiAgentRunner.start', () => {
     const { result } = await runner.start(startOpts())
     expect(result.text).toBe('the plan')
     expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, turns: 1 })
+  })
+
+  test('a local prerequisite launch failure returns an endable synthetic handle', async () => {
+    const runner = new PiAgentRunner({
+      createSessionFn: async () => {
+        throw new Error(
+          `pi runtime: detected Pi 0.80.10, but Autobuild requires Pi ${MINIMUM_PI_VERSION} or newer.`,
+        )
+      },
+      createSessionId: () => 'pi-prerequisite-failure',
+    })
+    const { session, result } = await runner.start(startOpts())
+    expect(session.id).toBe('pi-prerequisite-failure')
+    expect(result).toMatchObject({
+      kind: 'failed',
+      failure: { permanent: true, cause: 'configuration' },
+    })
+    await expect(runner.continue(session, 'retry')).rejects.toThrow('failed to start')
+    expect((await runner.end(session)).metadata.usage.turns).toBe(1)
   })
 
   test('returns a failed result with an endable handle and retains it in the transcript', async () => {
@@ -595,13 +579,11 @@ describe('PiAgentRunner.continue', () => {
 
   test('keeps the distribution CLI ahead of a conflicting host ab on start and continue', async () => {
     const conflictDir = await mkdtemp(join(tmpdir(), 'ab-pi-path-'))
-    const originalPath = process.env.PATH
     try {
       await writeConflictingAb(conflictDir)
-      const inheritedPath = [conflictDir, originalPath ?? '']
+      const inheritedPath = [conflictDir, process.env.PATH ?? '']
         .filter((entry) => entry !== '')
         .join(delimiter)
-      process.env.PATH = inheritedPath
       const { prompts, createSessionFn } = fakeSessions([
         {
           sessionId: 'pi-path',
@@ -618,6 +600,7 @@ describe('PiAgentRunner.continue', () => {
             AB_BUILD: 'auth-rate-limit',
             AB_PHASE: 'plan@1',
             AB_SESSION: 's_1',
+            PATH: inheritedPath,
           },
         }),
       )
@@ -637,8 +620,6 @@ describe('PiAgentRunner.continue', () => {
       expect(smoke.stdout).not.toContain('host-conflicting-ab')
       await runner.end(session)
     } finally {
-      if (originalPath === undefined) delete process.env.PATH
-      else process.env.PATH = originalPath
       await rm(conflictDir, { recursive: true, force: true })
     }
   })
@@ -677,7 +658,7 @@ describe('PiAgentRunner.end', () => {
     expect(content.session).toBe('pi-1')
     expect(content.buildSlug).toBe('auth-rate-limit')
     expect(content.turns).toHaveLength(2)
-    expect(content.turns[0]).toMatchObject({ turn: 1, prompt: '/ab-plan auth-rate-limit' })
+    expect(content.turns[0]).toMatchObject({ turn: 1, prompt: '/skill:ab-plan auth-rate-limit' })
     // end() disposes the live session.
     expect(disposed).toEqual(['pi-1'])
   })

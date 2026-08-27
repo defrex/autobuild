@@ -15,7 +15,7 @@ function requiredModel(): string {
 }
 
 describe.skipIf(!enabled)('Pi live AgentRunner contract (opt-in)', () => {
-  test('runs start, continue, end, ambient/PATH probe, and one-shot against the real SDK', async () => {
+  test('runs start, continue, end, ambient/PATH probe, and one-shot against the local Pi CLI', async () => {
     await runLiveAgentRunnerContract(new PiAgentRunner(), requiredModel())
   }, 300_000)
 })

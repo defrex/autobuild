@@ -611,8 +611,13 @@ eager startup error; they never first surface during an outage.
 
 Three runtimes ship: `claude`, `codex`, and `pi`; `ab plugin list` projects all
 three as builtin agent runtimes, and trusted plugins may register additional
-names. Builtin and plugin runtimes use the same exact-pair validation and event
-attribution. With no configured model, the selected runtime uses its declared
+names. The `pi` runtime requires a locally installed Pi CLI version 0.84.3 or
+newer and uses that installation's login and model catalog through headless RPC;
+Autobuild does not install Pi. `ab init` reports a missing or older executable
+as unusable, and `pi` must be logged in for every configured model. `ab models`
+lists this local catalog, while `ab models --available` limits it to models with
+configured credentials. Builtin and plugin runtimes use the same exact-pair
+validation and event attribution. With no configured model, the selected runtime uses its declared
 default when present: Claude and Codex delegate to their local CLI's selected
 default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
 ids. Pi ids remain provider-qualified—including the independent
