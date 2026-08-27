@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#227](https://github.com/defrex/autobuild/pull/227) — Show only failures and warnings on dispatcher dashboards
 - [#226](https://github.com/defrex/autobuild/pull/226) — Use the operator's local pi install
 - [#225](https://github.com/defrex/autobuild/pull/225) — Inherit repository identity for local Git landings
 - [#224](https://github.com/defrex/autobuild/pull/224) — Remove durable progress from dashboard rows
