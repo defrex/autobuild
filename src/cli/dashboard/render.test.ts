@@ -123,9 +123,10 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines.slice(0, -1).join('\n')).not.toContain('Ctrl-C to stop')
   })
 
-  test('the warning row is absent until needed, then appears aligned below both headers', () => {
+  test('the warning row is absent until needed, with one separator below the top section', () => {
     const clean = rd(model([build()]), WIDE).map(stripAnsi)
-    expect(clean[2]).toContain('auth-rate-limit')
+    expect(clean[2]).toBe('')
+    expect(clean[3]).toContain('auth-rate-limit')
 
     const warned = rd(
       { ...model([build()]), warningLines: ['ticket source unavailable'] },
@@ -134,7 +135,31 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(warned[2]).toBe('   ticket source unavailable')
     expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Autobuild'))
     expect(warned[3]).toBe('')
-    expect(warned).toHaveLength(clean.length + 2)
+    expect(warned[4]).toContain('auth-rate-limit')
+    expect(warned).toHaveLength(clean.length + 1)
+  })
+
+  test('warning and upgrade chrome never control the top/body separator', () => {
+    for (const [availableUpgrade, warningLines] of [
+      [undefined, undefined],
+      ['2.4.0', undefined],
+      [undefined, ['ticket source unavailable']],
+      ['2.4.0', ['ticket source unavailable']],
+    ] as const) {
+      const lines = rd({ ...model([build()]), availableUpgrade, warningLines }, WIDE).map(stripAnsi)
+      const bodyIndex = lines.findIndex((line) => line.includes('auth-rate-limit'))
+      const chromeRows = Number(availableUpgrade !== undefined) + Number(warningLines !== undefined)
+
+      expect(bodyIndex).toBe(3 + chromeRows)
+      expect(lines[bodyIndex - 1]).toBe('')
+      expect(lines.slice(0, bodyIndex).filter((line) => line === '')).toHaveLength(1)
+      if (availableUpgrade !== undefined) expect(lines[2]).toContain('run ab upgrade')
+      if (warningLines !== undefined) {
+        expect(lines[2 + Number(availableUpgrade !== undefined)]).toContain(
+          'ticket source unavailable',
+        )
+      }
+    }
   })
 
   test('an available release has a dedicated persistent row alongside warnings', () => {
@@ -272,9 +297,14 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     }
   })
 
-  test('an empty dashboard says so', () => {
-    const lines = rd(model([]), WIDE)
-    expect(lines.join('\n')).toContain('no active builds')
+  test('an empty dashboard separates the controls, placeholder, and footer once each', () => {
+    const lines = rd(model([]), WIDE).map(stripAnsi)
+    const placeholder = lines.findIndex((line) => line.includes('no active builds'))
+
+    expect(placeholder).toBe(3)
+    expect(lines[placeholder - 1]).toBe('')
+    expect(lines[placeholder + 1]).toBe('')
+    expect(lines.at(-1)).toContain('Keys:')
   })
 
   test('the summary renders current/limit pressure for active builds and observations', () => {
@@ -1404,7 +1434,7 @@ describe('renderDashboard: layout', () => {
     expect(short!.indexOf('ENG-42')).toBe(long!.indexOf('ENG-42'))
   })
 
-  test('clean controls are adjacent to the body while rows and legend stay separated', () => {
+  test('blank lines separate the top section, consecutive rows, and the legend', () => {
     const lines = rd(
       {
         ...model([build({ slug: 'a' }), build({ slug: 'b' })]),
@@ -1414,10 +1444,11 @@ describe('renderDashboard: layout', () => {
     )
     const first = lines.findIndex((line) => line.includes(' a') && line.includes('RUNNING'))
     const second = lines.findIndex((line) => line.includes(' b') && line.includes('RUNNING'))
-    expect(lines[2]).toContain(' a') // no clean-frame top/body gap
-    expect(first).toBe(2)
-    expect(lines.slice(first, second)).toContain('')
+    expect(lines[2]).toBe('')
+    expect(first).toBe(3)
+    expect(lines.slice(first, second).filter((line) => line === '')).toHaveLength(1)
     expect(lines.at(-2)).toBe('')
+    expect(lines.at(-1)).toContain('Keys:')
   })
 
   test('the two-column cursor lane contains only spaces or the selected marker before the legend', () => {
@@ -1897,8 +1928,46 @@ describe('renderDashboard: `height` caps the LINE count', () => {
         if (warningLine !== undefined && height >= 3) {
           expect(lines[2]).toBe(`   ${warningLine}`)
         }
+        expect(lines.at(-1)).not.toBe('')
         for (const line of lines) expect(line.length).toBeLessThanOrEqual(80)
       }
+    }
+  })
+
+  test('clean and warned boundary frames charge both separators exactly once', () => {
+    for (const warningLine of [undefined, 'store read failed'] as const) {
+      const dashboard = {
+        ...model([]),
+        ...(warningLine !== undefined ? { warningLines: [warningLine] } : {}),
+      }
+      const topLength = warningLine === undefined ? 2 : 3
+
+      // Controls outrank spacing when only one row remains below the complete
+      // top section; no manufactured blank is allowed to trail the frame.
+      const controlsOnly = rd(dashboard, {
+        color: false,
+        width: 80,
+        height: topLength + 1,
+      }).map(stripAnsi)
+      expect(controlsOnly).toHaveLength(topLength + 1)
+      expect(controlsOnly.at(-1)).toContain('Keys:')
+      expect(controlsOnly).not.toContain('')
+
+      // Once one body row fits, both structural gaps surround it. Filling the
+      // exact cap proves neither separator is omitted, double-counted, nor
+      // charged as an extra body row.
+      const bodyFits = rd(dashboard, {
+        color: false,
+        width: 80,
+        height: topLength + 4,
+      }).map(stripAnsi)
+      expect(bodyFits).toHaveLength(topLength + 4)
+      expect(bodyFits.slice(topLength)).toEqual([
+        '',
+        '   no active builds',
+        '',
+        expect.stringContaining('Keys:'),
+      ])
     }
   })
 
