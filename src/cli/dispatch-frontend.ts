@@ -120,7 +120,6 @@ export class DispatchFrontend {
   /** Display-only pressure is sampled by the Store-only frontend. Undefined
    * means no factual sample has succeeded yet; failures retain the last value. */
   private observationCount: number | undefined
-  private observationRefreshDiagnostic: string | undefined
   private model: DashboardModel | undefined
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private view: DashboardView | undefined
@@ -275,8 +274,8 @@ export class DispatchFrontend {
     // No filesystem fallback: the first frame waits for the child's durable,
     // run-correlated effective snapshot.
     if (ref === undefined) {
-      if (status.health === 'failed' && status.notice !== undefined) {
-        this.region.update([status.notice])
+      if (status.health === 'failed' && status.warningNotice !== undefined) {
+        this.region.update([status.warningNotice])
       }
       return
     }
@@ -284,18 +283,11 @@ export class DispatchFrontend {
     try {
       const scan = await scanUnclaimedObservations(this.opts.store, this.opts.repo)
       this.observationCount = scan.observations.length
-      this.observationRefreshDiagnostic = undefined
-    } catch (error) {
-      this.observationRefreshDiagnostic = `dashboard observation refresh failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+    } catch {
       // Before the first successful sample there is no factual zero to place in
-      // a complete frame. Paint only the actionable diagnostic and retry on the
-      // next ordinary poll, without manufacturing a repository notice.
-      if (this.observationCount === undefined) {
-        this.region.update([this.observationRefreshDiagnostic])
-        return
-      }
+      // a complete frame. Leave the prior frame untouched and retry on the next
+      // ordinary poll, without manufacturing a repository notice.
+      if (this.observationCount === undefined) return
     }
     this.cache ??= new DashboardBuildPollCache(this.opts.store, this.opts.repo, config)
     const snapshot = await this.cache.refresh(config, this.configRevision)
@@ -320,11 +312,7 @@ export class DispatchFrontend {
     const previous = this.model === undefined ? [] : dashboardSelections(this.model)
     const warningLines = [
       ...status.roleWarnings,
-      ...status.diagnostics,
-      ...(status.notice !== undefined ? [status.notice] : []),
-      ...(this.observationRefreshDiagnostic !== undefined
-        ? [this.observationRefreshDiagnostic]
-        : []),
+      ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
     ]
     const projected = buildDashboardFromProjected(
       snapshot.builds,

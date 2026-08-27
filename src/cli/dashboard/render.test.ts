@@ -125,7 +125,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
 
   test('the warning row is absent until needed, then appears aligned below both headers', () => {
     const clean = rd(model([build()]), WIDE).map(stripAnsi)
-    expect(clean[2]).toBe('')
+    expect(clean[2]).toContain('auth-rate-limit')
 
     const warned = rd(
       { ...model([build()]), warningLines: ['ticket source unavailable'] },
@@ -134,7 +134,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(warned[2]).toBe('   ticket source unavailable')
     expect(warned[2]!.search(/\S/)).toBe(warned[0]!.indexOf('Autobuild'))
     expect(warned[3]).toBe('')
-    expect(warned).toHaveLength(clean.length + 1)
+    expect(warned).toHaveLength(clean.length + 2)
   })
 
   test('an available release has a dedicated persistent row alongside warnings', () => {
@@ -180,7 +180,6 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   })
 
   test('long, multiline, and non-ASCII warnings WRAP onto safe physical rows', () => {
-    const clean = rd(model([build()]), { color: true, width: 40 })
     const warned = rd(
       {
         ...model([build()]),
@@ -190,7 +189,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     )
     // Newline-aware and capped: three content rows plus a count notice, all
     // honouring the two redraw invariants.
-    const rows = warned.slice(2, warned.length - (clean.length - 2))
+    const bodyStart = warned.findIndex((line) => stripAnsi(line).includes('ENG-42'))
+    const rows = warned.slice(2, bodyStart - 1)
     expect(rows.length).toBeGreaterThan(1)
     for (const row of rows) {
       expect(cellWidth(stripAnsi(row))).toBeLessThanOrEqual(40)
@@ -1404,7 +1404,7 @@ describe('renderDashboard: layout', () => {
     expect(short!.indexOf('ENG-42')).toBe(long!.indexOf('ENG-42'))
   })
 
-  test('blank lines separate the top section, consecutive rows, and the legend', () => {
+  test('clean controls are adjacent to the body while rows and legend stay separated', () => {
     const lines = rd(
       {
         ...model([build({ slug: 'a' }), build({ slug: 'b' })]),
@@ -1414,8 +1414,8 @@ describe('renderDashboard: layout', () => {
     )
     const first = lines.findIndex((line) => line.includes(' a') && line.includes('RUNNING'))
     const second = lines.findIndex((line) => line.includes(' b') && line.includes('RUNNING'))
-    expect(lines[2]).toBe('') // header + status, then top/body separator
-    expect(first).toBeGreaterThan(2)
+    expect(lines[2]).toContain(' a') // no clean-frame top/body gap
+    expect(first).toBe(2)
     expect(lines.slice(first, second)).toContain('')
     expect(lines.at(-2)).toBe('')
   })
