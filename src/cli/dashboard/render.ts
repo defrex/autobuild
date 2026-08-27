@@ -1294,16 +1294,15 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // frames paint and `controlsCapacity` budgets proportionally fewer controls
   // rows as warnings increase `top.length`.
   const warnings = warningRows(model.warningLines ?? [], width)
-  const hasConditionalTopChrome = upgradeNotice !== undefined || warnings.length > 0
   const top = [
     summary,
     toggles,
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
     ...warnings,
   ]
-  // The body/control separator is always present. The top/body separator only
-  // exists when upgrade or warning chrome needs separating from build rows.
-  const separatorCount = hasConditionalTopChrome ? 2 : 1
+  // Both structural separators are fixed frame chrome: one between the
+  // completed top section and body, and one between body and controls.
+  const separatorCount = 2
   const controls = dashboardControls(
     model,
     color,
@@ -1318,8 +1317,8 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
   // Once the complete top section fits, retain controls before spending rows
-  // on body content. Any chrome-only remainder is spent on the applicable
-  // separators; a clean frame does not manufacture a top/body gap.
+  // on body content. Chrome-only remainder is spent on the two structural
+  // separators; a visible body is not admitted until both gaps fit.
   if (height !== undefined && height <= top.length + separatorCount + controls.length) {
     const available = height - top.length
     if (available <= controls.length) return [...top, ...controls.slice(0, available)]
@@ -1456,9 +1455,9 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     }
   }
 
-  // Warning/upgrade chrome keeps its existing separator. A clean frame gives
-  // that row back to the body, placing the first build directly below toggles.
-  return [...top, ...(hasConditionalTopChrome ? [''] : []), ...body, '', ...controls]
+  // Both blanks are structural frame chrome, independent of warning/upgrade
+  // content, and are charged exactly once in the body budget above.
+  return [...top, '', ...body, '', ...controls]
 }
 
 /** Render the dashboard inside a fixed one-column horizontal gutter.
