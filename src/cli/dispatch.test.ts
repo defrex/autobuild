@@ -3072,7 +3072,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.err).toEqual([])
       expect(painted).toContain('Autobuild')
       expect(painted).toContain(slug)
-      expect(painted).not.toContain(`build ${slug} parked`)
+      expect(painted).toContain(`build ${slug} parked`)
       expect(painted).not.toContain('tick:')
       expect(painted).not.toContain(`one pass over ${fx.origin}`)
       expect(painted).not.toContain('Ctrl-C to stop')
@@ -3507,7 +3507,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch: warnings use the conditional row while routine diagnostics and counts stay hidden', async () => {
+  test('watch: routine diagnostics and counts stay hidden', async () => {
     const fx = await makeFixture(
       [
         readyTicket('T-blocked-tty', { title: 'Blocked work', blockedBy: ['T-9'] }),
@@ -3546,20 +3546,12 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const diagnostic = 'ticket T-blocked-tty blocked by T-9 (not complete)'
-      const invalidFrame = term.frames.find((chunk) => stripAnsi(chunk).includes(invalid))
       const painted = stripAnsi(term.all())
       expect(out).toEqual([])
       expect(fx.err).toEqual([])
-      expect(invalidFrame).toBeDefined()
+      expect(painted).not.toContain(invalid)
       expect(painted).not.toContain(diagnostic)
       expect(painted).not.toContain('tick: invalidTickets=1 dependencyBlocked=1')
-      const warningLines = stripAnsi(invalidFrame!).split('\n').slice(0, -1)
-      expect(warningLines[0]).toContain('Autobuild')
-      expect(warningLines[0]).toContain('queue 0 | active 0')
-      expect(warningLines[0]).not.toMatch(/\bwatch\b/)
-      expect(warningLines[1]).toContain('intake ON')
-      expect(warningLines[2]).toBe(`   ${invalid}`)
-      expect(warningLines[2]!.search(/\S/)).toBe(warningLines[0]!.indexOf('Autobuild'))
     } finally {
       await fx.cleanup()
     }
@@ -5089,10 +5081,8 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => bothHave('build.pause-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
       await waitFor(() => latestDashboardFrame(term).includes('repository PAUSED'))
-      await waitFor(() =>
-        latestDashboardFrame(term).includes(
-          'pause all: pause requested for 2 builds; queued builds held; intake OFF',
-        ),
+      expect(latestDashboardFrame(term)).not.toContain(
+        'pause all: pause requested for 2 builds; queued builds held; intake OFF',
       )
       // The wiring assertion: the fact the dashboard writes is the one the
       // dispatcher reads, and it lands before intake.
@@ -5113,10 +5103,8 @@ describe('abDispatch interactive keyboard controls', () => {
       input.text('R')
       await waitFor(() => bothHave('build.resume-requested', 1))
       await waitFor(() => latestDashboardFrame(term).includes('intake ON'))
-      await waitFor(() =>
-        latestDashboardFrame(term).includes(
-          'resume all: resume requested for 2 builds; queued builds released; intake ON',
-        ),
+      expect(latestDashboardFrame(term)).not.toContain(
+        'resume all: resume requested for 2 builds; queued builds released; intake ON',
       )
       expect(latestDashboardFrame(term)).not.toContain('repository PAUSED')
       expect(await settingWrites(fx.store, fx.origin)).toEqual([
@@ -5195,12 +5183,10 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
 
       input.press('pause')
-      await waitFor(() =>
-        latestDashboardFrame(term).includes(
-          'pause all: no pausable builds; queued builds held; intake OFF',
-        ),
+      await waitFor(() => latestDashboardFrame(term).includes('intake OFF'))
+      expect(latestDashboardFrame(term)).not.toContain(
+        'pause all: no pausable builds; queued builds held; intake OFF',
       )
-      expect(latestDashboardFrame(term)).toContain('intake OFF')
       // With nothing pausable, the repository facts are the whole action.
       expect(await settingWrites(fx.store, fx.origin)).toEqual([
         ['dispatcher.pause-set', { enabled: true }],
@@ -6988,7 +6974,7 @@ runtime = "claude"
     }, 30_000)
   }
 
-  test('a later transient warning does not erase the config diagnostic', async () => {
+  test('routine ticket diagnostics do not enter the sticky config warning region', async () => {
     const fx = await makeFixture(readyTicket('T-sticky'), happyHandlers(), BROKEN_ROLES_TOML)
     const originalListReady = fx.tickets.listReady.bind(fx.tickets)
     const transient = '/repo/tickets/done/notes.md: invalid frontmatter — title is required'
@@ -7009,12 +6995,9 @@ runtime = "claude"
         terminal: term,
       })
 
-      // `setWarning` replaces the transient slot outright, so sharing it would
-      // have let this tick's ticket diagnostic erase the startup notice for the
-      // life of the process. The final frame carries BOTH.
       const frame = latestDashboardFrame(term)
       for (const detail of DETAILS) expect(frame).toContain(detail)
-      expect(frame).toContain('invalid frontmatter')
+      expect(frame).not.toContain('invalid frontmatter')
     } finally {
       await fx.cleanup()
     }

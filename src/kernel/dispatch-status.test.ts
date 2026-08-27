@@ -109,6 +109,103 @@ describe('reduceDispatchStatus', () => {
     )
   })
 
+  test('retains warning severity across later informational notices', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    const status = reduceDispatchStatus(
+      [
+        started,
+        event(2, 'dispatcher.operator-reported', {
+          run: 'run-a',
+          level: 'warning',
+          message: 'dashboard action failed: denied',
+        }),
+        event(3, 'dispatcher.operator-reported', {
+          run: 'run-a',
+          level: 'info',
+          message: 'dispatcher intake OFF',
+        }),
+        event(4, 'dispatcher.config-reloaded', {
+          artifact: { kind: 'dispatcher-config', rev: 1 },
+          restartRequired: [],
+          effectiveChanged: true,
+          run: 'run-a',
+        }),
+      ],
+      'run-a',
+    )
+
+    expect(status.notice).toBe('autobuild.toml reloaded')
+    expect(status.warningNotice).toBe('dashboard action failed: denied')
+  })
+
+  test('projects every intrinsic failure and restart-required reload as a warning', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    const failures: Array<[RepositoryEvent['type'], RepositoryEvent['payload'], string]> = [
+      ['dispatcher.tick-failed', { run: 'run-a', error: 'offline' }, 'tick failed: offline'],
+      [
+        'dispatcher.runner-settled',
+        { run: 'run-a', slug: 'alpha', outcome: 'parked', status: 'blocked' },
+        'build alpha parked (blocked)',
+      ],
+      [
+        'dispatcher.runner-settled',
+        { run: 'run-a', slug: 'alpha', outcome: 'lease-held' },
+        'build alpha already held by another runner — skipped',
+      ],
+      [
+        'dispatcher.runner-settled',
+        { run: 'run-a', slug: 'alpha', outcome: 'failed', error: 'boom' },
+        'build alpha runner failed: boom',
+      ],
+      [
+        'dispatcher.harvest-runner-failed',
+        { run: 'run-a', error: 'boom' },
+        'harvest runner failed: boom',
+      ],
+      [
+        'dispatcher.run-stopped',
+        { run: 'run-a', outcome: 'abnormal', error: 'exit' },
+        'dispatcher stopped unexpectedly: exit',
+      ],
+      [
+        'dispatcher.config-rejected',
+        { run: 'run-a', error: 'bad TOML' },
+        'config reload rejected: bad TOML',
+      ],
+      [
+        'dispatcher.config-publication-failed',
+        { run: 'run-a', error: 'disk' },
+        'config reload not applied because its durable trace failed: disk',
+      ],
+      [
+        'dispatcher.config-reloaded',
+        {
+          artifact: { kind: 'dispatcher-config', rev: 1 },
+          restartRequired: ['tickets.source'],
+          effectiveChanged: true,
+          run: 'run-a',
+        },
+        'autobuild.toml reload requires dispatch restart for: tickets.source',
+      ],
+    ]
+
+    for (const [type, payload, expected] of failures) {
+      expect(reduceDispatchStatus([started, event(2, type, payload)], 'run-a').warningNotice).toBe(
+        expected,
+      )
+    }
+  })
+
   test('successful ticks supersede diagnostics and accepted config replaces warnings', () => {
     const events = [
       event(1, 'dispatcher.run-started', {

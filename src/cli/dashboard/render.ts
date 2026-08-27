@@ -1022,9 +1022,13 @@ export function resumeHintRows(width: number): string[] {
  * non-prompt frame stays byte-identical — and otherwise at least one body row
  * is reserved for the build list.
  */
-export function controlsCapacity(height: number | undefined, topLength: number): number {
+export function controlsCapacity(
+  height: number | undefined,
+  topLength: number,
+  separatorCount = 2,
+): number {
   if (height === undefined) return Number.POSITIVE_INFINITY
-  const below = height - topLength - 2
+  const below = height - topLength - separatorCount
   return Math.max(1, Math.min(below - 1, Math.max(4, Math.floor(below / 2))))
 }
 
@@ -1289,13 +1293,23 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   // count. The resulting rows join `top`, so `top.slice` limits what short
   // frames paint and `controlsCapacity` budgets proportionally fewer controls
   // rows as warnings increase `top.length`.
+  const warnings = warningRows(model.warningLines ?? [], width)
+  const hasConditionalTopChrome = upgradeNotice !== undefined || warnings.length > 0
   const top = [
     summary,
     toggles,
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
-    ...warningRows(model.warningLines ?? [], width),
+    ...warnings,
   ]
-  const controls = dashboardControls(model, color, width, controlsCapacity(height, top.length))
+  // The body/control separator is always present. The top/body separator only
+  // exists when upgrade or warning chrome needs separating from build rows.
+  const separatorCount = hasConditionalTopChrome ? 2 : 1
+  const controls = dashboardControls(
+    model,
+    color,
+    width,
+    controlsCapacity(height, top.length, separatorCount),
+  )
 
   // No paintable height at all (a 1-row screen — see `paintableRows`): paint
   // nothing. Its trailing newline would scroll a single line off even on the
@@ -1304,13 +1318,12 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
   // Once the complete top section fits, retain controls before spending rows
-  // on body content. One additional row has no room for spacing; two retain
-  // the top/body separator. A visible body requires both separators.
-  if (height !== undefined && height === top.length + 1) {
-    return [...top, ...controls]
-  }
-  if (height !== undefined && height === top.length + 2) {
-    return [...top, '', ...controls]
+  // on body content. Any chrome-only remainder is spent on the applicable
+  // separators; a clean frame does not manufacture a top/body gap.
+  if (height !== undefined && height <= top.length + separatorCount + controls.length) {
+    const available = height - top.length
+    if (available <= controls.length) return [...top, ...controls.slice(0, available)]
+    return [...top, ...Array.from({ length: available - controls.length }, () => ''), ...controls]
   }
 
   const widths = frameWidths(model.builds, model.harvest)
@@ -1357,7 +1370,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   const bodyBudget =
     height === undefined
       ? Number.POSITIVE_INFINITY
-      : Math.max(0, height - top.length - 2 - controls.length)
+      : Math.max(0, height - top.length - separatorCount - controls.length)
   let body: string[]
   if (rows.length === 0) {
     body = bodyBudget >= 1 ? [truncate(paint('  no active builds', 'dim', color), width)] : []
@@ -1443,10 +1456,9 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     }
   }
 
-  // Both blank separators are fixed frame chrome, not part of a row block:
-  // the first separates the global top section from harvest/build content and
-  // the second separates that content from the contextual controls.
-  return [...top, '', ...body, '', ...controls]
+  // Warning/upgrade chrome keeps its existing separator. A clean frame gives
+  // that row back to the body, placing the first build directly below toggles.
+  return [...top, ...(hasConditionalTopChrome ? [''] : []), ...body, '', ...controls]
 }
 
 /** Render the dashboard inside a fixed one-column horizontal gutter.

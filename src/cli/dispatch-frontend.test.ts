@@ -274,8 +274,8 @@ test('frontend owns live observation pressure and retains the last factual sampl
   const write = (chunk: string): void => {
     output += chunk
   }
-  // The first failed sample must produce only a diagnostic, never a complete
-  // dashboard model carrying a fabricated zero.
+  // The first failed sample must remain dashboard-silent and never produce a
+  // complete model carrying a fabricated zero.
   failNextObservationRead = true
   const frontend = new DispatchFrontend({
     repo,
@@ -334,9 +334,15 @@ test('frontend owns live observation pressure and retains the last factual sampl
               queued: 0,
               observations: 99,
               counters: tickCounters,
-              janitorDiagnostics: [],
-              ticketDiagnostics: [],
-              dependencyDiagnostics: [],
+              janitorDiagnostics: ['janitor diagnostic'],
+              ticketDiagnostics: ['ticket diagnostic'],
+              creationDiagnostics: ['creation diagnostic'],
+              dependencyDiagnostics: [
+                'incomplete blocker',
+                'absent blocker',
+                'dependency cycle',
+                'self dependency',
+              ],
             },
           }),
         )
@@ -345,16 +351,29 @@ test('frontend owns live observation pressure and retains the last factual sampl
   })
 
   const running = frontend.run()
-  await waitFor(
-    () => output.includes('observation stream unavailable'),
-    'initial refresh diagnostic',
-  )
+  await waitFor(() => !failNextObservationRead, 'initial failed observation refresh')
   expect(frames).toHaveLength(0)
+  expect(output).not.toContain('observation stream unavailable')
   await waitFor(
     () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
     'first factual pressure sample',
   )
   expect(frames.some((frame) => frame.current === 99)).toBe(false)
+  expect(frames.flatMap((frame) => frame.warnings)).toEqual([])
+  const completed = (await backing.getRepoEvents(repo)).find(
+    (item) => item.type === 'dispatcher.tick-completed',
+  )
+  expect(completed?.payload).toMatchObject({
+    janitorDiagnostics: ['janitor diagnostic'],
+    ticketDiagnostics: ['ticket diagnostic'],
+    creationDiagnostics: ['creation diagnostic'],
+    dependencyDiagnostics: [
+      'incomplete blocker',
+      'absent blocker',
+      'dependency cycle',
+      'self dependency',
+    ],
+  })
 
   await backing.append('source', {
     actor: agentActor('implement', 's_observe_2'),
@@ -492,16 +511,21 @@ test('frontend owns live observation pressure and retains the last factual sampl
 
   const repoEventsBeforeFailure = (await backing.getRepoEvents(repo)).length
   const buildEventsBeforeFailure = (await backing.getEvents('source')).length
+  const framesBeforeFailure = frames.length
   failNextObservationRead = true
   await waitFor(
     () =>
-      frames.some(
-        (frame) =>
-          frame.current === 1 &&
-          frame.warnings.some((warning) => warning.includes('observation stream unavailable')),
-      ),
-    'retained pressure refresh diagnostic',
+      !failNextObservationRead &&
+      frames.slice(framesBeforeFailure).some((frame) => frame.current === 1),
+    'retained pressure refresh',
   )
+  expect(
+    frames
+      .slice(framesBeforeFailure)
+      .flatMap((frame) => frame.warnings)
+      .join('\n'),
+  ).not.toContain('observation stream unavailable')
+  expect(output).not.toContain('observation stream unavailable')
   expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
   expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
 

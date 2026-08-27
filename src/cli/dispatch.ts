@@ -605,12 +605,9 @@ class DispatchLoop {
         try {
           const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
           this.observationCount = scan.observations.length
-        } catch (error) {
-          this.warn(
-            `dashboard observation scan failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          )
+        } catch {
+          // Display-only sampling failures retain the last factual count and
+          // retry on the next tick; they are not dashboard failures.
         }
       }
 
@@ -1562,7 +1559,9 @@ class DispatchLoop {
             result.outcome === 'escalated' ||
             result.outcome === 'failed')
         ) {
-          this.say(`harvest ${result.run} ${result.outcome}`)
+          const line = `harvest ${result.run} ${result.outcome}`
+          if (result.outcome === 'failed') this.failureNotice(line)
+          else this.say(line)
         }
       })
       .catch(async (error: unknown) => {
@@ -1721,7 +1720,7 @@ class DispatchLoop {
           type: 'dispatcher.runner-settled',
           payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
         })
-        this.say(`build ${slug} already held by another runner — skipped`)
+        this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
       const handle = await this.wiring.buildExecution.start({
@@ -1745,7 +1744,7 @@ class DispatchLoop {
                   type: 'dispatcher.runner-settled',
                   payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
                 })
-                this.say(`build ${slug} already held by another runner — skipped`)
+                this.failureNotice(`build ${slug} already held by another runner — skipped`)
                 return
               }
 
@@ -1761,7 +1760,7 @@ class DispatchLoop {
                     status: state.status,
                   },
                 })
-                this.say(`build ${slug} parked (${state.status})`)
+                this.failureNotice(`build ${slug} parked (${state.status})`)
                 return
               }
 
@@ -1773,7 +1772,6 @@ class DispatchLoop {
                 type: 'dispatcher.runner-settled',
                 payload: { run: this.opts.kernelRunId!, slug, outcome: 'failed', error: detail },
               })
-              if (diagnostic?.outcome === 'setup-failed' && this.dashboard) return
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
               await this.wiring.store.releaseLease(slug, instance)
@@ -1851,20 +1849,25 @@ class DispatchLoop {
     if (!this.dashboard && this.opts.silent !== true) this.opts.stdout(line)
   }
 
-  /** Report a completed operator action where the operator can see it. The
-   * header's conditional row is one shared notice slot — a warning and an
-   * action report compete for the same line, and the latest wins. `say` is
-   * deliberately silent on a TTY, so a report routed through it would never
-   * appear; `warn` would reach the row but write stderr in plain mode, which
-   * this is not. Hence the third seam. */
+  /** Routine acknowledgement: line-oriented stdout, dashboard-silent. */
   private announce(line: string): void {
-    if (this.dashboard) this.setWarning(line)
-    else this.opts.stdout(line)
+    if (!this.dashboard) this.opts.stdout(line)
   }
 
   private warn(line: string): void {
     if (this.dashboard) this.setWarning(line)
     else if (this.opts.silent !== true) this.opts.stderr(line)
+  }
+
+  /** Failure-severity dashboard notice whose historical plain sink is stdout. */
+  private failureNotice(line: string): void {
+    if (this.dashboard) this.setWarning(line)
+    else if (this.opts.silent !== true) this.opts.stdout(line)
+  }
+
+  /** Routine diagnostic whose historical line-oriented sink is stderr. */
+  private routineDiagnostic(line: string): void {
+    if (!this.dashboard && this.opts.silent !== true) this.opts.stderr(line)
   }
 
   /**
@@ -1912,9 +1915,9 @@ class DispatchLoop {
       queued: _queued,
       ...counts
     } = report
-    for (const line of janitorDiagnostics) this.warn(line)
+    for (const line of janitorDiagnostics) this.routineDiagnostic(line)
     for (const line of blockedDiagnostics) this.say(line)
-    for (const line of ticketDiagnostics) this.warn(line)
+    for (const line of ticketDiagnostics) this.routineDiagnostic(line)
     for (const line of creationDiagnostics) this.say(line)
     for (const line of dependencyDiagnostics) this.say(line)
     const parts = Object.entries(counts)
