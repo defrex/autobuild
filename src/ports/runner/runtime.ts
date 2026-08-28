@@ -71,6 +71,11 @@ export interface RuntimeRegistration {
    * adapter, plus documented aliases of those options. Every other role arg
    * remains freeform, including options the adapter may also emit. */
   ownedArgs?: readonly string[]
+  /**
+   * Exact structural token Autobuild appends before the positional prompt.
+   * Role args may not duplicate this boundary.
+   */
+  promptBoundary?: string
 }
 
 /** name → registration. The one place a runtime's name lives (§9). */
@@ -137,6 +142,14 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
       new Set(ownedArgs).size !== ownedArgs.length)
   ) {
     throw new Error('ownedArgs must be a unique array of nonblank option spellings')
+  }
+
+  const promptBoundary = value.promptBoundary
+  if (
+    promptBoundary !== undefined &&
+    (typeof promptBoundary !== 'string' || promptBoundary.trim().length === 0)
+  ) {
+    throw new Error('promptBoundary must be a nonblank string when provided')
   }
 
   const oneShot = value.oneShot

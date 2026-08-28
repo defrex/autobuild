@@ -34,6 +34,17 @@ describe('runtime registration validation', () => {
     ).toThrow('ownedArgs must be a unique array')
   })
 
+  test('validates prompt-boundary metadata independently of owned options', () => {
+    expect(validateRuntimeRegistration({ ...reg([]), promptBoundary: '--' }).promptBoundary).toBe(
+      '--',
+    )
+    for (const promptBoundary of ['', '   ', 42]) {
+      expect(() => validateRuntimeRegistration({ ...reg([]), promptBoundary })).toThrow(
+        'promptBoundary must be a nonblank string when provided',
+      )
+    }
+  })
+
   test('accepts only the explicit provider-qualified wildcard syntax', () => {
     expect(validateRuntimeRegistration(reg(['*/*'])).servesModels).toEqual(['*/*'])
     expect(() => validateRuntimeRegistration(reg(['openai/*']))).toThrow(

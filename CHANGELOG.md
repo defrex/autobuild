@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#235](https://github.com/defrex/autobuild/pull/235) — Reject bare prompt terminators in Claude and Codex role args
 - [#234](https://github.com/defrex/autobuild/pull/234) — Make Claude one-shot arguments CLI-compatible
 - [#233](https://github.com/defrex/autobuild/pull/233) — Cover Pi model catalog command failure diagnostics
 - [#232](https://github.com/defrex/autobuild/pull/232) — Add freeform CLI arguments to roles

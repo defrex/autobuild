@@ -11,7 +11,12 @@ const claude = runner()
 const pi = runner()
 const gemini = runner()
 const registry: RuntimeRegistry = {
-  claude: { runner: claude, servesModels: ['claude-'], ownedArgs: ['--model', '-m'] },
+  claude: {
+    runner: claude,
+    servesModels: ['claude-'],
+    ownedArgs: ['--model', '-m'],
+    promptBoundary: '--',
+  },
   pi: { runner: pi, servesModels: ['kimi-', 'gpt-'], defaultModel: 'kimi-k3' },
   gemini: { runner: gemini, servesModels: ['gpt-'] },
 }
@@ -215,6 +220,42 @@ describe('createRuntimeResolver — owned argv validation', () => {
     )
     expect(error.problems[0]).toContain('[roles.plan].alternates[0]')
     expect(error.problems[0]).toContain('runtime "claude"')
+  })
+
+  test('rejects an exact prompt boundary on primary and alternate targets before launch', () => {
+    const boundaryRunner = runner()
+    const boundaryRegistry: RuntimeRegistry = {
+      claude: {
+        runner: boundaryRunner,
+        servesModels: ['claude-'],
+        promptBoundary: '--',
+      },
+    }
+    const error = runtimeConfigError(() =>
+      createRuntimeResolver(boundaryRegistry, {
+        default: { runtime: 'claude' },
+        implement: {
+          args: ['--'],
+          alternates: [{ args: ['--'] }],
+        },
+      }),
+    )
+
+    expect(error.problems).toEqual([
+      '[roles.implement] argument "--" conflicts with the prompt boundary for runtime "claude". Remove it because Autobuild owns and appends this prompt separator.',
+      '[roles.implement].alternates[0] argument "--" conflicts with the prompt boundary for runtime "claude". Remove it because Autobuild owns and appends this prompt separator.',
+    ])
+    expect(boundaryRunner.sessions.size).toBe(0)
+  })
+
+  test('prompt-boundary matching is exact, ordered, and capability-scoped', () => {
+    const nearMisses = ['--future-option', 'prefix--suffix', '--=value', 'passthrough-value']
+    expect(resolver({ plan: { args: nearMisses } }).resolve('plan').args).toEqual(nearMisses)
+
+    const piArgs = ['before', '--', 'after']
+    expect(
+      resolver({ default: { runtime: 'pi', args: piArgs } }).resolve('implement').args,
+    ).toEqual(piArgs)
   })
 })
 
