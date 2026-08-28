@@ -139,6 +139,10 @@ export const CODEX_OWNED_ARGS = [
   '-s',
   '--disable',
   '--enable',
+  '--help',
+  '-h',
+  '--version',
+  '-V',
 ] as const
 
 const MISSING_CLI_MESSAGE =

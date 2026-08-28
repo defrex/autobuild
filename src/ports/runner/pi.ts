@@ -181,6 +181,12 @@ export const PI_OWNED_ARGS = [
   '--skill',
   '--no-extensions',
   '-ne',
+  '--list-models',
+  '--export',
+  '--help',
+  '-h',
+  '--version',
+  '-v',
 ] as const
 
 export interface PiTurn {

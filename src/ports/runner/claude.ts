@@ -139,10 +139,19 @@ export const CLAUDE_OWNED_ARGS = [
   '--session-id',
   '--resume',
   '-r',
+  '--continue',
+  '-c',
+  '--fork-session',
+  '--from-pr',
+  '--teleport',
   '--model',
   '--tools',
   '--max-turns',
   '--no-session-persistence',
+  '--help',
+  '-h',
+  '--version',
+  '-v',
 ] as const
 
 const MISSING_CLI_MESSAGE =

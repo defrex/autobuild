@@ -21,7 +21,20 @@ describe('production runtime registry', () => {
     const runtimes = createProductionRuntimes().runtimes
     for (const [runtime, arg] of [
       ['claude', '-r'],
+      ['claude', '--continue'],
+      ['claude', '-c'],
+      ['claude', '--fork-session'],
+      ['claude', '--from-pr'],
+      ['claude', '--teleport'],
+      ['claude', '--help'],
+      ['claude', '-h'],
+      ['claude', '--version'],
+      ['claude', '-v'],
       ['codex', '--enable'],
+      ['codex', '--help'],
+      ['codex', '-h'],
+      ['codex', '--version'],
+      ['codex', '-V'],
     ] as const) {
       expect(() =>
         createRuntimeResolver(runtimes, {
@@ -81,6 +94,12 @@ describe('production runtime registry', () => {
       '-a',
       '--print',
       '-p',
+      '--list-models',
+      '--export',
+      '--help',
+      '-h',
+      '--version',
+      '-v',
     ]
 
     for (const arg of conflicting) {
