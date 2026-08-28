@@ -35,6 +35,30 @@ export function parsePiModel(model: string): PiModelRef {
   return { provider: model.slice(0, slash), id: model.slice(slash + 1) }
 }
 
+export function parsePiModelCatalog(output: string): PiModelRef[] {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const header = lines.shift()?.split(/\s{2,}/)
+  if (
+    header === undefined ||
+    header.length < 3 ||
+    header[0] !== 'provider' ||
+    header[1] !== 'model'
+  ) {
+    throw new Error('expected a header beginning with "provider" and "model" columns')
+  }
+
+  return lines.map((line, index) => {
+    const columns = line.split(/\s{2,}/)
+    if (columns.length !== header.length || columns[0] === '' || columns[1] === '') {
+      throw new Error(`row ${index + 1} does not match the catalog header`)
+    }
+    return { provider: columns[0]!, id: columns[1]! }
+  })
+}
+
 export interface PiCliInvocation {
   args: string[]
   cwd: string
@@ -113,8 +137,9 @@ export async function isPiRuntimeUsable(
   const env = cleanEnv(input.env)
   try {
     await checkLocalPi(input.cwd, env, runCli)
+    let catalog: PiModelRef[] | undefined
     for (const model of new Set(input.models)) {
-      parsePiModel(model)
+      const modelRef = parsePiModel(model)
       const result = await runCli({
         args: ['auth', 'check', '--model', model, '--json'],
         cwd: input.cwd,
@@ -136,6 +161,42 @@ export async function isPiRuntimeUsable(
         return {
           usable: false,
           reason: `Pi model "${model}" is not ready in the local Pi login${reason}`,
+        }
+      }
+
+      if (catalog === undefined) {
+        let catalogResult: PiCliResult
+        try {
+          catalogResult = await runCli({ args: ['--list-models'], cwd: input.cwd, env })
+        } catch (error) {
+          return {
+            usable: false,
+            reason: `Pi local model catalog probe failed to launch: ${errorText(error)}`,
+          }
+        }
+        if (catalogResult.exitCode !== 0) {
+          return {
+            usable: false,
+            reason: `Pi local model catalog probe failed: "pi --list-models" exited with code ${catalogResult.exitCode}: ${catalogResult.stderr.trim() || catalogResult.stdout.trim() || 'no diagnostic'}`,
+          }
+        }
+        try {
+          catalog = parsePiModelCatalog(catalogResult.stdout)
+        } catch (error) {
+          return {
+            usable: false,
+            reason: `Pi local model catalog probe returned a malformed table: ${errorText(error)}`,
+          }
+        }
+      }
+      if (
+        !catalog.some(
+          (candidate) => candidate.provider === modelRef.provider && candidate.id === modelRef.id,
+        )
+      ) {
+        return {
+          usable: false,
+          reason: `Pi model "${model}" is unavailable from the local Pi model catalog`,
         }
       }
     }
