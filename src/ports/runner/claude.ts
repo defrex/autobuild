@@ -134,6 +134,7 @@ export const CLAUDE_OWNED_ARGS = [
   '-p',
   '--print',
   '--output-format',
+  '--input-format',
   '--verbose',
   '--dangerously-skip-permissions',
   '--session-id',

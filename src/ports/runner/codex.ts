@@ -128,6 +128,7 @@ interface SessionState {
 export const CODEX_OWNED_ARGS = [
   '--json',
   '--dangerously-bypass-approvals-and-sandbox',
+  '--approve-for-me',
   '--config',
   '-c',
   '--model',

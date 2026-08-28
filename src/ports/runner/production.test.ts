@@ -21,6 +21,7 @@ describe('production runtime registry', () => {
     const runtimes = createProductionRuntimes().runtimes
     for (const [runtime, arg] of [
       ['claude', '-r'],
+      ['claude', '--input-format'],
       ['claude', '--continue'],
       ['claude', '-c'],
       ['claude', '--fork-session'],
@@ -31,6 +32,7 @@ describe('production runtime registry', () => {
       ['claude', '--version'],
       ['claude', '-v'],
       ['codex', '--enable'],
+      ['codex', '--approve-for-me'],
       ['codex', '--help'],
       ['codex', '-h'],
       ['codex', '--version'],
