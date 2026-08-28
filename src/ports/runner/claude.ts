@@ -138,6 +138,7 @@ export const CLAUDE_OWNED_ARGS = [
   '--dangerously-skip-permissions',
   '--session-id',
   '--resume',
+  '-r',
   '--model',
   '--tools',
   '--max-turns',

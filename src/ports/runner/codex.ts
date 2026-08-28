@@ -138,6 +138,7 @@ export const CODEX_OWNED_ARGS = [
   '--sandbox',
   '-s',
   '--disable',
+  '--enable',
 ] as const
 
 const MISSING_CLI_MESSAGE =

@@ -14,6 +14,24 @@ describe('production runtime registry', () => {
     expect(codex?.servesModels).toEqual(['gpt-'])
     expect(codex?.defaultModel).toBeUndefined()
     expect(codex?.ownedArgs).toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(codex?.ownedArgs).toContain('--enable')
+  })
+
+  test('rejects documented spellings that override shipped adapter invariants', () => {
+    const runtimes = createProductionRuntimes().runtimes
+    for (const [runtime, arg] of [
+      ['claude', '-r'],
+      ['codex', '--enable'],
+    ] as const) {
+      expect(() =>
+        createRuntimeResolver(runtimes, {
+          default: { runtime },
+          plan: { args: [arg, 'conflicting-value'] },
+        }),
+      ).toThrow(
+        `[roles.plan] argument ${JSON.stringify(arg)} conflicts with an option owned by runtime "${runtime}"`,
+      )
+    }
   })
 
   test('registers Pi against the local provider-qualified catalog wildcard', () => {
