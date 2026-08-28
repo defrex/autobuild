@@ -67,9 +67,9 @@ export interface RuntimeRegistration {
    * Claude's subscription default) — the path that preserves no-model behavior.
    */
   defaultModel?: string
-  /** Option spellings reserved by the adapter's invocation protocol. Role
-   * args may supplement repeatable options the adapter also uses by omitting
-   * those spellings from this list. */
+  /** Model-selection and parsed protocol/output-mode spellings owned by the
+   * adapter, plus documented aliases of those options. Every other role arg
+   * remains freeform, including options the adapter may also emit. */
   ownedArgs?: readonly string[]
 }
 

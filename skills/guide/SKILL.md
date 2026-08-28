@@ -541,7 +541,7 @@ consumed by the core `plan` phase, and nothing is reported.
 |---|---|---|---|
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
-| `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Adapter-owned option spellings are rejected eagerly. |
+| `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Only model and parsed protocol/output-mode spellings are rejected eagerly. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |
 | `sessionBudgetSeconds` | policy fallback | optional positive integer | Wall-clock budget for each build phase session on this logical role. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
 | `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. `extensions` remains only the deprecated no-op. |
@@ -555,9 +555,14 @@ the phase role nor `default` names a model, the merged runtime uses its own
 default model. Compatibility failures name the role, runtime, model, and served
 model families; all problems in `default` and every declared role are
 aggregated by one eager resolver construction before judgment runs. Runtime
-adapters also declare protocol-owned CLI options; exact spellings, declared
-short aliases, and `--option=value` forms in effective args join that same
-role-naming aggregate. Repeatable supplemental options remain usable. Pi always
+adapters reject only the model and parsed protocol/output-mode options they
+emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
+rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Exact
+spellings, `--option=value` forms, and documented compact short aliases join
+that same role-naming aggregate. Every other option passes through without
+Autobuild validation, including sandbox, approval, session, tool, skill,
+thinking, extension, lifecycle, and unknown options, even when it supplements
+another adapter-emitted occurrence. Pi always
 disables ambient extension discovery and explicitly loads the Autobuild bridge;
 `--extension <path>` in `args` loads an explicit extension alongside it and
 activates all tools that extension registers. With no such args, Pi loads no

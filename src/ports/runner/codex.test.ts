@@ -197,7 +197,7 @@ describe('CodexAgentRunner start and continue', () => {
     ])
     const runner = new CodexAgentRunner({ runCli: cli.runCli })
     const { session, result } = await runner.start(
-      startOpts({ model: 'gpt-5.4', args: ['--profile', 'autobuild'] }),
+      startOpts({ model: 'gpt-5.4', args: ['--sandbox', 'workspace-write'] }),
     )
     await runner.continue(session, '- address findings')
 
@@ -215,8 +215,8 @@ describe('CodexAgentRunner start and continue', () => {
       'shell_environment_policy.inherit=all',
       '--model',
       'gpt-5.4',
-      '--profile',
-      'autobuild',
+      '--sandbox',
+      'workspace-write',
       '--',
       '$ab-plan codex-runtime',
     ])
@@ -229,8 +229,8 @@ describe('CodexAgentRunner start and continue', () => {
       'shell_environment_policy.inherit=all',
       '--model',
       'gpt-5.4',
-      '--profile',
-      'autobuild',
+      '--sandbox',
+      'workspace-write',
       'native-thread',
       '--',
       '- address findings',

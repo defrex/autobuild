@@ -230,7 +230,7 @@ describe('ClaudeAgentRunner start and continue', () => {
       createSessionId: () => '11111111-1111-4111-8111-111111111111',
     })
     const { session } = await runner.start(
-      startOpts({ model: 'claude-opus-4', args: ['--permission-mode', 'plan'] }),
+      startOpts({ model: 'claude-opus-4', args: ['--bg', '--permission-mode', 'plan'] }),
     )
     await runner.continue(session, '- address findings')
 
@@ -249,6 +249,7 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--bg',
       '--permission-mode',
       'plan',
       '--',
@@ -264,6 +265,7 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--bg',
       '--permission-mode',
       'plan',
       '--',

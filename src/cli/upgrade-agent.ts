@@ -44,9 +44,10 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
 
 /**
  * Put all three exact versions in one prompt. They are explicitly data, and
- * the one-shot runtime has no tools and adapter-owned args preserve that invariant, so skill text cannot act on
- * the repository. Deterministic validation in upgrade.ts remains the only
- * authority that can turn this proposal into filesystem writes.
+ * the one-shot adapter defaults to no tools, so skill text cannot act on the
+ * repository unless the operator deliberately supplements that default through
+ * role args. Deterministic validation in upgrade.ts remains the only authority
+ * that can turn this proposal into filesystem writes.
  */
 export function upgradeConflictPrompt(input: {
   skill: string

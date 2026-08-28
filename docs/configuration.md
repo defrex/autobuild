@@ -607,9 +607,15 @@ an invalid pair. The only implicit fill is when neither the role nor `default`
 names a model, in which case the selected runtime uses its own default. Every
 alternate overlays that concrete role's effective primary runtime, model, and
 args, then undergoes the same exact-pair validation. Each configured string is
-one argv token; Autobuild does not parse or shell-expand it. Adapter-owned
-options (including declared aliases and `--option=value` forms) join the eager
-aggregated startup error with a role/runtime-specific diagnostic. Unknown fields,
+one argv token; Autobuild does not shell-expand it. The narrow rejected set is
+derived from the model and machine-readable protocol options each adapter emits:
+Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
+`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Those spellings,
+`--option=value` forms, and compact documented short aliases join the eager
+aggregated startup error with a role/runtime-specific diagnostic. Every other
+option passes through without Autobuild validation, including sandbox, approval,
+session, tool, skill, thinking, extension, lifecycle, and unknown options, even
+when it supplements another occurrence emitted by the adapter. Unknown fields,
 runtimes, and incompatible models in any indexed entry join the aggregated
 eager startup error; they never first surface during an outage.
 

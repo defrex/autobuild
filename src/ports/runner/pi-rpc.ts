@@ -4,6 +4,8 @@ import { classifyProviderError } from './provider-error'
 import type { PiModelRef, PiSession, PiTurn } from './pi'
 
 export const PI_BRIDGE_PATH = fileURLToPath(new URL('./pi-bridge.js', import.meta.url))
+export const PI_RPC_MODE_ARG = '--mode'
+export const PI_MODEL_ARG = '--model'
 const CATALOG_PREFIX = 'autobuild-pi-catalog:'
 
 export interface PiRpcInvocation {
@@ -336,7 +338,7 @@ export interface PiRpcSessionOptions {
 
 export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiSession> {
   const args = [
-    '--mode',
+    PI_RPC_MODE_ARG,
     'rpc',
     '--no-session',
     '--no-approve',
@@ -344,7 +346,7 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
     '--no-prompt-templates',
     '--no-themes',
   ]
-  if (opts.model !== undefined) args.push('--model', `${opts.model.provider}/${opts.model.id}`)
+  if (opts.model !== undefined) args.push(PI_MODEL_ARG, `${opts.model.provider}/${opts.model.id}`)
   // `--tools` filters both builtin and package tools out of Pi's registry.
   // Keep the complete registry for build sessions and let the bridge activate
   // exactly the configured builtin/package subset before every agent prompt.
@@ -367,7 +369,7 @@ export async function readLocalPiCatalog(opts: {
   const client = await PiRpcClient.launch(
     {
       args: [
-        '--mode',
+        PI_RPC_MODE_ARG,
         'rpc',
         '--no-session',
         '--no-approve',

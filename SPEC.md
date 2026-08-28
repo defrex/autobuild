@@ -890,11 +890,15 @@ deterministic fail-safe.
      then never used. `ab dispatch` reports it at startup as a warning.
 
   Each `args` string is one argv token, preserved in order and appended to
-  every phase and tool-free one-shot invocation for that role. Adapters declare
-  the option spellings their protocol owns; an effective primary or alternate
-  list containing one (including `--option=value` or a declared short alias)
-  joins the aggregate eager startup error rather than overriding Autobuild's
-  invariant flags. Repeatable supplemental options need not be owned. Pi always
+  every phase and tool-free one-shot invocation for that role. Adapters reject
+  only model selection and the machine-readable mode they emit and parse:
+  Claude owns `-p`/`--print`, `--output-format`, and `--model`; Codex owns
+  `--json` and `--model`/`-m`; Pi owns `--mode` and `--model`. An effective
+  primary or alternate list containing one (including `--option=value` or a
+  documented compact short alias) joins the aggregate eager startup error.
+  Every other option passes through without Autobuild validation, even when it
+  changes sandbox, approval, session, tool, skill, thinking, extension, or
+  lifecycle behavior or supplements another adapter-emitted option. Pi always
   disables ambient extension discovery and explicitly loads the Autobuild
   bridge; a role can add repeatable `--extension <path>` tokens through `args`,
   and all tools from that explicitly loaded extension are available alongside

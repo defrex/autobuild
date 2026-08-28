@@ -12,7 +12,7 @@ import {
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
-import { createPiRpcSession } from './pi-rpc'
+import { createPiRpcSession, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
@@ -145,49 +145,8 @@ export async function isPiRuntimeUsable(
   }
 }
 
-export const PI_OWNED_ARGS = [
-  '--mode',
-  '--print',
-  '-p',
-  '--no-session',
-  '--continue',
-  '-c',
-  '--resume',
-  '-r',
-  '--session',
-  '--session-id',
-  '--fork',
-  '--no-approve',
-  '-na',
-  '--approve',
-  '-a',
-  '--no-context-files',
-  '-nc',
-  '--no-prompt-templates',
-  '-np',
-  '--no-themes',
-  '--model',
-  '-m',
-  '--no-tools',
-  '-nt',
-  '--no-builtin-tools',
-  '-nbt',
-  '--tools',
-  '-t',
-  '--exclude-tools',
-  '-xt',
-  '--no-skills',
-  '-ns',
-  '--skill',
-  '--no-extensions',
-  '-ne',
-  '--list-models',
-  '--export',
-  '--help',
-  '-h',
-  '--version',
-  '-v',
-] as const
+/** Options that select the model or the RPC protocol parsed by the adapter. */
+export const PI_OWNED_ARGS = [PI_RPC_MODE_ARG, PI_MODEL_ARG] as const
 
 export interface PiTurn {
   text: string

@@ -130,33 +130,17 @@ interface SessionState {
   turns: TurnRecord[]
 }
 
+const CLAUDE_PRINT_ARG = '-p'
+const CLAUDE_PRINT_ALIAS = '--print'
+const CLAUDE_OUTPUT_FORMAT_ARG = '--output-format'
+const CLAUDE_MODEL_ARG = '--model'
+
+/** Options that select the model or the structured protocol parsed below. */
 export const CLAUDE_OWNED_ARGS = [
-  '-p',
-  '--print',
-  '--output-format',
-  '--input-format',
-  '--verbose',
-  '--dangerously-skip-permissions',
-  '--session-id',
-  '--resume',
-  '-r',
-  '--continue',
-  '-c',
-  '--fork-session',
-  '--from-pr',
-  '--teleport',
-  '--bg',
-  '--background',
-  '--cloud',
-  '--environment',
-  '--model',
-  '--tools',
-  '--max-turns',
-  '--no-session-persistence',
-  '--help',
-  '-h',
-  '--version',
-  '-v',
+  CLAUDE_PRINT_ARG,
+  CLAUDE_PRINT_ALIAS,
+  CLAUDE_OUTPUT_FORMAT_ARG,
+  CLAUDE_MODEL_ARG,
 ] as const
 
 const MISSING_CLI_MESSAGE =
@@ -186,7 +170,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const args = this.baseArgs()
     args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
-    if (input.model !== undefined) args.push('--model', input.model)
+    if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
     args.push(...(input.args ?? []), '--', input.prompt)
 
     const turn = await this.runPrompt({
@@ -284,7 +268,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     const args = this.baseArgs()
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
-    if (opts.model !== undefined) args.push('--model', opts.model)
+    if (opts.model !== undefined) args.push(CLAUDE_MODEL_ARG, opts.model)
     args.push(...(opts.args ?? []), '--', prompt)
 
     return this.runPrompt({
@@ -296,7 +280,13 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   }
 
   private baseArgs(): string[] {
-    return ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions']
+    return [
+      CLAUDE_PRINT_ARG,
+      CLAUDE_OUTPUT_FORMAT_ARG,
+      'stream-json',
+      '--verbose',
+      '--dangerously-skip-permissions',
+    ]
   }
 
   private async runPrompt(invocation: ClaudeCliInvocation): Promise<ClaudeTurn> {
