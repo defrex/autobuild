@@ -1832,15 +1832,17 @@ describe('happy path (§15.6)', () => {
     test('an agent verify step routes by its STEP name, not its skill name', async () => {
       const { h, started } = await startedFor(
         withRoles(
-          'e2e = { runtime = "scripted", model = "m-step" }\n' +
+          'e2e = { runtime = "scripted", model = "m-step", args = ["--effort", "high"] }\n' +
             '"ab-verify-e2e" = { runtime = "scripted", model = "m-skill" }\n',
         ),
         'e2e',
       )
       expect(started.payload.phase).toBe('verify:e2e')
       expect(started.payload.model).toBe('m-step')
+      expect(started.payload.args).toEqual(['--effort', 'high'])
       const journal = [...h.runner.sessions.values()].find((j) => j.opts.skill === 'ab-verify-e2e')!
       expect(journal.opts.model).toBe('m-step')
+      expect(journal.opts.args).toEqual(['--effort', 'high'])
     })
 
     test('…and still routes by its deprecated skill-name key when that is all there is', async () => {

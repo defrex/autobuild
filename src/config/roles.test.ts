@@ -612,6 +612,29 @@ skill = "ab-verify-e2e"
   })
 })
 
+describe('roleKeyWarnings — deprecated extensions', () => {
+  test('warns once for each declaring role across primary and alternate entries', () => {
+    const parsed = config(`${DEFAULT_ROLE}extensions = ["legacy"]
+alternates = [{ extensions = [] }]
+
+[roles.plan]
+alternates = [{ extensions = ["also-legacy"] }]
+`)
+    expect(roleKeyWarnings(parsed)).toEqual([
+      'autobuild.toml: [roles.default] declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.',
+      'autobuild.toml: [roles.plan] declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.',
+    ])
+  })
+
+  test('renders unusual declaring role keys safely and args alone is silent', () => {
+    const parsed = config(
+      `${DEFAULT_ROLE}args = ["--effort", "high"]\n\n[roles."odd\\nname"]\nextensions = []\n`,
+    )
+    expect(roleKeyWarnings(parsed).at(-1)).toContain('[roles."odd\\u000Aname"]')
+    expect(roleKeyWarnings(config(`${DEFAULT_ROLE}args = []\n`))).toEqual([])
+  })
+})
+
 describe('roleKeyWarnings — the one message set', () => {
   const BOTH_CLASSES = withVerify(
     E2E_STEP,
@@ -624,7 +647,7 @@ describe('roleKeyWarnings — the one message set', () => {
     expect(lines).toHaveLength(3)
     expect(lines[0]).toBe(
       'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests ' +
-        'them — their runtime and model never reach a session.',
+        'them — their runtime, model, and args never reach a session.',
     )
     expect(lines[1]).toBe(
       'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, ' +
@@ -656,8 +679,7 @@ describe('roleKeyWarnings — the one message set', () => {
   test('a single unconsumed key reads in the singular', () => {
     const [line] = roleKeyWarnings(config(`${DEFAULT_ROLE}[roles.ghost]\nruntime = "claude"\n`))
     expect(line).toBe(
-      'autobuild.toml: [roles.ghost] is declared but nothing requests it — its runtime ' +
-        'and model never reach a session.',
+      'autobuild.toml: [roles.ghost] is declared but nothing requests it — its runtime, model, and args never reach a session.',
     )
   })
 

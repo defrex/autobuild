@@ -229,7 +229,9 @@ describe('ClaudeAgentRunner start and continue', () => {
       runCli: cli.runCli,
       createSessionId: () => '11111111-1111-4111-8111-111111111111',
     })
-    const { session } = await runner.start(startOpts({ model: 'claude-opus-4' }))
+    const { session } = await runner.start(
+      startOpts({ model: 'claude-opus-4', args: ['--permission-mode', 'plan'] }),
+    )
     await runner.continue(session, '- address findings')
 
     expect(session).toEqual({
@@ -247,6 +249,8 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--permission-mode',
+      'plan',
       '--',
       '/ab-plan auth-rate-limit',
     ])
@@ -260,6 +264,8 @@ describe('ClaudeAgentRunner start and continue', () => {
       session.id,
       '--model',
       'claude-opus-4',
+      '--permission-mode',
+      'plan',
       '--',
       '- address findings',
     ])
@@ -434,6 +440,7 @@ describe('ClaudeAgentRunner complete', () => {
       cwd: '/repos/app',
       env: { NAMING_TOKEN: 'secret' },
       model: 'claude-haiku-4',
+      args: ['--effort', 'high'],
       signal: controller.signal,
     })
 
@@ -453,6 +460,8 @@ describe('ClaudeAgentRunner complete', () => {
       '--no-session-persistence',
       '--model',
       'claude-haiku-4',
+      '--effort',
+      'high',
       '--',
       'name this spec verbatim',
     ])

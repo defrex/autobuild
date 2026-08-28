@@ -67,6 +67,10 @@ export interface RuntimeRegistration {
    * Claude's subscription default) — the path that preserves no-model behavior.
    */
   defaultModel?: string
+  /** Option spellings reserved by the adapter's invocation protocol. Role
+   * args may supplement repeatable options the adapter also uses by omitting
+   * those spellings from this list. */
+  ownedArgs?: readonly string[]
 }
 
 /** name → registration. The one place a runtime's name lives (§9). */
@@ -121,6 +125,18 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
     (typeof defaultModel !== 'string' || defaultModel.trim().length === 0)
   ) {
     throw new Error('defaultModel must be a nonblank string when provided')
+  }
+
+  const ownedArgs = value.ownedArgs
+  if (
+    ownedArgs !== undefined &&
+    (!Array.isArray(ownedArgs) ||
+      ownedArgs.some(
+        (arg) => typeof arg !== 'string' || !arg.startsWith('-') || arg.trim().length === 0,
+      ) ||
+      new Set(ownedArgs).size !== ownedArgs.length)
+  ) {
+    throw new Error('ownedArgs must be a unique array of nonblank option spellings')
   }
 
   const oneShot = value.oneShot

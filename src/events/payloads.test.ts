@@ -561,12 +561,13 @@ describe('provider alternate evidence', () => {
           role: 'implement',
           runner: 'claude',
           model: 'claude-opus',
+          args: ['--effort', 'high'],
           phase: 'implement',
           round: 1,
           substitution: { failed, selectedIndex: 1 },
         },
       }).payload,
-    ).toMatchObject({ substitution: { failed, selectedIndex: 1 } })
+    ).toMatchObject({ args: ['--effort', 'high'], substitution: { failed, selectedIndex: 1 } })
     expect(
       validateEventWrite({
         actor: KERNEL,

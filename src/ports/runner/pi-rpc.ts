@@ -108,7 +108,6 @@ export class PiRpcClient implements PiSession {
   private constructor(
     private readonly process: PiRpcProcess,
     sessionId: string,
-    private readonly configuredExtensions: readonly string[],
     private readonly configuredTools: readonly string[],
   ) {
     this.sessionId = sessionId
@@ -122,16 +121,10 @@ export class PiRpcClient implements PiSession {
   static async launch(
     invocation: PiRpcInvocation,
     spawn: PiRpcSpawnFn = spawnPiRpc,
-    configuredExtensions: readonly string[] = [],
     configuredTools: readonly string[] = [],
   ): Promise<PiRpcClient> {
     const process = spawn(invocation)
-    const client = new PiRpcClient(
-      process,
-      crypto.randomUUID(),
-      configuredExtensions,
-      configuredTools,
-    )
+    const client = new PiRpcClient(process, crypto.randomUUID(), configuredTools)
     try {
       const state = await client.command('get_state')
       const data = record(state.data)
@@ -227,7 +220,6 @@ export class PiRpcClient implements PiSession {
     await this.command('prompt', {
       message: `/autobuild-configure ${encode({
         environment,
-        extensions: this.configuredExtensions,
         tools: this.configuredTools,
       })}`,
     })
@@ -336,7 +328,7 @@ export interface PiRpcSessionOptions {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
-  extensions: readonly string[]
+  args: readonly string[]
   skill?: string
   env: Record<string, string>
   spawn?: PiRpcSpawnFn
@@ -359,14 +351,11 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
   if (opts.tools.length === 0) args.push('--no-tools')
   args.push('--no-skills')
   if (opts.skill !== undefined) args.push('--skill', `${opts.cwd}/.agents/skills/${opts.skill}`)
-  if (opts.extensions.length === 0) args.push('--no-extensions')
-  args.push('--extension', PI_BRIDGE_PATH)
-  return PiRpcClient.launch(
-    { args, cwd: opts.cwd, env: opts.env },
-    opts.spawn,
-    opts.extensions,
-    opts.tools,
-  )
+  // Disable ambient discovery unconditionally. Explicit repeatable
+  // --extension paths in configured args still load alongside the bridge.
+  args.push('--no-extensions', '--extension', PI_BRIDGE_PATH)
+  args.push(...opts.args)
+  return PiRpcClient.launch({ args, cwd: opts.cwd, env: opts.env }, opts.spawn, opts.tools)
 }
 
 export async function readLocalPiCatalog(opts: {

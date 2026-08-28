@@ -145,6 +145,21 @@ export async function isPiRuntimeUsable(
   }
 }
 
+export const PI_OWNED_ARGS = [
+  '--mode',
+  '--no-session',
+  '--no-approve',
+  '--no-context-files',
+  '--no-prompt-templates',
+  '--no-themes',
+  '--model',
+  '-m',
+  '--no-tools',
+  '--no-skills',
+  '--skill',
+  '--no-extensions',
+] as const
+
 export interface PiTurn {
   text: string
   usage: { inputTokens: number; outputTokens: number }
@@ -161,7 +176,7 @@ export type PiCreateSessionFn = (opts: {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
-  extensions: readonly string[]
+  args: readonly string[]
   skill?: string
   env: Record<string, string>
 }) => Promise<PiSession>
@@ -203,7 +218,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       cwd: input.cwd,
       ...(model !== undefined ? { model } : {}),
       tools: [],
-      extensions: [],
+      args: input.args ?? [],
       env: sessionEnv(input.env),
     })
     try {
@@ -227,7 +242,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         cwd: opts.workspacePath,
         ...(model !== undefined ? { model } : {}),
         tools: PI_TOOLS,
-        extensions: opts.extensions ?? [],
+        args: opts.args ?? [],
         skill: opts.skill,
         env: sessionEnv(opts.env),
       })

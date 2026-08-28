@@ -740,21 +740,26 @@ describe('parseConfig — roles and strictness', () => {
 [roles.default]
 runtime = "pi"
 model = "kimi-k3"
-extensions = ["web-access"]
-alternates = [{ runtime = "claude", model = "claude-opus", extensions = [] }]
+args = ["--extension", "./web-access.js"]
+extensions = ["deprecated-token"]
+alternates = [{ runtime = "claude", model = "claude-opus", args = [], extensions = [] }]
 [roles.plan]
-extensions = []
+args = []
 alternates = []
 `)
     expect(config.roles).toEqual({
       default: {
         runtime: 'pi',
         model: 'kimi-k3',
-        extensions: ['web-access'],
-        alternates: [{ runtime: 'claude', model: 'claude-opus', extensions: [] }],
+        args: ['--extension', './web-access.js'],
+        extensions: ['deprecated-token'],
+        alternates: [{ runtime: 'claude', model: 'claude-opus', args: [], extensions: [] }],
       },
-      plan: { extensions: [], alternates: [] },
+      plan: { args: [], alternates: [] },
     })
+    expect(parseError(`${READY}[roles.default]\nruntime = "pi"\nargs = [""]\n`).message).toContain(
+      'Too small',
+    )
     expect(
       parseError(`${READY}[roles.default]\nruntime = "pi"\nalternates = [{ extra = true }]\n`)
         .message,

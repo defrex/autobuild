@@ -944,6 +944,7 @@ triageState = "Triage"
 [roles.slug]
 runtime = "namer"
 model = "gpt-slug-name"
+args = ["--naming-style", "concise"]
 `
     const fx = await makeFixture(
       readyTicket('T-named', {
@@ -992,6 +993,7 @@ model = "gpt-slug-name"
       expect(calls[0]?.cwd).toBe(fx.origin)
       expect(calls[0]?.env.NAMING_API_KEY).toBe('secret')
       expect(calls[0]?.model).toBe('gpt-slug-name')
+      expect(calls[0]?.args).toEqual(['--naming-style', 'concise'])
       expect(calls[0]?.signal).toBeInstanceOf(AbortSignal)
 
       const [build] = await fx.store.listBuilds()
@@ -6904,10 +6906,34 @@ runtime = "claude"
       })
 
       expect(fx.err).toEqual([
-        'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime and model never reach a session.',
+        'autobuild.toml: [roles.__proto__] is declared but nothing requests it — its runtime, model, and args never reach a session.',
         'Valid role keys: code-review, default, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
       ])
       for (const line of out) expect(line).not.toContain('[roles.')
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('deprecated extensions warn at startup without blocking dispatch', async () => {
+    const toml = DISPATCH_CONFIG_TOML.replace(
+      '[policy]',
+      '[roles.plan]\nextensions = ["legacy"]\n\n[policy]',
+    )
+    const fx = await makeFixture([], happyHandlers(), toml)
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+      expect(fx.err).toEqual([
+        'autobuild.toml: [roles.plan] declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.',
+      ])
     } finally {
       await fx.cleanup()
     }
@@ -6928,7 +6954,7 @@ runtime = "claude"
       })
 
       expect(fx.err).toEqual([
-        'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime and model never reach a session.',
+        'autobuild.toml: [roles.ghost], [roles.typo] are declared but nothing requests them — their runtime, model, and args never reach a session.',
         'Valid role keys: code-review, default, e2e, finalize, harvest, harvest-review, implement, plan, plan-review, reconcile, slug, upgrade',
         'autobuild.toml: [roles.ab-verify-e2e] should be [roles.e2e] — it is the deprecated skill-name key for agent verify step "e2e" and stops working in a future release.',
       ])

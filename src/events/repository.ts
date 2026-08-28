@@ -129,6 +129,8 @@ export const harvestEventPayloadSchemas = {
     role: z.enum(['harvest', 'harvest-review']),
     runner: z.string().min(1),
     model: z.string().optional(),
+    /** Optional only so historical repository journals replay without migration. */
+    args: z.array(z.string()).optional(),
     step: z.enum(['synthesize', 'review']),
     round,
     substitution: providerSubstitutionSchema.optional(),

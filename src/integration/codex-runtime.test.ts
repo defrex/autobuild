@@ -18,7 +18,10 @@ import {
   CONFIG_TOML,
 } from './harness'
 
-const CODEX_CONFIG = CONFIG_TOML.replace('runtime = "scripted"', 'runtime = "codex"')
+const CODEX_CONFIG = CONFIG_TOML.replace(
+  'runtime = "scripted"',
+  'runtime = "codex"\nargs = ["--profile", "autobuild"]',
+)
 const CODEX_SLUG = 'login-throttling'
 
 function isOneShotCall(call: CodexCliInvocation): boolean {
@@ -177,10 +180,20 @@ test('a Codex-only runtime drives a full build and native producer continuation'
     expect(started.length).toBeGreaterThan(0)
     expect(started.every((event) => event.payload.runner === 'codex')).toBe(true)
     expect(started.every((event) => event.payload.model === undefined)).toBe(true)
+    expect(started.every((event) => event.payload.args?.join(' ') === '--profile autobuild')).toBe(
+      true,
+    )
 
     const calls = transport?.calls ?? []
     expect(calls.length).toBeGreaterThan(0)
     expect(calls.every((call) => call.args[0] === 'exec')).toBe(true)
+    expect(
+      calls.every((call) => {
+        const delimiter = call.args.lastIndexOf('--')
+        const profile = call.args.indexOf('--profile')
+        return profile >= 0 && profile < delimiter && call.args[profile + 1] === 'autobuild'
+      }),
+    ).toBe(true)
     const oneShots = calls.filter(isOneShotCall)
     expect(oneShots).toHaveLength(1)
     const oneShotSeparator = oneShots[0]!.args.lastIndexOf('--')

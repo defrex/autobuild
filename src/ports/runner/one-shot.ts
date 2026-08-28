@@ -13,6 +13,8 @@ export interface OneShotCompletionInput {
   env: Record<string, string>
   /** Absent means the runtime's own default model. */
   model?: string
+  /** Extra CLI argv tokens for the selected runtime, in declared order. */
+  args?: readonly string[]
   /** Caller-owned cancellation, normally a deterministic deadline. */
   signal?: AbortSignal
 }

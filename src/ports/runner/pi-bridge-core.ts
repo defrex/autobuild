@@ -46,18 +46,17 @@ const CATALOG_PREFIX = 'autobuild-pi-catalog:'
 export function selectActiveToolNames(
   tools: readonly BridgeTool[],
   baseTools: readonly string[],
-  extensions: readonly string[],
 ): string[] {
   const allowedBase = new Set(baseTools)
-  const allowedExtensions = extensions.map((value) => value.toLowerCase())
   return [
     ...new Set(
       tools
         .filter((tool) => {
           if (BUILTIN_TOOL_NAMES.has(tool.name)) return allowedBase.has(tool.name)
-          if (tool.sourceInfo?.origin !== 'package') return false
-          const source = (tool.sourceInfo.source ?? '').toLowerCase()
-          return allowedExtensions.some((name) => source.includes(name))
+          // Ambient discovery is disabled by the adapter. Every remaining
+          // non-builtin tool came from an explicitly loaded extension. An
+          // empty builtin allowlist marks a tool-free one-shot invocation.
+          return baseTools.length > 0
         })
         .map((tool) => tool.name),
     ),
@@ -66,11 +65,10 @@ export function selectActiveToolNames(
 
 export function installAutobuildBridge(pi: BridgeApi, createBashTool: BridgeBashToolFactory): void {
   let environment: Record<string, string> = {}
-  let extensions: string[] = []
   let baseTools: string[] = []
 
   const activateTools = (): void => {
-    pi.setActiveTools(selectActiveToolNames(pi.getAllTools(), baseTools, extensions))
+    pi.setActiveTools(selectActiveToolNames(pi.getAllTools(), baseTools))
   }
 
   pi.on('session_start', (_event, context) => {
@@ -91,7 +89,6 @@ export function installAutobuildBridge(pi: BridgeApi, createBashTool: BridgeBash
       const payload = decode(args)
       if (!isRecord(payload)) throw new Error('invalid Autobuild bridge configuration')
       environment = stringRecord(payload.environment)
-      extensions = stringArray(payload.extensions)
       baseTools = stringArray(payload.tools)
       activateTools()
     },

@@ -257,6 +257,8 @@ export const eventPayloadSchemas = {
     role: z.string().min(1),
     runner: z.string().min(1),
     model: z.string().optional(),
+    /** Optional only so historical events replay without migration. */
+    args: z.array(z.string()).optional(),
     phase: phaseSchema,
     round: round.optional(),
     /** Present only when this target substituted for the preceding failed one. */

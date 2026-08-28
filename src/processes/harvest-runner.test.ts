@@ -1444,7 +1444,8 @@ readyState = "Ready"
 [roles.default]
 runtime = "scripted"
 model = "primary-model"
-alternates = [{ runtime = "alternate", model = "alternate-model" }]
+args = ["--primary-flag"]
+alternates = [{ runtime = "alternate", model = "alternate-model", args = [] }]
 [policy]
 harvestThreshold = 1
 `)
@@ -1476,6 +1477,12 @@ harvestThreshold = 1
       'alternate',
       'scripted',
       'alternate',
+    ])
+    expect(starts.map((event) => event.payload.args)).toEqual([
+      ['--primary-flag'],
+      [],
+      ['--primary-flag'],
+      [],
     ])
     expect(starts[1]?.payload).toMatchObject({
       substitution: {

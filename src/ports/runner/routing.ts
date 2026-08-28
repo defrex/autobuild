@@ -1,5 +1,5 @@
 /**
- * Eager runtime/model/extension role resolution (SPEC §9, §16.1). Primary
+ * Eager runtime/model/args role resolution (SPEC §9, §16.1). Primary
  * fields and the ordered alternate list inherit independently from the
  * reserved `[roles.default]` entry. A declared role list, including `[]`,
  * replaces the inherited list wholesale; each entry overlays that concrete
@@ -15,8 +15,8 @@ export interface ResolvedRuntime {
   runtime: string
   /** Absent ⇒ the adapter's built-in default model. */
   model?: string
-  /** Named extensions this session may use. Empty ⇒ hermetic. */
-  extensions?: readonly string[]
+  /** Extra CLI argv tokens, preserved in declared order. */
+  args: readonly string[]
 }
 
 /** A role's primary target plus its failure-triggered targets in declaration order. */
@@ -29,6 +29,8 @@ export interface ResolvedRole extends ResolvedRuntime {
 export interface RuntimeAxes {
   runtime?: string
   model?: string
+  args?: readonly string[]
+  /** Deprecated compatibility field; accepted by the schema but ignored. */
   extensions?: readonly string[]
 }
 
@@ -42,7 +44,7 @@ export interface RuntimeSpec extends RuntimeAxes {
 export class RuntimeConfigError extends Error {
   constructor(readonly problems: string[]) {
     super(
-      `invalid runtime/model configuration (SPEC §9):\n` +
+      `invalid runtime/model/args configuration (SPEC §9):\n` +
         problems.map((p) => `  - ${p}`).join('\n'),
     )
     this.name = 'RuntimeConfigError'
@@ -69,7 +71,7 @@ function mergeAxes(spec: RuntimeAxes, base: RuntimeAxes): RuntimeAxes {
   return {
     ...(runtime !== undefined ? { runtime } : {}),
     ...(model !== undefined ? { model } : {}),
-    extensions: spec.extensions ?? base.extensions ?? [],
+    args: spec.args ?? base.args ?? [],
   }
 }
 
@@ -101,19 +103,42 @@ function resolveAxes(
   const reg = registry[runtime]!
 
   const model = axes.model ?? reg.defaultModel
-  if (model !== undefined && !serves(reg, model)) {
+  const modelValid = model === undefined || serves(reg, model)
+  if (!modelValid) {
     problems.push(
       `${label} resolves runtime "${runtime}" with model "${model}", but ` +
         `"${runtime}" serves only [${servedModels(reg)}]`,
     )
-    return undefined
   }
+
+  const args = axes.args ?? []
+  const ownedArgs = new Set(reg.ownedArgs ?? [])
+  for (const arg of args) {
+    const spelling = arg.startsWith('--') ? arg.split('=', 1)[0]! : arg
+    const owned =
+      ownedArgs.has(spelling) ||
+      [...ownedArgs].some(
+        (candidate) =>
+          candidate.startsWith('-') &&
+          !candidate.startsWith('--') &&
+          candidate.length === 2 &&
+          arg.startsWith(candidate) &&
+          arg.length > candidate.length,
+      )
+    if (owned) {
+      problems.push(
+        `${label} argument ${JSON.stringify(arg)} conflicts with an option owned by runtime "${runtime}"`,
+      )
+    }
+  }
+
+  if (!modelValid) return undefined
 
   return {
     runner: reg.runner,
     runtime,
     ...(model !== undefined ? { model } : {}),
-    extensions: axes.extensions ?? [],
+    args,
   }
 }
 

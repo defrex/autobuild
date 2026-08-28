@@ -13,6 +13,7 @@ describe('production runtime registry', () => {
     expect(typeof codex?.initUsable).toBe('function')
     expect(codex?.servesModels).toEqual(['gpt-'])
     expect(codex?.defaultModel).toBeUndefined()
+    expect(codex?.ownedArgs).toContain('--dangerously-bypass-approvals-and-sandbox')
   })
 
   test('registers Pi against the local provider-qualified catalog wildcard', () => {
@@ -20,11 +21,18 @@ describe('production runtime registry', () => {
     expect(pi?.runner.name).toBe('pi')
     expect(pi?.servesModels).toEqual(['*/*'])
     expect(pi?.defaultModel).toBe('kimi-coding/k3')
+    expect(pi?.ownedArgs).toContain('--no-extensions')
+    expect(pi?.ownedArgs).not.toContain('--extension')
 
     const future = createRuntimeResolver(createProductionRuntimes().runtimes, {
-      default: { runtime: 'pi', model: 'future-provider/new-model' },
+      default: {
+        runtime: 'pi',
+        model: 'future-provider/new-model',
+        args: ['--extension', './explicit.js'],
+      },
     })
     expect(future.resolve('plan').model).toBe('future-provider/new-model')
+    expect(future.resolve('plan').args).toEqual(['--extension', './explicit.js'])
   })
 
   test('validates Codex model families eagerly and delegates an omitted model', () => {

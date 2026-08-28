@@ -130,6 +130,20 @@ interface SessionState {
   turns: TurnRecord[]
 }
 
+export const CLAUDE_OWNED_ARGS = [
+  '-p',
+  '--print',
+  '--output-format',
+  '--verbose',
+  '--dangerously-skip-permissions',
+  '--session-id',
+  '--resume',
+  '--model',
+  '--tools',
+  '--max-turns',
+  '--no-session-persistence',
+] as const
+
 const MISSING_CLI_MESSAGE =
   'claude runtime: Claude Code CLI executable "claude" was not found. ' +
   'Install Claude Code (https://code.claude.com/docs/en/setup), run `claude`, ' +
@@ -158,7 +172,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     const args = this.baseArgs()
     args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
     if (input.model !== undefined) args.push('--model', input.model)
-    args.push('--', input.prompt)
+    args.push(...(input.args ?? []), '--', input.prompt)
 
     const turn = await this.runPrompt({
       args,
@@ -256,7 +270,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
     if (opts.model !== undefined) args.push('--model', opts.model)
-    args.push('--', prompt)
+    args.push(...(opts.args ?? []), '--', prompt)
 
     return this.runPrompt({
       args,

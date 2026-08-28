@@ -196,7 +196,9 @@ describe('CodexAgentRunner start and continue', () => {
       output([thread('native-thread'), message('continued'), completed(2, 1)]),
     ])
     const runner = new CodexAgentRunner({ runCli: cli.runCli })
-    const { session, result } = await runner.start(startOpts({ model: 'gpt-5.4' }))
+    const { session, result } = await runner.start(
+      startOpts({ model: 'gpt-5.4', args: ['--profile', 'autobuild'] }),
+    )
     await runner.continue(session, '- address findings')
 
     expect(session).toEqual({ id: 'native-thread', runner: 'codex', model: 'gpt-5.4' })
@@ -213,6 +215,8 @@ describe('CodexAgentRunner start and continue', () => {
       'shell_environment_policy.inherit=all',
       '--model',
       'gpt-5.4',
+      '--profile',
+      'autobuild',
       '--',
       '$ab-plan codex-runtime',
     ])
@@ -225,6 +229,8 @@ describe('CodexAgentRunner start and continue', () => {
       'shell_environment_policy.inherit=all',
       '--model',
       'gpt-5.4',
+      '--profile',
+      'autobuild',
       'native-thread',
       '--',
       '- address findings',
@@ -379,6 +385,7 @@ describe('CodexAgentRunner complete', () => {
       cwd: '/repo',
       env: { CODEX_HOME: '/auth/codex', AB_PHASE: 'slug' },
       model: 'gpt-5.4-mini',
+      args: ['--profile', 'naming'],
       signal: controller.signal,
     })
     expect(result).toEqual({ text: 'slug-name' })
@@ -420,6 +427,8 @@ describe('CodexAgentRunner complete', () => {
       'browser_use_full_cdp_access',
       '--model',
       'gpt-5.4-mini',
+      '--profile',
+      'naming',
       '--',
       'name this spec',
     ])
