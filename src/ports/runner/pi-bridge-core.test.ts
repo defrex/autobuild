@@ -104,4 +104,54 @@ describe('Autobuild Pi bridge', () => {
       PATH: '/managed:/bin',
     })
   })
+
+  test('concurrent bridge sessions retain independent tools and environments', async () => {
+    const planning = harness([tools[0]!, tools[2]!])
+    const implementation = harness([tools[1]!, tools[3]!])
+    planning.sessionStart()
+    implementation.sessionStart()
+
+    await planning.commands.get('autobuild-configure')!(
+      encoded({
+        tools: ['read'],
+        environment: {
+          AB_PHASE: 'plan@1',
+          AB_SESSION: 'planning-session',
+          PATH: '/planning/bin',
+        },
+      }),
+      context,
+    )
+    await implementation.commands.get('autobuild-configure')!(
+      encoded({
+        tools: ['bash'],
+        environment: {
+          AB_PHASE: 'implement@3',
+          AB_SESSION: 'implementation-session',
+          PATH: '/implementation/bin',
+        },
+      }),
+      context,
+    )
+
+    expect(planning.active.at(-1)).toEqual(['read', 'delegate'])
+    expect(implementation.active.at(-1)).toEqual(['bash', 'web_search'])
+    expect(planning.spawnEnvironment()).toEqual({
+      HOME: '/home/operator',
+      AB_PHASE: 'plan@1',
+      AB_SESSION: 'planning-session',
+      PATH: '/planning/bin',
+    })
+    expect(implementation.spawnEnvironment()).toEqual({
+      HOME: '/home/operator',
+      AB_PHASE: 'implement@3',
+      AB_SESSION: 'implementation-session',
+      PATH: '/implementation/bin',
+    })
+
+    // Revisit the first session after configuring the second: shared mutable
+    // bridge state would make either of these observations change.
+    expect(planning.active.at(-1)).toEqual(['read', 'delegate'])
+    expect(planning.spawnEnvironment().AB_SESSION).toBe('planning-session')
+  })
 })
