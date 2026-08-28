@@ -55,12 +55,19 @@ describe('Pi init usability', () => {
     }
   }
 
-  test('requires the minimum local version and local auth for every model', async () => {
-    const cli = fakeCli((call) =>
-      call.args[0] === '--version'
-        ? { stdout: `${MINIMUM_PI_VERSION}\n` }
-        : { stdout: '{"status":"ready","provider":"test","authType":"oauth"}\n' },
-    )
+  test('requires the minimum local version, catalog membership, and auth for every model', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') {
+        return {
+          stdout:
+            'provider     model       context  max-out  thinking  images\n' +
+            'openai       gpt-test    128K     32K      yes       yes\n' +
+            'kimi-coding  k3          1.0M     131.1K   yes       yes\n',
+        }
+      }
+      return { stdout: '{"status":"ready","provider":"test","authType":"oauth"}\n' }
+    })
     expect(await isPiRuntimeUsable(input, cli.run)).toEqual({
       usable: true,
       reason: 'Local Pi CLI, model catalog, and authentication are available',
@@ -68,9 +75,49 @@ describe('Pi init usability', () => {
     expect(cli.calls.map((call) => call.args)).toEqual([
       ['--version'],
       ['auth', 'check', '--model', 'openai/gpt-test', '--json'],
+      ['--list-models'],
       ['auth', 'check', '--model', 'kimi-coding/k3', '--json'],
     ])
     expect(cli.calls[1]?.env.OPENAI_API_KEY).toBe('secret')
+  })
+
+  test('rejects ready authentication when the exact model is absent from the local catalog', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') {
+        return {
+          stdout:
+            'provider  model          context  max-out  thinking  images\n' +
+            'openai    gpt-test-mini  128K     32K      yes       yes\n',
+        }
+      }
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason: 'Pi model "openai/gpt-test" is unavailable from the local Pi model catalog',
+    })
+  })
+
+  test('accepts an exact catalog model whose id contains additional slashes', async () => {
+    const model = 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') {
+        return {
+          stdout:
+            'provider               model                         context  max-out  thinking  images\n' +
+            'cloudflare-workers-ai  @cf/moonshotai/kimi-k2.6     128K     32K      yes       no\n',
+        }
+      }
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: [model] }, cli.run)).toEqual({
+      usable: true,
+      reason: 'Local Pi CLI, model catalog, and authentication are available',
+    })
   })
 
   test('reports old, missing, and unready local Pi installations actionably', async () => {
@@ -98,6 +145,32 @@ describe('Pi init usability', () => {
     expect(await isPiRuntimeUsable(input, unready.run)).toEqual({
       usable: false,
       reason: expect.stringContaining('is not ready in the local Pi login'),
+    })
+    expect(unready.calls.map((call) => call.args)).not.toContainEqual(['--list-models'])
+  })
+
+  test('keeps malformed authentication distinct and does not probe the catalog', async () => {
+    const cli = fakeCli((call) =>
+      call.args[0] === '--version' ? { stdout: `${MINIMUM_PI_VERSION}\n` } : { stdout: 'not json' },
+    )
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason: 'Pi authentication check for model "openai/gpt-test" returned malformed JSON',
+    })
+    expect(cli.calls.map((call) => call.args)).not.toContainEqual(['--list-models'])
+  })
+
+  test('fails closed with a catalog-specific reason for a malformed model table', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') return { stdout: 'openai/gpt-test\n' }
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason: expect.stringContaining('local model catalog probe returned a malformed table'),
     })
   })
 })
