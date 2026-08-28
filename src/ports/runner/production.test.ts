@@ -3,28 +3,106 @@ import { createProductionRuntimes } from './production'
 import { createRuntimeResolver } from './routing'
 
 describe('production runtime registry', () => {
-  test('registers Codex with resumable and one-shot capabilities and no forced model', () => {
+  test('registers exact model and parsed-protocol ownership metadata', () => {
     const production = createProductionRuntimes()
-    const codex = production.runtimes.codex
-    expect(codex).toBeDefined()
+    const { claude, codex, pi } = production.runtimes
+
+    expect(claude?.ownedArgs).toEqual(['-p', '--print', '--output-format', '--model'])
+    expect(codex?.ownedArgs).toEqual(['--json', '--model', '-m'])
+    expect(pi?.ownedArgs).toEqual(['--mode', '--model'])
+
     expect(codex?.runner.name).toBe('codex')
     expect(codex?.oneShot).toBeDefined()
     expect(typeof codex?.oneShot?.complete).toBe('function')
     expect(typeof codex?.initUsable).toBe('function')
     expect(codex?.servesModels).toEqual(['gpt-'])
     expect(codex?.defaultModel).toBeUndefined()
-  })
-
-  test('registers Pi against the local provider-qualified catalog wildcard', () => {
-    const pi = createProductionRuntimes().runtimes.pi
     expect(pi?.runner.name).toBe('pi')
     expect(pi?.servesModels).toEqual(['*/*'])
     expect(pi?.defaultModel).toBe('kimi-coding/k3')
+  })
 
+  test('rejects only model and parsed-protocol spellings, including real aliases', () => {
+    const runtimes = createProductionRuntimes().runtimes
+    for (const [runtime, arg] of [
+      ['claude', '-p'],
+      ['claude', '--print'],
+      ['claude', '--output-format'],
+      ['claude', '--model'],
+      ['codex', '--json'],
+      ['codex', '--model'],
+      ['codex', '-m'],
+      ['codex', '-mgpt-5.4'],
+      ['pi', '--mode'],
+      ['pi', '--model'],
+    ] as const) {
+      expect(() =>
+        createRuntimeResolver(runtimes, {
+          default: { runtime },
+          plan: { args: [arg, 'conflicting-value'] },
+        }),
+      ).toThrow(
+        `[roles.plan] argument ${JSON.stringify(arg)} conflicts with an option owned by runtime "${runtime}"`,
+      )
+    }
+  })
+
+  test('passes every other option category through freeform', () => {
+    const runtimes = createProductionRuntimes().runtimes
+    const cases = [
+      ['claude', ['-m', '--permission-mode', 'plan', '--resume', '--tools', '--effort', 'high']],
+      [
+        'codex',
+        [
+          '--sandbox',
+          'workspace-write',
+          '--ask-for-approval',
+          'never',
+          '--enable',
+          'web_search',
+          '--help',
+          '--future-option',
+        ],
+      ],
+      [
+        'pi',
+        [
+          '-m',
+          '--session',
+          'operator-session',
+          '--tools',
+          'read',
+          '--skill',
+          'custom',
+          '--thinking',
+          'high',
+          '--extension',
+          './explicit.js',
+          '--no-extensions',
+          '--help',
+        ],
+      ],
+    ] as const
+
+    for (const [runtime, args] of cases) {
+      const resolved = createRuntimeResolver(runtimes, {
+        default: { runtime },
+        plan: { args: [...args] },
+      }).resolve('plan')
+      expect(resolved.args).toEqual(args)
+    }
+  })
+
+  test('registers Pi against the local provider-qualified catalog wildcard', () => {
     const future = createRuntimeResolver(createProductionRuntimes().runtimes, {
-      default: { runtime: 'pi', model: 'future-provider/new-model' },
+      default: {
+        runtime: 'pi',
+        model: 'future-provider/new-model',
+        args: ['--extension', './explicit.js'],
+      },
     })
     expect(future.resolve('plan').model).toBe('future-provider/new-model')
+    expect(future.resolve('plan').args).toEqual(['--extension', './explicit.js'])
   })
 
   test('validates Codex model families eagerly and delegates an omitted model', () => {

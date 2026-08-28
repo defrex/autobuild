@@ -1125,6 +1125,7 @@ export class BuildRunner {
           role: step,
           runner: target.runtime,
           ...(target.model !== undefined ? { model: target.model } : {}),
+          args: [...target.args],
           phase: 'finalize',
           round: 1,
           ...(substitution !== undefined
@@ -1145,7 +1146,7 @@ export class BuildRunner {
             buildSlug: slug,
             workspacePath,
             ...(target.model !== undefined ? { model: target.model } : {}),
-            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            ...(target.args !== undefined ? { args: target.args } : {}),
             env: this.sessionEnvFor('finalize@1', session),
             signal,
           }),
@@ -1237,7 +1238,7 @@ export class BuildRunner {
       runner,
       runtime: runnerName,
       model,
-      extensions,
+      args,
       sessionBudgetSeconds,
     } = this.boundaryResolver.resolve(step)
 
@@ -1249,6 +1250,7 @@ export class BuildRunner {
         role: step,
         runner: runnerName,
         ...(model !== undefined ? { model } : {}),
+        args: [...args],
         phase: 'finalize',
         round: 1,
       },
@@ -1263,7 +1265,7 @@ export class BuildRunner {
         buildSlug: slug,
         workspacePath,
         ...(model !== undefined ? { model } : {}),
-        ...(extensions !== undefined ? { extensions } : {}),
+        ...(args !== undefined ? { args } : {}),
         env: this.sessionEnvFor('finalize@1', session),
         signal,
       }),
@@ -1535,7 +1537,7 @@ export class BuildRunner {
     const primaryRoute = JSON.stringify({
       runtime: primary.runtime,
       model: primary.model,
-      extensions: primary.extensions,
+      args: primary.args,
     })
     let primaryLive =
       spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
@@ -1563,6 +1565,7 @@ export class BuildRunner {
           role: spec.role,
           runner: target.runtime,
           ...(target.model !== undefined ? { model: target.model } : {}),
+          args: [...target.args],
           phase: spec.phase,
           round: spec.round,
           ...(substitution !== undefined
@@ -1590,7 +1593,7 @@ export class BuildRunner {
               buildSlug: slug,
               workspacePath,
               ...(target.model !== undefined ? { model: target.model } : {}),
-              ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+              ...(target.args !== undefined ? { args: target.args } : {}),
               env: this.sessionEnvFor(spec.abPhase, session),
               signal,
             }),
@@ -1788,10 +1791,10 @@ export class BuildRunner {
       runner,
       runtime: runnerName,
       model,
-      extensions,
+      args,
       sessionBudgetSeconds,
     } = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
-    const route = JSON.stringify({ runtime: runnerName, model, extensions })
+    const route = JSON.stringify({ runtime: runnerName, model, args })
     let live =
       spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
     if (live !== undefined && (live.runner !== runner || live.route !== route)) {
@@ -1815,6 +1818,7 @@ export class BuildRunner {
         role: spec.role,
         runner: runnerName,
         ...(model !== undefined ? { model } : {}),
+        args: [...args],
         phase: spec.phase,
         round: spec.round,
       },
@@ -1845,7 +1849,7 @@ export class BuildRunner {
         buildSlug: slug,
         workspacePath,
         ...(model !== undefined ? { model } : {}),
-        ...(extensions !== undefined ? { extensions } : {}),
+        ...(args !== undefined ? { args } : {}),
         env: this.sessionEnvFor(spec.abPhase, session),
         signal,
       })

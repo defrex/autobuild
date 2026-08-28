@@ -71,27 +71,32 @@ const tools: BridgeTool[] = [
 
 describe('Autobuild Pi bridge', () => {
   test('a hermetic role activates only its requested builtins', async () => {
-    const bridge = harness(tools)
+    const bridge = harness(tools.slice(0, 2))
     bridge.sessionStart()
     await bridge.commands.get('autobuild-configure')!(
-      encoded({ tools: ['read', 'bash'], extensions: [], environment: {} }),
+      encoded({ tools: ['read', 'bash'], environment: {} }),
       context,
     )
     expect(bridge.active.at(-1)).toEqual(['read', 'bash'])
   })
 
-  test('a package allowlist is case-insensitive and activates no unrelated tools', async () => {
+  test('all tools from explicitly loaded extensions are activated without source matching', async () => {
     const bridge = harness(tools)
     bridge.sessionStart()
     await bridge.commands.get('autobuild-configure')!(
       encoded({
         tools: ['read', 'bash'],
-        extensions: ['subAGENTS'],
         environment: { AB_PHASE: 'implement@2', AB_SESSION: 's_2', PATH: '/managed:/bin' },
       }),
       context,
     )
-    expect(bridge.active.at(-1)).toEqual(['read', 'bash', 'delegate'])
+    expect(bridge.active.at(-1)).toEqual([
+      'read',
+      'bash',
+      'delegate',
+      'web_search',
+      'untrusted_top_level',
+    ])
     expect(bridge.spawnEnvironment()).toEqual({
       HOME: '/home/operator',
       AB_PHASE: 'implement@2',
@@ -100,16 +105,15 @@ describe('Autobuild Pi bridge', () => {
     })
   })
 
-  test('concurrent bridge sessions retain independent tools, extensions, and environments', async () => {
-    const planning = harness(tools)
-    const implementation = harness(tools)
+  test('concurrent bridge sessions retain independent tools and environments', async () => {
+    const planning = harness([tools[0]!, tools[2]!])
+    const implementation = harness([tools[1]!, tools[3]!])
     planning.sessionStart()
     implementation.sessionStart()
 
     await planning.commands.get('autobuild-configure')!(
       encoded({
         tools: ['read'],
-        extensions: ['subagents'],
         environment: {
           AB_PHASE: 'plan@1',
           AB_SESSION: 'planning-session',
@@ -121,7 +125,6 @@ describe('Autobuild Pi bridge', () => {
     await implementation.commands.get('autobuild-configure')!(
       encoded({
         tools: ['bash'],
-        extensions: ['web-access'],
         environment: {
           AB_PHASE: 'implement@3',
           AB_SESSION: 'implementation-session',

@@ -62,7 +62,8 @@ describe('createUpgradeAgentResolver', () => {
       return config(
         '[roles.default]\n' +
           'runtime = "alpha"\n' +
-          'model = "alpha-default"\n\n' +
+          'model = "alpha-default"\n' +
+          'args = ["--effort", "high"]\n\n' +
           '[roles.upgrade]\n' +
           'model = "alpha-upgrade"\n',
       )
@@ -93,6 +94,7 @@ describe('createUpgradeAgentResolver', () => {
     expect(call.cwd).toBe('/target/repo')
     expect(call.env).toEqual({ API_TOKEN: 'secret' })
     expect(call.model).toBe('alpha-upgrade')
+    expect(call.args).toEqual(['--effort', 'high'])
     expect(call.signal).toBeInstanceOf(AbortSignal)
     expect(call.signal?.aborted).toBe(false)
     expect(call.prompt).toContain('The file path inside that skill is SKILL.md')

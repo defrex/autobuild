@@ -4,6 +4,8 @@ import { classifyProviderError } from './provider-error'
 import type { PiModelRef, PiSession, PiTurn } from './pi'
 
 export const PI_BRIDGE_PATH = fileURLToPath(new URL('./pi-bridge.js', import.meta.url))
+export const PI_RPC_MODE_ARG = '--mode'
+export const PI_MODEL_ARG = '--model'
 const CATALOG_PREFIX = 'autobuild-pi-catalog:'
 
 export interface PiRpcInvocation {
@@ -108,7 +110,6 @@ export class PiRpcClient implements PiSession {
   private constructor(
     private readonly process: PiRpcProcess,
     sessionId: string,
-    private readonly configuredExtensions: readonly string[],
     private readonly configuredTools: readonly string[],
   ) {
     this.sessionId = sessionId
@@ -122,16 +123,10 @@ export class PiRpcClient implements PiSession {
   static async launch(
     invocation: PiRpcInvocation,
     spawn: PiRpcSpawnFn = spawnPiRpc,
-    configuredExtensions: readonly string[] = [],
     configuredTools: readonly string[] = [],
   ): Promise<PiRpcClient> {
     const process = spawn(invocation)
-    const client = new PiRpcClient(
-      process,
-      crypto.randomUUID(),
-      configuredExtensions,
-      configuredTools,
-    )
+    const client = new PiRpcClient(process, crypto.randomUUID(), configuredTools)
     try {
       const state = await client.command('get_state')
       const data = record(state.data)
@@ -227,7 +222,6 @@ export class PiRpcClient implements PiSession {
     await this.command('prompt', {
       message: `/autobuild-configure ${encode({
         environment,
-        extensions: this.configuredExtensions,
         tools: this.configuredTools,
       })}`,
     })
@@ -336,7 +330,7 @@ export interface PiRpcSessionOptions {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
-  extensions: readonly string[]
+  args: readonly string[]
   skill?: string
   env: Record<string, string>
   spawn?: PiRpcSpawnFn
@@ -344,7 +338,7 @@ export interface PiRpcSessionOptions {
 
 export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiSession> {
   const args = [
-    '--mode',
+    PI_RPC_MODE_ARG,
     'rpc',
     '--no-session',
     '--no-approve',
@@ -352,21 +346,18 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
     '--no-prompt-templates',
     '--no-themes',
   ]
-  if (opts.model !== undefined) args.push('--model', `${opts.model.provider}/${opts.model.id}`)
+  if (opts.model !== undefined) args.push(PI_MODEL_ARG, `${opts.model.provider}/${opts.model.id}`)
   // `--tools` filters both builtin and package tools out of Pi's registry.
   // Keep the complete registry for build sessions and let the bridge activate
   // exactly the configured builtin/package subset before every agent prompt.
   if (opts.tools.length === 0) args.push('--no-tools')
   args.push('--no-skills')
   if (opts.skill !== undefined) args.push('--skill', `${opts.cwd}/.agents/skills/${opts.skill}`)
-  if (opts.extensions.length === 0) args.push('--no-extensions')
-  args.push('--extension', PI_BRIDGE_PATH)
-  return PiRpcClient.launch(
-    { args, cwd: opts.cwd, env: opts.env },
-    opts.spawn,
-    opts.extensions,
-    opts.tools,
-  )
+  // Disable ambient discovery unconditionally. Explicit repeatable
+  // --extension paths in configured args still load alongside the bridge.
+  args.push('--no-extensions', '--extension', PI_BRIDGE_PATH)
+  args.push(...opts.args)
+  return PiRpcClient.launch({ args, cwd: opts.cwd, env: opts.env }, opts.spawn, opts.tools)
 }
 
 export async function readLocalPiCatalog(opts: {
@@ -378,7 +369,7 @@ export async function readLocalPiCatalog(opts: {
   const client = await PiRpcClient.launch(
     {
       args: [
-        '--mode',
+        PI_RPC_MODE_ARG,
         'rpc',
         '--no-session',
         '--no-approve',

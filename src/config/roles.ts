@@ -5,7 +5,7 @@
  * consumes is accepted, eagerly resolved, validated — and then never looked up.
  * The session that was meant to run on it runs on `[roles.default]` instead.
  * This module is the pure derivation that lets `ab dispatch` say so at startup.
- * It never throws and never changes which runtime or model runs.
+ * It never throws and never changes which runtime, model, or args run.
  *
  * TWO MECHANISMS, DELIBERATELY KEPT APART. No notice, comment, or document may
  * say a declared key "inherits default":
@@ -335,13 +335,21 @@ export function roleKeyWarnings(config: Config): string[] {
     const keys = unconsumed.map(roleTable).join(', ')
     lines.push(
       unconsumed.length === 1
-        ? `autobuild.toml: ${keys} is declared but nothing requests it — its runtime and model never reach a session.`
-        : `autobuild.toml: ${keys} are declared but nothing requests them — their runtime and model never reach a session.`,
+        ? `autobuild.toml: ${keys} is declared but nothing requests it — its runtime, model, and args never reach a session.`
+        : `autobuild.toml: ${keys} are declared but nothing requests them — their runtime, model, and args never reach a session.`,
     )
     // Rendered as keys, not as prose names: this list is what the operator
     // types next, so a name needing quotes must show them here too.
     lines.push(`Valid role keys: ${valid.map(tomlKey).join(', ')}`)
   }
   for (const entry of deprecated) lines.push(deprecationNotice(entry))
+  for (const [role, spec] of Object.entries(config.roles)) {
+    const declared =
+      spec.extensions !== undefined || spec.alternates?.some((alt) => alt.extensions !== undefined)
+    if (!declared) continue
+    lines.push(
+      `autobuild.toml: ${roleTable(role)} declares deprecated extensions — it has no effect; use args for explicit runtime CLI arguments.`,
+    )
+  }
   return lines
 }

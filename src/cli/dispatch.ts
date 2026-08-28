@@ -485,6 +485,7 @@ class DispatchLoop {
         env: definedEnv(opts.env),
         signal,
         ...(resolvedSlug.model !== undefined ? { model: resolvedSlug.model } : {}),
+        args: resolvedSlug.args,
       })
       return result.text
     }

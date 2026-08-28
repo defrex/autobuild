@@ -500,7 +500,7 @@ step as failed and file an observation while the green build continues.
 
 ### `[roles]`
 
-An **open map** of role name → `{ runtime?, model?, extensions?, sessionBudgetSeconds?, alternates? }`.
+An **open map** of role name → `{ runtime?, model?, args?, extensions?, sessionBudgetSeconds?, alternates? }`.
 The three primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
@@ -521,10 +521,10 @@ The pipeline resolves `plan`, `plan-review`, `implement`, `code-review`,
 its logical step name. A verify step's configured skill name remains a
 deprecated alias for existing configurations and will be removed in a future
 release. The repository workflow resolves `harvest` and `harvest-review`. Two
-non-phase judgments use the same runtime/model resolver: `slug` optionally
+non-phase judgments use the same runtime/model/args resolver: `slug` optionally
 proposes pre-build naming, and `upgrade` proposes a resolution only when a
-vendored skill merge conflicts. Both are tool-free one-shots with extensions
-disabled. Missing slug capability uses the deterministic title fallback;
+vendored skill merge conflicts. Both are tool-free one-shots and receive the
+role's effective `args`. Missing slug capability uses the deterministic title fallback;
 unavailable upgrade judgment retains the conflict for manual resolution.
 
 A declared key that none of those routes requests is resolved and validated
@@ -541,9 +541,10 @@ consumed by the core `plan` phase, and nothing is reported.
 |---|---|---|---|
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
-| `extensions` | — | optional, array of nonempty strings | Pi extension allowlist. Omitted ⇒ inherit `[roles.default].extensions`; absent there too ⇒ **hermetic**. A set list, including `[]`, replaces the default wholesale rather than unioning. Entries match installed package sources case-insensitively; runtimes without extensions ignore this axis. |
+| `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Only model and parsed protocol/output-mode spellings are rejected eagerly. |
+| `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |
 | `sessionBudgetSeconds` | policy fallback | optional positive integer | Wall-clock budget for each build phase session on this logical role. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
-| `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. |
+| `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. `extensions` remains only the deprecated no-op. |
 
 Inheritance is mechanical and **independent per field**: merge each configured
 role over the raw `default` entry, then validate the exact runtime/model pair.
@@ -553,7 +554,20 @@ the selected runtime's default. The one implicit fill-in is benign: if neither
 the phase role nor `default` names a model, the merged runtime uses its own
 default model. Compatibility failures name the role, runtime, model, and served
 model families; all problems in `default` and every declared role are
-aggregated by one eager resolver construction before judgment runs. Dispatch
+aggregated by one eager resolver construction before judgment runs. Runtime
+adapters reject only the model and parsed protocol/output-mode options they
+emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
+rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Exact
+spellings, `--option=value` forms, and documented compact short aliases join
+that same role-naming aggregate. Every other option passes through without
+Autobuild validation, including sandbox, approval, session, tool, skill,
+thinking, extension, lifecycle, and unknown options, even when it supplements
+another adapter-emitted occurrence. Pi always
+disables ambient extension discovery and explicitly loads the Autobuild bridge;
+`--extension <path>` in `args` loads an explicit extension alongside it and
+activates all tools that extension registers. With no such args, Pi loads no
+operator-installed extensions. Effective args are recorded on session-start
+facts. Dispatch
 constructs it before any build launches; upgrade constructs it lazily on the
 first conflict and converts a construction failure to the safe `conflicted`
 outcome.

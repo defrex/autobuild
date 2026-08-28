@@ -125,6 +125,13 @@ interface SessionState {
   turns: TurnRecord[]
 }
 
+const CODEX_JSON_ARG = '--json'
+const CODEX_MODEL_ARG = '--model'
+const CODEX_MODEL_ALIAS = '-m'
+
+/** Options that select the model or the JSONL protocol parsed below. */
+export const CODEX_OWNED_ARGS = [CODEX_JSON_ARG, CODEX_MODEL_ARG, CODEX_MODEL_ALIAS] as const
+
 const MISSING_CLI_MESSAGE =
   'codex runtime: Codex CLI executable "codex" was not found. ' +
   'Install the Codex CLI (https://developers.openai.com/codex/cli), run `codex login`, ' +
@@ -170,7 +177,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const args = [
       'exec',
-      '--json',
+      CODEX_JSON_ARG,
       '--ephemeral',
       '--ignore-user-config',
       '--ignore-rules',
@@ -183,8 +190,8 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       'web_search="disabled"',
     ]
     for (const feature of ONE_SHOT_DISABLED_FEATURES) args.push('--disable', feature)
-    if (input.model !== undefined) args.push('--model', input.model)
-    args.push('--', input.prompt)
+    if (input.model !== undefined) args.push(CODEX_MODEL_ARG, input.model)
+    args.push(...(input.args ?? []), '--', input.prompt)
 
     const turn = await this.runPrompt({
       args,
@@ -299,8 +306,14 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
   ): Promise<CodexTurn> {
     const args = ['exec']
     if (resume !== undefined) args.push('resume')
-    args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--config', SHELL_ENV_INHERIT)
-    if (opts.model !== undefined) args.push('--model', opts.model)
+    args.push(
+      CODEX_JSON_ARG,
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--config',
+      SHELL_ENV_INHERIT,
+    )
+    if (opts.model !== undefined) args.push(CODEX_MODEL_ARG, opts.model)
+    args.push(...(opts.args ?? []))
     if (resume !== undefined) args.push(resume)
     args.push('--', prompt)
     return this.runPrompt({

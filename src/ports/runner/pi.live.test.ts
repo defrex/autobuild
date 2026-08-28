@@ -67,26 +67,7 @@ function parseProbe(value: unknown): ToolProbe {
   return { all, active: value.active }
 }
 
-function requirePackageTool(
-  tools: readonly ProbeTool[],
-  packageName: string,
-  toolName: string,
-): void {
-  const found = tools.some(
-    (tool) =>
-      tool.name === toolName &&
-      tool.sourceInfo?.origin === 'package' &&
-      (tool.sourceInfo.source ?? '').toLowerCase().includes(packageName.toLowerCase()),
-  )
-  if (!found) {
-    throw new Error(
-      `Pi live installed-package gating prerequisite missing: expected package tool "${toolName}" ` +
-        `from npm:${packageName}. Install it with \`pi install npm:${packageName}\` and ensure it is enabled in Pi settings.`,
-    )
-  }
-}
-
-async function probeInstalledPackageGating(): Promise<ToolProbe> {
+async function probeExplicitExtensionActivation(): Promise<ToolProbe> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] => entry[1] !== undefined,
@@ -104,7 +85,7 @@ export default function toolProbe(pi) {
   pi.registerTool({
     name: ${JSON.stringify(PROBE_TOOL)},
     label: 'Autobuild contract probe',
-    description: 'Test-only tool that must remain inactive',
+    description: 'Test-only explicitly loaded tool',
     parameters: Type.Object({}),
     async execute() {
       return { content: [{ type: 'text', text: 'unexpected activation' }], details: {} }
@@ -146,6 +127,7 @@ export default function toolProbe(pi) {
       '--no-skills',
       '--no-prompt-templates',
       '--no-themes',
+      '--no-extensions',
       '--extension',
       PI_BRIDGE_PATH,
       '--extension',
@@ -262,8 +244,7 @@ export default function toolProbe(pi) {
     await command('prompt', {
       message: `/autobuild-configure ${encoded({
         tools: ['read'],
-        extensions: ['pi-subagents'],
-        environment: { AB_PHASE: 'live-package-contract', AB_SESSION: nonce },
+        environment: { AB_PHASE: 'live-extension-contract', AB_SESSION: nonce },
       })}`,
     })
     await command('prompt', { message: `/autobuild-contract-probe ${nonce}` })
@@ -287,23 +268,12 @@ export default function toolProbe(pi) {
 }
 
 describe.skipIf(!enabled)('Pi live AgentRunner contract (opt-in)', () => {
-  test('gates tools discovered from installed Pi packages through the production bridge', async () => {
-    const probe = await probeInstalledPackageGating()
-    requirePackageTool(probe.all, 'pi-subagents', 'subagent')
-    requirePackageTool(probe.all, 'pi-web-access', 'web_search')
+  test('activates explicitly loaded extension tools through the production bridge', async () => {
+    const probe = await probeExplicitExtensionActivation()
 
+    expect(probe.all.map((tool) => tool.name)).toContain(PROBE_TOOL)
     expect(probe.active).toContain('read')
-    expect(probe.active).toContain('subagent')
-    expect(probe.active).not.toContain('web_search')
-    expect(probe.active).not.toContain(PROBE_TOOL)
-
-    const webAccessTools = probe.all.filter(
-      (tool) =>
-        tool.sourceInfo?.origin === 'package' &&
-        (tool.sourceInfo.source ?? '').toLowerCase().includes('pi-web-access'),
-    )
-    expect(webAccessTools.length).toBeGreaterThan(0)
-    for (const tool of webAccessTools) expect(probe.active).not.toContain(tool.name)
+    expect(probe.active).toContain(PROBE_TOOL)
   }, 60_000)
 
   test('runs start, continue, end, ambient/PATH probe, and one-shot against the local Pi CLI', async () => {

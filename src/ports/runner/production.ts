@@ -3,9 +3,9 @@
  * needs agent judgment. Keeping the shipped adapters and their model families
  * here prevents dispatch and other non-phase one-shots from drifting apart.
  */
-import { ClaudeAgentRunner, isClaudeRuntimeUsable } from './claude'
-import { CodexAgentRunner, isCodexRuntimeUsable } from './codex'
-import { isPiRuntimeUsable, PiAgentRunner } from './pi'
+import { CLAUDE_OWNED_ARGS, ClaudeAgentRunner, isClaudeRuntimeUsable } from './claude'
+import { CODEX_OWNED_ARGS, CodexAgentRunner, isCodexRuntimeUsable } from './codex'
+import { isPiRuntimeUsable, PI_OWNED_ARGS, PiAgentRunner } from './pi'
 import type { RuntimeRegistry } from './runtime'
 
 export interface ProductionRuntimes {
@@ -26,6 +26,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         oneShot: claude,
         initUsable: isClaudeRuntimeUsable,
         servesModels: ['claude-'],
+        ownedArgs: CLAUDE_OWNED_ARGS,
       },
       codex: {
         runner: codex,
@@ -34,6 +35,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         // Codex CLI model ids are unqualified; an omitted model delegates to
         // the operator's configured Codex default.
         servesModels: ['gpt-'],
+        ownedArgs: CODEX_OWNED_ARGS,
       },
       pi: {
         runner: pi,
@@ -43,6 +45,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         // provider-qualified model it resolves is valid here.
         servesModels: ['*/*'],
         defaultModel: 'kimi-coding/k3',
+        ownedArgs: PI_OWNED_ARGS,
       },
     },
   }

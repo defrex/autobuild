@@ -246,16 +246,20 @@ export const finalizeSectionSchema = stepSection(
 
 // ── [roles] ──────────────────────────────────────────────────────────────────
 //
-// Open map: role → fields on the runtime, model, and extensions axes (SPEC §9,
+// Open map: role → fields on the runtime, model, and args axes (SPEC §9,
 // §16.1). The reserved `default` entry is the raw inheritance base and must
 // name a runtime; registry-aware enforcement lives in the eager resolver;
 // every other role overrides it independently per field. Registry-dependent
 // compatibility validation happens in the eager runtime resolver, because the
 // config loader does not know the injected runtime registry.
 
+const roleArgsSchema = z.array(z.string().min(1))
+
 const runtimeAxesSchema = z.strictObject({
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  args: roleArgsSchema.optional(),
+  // Deprecated compatibility field. It remains schema-valid but is a warning-only no-op.
   extensions: z.array(z.string().min(1)).optional(),
 })
 
@@ -265,9 +269,11 @@ export const roleSchema = runtimeAxesSchema.extend({
   // Alternates deliberately use runtimeAxesSchema: one logical role owns one
   // budget regardless of which provider target executes the attempt.
   sessionBudgetSeconds: z.number().int().positive().optional(),
-  // Per-role extension allowlist (SPEC §9). Absent ⇒ inherit
-  // [roles.default].extensions; absent there too ⇒ hermetic. A set list,
-  // including [], replaces the default wholesale rather than unioning with it.
+  // Extra CLI arguments. Absent ⇒ inherit [roles.default].args; a declared
+  // list, including [], replaces the default wholesale rather than unioning.
+  args: roleArgsSchema.optional(),
+  // Deprecated compatibility field. It is accepted only so dispatch can emit
+  // a migration diagnostic; it has no effect on runtime resolution.
   extensions: z.array(z.string().min(1)).optional(),
   // Ordered failure-triggered execution targets. Absent ⇒ inherit the base
   // list; a declared list (including []) replaces it wholesale. Each strict

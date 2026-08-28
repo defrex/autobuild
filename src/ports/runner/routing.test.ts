@@ -11,7 +11,7 @@ const claude = runner()
 const pi = runner()
 const gemini = runner()
 const registry: RuntimeRegistry = {
-  claude: { runner: claude, servesModels: ['claude-'] },
+  claude: { runner: claude, servesModels: ['claude-'], ownedArgs: ['--model', '-m'] },
   pi: { runner: pi, servesModels: ['kimi-', 'gpt-'], defaultModel: 'kimi-k3' },
   gemini: { runner: gemini, servesModels: ['gpt-'] },
 }
@@ -42,7 +42,7 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
 
   test('an absent phase role inherits the explicit default pair', () => {
     const r = resolver({
-      default: { runtime: 'pi', model: 'gpt-5.6-sol', extensions: ['web-access'] },
+      default: { runtime: 'pi', model: 'gpt-5.6-sol', args: ['web-access'] },
       plan: { model: 'kimi-k3' },
     })
 
@@ -50,7 +50,7 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
       runner: pi,
       runtime: 'pi',
       model: 'gpt-5.6-sol',
-      extensions: ['web-access'],
+      args: ['web-access'],
     })
     expect(r.resolve('plan').model).toBe('kimi-k3')
   })
@@ -60,27 +60,27 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
       default: {
         runtime: 'pi',
         model: 'gpt-5.6-sol',
-        extensions: ['web-access'],
+        args: ['web-access'],
       },
       plan: { model: 'kimi-k3' },
       'code-review': { runtime: 'gemini' },
-      implement: { extensions: ['subagents'] },
+      implement: { args: ['subagents'] },
     })
 
     expect(r.resolve('plan')).toMatchObject({
       runtime: 'pi',
       model: 'kimi-k3',
-      extensions: ['web-access'],
+      args: ['web-access'],
     })
     expect(r.resolve('code-review')).toMatchObject({
       runtime: 'gemini',
       model: 'gpt-5.6-sol',
-      extensions: ['web-access'],
+      args: ['web-access'],
     })
     expect(r.resolve('implement')).toMatchObject({
       runtime: 'pi',
       model: 'gpt-5.6-sol',
-      extensions: ['subagents'],
+      args: ['subagents'],
     })
   })
 
@@ -117,17 +117,17 @@ describe('createRuntimeResolver — raw per-field inheritance', () => {
     expect(r.resolve('implement').model).toBe('kimi-k3')
   })
 
-  test('extensions replace wholesale, including an explicit empty list', () => {
+  test('args replace wholesale, including an explicit empty list', () => {
     const r = resolver({
-      default: { runtime: 'pi', extensions: ['subagents', 'web-access'] },
-      plan: { extensions: ['web-access'] },
-      implement: { extensions: [] },
+      default: { runtime: 'pi', args: ['subagents', 'web-access'] },
+      plan: { args: ['web-access'] },
+      implement: { args: [] },
       'code-review': {},
     })
 
-    expect(r.resolve('plan').extensions).toEqual(['web-access'])
-    expect(r.resolve('implement').extensions).toEqual([])
-    expect(r.resolve('code-review').extensions).toEqual(['subagents', 'web-access'])
+    expect(r.resolve('plan').args).toEqual(['web-access'])
+    expect(r.resolve('implement').args).toEqual([])
+    expect(r.resolve('code-review').args).toEqual(['subagents', 'web-access'])
   })
 })
 
@@ -137,10 +137,10 @@ describe('createRuntimeResolver — ordered alternates', () => {
       default: {
         runtime: 'pi',
         model: 'gpt-5.6-sol',
-        extensions: ['web-access'],
-        alternates: [{ runtime: 'gemini', extensions: [] }],
+        args: ['web-access'],
+        alternates: [{ runtime: 'gemini', args: [] }],
       },
-      plan: { model: 'gpt-plan', extensions: ['subagents'] },
+      plan: { model: 'gpt-plan', args: ['subagents'] },
     })
 
     expect(r.resolve('plan').alternates).toEqual([
@@ -148,7 +148,7 @@ describe('createRuntimeResolver — ordered alternates', () => {
         runner: gemini,
         runtime: 'gemini',
         model: 'gpt-plan',
-        extensions: [],
+        args: [],
       }),
     ])
   })
@@ -188,6 +188,33 @@ describe('createRuntimeResolver — ordered alternates', () => {
       expect(String(error)).toContain('[roles.plan].alternates[0]')
       expect(String(error)).toContain('[roles.plan].alternates[1]')
     }
+  })
+})
+
+describe('createRuntimeResolver — owned argv validation', () => {
+  test('rejects exact aliases and --option=value forms while preserving supplemental args', () => {
+    const error = runtimeConfigError(() =>
+      resolver({
+        plan: { args: ['--model=claude-opus', '--permission-mode', 'plan'] },
+        implement: { args: ['-mclaude-opus'] },
+      }),
+    )
+    expect(error.problems).toEqual([
+      '[roles.plan] argument "--model=claude-opus" conflicts with an option owned by runtime "claude"',
+      '[roles.implement] argument "-mclaude-opus" conflicts with an option owned by runtime "claude"',
+    ])
+
+    expect(
+      resolver({ plan: { args: ['--permission-mode', 'plan'] } }).resolve('plan').args,
+    ).toEqual(['--permission-mode', 'plan'])
+  })
+
+  test('validates alternate args against the alternate runtime and labels the indexed entry', () => {
+    const error = runtimeConfigError(() =>
+      resolver({ plan: { alternates: [{ runtime: 'claude', args: ['--model=x'] }] } }),
+    )
+    expect(error.problems[0]).toContain('[roles.plan].alternates[0]')
+    expect(error.problems[0]).toContain('runtime "claude"')
   })
 })
 

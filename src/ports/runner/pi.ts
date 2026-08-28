@@ -12,7 +12,7 @@ import {
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
-import { createPiRpcSession } from './pi-rpc'
+import { createPiRpcSession, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
@@ -206,6 +206,9 @@ export async function isPiRuntimeUsable(
   }
 }
 
+/** Options that select the model or the RPC protocol parsed by the adapter. */
+export const PI_OWNED_ARGS = [PI_RPC_MODE_ARG, PI_MODEL_ARG] as const
+
 export interface PiTurn {
   text: string
   usage: { inputTokens: number; outputTokens: number }
@@ -222,7 +225,7 @@ export type PiCreateSessionFn = (opts: {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
-  extensions: readonly string[]
+  args: readonly string[]
   skill?: string
   env: Record<string, string>
 }) => Promise<PiSession>
@@ -264,7 +267,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       cwd: input.cwd,
       ...(model !== undefined ? { model } : {}),
       tools: [],
-      extensions: [],
+      args: input.args ?? [],
       env: sessionEnv(input.env),
     })
     try {
@@ -288,7 +291,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         cwd: opts.workspacePath,
         ...(model !== undefined ? { model } : {}),
         tools: PI_TOOLS,
-        extensions: opts.extensions ?? [],
+        args: opts.args ?? [],
         skill: opts.skill,
         env: sessionEnv(opts.env),
       })

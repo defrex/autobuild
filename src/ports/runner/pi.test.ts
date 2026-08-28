@@ -185,7 +185,7 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
       cwd: opts.cwd,
       model: opts.model,
       tools: opts.tools,
-      extensions: opts.extensions,
+      args: opts.args,
     })
     nextSession += 1
     return {
@@ -281,7 +281,7 @@ interface RecordedCreate {
   cwd: string
   model?: PiModelRef
   tools: readonly string[]
-  extensions: readonly string[]
+  args: readonly string[]
 }
 
 interface RecordedPrompt {
@@ -310,7 +310,7 @@ function fakeSessions(sessions: Array<{ sessionId: string; turns: ScriptedTurn[]
       cwd: opts.cwd,
       model: opts.model,
       tools: opts.tools,
-      extensions: opts.extensions,
+      args: opts.args,
     })
     const script = sessions[creates.length - 1] ?? { sessionId: `s-${creates.length}`, turns: [] }
     let turn = 0
@@ -418,17 +418,24 @@ describe('PiAgentRunner.start', () => {
     expect(creates[0]?.tools).toContain('bash')
   })
 
-  test('forwards the per-phase extension allowlist; absent ⇒ hermetic (empty)', async () => {
+  test('forwards ordered per-phase args; absent is an empty list', async () => {
     const { creates, createSessionFn } = fakeSessions([
       { sessionId: 'pi-1', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
       { sessionId: 'pi-2', turns: [{ text: 'ok', inputTokens: 1, outputTokens: 1 }] },
     ])
     const runner = new PiAgentRunner({ createSessionFn })
-    await runner.start(startOpts({ extensions: ['subagents', 'web-access'] }))
-    expect(creates[0]?.extensions).toEqual(['subagents', 'web-access'])
-    // Absent ⇒ hermetic: the adapter passes an empty allowlist, not undefined.
+    await runner.start(
+      startOpts({ args: ['--session', 'operator-session', '--extension', './web-access.js'] }),
+    )
+    expect(creates[0]?.args).toEqual([
+      '--session',
+      'operator-session',
+      '--extension',
+      './web-access.js',
+    ])
+    // Absent passes an empty argv list, not undefined.
     await runner.start(startOpts())
-    expect(creates[1]?.extensions).toEqual([])
+    expect(creates[1]?.args).toEqual([])
   })
 
   test('captures the local RPC session id as the handle id', async () => {
@@ -536,6 +543,7 @@ describe('PiAgentRunner.complete', () => {
       cwd: '/repos/app',
       env: { NAMING_TOKEN: 'secret' },
       model: 'openai/gpt-5.6-sol',
+      args: ['--extension', './naming.js'],
       signal: controller.signal,
     })
 
@@ -544,7 +552,7 @@ describe('PiAgentRunner.complete', () => {
       cwd: '/repos/app',
       model: { provider: 'openai', id: 'gpt-5.6-sol' },
       tools: [],
-      extensions: [],
+      args: ['--extension', './naming.js'],
     })
     expect(prompts[0]?.text).toBe('name this spec verbatim')
     expect(prompts[0]?.env.NAMING_TOKEN).toBe('secret')

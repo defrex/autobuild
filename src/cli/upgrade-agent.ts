@@ -44,9 +44,10 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
 
 /**
  * Put all three exact versions in one prompt. They are explicitly data, and
- * the one-shot runtime has no tools or extensions, so skill text cannot act on
- * the repository. Deterministic validation in upgrade.ts remains the only
- * authority that can turn this proposal into filesystem writes.
+ * the one-shot adapter defaults to no tools, so skill text cannot act on the
+ * repository unless the operator deliberately supplements that default through
+ * role args. Deterministic validation in upgrade.ts remains the only authority
+ * that can turn this proposal into filesystem writes.
  */
 export function upgradeConflictPrompt(input: {
   skill: string
@@ -88,6 +89,7 @@ export function upgradeConflictPrompt(input: {
 interface ResolvedCompletion {
   oneShot: OneShotCompletion
   model?: string
+  args: readonly string[]
 }
 
 /**
@@ -119,6 +121,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
       return {
         oneShot,
         ...(selected.model !== undefined ? { model: selected.model } : {}),
+        args: selected.args,
       }
     })()
     return resolved
@@ -163,6 +166,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
           env: definedEnv(opts.env),
           signal: controller.signal,
           ...(selected.model !== undefined ? { model: selected.model } : {}),
+          args: selected.args,
         }),
         stopped,
       ])

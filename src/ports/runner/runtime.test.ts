@@ -22,6 +22,18 @@ describe('runtime registration validation', () => {
     )
   })
 
+  test('validates adapter-owned option metadata', () => {
+    expect(
+      validateRuntimeRegistration({ ...reg([]), ownedArgs: ['--model', '-m'] }).ownedArgs,
+    ).toEqual(['--model', '-m'])
+    expect(() => validateRuntimeRegistration({ ...reg([]), ownedArgs: ['model'] })).toThrow(
+      'ownedArgs must be a unique array',
+    )
+    expect(() =>
+      validateRuntimeRegistration({ ...reg([]), ownedArgs: ['--model', '--model'] }),
+    ).toThrow('ownedArgs must be a unique array')
+  })
+
   test('accepts only the explicit provider-qualified wildcard syntax', () => {
     expect(validateRuntimeRegistration(reg(['*/*'])).servesModels).toEqual(['*/*'])
     expect(() => validateRuntimeRegistration(reg(['openai/*']))).toThrow(

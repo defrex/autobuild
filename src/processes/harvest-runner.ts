@@ -553,7 +553,7 @@ export class HarvestRunner {
     const primaryRoute = JSON.stringify({
       runtime: primary.runtime,
       model: primary.model,
-      extensions: primary.extensions,
+      args: primary.args,
     })
     let primaryLive = spec.producer ? this.producer : undefined
     if (
@@ -584,6 +584,7 @@ export class HarvestRunner {
           role: spec.role,
           runner: target.runtime,
           ...(target.model !== undefined ? { model: target.model } : {}),
+          args: [...target.args],
           step: spec.step,
           round: spec.round,
           ...(substitution !== undefined
@@ -610,7 +611,7 @@ export class HarvestRunner {
             invocation: spec.run,
             workspacePath,
             ...(target.model !== undefined ? { model: target.model } : {}),
-            ...(target.extensions !== undefined ? { extensions: target.extensions } : {}),
+            ...(target.args !== undefined ? { args: target.args } : {}),
             env: this.sessionEnv(spec.run, spec.step, spec.round, session),
           })
           handle = turn.session
@@ -782,7 +783,7 @@ export class HarvestRunner {
     const route = JSON.stringify({
       runtime: resolved.runtime,
       model: resolved.model,
-      extensions: resolved.extensions,
+      args: resolved.args,
     })
     let live = spec.producer ? this.producer : undefined
     if (live !== undefined && (live.runner !== resolved.runner || live.route !== route)) {
@@ -804,6 +805,7 @@ export class HarvestRunner {
         role: spec.role,
         runner: resolved.runtime,
         ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+        args: [...resolved.args],
         step: spec.step,
         round: spec.round,
       },
@@ -826,7 +828,7 @@ export class HarvestRunner {
           invocation: spec.run,
           workspacePath,
           ...(resolved.model !== undefined ? { model: resolved.model } : {}),
-          ...(resolved.extensions !== undefined ? { extensions: resolved.extensions } : {}),
+          ...(resolved.args !== undefined ? { args: resolved.args } : {}),
           env: this.sessionEnv(spec.run, spec.step, spec.round, session),
         })
         handle = turn.session

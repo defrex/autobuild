@@ -153,7 +153,7 @@ describe('Pi RPC JSONL', () => {
       cwd: '/repo',
       model: { provider: 'future-provider', id: 'future-model' },
       tools: ['read', 'bash'],
-      extensions: ['SubAgents'],
+      args: ['--extension', '/repo/explicit-extension.js'],
       skill: 'ab-plan',
       env: { PATH: '/bin' },
       spawn: fake.spawn,
@@ -181,8 +181,11 @@ describe('Pi RPC JSONL', () => {
       '--no-skills',
       '--skill',
       '/repo/.agents/skills/ab-plan',
+      '--no-extensions',
       '--extension',
       PI_BRIDGE_PATH,
+      '--extension',
+      '/repo/explicit-extension.js',
     ])
     const configure = String(
       fake.calls.find((call) => String(call.message).startsWith('/autobuild-configure '))?.message,
@@ -190,7 +193,6 @@ describe('Pi RPC JSONL', () => {
     const encoded = configure.split(' ')[1]!
     expect(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))).toEqual({
       environment: { AB_PHASE: 'plan@2', AB_SESSION: 's_2' },
-      extensions: ['SubAgents'],
       tools: ['read', 'bash'],
     })
     await session.dispose()
@@ -269,7 +271,7 @@ describe('Pi RPC JSONL', () => {
     const session = await createPiRpcSession({
       cwd: '/repo',
       tools: [],
-      extensions: [],
+      args: [],
       env: {},
       spawn: fake.spawn,
     })
