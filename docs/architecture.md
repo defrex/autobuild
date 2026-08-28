@@ -593,12 +593,33 @@ and covers direct argv, native resume, stream-json parsing, usage, transcripts,
 and failure classification without launching the CLI. Codex similarly uses the
 locally installed `codex` executable after `codex login`; its offline suite
 pins direct argv, `$skill` invocation, JSONL parsing, native thread resume,
-startup diagnostics, and tool-free one-shot rejection. Pi requires a locally installed `pi` executable at version 0.84.3 or newer and
-uses that installation's login and model catalog for the provider named in
-`AB_PI_CONTRACT_MODEL`. The live fixtures
-create isolated temporary project skills and probe files and remove them after
-each run; provider failures remain in the deterministic injected adapter
-contracts because they cannot be manufactured safely against a live account.
+startup diagnostics, and tool-free one-shot rejection.
+
+Pi requires a locally installed `pi` executable at version 0.84.3 or newer. The
+full AgentRunner smoke uses that installation's login and model catalog for the
+authenticated provider named in `AB_PI_CONTRACT_MODEL`. The same live file also
+checks production extension gating against two packages installed and enabled
+in the operator's user-visible Pi settings:
+
+```sh
+pi install npm:pi-subagents
+pi install npm:pi-web-access
+```
+
+That package probe does not invoke a provider and can be selected without
+`AB_PI_CONTRACT_MODEL`:
+
+```sh
+AB_RUN_LIVE_PORT_CONTRACTS=1 \
+bun test src/ports/runner/pi.live.test.ts -t 'gates tools discovered'
+```
+
+Once opted in, the probe fails with the missing expected tool and its exact
+`pi install` remediation if either package is not discoverable; it never skips
+and implies package coverage ran. The live fixtures create isolated temporary
+project skills, extensions, and probe files and remove them after each run;
+provider failures remain in the deterministic injected adapter contracts
+because they cannot be manufactured safely against a live account.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit.
