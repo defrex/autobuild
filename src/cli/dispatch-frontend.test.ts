@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
-import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
+import type { DashboardModel } from './dashboard/model'
 import { dashboardContentWidth, detailScrollLimit, renderDashboard } from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
 import type { DispatchChildResult } from './dispatch-process'
@@ -51,6 +52,133 @@ async function waitFor(
   }
   throw new Error(`timed out waiting for ${message}`)
 }
+
+test('once renders one durable snapshot without starting interactive presentation', async () => {
+  const repo = '/once-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const slug = 'durable-snapshot'
+  const ticket = { source: 'fake', id: 'AUT-ONCE', title: 'Durable snapshot' }
+  await store.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo, ticket, baseBranch: 'main' },
+  })
+
+  const snapshots: DashboardModel[] = []
+  let output = ''
+  let inputStarts = 0
+  let childStops = 0
+  let childOnce: boolean | undefined
+  const write = (chunk: string): void => {
+    output += chunk
+  }
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write,
+      modes: createTerminalModeController(write, write),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: {
+      start: () => {
+        inputStarts += 1
+        return () => {}
+      },
+    },
+    once: true,
+    resolveDashboardRenderer: () => (model) => {
+      snapshots.push(model)
+      return ['once snapshot']
+    },
+    launchChild: ({ run, options }) => {
+      childOnce = options.once
+      const completed = store
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                policy: { harvestThreshold: 9 },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: ['durable role warning'],
+            },
+          }),
+        )
+        .then(() =>
+          store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run,
+              queued: 3,
+              counters: tickCounters,
+              janitorDiagnostics: ['routine janitor diagnostic'],
+              ticketDiagnostics: [],
+              creationDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          }),
+        )
+        .then(() =>
+          store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-failed',
+            payload: { run, error: 'durable failure' },
+          }),
+        )
+        .then(() =>
+          store.appendRepo(repo, {
+            actor: humanActor('operator'),
+            type: 'dispatcher.operator-reported',
+            payload: { run, level: 'info', message: 'routine dispatcher notice' },
+          }),
+        )
+        .then(() => ({ outcome: 'normal', exitCode: 0 }) as const)
+      return {
+        completed,
+        async stop() {
+          childStops += 1
+        },
+      }
+    },
+  })
+
+  await frontend.run()
+
+  expect(childOnce).toBe(true)
+  expect(childStops).toBe(1)
+  expect(inputStarts).toBe(0)
+  expect(snapshots).toHaveLength(1)
+  expect(output).toContain('once snapshot')
+  const snapshot = snapshots[0]!
+  expect(snapshot.builds.map((build) => build.slug)).toContain(slug)
+  expect(snapshot.queued).toBe(3)
+  expect(snapshot.active).toEqual({ current: 1, limit: 4 })
+  expect(snapshot.observations.limit).toBe(9)
+  expect(snapshot.warningLines).toEqual(['durable role warning', 'tick failed: durable failure'])
+  expect(snapshot.warningLines).not.toContain('routine janitor diagnostic')
+  expect(snapshot.warningLines).not.toContain('routine dispatcher notice')
+})
 
 test('frontend input and captured controls remain responsive while the kernel is gated', async () => {
   const repo = '/repo'

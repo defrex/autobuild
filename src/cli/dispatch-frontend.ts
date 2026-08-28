@@ -883,7 +883,7 @@ export class DispatchFrontend {
     const stop = (): void => this.requestOperatorStop()
     this.opts.signal?.addEventListener('abort', stop, { once: true })
     try {
-      this.startPresentation()
+      if (!this.opts.once) this.startPresentation()
       if (this.opts.signal?.aborted) this.requestOperatorStop()
       const result = await this.child.completed
       if (
