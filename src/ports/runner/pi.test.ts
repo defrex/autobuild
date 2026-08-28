@@ -173,6 +173,64 @@ describe('Pi init usability', () => {
       reason: expect.stringContaining('local model catalog probe returned a malformed table'),
     })
   })
+
+  test('reports a non-zero catalog command with its stderr and exit code', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') {
+        return { stdout: '', stderr: 'registry cache is unavailable\n', exitCode: 23 }
+      }
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason:
+        'Pi local model catalog probe failed: "pi --list-models" exited with code 23: registry cache is unavailable',
+    })
+    expect(cli.calls.map((call) => call.args)).toEqual([
+      ['--version'],
+      ['auth', 'check', '--model', 'openai/gpt-test', '--json'],
+      ['--list-models'],
+    ])
+  })
+
+  test('identifies a non-zero catalog command even when it returns no diagnostic', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') return { stdout: '', stderr: '', exitCode: 9 }
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason:
+        'Pi local model catalog probe failed: "pi --list-models" exited with code 9: no diagnostic',
+    })
+    expect(cli.calls.map((call) => call.args)).toEqual([
+      ['--version'],
+      ['auth', 'check', '--model', 'openai/gpt-test', '--json'],
+      ['--list-models'],
+    ])
+  })
+
+  test('reports a catalog-specific launch failure with the underlying spawn error', async () => {
+    const cli = fakeCli((call) => {
+      if (call.args[0] === '--version') return { stdout: `${MINIMUM_PI_VERSION}\n` }
+      if (call.args[0] === '--list-models') throw new Error('spawn pi EACCES')
+      return { stdout: '{"status":"ready"}\n' }
+    })
+
+    expect(await isPiRuntimeUsable({ ...input, models: ['openai/gpt-test'] }, cli.run)).toEqual({
+      usable: false,
+      reason: 'Pi local model catalog probe failed to launch: spawn pi EACCES',
+    })
+    expect(cli.calls.map((call) => call.args)).toEqual([
+      ['--version'],
+      ['auth', 'check', '--model', 'openai/gpt-test', '--json'],
+      ['--list-models'],
+    ])
+  })
 })
 
 const piContractFactory: AgentRunnerContractFactory = (scenario) => {
