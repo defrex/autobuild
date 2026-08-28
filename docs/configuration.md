@@ -74,7 +74,7 @@ These fields hot-reload:
 | `[pr]` | Next build creation. |
 | `[commands]` | Next setup, verify check, or finalize check selected. |
 | `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
-| `[roles]` | Next agent session for that role. Runtime, model, extensions, alternates, and the session budget are captured together. |
+| `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together. |
 | `[policy]` | Next policy, convergence, or agent-session boundary. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
@@ -564,7 +564,7 @@ failures become failure-tolerant follow-up observations.
 ## `[roles]`
 
 An open map from a nonempty role name to three primary agent axes, one
-wall-clock session budget, and an ordered alternate list. All five fields
+wall-clock session budget, and an ordered alternate list. All five live fields
 inherit independently. The reserved
 `default` entry is required to name a runtime, is the raw base for every other
 role, and is never dispatched itself. Missing it fails eagerly before any
@@ -574,27 +574,28 @@ session starts, with a copyable table and all registered runtime names.
 |---|---:|---|---|
 | `runtime` | inherited from required `[roles.default].runtime` | required on `default`; optional nonempty registered runtime name on children | Select an agent adapter. |
 | `model` | inherited; otherwise selected runtime's own default | optional nonempty model id compatible with the resolved runtime | Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified. |
-| `extensions` | inherited; otherwise `[]` (hermetic) | optional array of nonempty strings; `[]` allowed | Pi package/extension allowlist. A supplied list replaces, rather than unions with, the inherited list. |
+| `args` | inherited; otherwise `[]` | optional array of nonempty strings; `[]` allowed | Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list. |
+| `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`. |
 | `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Wall-clock budget for each build phase session routed through this logical role. One budget covers the primary and every alternate target. |
-| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets. A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. |
+| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets. A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op. |
 
 <!-- config-fragment:roles -->
 ```toml
 [roles.default]
 runtime = "claude"
-extensions = []
+args = []
 alternates = [
-  { runtime = "pi", model = "openai-codex/gpt-5.6-sol", extensions = ["subagents"] },
+  { runtime = "pi", model = "openai-codex/gpt-5.6-sol", args = ["--extension", "./tools/pi.js"] },
 ]
 
 [roles.plan]
-extensions = ["subagents", "web-access"]
+args = ["--effort", "high"]
 alternates = [] # replace the inherited list for this role
 
 [roles.code-review]
 runtime = "pi"
 model = "kimi-coding/k3"
-extensions = ["web-access"]
+args = ["--extension", "./tools/web-access.js"]
 sessionBudgetSeconds = 7200
 ```
 
@@ -605,7 +606,10 @@ to serve a configured model and never substitutes a different model to repair
 an invalid pair. The only implicit fill is when neither the role nor `default`
 names a model, in which case the selected runtime uses its own default. Every
 alternate overlays that concrete role's effective primary runtime, model, and
-extensions, then undergoes the same exact-pair validation. Unknown fields,
+args, then undergoes the same exact-pair validation. Each configured string is
+one argv token; Autobuild does not parse or shell-expand it. Adapter-owned
+options (including declared aliases and `--option=value` forms) join the eager
+aggregated startup error with a role/runtime-specific diagnostic. Unknown fields,
 runtimes, and incompatible models in any indexed entry join the aggregated
 eager startup error; they never first surface during an outage.
 
@@ -621,12 +625,14 @@ validation and event attribution. With no configured model, the selected runtime
 default when present: Claude and Codex delegate to their local CLI's selected
 default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
 ids. Pi ids remain provider-qualified—including the independent
-`openai-codex/*` route—and `ab models [query]` looks them up. Extension entries
-match installed Pi package sources case-insensitively; runtimes without an
-extension mechanism ignore this axis. A plugin may declare
+`openai-codex/*` route—and `ab models [query]` looks them up. Pi always passes
+`--no-extensions` to disable ambient package discovery and loads the Autobuild
+bridge explicitly. Repeatable `--extension <path>` tokens in `args` supplement
+that setup and expose every tool registered by that explicitly loaded extension;
+without them, no operator-installed extension loads. A plugin may declare
 optional tool-free one-shot completion for `slug` and `upgrade`; absence keeps
-each caller's existing fail-safe behavior. One-shot judgments disable
-extensions even if their role grants them.
+each caller's existing fail-safe behavior. Role `args` apply to those one-shots
+too. Effective arguments are recorded on session-start facts.
 
 The injected Codex protocol/contract suite is deterministic and credential-free:
 `bun test src/ports/runner/codex.test.ts`. An authenticated local smoke run is
@@ -908,15 +914,15 @@ skill = "ab-release-notes"
 
 [roles.default]
 runtime = "claude"
-extensions = []
+args = []
 
 [roles.plan]
-extensions = ["subagents", "web-access"]
+args = ["--effort", "high"]
 
 [roles.code-review]
 runtime = "pi"
 model = "kimi-coding/k3"
-extensions = ["web-access"]
+args = ["--extension", "./tools/web-access.js"]
 sessionBudgetSeconds = 7200
 
 [policy]

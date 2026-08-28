@@ -50,28 +50,24 @@ steps = ["changelog"]
 kind = "agent"
 skill = "ab-finalize-changelog"
 
-# Runtime, model, and extensions per phase role. `default` is the inheritance
-# base and is never dispatched as a phase; every other role overrides each field
-# independently, and a declared extensions list replaces rather than unions.
+# Runtime, model, and args per phase role. `default` is the inheritance base
+# and is never dispatched as a phase; every other role overrides each field
+# independently, and a declared args list replaces rather than unions.
 [roles.default]
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
-extensions = ["subagents", "web-access"]
 
 [roles.implement]
 runtime = "pi"
 model = "openai-codex/gpt-5.6-sol"
-extensions = ["subagents"]
 
 [roles.plan-review]
 runtime = "pi"
 model = "kimi-coding/k3"
-extensions = ["web-access"]
 
 [roles.code-review]
 runtime = "pi"
 model = "kimi-coding/k3"
-extensions = ["web-access"]
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates

@@ -847,8 +847,8 @@ deterministic fail-safe.
   adapters, each under a *distinct runtime name*, never
   as a mode flag on an existing one. Plugin adapters must pass the exported
   AgentRunner contract suite.
-- **Routing — explicit role inheritance (§16.1):** runtime, model, extension
-  allowlist, and build-session budget live in one open `[roles]` map whose
+- **Routing — explicit role inheritance (§16.1):** runtime, model, extra CLI
+  arguments (`args`), and build-session budget live in one open `[roles]` map whose
   reserved `default` entry is the inheritance base and must explicitly name a
   runtime. The budget inherits independently, then falls back to
   `[policy].sessionBudgetSeconds`; it belongs to the logical role, so provider
@@ -875,18 +875,32 @@ deterministic fail-safe.
   not conflated:
 
   1. Primary field resolution never hunts for a compatible substitute. Every
-     concrete role merges runtime, model, and extensions over `default`
-     independently; an incompatible merged pair is an eager error.
+     concrete role merges runtime, model, and `args` over `default`
+     independently; an incompatible merged pair is an eager error. A declared
+     `args` list, including `[]`, replaces the inherited list wholesale.
   2. A **requested** role key that no `[roles.<key>]` declares resolves to
      `[roles.default]` wholesale. That is undeclared-key fallback, not outage
      routing.
-  3. A role may declare `alternates = [{ runtime?, model?, extensions? }, …]`.
+  3. A role may declare `alternates = [{ runtime?, model?, args? }, …]`.
      The list is independently inherited: a role's own list,
      including `[]`, replaces the default list wholesale. Each entry overlays
      that concrete role's effective primary axes and is resolved and validated
      eagerly with indexed problems in the aggregate startup error.
   4. A **declared** key that nothing ever requests is resolved, validated, and
      then never used. `ab dispatch` reports it at startup as a warning.
+
+  Each `args` string is one argv token, preserved in order and appended to
+  every phase and tool-free one-shot invocation for that role. Adapters declare
+  the option spellings their protocol owns; an effective primary or alternate
+  list containing one (including `--option=value` or a declared short alias)
+  joins the aggregate eager startup error rather than overriding Autobuild's
+  invariant flags. Repeatable supplemental options need not be owned. Pi always
+  disables ambient extension discovery and explicitly loads the Autobuild
+  bridge; a role can add repeatable `--extension <path>` tokens through `args`,
+  and all tools from that explicitly loaded extension are available alongside
+  the bridge. With no such args, Pi loads no operator-installed extensions.
+  The deprecated `extensions` field remains schema-valid but has no effect and
+  produces a startup warning directing the operator to `args`.
 
   All roles
   resolve **eagerly, before any session launches**, with problems aggregated
@@ -902,8 +916,8 @@ deterministic fail-safe.
   the failed conversation. Selection is non-sticky: every later phase, loop
   continuation, and retry starts from the primary. The final failure controls
   retry/permanent behavior. This applies to core phases, agent verify/finalize,
-  and Harvest, but not tool-free one-shots. Every selected runtime/model is
-  recorded on `session.started`; fallback starts cite the preceding target and
+  and Harvest, but not tool-free one-shots. Every selected runtime/model/args
+  tuple is recorded on `session.started`; fallback starts cite the preceding target and
   verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
   the complete ordered attempt list.
 - **Transcripts come back through the interface**, not scraped from disk, so
