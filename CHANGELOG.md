@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#234](https://github.com/defrex/autobuild/pull/234) — Make Claude one-shot arguments CLI-compatible
 - [#232](https://github.com/defrex/autobuild/pull/232) — Add freeform CLI arguments to roles
 - [#231](https://github.com/defrex/autobuild/pull/231) — Complete Pi package gating and session isolation coverage
 - [#230](https://github.com/defrex/autobuild/pull/230) — Cover dispatcher one-shot snapshots
