@@ -457,8 +457,8 @@ describe('ClaudeAgentRunner complete', () => {
       '--dangerously-skip-permissions',
       '--tools',
       '',
-      '--max-turns',
-      '1',
+      '--disallowedTools',
+      'mcp__*',
       '--no-session-persistence',
       '--model',
       'claude-haiku-4',
@@ -467,6 +467,7 @@ describe('ClaudeAgentRunner complete', () => {
       '--',
       'name this spec verbatim',
     ])
+    expect(cli.calls[0]?.args).not.toContain('--max-turns')
     expect(cli.calls[0]?.args).not.toContain('--session-id')
     expect(cli.calls[0]?.args).not.toContain('--resume')
     await expect(runner.end({ id: 'unused', runner: 'claude' })).rejects.toThrow(

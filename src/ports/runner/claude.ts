@@ -168,11 +168,12 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
-  /** Non-phase judgment: one verbatim prompt, one model turn, and no tools or
-   * resumable session persistence. */
+  /** Non-phase judgment: one verbatim prompt, one tool-free completion, and no
+   * resumable session persistence. With no built-in or MCP tools, the single
+   * print-mode prompt cannot enter a tool-result loop. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const args = this.baseArgs()
-    args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
+    args.push('--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence')
     if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
     args.push(...(input.args ?? []), CLAUDE_PROMPT_BOUNDARY, input.prompt)
 

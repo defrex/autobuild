@@ -590,8 +590,14 @@ Claude uses the locally installed Claude Code CLI and its configured login; the
 live command therefore requires an installed `claude` executable whose browser
 login has already completed. Its offline suite injects a subprocess executor
 and covers direct argv, native resume, stream-json parsing, usage, transcripts,
-and failure classification without launching the CLI. Codex similarly uses the
-locally installed `codex` executable after `codex login`; its offline suite
+and failure classification without launching the CLI. The one-shot argument
+set was checked against Claude Code 2.1.245 `--help` and [Anthropic's CLI
+reference](https://code.claude.com/docs/en/cli-reference): `-p` produces one
+non-interactive result, `--no-session-persistence` prevents resumable storage,
+`--tools ""` disables built-in tools, and `--disallowedTools "mcp__*"` denies
+MCP tools. This is compatibility evidence, not a repository-wide minimum
+version. Codex similarly uses the locally installed `codex` executable after
+`codex login`; its offline suite
 pins direct argv, `$skill` invocation, JSONL parsing, native thread resume,
 startup diagnostics, and tool-free one-shot rejection.
 
