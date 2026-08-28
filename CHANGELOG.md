@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#231](https://github.com/defrex/autobuild/pull/231) — Complete Pi package gating and session isolation coverage
 - [#230](https://github.com/defrex/autobuild/pull/230) — Cover dispatcher one-shot snapshots
 - [#229](https://github.com/defrex/autobuild/pull/229) — Reject Pi models absent from the local catalog
 - [#228](https://github.com/defrex/autobuild/pull/228) — Restore the dashboard top/body separator
