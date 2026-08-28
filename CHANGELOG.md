@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#232](https://github.com/defrex/autobuild/pull/232) — Add freeform CLI arguments to roles
 - [#228](https://github.com/defrex/autobuild/pull/228) — Restore the dashboard top/body separator
 - [#227](https://github.com/defrex/autobuild/pull/227) — Show only failures and warnings on dispatcher dashboards
 - [#226](https://github.com/defrex/autobuild/pull/226) — Use the operator's local pi install
