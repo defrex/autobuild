@@ -40,7 +40,9 @@ describe('production runtime registry', () => {
     expect(pi?.servesModels).toEqual(['*/*'])
     expect(pi?.defaultModel).toBe('kimi-coding/k3')
     expect(pi?.ownedArgs).toContain('--no-extensions')
+    expect(pi?.ownedArgs).toContain('-ne')
     expect(pi?.ownedArgs).not.toContain('--extension')
+    expect(pi?.ownedArgs).not.toContain('-e')
 
     const future = createRuntimeResolver(createProductionRuntimes().runtimes, {
       default: {
@@ -51,6 +53,46 @@ describe('production runtime registry', () => {
     })
     expect(future.resolve('plan').model).toBe('future-provider/new-model')
     expect(future.resolve('plan').args).toEqual(['--extension', './explicit.js'])
+  })
+
+  test('rejects every Pi spelling that can override bridge tool and session invariants', () => {
+    const runtimes = createProductionRuntimes().runtimes
+    const conflicting = [
+      '-nt',
+      '-ne',
+      '-ns',
+      '-nc',
+      '-np',
+      '-na',
+      '--tools',
+      '-t',
+      '--exclude-tools',
+      '-xt',
+      '--no-builtin-tools',
+      '-nbt',
+      '--continue',
+      '-c',
+      '--resume',
+      '-r',
+      '--session',
+      '--session-id',
+      '--fork',
+      '--approve',
+      '-a',
+      '--print',
+      '-p',
+    ]
+
+    for (const arg of conflicting) {
+      expect(() =>
+        createRuntimeResolver(runtimes, {
+          default: { runtime: 'pi' },
+          plan: { args: [arg, 'conflicting-value'] },
+        }),
+      ).toThrow(
+        `[roles.plan] argument ${JSON.stringify(arg)} conflicts with an option owned by runtime "pi"`,
+      )
+    }
   })
 
   test('validates Codex model families eagerly and delegates an omitted model', () => {
