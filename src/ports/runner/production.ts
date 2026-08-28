@@ -3,8 +3,18 @@
  * needs agent judgment. Keeping the shipped adapters and their model families
  * here prevents dispatch and other non-phase one-shots from drifting apart.
  */
-import { CLAUDE_OWNED_ARGS, ClaudeAgentRunner, isClaudeRuntimeUsable } from './claude'
-import { CODEX_OWNED_ARGS, CodexAgentRunner, isCodexRuntimeUsable } from './codex'
+import {
+  CLAUDE_OWNED_ARGS,
+  CLAUDE_PROMPT_BOUNDARY,
+  ClaudeAgentRunner,
+  isClaudeRuntimeUsable,
+} from './claude'
+import {
+  CODEX_OWNED_ARGS,
+  CODEX_PROMPT_BOUNDARY,
+  CodexAgentRunner,
+  isCodexRuntimeUsable,
+} from './codex'
 import { isPiRuntimeUsable, PI_OWNED_ARGS, PiAgentRunner } from './pi'
 import type { RuntimeRegistry } from './runtime'
 
@@ -27,6 +37,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         initUsable: isClaudeRuntimeUsable,
         servesModels: ['claude-'],
         ownedArgs: CLAUDE_OWNED_ARGS,
+        promptBoundary: CLAUDE_PROMPT_BOUNDARY,
       },
       codex: {
         runner: codex,
@@ -36,6 +47,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         // the operator's configured Codex default.
         servesModels: ['gpt-'],
         ownedArgs: CODEX_OWNED_ARGS,
+        promptBoundary: CODEX_PROMPT_BOUNDARY,
       },
       pi: {
         runner: pi,

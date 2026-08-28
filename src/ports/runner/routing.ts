@@ -114,6 +114,14 @@ function resolveAxes(
   const args = axes.args ?? []
   const ownedArgs = new Set(reg.ownedArgs ?? [])
   for (const arg of args) {
+    if (arg === reg.promptBoundary) {
+      problems.push(
+        `${label} argument ${JSON.stringify(arg)} conflicts with the prompt boundary for runtime "${runtime}". ` +
+          'Remove it because Autobuild owns and appends this prompt separator.',
+      )
+      continue
+    }
+
     const spelling = arg.startsWith('--') ? arg.split('=', 1)[0]! : arg
     const owned =
       ownedArgs.has(spelling) ||

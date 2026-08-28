@@ -610,12 +610,16 @@ args, then undergoes the same exact-pair validation. Each configured string is
 one argv token; Autobuild does not shell-expand it. The narrow rejected set is
 derived from the model and machine-readable protocol options each adapter emits:
 Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
-`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Those spellings,
-`--option=value` forms, and compact documented short aliases join the eager
-aggregated startup error with a role/runtime-specific diagnostic. Every other
-option passes through without Autobuild validation, including sandbox, approval,
-session, tool, skill, thinking, extension, lifecycle, and unknown options, even
-when it supplements another occurrence emitted by the adapter. Unknown fields,
+`--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude and Codex
+also reject a standalone `--` because Autobuild owns and appends that structural
+separator immediately before their positional prompt. Those option spellings,
+`--option=value` forms, compact documented short aliases, and the exact affected
+prompt separator join the eager aggregated startup error with a
+role/runtime-specific diagnostic. Every other option passes through without
+Autobuild validation, including sandbox, approval, session, tool, skill,
+thinking, extension, lifecycle, unknown options, and arguments that merely
+contain two hyphens, even when they supplement another occurrence emitted by the
+adapter. Unknown fields,
 runtimes, and incompatible models in any indexed entry join the aggregated
 eager startup error; they never first surface during an outage.
 

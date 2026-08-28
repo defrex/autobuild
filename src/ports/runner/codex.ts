@@ -129,6 +129,9 @@ const CODEX_JSON_ARG = '--json'
 const CODEX_MODEL_ARG = '--model'
 const CODEX_MODEL_ALIAS = '-m'
 
+/** Structural separator before Codex's positional prompt. */
+export const CODEX_PROMPT_BOUNDARY = '--'
+
 /** Options that select the model or the JSONL protocol parsed below. */
 export const CODEX_OWNED_ARGS = [CODEX_JSON_ARG, CODEX_MODEL_ARG, CODEX_MODEL_ALIAS] as const
 
@@ -191,7 +194,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     ]
     for (const feature of ONE_SHOT_DISABLED_FEATURES) args.push('--disable', feature)
     if (input.model !== undefined) args.push(CODEX_MODEL_ARG, input.model)
-    args.push(...(input.args ?? []), '--', input.prompt)
+    args.push(...(input.args ?? []), CODEX_PROMPT_BOUNDARY, input.prompt)
 
     const turn = await this.runPrompt({
       args,
@@ -315,7 +318,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     if (opts.model !== undefined) args.push(CODEX_MODEL_ARG, opts.model)
     args.push(...(opts.args ?? []))
     if (resume !== undefined) args.push(resume)
-    args.push('--', prompt)
+    args.push(CODEX_PROMPT_BOUNDARY, prompt)
     return this.runPrompt({
       args,
       cwd: opts.workspacePath,

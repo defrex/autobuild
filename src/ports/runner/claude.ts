@@ -135,6 +135,9 @@ const CLAUDE_PRINT_ALIAS = '--print'
 const CLAUDE_OUTPUT_FORMAT_ARG = '--output-format'
 const CLAUDE_MODEL_ARG = '--model'
 
+/** Structural separator before Claude's positional prompt. */
+export const CLAUDE_PROMPT_BOUNDARY = '--'
+
 /** Options that select the model or the structured protocol parsed below. */
 export const CLAUDE_OWNED_ARGS = [
   CLAUDE_PRINT_ARG,
@@ -171,7 +174,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     const args = this.baseArgs()
     args.push('--tools', '', '--max-turns', '1', '--no-session-persistence')
     if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
-    args.push(...(input.args ?? []), '--', input.prompt)
+    args.push(...(input.args ?? []), CLAUDE_PROMPT_BOUNDARY, input.prompt)
 
     const turn = await this.runPrompt({
       args,
@@ -269,7 +272,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
     if (opts.model !== undefined) args.push(CLAUDE_MODEL_ARG, opts.model)
-    args.push(...(opts.args ?? []), '--', prompt)
+    args.push(...(opts.args ?? []), CLAUDE_PROMPT_BOUNDARY, prompt)
 
     return this.runPrompt({
       args,
