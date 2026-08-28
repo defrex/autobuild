@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.6.0 — 2026-08-28
+
+This release strengthens role configuration by adding freeform CLI arguments to roles, making Claude one-shot arguments CLI-compatible, and rejecting bare prompt terminators in Claude and Codex role args. Pi integration now uses the operator's local pi install, rejects models absent from the local catalog, and gains fuller coverage of package gating, session isolation, and catalog failure diagnostics. Build execution is more resilient, with abandoned sessions reclaimed when runners attach, descendant processes reaped after every build-child exit, wall-clock budgets bounding phase agent sessions, transcript recovery after terminal turn errors, and policy-blocked builds staying parked across dispatch restarts. Dashboards were also refined to show only failures and warnings on dispatcher views, and durable build progress moved into the status surfaces.
+
 - [#235](https://github.com/defrex/autobuild/pull/235) — Reject bare prompt terminators in Claude and Codex role args
 - [#234](https://github.com/defrex/autobuild/pull/234) — Make Claude one-shot arguments CLI-compatible
 - [#233](https://github.com/defrex/autobuild/pull/233) — Cover Pi model catalog command failure diagnostics
@@ -30,6 +34,7 @@
 - [#209](https://github.com/defrex/autobuild/pull/209) — Scope phase-invoked read commands to ambient identity
 - [#208](https://github.com/defrex/autobuild/pull/208) — Keep reconcile policy causes distinct
 - [#207](https://github.com/defrex/autobuild/pull/207) — Add JSON output to ticket mutators
+
 ## v0.5.0 — 2026-08-04
 
 This release moves build execution into supervised, isolated processes, separating the dispatch dashboard from kernel work so the frontend stays responsive under load while preserving observation pressure and handling shutdown, cleanup failures, and stale abort confirmations safely. Harvest and dispatch accounting were hardened as well: tickets are withheld while a Harvest is being created, counters survive tick publication failures, and dispatch accounting now reflects settled Harvest results. Reconcile budgets became progress-aware, local phase stores are scoped to the ambient session identity, and the README headline now leads with the happy path.
