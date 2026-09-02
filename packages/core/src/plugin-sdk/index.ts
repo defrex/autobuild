@@ -110,3 +110,18 @@ export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { FakeForge } from '../ports/forge/fake'
 export { ScriptedAgentRunner } from '../ports/runner/fake'
 export { MemoryBlobStore, MemoryBuildStore } from '../store/memory'
+
+// Runtime primitives needed by out-of-tree BuildStore adapters.
+export { validateEventWrite } from '../events/catalog'
+export type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
+export type { EventType } from '../events/payloads'
+export { validateRepositoryEventWrite } from '../events/repository'
+export type {
+  RepositoryEvent,
+  RepositoryEventEnvelope,
+  RepositoryEventType,
+  RepositoryEventWrite,
+} from '../events/repository'
+export { BuildScopeError, createBuildScopedStore } from '../store/build-scope'
+export { pollingSubscribe } from '../store/subscribe'
+export { contentHash, systemClock, toBytes, validateExpectedSeq } from '../store/types'

@@ -39,7 +39,7 @@
     "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
-    "test": "bun test packages/core/src tools bin",
+    "test": "bun test packages/*/src tools bin",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
