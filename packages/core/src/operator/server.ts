@@ -104,6 +104,13 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     return scope.operator.user
   }
 
+  async function requireRouteBuild(repo: string, slug: string): Promise<void> {
+    const record = await opts.store.getBuild(slug)
+    if (record === null || record.repo !== repo) {
+      throw new HttpError(404, 'not-found', `unknown build "${slug}"`)
+    }
+  }
+
   async function route(req: Request): Promise<Response> {
     identity(req)
     const user = operator(req)
@@ -219,10 +226,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
       if (req.method === 'POST' && rest[2] === 'control' && rest.length === 3) {
         const request = await body(req, buildControlRequestSchema)
+        await requireRouteBuild(repo, slug)
         if (request.action === 'pause' || request.action === 'cancel-pause') {
-          const record = await opts.store.getBuild(slug)
-          if (record === null || record.repo !== repo)
-            throw new HttpError(404, 'not-found', `unknown build "${slug}"`)
           const state = reduceBuild(await opts.store.getEvents(slug))
           const display = effectiveStatus(state)
           if (request.action === 'pause' && display === 'pausing') {
@@ -248,11 +253,12 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
       if (req.method === 'POST' && rest[2] === 'answer' && rest.length === 3) {
         const request = await body(req, answerRequestSchema)
+        await requireRouteBuild(repo, slug)
         const action: BuildControlAction =
           request.resolution === 'guidance'
             ? { kind: 'answer', text: request.text }
             : request.resolution === 'retry'
-              ? { kind: 'answer', text: request.text }
+              ? { kind: 'answer' }
               : request.resolution === 'dismiss'
                 ? { kind: 'answer', text: request.text, resolve: { kind: 'dismiss-finding' } }
                 : request.resolution === 'review-round-ceiling'
@@ -260,6 +266,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
                   : {
                       kind: 'answer',
                       text: request.text,
+                      ...(request.ceiling !== undefined
+                        ? { reviewRoundCeiling: request.ceiling }
+                        : {}),
                       resolve: {
                         kind: 'revise-spec',
                         body:

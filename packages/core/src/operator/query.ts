@@ -17,7 +17,7 @@ export type BuildListScope = 'active' | 'queued' | 'all'
 
 export class OperatorQueryError extends Error {
   constructor(
-    readonly code: 'not-found' | 'wrong-repository' | 'effective-config-unavailable',
+    readonly code: 'not-found' | 'effective-config-unavailable',
     message: string,
   ) {
     super(message)
@@ -49,10 +49,7 @@ async function requireBuild(store: BuildStore, repo: string, slug: string) {
   const record = await store.getBuild(slug)
   if (record === null) throw new OperatorQueryError('not-found', `no build "${slug}" in this store`)
   if (record.repo !== repo) {
-    throw new OperatorQueryError(
-      'wrong-repository',
-      `build "${slug}" belongs to repository "${record.repo}", not "${repo}"`,
-    )
+    throw new OperatorQueryError('not-found', `unknown build "${slug}"`)
   }
   return record
 }
@@ -124,11 +121,8 @@ export async function getOperatorBuild(opts: {
   const record = await requireBuild(opts.store, opts.repo, opts.slug)
   const events = await opts.store.getEvents(opts.slug)
   const state = reduceBuild(events)
-  let dashboardRow: DashboardBuild | null = null
-  if (state.status !== 'done' && state.status !== 'aborted') {
-    const { config } = await effectiveConfig(opts.store, opts.repo)
-    dashboardRow = projectBuild(record, state, config, events)
-  }
+  const { config } = await effectiveConfig(opts.store, opts.repo)
+  const dashboardRow = projectBuild(record, state, config, events)
   return { detail: detail(record, events, opts.now), dashboardRow }
 }
 

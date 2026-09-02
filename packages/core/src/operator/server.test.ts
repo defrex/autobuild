@@ -1,9 +1,16 @@
 import { describe, expect, test } from 'bun:test'
+import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import { RemoteBuildStore } from '../store/remote/client'
 import { createStoreServer } from '../store/remote/server'
 import { mintToken, tokenResource, verifyToken } from '../store/remote/token'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from '../store/remote/version'
 import { OperatorApiClient, OperatorApiError } from './client'
 import { createOperatorServer } from './server'
 
@@ -17,6 +24,40 @@ function fetchFor(server: { fetch(req: Request): Promise<Response> }): typeof fe
     server.fetch(
       input instanceof Request ? new Request(input, init) : new Request(String(input), init),
     )) as typeof fetch
+}
+
+const DASHBOARD_CONFIG = parseConfig(`
+capacity = 2
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+`)
+
+async function publishConfig(store: MemoryBuildStore): Promise<void> {
+  await store.ensureRepo(repo)
+  const { verify, finalize, ...root } = DASHBOARD_CONFIG
+  const artifact = await store.putRepoArtifact(repo, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({
+      ...root,
+      verify: { steps: verify.steps, ...verify.stepConfigs },
+      finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+    }),
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'dispatch-1',
+      pid: 123,
+      effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      roleWarnings: [],
+    },
+  })
 }
 
 async function runningStore(): Promise<MemoryBuildStore> {
@@ -110,6 +151,57 @@ describe('operator HTTP API', () => {
     const artifact = await client.downloadArtifact(repo, 'demo', 'notes/report', 0)
     expect([...artifact.content]).toEqual([0, 1, 255])
     expect(artifact).toMatchObject({ kind: 'notes/report', revision: 0 })
+  })
+
+  test('per-build projection retains aborted cleanup rows until completion', async () => {
+    const store = await runningStore()
+    await publishConfig(store)
+    await store.append('demo', { actor: KERNEL, type: 'build.aborted', payload: {} })
+    const server = createOperatorServer({ store, secret, clock })
+    const client = new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(server),
+    })
+    const build = await client.getBuild(repo, 'demo')
+    expect(build.dashboardRow).toMatchObject({ slug: 'demo', status: 'cleaning' })
+    expect(build.dashboardRow).not.toBeNull()
+    expect((await client.dashboard(repo)).model.builds).toContainEqual(build.dashboardRow!)
+  })
+
+  test('cross-repository builds are consistently hidden and retry rejects text', async () => {
+    const store = await runningStore()
+    const client = new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(createOperatorServer({ store, secret, clock })),
+    })
+    for (const call of [
+      () => client.getBuild('/another-repo', 'demo'),
+      () => client.controlBuild('/another-repo', 'demo', { action: 'pause' }),
+      () => client.answer('/another-repo', 'demo', { resolution: 'retry' }),
+      () => client.downloadArtifact('/another-repo', 'demo', 'notes'),
+    ]) {
+      const error = await call().catch((caught) => caught)
+      expect(error).toMatchObject({ status: 404, kind: 'not-found' })
+      expect((error as Error).message).toBe('unknown build "demo"')
+    }
+
+    const response = await fetchFor(createOperatorServer({ store, secret, clock }))(
+      `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ resolution: 'retry', text: 'stray guidance' }),
+      },
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ kind: 'validation' })
   })
 
   test('version validation precedes authentication and terminal refusal text survives', async () => {

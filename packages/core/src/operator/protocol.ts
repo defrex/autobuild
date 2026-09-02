@@ -14,9 +14,9 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
 export type OperatorBuildControlRequest = z.infer<typeof buildControlRequestSchema>
 
 const optionalText = z.string().optional()
-export const answerRequestSchema = z.discriminatedUnion('resolution', [
+export const answerRequestSchema = z.union([
   z.strictObject({ resolution: z.literal('guidance'), text: z.string().trim().min(1) }),
-  z.strictObject({ resolution: z.literal('retry'), text: optionalText }),
+  z.strictObject({ resolution: z.literal('retry') }),
   z.strictObject({ resolution: z.literal('dismiss'), text: optionalText }),
   z.strictObject({
     resolution: z.literal('review-round-ceiling'),
@@ -28,12 +28,15 @@ export const answerRequestSchema = z.discriminatedUnion('resolution', [
     origin: z.literal('body'),
     body: z.string(),
     text: optionalText,
+    /** Accepted only so the shared core can return its exact incompatible-options refusal. */
+    ceiling: z.number().int().positive().optional(),
   }),
   z.strictObject({
     resolution: z.literal('revise-spec'),
     origin: z.literal('ticket'),
     body: z.string(),
     text: optionalText,
+    ceiling: z.number().int().positive().optional(),
   }),
 ])
 export type OperatorAnswerRequest = z.infer<typeof answerRequestSchema>
