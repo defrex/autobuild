@@ -149,7 +149,7 @@ export class PostgresTicketSource implements TicketSource {
     const rows: Row[] = await this.sql`SELECT * FROM ab_tickets
       WHERE team = ${this.team}
         AND (${criteria.state ?? null}::text IS NULL OR state = ${criteria.state ?? null})
-        AND labels @> ${labels}::text[]
+        AND labels @> ${this.sql.array(labels, 'text')}
       ORDER BY created_at, id`
     return {
       tickets: await Promise.all(rows.map((row) => this.record(this.sql, row))),
@@ -206,7 +206,7 @@ export class PostgresTicketSource implements TicketSource {
       const inserted: Row[] = await tx`INSERT INTO ab_tickets
         (team, id, creation_key, title, body, state, labels, created_at, updated_at)
         VALUES (${this.team}, ${id}, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
-          ${state}, ${draft.labels ?? []}, ${now}, ${now})
+          ${state}, ${tx.array(draft.labels ?? [], 'text')}, ${now}, ${now})
         ON CONFLICT (team, creation_key) DO NOTHING RETURNING *`
       let row = inserted[0]
       if (!row && options.idempotencyKey !== undefined) {
@@ -234,7 +234,7 @@ export class PostgresTicketSource implements TicketSource {
       await tx`UPDATE ab_tickets SET
         title = ${validated.title ?? String(row.title)},
         body = ${validated.body ?? String(row.body)},
-        labels = ${validated.labels ?? strings(row.labels)},
+        labels = ${tx.array(validated.labels ?? strings(row.labels), 'text')},
         updated_at = ${new Date().toISOString()}
         WHERE team = ${this.team} AND id = ${id}`
     })
