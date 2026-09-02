@@ -3,6 +3,7 @@ import { mintToken } from 'autobuild/remote-store'
 
 const USAGE = `Usage:
   ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)
+  ab-hosted-store mint operator --user IDENTITY (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint build --build SLUG --session SESSION (--ttl-seconds N | --expires-at ISO-8601)`
 
@@ -60,11 +61,19 @@ export function mintTokenFromArgs(args: string[], env: Env, now = new Date()): s
     '--expires-at',
     option(args, '--expires-at'),
   ])
-  if (args[1] === 'operator' || args[1] === 'admin') {
+  if (args[1] === 'admin') {
     for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
-    return args[1] === 'operator'
-      ? mintToken(secret, { operator: true, session: '*', exp })
-      : mintToken(secret, { build: '*', session: '*', exp })
+    return mintToken(secret, { build: '*', session: '*', exp })
+  }
+  if (args[1] === 'operator') {
+    const rawUser = option(args, '--user')
+    const user = rawUser?.trim()
+    if (rawUser !== undefined && !user) throw new Error('--user must be nonblank')
+    if (rawUser !== undefined) allowed.add('--user').add(rawUser)
+    for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
+    return user
+      ? mintToken(secret, { operator: { user }, exp })
+      : mintToken(secret, { operator: true, session: '*', exp })
   }
   const build = option(args, '--build')?.trim()
   const session = option(args, '--session')?.trim()

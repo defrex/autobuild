@@ -65,7 +65,7 @@ export function createTicketServer(options: TicketServerOptions): {
     const scope = verifyToken(options.secret, match[1]!, clock())
     if (scope === null) throw new TicketRequestError(401, 'auth', 'invalid or expired token')
     const resource = tokenResource(scope)
-    if (resource.kind !== 'operator') {
+    if (resource.kind !== 'deployment') {
       throw new TicketRequestError(
         403,
         'auth',

@@ -367,7 +367,9 @@ export interface ControlBuildOpts {
   /** Canonical main-repository identity stored on BuildRecord.repo. */
   repo: string
   slug: string
-  env: Record<string, string | undefined>
+  /** Explicit identity for non-CLI callers. CLI adapters may supply env. */
+  user?: string
+  env?: Record<string, string | undefined>
   action: BuildControlAction
   /** Injected only for --revise-spec-from-ticket. */
   readTicketBody?: (ref: TicketRef) => Promise<string>
@@ -391,7 +393,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
 
   const events = await opts.store.getEvents(opts.slug)
   const state = reduceBuild(events)
-  const user = buildControlUser(opts.env)
+  const user = opts.user?.trim() || buildControlUser(opts.env ?? {})
 
   if (opts.action.kind === 'discard') {
     if (state.status !== 'queued') {

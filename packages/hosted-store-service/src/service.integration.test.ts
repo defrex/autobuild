@@ -4,10 +4,12 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createTerminalModeController } from '../../core/src/cli/terminal-restore'
 import { abDispatch } from '../../core/src/cli/dispatch'
+import { agentActor, KERNEL } from '../../core/src/events/envelope'
 import { createTicketSource } from '../../core/src/ports/tickets/create'
 import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
 import type { TicketSource } from '../../core/src/ports/types'
 import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
+import { OperatorApiClient } from 'autobuild/operator-api'
 import { RemoteBuildStore, mintToken } from 'autobuild/remote-store'
 import {
   CONFIG_TOML,
@@ -28,6 +30,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const requests: Array<{ method: string; path: string; authorization: string | null }> = []
   let serviceUrl = ''
   let serviceToken = ''
+  const serviceSecret = 'integration-signing-secret'
   let hostedTickets: TicketSource | undefined
   const ticketBackend = new FakeTicketSource([
     { ...readyTicket('T-1'), blockedBy: ['T-blocker'] },
@@ -44,10 +47,9 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     localGitForge: true,
     processCli: true,
     storeAdapter: async (backing) => {
-      const secret = 'integration-signing-secret'
       const service = createHostedStoreService({
         env: {
-          AB_STORE_SECRET: secret,
+          AB_STORE_SECRET: serviceSecret,
           AB_POSTGRES_URL: 'postgres://injected/test',
           AB_BLOB_BACKEND: 's3',
           AB_S3_BUCKET: 'injected',
@@ -71,7 +73,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
         },
       })
       serviceUrl = `http://127.0.0.1:${server.port}`
-      serviceToken = mintToken(secret, {
+      serviceToken = mintToken(serviceSecret, {
         operator: true,
         session: '*',
         exp: Date.now() + 60 * 60 * 1000,
@@ -198,6 +200,105 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
         entry.method === 'POST' && entry.path.includes('/repos/') && entry.path.endsWith('/events'),
     ),
   ).toBe(true)
+
+  // Exercise the operator surface through the actual Bun listener, not only
+  // the host-neutral in-process Fetch composition.
+  const operatorToken = mintToken(serviceSecret, {
+    operator: { user: 'HTTP Operator' },
+    exp: Date.now() + 60_000,
+  })
+  const operator = new OperatorApiClient({ url: serviceUrl, token: operatorToken })
+  const operatorDashboard = await operator.dashboard(h.origin)
+  expect(operatorDashboard.model.repo).toBe(h.origin)
+  expect(operatorDashboard.model.builds.some((build) => build.slug === 'add-rate-limiting')).toBe(
+    true,
+  )
+  expect(await operator.repositoryStatus(h.origin)).toMatchObject({ repo: h.origin })
+  expect(await operator.harvestStatus(h.origin)).toMatchObject({ repo: h.origin })
+  await operator.setIntake(h.origin, false)
+  expect((await h.store.getRepoEvents(h.origin)).at(-1)).toMatchObject({
+    actor: { kind: 'human', user: 'HTTP Operator' },
+    type: 'dispatcher.intake-set',
+    payload: { enabled: false },
+  })
+
+  const answerSlug = 'operator-answer'
+  await h.store.createBuild({
+    slug: answerSlug,
+    repo: h.origin,
+    ticket: { source: 'fake', id: 'T-operator' },
+  })
+  await h.store.append(answerSlug, {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'operator-runner', host: 'integration-host' },
+  })
+  const oldSpec = await h.store.putArtifact(answerSlug, { kind: 'spec', content: 'old spec' })
+  await h.store.append(answerSlug, {
+    actor: agentActor('spec', 'operator-spec-session'),
+    type: 'spec.authored',
+    payload: {
+      artifact: { kind: oldSpec.kind, rev: oldSpec.revision },
+      session: 'operator-spec-session',
+    },
+  })
+  await h.store.append(answerSlug, {
+    actor: agentActor('implement', 'operator-implement-session'),
+    type: 'escalation.raised',
+    payload: {
+      id: 'operator-escalation',
+      phase: 'implement',
+      round: 1,
+      source: 'agent',
+      question: 'Replace the spec?',
+    },
+  })
+  const replacement = [
+    '# Replacement',
+    '',
+    '## Acceptance criteria',
+    '- The listener path revises this build.',
+    '',
+    '## Out of scope',
+    '- Nothing else.',
+    '',
+  ].join('\n')
+  await operator.answer(h.origin, answerSlug, {
+    resolution: 'revise-spec',
+    origin: 'body',
+    body: replacement,
+  })
+  const revised = await operator.downloadArtifact(h.origin, answerSlug, 'spec', 1)
+  expect(new TextDecoder().decode(revised.content)).toBe(replacement)
+  expect((await h.store.getEvents(answerSlug)).filter((event) => event.seq > 3)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        actor: { kind: 'human', user: 'HTTP Operator' },
+        type: 'escalation.answered',
+      }),
+      expect.objectContaining({ type: 'spec.revised' }),
+    ]),
+  )
+
+  const rejectedScopes = [
+    serviceToken,
+    mintToken(serviceSecret, {
+      build: answerSlug,
+      session: '*',
+      exp: Date.now() + 60_000,
+    }),
+    mintToken(serviceSecret, {
+      resource: { kind: 'repo', id: h.origin },
+      session: '*',
+      exp: Date.now() + 60_000,
+    }),
+  ]
+  for (const token of rejectedScopes) {
+    const error = await new OperatorApiClient({ url: serviceUrl, token })
+      .repositoryStatus(h.origin)
+      .catch((caught) => caught)
+    expect(error).toMatchObject({ status: 403, kind: 'auth' })
+  }
 
   const badToken = mintToken('wrong-secret', {
     build: '*',

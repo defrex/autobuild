@@ -34,10 +34,21 @@ export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/b
 ab dispatch
 ```
 
-Operator tokens cover store and ticket operations, allowing one dispatcher
-credential. Legacy admin tokens still cover store administration but cannot
-access tickets. Mint a least-privilege build/session token with an explicit
-future expiry:
+Deployment operator tokens cover store and ticket operations, allowing one
+dispatcher credential. Legacy admin tokens still cover store administration but
+cannot access tickets.
+
+The same deployment also serves the versioned [operator API](../../docs/operator-api.md).
+Mint an attributed human-operator token with `--user`; unlike the deployment
+credential, it can use only the operator API and its signed identity is recorded
+on every control:
+
+```sh
+AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator \
+  --user 'Ada Lovelace' --ttl-seconds 3600
+```
+
+Mint a least-privilege build/session token with an explicit future expiry:
 
 ```sh
 AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint build \

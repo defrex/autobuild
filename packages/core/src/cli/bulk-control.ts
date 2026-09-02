@@ -158,7 +158,9 @@ export interface BulkControlOpts {
   store: BuildStore
   /** Canonical main-repository identity stored on BuildRecord.repo. */
   repo: string
-  env: Record<string, string | undefined>
+  /** Explicit identity for API callers; CLI/dashboard may retain env. */
+  user?: string
+  env?: Record<string, string | undefined>
   direction: BulkDirection
 }
 
@@ -231,7 +233,7 @@ export function bulkControlReport(summary: BulkControlSummary): string {
  */
 export async function bulkControlRepository(opts: BulkControlOpts): Promise<BulkControlSummary> {
   const { store, repo, direction } = opts
-  const actor = humanActor(buildControlUser(opts.env))
+  const actor = humanActor(opts.user?.trim() || buildControlUser(opts.env ?? {}))
   const paused = direction === 'pause'
   const intake = direction === 'resume'
 

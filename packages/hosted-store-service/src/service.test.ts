@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '../../core/src/store/memory'
+import { OperatorApiClient } from 'autobuild/operator-api'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -74,6 +75,87 @@ describe('hosted store service', () => {
     expect(opens).toBe(1)
   })
 
+  test('composes the operator API through the same lazy store', async () => {
+    let opens = 0
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens += 1
+        return backing
+      },
+    })
+    const token = mintToken(env.AB_STORE_SECRET, {
+      operator: { user: 'Hosted Operator' },
+      exp: now.getTime() + 60_000,
+    })
+    const client = new OperatorApiClient({
+      url: 'http://hosted.test',
+      token,
+      fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch,
+    })
+    expect(await client.repositoryStatus('acme/repo')).toEqual({
+      repo: 'acme/repo',
+      intake: true,
+      paused: false,
+      defaultAutoMerge: false,
+    })
+    expect(opens).toBe(1)
+    await client.setIntake('acme/repo', false)
+    expect((await backing.getRepoEvents('acme/repo')).at(-1)).toMatchObject({
+      actor: { kind: 'human', user: 'Hosted Operator' },
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+  })
+
+  test('redacts operator backing failures and reports them with operator context', async () => {
+    const failure = new Error('postgres://operator:secret@db.internal/control')
+    const backing = new MemoryBuildStore({ clock })
+    backing.getRepo = async () => {
+      throw failure
+    }
+    const reports: unknown[][] = []
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+      reportInternalError: (reported, context) => reports.push([reported, context]),
+    })
+    const operator = new OperatorApiClient({
+      url: 'http://hosted.test',
+      token: mintToken(env.AB_STORE_SECRET, {
+        operator: { user: 'Hosted Operator' },
+        exp: now.getTime() + 60_000,
+      }),
+      fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch,
+    })
+
+    const error = await operator.repositoryStatus('acme/repo').catch((caught) => caught)
+    expect(error).toMatchObject({
+      status: 500,
+      kind: 'internal',
+      message: 'hosted store is unavailable',
+    })
+    expect(reports).toEqual([
+      [
+        failure,
+        {
+          backend: 'operator',
+          method: 'GET',
+          pathname: '/operator/v1/repos/acme%2Frepo/status',
+        },
+      ],
+    ])
+  })
+
   test('unknown and unsupported routes return 404 without opening persistence', async () => {
     let opens = 0
     const service = createHostedStoreService({
@@ -94,6 +176,7 @@ describe('hosted store service', () => {
       new Request('http://hosted.test/builds', { method: 'DELETE' }),
       new Request('http://hosted.test/builds/demo/events/extra', { method: 'GET' }),
       new Request('http://hosted.test/tickets/not-an-operation', { method: 'POST' }),
+      new Request('http://hosted.test/operator/v1/repos/acme%2Frepo/not-an-operation'),
     ]) {
       const response = await service.fetch(request)
       expect(response.status).toBe(404)

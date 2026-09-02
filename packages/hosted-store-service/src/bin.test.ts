@@ -5,13 +5,13 @@ import { mintTokenFromArgs, runTokenCli } from './bin'
 const now = new Date('2026-09-02T00:00:00.000Z')
 
 describe('offline token command', () => {
-  test('mints operator, admin, and build/session scopes without a service', () => {
-    const operator = mintTokenFromArgs(
+  test('mints deployment, admin, build/session, and attributed operator scopes offline', () => {
+    const deployment = mintTokenFromArgs(
       ['mint', 'operator', '--ttl-seconds', '60'],
       { AB_STORE_SECRET: 's' },
       now,
     )
-    expect(verifyToken('s', operator, now)).toEqual({
+    expect(verifyToken('s', deployment, now)).toEqual({
       operator: true,
       session: '*',
       exp: now.getTime() + 60_000,
@@ -46,6 +46,16 @@ describe('offline token command', () => {
       build: 'demo',
       session: 'implement',
       exp: Date.parse('2026-09-03T00:00:00Z'),
+    })
+
+    const humanOperator = mintTokenFromArgs(
+      ['mint', 'operator', '--user', 'Ada Lovelace', '--ttl-seconds', '60'],
+      { AB_STORE_SECRET: 's' },
+      now,
+    )
+    expect(verifyToken('s', humanOperator, now)).toEqual({
+      operator: { user: 'Ada Lovelace' },
+      exp: now.getTime() + 60_000,
     })
   })
 

@@ -4,7 +4,8 @@ The contributor-facing map: how the codebase is organized and where the
 seams are. `SPEC.md` is the source of truth for the design and terminology;
 this document maps it to the code. For the user journey — install, configure,
 operate — see [`README.md`](../README.md); for the complete declarative surface,
-see [`docs/configuration.md`](configuration.md). Behavioral detail beyond what
+see [`docs/configuration.md`](configuration.md). The hosted sessionless control
+surface is specified in the [operator API reference](operator-api.md). Behavioral detail beyond what
 a map needs lives with the code and its tests; when this document and the code
 disagree, the code is authoritative.
 

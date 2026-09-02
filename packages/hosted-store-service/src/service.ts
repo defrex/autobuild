@@ -3,6 +3,7 @@ import {
   openPostgresTicketDatabase,
   type PostgresTicketDatabase,
 } from '@autobuild/postgres-store'
+import { createOperatorServer } from 'autobuild/operator-api'
 import type { BuildStore, Clock, TicketSource } from 'autobuild/plugin-sdk'
 import {
   createTicketServer,
@@ -19,8 +20,10 @@ import {
 } from 'autobuild/remote-store'
 import { HOSTED_ARTIFACT_MAX_BYTES, parseHostedStoreEnv, type HostedStoreEnv } from './config'
 
+type HostedBackend = 'store' | 'tickets' | 'operator'
+
 export interface HostedStoreErrorContext {
-  backend: 'store' | 'tickets'
+  backend: HostedBackend
   method: string
   pathname: string
 }
@@ -70,7 +73,7 @@ const storeResourceRoutes = new Set([
 ])
 
 /** Classify only route shapes implemented by the delegated protocol servers. */
-function hostedBackend(req: Request, pathname: string): 'store' | 'tickets' | undefined {
+function hostedBackend(req: Request, pathname: string): HostedBackend | undefined {
   let segments: string[]
   try {
     segments = pathname
@@ -78,6 +81,44 @@ function hostedBackend(req: Request, pathname: string): 'store' | 'tickets' | un
       .filter((part) => part.length > 0)
       .map(decodeURIComponent)
   } catch {
+    return undefined
+  }
+
+  if (segments[0] === 'operator') {
+    if (segments[1] !== 'v1' || segments[2] !== 'repos' || segments.length < 5) return undefined
+    const rest = segments.slice(4)
+    if (
+      req.method === 'GET' &&
+      rest.length === 1 &&
+      (rest[0] === 'builds' || rest[0] === 'dashboard' || rest[0] === 'status')
+    ) {
+      return 'operator'
+    }
+    if (req.method === 'GET' && rest.join('/') === 'harvest/status') return 'operator'
+    if (
+      req.method === 'POST' &&
+      (rest.join('/') === 'bulk-control' || rest.join('/') === 'harvest/control')
+    ) {
+      return 'operator'
+    }
+    const setting = rest[1] === 'intake' || rest[1] === 'auto-merge-default'
+    if (rest[0] === 'settings' && setting) {
+      if (req.method === 'PUT' && rest.length === 2) return 'operator'
+      if (req.method === 'POST' && rest.length === 3 && rest[2] === 'toggle') return 'operator'
+    }
+    if (rest[0] === 'builds' && rest[1]) {
+      if (req.method === 'GET' && rest.length === 2) return 'operator'
+      if (req.method === 'GET' && rest.length === 4 && rest[2] === 'artifacts' && rest[3]) {
+        return 'operator'
+      }
+      if (
+        req.method === 'POST' &&
+        rest.length === 3 &&
+        (rest[2] === 'control' || rest[2] === 'answer')
+      ) {
+        return 'operator'
+      }
+    }
     return undefined
   }
 
@@ -117,7 +158,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
   const requestsWithInternalFailures = new WeakSet<Request>()
 
-  const report = async (error: unknown, req: Request, backend: 'store' | 'tickets') => {
+  const report = async (error: unknown, req: Request, backend: HostedBackend) => {
     try {
       await reporter(error, {
         backend,
@@ -129,7 +170,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     }
   }
 
-  const reportProtocolFailure = (error: unknown, req: Request, backend: 'store' | 'tickets') => {
+  const reportProtocolFailure = (error: unknown, req: Request, backend: HostedBackend) => {
     requestsWithInternalFailures.add(req)
     return report(error, req, backend)
   }
@@ -139,13 +180,24 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       const attempt = (async () => {
         const config = parseHostedStoreEnv(env)
         const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
-        return createStoreServer({
+        const shared = options.clock === undefined ? {} : { clock: options.clock }
+        const storeServer = createStoreServer({
           store,
           secret: config.secret,
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
-          ...(options.clock === undefined ? {} : { clock: options.clock }),
-        }).fetch
+          ...shared,
+        })
+        const operatorServer = createOperatorServer({
+          store,
+          secret: config.secret,
+          onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
+          ...shared,
+        })
+        return (req: Request) =>
+          new URL(req.url).pathname.startsWith('/operator/v1/')
+            ? operatorServer.fetch(req)
+            : storeServer.fetch(req)
       })()
       storeHandlerPromise = attempt
       void attempt.catch(() => {
