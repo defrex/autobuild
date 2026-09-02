@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -129,6 +130,16 @@ function harness(
       requests.push(request)
       if (request.command === 'claude') return claude
       if (request.command === 'gh') return github
+      if (request.command === 'bun' && request.args[0] === 'install') {
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (request.command === 'bun' && request.args.join(' ') === 'run --silent postgres:migrate') {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'AB_POSTGRES_URL is required and must be nonblank\n',
+        }
+      }
       return spawnCommand(request)
     },
     output: {
@@ -243,7 +254,40 @@ describe('release orchestration', () => {
       run: testHarness.run,
       output: testHarness.output,
       today: () => '2026-07-27',
+      repositoryUrl: fixture.remote,
     })
+
+    const cloneRequests = testHarness.requests.filter(
+      (request) => request.command === 'git' && request.args[0] === 'clone',
+    )
+    expect(cloneRequests).toHaveLength(2)
+    expect(cloneRequests.map((request) => request.args.at(-2))).toEqual([
+      fixture.root,
+      fixture.remote,
+    ])
+    for (const clone of cloneRequests) {
+      expect(clone.args).toContain('v2.0.1')
+      expect(existsSync(String(clone.args.at(-1)))).toBe(false)
+    }
+    const smokeBunRequests = testHarness.requests.filter((request) => request.command === 'bun')
+    expect(smokeBunRequests).toHaveLength(4)
+    expect(
+      smokeBunRequests.filter(
+        (request) => request.args.join(' ') === 'run --silent postgres:migrate',
+      ),
+    ).toHaveLength(2)
+    for (const request of smokeBunRequests) {
+      expect(request.env).toBeDefined()
+      expect(request.env).not.toHaveProperty('AB_POSTGRES_URL')
+    }
+    const pushIndex = testHarness.requests.findIndex(
+      (request) => request.command === 'git' && request.args[0] === 'push',
+    )
+    const remoteCloneIndex = testHarness.requests.indexOf(cloneRequests[1]!)
+    const ghIndex = testHarness.requests.findIndex((request) => request.command === 'gh')
+    expect(testHarness.requests.indexOf(cloneRequests[0]!)).toBeLessThan(pushIndex)
+    expect(pushIndex).toBeLessThan(remoteCloneIndex)
+    expect(remoteCloneIndex).toBeLessThan(ghIndex)
 
     const claude = testHarness.requests.find((request) => request.command === 'claude')
     expect(claude?.args.slice(0, 4)).toEqual(['-p', '--tools', '', '--'])
@@ -308,6 +352,82 @@ describe('release orchestration', () => {
     expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
   })
 
+  test('a local-tag migration smoke failure rolls back the commit and unpushed tag', async () => {
+    const fixture = await createFixture()
+    const testHarness = harness()
+    const normalRun = testHarness.run
+    testHarness.run = async (request) => {
+      if (request.command === 'bun' && request.args[0] === 'install') {
+        testHarness.requests.push(request)
+        return { exitCode: 1, stdout: '', stderr: 'deterministic install failure' }
+      }
+      return normalRun(request)
+    }
+
+    await expectReleaseFailure(
+      fixture.root,
+      /could not install v2\.0\.1 smoke checkout/,
+      testHarness,
+    )
+    expect((await command(fixture.root, 'git', ['tag', '--list', 'v2.0.1'])).stdout).toBe('')
+    const clone = testHarness.requests.find(
+      (request) => request.command === 'git' && request.args[0] === 'clone',
+    )
+    expect(clone).toBeDefined()
+    expect(existsSync(String(clone?.args.at(-1)))).toBe(false)
+    expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
+  })
+
+  test('a remote-tag smoke failure preserves pushed refs and prints both recovery stages', async () => {
+    const fixture = await createFixture()
+    const testHarness = harness()
+    const normalRun = testHarness.run
+    testHarness.run = async (request) => {
+      if (
+        request.command === 'git' &&
+        request.args[0] === 'clone' &&
+        request.args.at(-2) === fixture.remote
+      ) {
+        testHarness.requests.push(request)
+        return { exitCode: 1, stdout: '', stderr: 'remote temporarily unavailable' }
+      }
+      return normalRun(request)
+    }
+    let error: unknown
+    try {
+      await runRelease(['--patch'], fixture.root, {
+        run: testHarness.run,
+        output: testHarness.output,
+        today: () => '2026-07-27',
+        repositoryUrl: fixture.remote,
+      })
+    } catch (caught) {
+      error = caught
+    }
+
+    const message = thrownMessage(error)
+    expect(message).toContain('canonical GitHub-tag migration smoke failed')
+    expect(message).toContain('https://github.com/defrex/autobuild.git')
+    expect(message).toContain('bun install --frozen-lockfile')
+    expect(message).toContain('env -u AB_POSTGRES_URL')
+    expect(message).toContain('gh release create v2.0.1')
+    expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
+    const head = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()
+    expect(
+      (await command(fixture.root, 'git', ['ls-remote', 'origin', 'refs/heads/main'])).stdout,
+    ).toStartWith(head)
+    expect(
+      (await command(fixture.root, 'git', ['ls-remote', 'origin', 'refs/tags/v2.0.1^{}'])).stdout,
+    ).toStartWith(head)
+    const failedClone = testHarness.requests.find(
+      (request) =>
+        request.command === 'git' &&
+        request.args[0] === 'clone' &&
+        request.args.at(-2) === fixture.remote,
+    )
+    expect(existsSync(String(failedClone?.args.at(-1)))).toBe(false)
+  })
+
   test('a post-push GitHub failure prints the exact notes in a verbatim retry command', async () => {
     const fixture = await createFixture()
     const testHarness = harness(undefined, {
@@ -322,6 +442,7 @@ describe('release orchestration', () => {
         run: testHarness.run,
         output: testHarness.output,
         today: () => '2026-07-27',
+        repositoryUrl: fixture.remote,
       })
     } catch (caught) {
       error = caught
@@ -463,6 +584,7 @@ describe('release orchestration', () => {
         run: testHarness.run,
         output: testHarness.output,
         today: () => '2026-07-27',
+        repositoryUrl: fixture.remote,
       })
       const changelog = await readFile(join(fixture.root, 'CHANGELOG.md'), 'utf8')
       expect(changelog).toContain('- [#2](https://example.test/2) — New capability')

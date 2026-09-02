@@ -1,7 +1,7 @@
 import { SQL } from 'bun'
 
 export const SCHEMA_VERSION = 1
-export const MIGRATE_COMMAND = 'bunx @autobuild/postgres-store migrate'
+export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 export const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
