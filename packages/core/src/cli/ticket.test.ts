@@ -511,7 +511,9 @@ describe('abTicketCreate', () => {
         stdout: () => {},
         sourceFactory: fakeFactory(created, ['AUT-8']),
       }),
-    ).rejects.toThrow(/--blocked-by: no ticket "AUT-99" in the configured fake/)
+    ).rejects.toThrow(
+      /--blocked-by: no ticket "AUT-99" in the configured fake ticket source — blocker ids are source-local \(e\.g\. AUT-8 for linear, file-1 for file\)/,
+    )
     // Validation precedes creation: nothing was filed.
     expect(created.draft).toBeUndefined()
   })

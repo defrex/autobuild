@@ -7,17 +7,46 @@ export interface TicketDraft {
   labels: string[]
 }
 
+export function bodyForEditor(body: string): string {
+  return body.replace(/\r\n?/g, '\n')
+}
+
+/** Restore source line endings after the browser's textarea API normalizes them.
+ * When the edit keeps the same line count, every original separator is retained,
+ * including mixed CRLF/LF/CR content. New separators use the source's dominant style. */
+export function bodyFromEditor(original: string, edited: string): string {
+  if (edited.includes('\r')) return edited
+  const originalEndings = original.match(/\r\n|\r|\n/g) ?? []
+  const editedLines = edited.split('\n')
+  if (originalEndings.length === editedLines.length - 1) {
+    return editedLines.map((line, index) => line + (originalEndings[index] ?? '')).join('')
+  }
+  const counts = new Map<string, number>()
+  let preferred = '\n'
+  let preferredCount = 0
+  for (const ending of originalEndings) {
+    const count = (counts.get(ending) ?? 0) + 1
+    counts.set(ending, count)
+    if (count > preferredCount) {
+      preferred = ending
+      preferredCount = count
+    }
+  }
+  return editedLines.join(preferred)
+}
+
 export function draftFromTicket(ticket: Ticket): TicketDraft {
-  return { title: ticket.title, body: ticket.body, labels: [...ticket.labels] }
+  return { title: ticket.title, body: bodyForEditor(ticket.body), labels: [...ticket.labels] }
 }
 
 export function ticketUpdatePatch(
   ticket: Ticket,
   draft: TicketDraft,
 ): OperatorTicketUpdateRequest | null {
+  const body = bodyFromEditor(ticket.body, draft.body)
   const patch: OperatorTicketUpdateRequest = {
     ...(draft.title !== ticket.title ? { title: draft.title } : {}),
-    ...(draft.body !== ticket.body ? { body: draft.body } : {}),
+    ...(body !== ticket.body ? { body } : {}),
     ...(draft.labels.length !== ticket.labels.length ||
     draft.labels.some((label, index) => label !== ticket.labels[index])
       ? { labels: [...draft.labels] }

@@ -106,6 +106,15 @@ nav {
   border: 1px solid var(--line);
   background: var(--panel);
 }
+.terminalBuildNotice {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+.terminalBuildNotice h2 {
+  margin-top: 0;
+}
 .tableRegion {
   width: 100%;
   overflow-x: auto;

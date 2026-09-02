@@ -1,6 +1,10 @@
 'use client'
 
-import type { OperatorTicketDetail, OperatorTicketQueue } from 'autobuild/operator-api'
+import type {
+  OperatorTicketBuild,
+  OperatorTicketDetail,
+  OperatorTicketQueue,
+} from 'autobuild/operator-api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -21,7 +25,7 @@ export function TicketQueue({
 }: {
   repo: string
   onError: (message?: string) => void
-  onOpenBuild: (slug: string) => void
+  onOpenBuild: (build: OperatorTicketBuild) => void
 }) {
   const [queue, setQueue] = useState<OperatorTicketQueue>()
   const [selected, setSelected] = useState<string>()
@@ -175,7 +179,14 @@ export function TicketQueue({
           dirty={dirty}
           disabled={pending}
           onEdit={edit}
-          onClose={() => setSelected(undefined)}
+          onClose={() => {
+            sequence.current += 1
+            setSelected(undefined)
+            setDetail(undefined)
+            setDraft(undefined)
+            setDirty(false)
+            dirtyRef.current = false
+          }}
           onSave={() => {
             const patch = ticketUpdatePatch(detail.ticket, draft)
             if (patch) void act(() => api.updateTicket(repo, detail.ticket.ref.id, patch))
@@ -293,7 +304,7 @@ function TicketDetail({
   onSave: () => void
   onMove: (state: string) => void
   onBlock: (ids: string[], operation: 'block' | 'unblock') => void
-  onOpenBuild: (slug: string) => void
+  onOpenBuild: (build: OperatorTicketBuild) => void
 }) {
   const [move, setMove] = useState(value.ticket.state ?? '')
   const [blocker, setBlocker] = useState('')
@@ -321,7 +332,7 @@ function TicketDetail({
             href={value.build.link}
             onClick={(event) => {
               event.preventDefault()
-              onOpenBuild(value.build!.slug)
+              onOpenBuild(value.build!)
             }}
           >
             Build {value.build.slug} · {value.build.status}

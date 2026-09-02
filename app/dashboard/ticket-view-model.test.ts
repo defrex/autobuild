@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Ticket } from 'autobuild/plugin-sdk'
 import {
+  bodyFromEditor,
   draftFromTicket,
   groupTickets,
   reconcileTicketDetail,
@@ -19,9 +20,17 @@ const ticket: Ticket = {
 describe('ticket view model', () => {
   test('omits unchanged bodies and preserves exact edited bytes', () => {
     const draft = draftFromTicket(ticket)
+    expect(draft.body).toBe('first\nsecond  \nno-final-newline')
     expect(ticketUpdatePatch(ticket, draft)).toBeNull()
     draft.body = 'first\r\nchanged \n\n'
     expect(ticketUpdatePatch(ticket, draft)).toEqual({ body: 'first\r\nchanged \n\n' })
+  })
+
+  test('restores textarea-normalized CRLF and mixed separators around edits', () => {
+    expect(bodyFromEditor('one\r\ntwo\r\nthree', 'one\nTWO\nthree')).toBe('one\r\nTWO\r\nthree')
+    expect(bodyFromEditor('one\r\ntwo\nthree\rfour', 'ONE\ntwo\nthree\nfour')).toBe(
+      'ONE\r\ntwo\nthree\rfour',
+    )
   })
 
   test('replaces and clears labels', () => {

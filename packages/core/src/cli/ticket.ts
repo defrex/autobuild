@@ -206,7 +206,10 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       ...(opts.blockedBy !== undefined ? { blockedBy: opts.blockedBy } : {}),
       ...(opts.state !== undefined ? { state: opts.state } : {}),
     },
-    { blockerErrorPrefix: '--blocked-by: ' },
+    {
+      blockerErrorPrefix: '--blocked-by: ',
+      blockerErrorSuffix: ' (e.g. AUT-8 for linear, file-1 for file)',
+    },
   )
   if (opts.json === true) {
     emitTicketJson(opts, ticket)

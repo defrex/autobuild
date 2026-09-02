@@ -54,6 +54,7 @@ async function knownBlockers(
   source: TicketSource,
   blockerIds: string[],
   prefix: string,
+  suffix = '',
 ): Promise<string[]> {
   const ids = [...new Set(blockerIds)]
   if (ids.length === 0) return ids
@@ -62,7 +63,7 @@ async function knownBlockers(
   if (unknown.length > 0) {
     throw new TicketOperationError(
       'not-found',
-      `${prefix}no ticket ${unknown.map((id) => `"${id}"`).join(', ')} in the configured ${source.name} ticket source — blocker ids are source-local`,
+      `${prefix}no ticket ${unknown.map((id) => `"${id}"`).join(', ')} in the configured ${source.name} ticket source — blocker ids are source-local${suffix}`,
     )
   }
   return ids
@@ -71,12 +72,13 @@ async function knownBlockers(
 export async function createTicket(
   source: TicketSource,
   input: TicketDraft & { state?: string },
-  options: { blockerErrorPrefix?: string } = {},
+  options: { blockerErrorPrefix?: string; blockerErrorSuffix?: string } = {},
 ): Promise<Ticket> {
   const blockedBy = await knownBlockers(
     source,
     input.blockedBy ?? [],
     options.blockerErrorPrefix ?? '',
+    options.blockerErrorSuffix ?? '',
   )
   const draft: TicketDraft = {
     title: input.title,

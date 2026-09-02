@@ -1,6 +1,10 @@
 'use client'
 
-import type { OperatorAnswerRequest, OperatorDashboardSnapshot } from 'autobuild/operator-api'
+import type {
+  OperatorAnswerRequest,
+  OperatorDashboardSnapshot,
+  OperatorTicketBuild,
+} from 'autobuild/operator-api'
 import {
   buildActionAvailability,
   parseTranscript,
@@ -65,6 +69,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
   const [surface, setSurface] = useState<'builds' | 'tickets'>('builds')
   const [selected, setSelected] = useState<string>()
+  const [linkedBuild, setLinkedBuild] = useState<{ repo: string; build: OperatorTicketBuild }>()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
@@ -193,8 +198,9 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           key={repo}
           repo={repo}
           onError={setError}
-          onOpenBuild={(slug) => {
-            setSelected(slug)
+          onOpenBuild={(ticketBuild) => {
+            setLinkedBuild({ repo, build: ticketBuild })
+            setSelected(ticketBuild.slug)
             setSurface('builds')
           }}
         />
@@ -260,6 +266,19 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
                 {line}
               </p>
             ))}
+            {linkedBuild?.repo === repo && linkedBuild.build.slug === selected && !build && (
+              <section
+                className="terminalBuildNotice"
+                id={`build-${encodeURIComponent(linkedBuild.build.slug)}`}
+                aria-label="Most recent ticket build"
+              >
+                <h2>Build {linkedBuild.build.slug}</h2>
+                <p>
+                  Status: <strong>{linkedBuild.build.status.toUpperCase()}</strong>
+                </p>
+                <p>This terminal build is not part of the active pipeline table.</p>
+              </section>
+            )}
             <section className="tableRegion" aria-label="Build pipelines">
               <table>
                 <thead>
