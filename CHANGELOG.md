@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs
 ## v0.6.0 — 2026-08-28
 
 This release strengthens role configuration by adding freeform CLI arguments to roles, making Claude one-shot arguments CLI-compatible, and rejecting bare prompt terminators in Claude and Codex role args. Pi integration now uses the operator's local pi install, rejects models absent from the local catalog, and gains fuller coverage of package gating, session isolation, and catalog failure diagnostics. Build execution is more resilient, with abandoned sessions reclaimed when runners attach, descendant processes reaped after every build-child exit, wall-clock budgets bounding phase agent sessions, transcript recovery after terminal turn errors, and policy-blocked builds staying parked across dispatch restarts. Dashboards were also refined to show only failures and warnings on dispatcher views, and durable build progress moved into the status surfaces.
