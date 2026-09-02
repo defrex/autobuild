@@ -8,7 +8,7 @@ import type {
   TicketSource,
   TicketUpdate,
 } from 'autobuild/plugin-sdk'
-import { validateTicketUpdate } from 'autobuild/plugin-sdk'
+import { validateTicketUpdate } from 'autobuild/ticket-update'
 import { assertTicketSchema } from './schema'
 
 type Row = Record<string, unknown>

@@ -23,3 +23,4 @@ export type {
 } from './query'
 export { OperatorControlError } from './control'
 export { OperatorQueryError } from './query'
+export * from './presentation'

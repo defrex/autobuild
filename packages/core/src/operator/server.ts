@@ -215,7 +215,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             'not-found',
             `artifact ${rest[3]}${rev === undefined ? '' : `@${rev}`} not found`,
           )
-        return new Response(artifact.content, {
+        return new Response(Uint8Array.from(artifact.content), {
           status: 200,
           headers: {
             'content-type': 'application/octet-stream',

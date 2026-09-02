@@ -27,7 +27,7 @@ import type {
   DashboardSelection,
   PipelineStep,
 } from './model'
-import { dashboardBuildControl } from './model'
+import { dashboardBuildControl } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
 import { dashboardSelections, sameSelection } from './selection'

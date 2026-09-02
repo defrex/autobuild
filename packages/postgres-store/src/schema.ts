@@ -1,4 +1,10 @@
 import { SQL } from 'bun'
+import {
+  AUTH_SCHEMA_CHECKSUM,
+  AUTH_SCHEMA_DDL,
+  AUTH_SCHEMA_VERSION,
+  assertAuthSchema,
+} from './auth-schema'
 
 export const SCHEMA_VERSION = 1
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
@@ -361,6 +367,7 @@ export async function migratePostgres(url: string): Promise<void> {
       await tx`SELECT pg_advisory_xact_lock(470281941)`
       await tx.unsafe(SCHEMA_DDL)
       await tx.unsafe(TICKET_SCHEMA_DDL)
+      await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
       const marker = rows[0]
@@ -387,8 +394,24 @@ export async function migratePostgres(url: string): Promise<void> {
           (singleton, version, checksum, applied_at)
           VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
       }
+      const authRows: { version: number; checksum: string }[] =
+        await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
+      const authMarker = authRows[0]
+      if (authMarker) {
+        if (
+          Number(authMarker.version) !== AUTH_SCHEMA_VERSION ||
+          authMarker.checksum !== AUTH_SCHEMA_CHECKSUM
+        ) {
+          throw schemaError('auth marker is incompatible')
+        }
+      } else {
+        await tx`INSERT INTO ab_auth_schema_migrations
+          (singleton, version, checksum, applied_at)
+          VALUES (true, ${AUTH_SCHEMA_VERSION}, ${AUTH_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
+      }
       await assertSchema(tx)
       await assertTicketSchema(tx)
+      await assertAuthSchema(tx)
     })
   } finally {
     await sql.close()

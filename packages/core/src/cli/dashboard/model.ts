@@ -46,6 +46,8 @@ import type { BuildRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
 import type { TranscriptPresentation } from './transcript'
+export { dashboardBuildControl } from './actions'
+export type { DashboardBuildControl } from './actions'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   openHarvestRun,
@@ -66,30 +68,6 @@ export type EffectiveStatus =
   | 'blocked'
   | 'aborting'
   | 'cleaning'
-
-export type DashboardBuildControl =
-  | { key: 'p'; action: 'pause'; label: 'pause' }
-  | { key: 'p'; action: 'cancel-pause'; label: 'cancel pause' }
-  | { key: 'r'; action: 'resume'; label: 'resume' }
-
-/** One authoritative display-status → keyboard-control mapping, shared by
- * rendering and input routing so an inactive shortcut can never be advertised. */
-export function dashboardBuildControl(status: EffectiveStatus): DashboardBuildControl | undefined {
-  switch (status) {
-    case 'running':
-      return { key: 'p', action: 'pause', label: 'pause' }
-    case 'pausing':
-      return { key: 'p', action: 'cancel-pause', label: 'cancel pause' }
-    case 'paused':
-    case 'blocked':
-      return { key: 'r', action: 'resume', label: 'resume' }
-    case 'queued':
-    case 'resuming':
-    case 'aborting':
-    case 'cleaning':
-      return undefined
-  }
-}
 
 export type StepState = 'done' | 'current' | 'provisional' | 'pending'
 

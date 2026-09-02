@@ -3,8 +3,9 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
     "types": ["bun"],
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
@@ -17,10 +18,41 @@
     "paths": {
       "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
       "autobuild/remote-store": ["./packages/core/src/store/remote/index.ts"],
+      "autobuild/store-adapter": ["./packages/core/src/store/adapter.ts"],
       "autobuild/operator-api": ["./packages/core/src/operator/index.ts"],
+      "autobuild/operator-presentation": ["./packages/core/src/operator/presentation.ts"],
       "autobuild/remote-tickets": ["./packages/core/src/ports/tickets/remote-index.ts"],
-      "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"]
-    }
+      "autobuild/ticket-update": ["./packages/core/src/ports/tickets/update.ts"],
+      "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"],
+      "@autobuild/hosted-store-service/service": ["./packages/hosted-store-service/src/service.ts"],
+      "@autobuild/hosted-store-service/web/auth": [
+        "./packages/hosted-store-service/src/web/auth.ts"
+      ],
+      "@autobuild/hosted-store-service/web/config": [
+        "./packages/hosted-store-service/src/web/config.ts"
+      ],
+      "@autobuild/hosted-store-service/web/runtime": [
+        "./packages/hosted-store-service/src/web/runtime.ts"
+      ]
+    },
+    "allowJs": true,
+    "incremental": true,
+    "esModuleInterop": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["packages/*/src", "bin", "tools", "server.ts", "drizzle.config.ts"]
+  "include": [
+    "packages/*/src",
+    "bin",
+    "tools",
+    "server.ts",
+    "drizzle.config.ts",
+    "app",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
 }
