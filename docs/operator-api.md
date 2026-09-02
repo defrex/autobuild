@@ -29,6 +29,11 @@ and artifact kind as separate URL path segments.
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
 
+For artifact reads, an absent `rev` selects the latest revision. A supplied value
+must match `[0-9]+` (one or more ASCII base-10 digits) and represent an integer
+from `0` through `Number.MAX_SAFE_INTEGER` (`9007199254740991`). All other
+supplied forms return `400 validation`.
+
 Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
