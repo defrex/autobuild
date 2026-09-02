@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#237](https://github.com/defrex/autobuild/pull/237) — Document the Bun workspace migration
 - [#236](https://github.com/defrex/autobuild/pull/236) — Move Autobuild's core implementation into the private `packages/core` Bun workspace while retaining the root package as the compatibility distribution
 
 ## v0.6.0 — 2026-08-28
