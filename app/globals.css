@@ -15,7 +15,7 @@
 }
 body {
   margin: 0;
-  min-width: 900px;
+  min-width: 320px;
   background: var(--bg);
   color: var(--text);
 }
@@ -89,6 +89,14 @@ h1 {
 nav {
   margin: 1rem 0;
 }
+.surfaceNav {
+  display: flex;
+  gap: 0.5rem;
+}
+.surfaceNav button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #163047;
+}
 .statusbar {
   display: flex;
   align-items: center;
@@ -97,6 +105,15 @@ nav {
   padding: 0.75rem;
   border: 1px solid var(--line);
   background: var(--panel);
+}
+.terminalBuildNotice {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+.terminalBuildNotice h2 {
+  margin-top: 0;
 }
 .tableRegion {
   width: 100%;
@@ -211,6 +228,99 @@ thead {
 .card button {
   width: 100%;
   margin-top: 1rem;
+}
+.ticketQueue {
+  display: grid;
+  gap: 1rem;
+}
+.ticketToolbar,
+.ticketGroups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+}
+.ticketGroup {
+  flex: 1 1 20rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.ticketGroup h2 {
+  margin-top: 0;
+}
+.badge {
+  padding: 0.1rem 0.4rem;
+  border-radius: 1rem;
+  background: #263b50;
+  color: var(--muted);
+  font-size: 0.75em;
+}
+.ticketCard {
+  display: grid;
+  width: 100%;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  text-align: left;
+}
+.ticketCard span {
+  color: var(--muted);
+}
+.ticketForm {
+  display: grid;
+  gap: 0.7rem;
+  max-width: 60rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.ticketForm label,
+.ticketDetail label {
+  display: grid;
+  gap: 0.3rem;
+}
+.ticketForm textarea,
+.ticketDetail textarea {
+  min-height: 14rem;
+  width: 100%;
+}
+.ticketDetail input {
+  width: min(100%, 60rem);
+}
+.ticketDetail section {
+  margin-top: 1.5rem;
+}
+.markdown {
+  padding: 1rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  background: #080c11;
+}
+.markdown pre {
+  overflow: auto;
+}
+.markdown img {
+  max-width: 100%;
+}
+@media (max-width: 700px) {
+  .shell {
+    padding-inline: 0.75rem;
+  }
+  header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .identity {
+    flex-wrap: wrap;
+  }
+  .ticketToolbar label {
+    width: 100%;
+  }
+  .ticketToolbar input,
+  .ticketToolbar select {
+    width: 100%;
+  }
 }
 .sr-only {
   position: absolute;

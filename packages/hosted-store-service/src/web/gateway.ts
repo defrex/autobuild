@@ -24,6 +24,16 @@ function failure(status: number, kind: 'auth' | 'validation' | 'not-found', erro
 
 function operatorSuffix(method: string, parts: string[]): boolean {
   const tail = parts.join('/')
+  if (parts[0] === 'tickets') {
+    if ((method === 'GET' || method === 'POST') && parts.length === 1) return true
+    if ((method === 'GET' || method === 'PATCH') && parts.length === 2 && parts[1]) return true
+    return (
+      method === 'POST' &&
+      parts.length === 3 &&
+      !!parts[1] &&
+      ['move', 'block', 'unblock'].includes(parts[2] ?? '')
+    )
+  }
   if (method === 'GET' && ['dashboard', 'status', 'builds', 'harvest/status'].includes(tail))
     return true
   if (method === 'POST' && ['bulk-control', 'harvest/control'].includes(tail)) return true

@@ -11,9 +11,16 @@ import type { Config, TicketsConfig } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { createTicketSource } from '../ports/tickets/create'
+import {
+  changeBlockers,
+  createTicket,
+  moveTicket,
+  requireTicket,
+  ticketListCriteria,
+  updateTicket,
+} from '../ports/tickets/operations'
 import type { Ticket, TicketSource, TicketUpdate } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { readyCriteria } from '../processes/dispatcher'
 import { parseArgs, stringFlag } from './args'
 import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
 
@@ -181,60 +188,8 @@ function ticketDetail(ticket: Ticket): string[] {
   return lines
 }
 
-function missingTicket(source: TicketSource, id: string): Error {
-  return new Error(
-    `no ticket "${id}" in the configured ${source.name} ticket source — ` +
-      'ticket ids are source-local',
-  )
-}
-
-async function requireTicket(source: TicketSource, id: string): Promise<Ticket> {
-  const ticket = await source.get(id)
-  if (ticket === null) throw missingTicket(source, id)
-  return ticket
-}
-
 function emitTicketJson(opts: TicketCommandOpts, ticket: Ticket): void {
   opts.stdout(JSON.stringify(ticket, null, 2))
-}
-
-async function requirePostMutationTicket(
-  source: TicketSource,
-  id: string,
-  operation: string,
-): Promise<Ticket> {
-  const ticket = await source.get(id)
-  if (ticket === null) {
-    throw new Error(
-      `ticket "${id}" disappeared from the configured ${source.name} ` +
-        `ticket source after ${operation}`,
-    )
-  }
-  return ticket
-}
-
-async function preflightBlockers(
-  source: TicketSource,
-  id: string,
-  blockerIds: string[],
-  operation: 'block' | 'unblock',
-): Promise<string[]> {
-  await requireTicket(source, id)
-  const deduplicated = [...new Set(blockerIds)]
-  const states = await source.dependencyStates(deduplicated)
-  const unknown = states.filter((state) => !state.exists).map((state) => state.id)
-  if (unknown.length > 0) {
-    throw new Error(
-      `no ticket ${unknown.map((candidate) => `"${candidate}"`).join(', ')} ` +
-        `in the configured ${source.name} ticket source — blocker ids are source-local`,
-    )
-  }
-  if (operation === 'block' && deduplicated.includes(id)) {
-    throw new Error(
-      `ticket "${id}" in the configured ${source.name} ticket source cannot block itself`,
-    )
-  }
-  return deduplicated
 }
 
 export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
@@ -242,34 +197,20 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   const body = await readBody(opts.bodyFile)
   const { source } = await resolveTicketCommand(opts, 'create')
 
-  // Validate blockers BEFORE creating: a ticket referencing a nonexistent
-  // blocker would never dispatch, and failing here costs nothing, whereas
-  // failing after create leaves a stranded ticket behind.
-  const blockedBy = [...new Set(opts.blockedBy ?? [])]
-  if (blockedBy.length > 0) {
-    const states = await source.dependencyStates(blockedBy)
-    const unknown = states.filter((state) => !state.exists).map((state) => state.id)
-    if (unknown.length > 0) {
-      throw new Error(
-        `--blocked-by: no ticket ${unknown.map((id) => `"${id}"`).join(', ')} ` +
-          `in the configured ${source.name} ticket source — blocker ids are ` +
-          'source-local (e.g. AUT-8 for linear, file-1 for file)',
-      )
-    }
-  }
-
-  const draft = {
-    title: opts.title,
-    body,
-    ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
-    ...(blockedBy.length > 0 ? { blockedBy } : {}),
-  }
-  // Preserve the no-override call exactly for adapters and plugins that
-  // distinguish an omitted options argument from explicit create options.
-  const ticket =
-    opts.state === undefined
-      ? await source.create(draft)
-      : await source.create(draft, { state: opts.state })
+  const ticket = await createTicket(
+    source,
+    {
+      title: opts.title,
+      body,
+      ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+      ...(opts.blockedBy !== undefined ? { blockedBy: opts.blockedBy } : {}),
+      ...(opts.state !== undefined ? { state: opts.state } : {}),
+    },
+    {
+      blockerErrorPrefix: '--blocked-by: ',
+      blockerErrorSuffix: ' (e.g. AUT-8 for linear, file-1 for file)',
+    },
+  )
   if (opts.json === true) {
     emitTicketJson(opts, ticket)
     return
@@ -291,20 +232,21 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(body !== undefined ? { body } : {}),
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
   }
-  await source.update(opts.id, patch)
   if (opts.json === true) {
-    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'the update'))
+    const updated = await updateTicket(source, opts.id, patch)
+    if (updated !== null) emitTicketJson(opts, updated)
     return
   }
+  await updateTicket(source, opts.id, patch, false)
   opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
 }
 
 export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'block')
-  const blockerIds = await preflightBlockers(source, opts.id, opts.blockerIds, 'block')
-  for (const blockerId of blockerIds) await source.addBlocker(opts.id, blockerId)
+  const blockerIds = [...new Set(opts.blockerIds)]
+  const updated = await changeBlockers(source, opts.id, blockerIds, 'block')
   if (opts.json === true) {
-    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'adding blockers'))
+    emitTicketJson(opts, updated)
     return
   }
   opts.stdout(
@@ -314,10 +256,10 @@ export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
 
 export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'unblock')
-  const blockerIds = await preflightBlockers(source, opts.id, opts.blockerIds, 'unblock')
-  for (const blockerId of blockerIds) await source.removeBlocker(opts.id, blockerId)
+  const blockerIds = [...new Set(opts.blockerIds)]
+  const updated = await changeBlockers(source, opts.id, blockerIds, 'unblock')
   if (opts.json === true) {
-    emitTicketJson(opts, await requirePostMutationTicket(source, opts.id, 'removing blockers'))
+    emitTicketJson(opts, updated)
     return
   }
   opts.stdout(
@@ -328,13 +270,10 @@ export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
 /** `ab ticket list` — ready-to-dispatch by default, explicit criteria otherwise. */
 export async function abTicketList(opts: TicketListOpts): Promise<void> {
   const { config, source } = await resolveTicketCommand(opts, 'list')
-  const criteria =
-    opts.state === undefined && opts.labels === undefined
-      ? readyCriteria(config)
-      : {
-          ...(opts.state !== undefined ? { state: opts.state } : {}),
-          ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
-        }
+  const criteria = ticketListCriteria(config, {
+    ...(opts.state !== undefined ? { state: opts.state } : {}),
+    ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+  })
   const listing = await source.listReady(criteria)
   for (const diagnostic of listing.diagnostics) opts.stderr(diagnostic)
   if (opts.json === true) {
@@ -365,15 +304,7 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
 /** `ab ticket move <id> <state>` — adapter-owned state validation and move. */
 export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'move')
-  await requireTicket(source, opts.id)
-  await source.transition(opts.id, opts.state)
-  const moved = await source.get(opts.id)
-  if (moved === null) {
-    throw new Error(
-      `ticket "${opts.id}" disappeared from the configured ${source.name} ` +
-        'ticket source after the move',
-    )
-  }
+  const moved = await moveTicket(source, opts.id, opts.state)
   if (opts.json === true) {
     opts.stdout(JSON.stringify(moved, null, 2))
     return

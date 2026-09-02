@@ -99,6 +99,66 @@ describe('web operator gateway', () => {
     ).toBe(404)
   })
 
+  test('allows only exact ticket shapes and applies write origin/content-type checks', async () => {
+    const delegated: string[] = []
+    const gateway = createWebGateway({
+      env,
+      getSession: session,
+      delegate: async (request) => {
+        delegated.push(`${request.method} ${new URL(request.url).pathname}`)
+        return Response.json({ ok: true })
+      },
+    })
+    expect(
+      (
+        await gateway.fetch(
+          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets?state=Ready'),
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await gateway.fetch(
+          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1'),
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await gateway.fetch(
+          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/move', {
+            method: 'POST',
+            headers: { origin: 'https://operator.example', 'content-type': 'application/json' },
+            body: '{"state":"Done"}',
+          }),
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await gateway.fetch(
+          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/comments'),
+        )
+      ).status,
+    ).toBe(404)
+    expect(
+      (
+        await gateway.fetch(
+          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets', {
+            method: 'POST',
+            headers: { origin: 'https://operator.example', 'content-type': 'text/plain' },
+            body: '{}',
+          }),
+        )
+      ).status,
+    ).toBe(400)
+    expect(delegated).toEqual([
+      'GET /operator/v1/repos/owner%2Frepo/tickets',
+      'GET /operator/v1/repos/owner%2Frepo/tickets/AUT-1',
+      'POST /operator/v1/repos/owner%2Frepo/tickets/AUT-1/move',
+    ])
+  })
+
   test('preserves artifact bytes without exposing configured canaries', async () => {
     const bytes = Uint8Array.from([0, 255, 17])
     const gateway = createWebGateway({

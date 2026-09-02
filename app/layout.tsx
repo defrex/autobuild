@@ -4,7 +4,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Autobuild operator',
-  description: 'Watch and control Autobuild pipelines',
+  description: 'Watch builds and groom the Autobuild ticket queue',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

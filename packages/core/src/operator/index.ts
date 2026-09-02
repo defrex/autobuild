@@ -10,11 +10,19 @@ export {
   harvestControlRequestSchema,
   operatorErrorSchema,
   settingRequestSchema,
+  ticketBlockerRequestSchema,
+  ticketCreateRequestSchema,
+  ticketMoveRequestSchema,
+  ticketUpdateRequestSchema,
 } from './protocol'
 export type {
   OperatorAnswerRequest,
   OperatorBuildControlRequest,
   OperatorErrorBody,
+  OperatorTicketBlockerRequest,
+  OperatorTicketCreateRequest,
+  OperatorTicketMoveRequest,
+  OperatorTicketUpdateRequest,
 } from './protocol'
 export type {
   BuildListScope,
@@ -23,4 +31,11 @@ export type {
 } from './query'
 export { OperatorControlError } from './control'
 export { OperatorQueryError } from './query'
+export type {
+  OperatorTicketBackend,
+  OperatorTicketBuild,
+  OperatorTicketContext,
+  OperatorTicketDetail,
+  OperatorTicketQueue,
+} from './tickets'
 export * from './presentation'

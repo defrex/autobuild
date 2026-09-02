@@ -28,6 +28,8 @@ and artifact kind as separate URL path segments.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
+| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria}`. With no query filters, `criteria` is the repository's effective `readyState` and conjunctive `readyLabels`; repeated `label` parameters are AND filters. State names come from the backend. |
+| `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 
 For artifact reads, an absent `rev` selects the latest revision. A supplied value
 must match `[0-9]+` (one or more ASCII base-10 digits) and represent an integer
@@ -53,6 +55,11 @@ JSON bodies are strict: unknown fields are rejected.
 | `POST …/settings/auto-merge-default/toggle` | Empty body. |
 | `POST …/bulk-control` | `{"action":"pause"\|"resume"}`. The hold fact, intake fact, then eligible build events are written in that order. |
 | `POST …/harvest/control` | `{"action":"toggle-gate"}` or `{"action":"run","run":"…"}`. A run action is bound to that concrete projected run. |
+| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[]}`; omitted state preserves the backend default. |
+| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, and complete-replacement `labels`. Body bytes are not normalized. |
+| `POST …/tickets/{id}/move` | `{"state":"backend state name"}`. |
+| `POST …/tickets/{id}/block` | `{"blockerIds":["…"]}`. |
+| `POST …/tickets/{id}/unblock` | `{"blockerIds":["…"]}`. |
 
 Answer variants:
 
@@ -121,8 +128,8 @@ headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
 code. Responses are private/no-store; a 401 sends the application back to sign
-in. Browser clients poll `dashboard` every two seconds; live transcript
-streaming is not provided.
+in. Browser clients poll the visible dashboard or ticket queue/detail every two seconds; live transcript
+streaming is not provided. Dirty ticket drafts survive polling. Markdown is rendered without raw HTML,
+and ticket-provider credentials and delegated bearer tokens remain server-side.
 
-The API does not expose phase-session commands, ticket intake, runner startup,
-streaming, or a generic event-append operation.
+The API does not expose phase-session commands, runner startup, streaming, or a generic event-append operation.

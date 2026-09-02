@@ -13,8 +13,13 @@ import {
   operatorErrorSchema,
   type OperatorAnswerRequest,
   type OperatorBuildControlRequest,
+  type OperatorTicketBlockerRequest,
+  type OperatorTicketCreateRequest,
+  type OperatorTicketMoveRequest,
+  type OperatorTicketUpdateRequest,
 } from './protocol'
 import type { OperatorBuildView, OperatorDashboardSnapshot } from './query'
+import type { OperatorTicketDetail, OperatorTicketQueue } from './tickets'
 
 export class OperatorApiError extends Error {
   constructor(
@@ -93,6 +98,62 @@ export class OperatorApiClient {
   }
   harvestStatus(repo: string): Promise<HarvestStatusView> {
     return this.request(repo, 'harvest/status')
+  }
+  listTickets(
+    repo: string,
+    filters: { state?: string; labels?: string[] } = {},
+  ): Promise<OperatorTicketQueue> {
+    const query = new URLSearchParams()
+    if (filters.state !== undefined) query.set('state', filters.state)
+    for (const label of filters.labels ?? []) query.append('label', label)
+    const suffix = query.size > 0 ? `tickets?${query}` : 'tickets'
+    return this.request(repo, suffix)
+  }
+  getTicket(repo: string, id: string): Promise<OperatorTicketDetail> {
+    return this.request(repo, `tickets/${encodeURIComponent(id)}`)
+  }
+  createTicket(repo: string, request: OperatorTicketCreateRequest): Promise<OperatorTicketDetail> {
+    return this.request(repo, 'tickets', { method: 'POST', body: JSON.stringify(request) })
+  }
+  updateTicket(
+    repo: string,
+    id: string,
+    request: OperatorTicketUpdateRequest,
+  ): Promise<OperatorTicketDetail> {
+    return this.request(repo, `tickets/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(request),
+    })
+  }
+  moveTicket(
+    repo: string,
+    id: string,
+    request: OperatorTicketMoveRequest,
+  ): Promise<OperatorTicketDetail> {
+    return this.request(repo, `tickets/${encodeURIComponent(id)}/move`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+  blockTicket(
+    repo: string,
+    id: string,
+    request: OperatorTicketBlockerRequest,
+  ): Promise<OperatorTicketDetail> {
+    return this.request(repo, `tickets/${encodeURIComponent(id)}/block`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+  unblockTicket(
+    repo: string,
+    id: string,
+    request: OperatorTicketBlockerRequest,
+  ): Promise<OperatorTicketDetail> {
+    return this.request(repo, `tickets/${encodeURIComponent(id)}/unblock`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
   }
   controlBuild(
     repo: string,
