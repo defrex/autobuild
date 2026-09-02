@@ -40,27 +40,47 @@ K unclaimed observation.recorded events
                                   (Triage by default)
 ```
 
+## Workspace ownership
+
+The repository is a Bun 1.4 workspace. The private root package, `autobuild`, is
+still the sole Git-installed compatibility distribution: it owns the public and
+private `bin/` entries, the `autobuild/plugin-sdk` export, and the shipped
+`skills/`, `templates/`, and documentation. Its implementation is included as
+unbundled TypeScript from the private `@autobuild/core` workspace at
+`packages/core`; the root repeats core's runtime dependencies so a packed or
+Git installation never requires a separately published core package.
+
+`packages/core` owns the CLI, kernel, adapters, shared types, dashboard
+projection, plugin SDK, and reusable contract suites. `tools/` is
+repository-only maintainer tooling. Future private API and web deployment
+packages will be siblings under `packages/` and depend on core with
+`workspace:*`; they must not enter the root package's `files` list or runtime
+dependency closure. All workspace manifests share one version because the
+remote-store protocol requires matching client and server versions.
+
 ## Layout
 
 | Path | Contents | SPEC |
 |---|---|---|
-| `src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
-| `src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
-| `src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
-| `src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
-| `src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
-| `src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
-| `src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
-| `src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
-| `src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
-| `src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
-| `src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
+| `package.json` | Private `autobuild` compatibility distribution and Bun workspace orchestrator; owns bins and shipped assets | — |
+| `packages/core/package.json` | Private `@autobuild/core` implementation workspace | — |
+| `packages/core/src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
+| `packages/core/src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
+| `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
+| `packages/core/src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
+| `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
+| `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
+| `packages/core/src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
+| `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
+| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
+| `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
-| `src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
-| `src/integration/` | End-to-end harness and product scenarios | — |
+| `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
+| `packages/core/src/integration/` | End-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
-| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `src/cli/guide-skill.test.ts` guards schema coverage and `src/cli/skill-self-containment.test.ts` guards installed references | §16.3 |
+| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `packages/core/src/cli/guide-skill.test.ts` guards schema coverage and `packages/core/src/cli/skill-self-containment.test.ts` guards installed references | §16.3 |
 | `docs/spec-standard.md` | The standalone definition of "buildable" every ticket surface uses; kept byte-identical with `skills/guide/references/spec-standard.md` for installed agents | §6.1 |
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
@@ -69,21 +89,21 @@ K unclaimed observation.recorded events
 Where each mechanism lives, and the one rule worth knowing at the seam. The
 full behavior is specified by each owner's colocated tests.
 
-**Events and state.** `src/events/payloads.ts` and `src/events/repository.ts`
+**Events and state.** `packages/core/src/events/payloads.ts` and `packages/core/src/events/repository.ts`
 are the frozen catalogs; every write passes `validateEventWrite` /
-`validateRepositoryEventWrite`. `src/kernel/reducer.ts` derives all build
-status; `src/kernel/harvest.ts` and `src/kernel/dispatch-settings.ts` reduce
+`validateRepositoryEventWrite`. `packages/core/src/kernel/reducer.ts` derives all build
+status; `packages/core/src/kernel/harvest.ts` and `packages/core/src/kernel/dispatch-settings.ts` reduce
 the repository journal independently of each other. No decision anywhere
 consults a snapshot in place of the append-only log.
 
-**Session Store authority.** `src/cli/binary.ts` validates a complete build or
+**Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through
-`src/cli/store-opening.ts`. `src/cli/env.ts` also classifies optional ambient
+`packages/core/src/cli/store-opening.ts`. `packages/core/src/cli/env.ts` also classifies optional ambient
 identity for the finite `builds`, `build status`, and `artifact download` read
 shells: no identity retains operator authority, while any partial, malformed,
 shared-only, or mixed identity fails closed before Store opening. Remote
 references keep the existing token-backed client unchanged. Local references
-are wrapped by `src/store/session-scope.ts`, which permits only the exact
+are wrapped by `packages/core/src/store/session-scope.ts`, which permits only the exact
 ambient build or repository resource and rejects agent-attributed event writes
 for any session other than `AB_SESSION`. The wrapper deliberately allows
 non-agent actors because phase terminals also run trusted kernel plumbing in
@@ -91,13 +111,13 @@ that CLI process; resource authority still applies to every operation. Generic
 sessionless opening remains unwrapped; only those three reads use the dedicated
 ambient-aware finite opener.
 
-**Phase decisions.** `src/kernel/phases.ts` owns the phase table,
-`src/kernel/engine.ts` the deterministic transitions;
-`src/processes/build-runner.ts` executes the decisions. Repeated phase starts
+**Phase decisions.** `packages/core/src/kernel/phases.ts` owns the phase table,
+`packages/core/src/kernel/engine.ts` the deterministic transitions;
+`packages/core/src/processes/build-runner.ts` executes the decisions. Repeated phase starts
 left by recovery are execution evidence, not policy counters: logical verdict
 rounds, `phase.failed`, failed verify completions, and distinct completed
 reconcile attempts own their respective budgets. Agents reach state only
-through `src/cli/` terminals, which convert artifact deposits into event facts
+through `packages/core/src/cli/` terminals, which convert artifact deposits into event facts
 atomically — the engine never reads blobs. Engine crash-gap and
 exhaustion guards query the event log for a later escalation raise with the
 exact same source/class and target phase; the triggering sequence remains the
@@ -105,7 +125,7 @@ re-arm boundary. `BuildRunner` applies the same independent targeting at the
 setup seam, where only a setup-targeted policy raise can satisfy setup
 exhaustion.
 
-**Phase-session budgets.** `src/ports/runner/routing.ts` resolves one inherited
+**Phase-session budgets.** `packages/core/src/ports/runner/routing.ts` resolves one inherited
 `sessionBudgetSeconds` value for each logical role, with the policy default as
 its final fallback. `BuildRunner` captures it at the session action boundary,
 starts an unref'ed timer after `session.started`, and composes expiry with the
@@ -125,9 +145,9 @@ this build-phase timer.
 **Human guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
 answer` and the dashboard's blocked-build resume control are two surfaces over
-the one `src/cli/build-control.ts` operation that appends it, so delivery is
+the one `packages/core/src/cli/build-control.ts` operation that appends it, so delivery is
 identical whichever a human used.
-`src/kernel/engine.ts` routes answers from `plan` and `plan-review` to the next
+`packages/core/src/kernel/engine.ts` routes answers from `plan` and `plan-review` to the next
 `plan` round, and answers from `implement` and `code-review` to the next
 `implement` round. An agent verifier's own escalation is the deliberate
 exception to producer routing: its answer returns to that same step on
@@ -145,8 +165,8 @@ restart and decision replay agree.
 `finalize` and `reconcile` have no producer round, so
 `PHASE_SPECS.inputs.answeredGuidance` makes `ab context` their delivery channel
 for the latest answer addressed to that phase. On every receiving path,
-`src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
-answer text. For producer and verifier feedback routes, `src/kernel/engine.ts`
+`packages/core/src/cli/context.ts` materializes `.ab/guidance.json` with the escalation id and
+answer text. For producer and verifier feedback routes, `packages/core/src/kernel/engine.ts`
 indexes each guidance-bearing phase start as a durable carrier and pairs only
 the latest carrier for an exact phase plus round/attempt with a subsequent
 matching `session.started`. An unpaired carrier remains deliverable across
@@ -154,7 +174,7 @@ recovery; the matching launch consumes it once without process-local state. A
 producer round's feedback is a discriminated union — findings, a
 failed verify report, or guidance — and a round may carry none, so a round with
 guidance writes no `.ab/findings.json`. The receiving skills document their
-corresponding input, and `src/cli/skill-guidance.test.ts` derives that
+corresponding input, and `packages/core/src/cli/skill-guidance.test.ts` derives that
 requirement from the phase table.
 
 **Finalize publication.** Content-producing `finalize:*` checks or agents
@@ -164,14 +184,14 @@ derives the last published head from event facts, rejects a non-descendant
 before checkpointing the new head on `finalize.step-completed`. An unchanged
 head is a no-op; Git/Forge failures stay failure-tolerant observations.
 
-**Verify gating.** `src/ontology.ts` owns the canonical
+**Verify gating.** `packages/core/src/ontology.ts` owns the canonical
 `pass | fail | skipped` outcome (only `fail` routes back to implement or
 consumes attempts; a skip satisfies one step without being passing
 evidence). Two kernel-authored skip sources narrow the configured universe:
-`src/kernel/plan-verify-selection.ts` resolves an approved plan's front-matter
-selection (applied at the planner's `ab done` in `src/cli/terminals.ts`,
+`packages/core/src/kernel/plan-verify-selection.ts` resolves an approved plan's front-matter
+selection (applied at the planner's `ab done` in `packages/core/src/cli/terminals.ts`,
 snapshotted by the engine at approval), and
-`src/kernel/verify-applicability.ts` matches changed paths against a step's
+`packages/core/src/kernel/verify-applicability.ts` matches changed paths against a step's
 selectors, resolved by the build runner via `git diff` against the initial
 branch-cut base (or the refreshed base promoted by a completed reconcile).
 This verify-only base is deliberately independent from implementation's
@@ -186,7 +206,7 @@ once. Guidance answering the policy escalation after failed-report exhaustion
 instead routes to `implement` and outranks the pending report. A bare retry carries no
 feedback.
 
-**Launch ownership.** `src/cli/dispatch.ts` is the kernel owner and
+**Launch ownership.** `packages/core/src/cli/dispatch.ts` is the kernel owner and
 single-flights supervised build executions per slug within its process. It
 publishes effective config into the build artifact namespace, claims the exact
 execution-instance lease, then calls the workspace-adjacent `BuildExecution`
@@ -224,18 +244,18 @@ negative group id and applies the same bounded TERM-then-KILL teardown, so it
 survives abrupt kernel death. The live local supervisor independently awaits
 full-group disappearance before publishing completion and releasing its exact
 lease; lease expiry remains the durable recovery fallback. The BuildStore lease
-remains the cross-process and workspace-release gate. `src/processes/dispatcher.ts`
+remains the cross-process and workspace-release gate. `packages/core/src/processes/dispatcher.ts`
 counts actual schedules, not suppressed polls. Open session history is never a
 lock: a legacy dead session may remain open, while an actual takeover closes it
 explicitly.
 
-**Store authority.** `src/store/build-scope.ts` wraps every adapter with one
+**Store authority.** `packages/core/src/store/build-scope.ts` wraps every adapter with one
 build's authority. Own-build record/event/artifact/lease/subscription calls
 delegate; foreign-build, collection/admin, close, and repository-journal calls
 raise `BuildScopeError`. The shared Store suite applies these checks to memory,
 SQLite, and remote clients, while HTTP token scope remains defense in depth.
 
-**Live configuration.** `src/config/live.ts` owns the running dispatcher's
+**Live configuration.** `packages/core/src/config/live.ts` owns the running dispatcher's
 immutable last-valid main-checkout snapshot, exhaustive hot/restart field
 classification, and eager role resolver. The watch loop refreshes it before
 each tick and publishes the exact accepted TOML and the composed effective JSON
@@ -253,21 +273,21 @@ notices rather than partial adapter swaps. `--once` retains static startup
 configuration.
 
 **Harvest.** The dispatcher owns the threshold trigger and starts runs
-fire-and-forget; `src/processes/harvest.ts` is the deterministic core (scan,
+fire-and-forget; `packages/core/src/processes/harvest.ts` is the deterministic core (scan,
 source-aware originating-ticket lifecycle projection, filing-time blocker
 resolution, occurrence identity, and the exhaustion partition),
 `harvest-runner.ts` executes the staged workflow under the heartbeated
 repository lease, records declared/derived blocker provenance, and
-`src/kernel/harvest.ts` reduces runs, claims, recovery history, and the
+`packages/core/src/kernel/harvest.ts` reduces runs, claims, recovery history, and the
 committed ledger with ordered parked/exhaustion/open selectors. Its pure
 creation selectors pair reservation/filing facts, bound unmatched keys to
 active runs, and conservatively union reservations first seen between the
-repository snapshots bracketing a ready listing. `src/processes/dispatcher.ts`
+repository snapshots bracketing a ready listing. `packages/core/src/processes/dispatcher.ts`
 correlates those keys before dependency reads or claims, retaining queue depth
 and emitting creation-specific tick diagnostics. The recovery
 invariants are SPEC §12; the mechanics live in the reducer and its tests.
 
-**Ticket sources.** `src/ports/tickets/`. `listReady` is an explicit
+**Ticket sources.** `packages/core/src/ports/tickets/`. `listReady` is an explicit
 partial-listing seam: individually malformed records come back as
 diagnostics (surfaced by the dispatcher's tick report and `ab ticket list`
 stderr) while tracker-wide invariant violations stay fatal — one broken
@@ -279,7 +299,7 @@ adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
 unchanged.
 
 **Workspace, execution, and review base selection.**
-`src/ports/workspace/create.ts` resolves `[workspace].provider` against the
+`packages/core/src/ports/workspace/create.ts` resolves `[workspace].provider` against the
 builtin-plus-plugin registry once during production wiring and pairs it with a
 `BuildExecution` capability. A provider-supplied capability substitutes at
 that seam; otherwise the shipped local subprocess capability is used. The builtin stays
@@ -287,27 +307,27 @@ store-root-aware; selected plugin factories receive their nested config,
 environment, and absolute repository root. `WorkspaceHandle.ref` remains a
 provider identifier while `path` is the locally reachable working copy used by
 runners and forge calls; both are recorded, with `ref` as the historical-event
-fallback. `src/ports/workspace/git-worktree.ts` selects the branch-cut base once
+fallback. `packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
 resumes at the branch tip and never re-cuts, so the first provisioning fact
 remains immutable provenance. Separately, each successful implementation terminal in
-`src/cli/terminals.ts` asks the Forge to snapshot its authoritative base when
+`packages/core/src/cli/terminals.ts` asks the Forge to snapshot its authoritative base when
 that optional capability exists; otherwise it privately refreshes the frozen
 target branch from `origin` and records
 the unique merge-base of that snapshot and `HEAD` in `implement.completed`.
 It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
 errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
-execution-time target refresh in `src/processes/build-runner.ts` remains a
+execution-time target refresh in `packages/core/src/processes/build-runner.ts` remains a
 third, deliberately separate boundary and also fails closed.
 
-**Agent runtimes.** `src/ports/runner/`: `runtime.ts` (capability-carrying
+**Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
 `production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct
 Codex `exec --json` subprocess protocol with native thread resume), `pi.ts` and
 `pi-rpc.ts` (the local pi CLI prerequisite/auth probe and long-lived headless
 RPC protocol, minimum version 0.84.3), `one-shot.ts` (optional tool-free
-non-phase completions — slug naming via `src/cli/dispatch.ts`, skill-conflict
-proposals via `src/cli/upgrade-agent.ts`), `provider-error.ts` (positive-only
+non-phase completions — slug naming via `packages/core/src/cli/dispatch.ts`, skill-conflict
+proposals via `packages/core/src/cli/upgrade-agent.ts`), `provider-error.ts` (positive-only
 permanent-failure classifier), and `session-env.ts` (per-turn environment merge
 that fronts `bin/agent/ab` on `PATH`). The pi CLI owns its login and model
 catalog; the shipped bridge limits tools and refreshes each turn's subprocess
@@ -316,7 +336,7 @@ native error extraction; processes own durable failure policy — the transcript
 is always deposited, and a turn's typed terminal always beats a late failure
 signal.
 
-**Plugin bootstrap and CLI composition.** `src/plugins/load.ts` resolves
+**Plugin bootstrap and CLI composition.** `packages/core/src/plugins/load.ts` resolves
 repository-path modules from the config-bearing root and bare packages from an
 explicit package root (defaulting to that same root), validates each default
 manifest/API range, and atomically registers normalized factories, provenance,
@@ -324,15 +344,15 @@ ticket credential metadata, and optional contract descriptors before production
 wiring or the first dispatch tick. Its structured single-module attempt feeds
 two policies: `loadPlugins` remains fail-fast for dispatch, while
 `diagnosePlugins` collects ordered failures and retains later healthy
-registrations for `ab plugin doctor`. `src/cli/plugin.ts` owns the sessionless
-list/doctor/test grammar and live gate; `src/plugins/contract-entry.ts` reloads
+registrations for `ab plugin doctor`. `packages/core/src/cli/plugin.ts` owns the sessionless
+list/doctor/test grammar and live gate; `packages/core/src/plugins/contract-entry.ts` reloads
 one selected registration inside a real `bun test` process and registers exactly
 one unchanged port suite.
 
-`src/ports/forge/create.ts` resolves the root `forge` selector, constructs the
+`packages/core/src/ports/forge/create.ts` resolves the root `forge` selector, constructs the
 shipped GitHub or local-git adapter, or lazily invokes a registered plugin
 factory, and preserves the returned adapter's optional capabilities. The
-local-git adapter in `src/ports/forge/local-git.ts` stores versioned JSON PR
+local-git adapter in `packages/core/src/ports/forge/local-git.ts` stores versioned JSON PR
 records as blobs behind private `refs/autobuild/local-git/` refs in the shared
 Git database. It computes mergeability with `git merge-tree`, leaves the build
 branch reachable, and lands a guarded single-parent squash locally. Immediately
@@ -350,53 +370,53 @@ PR as merged only after synchronization succeeds. Forge-native base snapshotting
 it pin the current local base without `origin`, while capability-less adapters
 retain the legacy private-ref fetch path. Dispatch constructs one
 selected adapter before opening the store and threads it through runners,
-epilogue, and janitor work. Scoped `src/cli/binary.ts` processes independently
+epilogue, and janitor work. Scoped `packages/core/src/cli/binary.ts` processes independently
 load immutable config and repository-path plugins from the build worktree, use
 `resolveMainRepo` to locate the consuming checkout only for bare-package lookup,
 and resolve the same adapter name for phase terminal plumbing. This keeps
 package availability independent of local-store/worktree placement without
 redirecting branch-owned plugin source or factory `repoRoot` away from the
-worktree. `src/ports/workspace/create.ts` similarly resolves
+worktree. `packages/core/src/ports/workspace/create.ts` similarly resolves
 `[workspace].provider`, retaining host-owned git-worktree construction while
 passing plugin config, environment, and repository root to registered
 factories. Ticket-source selection is registry-backed in
-`src/ports/tickets/create.ts`; dispatch and sessionless `ab ticket` commands
+`packages/core/src/ports/tickets/create.ts`; dispatch and sessionless `ab ticket` commands
 load plugins before constructing it.
 
-`src/plugins/runtimes.ts` invokes plugin runtime factories in registration
+`packages/core/src/plugins/runtimes.ts` invokes plugin runtime factories in registration
 order, validates their capability-bearing registrations, and returns one fresh
 registry containing builtins and plugins. Dispatch performs that composition
 before eager role resolution and shares the result with build, harvest, and
 slug routing. Upgrade performs the same composition lazily at its first merge
 conflict.
 
-`src/cli/repo-state.ts` owns repository identity and store precedence
-(`--store` > `AB_STORE` > `.autobuild/`); `src/cli/store-opening.ts` is the
+`packages/core/src/cli/repo-state.ts` owns repository identity and store precedence
+(`--store` > `AB_STORE` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
 production store composition boundary shared by finite sessionless queries and
 phase sessions. Its shared scoping primitive preserves remote token composition
 and adds local ambient authority only for filesystem stores. The dedicated
 ambient-read opener classifies identity before repository or Store opening and
 is adopted only by `ab builds`, `ab build status`, and `ab artifact download`;
 all other sessionless commands keep the generic unwrapped opener.
-`src/cli/repository-status.ts` consumes that boundary and the kernel's
+`packages/core/src/cli/repository-status.ts` consumes that boundary and the kernel's
 `reduceDispatchSettings` projection to report journal-backed dispatcher
 controls without ensuring a repository stream or starting dispatcher work.
-`src/cli/args.ts` parses command-scoped flag contracts; `src/cli/binary.ts`
+`packages/core/src/cli/args.ts` parses command-scoped flag contracts; `packages/core/src/cli/binary.ts`
 classifies build/harvest session tuples and routes sessionless invocations, so
 phase-only commands report their complete runner context when run by hand.
 
-**PR attachments.** `src/cli/artifact.ts` atomically turns an explicit
+**PR attachments.** `packages/core/src/cli/artifact.ts` atomically turns an explicit
 `artifact put --attach` into an exact artifact plus designation fact.
-`src/kernel/pr-attachments.ts` selects current designations, hosted
+`packages/core/src/kernel/pr-attachments.ts` selects current designations, hosted
 correlations, and pending cleanup without coupling to a producer or verify-step
-name. `src/cli/pr-attachments.ts` performs optional image hosting through the
-narrow Forge capability, while `src/cli/pr-summary.ts` renders the same complete
+name. `packages/core/src/cli/pr-attachments.ts` performs optional image hosting through the
+narrow Forge capability, while `packages/core/src/cli/pr-summary.ts` renders the same complete
 text projection for finalize and late designations. The GitHub release transport
-lives in `src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
+lives in `packages/core/src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
 and retry facts remain dispatcher janitor duty.
 
 **Abort control and cleanup.** CLI and dashboard call the same
-`src/cli/build-control.ts` service. A confirmed dashboard `a` action appends only
+`packages/core/src/cli/build-control.ts` service. A confirmed dashboard `a` action appends only
 the durable abort request. After claiming the build lease, `build-runner.ts`
 acknowledges an already-pending pause or abort before workspace setup, without
 appending `runner.attached`; resume and workspace-using decisions stay behind
@@ -414,10 +434,10 @@ AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
 behavior.
 
-**Dashboard.** `src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
+**Dashboard.** `packages/core/src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
 it has no ticket, forge, workspace-provider, LiveConfig, or runtime dependency.
 It follows one dispatch run's repository facts incrementally through
-`src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
+`packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
 intervals. The same polling path calls the canonical
@@ -432,10 +452,10 @@ queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
-`src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
+`packages/core/src/cli/build-progress.ts` projects the exact last-event, heartbeat, and lease
 inputs shared by the diagnostic `ab builds` and `ab build status` surfaces. Its
 one-hour `diverged` predicate is presentation-only: reducer status, engine
-routing, and lease health remain independent. `src/cli/dashboard/model.ts` is
+routing, and lease health remain independent. `packages/core/src/cli/dashboard/model.ts` is
 the event-derived build-row projection; `poll.ts` reprojects rows for event or
 effective-config changes and reuses them across heartbeat/lease-only renewals
 while retaining the cached log and reduction.
@@ -461,13 +481,13 @@ read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,
 never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
-**Init and upgrade.** `src/cli/init.ts` owns deterministic skill vendoring,
+**Init and upgrade.** `packages/core/src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
 launches an interactive agent CLI, or prints the identical short prompt, telling
 the setup agent to read the installed
 `.agents/skills/ab-guide/references/setup.md`; this bypasses all build and
 BuildStore session plumbing. Existing config is never reconciled, even with
-`--force`. `src/cli/upgrade.ts` owns the pristine × local × incoming skill merge,
+`--force`. `packages/core/src/cli/upgrade.ts` owns the pristine × local × incoming skill merge,
 the provenance-safe fixed retirement of obsolete defaults, and all writes:
 agent output is an untrusted proposal validated before anything touches disk,
 and every failure path leaves live and pristine byte-untouched.
@@ -490,7 +510,7 @@ bun run dev -- dispatch
 
 Bun keeps the original CLI promise and its `DispatchLoop` alive while hot
 module evaluation replaces only the renderer used by the next repaint. Edits
-to `src/cli/dashboard/render.ts` and presentation-only dependencies imported
+to `packages/core/src/cli/dashboard/render.ts` and presentation-only dependencies imported
 by it appear without restarting runners, releasing leases, or stacking input
 handlers. Changes to dispatcher logic, dashboard model/controller logic,
 keyboard handling, or build-runner code still require a restart. The
@@ -501,17 +521,17 @@ installed `ab` binary remains the non-watching production entry.
 The seams are the contract. Five reusable contract families run the same
 behavioral assertions against every implementation:
 
-- `src/store/contract.ts` — `BuildStore` and `BlobStore`;
-- `src/ports/tickets/contract.ts` — `TicketSource`;
-- `src/ports/workspace/contract.ts` — `WorkspaceProvider`;
-- `src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
+- `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`;
+- `packages/core/src/ports/tickets/contract.ts` — `TicketSource`;
+- `packages/core/src/ports/workspace/contract.ts` — `WorkspaceProvider`;
+- `packages/core/src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
   branch deletion with merged-race preservation;
-- `src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
+- `packages/core/src/ports/runner/contract.ts` — `AgentRunner` session/continuation,
   transcript metadata and usage, typed failure permanence/cause, per-turn
   ambient environment refresh and cancellation, distribution-managed `ab`
   resolution, and the optional tool-free one-shot capability.
 
-`src/ports/runner/routing.ts` eagerly resolves every role's primary, ordered
+`packages/core/src/ports/runner/routing.ts` eagerly resolves every role's primary, ordered
 alternate targets, and independently inherited build-session budget.
 `build-runner.ts` and `harvest-runner.ts` own the deterministic
 primary-first attempt loop: each substitution opens a new session bracket,
@@ -538,7 +558,7 @@ AB_RUN_LIVE_PORT_CONTRACTS=1 \
 LINEAR_API_KEY=… \
 AB_LINEAR_CONTRACT_TEAM_KEY=SCRATCH \
 AB_LINEAR_CONTRACT_PROJECT_ID=… \
-bun test src/ports/tickets/linear.live.test.ts
+bun test packages/core/src/ports/tickets/linear.live.test.ts
 ```
 
 The token must be able to create, update, relate, and archive issues in the
@@ -556,7 +576,7 @@ To run the GitHub contract manually:
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 GH_TOKEN=… \
 AB_GITHUB_CONTRACT_REPO=owner/destructive-scratch-repo \
-bun test src/ports/forge/github.live.test.ts
+bun test packages/core/src/ports/forge/github.live.test.ts
 ```
 
 `GITHUB_TOKEN` may be used instead of `GH_TOKEN`. The repository must have
@@ -575,15 +595,15 @@ execution, and one-shot completion:
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_CLAUDE_CONTRACT_MODEL=claude-sonnet-4-… \
-bun test src/ports/runner/claude.live.test.ts
+bun test packages/core/src/ports/runner/claude.live.test.ts
 
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_CODEX_CONTRACT_MODEL=gpt-… \
-bun test src/ports/runner/codex.live.test.ts
+bun test packages/core/src/ports/runner/codex.live.test.ts
 
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_PI_CONTRACT_MODEL=openai/gpt-… \
-bun test src/ports/runner/pi.live.test.ts
+bun test packages/core/src/ports/runner/pi.live.test.ts
 ```
 
 Claude uses the locally installed Claude Code CLI and its configured login; the
@@ -617,7 +637,7 @@ That package probe does not invoke a provider and can be selected without
 
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
-bun test src/ports/runner/pi.live.test.ts -t 'gates tools discovered'
+bun test packages/core/src/ports/runner/pi.live.test.ts -t 'gates tools discovered'
 ```
 
 Once opted in, the probe fails with the missing expected tool and its exact

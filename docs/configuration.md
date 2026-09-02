@@ -645,9 +645,9 @@ each caller's existing fail-safe behavior. Role `args` apply to those one-shots
 too. Effective arguments are recorded on session-start facts.
 
 The injected Codex protocol/contract suite is deterministic and credential-free:
-`bun test src/ports/runner/codex.test.ts`. An authenticated local smoke run is
+`bun test packages/core/src/ports/runner/codex.test.ts`. An authenticated local smoke run is
 opt-in:
-`AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test src/ports/runner/codex.live.test.ts`.
+`AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test packages/core/src/ports/runner/codex.live.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
 `code-review`, `finalize`, and `reconcile`). Agent verify steps and agent

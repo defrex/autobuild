@@ -15,7 +15,7 @@
 Autobuild builds itself, so every change here wears exactly one of two hats.
 Sorting out which is a top-level concern for any ticket, spec, or request:
 
-- **The product** — what ships to every user: `src/`, `bin/`, the canonical
+- **The product** — what ships to every user: `packages/core/src/`, `bin/`, the canonical
   skill defaults in `skills/`, `templates/`, `SPEC.md`, `README.md`, and
   `docs/`. Nothing here may encode this repository's specifics — its
   dashboard-capture evidence, its Linear team, its verify steps.
@@ -94,9 +94,9 @@ Only `verify:*` and `finalize:*` are configurable extension points. Agents inter
 
 ## Development conventions
 
-- Keep tests colocated as `*.test.ts`; integration scenarios are in `src/integration/`.
+- Keep tests colocated as `*.test.ts`; integration scenarios are in `packages/core/src/integration/`.
 - Run `bun run check`, `bun test`, and `bun typecheck` before finishing changes.
-- Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `src/store/contract.ts`.
-- Validate every event write and derive status through `src/kernel/reducer.ts`; events record facts, never derived state.
-- Keep phase behavior centralized in `src/kernel/phases.ts` and deterministic transitions in `src/kernel/engine.ts`.
+- Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `packages/core/src/store/contract.ts`.
+- Validate every event write and derive status through `packages/core/src/kernel/reducer.ts`; events record facts, never derived state.
+- Keep phase behavior centralized in `packages/core/src/kernel/phases.ts` and deterministic transitions in `packages/core/src/kernel/engine.ts`.
 - Do not commit `.ab/`, `.autobuild/`, `.env`, build artifacts, or transcripts.

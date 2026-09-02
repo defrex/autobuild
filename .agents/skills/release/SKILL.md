@@ -52,7 +52,7 @@ current one, so it can correct a wrong version in `package.json`.
 `bun run release` runs the repository's lint, typecheck, and test gates before
 touching any file, and the test gate fails spuriously when the suite runs with
 `CLAUDECODE=1` set. Bun's reporter suppresses per-test `(pass)` lines under
-that variable, and `src/cli/plugin-authoring-guide.test.ts` asserts on a
+that variable, and `packages/core/src/cli/plugin-authoring-guide.test.ts` asserts on a
 nested `bun test`'s printed test name. Prefix every release command with
 `env -u CLAUDECODE`. If that test is ever rewritten to assert on exit status
 instead of reporter output, this note can go.
