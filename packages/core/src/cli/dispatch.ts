@@ -37,9 +37,9 @@ import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
+import { dashboardBuildControl } from './dashboard/actions'
 import {
   buildDashboardFromProjected,
-  dashboardBuildControl,
   projectHarvest,
   type DashboardBuild,
   type DashboardModel,

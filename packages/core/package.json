@@ -12,7 +12,12 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
+    "better-auth": "1.4.18",
     "drizzle-orm": "^0.45.2",
+    "next": "16.1.6",
+    "pg": "8.18.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
     "semver": "^7.7.4",
     "smol-toml": "^1.7.0",
     "zod": "^4.4.3"

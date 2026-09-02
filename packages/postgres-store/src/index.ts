@@ -1,3 +1,9 @@
+export {
+  AUTH_SCHEMA_CHECKSUM,
+  AUTH_SCHEMA_DDL,
+  AUTH_SCHEMA_VERSION,
+  assertAuthSchema,
+} from './auth-schema'
 export { openPostgresBuildStoreFromEnv, parsePostgresStoreEnv } from './config'
 export type { PostgresStoreConfig } from './config'
 export { S3BlobStore, blobPath } from './s3'

@@ -15,9 +15,9 @@ import { systemClock } from '../store/types'
 import { BuildControlError, buildControlUser, controlBuild } from './build-control'
 import { bulkControlReport, bulkControlRepository } from './bulk-control'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
+import { dashboardBuildControl } from './dashboard/actions'
 import {
   buildDashboardFromProjected,
-  dashboardBuildControl,
   type DashboardBuild,
   type DashboardModel,
   type DashboardSelection,

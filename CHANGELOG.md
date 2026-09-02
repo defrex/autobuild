@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#250](https://github.com/defrex/autobuild/pull/250) — Add authenticated hosted web dashboard
 - [#249](https://github.com/defrex/autobuild/pull/249) — Preserve harvest no-action frontend report
 - [#248](https://github.com/defrex/autobuild/pull/248) — Validate artifact revision queries strictly
 - [#247](https://github.com/defrex/autobuild/pull/247) — Harden hosted store routing and error responses

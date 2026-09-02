@@ -30,7 +30,7 @@ import {
   type RepositoryRecord,
   type SubscribeOptions,
   type Unsubscribe,
-} from 'autobuild/plugin-sdk'
+} from 'autobuild/store-adapter'
 import { assertSchema } from './schema'
 
 type Row = Record<string, unknown>

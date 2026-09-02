@@ -110,5 +110,19 @@ refusal` and preserve the shared `BuildControlError` code and exact reason text.
 A partial bulk failure uses code `bulk-partial` and includes the durable write
 progress and unattempted builds. Unexpected failures are `500 internal`.
 
+## Browser gateway
+
+The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`.
+That route is not a second public bearer-token API: it requires a current
+Better Auth HTTP-only cookie, rechecks the deployment email and repository
+allowlists, rejects cross-origin JSON controls, and delegates only the operator
+suffixes listed above. It replaces caller-supplied authorization/version
+headers with a server-minted token that expires after 30 seconds and carries
+the normalized signed-in email. Consequently every durable control event has
+the browser user's human actor while no token or signing secret reaches client
+code. Responses are private/no-store; a 401 sends the application back to sign
+in. Browser clients poll `dashboard` every two seconds; live transcript
+streaming is not provided.
+
 The API does not expose phase-session commands, ticket intake, runner startup,
 streaming, or a generic event-append operation.

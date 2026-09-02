@@ -162,7 +162,7 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
   }
 
   const registration = value as unknown as RuntimeRegistration
-  if (defaultModel !== undefined && !serves(registration, defaultModel)) {
+  if (typeof defaultModel === 'string' && !serves(registration, defaultModel)) {
     throw new Error(
       `defaultModel "${defaultModel}" is not served by servesModels ` +
         `[${servesModels.join(', ')}]`,

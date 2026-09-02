@@ -40,9 +40,10 @@ narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
 `autobuild/plugin-sdk` surface. Teams that need one durable store across hosts
 can deploy the optional [hosted service](packages/hosted-store-service/README.md),
-which can also own ticket persistence and external tracker credentials. Browser
-and automation clients can use its versioned [operator API](docs/operator-api.md)
-for the same sessionless controls and projections as the CLI and dashboard.
+which also serves a GitHub-authenticated browser dashboard and can own ticket
+persistence and external tracker credentials. The web UI uses a server-managed
+session; automation clients can use the versioned [operator API](docs/operator-api.md)
+for the same controls and projections without exposing service credentials.
 
 ## Quickstart
 

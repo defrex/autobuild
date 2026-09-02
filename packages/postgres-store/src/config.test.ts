@@ -86,14 +86,14 @@ describe('PostgreSQL store environment', () => {
     ).toThrow('AB_POSTGRES_URL')
   })
 
-  test('root CLI manifest has no provider SDK or PostgreSQL driver dependency', async () => {
+  test('root full-stack manifest has no blob provider SDK dependency', async () => {
     const manifest = (await Bun.file('package.json').json()) as {
       dependencies?: Record<string, string>
     }
     const names = Object.keys(manifest.dependencies ?? {})
     expect(names).not.toContain('@aws-sdk/client-s3')
     expect(names).not.toContain('@vercel/blob')
-    expect(names).not.toContain('pg')
+    expect(manifest.dependencies?.pg).toBe('8.18.0')
     expect(names).not.toContain('postgres')
   })
 })

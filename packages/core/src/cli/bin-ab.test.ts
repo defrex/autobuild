@@ -98,7 +98,7 @@ async function runBinWithoutAb(
 
 async function runDev(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   return collect(
-    Bun.spawn(['bun', 'run', 'dev', '--', ...args], {
+    Bun.spawn(['bun', 'run', 'dev:cli', '--', ...args], {
       cwd: ROOT,
       env: testEnv(),
       stdout: 'pipe',
@@ -253,7 +253,7 @@ test('ab builds --json emits parseable JSON and no ANSI', async () => {
   expect(JSON.parse(result.stdout)).toEqual([])
 })
 
-test('the repo dev script forwards a complete CLI invocation and exits under --hot', async () => {
+test('the repo dev:cli script forwards a complete CLI invocation and exits under --hot', async () => {
   const result = await runDev(['builds', '--all', '--json'])
   expect(result.code).toBe(0)
   expect(result.stdout).not.toContain('\x1b')

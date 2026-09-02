@@ -4,6 +4,7 @@ import { abDispatch } from '../packages/core/src/cli/dispatch'
 import { bulkControlRepository } from '../packages/core/src/cli/bulk-control'
 import { renderDashboardFrameImage } from '../packages/core/src/cli/dashboard/frame-image'
 import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
+import type { DashboardModel } from '../packages/core/src/cli/dashboard/model'
 import { renderDashboard, stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../packages/core/src/cli/terminal'
 import { createTerminalModeController } from '../packages/core/src/cli/terminal-restore'
@@ -22,7 +23,7 @@ const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 
 type CaptureScenario = 'mixed' | 'happy'
 
-interface FrameSpec {
+export interface FrameSpec {
   id: string
   scenario: CaptureScenario
   columns: number
@@ -56,7 +57,7 @@ const SCRIPTED_BLOCKER = [
 
 const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'QUEUED'] as const
 
-const FRAME_SPECS: readonly FrameSpec[] = [
+export const FRAME_SPECS: readonly FrameSpec[] = [
   {
     id: 'headline-happy-wide',
     scenario: 'happy',
@@ -160,6 +161,8 @@ export interface CapturedDashboardFrame {
   lines: string[]
   text: string
   png: Uint8Array
+  /** Store-only projection used as the terminal/web parity oracle. */
+  model: DashboardModel
   textPath: string
   pngPath: string
 }
@@ -741,10 +744,14 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
   return [...lines]
 }
 
-async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<string[]> {
+async function capturePaint(
+  harness: E2eHarness,
+  spec: FrameSpec,
+): Promise<{ lines: string[]; model: DashboardModel }> {
   const terminal = new CaptureTerminal(spec.columns, spec.rows)
   const stderr: string[] = []
   let captured: string[] | undefined
+  let capturedModel: DashboardModel | undefined
   const sentinelLeaseNotices = new Set(
     HAPPY_BUILDS.map(({ slug }) => `build ${slug} already held by another runner — skipped`),
   )
@@ -807,6 +814,7 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
         ...options,
         now: RENDER_NOW,
       })
+      capturedModel = presented
       captured = [...lines]
       return lines
     },
@@ -815,7 +823,9 @@ async function capturePaint(harness: E2eHarness, spec: FrameSpec): Promise<strin
   if (stderr.length > 0) {
     throw new Error(`dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`)
   }
-  return validateCapturedFrame(spec, captured)
+  if (capturedModel === undefined)
+    throw new Error(`dashboard capture ${spec.id}: model was not projected`)
+  return { lines: validateCapturedFrame(spec, captured), model: capturedModel }
 }
 
 function assertOutputUnderScratch(workspacePath: string, outputDir: string): void {
@@ -851,7 +861,7 @@ export async function captureDashboardFrames(
     const frames: CapturedDashboardFrame[] = []
     for (const spec of FRAME_SPECS) {
       const harness = spec.scenario === 'happy' ? happy.harness : mixedHarness
-      const lines = await capturePaint(harness, spec)
+      const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,
       })
@@ -866,6 +876,7 @@ export async function captureDashboardFrames(
         lines,
         text: rendered.text,
         png: rendered.png,
+        model,
         textPath,
         pngPath,
       })

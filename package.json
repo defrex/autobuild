@@ -20,6 +20,11 @@
       "import": "./packages/core/src/plugin-sdk/index.ts",
       "default": "./packages/core/src/plugin-sdk/index.ts"
     },
+    "./store-adapter": {
+      "types": "./packages/core/src/store/adapter.ts",
+      "import": "./packages/core/src/store/adapter.ts",
+      "default": "./packages/core/src/store/adapter.ts"
+    },
     "./remote-store": {
       "types": "./packages/core/src/store/remote/index.ts",
       "import": "./packages/core/src/store/remote/index.ts",
@@ -29,6 +34,16 @@
       "types": "./packages/core/src/operator/index.ts",
       "import": "./packages/core/src/operator/index.ts",
       "default": "./packages/core/src/operator/index.ts"
+    },
+    "./operator-presentation": {
+      "types": "./packages/core/src/operator/presentation.ts",
+      "import": "./packages/core/src/operator/presentation.ts",
+      "default": "./packages/core/src/operator/presentation.ts"
+    },
+    "./ticket-update": {
+      "types": "./packages/core/src/ports/tickets/update.ts",
+      "import": "./packages/core/src/ports/tickets/update.ts",
+      "default": "./packages/core/src/ports/tickets/update.ts"
     },
     "./remote-tickets": {
       "types": "./packages/core/src/ports/tickets/remote-index.ts",
@@ -47,7 +62,10 @@
     "docs"
   ],
   "scripts": {
-    "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
+    "dev": "bun run --bun next dev",
+    "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
+    "build": "bun run --bun next build",
+    "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:readme-headline": "bun tools/readme-headline.ts",
@@ -60,7 +78,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "better-auth": "1.4.18",
     "drizzle-orm": "^0.45.2",
+    "next": "16.1.6",
+    "pg": "8.18.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
     "semver": "^7.7.4",
     "smol-toml": "^1.7.0",
     "zod": "^4.4.3"
@@ -69,11 +92,14 @@
     "@biomejs/biome": "2.5.5",
     "@resvg/resvg-js": "2.6.2",
     "@types/bun": "^1.3.14",
+    "@types/pg": "8.16.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
     "@types/semver": "^7.7.1",
     "dejavu-fonts-ttf": "2.37.0",
     "drizzle-kit": "^0.31.10",
     "git-format-staged": "4.0.1",
     "husky": "9.1.7",
-    "typescript": "^7.0.2"
+    "typescript": "5.9.3"
   }
 }

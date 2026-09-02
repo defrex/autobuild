@@ -51,7 +51,7 @@ function vercelHarness(): VercelBlobStore {
       if (!value) return null
       return {
         statusCode: 200,
-        stream: new Blob([value]).stream(),
+        stream: new Blob([Uint8Array.from(value)]).stream(),
         headers: new Headers(),
         blob: {
           url: pathname,
