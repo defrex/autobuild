@@ -33,6 +33,14 @@ export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/b
 ab dispatch
 ```
 
+The same deployment also serves the versioned [operator API](../../docs/operator-api.md).
+Mint an operator token whose signed identity is attributed to every control:
+
+```sh
+AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator \
+  --user 'Ada Lovelace' --ttl-seconds 3600
+```
+
 Mint a least-privilege build/session token with an explicit future expiry:
 
 ```sh

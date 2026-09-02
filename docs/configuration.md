@@ -33,7 +33,8 @@ Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
 identity needs permission to create tables during migration and to select,
 insert, and update those tables at runtime. The complete run, deployment, and
 token procedure is in the [hosted service
-guide](../packages/hosted-store-service/README.md).
+guide](../packages/hosted-store-service/README.md); operator clients use the
+separate signed-user token described by the [operator API](operator-api.md).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|

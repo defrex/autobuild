@@ -40,6 +40,8 @@ narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
 `autobuild/plugin-sdk` surface. Teams that need one durable store across hosts
 can deploy the optional [hosted store service](packages/hosted-store-service/README.md).
+Browser and automation clients can use its versioned [operator API](docs/operator-api.md)
+for the same sessionless controls and projections as the CLI and dashboard.
 
 ## Quickstart
 
