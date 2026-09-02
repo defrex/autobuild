@@ -45,6 +45,38 @@ CREATE TABLE IF NOT EXISTS repo_artifacts (
 
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
+/** Ticket persistence evolves independently so deployed v1 BuildStore markers
+ * remain valid while the hosted ticket tables are added. */
+export const TICKET_SCHEMA_VERSION = 1
+export const TICKET_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  version integer NOT NULL, checksum text NOT NULL, applied_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ab_tickets (
+  team text NOT NULL, id text NOT NULL, creation_key text,
+  title text NOT NULL, body text NOT NULL, state text NOT NULL,
+  labels text[] NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (team, id), UNIQUE (team, creation_key)
+);
+CREATE TABLE IF NOT EXISTS ab_ticket_comments (
+  team text NOT NULL, ticket_id text NOT NULL, seq bigint NOT NULL,
+  body text NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (team, ticket_id, seq),
+  FOREIGN KEY (team, ticket_id) REFERENCES ab_tickets(team, id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS ab_ticket_blockers (
+  team text NOT NULL, ticket_id text NOT NULL, blocker_id text NOT NULL,
+  PRIMARY KEY (team, ticket_id, blocker_id),
+  FOREIGN KEY (team, ticket_id) REFERENCES ab_tickets(team, id) ON DELETE CASCADE,
+  FOREIGN KEY (team, blocker_id) REFERENCES ab_tickets(team, id) ON DELETE CASCADE,
+  CHECK (ticket_id <> blocker_id)
+);`.trim()
+export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_DDL)
+  .digest('hex')
+
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
@@ -250,12 +282,85 @@ export async function assertSchema(sql: SQL): Promise<void> {
   await assertCatalogShape(sql)
 }
 
+export async function assertTicketSchema(sql: SQL): Promise<void> {
+  let rows: { version: number; checksum: string }[]
+  try {
+    rows =
+      await sql`SELECT version, checksum FROM ab_ticket_schema_migrations WHERE singleton = true`
+  } catch (error) {
+    const code =
+      (error as { code?: string; errno?: string }).errno ?? (error as { code?: string }).code
+    if (code === '42P01') throw schemaError('ticket tables are missing')
+    throw error
+  }
+  const marker = rows[0]
+  if (!marker) throw schemaError('ticket marker is missing')
+  if (
+    Number(marker.version) !== TICKET_SCHEMA_VERSION ||
+    marker.checksum !== TICKET_SCHEMA_CHECKSUM
+  ) {
+    throw schemaError('ticket marker is incompatible')
+  }
+  const expected: Record<string, Array<[string, string, boolean]>> = {
+    ab_ticket_schema_migrations: [
+      ['singleton', 'boolean', true],
+      ['version', 'integer', true],
+      ['checksum', 'text', true],
+      ['applied_at', 'timestamp with time zone', true],
+    ],
+    ab_tickets: [
+      ['team', 'text', true],
+      ['id', 'text', true],
+      ['creation_key', 'text', false],
+      ['title', 'text', true],
+      ['body', 'text', true],
+      ['state', 'text', true],
+      ['labels', 'text[]', true],
+      ['created_at', 'timestamp with time zone', true],
+      ['updated_at', 'timestamp with time zone', true],
+    ],
+    ab_ticket_comments: [
+      ['team', 'text', true],
+      ['ticket_id', 'text', true],
+      ['seq', 'bigint', true],
+      ['body', 'text', true],
+      ['created_at', 'timestamp with time zone', true],
+    ],
+    ab_ticket_blockers: [
+      ['team', 'text', true],
+      ['ticket_id', 'text', true],
+      ['blocker_id', 'text', true],
+    ],
+  }
+  const columns: CatalogColumn[] = await sql`
+    SELECT c.relname AS table_name, a.attname AS column_name,
+      pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type,
+      a.attnotnull AS not_null, NULL::text AS default_expression
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+    WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
+      AND a.attnum > 0 AND NOT a.attisdropped
+      AND c.relname = ANY(ARRAY['ab_ticket_schema_migrations', 'ab_tickets',
+        'ab_ticket_comments', 'ab_ticket_blockers'])
+    ORDER BY c.relname, a.attnum`
+  for (const [table, shape] of Object.entries(expected)) {
+    const actual = columns
+      .filter((column) => column.table_name === table)
+      .map((column) => [column.column_name, column.formatted_type, column.not_null])
+    if (JSON.stringify(actual) !== JSON.stringify(shape)) {
+      throw schemaError(`ticket table ${table} is missing or mismatched`)
+    }
+  }
+}
+
 export async function migratePostgres(url: string): Promise<void> {
   const sql = new SQL(url)
   try {
     await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(470281941)`
       await tx.unsafe(SCHEMA_DDL)
+      await tx.unsafe(TICKET_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
       const marker = rows[0]
@@ -267,7 +372,23 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`INSERT INTO ab_schema_migrations (singleton, version, checksum, applied_at)
           VALUES (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
       }
+      const ticketRows: { version: number; checksum: string }[] =
+        await tx`SELECT version, checksum FROM ab_ticket_schema_migrations WHERE singleton = true FOR UPDATE`
+      const ticketMarker = ticketRows[0]
+      if (ticketMarker) {
+        if (
+          Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION ||
+          ticketMarker.checksum !== TICKET_SCHEMA_CHECKSUM
+        ) {
+          throw schemaError('ticket marker is incompatible')
+        }
+      } else {
+        await tx`INSERT INTO ab_ticket_schema_migrations
+          (singleton, version, checksum, applied_at)
+          VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
+      }
       await assertSchema(tx)
+      await assertTicketSchema(tx)
     })
   } finally {
     await sql.close()

@@ -10,6 +10,7 @@ import { createTicketSource } from './create'
 import { FakeTicketSource } from './fake'
 import { FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
+import { HostedTicketSource } from './remote'
 
 const LINEAR_CONFIG = {
   source: 'linear' as const,
@@ -19,6 +20,37 @@ const LINEAR_CONFIG = {
 const FILE_CONFIG = { source: 'file' as const, readyState: 'ready' }
 const ENV = { LINEAR_API_KEY: 'lin_api_abc' }
 const REPO = '/repo'
+
+describe('createTicketSource — hosted', () => {
+  const config = { source: 'hosted', teamKey: 'ENG', readyState: 'Ready' }
+
+  test('constructs from the shared service URL and operator token', async () => {
+    const source = await createTicketSource(
+      config,
+      { AB_STORE: 'https://store.example/', AB_TOKEN: 'operator-token' },
+      REPO,
+    )
+    expect(source).toBeInstanceOf(HostedTicketSource)
+    expect(source.name).toBe('hosted')
+  })
+
+  test('requires an HTTP(S) service, token, and team', async () => {
+    await expect(createTicketSource(config, {}, REPO)).rejects.toThrow('AB_STORE')
+    await expect(
+      createTicketSource(config, { AB_STORE: '/local/store', AB_TOKEN: 'token' }, REPO),
+    ).rejects.toThrow('HTTP(S)')
+    await expect(
+      createTicketSource(config, { AB_STORE: 'https://store.example' }, REPO),
+    ).rejects.toThrow('AB_TOKEN')
+    await expect(
+      createTicketSource(
+        { source: 'hosted', readyState: 'Ready' },
+        { AB_STORE: 'https://store.example', AB_TOKEN: 'token' },
+        REPO,
+      ),
+    ).rejects.toThrow('teamKey')
+  })
+})
 
 describe('createTicketSource — linear', () => {
   test('constructs a LinearTicketSource from config and env', async () => {
@@ -165,7 +197,7 @@ describe('createTicketSource — plugin', () => {
     const registry = pluginRegistry(() => new FakeTicketSource())
     await expect(
       createTicketSource({ source: 'missing', readyState: 'Open' }, {}, REPO, undefined, registry),
-    ).rejects.toThrow(/unknown ticket source "missing".*file, jira, linear/)
+    ).rejects.toThrow(/unknown ticket source "missing".*file, hosted, jira, linear/)
   })
 
   test('factory failures retain cause and identify source ownership', async () => {

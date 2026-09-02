@@ -167,6 +167,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     const resource = tokenResource(scope)
     const allowed =
+      resource.kind === 'deployment' ||
       resource.kind === 'admin' ||
       (kind !== 'admin' && resource.kind === kind && resource.id === id)
     if (!allowed) {

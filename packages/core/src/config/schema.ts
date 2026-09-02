@@ -344,9 +344,9 @@ export const ticketsSchema = z.strictObject({
       (s) => s.trim().length > 0,
       '[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
     ),
-  /** Linear team key (e.g. "ENG") — required when source = "linear". */
+  /** Backend team key (e.g. "ENG") — required for linear and hosted. */
   teamKey: z.string().min(1).optional(),
-  /** Workflow state claim() moves an issue to (§12); Linear only. */
+  /** Workflow state claim() moves an issue to (§12); Linear and hosted. */
   claimedState: z.string().min(1).optional(),
   /** State create() files new tickets into. Absent = the provider's default
    * (Linear: the team's default state, e.g. Backlog; file: Triage). */
@@ -537,12 +537,14 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   }
 
   const tickets = config.tickets
-  if (tickets.source === 'linear') {
+  if (tickets.source === 'linear' || tickets.source === 'hosted') {
     if (tickets.teamKey === undefined) {
       ctx.addIssue({
         code: 'custom',
         path: ['tickets', 'teamKey'],
-        message: '[tickets].source = "linear" requires teamKey — the Linear team key (e.g. "ENG")',
+        message: `[tickets].source = "${tickets.source}" requires teamKey${
+          tickets.source === 'linear' ? ' — the Linear team key (e.g. "ENG")' : ''
+        }`,
       })
     }
     if (tickets.dir !== undefined) {
@@ -559,7 +561,7 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
         ctx.addIssue({
           code: 'custom',
           path: ['tickets', key],
-          message: `[tickets].${key} applies only to source = "linear" — remove it or set source = "linear"`,
+          message: `[tickets].${key} applies only to source = "linear" or "hosted" — remove it or select one of those sources`,
         })
       }
     }

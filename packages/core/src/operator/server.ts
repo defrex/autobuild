@@ -94,7 +94,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     const scope = verifyToken(opts.secret, match[1]!, clock())
     if (scope === null) throw new HttpError(401, 'auth', 'invalid or expired token')
     const resource = tokenResource(scope)
-    if (resource.kind !== 'operator' || !('operator' in scope)) {
+    if (resource.kind !== 'operator' || !('operator' in scope) || scope.operator === true) {
       throw new HttpError(
         403,
         'auth',

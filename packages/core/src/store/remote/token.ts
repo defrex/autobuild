@@ -28,16 +28,27 @@ export interface ResourceTokenScope {
   exp: number
 }
 
-/** Operator authority is deliberately disjoint from raw store authority. The
- * signed nonblank user claim is the actor used by every operator event. */
+/** Human operator authority is deliberately disjoint from raw store authority.
+ * The signed nonblank user claim attributes every operator API event. */
 export interface OperatorTokenScope {
   operator: { user: string }
   exp: number
 }
 
-/** Legacy build scopes remain valid; repository-scoped agent sessions use the
- * explicit resource form so a repo token cannot read any build stream. */
-export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope | OperatorTokenScope
+/** Deployment authority used by dispatchers for raw store and hosted ticket
+ * routes. It intentionally does not grant access to attributed operator APIs. */
+export interface DeploymentTokenScope {
+  operator: true
+  session: string
+  exp: number
+}
+
+/** Legacy scopes remain valid on their existing routes. */
+export type TokenScope =
+  | LegacyBuildTokenScope
+  | ResourceTokenScope
+  | OperatorTokenScope
+  | DeploymentTokenScope
 
 const commonScope = {
   session: z.string().min(1),
@@ -56,13 +67,18 @@ const tokenScopeSchema = z.union([
     operator: z.strictObject({ user: z.string().trim().min(1) }),
     exp: z.number().int(),
   }),
+  z.strictObject({ operator: z.literal(true), ...commonScope }),
 ])
 
 export function tokenResource(scope: TokenScope): {
-  kind: 'build' | 'repo' | 'admin' | 'operator'
+  kind: 'build' | 'repo' | 'admin' | 'operator' | 'deployment'
   id: string
 } {
-  if ('operator' in scope) return { kind: 'operator', id: scope.operator.user }
+  if ('operator' in scope) {
+    return scope.operator === true
+      ? { kind: 'deployment', id: '*' }
+      : { kind: 'operator', id: scope.operator.user }
+  }
   if ('build' in scope) {
     return scope.build === '*' ? { kind: 'admin', id: '*' } : { kind: 'build', id: scope.build }
   }

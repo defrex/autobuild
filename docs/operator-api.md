@@ -13,8 +13,9 @@ AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator
   --user 'Ada Lovelace' --ttl-seconds 3600
 ```
 
-Admin, build, and repository tokens have no operator authority. Operator tokens
-have no raw `/builds` or `/repos` store authority. Encode repository, build,
+Admin, build, repository, and deployment (`{ "operator": true, … }`) tokens
+have no attributed operator authority. Human-operator tokens have no raw
+`/builds`, `/repos`, or `/tickets` authority. Encode repository, build,
 and artifact kind as separate URL path segments.
 
 ## Reads

@@ -1,6 +1,15 @@
-import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
-import type { BuildStore, Clock } from 'autobuild/plugin-sdk'
+import {
+  openPostgresBuildStoreFromEnv,
+  openPostgresTicketDatabase,
+  type PostgresTicketDatabase,
+} from '@autobuild/postgres-store'
 import { createOperatorServer } from 'autobuild/operator-api'
+import type { BuildStore, Clock, TicketSource } from 'autobuild/plugin-sdk'
+import {
+  createTicketServer,
+  type HostedTicketContext,
+  LinearTicketSource,
+} from 'autobuild/remote-tickets'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -14,6 +23,13 @@ export interface HostedStoreServiceOptions {
   env?: HostedStoreEnv
   clock?: Clock
   openStore?: (env: HostedStoreEnv, options: { clock?: Clock }) => Promise<BuildStore>
+  /** Context-aware backend seam. Production chooses one deployment backend;
+   * tests inject a fake while exercising the real authenticated protocol. */
+  sourceFor?: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+  openTicketDatabase?: (
+    url: string,
+    lifecycle: { triage: string; ready: string; doing: string; done: string },
+  ) => Promise<PostgresTicketDatabase>
 }
 
 const internalError = (): Response =>
@@ -28,35 +44,72 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
 } {
   const env = options.env ?? process.env
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
-  let handlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
+  const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
+  let storeHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
+  let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
 
-  const openHandler = (): Promise<(req: Request) => Promise<Response>> => {
-    handlerPromise ??= (async () => {
+  const openStoreHandler = () => {
+    if (storeHandlerPromise === undefined) {
+      const attempt = (async () => {
+        const config = parseHostedStoreEnv(env)
+        let store: BuildStore
+        try {
+          store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
+        } catch {
+          throw new Error('hosted store is unavailable')
+        }
+        const shared = options.clock === undefined ? {} : { clock: options.clock }
+        const storeServer = createStoreServer({
+          store,
+          secret: config.secret,
+          maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          ...shared,
+        })
+        const operatorServer = createOperatorServer({
+          store,
+          secret: config.secret,
+          ...shared,
+        })
+        return (req: Request) =>
+          new URL(req.url).pathname.startsWith('/operator/v1/')
+            ? operatorServer.fetch(req)
+            : storeServer.fetch(req)
+      })()
+      storeHandlerPromise = attempt
+      void attempt.catch(() => {
+        if (storeHandlerPromise === attempt) storeHandlerPromise = undefined
+      })
+    }
+    return storeHandlerPromise
+  }
+
+  const openTicketHandler = () => {
+    ticketHandlerPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
-      let store: BuildStore
-      try {
-        store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
-      } catch {
-        throw new Error('hosted store is unavailable')
+      let sourceFor = options.sourceFor
+      if (sourceFor === undefined && config.ticketBackend === 'database') {
+        const database = await ticketOpener(config.postgres.url, config.ticketLifecycle)
+        sourceFor = (context) => database.source(context)
       }
-      const shared = options.clock === undefined ? {} : { clock: options.clock }
-      const storeServer = createStoreServer({
-        store,
+      if (sourceFor === undefined) {
+        // The parser guarantees this credential for the linear backend. It is
+        // captured here and is never represented in request context or output.
+        const apiKey = config.linearApiKey!
+        sourceFor = (context) =>
+          new LinearTicketSource({
+            apiKey,
+            teamKey: context.teamKey,
+            ...(context.claimedState !== undefined ? { claimedState: context.claimedState } : {}),
+            ...(context.createState !== undefined ? { createState: context.createState } : {}),
+          })
+      }
+      return createTicketServer({
         secret: config.secret,
-        maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
-        ...shared,
-      })
-      const operatorServer = createOperatorServer({
-        store,
-        secret: config.secret,
-        ...shared,
-      })
-      return (req: Request) =>
-        new URL(req.url).pathname.startsWith('/operator/v1/')
-          ? operatorServer.fetch(req)
-          : storeServer.fetch(req)
+        sourceFor,
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
+      }).fetch
     })()
-    return handlerPromise
+    return ticketHandlerPromise
   }
 
   return {
@@ -72,7 +125,8 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       if (
         url.pathname.startsWith('/builds') ||
         url.pathname.startsWith('/repos') ||
-        url.pathname.startsWith('/operator/v1/')
+        url.pathname.startsWith('/operator/v1/') ||
+        url.pathname.startsWith('/tickets')
       ) {
         const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
         const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
@@ -90,7 +144,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         }
       }
       try {
-        return await (await openHandler())(req)
+        return url.pathname.startsWith('/tickets')
+          ? await (await openTicketHandler())(req)
+          : await (await openStoreHandler())(req)
       } catch {
         return internalError()
       }

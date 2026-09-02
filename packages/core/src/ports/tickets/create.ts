@@ -11,6 +11,7 @@ import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { TicketSource } from '../types'
 import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
+import { HostedTicketSource } from './remote'
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -26,6 +27,40 @@ export async function createTicketSource(
   /** Registry loaded from this repository's configured plugins. */
   plugins: PluginRegistry = createPluginRegistry(),
 ): Promise<TicketSource> {
+  if (config.source === 'hosted') {
+    const rawUrl = env.AB_STORE?.trim()
+    if (!rawUrl) {
+      throw new Error(
+        'AB_STORE is not set — required when [tickets].source = "hosted"; set it to the hosted service HTTP(S) URL',
+      )
+    }
+    let serviceUrl: URL
+    try {
+      serviceUrl = new URL(rawUrl)
+    } catch {
+      throw new Error('AB_STORE must be a valid HTTP(S) URL when [tickets].source = "hosted"')
+    }
+    if (serviceUrl.protocol !== 'http:' && serviceUrl.protocol !== 'https:') {
+      throw new Error('AB_STORE must be an HTTP(S) URL when [tickets].source = "hosted"')
+    }
+    const token = env.AB_TOKEN?.trim()
+    if (!token) {
+      throw new Error(
+        'AB_TOKEN is not set — an operator-scope token is required when [tickets].source = "hosted"',
+      )
+    }
+    if (config.teamKey === undefined) {
+      throw new Error('[tickets].source = "hosted" requires teamKey')
+    }
+    return new HostedTicketSource({
+      url: serviceUrl.toString(),
+      token,
+      teamKey: config.teamKey,
+      ...(config.claimedState !== undefined ? { claimedState: config.claimedState } : {}),
+      ...(config.createState !== undefined ? { createState: config.createState } : {}),
+    })
+  }
+
   if (config.source === 'linear') {
     const apiKey = env.LINEAR_API_KEY
     if (apiKey === undefined || apiKey === '') {

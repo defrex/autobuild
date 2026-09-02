@@ -102,6 +102,55 @@ describe('hosted store service', () => {
     })
   })
 
+  test('retries lazy store initialization after a rejected attempt', async () => {
+    let opens = 0
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens++
+        if (opens === 1) throw new Error('temporary provider outage')
+        return backing
+      },
+    })
+    const client = clientFor(service)
+
+    const firstError = await client
+      .createBuild({ slug: 'demo', repo: 'acme/repo' })
+      .catch((value: unknown) => value)
+    expect((firstError as Error).message).toBe('hosted store is unavailable')
+    expect(opens).toBe(1)
+
+    await client.createBuild({ slug: 'demo', repo: 'acme/repo' })
+    expect(await client.listBuilds()).toHaveLength(1)
+    expect(opens).toBe(2)
+  })
+
+  test('shares an in-flight store initialization and reuses it after success', async () => {
+    let opens = 0
+    const backing = new MemoryBuildStore({ clock })
+    const deferred = Promise.withResolvers<MemoryBuildStore>()
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens++
+        return deferred.promise
+      },
+    })
+    const client = clientFor(service)
+
+    const first = client.listBuilds()
+    const second = client.listBuilds()
+    expect(opens).toBe(1)
+
+    deferred.resolve(backing)
+    expect(await Promise.all([first, second])).toEqual([[], []])
+    expect(await client.listBuilds()).toEqual([])
+    expect(opens).toBe(1)
+  })
+
   test('round-trips 1 MiB and rejects ceiling-plus-one without mutation', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({ env, clock, openStore: async () => backing })

@@ -425,9 +425,13 @@ The token's session dimension adds a second gate only to event-bearing writes:
 
 Build and repository scopes never cross: a harvest repository token cannot
 read a build stream, and a build token cannot read a repository journal.
-Operator scopes have `{ "operator": { "user": "nonblank identity" }, "exp": … }`.
-They are accepted only by the [operator API](operator-api.md), never by raw
-store routes; conversely, admin/build/repository scopes are refused there.
+Attributed human-operator scopes have
+`{ "operator": { "user": "nonblank identity" }, "exp": … }`. They are accepted
+only by the [operator API](operator-api.md), never by raw store or ticket routes;
+conversely, deployment/admin/build/repository scopes are refused there.
+Deployment scopes have `{ "operator": true, "session": "*", "exp": … }` and
+cover raw store and [hosted ticket](remote-ticket-protocol.md) routes without
+granting attributed operator controls.
 
 ## 6. Atomic deposits
 

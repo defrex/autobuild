@@ -130,6 +130,7 @@ function normalize<AdapterFactory, ContractFactory>(
 export class PluginRegistry {
   readonly ticketSources = reserved<TicketSourcePluginFactory, TicketSourceContractFactory>([
     'file',
+    'hosted',
     'linear',
   ])
   readonly agentRuntimes = reserved<AgentRuntimePluginFactory, AgentRunnerContractFactory>([

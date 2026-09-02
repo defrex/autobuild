@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#245](https://github.com/defrex/autobuild/pull/245) — Expose a versioned operator control API
+- [#244](https://github.com/defrex/autobuild/pull/244) — Recover hosted store initialization after transient failures
+- [#243](https://github.com/defrex/autobuild/pull/243) — Host ticket sources behind the hosted service
 - [#242](https://github.com/defrex/autobuild/pull/242) — Ship the hosted remote store service
 - [#241](https://github.com/defrex/autobuild/pull/241) — Make PostgreSQL first-row creation concurrency-safe
 - [#240](https://github.com/defrex/autobuild/pull/240) — Align PostgreSQL migrations and blob uploads with release contracts

@@ -829,15 +829,15 @@ state. Within a present table, `source` and `readyState` are required.
 | `source` | — | required nonblank builtin or plugin registration name | Select the ticket adapter after configured plugins load. |
 | `readyLabels` | source-aware | optional array of nonempty strings; `[]` allowed | Require every listed label in addition to the state gate. |
 | `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
-| `teamKey` | — | required for Linear; forbidden for file; optional for plugins | Linear team key such as `"ENG"`, or an existing plugin config field. |
-| `claimedState` | `"In Progress"` for Linear | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
+| `teamKey` | — | required for Linear and hosted; forbidden for file; optional for plugins | Backend team key such as `"ENG"`, or an existing plugin config field. |
+| `claimedState` | `"In Progress"` for direct Linear; hosted backend default otherwise | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
 | `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
-When `readyLabels` is absent, Linear uses `["autobuild"]`; file and plugin
-sources use `[]`, meaning no host-imposed label gate. An explicit value always
+When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
+and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always
 wins. A nonempty list is
 conjunctive: every configured label must be present. `readyState` remains
 mandatory regardless of labels. Linear compares state and label names exactly
@@ -846,7 +846,7 @@ canonicalizes them to `triage/`, `ready/`, `doing/`, or `done/`.
 
 Source-specific validation is strict:
 
-- Linear requires `teamKey` and rejects `dir`.
+- Linear and hosted require `teamKey` and reject `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
 - `createState`, `triageState`, and `proposalState` are valid for every source,
   but the named state must exist in that provider when used.
@@ -899,6 +899,29 @@ triageState = "Backlog"
 
 Linear credentials do not belong in this table. Set `LINEAR_API_KEY` in the
 environment or local `.env` file described below.
+
+For a hosted backend, repository policy remains local while credentials remain
+at the service:
+
+<!-- config-fragment:hosted-tickets -->
+```toml
+[tickets]
+source = "hosted"
+teamKey = "ENG"
+readyState = "Ready"
+readyLabels = []
+claimedState = "Doing"
+createState = "Triage"
+triageState = "Triage"
+```
+
+Set `AB_STORE` to the service's HTTP(S) URL and `AB_TOKEN` to a deployment
+operator token (`mint operator` without `--user`). The same source-agnostic wiring powers dispatch, harvest, ticket-aware
+skills, and all seven command families: `ab ticket create`, `update`, `block`,
+`unblock`, `list`, `show`, and `move`. See the
+[hosted ticket protocol](remote-ticket-protocol.md). In hosted Linear mode,
+`LINEAR_API_KEY` is configured only on the service; direct Linear remains
+supported.
 
 A plugin registration is selected the same way. `ab dispatch` and every
 `ab ticket` subcommand load the plugin and route through that source. Within a
@@ -1153,9 +1176,9 @@ Secrets and store selection accompany the file through environment variables:
 
 | Variable | Used for | Notes |
 |---|---|---|
-| `LINEAR_API_KEY` | Linear ticket source | Required and nonempty when `tickets.source = "linear"`; use a Linear personal API key. |
-| `AB_STORE` | BuildStore selection | A local path or HTTP(S) remote-store URL. A command's explicit `--store` wins, then nonblank `AB_STORE`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
-| `AB_TOKEN` | Protected remote BuildStore | Bearer credential forwarded to a remote store. Empty means no token; nonempty token bytes are treated as opaque. |
+| `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; in hosted Linear mode it is service-only. |
+| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
+| `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require deployment operator scope (`mint operator` without `--user`). Empty means no token; nonempty token bytes are treated as opaque. |
 
 A local store selection relocates the state database, blobs, worktrees, and the
 default file-ticket directory together. With a remote store, Git worktrees and
