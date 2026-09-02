@@ -679,6 +679,9 @@ describe('parseConfig — [tickets]', () => {
       teamKey: 'ENG',
       readyState: 'Todo',
     })
+    expect(
+      parseConfig('[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n').tickets,
+    ).toEqual({ source: 'hosted', teamKey: 'ENG', readyState: 'Ready' })
   })
 
   test('plugin source names parse while source and readyState remain nonblank', () => {
@@ -716,6 +719,14 @@ describe('parseConfig — [tickets]', () => {
     )
     expect(file.message).toContain('tickets.teamKey')
     expect(file.message).toContain('tickets.claimedState')
+    expect(parseError('[tickets]\nsource = "hosted"\nreadyState = "Ready"\n').message).toContain(
+      'tickets.teamKey',
+    )
+    expect(
+      parseError(
+        '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\ndir = "tickets"\n',
+      ).message,
+    ).toContain('tickets.dir')
   })
 
   test('readiness labels and lifecycle states retain their surface', () => {

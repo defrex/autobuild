@@ -106,6 +106,7 @@ export type {
 } from '../store/contract'
 
 export { FakeTicketSource } from '../ports/tickets/fake'
+export { validateTicketUpdate } from '../ports/tickets/update'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { FakeForge } from '../ports/forge/fake'
 export { ScriptedAgentRunner } from '../ports/runner/fake'

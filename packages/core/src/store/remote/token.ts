@@ -28,9 +28,17 @@ export interface ResourceTokenScope {
   exp: number
 }
 
-/** Legacy build scopes remain valid; repository-scoped agent sessions use the
- * explicit resource form so a repo token cannot read any build stream. */
-export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope
+/** Deployment operator authority. Unlike the legacy admin scope this is the
+ * only credential accepted by ticket routes, and it also covers store routes
+ * so a dispatcher needs just one AB_TOKEN. */
+export interface OperatorTokenScope {
+  operator: true
+  session: string
+  exp: number
+}
+
+/** Legacy scopes remain valid on their existing routes. */
+export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope | OperatorTokenScope
 
 const commonScope = {
   session: z.string().min(1),
@@ -45,12 +53,14 @@ const tokenScopeSchema = z.union([
     }),
     ...commonScope,
   }),
+  z.strictObject({ operator: z.literal(true), ...commonScope }),
 ])
 
 export function tokenResource(scope: TokenScope): {
-  kind: 'build' | 'repo' | 'admin'
+  kind: 'build' | 'repo' | 'admin' | 'operator'
   id: string
 } {
+  if ('operator' in scope) return { kind: 'operator', id: '*' }
   if ('build' in scope) {
     return scope.build === '*' ? { kind: 'admin', id: '*' } : { kind: 'build', id: scope.build }
   }
