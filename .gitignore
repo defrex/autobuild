@@ -1,4 +1,6 @@
 node_modules/
+.next/
+*.tsbuildinfo
 # per-phase agent scratch — disposable by construction (SPEC §7)
 .ab/
 # repository-local autobuild state (store, worktrees, and file tickets)
