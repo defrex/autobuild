@@ -675,6 +675,14 @@ describe('FileTicketSource', () => {
     expect((await source().dependencyStates(['file-1']))[0]?.resolved).toBe(false)
   })
 
+  test('claim refuses the configured doneState without moving the ticket', async () => {
+    await seedTicket('file-1', { state: 'Triage' })
+    const tickets = source({ doneState: 'Triage' })
+
+    expect(await tickets.claim('file-1')).toBe(false)
+    expect((await tickets.get('file-1'))?.state).toBe('Triage')
+  })
+
   test('an unknown doneState is a loud error, not a silently dead gate', async () => {
     expect(() => source({ doneState: 'Shipped' })).toThrow(/unknown state "Shipped"/)
   })

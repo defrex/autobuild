@@ -98,7 +98,11 @@ export interface TicketSource {
    * Fatal source failures and invariants still reject the call. */
   listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing>
   get(id: string): Promise<Ticket | null>
-  /** Claim-before-launch (§12): false means someone else already claimed it. */
+  /** Claim-before-launch (§12): acquires nonterminal work and returns true.
+   * Returns false for an unknown, already-claimed/contested, or terminal ticket.
+   * Refusing a terminal ticket leaves its state unchanged; claim never reopens
+   * completed work. An explicit transition to a nonterminal state permits a
+   * later claim. */
   claim(id: string): Promise<boolean>
   comment(id: string, body: string): Promise<void>
   transition(id: string, state: string): Promise<void>

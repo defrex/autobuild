@@ -2272,10 +2272,13 @@ describe('Dispatcher dependency gate', () => {
 
     const report = await h.dispatcher.tick()
 
-    // T-2 is Done, so T-3 is eligible. Every real state must be fetched.
+    // T-2 is Done, so T-3 reaches claim. Every real state must be fetched.
+    // The source then refuses all three because claim never reopens terminal
+    // work, so this dependency-cache regression creates no build.
     expect(report.dependencyDiagnostics).toEqual([])
     expect(report.dependencyBlocked).toBe(0)
-    expect((await h.store.listBuilds()).map((b) => b.ticket?.id)).toContain('T-3')
+    expect(h.tickets.claims).toContain('T-3')
+    expect(await h.store.listBuilds()).toEqual([])
   })
 
   test('a transitive chain is closed lazily: A → B → C, only A is dispatchable-checked', async () => {

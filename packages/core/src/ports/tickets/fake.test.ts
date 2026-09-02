@@ -217,13 +217,15 @@ describe('FakeTicketSource', () => {
     ])
   })
 
-  test('dependencyStates honors a custom doneState and journals each query', async () => {
+  test('custom doneState controls dependency resolution and terminal claim refusal', async () => {
     const source = new FakeTicketSource([ticket('t-1', { state: 'Shipped' })], {
       doneState: 'Shipped',
     })
 
     expect((await source.dependencyStates(['t-1']))[0]?.resolved).toBe(true)
     expect(source.dependencyQueries).toEqual([['t-1']])
+    expect(await source.claim('t-1')).toBe(false)
+    expect((await source.get('t-1'))?.state).toBe('Shipped')
   })
 
   test('created tickets land in Triage by default (§12: humans groom to Ready)', async () => {
