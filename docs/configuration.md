@@ -11,6 +11,34 @@ This document covers the complete accepted TOML surface. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 
+## PostgreSQL BuildStore environment
+
+The optional `@autobuild/postgres-store` adapter is configured only through the
+environment. It is installed separately, so an ordinary `autobuild` CLI install
+does not acquire PostgreSQL or blob-provider dependencies. Before opening the
+adapter, run the idempotent `bunx @autobuild/postgres-store migrate` step.
+
+| Variable | Required when | Values / purpose |
+|---|---|---|
+| `AB_POSTGRES_URL` | Always | Nonblank PostgreSQL connection URL; this is the adapter's sole database input. |
+| `AB_BLOB_BACKEND` | Always | `s3` or `vercel`. |
+| `AB_BLOB_PREFIX` | Optional | Object pathname prefix; redundant `/` characters are normalized. |
+| `AB_S3_BUCKET` | S3 | Bucket name. |
+| `AB_S3_REGION` | S3 | S3 signing region. |
+| `AB_S3_ENDPOINT` | Optional, S3 | Endpoint URL for an S3-compatible service. |
+| `AB_S3_ACCESS_KEY_ID` | S3 | Explicit access key; ambient AWS credential lookup is not used. |
+| `AB_S3_SECRET_ACCESS_KEY` | S3 | Explicit secret key. |
+| `AB_S3_SESSION_TOKEN` | Optional, S3 | Explicit temporary-credential session token. |
+| `AB_S3_FORCE_PATH_STYLE` | Optional, S3 | Exact boolean `true` or `false`. |
+| `AB_VERCEL_BLOB_ACCESS` | Vercel | `public` or `private`. |
+| `BLOB_READ_WRITE_TOKEN` | Vercel auth option | Blob read-write token. |
+| `VERCEL_OIDC_TOKEN` | Vercel OIDC option | Must be paired with `BLOB_STORE_ID` when no read-write token is supplied. |
+| `BLOB_STORE_ID` | Vercel OIDC option | Must be paired with `VERCEL_OIDC_TOKEN`. |
+
+S3 identities need `GetObject` and `PutObject` on the bucket/prefix. The adapter
+maps only a provider 404 to absence and propagates authorization/service errors.
+Vercel object names are deterministic and overwritten idempotently.
+
 ## Strict parsing and validation
 
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#239](https://github.com/defrex/autobuild/pull/239) — Add serverless PostgreSQL and network blob storage
 - [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs
 - [#237](https://github.com/defrex/autobuild/pull/237) — Document the Bun workspace migration
 - [#236](https://github.com/defrex/autobuild/pull/236) — Move Autobuild's core implementation into the private `packages/core` Bun workspace while retaining the root package as the compatibility distribution

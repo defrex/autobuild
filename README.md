@@ -157,6 +157,7 @@ propose; humans dispatch.
   configuration, as a worked example of the config surface.
 - [`docs/architecture.md`](docs/architecture.md) — how the design maps to the
   codebase: kernel, ports, processes, and stores.
+- [`packages/postgres-store/README.md`](packages/postgres-store/README.md) — serverless PostgreSQL persistence with S3-compatible or Vercel Blob storage.
 - [`docs/remote-store-protocol.md`](docs/remote-store-protocol.md) — the
   complete HTTP server contract and BuildStore conformance instructions.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and its
