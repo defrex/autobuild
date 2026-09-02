@@ -66,6 +66,12 @@ import {
   repositoryArtifactMetaWireSchema,
   repositoryRecordWireSchema,
 } from './protocol'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from './version'
 
 /** A scoped-token rejection (D8): 401 (missing/expired) or 403 (wrong build). */
 export class AuthError extends Error {
@@ -75,6 +81,11 @@ export class AuthError extends Error {
   }
 }
 
+export interface RemoteStoreIdentity {
+  autobuildVersion: string
+  protocolVersion: string
+}
+
 export interface RemoteBuildStoreOptions {
   /** Base URL of a store server (e.g. `http://127.0.0.1:4711`); fixed for life. */
   url: string
@@ -82,17 +93,24 @@ export interface RemoteBuildStoreOptions {
   token?: string
   /** Injectable network seam; defaults to global fetch. */
   fetchFn?: typeof fetch
+  /** Test seam for exercising package/protocol skew diagnostics. */
+  identity?: Partial<RemoteStoreIdentity>
 }
 
 export class RemoteBuildStore implements BuildStore {
   private readonly base: string
   private readonly token: string | undefined
   private readonly fetchFn: typeof fetch
+  private readonly identity: RemoteStoreIdentity
 
   constructor(opts: RemoteBuildStoreOptions) {
     this.base = opts.url.replace(/\/+$/, '')
     this.token = opts.token
     this.fetchFn = opts.fetchFn ?? fetch
+    this.identity = {
+      autobuildVersion: opts.identity?.autobuildVersion ?? AUTOBUILD_VERSION,
+      protocolVersion: opts.identity?.protocolVersion ?? REMOTE_STORE_PROTOCOL_VERSION,
+    }
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -108,7 +126,10 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   private async raw(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = {
+      [AUTOBUILD_VERSION_HEADER]: this.identity.autobuildVersion,
+      [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: this.identity.protocolVersion,
+    }
     if (this.token !== undefined) headers.authorization = `Bearer ${this.token}`
     if (body !== undefined) headers['content-type'] = 'application/json'
     return this.fetchFn(`${this.base}${path}`, {

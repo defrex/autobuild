@@ -23,6 +23,7 @@ import { textContent } from '../types'
 import { AuthError, RemoteBuildStore } from './client'
 import { startStoreServer } from './server'
 import { mintToken, verifyToken } from './token'
+import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 
 // ── The contract, over the wire ──────────────────────────────────────────────
 //
@@ -361,7 +362,11 @@ describe('D8 scope enforcement over the wire', () => {
 
       const health = await fetch(`${url}/health`)
       expect(health.status).toBe(200)
-      expect(await health.json()).toEqual({ ok: true })
+      expect(await health.json()).toEqual({
+        ok: true,
+        autobuildVersion: AUTOBUILD_VERSION,
+        protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+      })
     })
   })
 })
@@ -572,6 +577,76 @@ describe('wire robustness', () => {
       const response = await fetch(`${server.url}/nope`)
       expect(response.status).toBe(404)
       expect(((await response.json()) as { kind: string }).kind).toBe('not-found')
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
+// Package/protocol identity is a gate ahead of authentication and lookup.
+describe('remote identity and artifact policy', () => {
+  test('the client emits both identities and skew diagnostics name both sides', async () => {
+    let headers: Headers | undefined
+    const client = new RemoteBuildStore({
+      url: 'http://store.test',
+      fetchFn: (async (_input, init) => {
+        headers = new Headers(init?.headers)
+        return Response.json([])
+      }) as typeof fetch,
+    })
+    await client.listBuilds()
+    expect(headers?.get('x-autobuild-version')).toBe(AUTOBUILD_VERSION)
+    expect(headers?.get('x-autobuild-protocol-version')).toBe(REMOTE_STORE_PROTOCOL_VERSION)
+
+    const server = startStoreServer({ store: new MemoryBuildStore(), secret: 'secret' })
+    try {
+      const missing = await fetch(`${server.url}/builds`)
+      expect(missing.status).toBe(409)
+      expect(await missing.text()).toContain('client Autobuild (missing)')
+
+      const skewed = new RemoteBuildStore({
+        url: server.url,
+        identity: { protocolVersion: '999' },
+      })
+      const error = await skewed.listBuilds().catch((value: unknown) => value)
+      expect((error as Error).message).toContain('client Autobuild')
+      expect((error as Error).message).toContain('protocol 999')
+      expect((error as Error).message).toContain(`server Autobuild ${AUTOBUILD_VERSION}`)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('oversize bundled build and repository deposits mutate nothing', async () => {
+    const backing = new MemoryBuildStore()
+    const server = startStoreServer({ store: backing, maxArtifactBytes: 2 })
+    const client = new RemoteBuildStore({ url: server.url })
+    try {
+      await client.createBuild(sampleBuildInput('limited'))
+      const buildError = await client
+        .appendWithArtifacts('limited', [{ kind: 'large', content: new Uint8Array(3) }], () =>
+          sampleEventWrite('not-written'),
+        )
+        .catch((value: unknown) => value)
+      expect((buildError as Error).message).toContain('2 bytes')
+      expect(await backing.getEvents('limited')).toEqual([])
+      expect(await backing.listArtifacts('limited')).toEqual([])
+
+      await client.ensureRepo('acme/limited')
+      const repoError = await client
+        .appendRepoWithArtifacts(
+          'acme/limited',
+          [{ kind: 'large', content: new Uint8Array(3) }],
+          () => ({
+            actor: { kind: 'human', user: 'operator' },
+            type: 'dispatcher.pause-set',
+            payload: { enabled: true },
+          }),
+        )
+        .catch((value: unknown) => value)
+      expect((repoError as Error).message).toContain('2 bytes')
+      expect(await backing.getRepoEvents('acme/limited')).toEqual([])
+      expect(await backing.listRepoArtifacts('acme/limited')).toEqual([])
     } finally {
       await server.stop()
     }
