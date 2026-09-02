@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#247](https://github.com/defrex/autobuild/pull/247) — Harden hosted store routing and error responses
 - [#246](https://github.com/defrex/autobuild/pull/246) — Reject claims for terminal tickets
 - [#244](https://github.com/defrex/autobuild/pull/244) — Recover hosted store initialization after transient failures
 - [#243](https://github.com/defrex/autobuild/pull/243) — Host ticket sources behind the hosted service

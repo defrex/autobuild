@@ -18,6 +18,8 @@ export interface TicketServerOptions {
   secret: string
   sourceFor(context: HostedTicketContext): TicketSource | Promise<TicketSource>
   clock?: Clock
+  /** Observes unexpected source failures without changing their wire response. */
+  onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
 
 class TicketRequestError extends Error {
@@ -165,6 +167,17 @@ export function createTicketServer(options: TicketServerOptions): {
         // Only the message crosses the trust boundary; causes and stacks never do.
         const message = error instanceof Error ? error.message : 'ticket backend failed'
         const notFound = /unknown (?:ticket|issue)|not found/i.test(message)
+        // These are intentional domain feedback from TicketSource implementations.
+        // Their historical standalone mapping remains unchanged.
+        const expectedDomainFailure =
+          message.startsWith('invalid ticket update') || message.includes('cannot block itself')
+        if (!notFound && !expectedDomainFailure && options.onInternalError !== undefined) {
+          try {
+            await options.onInternalError(error, req)
+          } catch {
+            // Diagnostics must never replace the protocol response.
+          }
+        }
         return failure(notFound ? 404 : 500, notFound ? 'not-found' : 'internal', message)
       }
     },

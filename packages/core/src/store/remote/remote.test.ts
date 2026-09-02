@@ -21,9 +21,14 @@ import { BuildScopeError } from '../build-scope'
 import { MemoryBuildStore } from '../memory'
 import { textContent } from '../types'
 import { AuthError, RemoteBuildStore } from './client'
-import { startStoreServer } from './server'
+import { createStoreServer, startStoreServer } from './server'
 import { mintToken, verifyToken } from './token'
-import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from './version'
 
 // ── The contract, over the wire ──────────────────────────────────────────────
 //
@@ -650,5 +655,62 @@ describe('remote identity and artifact policy', () => {
     } finally {
       await server.stop()
     }
+  })
+})
+
+describe('remote store internal diagnostics', () => {
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+  }
+
+  test('reports unexpected failures with the original value and request', async () => {
+    const failure = new Error('postgres query failed')
+    const reports: Array<[unknown, Request]> = []
+    const store = new MemoryBuildStore()
+    store.listBuilds = async () => {
+      throw failure
+    }
+    const server = createStoreServer({
+      store,
+      onInternalError: (error, request) => reports.push([error, request]),
+    })
+    const request = new Request('https://store.example/builds', { headers })
+
+    const response = await server.fetch(request)
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toContain('postgres query failed')
+    expect(reports).toEqual([[failure, request]])
+  })
+
+  test('does not report expected failures and ignores reporter failures', async () => {
+    let reports = 0
+    const server = createStoreServer({
+      store: new MemoryBuildStore(),
+      onInternalError: () => {
+        reports++
+        throw new Error('logger failed')
+      },
+    })
+    const expected = await server.fetch(
+      new Request('https://store.example/builds', { method: 'POST', headers, body: '{}' }),
+    )
+    expect(expected.status).toBe(400)
+    expect(reports).toBe(0)
+
+    const failing = new MemoryBuildStore()
+    failing.listBuilds = async () => {
+      throw new Error('backend failed')
+    }
+    const resilient = createStoreServer({
+      store: failing,
+      onInternalError: () => {
+        throw new Error('logger failed')
+      },
+    })
+    const internal = await resilient.fetch(new Request('https://store.example/builds', { headers }))
+    expect(internal.status).toBe(500)
+    expect(await internal.text()).toContain('backend failed')
   })
 })
