@@ -2,7 +2,7 @@
  * This repository holds every distributed `ab-*` skill to its canonical
  * install form in both the live and `.ab-pristine` trees. This is repository
  * policy, not product behavior, so the guard lives in `tools/` rather than
- * `src/`.
+ * `packages/core/src/`.
  *
  * Canonical inventory and expected bytes come from the same reader used by
  * `ab init`. That keeps discovery, complete support-file trees, and SKILL.md
@@ -15,8 +15,8 @@ import { describe, expect, test } from 'bun:test'
 import type { Dirent } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { DistSkillFile } from '../src/cli/init'
-import { readDistSkills } from '../src/cli/init'
+import type { DistSkillFile } from '../packages/core/src/cli/init'
+import { readDistSkills } from '../packages/core/src/cli/init'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 

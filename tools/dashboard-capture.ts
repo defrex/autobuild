@@ -1,14 +1,14 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { abDispatch } from '../src/cli/dispatch'
-import { bulkControlRepository } from '../src/cli/bulk-control'
-import { renderDashboardFrameImage } from '../src/cli/dashboard/frame-image'
-import { cellWidth } from '../src/cli/dashboard/cells'
-import { renderDashboard, stripAnsi } from '../src/cli/dashboard/render'
-import type { TerminalInput, TerminalOut } from '../src/cli/terminal'
-import { createTerminalModeController } from '../src/cli/terminal-restore'
-import { agentActor, DISPATCHER, humanActor, KERNEL } from '../src/events/envelope'
-import { spawnExec } from '../src/ports/workspace/git-worktree'
+import { abDispatch } from '../packages/core/src/cli/dispatch'
+import { bulkControlRepository } from '../packages/core/src/cli/bulk-control'
+import { renderDashboardFrameImage } from '../packages/core/src/cli/dashboard/frame-image'
+import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
+import { renderDashboard, stripAnsi } from '../packages/core/src/cli/dashboard/render'
+import type { TerminalInput, TerminalOut } from '../packages/core/src/cli/terminal'
+import { createTerminalModeController } from '../packages/core/src/cli/terminal-restore'
+import { agentActor, DISPATCHER, humanActor, KERNEL } from '../packages/core/src/events/envelope'
+import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
 import {
   CONFIG_TOML,
   happyHandlers,
@@ -16,7 +16,7 @@ import {
   readyTicket,
   type E2eHarness,
   type SkillHandlers,
-} from '../src/integration/harness'
+} from '../packages/core/src/integration/harness'
 
 const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 

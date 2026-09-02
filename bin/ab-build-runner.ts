@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /** Private shipped child: one operating-system process per build. */
-import { runBuildChild } from '../src/processes/build-child'
-import { BuildChildExitCoordinator } from '../src/processes/build-child-exit'
-import { watchBuildParent } from '../src/processes/build-parent-watch'
-import { BUILD_RUNNER_OPTIONS_ENV } from '../src/ports/workspace/local-build-execution'
-import type { BuildExecutionStart } from '../src/ports/workspace/build-execution'
+import { runBuildChild } from '../packages/core/src/processes/build-child'
+import { BuildChildExitCoordinator } from '../packages/core/src/processes/build-child-exit'
+import { watchBuildParent } from '../packages/core/src/processes/build-parent-watch'
+import { BUILD_RUNNER_OPTIONS_ENV } from '../packages/core/src/ports/workspace/local-build-execution'
+import type { BuildExecutionStart } from '../packages/core/src/ports/workspace/build-execution'
 
 const raw = process.env[BUILD_RUNNER_OPTIONS_ENV]
 let input: BuildExecutionStart | undefined

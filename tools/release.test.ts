@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -81,9 +81,17 @@ async function createFixture(
   await command(parent, 'git', ['init', '-b', 'main', root])
   await command(root, 'git', ['config', 'user.name', 'Release Test'])
   await command(root, 'git', ['config', 'user.email', 'release@example.test'])
+  await mkdir(join(root, 'packages', 'core'), { recursive: true })
   await Promise.all([
     writeFile(join(root, 'autobuild.toml'), overrides.config ?? fixtureConfig),
-    writeFile(join(root, 'package.json'), '{\n  "name": "fixture",\n  "version": "2.0.0"\n}\n'),
+    writeFile(
+      join(root, 'package.json'),
+      '{\n  "name": "fixture",\n  "version": "2.0.0",\n  "workspaces": ["packages/*"]\n}\n',
+    ),
+    writeFile(
+      join(root, 'packages', 'core', 'package.json'),
+      '{\n  "name": "@fixture/core",\n  "version": "2.0.0"\n}\n',
+    ),
     writeFile(join(root, 'CHANGELOG.md'), overrides.changelog ?? fixtureChangelog),
     writeFile(join(root, 'README.md'), fixtureReadme),
   ])
@@ -226,7 +234,7 @@ describe('release transforms', () => {
 })
 
 describe('release orchestration', () => {
-  test('commits three files, pushes an annotated tag, and publishes the exact cut section', async () => {
+  test('commits all release files, pushes an annotated tag, and publishes the exact cut section', async () => {
     const fixture = await createFixture()
     const testHarness = harness()
     const before = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()
@@ -260,7 +268,7 @@ describe('release orchestration', () => {
         .trim()
         .split('\n')
         .sort(),
-    ).toEqual(['CHANGELOG.md', 'README.md', 'package.json'])
+    ).toEqual(['CHANGELOG.md', 'README.md', 'package.json', 'packages/core/package.json'])
     expect((await command(fixture.root, 'git', ['cat-file', '-t', 'v2.0.1'])).stdout.trim()).toBe(
       'tag',
     )
@@ -291,6 +299,9 @@ describe('release orchestration', () => {
         '- [#1](https://example.test/1) — Important repair\n',
     )
     expect(await readFile(join(fixture.root, 'package.json'), 'utf8')).toContain(
+      '"version": "2.0.1"',
+    )
+    expect(await readFile(join(fixture.root, 'packages/core/package.json'), 'utf8')).toContain(
       '"version": "2.0.1"',
     )
     expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain('#v2.0.1')
@@ -342,7 +353,7 @@ describe('release orchestration', () => {
     const fixture = await createFixture()
     const testHarness = harness()
     const files = await Promise.all(
-      ['CHANGELOG.md', 'README.md', 'package.json'].map((path) =>
+      ['CHANGELOG.md', 'README.md', 'package.json', 'packages/core/package.json'].map((path) =>
         readFile(join(fixture.root, path), 'utf8'),
       ),
     )
@@ -358,7 +369,7 @@ describe('release orchestration', () => {
 
     expect(
       await Promise.all(
-        ['CHANGELOG.md', 'README.md', 'package.json'].map((path) =>
+        ['CHANGELOG.md', 'README.md', 'package.json', 'packages/core/package.json'].map((path) =>
           readFile(join(fixture.root, path), 'utf8'),
         ),
       ),
@@ -370,6 +381,19 @@ describe('release orchestration', () => {
     expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
     expect(testHarness.logs.join('\n')).toContain('This release adds a new capability')
     expect(testHarness.logs.join('\n')).toContain('bun add -g github:defrex/autobuild#v2.1.0')
+    expect(testHarness.logs.join('\n')).toContain('--- packages/core/package.json (candidate) ---')
+  })
+
+  test('refuses version skew before mutating release files', async () => {
+    const fixture = await createFixture()
+    await writeFile(
+      join(fixture.root, 'packages', 'core', 'package.json'),
+      '{\n  "name": "@fixture/core",\n  "version": "2.0.1"\n}\n',
+    )
+    await command(fixture.root, 'git', ['add', 'packages/core/package.json'])
+    await command(fixture.root, 'git', ['commit', '-m', 'skew fixture'])
+    await command(fixture.root, 'git', ['push', 'origin', 'main'])
+    await expectReleaseFailure(fixture.root, /version must match root 2\.0\.0 before releasing/)
   })
 
   test('names dirty, wrong-branch, empty-section, local-tag, and remote-tag refusals', async () => {

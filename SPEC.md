@@ -12,8 +12,8 @@ boundaries between components, invariants, and decisions with their rationale
 
 - **Not a behavior reference.** Exact schemas, flag grammars, validation
   rules, and edge-case handling are specified by the code and its tests —
-  event payloads are frozen in `src/events/`, and the store contract in
-  `src/store/contract.ts`. Where this document and the code disagree on
+  event payloads are frozen in `packages/core/src/events/`, and the store contract in
+  `packages/core/src/store/contract.ts`. Where this document and the code disagree on
   behavior detail, the code is authoritative.
 - **Not an operating manual.** How to install, configure, and drive the
   system lives in `README.md` and `docs/`.
@@ -433,7 +433,7 @@ stream, artifacts, lease, and subscription remain available; another build,
 collection/admin operations, nested foreign scope, and every repository-journal
 operation reject. This guard applies identically to every adapter; remote tokens
 carry the same authority over the wire as defense in depth rather than creating
-it. Two implementations of one contract (`src/store/contract.ts` is the shared
+it. Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
 conformance suite):
 
 1. **Local** — one self-contained state tree at `<main-repo>/.autobuild/` by
@@ -454,7 +454,7 @@ conformance suite):
    binary, selected by an `http(s)://` reference. What remote sandboxes talk
    to. The documented [remote store protocol](docs/remote-store-protocol.md)
    is the public BuildStore extension surface for independently implemented
-   servers; `src/store/contract.ts`, driven through the shipped remote client,
+   servers; `packages/core/src/store/contract.ts`, driven through the shipped remote client,
    is the conformance bar. Autobuild does not load in-process BuildStore
    plugins. Git worktrees and default file tickets necessarily remain local.
 
@@ -1264,8 +1264,8 @@ exercise forced are marked **[D1]–[D4]**; all four are **confirmed**, with
 [D1] extended to cover merge standardization and conflict resolution (§15.7).
 
 The complete vocabulary is frozen in code: build payloads in
-`src/events/payloads.ts`, repository workflow and control payloads in
-`src/events/repository.ts`. Every adapter validates before append. The
+`packages/core/src/events/payloads.ts`, repository workflow and control payloads in
+`packages/core/src/events/repository.ts`. Every adapter validates before append. The
 sections below define the envelope, the conventions that govern every event,
 and the walkthroughs that motivated the design — not a field-by-field
 catalog.
@@ -1281,7 +1281,7 @@ Every event shares:
   "ts": "2026-07-15T14:03:22Z",   // assigned by the store
   "actor": { "kind": "agent", "role": "code-review", "session": "s_9f2" },
   "type": "code-review.verdict",
-  "payload": { /* per-type, frozen in src/events/ */ }
+  "payload": { /* per-type, frozen in packages/core/src/events/ */ }
 }
 ```
 
@@ -1321,7 +1321,7 @@ accidentally interpret repository state.
 
 ### 15.3 Catalog
 
-Authoritative in code (`src/events/payloads.ts`, `src/events/repository.ts`).
+Authoritative in code (`packages/core/src/events/payloads.ts`, `packages/core/src/events/repository.ts`).
 The families, with illustrative members:
 
 | Family | Examples |
@@ -1360,7 +1360,7 @@ reconcile never runs against a persisted or known-stale observation.
 Finding {
   "id": "f_3a91",                 // kernel-assigned at deposit, stable for the build
   "severity": "blocking" | "important" | "minor",
-  "file": "src/auth.ts",          // optional
+  "file": "packages/core/src/auth.ts",          // optional
   "lines": [40, 62],              // optional
   "summary": "…",
   "detail": "…",                  // optional

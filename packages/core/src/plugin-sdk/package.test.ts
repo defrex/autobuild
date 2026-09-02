@@ -21,7 +21,7 @@ import {
   type TicketSourcePluginDescriptor,
 } from 'autobuild/plugin-sdk'
 
-const root = resolve(import.meta.dir, '..', '..')
+const root = resolve(import.meta.dir, '..', '..', '..', '..')
 const temporary: string[] = []
 
 afterEach(async () => {
@@ -162,12 +162,16 @@ describe('autobuild/plugin-sdk package surface', () => {
     const listing = await new Response(listingProcess.stdout).text()
     expect(await listingProcess.exited).toBe(0)
     for (const path of [
-      'package/src/plugin-sdk/index.ts',
-      'package/src/ports/tickets/contract.ts',
-      'package/src/ports/runner/contract.ts',
-      'package/src/ports/workspace/contract.ts',
-      'package/src/ports/forge/contract.ts',
-      'package/src/store/contract.ts',
+      'package/packages/core/src/plugin-sdk/index.ts',
+      'package/packages/core/src/ports/tickets/contract.ts',
+      'package/packages/core/src/ports/runner/contract.ts',
+      'package/packages/core/src/ports/workspace/contract.ts',
+      'package/packages/core/src/ports/forge/contract.ts',
+      'package/packages/core/src/store/contract.ts',
+      'package/bin/ab.ts',
+      'package/bin/agent/ab',
+      'package/skills/implement/SKILL.md',
+      'package/templates/autobuild.toml',
     ]) {
       expect(listing).toContain(path)
     }
@@ -178,11 +182,41 @@ describe('autobuild/plugin-sdk package surface', () => {
     })
     const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
       exports?: Record<string, { types?: string; import?: string }>
+      dependencies?: Record<string, string>
     }
     expect(await manifestProcess.exited).toBe(0)
     expect(packedManifest.exports?.['./plugin-sdk']).toMatchObject({
-      types: './src/plugin-sdk/index.ts',
-      import: './src/plugin-sdk/index.ts',
+      types: './packages/core/src/plugin-sdk/index.ts',
+      import: './packages/core/src/plugin-sdk/index.ts',
     })
-  })
+    expect(packedManifest.dependencies?.['@autobuild/core']).toBeUndefined()
+
+    const extracted = join(destination, 'extracted')
+    await mkdir(extracted)
+    const extract = Bun.spawn(['tar', '-xzf', archive, '-C', extracted])
+    expect(await extract.exited).toBe(0)
+    const packageRoot = join(extracted, 'package')
+    const version = Bun.spawn(['bun', join(packageRoot, 'bin', 'ab.ts'), '--version'], {
+      cwd: packageRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
+    expect((await new Response(version.stdout).text()).trim()).toBe(
+      'autobuild 0.6.0\nplugin API 1.4.0',
+    )
+
+    const initialized = join(destination, 'initialized')
+    await mkdir(initialized)
+    const init = Bun.spawn(['bun', join(packageRoot, 'bin', 'ab.ts'), 'init'], {
+      cwd: initialized,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    expect(await init.exited, await new Response(init.stderr).text()).toBe(0)
+    expect(await Bun.file(join(initialized, 'autobuild.toml')).exists()).toBe(true)
+    expect(
+      await Bun.file(join(initialized, '.agents', 'skills', 'ab-implement', 'SKILL.md')).exists(),
+    ).toBe(true)
+  }, 20_000)
 })

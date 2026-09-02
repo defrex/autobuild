@@ -13,7 +13,10 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"]
+    }
   },
-  "include": ["src", "bin", "tools", "drizzle.config.ts"]
+  "include": ["packages/*/src", "bin", "tools", "drizzle.config.ts"]
 }

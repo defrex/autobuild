@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { distributionPath } from '../../distribution'
 import {
   DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS,
   terminateProcessGroup,
@@ -28,7 +28,7 @@ export class LocalBuildExecution implements BuildExecution {
   private readonly spawn: typeof Bun.spawn
 
   constructor(opts: LocalBuildExecutionOptions = {}) {
-    this.entrypoint = opts.entrypoint ?? resolve(import.meta.dir, '../../../bin/ab-build-runner.ts')
+    this.entrypoint = opts.entrypoint ?? distributionPath('bin', 'ab-build-runner.ts')
     this.env = opts.env ?? process.env
     this.stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS
     this.spawn = opts.spawn ?? Bun.spawn

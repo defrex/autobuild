@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
-import { htmlImageTargets, markdownTargets, withoutFencedCode } from '../src/markdown'
+import { htmlImageTargets, markdownTargets, withoutFencedCode } from '../packages/core/src/markdown'
 import { gitTrackedPaths, repoRoot } from './git-tracked'
 
 /**
@@ -41,7 +41,7 @@ export type DocsAssetFinding =
  *
  * Canonical `skills/**` is inside `files` and therefore counted, even though a
  * canonical skill cannot in fact reference `docs/assets` without failing
- * `src/cli/skill-self-containment.test.ts`. Counting it is vacuous rather than
+ * `packages/core/src/cli/skill-self-containment.test.ts`. Counting it is vacuous rather than
  * wrong, and deriving the set mechanically from `files` cannot fall out of date
  * the way a hand-maintained list would.
  */

@@ -12,7 +12,7 @@ capacity = 5             # concurrent builds
 [commands]
 setup = "bun install"
 lint = "bun run check"
-typecheck = "bun tsc --noEmit"
+typecheck = "bun run typecheck"
 test = "bun run test"
 
 # The configured universe and order of verification. A plan may deselect
@@ -39,7 +39,7 @@ command = "test"
 [verify.dashboard]
 kind = "agent"
 skill = "ab-verify-dashboard"
-paths = ["src/cli/dashboard/**", "src/cli/dispatch.ts", "tools/dashboard-capture.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
+paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.ts", "tools/dashboard-capture.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.

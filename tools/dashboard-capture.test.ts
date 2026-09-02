@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnExec } from '../src/ports/workspace/git-worktree'
+import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
 import { captureDashboardFrames, type DashboardCaptureResult } from './dashboard-capture'
 
 let tmp: string

@@ -7,10 +7,11 @@
  * Autobuild CLI. A fresh object is returned on every call; neither input nor
  * process.env is mutated, which keeps concurrent builds isolated.
  */
-import { delimiter, resolve } from 'node:path'
+import { delimiter } from 'node:path'
+import { distributionPath } from '../../distribution'
 
 /** Private command directory shipped by this Autobuild distribution. */
-export const AGENT_BIN_DIR = resolve(import.meta.dir, '..', '..', '..', 'bin', 'agent')
+export const AGENT_BIN_DIR = distributionPath('bin', 'agent')
 
 export function sessionEnv(
   scoped: Readonly<Record<string, string>>,

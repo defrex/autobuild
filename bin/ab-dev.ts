@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /** Repo-local Bun hot entry. This file is not exposed through package.json#bin. */
-import { runBinary } from '../src/cli/binary'
-import { evaluateDevCli, type DevCliState } from '../src/cli/dev'
-import { renderDashboard } from '../src/cli/dashboard/render'
+import { runBinary } from '../packages/core/src/cli/binary'
+import { evaluateDevCli, type DevCliState } from '../packages/core/src/cli/dev'
+import { renderDashboard } from '../packages/core/src/cli/dashboard/render'
 
 const STATE_KEY = Symbol.for('autobuild.cli.dashboard-dev')
 const globals = globalThis as unknown as Record<symbol, DevCliState | undefined>
