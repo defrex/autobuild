@@ -316,6 +316,9 @@ export async function makeHarness(opts: {
     token?: string
     cleanup?: () => Promise<void>
   }>
+  /** Execute scripted phase commands through the private `ab` launcher on
+   * PATH, forcing production ambient-env parsing and Store reopening. */
+  processCli?: boolean
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   const originPath = join(tmp, 'origin')
@@ -392,19 +395,39 @@ export async function makeHarness(opts: {
     const ws = ctx.opts.workspacePath
 
     const run = async (argv: string[]): Promise<string[]> => {
-      const out: string[] = []
-      const err: string[] = []
-      const code = await runCli(argv, {
-        store: activeStore,
-        env,
-        workspacePath: ws,
-        forge: selectedForge,
-        exec: spawnExec,
-        ids,
-        clock,
-        stdout: (line) => out.push(line),
-        stderr: (line) => err.push(line),
-      })
+      let code: number
+      let out: string[]
+      let err: string[]
+      if (opts.processCli === true) {
+        const child = Bun.spawn(['ab', ...argv], {
+          cwd: ws,
+          env: ctx.opts.env,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        })
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ])
+        code = exitCode
+        out = stdout.trimEnd() === '' ? [] : stdout.trimEnd().split('\n')
+        err = stderr.trimEnd() === '' ? [] : stderr.trimEnd().split('\n')
+      } else {
+        out = []
+        err = []
+        code = await runCli(argv, {
+          store: activeStore,
+          env,
+          workspacePath: ws,
+          forge: selectedForge,
+          exec: spawnExec,
+          ids,
+          clock,
+          stdout: (line) => out.push(line),
+          stderr: (line) => err.push(line),
+        })
+      }
       if (code !== 0) {
         const message =
           `ab ${argv.join(' ')} exited ${code} in ${env.phase}@${env.round}: ` +
@@ -449,6 +472,7 @@ export async function makeHarness(opts: {
   const makeRunner = async (
     slug: string,
     instance?: string,
+    sessionEnv?: Record<string, string>,
   ): Promise<{ runner: BuildRunner; instance: string }> => {
     const record = await activeStore.getBuild(slug)
     const workspacePath = openWorkspacePath(await activeStore.getEvents(slug))
@@ -477,6 +501,7 @@ export async function makeHarness(opts: {
         clock,
         instance: resolvedInstance,
         host: 'e2e-host',
+        ...(sessionEnv !== undefined ? { sessionEnv } : {}),
         // Long lease/heartbeat: liveness is driven by the shared stepping
         // clock; scenarios advance it explicitly to expire a lease.
         opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
@@ -506,7 +531,10 @@ export async function makeHarness(opts: {
     forge: selectedForge,
     workspaces,
     buildExecution: new InProcessBuildExecution(async (input) => {
-      const { runner } = await makeRunner(input.slug, input.instance)
+      const { runner } = await makeRunner(input.slug, input.instance, {
+        AB_STORE: input.storeRef,
+        ...(adapted?.token !== undefined ? { AB_TOKEN: adapted.token } : {}),
+      })
       await runner.run().catch(async (error) => {
         await activeStore.putArtifact(
           input.slug,

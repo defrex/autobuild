@@ -1,10 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createTerminalModeController } from '../../core/src/cli/terminal-restore'
 import { abDispatch } from '../../core/src/cli/dispatch'
 import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
 import { RemoteBuildStore, mintToken } from 'autobuild/remote-store'
 import {
+  CONFIG_TOML,
   happyHandlers,
   makeHarness,
   readyTicket,
@@ -25,6 +28,9 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const h = await makeHarness({
     handlers: happyHandlers(),
     tickets: [readyTicket('T-1')],
+    configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"'),
+    localGitForge: true,
+    processCli: true,
     storeAdapter: async (backing) => {
       const secret = 'integration-signing-secret'
       const service = createHostedStoreService({
@@ -82,8 +88,8 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   await dispatch()
 
   const events = await h.events('add-rate-limiting')
-  expect(typesOf(events)).toContain('finalize.completed')
   expect(h.cliErrors).toEqual([])
+  expect(typesOf(events)).toContain('finalize.completed')
   expect(requests.some((entry) => entry.method === 'POST' && entry.path.endsWith('/events'))).toBe(
     true,
   )
@@ -95,5 +101,84 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       .filter((entry) => entry.path !== '/health')
       .every((entry) => entry.authorization === `Bearer ${serviceToken}`),
   ).toBe(true)
+  for (const journal of h.agents.sessions.values()) {
+    expect(journal.opts.env.AB_STORE).toBe(serviceUrl)
+    expect(journal.opts.env.AB_TOKEN).toBe(serviceToken)
+  }
   expect(existsSync(join(h.origin, '.autobuild'))).toBe(false)
-})
+
+  // The terminal-owning parent and its real supervised child both reopen the
+  // service from the environment. No work is ready, so a production runtime
+  // can safely own this dashboard tick without invoking an external agent.
+  await writeFile(
+    join(h.origin, 'autobuild.toml'),
+    CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"').replace(
+      'runtime = "scripted"',
+      'runtime = "pi"',
+    ),
+  )
+  let dashboardOutput = ''
+  const dashboardWrite = (chunk: string): void => {
+    dashboardOutput += chunk
+  }
+  const requestCountBeforeDashboard = requests.length
+  await abDispatch({
+    targetRepo: h.origin,
+    env: { AB_STORE: serviceUrl, AB_TOKEN: serviceToken },
+    exec: spawnExec,
+    stdout: () => {},
+    stderr: () => {},
+    once: true,
+    terminal: {
+      write: dashboardWrite,
+      modes: createTerminalModeController(dashboardWrite, dashboardWrite),
+      columns: 100,
+      rows: 30,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+  })
+  const dashboardRequests = requests.slice(requestCountBeforeDashboard)
+  expect(dashboardOutput).toContain('add-rate-limiting')
+  const repoEvents = await h.store.getRepoEvents(h.origin)
+  const dashboardRun = repoEvents.find((event) => event.type === 'dispatcher.run-started')
+  expect(dashboardRun?.type).toBe('dispatcher.run-started')
+  if (dashboardRun?.type !== 'dispatcher.run-started') throw new Error('missing dashboard run')
+  expect(dashboardRun.payload.pid).not.toBe(process.pid)
+  expect(repoEvents.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+  expect(dashboardRequests.some((entry) => entry.path === '/builds')).toBe(true)
+  expect(
+    dashboardRequests.some(
+      (entry) =>
+        entry.method === 'POST' && entry.path.includes('/repos/') && entry.path.endsWith('/events'),
+    ),
+  ).toBe(true)
+
+  const badToken = mintToken('wrong-secret', {
+    build: '*',
+    session: '*',
+    exp: Date.now() + 60_000,
+  })
+  await expect(
+    abDispatch({
+      targetRepo: h.origin,
+      env: { AB_STORE: serviceUrl, AB_TOKEN: badToken },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      terminal: {
+        write: () => {},
+        modes: createTerminalModeController(
+          () => {},
+          () => {},
+        ),
+        columns: 100,
+        rows: 30,
+        interactive: true,
+      },
+      input: { start: () => () => {} },
+    }),
+  ).rejects.toThrow(/invalid or expired token/)
+  expect(existsSync(join(h.origin, '.autobuild'))).toBe(false)
+}, 20_000)
