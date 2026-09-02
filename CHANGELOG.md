@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#250](https://github.com/defrex/autobuild/pull/250) — Add authenticated hosted web dashboard
 - [#247](https://github.com/defrex/autobuild/pull/247) — Harden hosted store routing and error responses
 - [#246](https://github.com/defrex/autobuild/pull/246) — Reject claims for terminal tickets
 - [#245](https://github.com/defrex/autobuild/pull/245) — Expose a versioned operator control API
