@@ -48,21 +48,27 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
 
   const openStoreHandler = () => {
-    storeHandlerPromise ??= (async () => {
-      const config = parseHostedStoreEnv(env)
-      let store: BuildStore
-      try {
-        store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
-      } catch {
-        throw new Error('hosted store is unavailable')
-      }
-      return createStoreServer({
-        store,
-        secret: config.secret,
-        maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
-        ...(options.clock === undefined ? {} : { clock: options.clock }),
-      }).fetch
-    })()
+    if (storeHandlerPromise === undefined) {
+      const attempt = (async () => {
+        const config = parseHostedStoreEnv(env)
+        let store: BuildStore
+        try {
+          store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
+        } catch {
+          throw new Error('hosted store is unavailable')
+        }
+        return createStoreServer({
+          store,
+          secret: config.secret,
+          maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          ...(options.clock === undefined ? {} : { clock: options.clock }),
+        }).fetch
+      })()
+      storeHandlerPromise = attempt
+      void attempt.catch(() => {
+        if (storeHandlerPromise === attempt) storeHandlerPromise = undefined
+      })
+    }
     return storeHandlerPromise
   }
 
