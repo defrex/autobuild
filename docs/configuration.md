@@ -14,9 +14,23 @@ example](#complete-example) is valid on its own.
 ## PostgreSQL BuildStore environment
 
 The optional `@autobuild/postgres-store` adapter is configured only through the
-environment. It is installed separately, so an ordinary `autobuild` CLI install
-does not acquire PostgreSQL or blob-provider dependencies. Before opening the
-adapter, run the idempotent `bunx @autobuild/postgres-store migrate` step.
+environment. It is distributed in Autobuild's GitHub releases rather than npm,
+so an ordinary `autobuild` CLI install does not acquire its PostgreSQL or
+blob-provider dependencies. Choose the adapter-compatible tag shown in
+[GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
+revision into a dedicated checkout, and run the idempotent migration there:
+
+```sh
+git clone --depth 1 --branch v0.6.0 --single-branch https://github.com/defrex/autobuild.git autobuild-v0.6.0
+cd autobuild-v0.6.0
+bun install --frozen-lockfile
+AB_POSTGRES_URL=postgres://… bun run postgres:migrate
+```
+
+Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
+`postgres:migrate` script is relative to that pinned checkout. The database
+identity needs permission to create tables during migration and to select,
+insert, and update those tables at runtime.
 
 | Variable | Required when | Values / purpose |
 |---|---|---|
