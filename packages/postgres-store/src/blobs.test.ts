@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { describeBlobStoreContract } from 'autobuild/plugin-sdk'
+import { Buffer } from 'node:buffer'
 import { S3BlobStore } from './s3'
 import { VercelBlobStore } from './vercel'
 
@@ -33,7 +34,8 @@ function vercelHarness(): VercelBlobStore {
     access: 'private',
     prefix: 'ab/blobs',
     put: (async (pathname: string, body: unknown) => {
-      data.set(pathname, new Uint8Array(body as Uint8Array))
+      if (!Buffer.isBuffer(body)) throw new TypeError('Vercel PutBody must be a Buffer')
+      data.set(pathname, Uint8Array.from(body))
       return {
         url: pathname,
         downloadUrl: pathname,
@@ -87,18 +89,28 @@ describe('provider request mapping', () => {
     expect(seen?.input).toMatchObject({ Bucket: 'bucket', Key: 'prefix/abc' })
   })
 
-  test('Vercel disables suffixes and enables overwrite', async () => {
+  test('Vercel uploads binary bytes as a supported Buffer with deterministic options', async () => {
+    let pathname: string | undefined
+    let body: Buffer | undefined
     let options: Record<string, unknown> | undefined
     const blobs = new VercelBlobStore({
       access: 'public',
+      prefix: '//prefix//',
       token: 'secret',
-      put: (async (_path: string, _body: unknown, opts: Record<string, unknown>) => {
+      put: (async (seenPath: string, seenBody: unknown, opts: Record<string, unknown>) => {
+        if (!Buffer.isBuffer(seenBody)) throw new TypeError('Vercel PutBody must be a Buffer')
+        pathname = seenPath
+        body = seenBody
         options = opts
         return {}
       }) as never,
       get: (async () => null) as never,
     })
-    await blobs.put('abc', new Uint8Array([1]))
+    const bytes = new Uint8Array([0x00, 0x80, 0xff, 0x41])
+    await blobs.put('abc', bytes)
+    expect(pathname).toBe('prefix/abc')
+    expect(Buffer.isBuffer(body)).toBe(true)
+    expect([...body!]).toEqual([...bytes])
     expect(options).toMatchObject({
       access: 'public',
       token: 'secret',
