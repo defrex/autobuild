@@ -83,6 +83,11 @@ import {
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { scanUnclaimedObservations } from '../processes/harvest'
 import {
+  controlHarvestRun as applyHarvestRunControl,
+  toggleHarvestGate as applyHarvestGateToggle,
+  toggleRepositorySetting,
+} from '../operator/control'
+import {
   Dispatcher,
   emptyTickReport,
   type LaunchRunnerResult,
@@ -802,16 +807,13 @@ class DispatchLoop {
   private async toggleIntake(): Promise<void> {
     if (this.selection?.kind !== 'global') return
 
-    const { store } = this.wiring
-    const repo = this.opts.targetRepo
-    const current = await this.readDispatchSettings()
-    const enabled = !current.intake
-    await store.appendRepo(repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: 'dispatcher.intake-set',
-      payload: { enabled },
+    const event = await toggleRepositorySetting({
+      store: this.wiring.store,
+      repo: this.opts.targetRepo,
+      user: buildControlUser(this.opts.env),
+      setting: 'intake',
     })
-    this.say(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
+    this.say(`dispatcher intake ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
   }
 
@@ -966,19 +968,12 @@ class DispatchLoop {
       return
     }
 
-    const { store } = this.wiring
-    const repo = this.opts.targetRepo
-    await store.ensureRepo(repo)
-    const state = reduceHarvest(await store.getRepoEvents(repo))
-    const pending = state.pendingCommands.at(-1)
-    const requestedPaused = pending === undefined ? state.paused : pending.command === 'pause'
-    const command = requestedPaused ? 'resume' : 'pause'
-    await store.appendRepo(repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: command === 'resume' ? 'harvest.resume-requested' : 'harvest.pause-requested',
-      payload: {},
+    const result = await applyHarvestGateToggle({
+      store: this.wiring.store,
+      repo: this.opts.targetRepo,
+      user: buildControlUser(this.opts.env),
     })
-    this.say(`harvest gate: ${command} requested`)
+    this.say(`harvest gate: ${result.command} requested`)
     await this.renderOnce()
   }
 
@@ -1014,10 +1009,11 @@ class DispatchLoop {
       return
     }
 
-    await store.appendRepo(repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: 'harvest.resume-requested',
-      payload: {},
+    await applyHarvestRunControl({
+      store,
+      repo,
+      user: buildControlUser(this.opts.env),
+      run: projected.run,
     })
     const selectedRun = state.runs.find((run) => run.run === projected.run)
     this.say(
@@ -1075,16 +1071,13 @@ class DispatchLoop {
 
   private async toggleAutoMerge(): Promise<void> {
     if (this.view === undefined && this.selection?.kind === 'global') {
-      const { store } = this.wiring
-      const repo = this.opts.targetRepo
-      const current = await this.readDispatchSettings()
-      const enabled = !current.defaultAutoMerge
-      await store.appendRepo(repo, {
-        actor: humanActor(buildControlUser(this.opts.env)),
-        type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled },
+      const event = await toggleRepositorySetting({
+        store: this.wiring.store,
+        repo: this.opts.targetRepo,
+        user: buildControlUser(this.opts.env),
+        setting: 'auto-merge-default',
       })
-      this.say(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
+      this.say(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
       await this.renderOnce()
       return
     }

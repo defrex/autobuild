@@ -1,11 +1,10 @@
 import { configSchema, type Config } from '../config/schema'
 import { humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
-import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
-import { reduceHarvest } from '../kernel/harvest'
 import type { BuildState } from '../kernel/reducer'
 import { scanUnclaimedObservations } from '../processes/harvest'
+import { controlHarvestRun, toggleHarvestGate, toggleRepositorySetting } from '../operator/control'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
 import { BuildControlError, buildControlUser, controlBuild } from './build-control'
@@ -14,7 +13,6 @@ import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './das
 import {
   buildDashboardFromProjected,
   dashboardBuildControl,
-  projectHarvest,
   type DashboardBuild,
   type DashboardModel,
   type DashboardSelection,
@@ -554,24 +552,24 @@ export class DispatchFrontend {
   }
 
   private async toggleIntake(): Promise<void> {
-    const enabled = !reduceDispatchSettings(await this.events()).intake
-    await this.opts.store.appendRepo(this.opts.repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: 'dispatcher.intake-set',
-      payload: { enabled },
+    const event = await toggleRepositorySetting({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      user: buildControlUser(this.opts.env),
+      setting: 'intake',
     })
-    await this.report(`dispatcher intake ${enabled ? 'ON' : 'OFF'}`)
+    await this.report(`dispatcher intake ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
   }
 
   private async toggleDefaultAutoMerge(): Promise<void> {
-    const enabled = !reduceDispatchSettings(await this.events()).defaultAutoMerge
-    await this.opts.store.appendRepo(this.opts.repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: 'dispatcher.auto-merge-default-set',
-      payload: { enabled },
+    const event = await toggleRepositorySetting({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      user: buildControlUser(this.opts.env),
+      setting: 'auto-merge-default',
     })
-    await this.report(`dispatcher auto-merge default ${enabled ? 'ON' : 'OFF'}`)
+    await this.report(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
   }
 
@@ -587,37 +585,32 @@ export class DispatchFrontend {
   }
 
   private async toggleHarvest(): Promise<void> {
-    const state = reduceHarvest(await this.events())
-    const pending = state.pendingCommands.at(-1)
-    const paused = pending === undefined ? state.paused : pending.command === 'pause'
-    const type = paused ? 'harvest.resume-requested' : 'harvest.pause-requested'
-    await this.opts.store.appendRepo(this.opts.repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type,
-      payload: {},
+    const result = await toggleHarvestGate({
+      store: this.opts.store,
+      repo: this.opts.repo,
+      user: buildControlUser(this.opts.env),
     })
-    await this.report(`harvest gate: ${paused ? 'resume' : 'pause'} requested`)
+    await this.report(`harvest gate: ${result.command} requested`)
     await this.renderOnce()
   }
 
   private async harvestRun(expectedRun: string | undefined): Promise<void> {
-    const events = await this.events()
-    const projected = projectHarvest(events)
-    if (
-      expectedRun === undefined ||
-      projected?.run !== expectedRun ||
-      projected.action === undefined
-    ) {
+    if (expectedRun === undefined) {
       await this.report('harvest run action ignored: selected run is no longer active')
       await this.renderOnce()
       return
     }
-    await this.opts.store.appendRepo(this.opts.repo, {
-      actor: humanActor(buildControlUser(this.opts.env)),
-      type: 'harvest.resume-requested',
-      payload: {},
-    })
-    await this.report(`harvest: ${projected.action} requested`)
+    try {
+      const result = await controlHarvestRun({
+        store: this.opts.store,
+        repo: this.opts.repo,
+        user: buildControlUser(this.opts.env),
+        run: expectedRun,
+      })
+      await this.report(`harvest: ${result.action} requested`)
+    } catch (error) {
+      await this.report(error instanceof Error ? error.message : String(error))
+    }
     await this.renderOnce()
   }
 

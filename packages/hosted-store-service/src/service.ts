@@ -1,5 +1,6 @@
 import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
 import type { BuildStore, Clock } from 'autobuild/plugin-sdk'
+import { createOperatorServer } from 'autobuild/operator-api'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -38,12 +39,22 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       } catch {
         throw new Error('hosted store is unavailable')
       }
-      return createStoreServer({
+      const shared = options.clock === undefined ? {} : { clock: options.clock }
+      const storeServer = createStoreServer({
         store,
         secret: config.secret,
         maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
-        ...(options.clock === undefined ? {} : { clock: options.clock }),
-      }).fetch
+        ...shared,
+      })
+      const operatorServer = createOperatorServer({
+        store,
+        secret: config.secret,
+        ...shared,
+      })
+      return (req: Request) =>
+        new URL(req.url).pathname.startsWith('/operator/v1/')
+          ? operatorServer.fetch(req)
+          : storeServer.fetch(req)
     })()
     return handlerPromise
   }
@@ -58,7 +69,11 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
         })
       }
-      if (url.pathname.startsWith('/builds') || url.pathname.startsWith('/repos')) {
+      if (
+        url.pathname.startsWith('/builds') ||
+        url.pathname.startsWith('/repos') ||
+        url.pathname.startsWith('/operator/v1/')
+      ) {
         const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
         const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
         if (

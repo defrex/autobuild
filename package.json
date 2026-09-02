@@ -24,6 +24,11 @@
       "types": "./packages/core/src/store/remote/index.ts",
       "import": "./packages/core/src/store/remote/index.ts",
       "default": "./packages/core/src/store/remote/index.ts"
+    },
+    "./operator-api": {
+      "types": "./packages/core/src/operator/index.ts",
+      "import": "./packages/core/src/operator/index.ts",
+      "default": "./packages/core/src/operator/index.ts"
     }
   },
   "files": [

@@ -17,6 +17,7 @@
     "paths": {
       "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
       "autobuild/remote-store": ["./packages/core/src/store/remote/index.ts"],
+      "autobuild/operator-api": ["./packages/core/src/operator/index.ts"],
       "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"]
     }
   },

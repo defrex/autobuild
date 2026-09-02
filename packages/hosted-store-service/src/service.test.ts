@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '../../core/src/store/memory'
+import { OperatorApiClient } from 'autobuild/operator-api'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -61,6 +62,44 @@ describe('hosted store service', () => {
     await client.createBuild({ slug: 'demo', repo: 'acme/repo' })
     await client.listBuilds()
     expect(opens).toBe(1)
+  })
+
+  test('composes the operator API through the same lazy store', async () => {
+    let opens = 0
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens += 1
+        return backing
+      },
+    })
+    const token = mintToken(env.AB_STORE_SECRET, {
+      operator: { user: 'Hosted Operator' },
+      exp: now.getTime() + 60_000,
+    })
+    const client = new OperatorApiClient({
+      url: 'http://hosted.test',
+      token,
+      fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch,
+    })
+    expect(await client.repositoryStatus('acme/repo')).toEqual({
+      repo: 'acme/repo',
+      intake: true,
+      paused: false,
+      defaultAutoMerge: false,
+    })
+    expect(opens).toBe(1)
+    await client.setIntake('acme/repo', false)
+    expect((await backing.getRepoEvents('acme/repo')).at(-1)).toMatchObject({
+      actor: { kind: 'human', user: 'Hosted Operator' },
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
   })
 
   test('round-trips 1 MiB and rejects ceiling-plus-one without mutation', async () => {
