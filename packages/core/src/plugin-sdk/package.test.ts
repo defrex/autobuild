@@ -19,7 +19,7 @@ import {
   describeWorkspaceProviderContract,
   type AutobuildPluginManifest,
   type TicketSourcePluginDescriptor,
-} from 'autobuild/plugin-sdk'
+} from './index'
 
 const root = resolve(import.meta.dir, '..', '..', '..', '..')
 const temporary: string[] = []
@@ -28,8 +28,8 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-describe('autobuild/plugin-sdk package surface', () => {
-  test('exports manifest types, contracts, and reference adapters from the public subpath', () => {
+describe('plugin SDK package surface', () => {
+  test('exports manifest types, contracts, and reference adapters from the local SDK barrel', () => {
     const ticketSource = {
       factory: () => new FakeTicketSource(),
       requiredEnv: ['SAMPLE_TOKEN'],
@@ -190,6 +190,67 @@ describe('autobuild/plugin-sdk package surface', () => {
       import: './packages/core/src/plugin-sdk/index.ts',
     })
     expect(packedManifest.dependencies?.['@autobuild/core']).toBeUndefined()
+
+    const consumer = join(destination, 'consumer')
+    await mkdir(consumer)
+    await writeFile(
+      join(consumer, 'package.json'),
+      JSON.stringify({
+        name: 'packed-plugin-sdk-consumer',
+        private: true,
+        type: 'module',
+        dependencies: { autobuild: `file:${archive}` },
+      }),
+    )
+    const install = Bun.spawn(['bun', 'install', '--linker', 'isolated'], {
+      cwd: consumer,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const installExit = await install.exited
+    const [installOutput, installError] = await Promise.all([
+      new Response(install.stdout).text(),
+      new Response(install.stderr).text(),
+    ])
+    if (installExit !== 0) {
+      throw new Error(`packed consumer install failed:\n${installOutput}${installError}`)
+    }
+
+    await writeFile(
+      join(consumer, 'verify.ts'),
+      `
+        import {
+          FakeTicketSource,
+          PLUGIN_API_VERSION,
+          describeTicketSourceContract,
+        } from 'autobuild/plugin-sdk'
+
+        if (PLUGIN_API_VERSION !== '1.4.0') {
+          throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
+        }
+        if (typeof FakeTicketSource !== 'function') {
+          throw new Error('FakeTicketSource is unavailable')
+        }
+        if (typeof describeTicketSourceContract !== 'function') {
+          throw new Error('describeTicketSourceContract is unavailable')
+        }
+      `,
+    )
+    const consumerImport = Bun.spawn(['bun', 'verify.ts'], {
+      cwd: consumer,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const consumerImportExit = await consumerImport.exited
+    const [consumerImportOutput, consumerImportError] = await Promise.all([
+      new Response(consumerImport.stdout).text(),
+      new Response(consumerImport.stderr).text(),
+    ])
+    if (consumerImportExit !== 0) {
+      throw new Error(
+        `packed consumer autobuild/plugin-sdk import failed:\n${consumerImportOutput}${consumerImportError}`,
+      )
+    }
 
     const extracted = join(destination, 'extracted')
     await mkdir(extracted)
