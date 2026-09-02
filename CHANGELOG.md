@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#241](https://github.com/defrex/autobuild/pull/241) — Make PostgreSQL first-row creation concurrency-safe
 - [#240](https://github.com/defrex/autobuild/pull/240) — Align PostgreSQL migrations and blob uploads with release contracts
 - [#239](https://github.com/defrex/autobuild/pull/239) — Add serverless PostgreSQL and network blob storage
 - [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs

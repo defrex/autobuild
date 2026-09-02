@@ -68,6 +68,77 @@ if (testUrl) {
   })
 
   describe('PostgreSQL durability and concurrency', () => {
+    test('concurrent repository ensures create one absent row and return the winning record', async () => {
+      const database = await isolatedDatabase()
+      const stores = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          openPostgresBuildStore(database.url, new MemoryBlobStore()),
+        ),
+      )
+      const assertionSql = new SQL(database.url)
+      try {
+        const records = await Promise.all(stores.map((store) => store.ensureRepo('acme/new-repo')))
+        expect(records).toHaveLength(stores.length)
+        expect(
+          records.every((record) => JSON.stringify(record) === JSON.stringify(records[0])),
+        ).toBe(true)
+
+        const rows = await assertionSql`SELECT * FROM repo_streams WHERE repo = ${'acme/new-repo'}`
+        expect(rows).toHaveLength(1)
+        const createdAt = rows[0]?.created_at
+        const updatedAt = rows[0]?.updated_at
+        expect(records[0]).toEqual({
+          repo: 'acme/new-repo',
+          createdAt:
+            createdAt instanceof Date
+              ? createdAt.toISOString()
+              : new Date(String(createdAt)).toISOString(),
+          updatedAt:
+            updatedAt instanceof Date
+              ? updatedAt.toISOString()
+              : new Date(String(updatedAt)).toISOString(),
+        })
+      } finally {
+        await assertionSql.close()
+        await Promise.all(stores.map((store) => store.close()))
+        await database.cleanup()
+      }
+    })
+
+    test('concurrent creation of one absent build has one winner and normalized losers', async () => {
+      const database = await isolatedDatabase()
+      const stores = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          openPostgresBuildStore(database.url, new MemoryBlobStore()),
+        ),
+      )
+      const assertionSql = new SQL(database.url)
+      try {
+        const results = await Promise.allSettled(
+          stores.map((store) => store.createBuild(sampleBuildInput('new-shared-build'))),
+        )
+        const fulfilled = results.filter((result) => result.status === 'fulfilled')
+        const rejected = results.filter((result) => result.status === 'rejected')
+        expect(fulfilled).toHaveLength(1)
+        expect(rejected).toHaveLength(stores.length - 1)
+        expect(rejected.map((result) => result.reason?.message)).toEqual(
+          Array.from(
+            { length: stores.length - 1 },
+            () => 'build "new-shared-build" already exists',
+          ),
+        )
+
+        const rows = await assertionSql`SELECT * FROM builds WHERE slug = ${'new-shared-build'}`
+        expect(rows).toHaveLength(1)
+        expect(rows[0]?.slug).toBe('new-shared-build')
+        expect(rows[0]?.repo).toBe(sampleBuildInput('new-shared-build').repo)
+      } finally {
+        await assertionSql.close()
+        await Promise.all(stores.map((store) => store.close()))
+        await database.cleanup()
+      }
+    })
+
     test('fresh independent instances see prior writes and serialize streams', async () => {
       const database = await isolatedDatabase()
       const blobs = new MemoryBlobStore()

@@ -24,6 +24,14 @@ migration and to select, insert, and update the resulting tables at runtime.
 Opening against a missing, older/newer, or checksum-mismatched schema fails;
 schema creation is never implicit.
 
+## Concurrency
+
+Identity rows are created conflict-safely before being locked for subsequent
+work. Concurrent repository ensures are idempotent and all return the single
+stored record. Concurrent attempts to create the same build slug produce one
+winner; every other caller receives `build "<slug>" already exists` rather than
+a raw PostgreSQL uniqueness error.
+
 ```ts
 import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
 
