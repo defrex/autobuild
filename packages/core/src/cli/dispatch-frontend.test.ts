@@ -3,7 +3,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { createTerminalModeController } from './terminal-restore'
-import type { DashboardModel } from './dashboard/model'
+import { projectHarvest, type DashboardModel } from './dashboard/model'
 import { dashboardContentWidth, detailScrollLimit, renderDashboard } from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
 import type { DispatchChildResult } from './dispatch-process'
@@ -659,6 +659,117 @@ test('frontend owns live observation pressure and retains the last factual sampl
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
+})
+
+test('harvest run controls preserve the frontend no-action compatibility report', async () => {
+  const invoke = async (
+    name: string,
+    seed: (store: MemoryBuildStore, repo: string) => Promise<void>,
+    run: string | undefined,
+  ) => {
+    const repo = `/harvest-control-${name}`
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await seed(store, repo)
+    const before = (await store.getRepoEvents(repo)).length
+    const frontend = new DispatchFrontend({
+      repo,
+      storeRef: 'memory',
+      store,
+      env: { USER: 'frontend-operator' },
+      terminal: {
+        write: () => {},
+        modes: createTerminalModeController(
+          () => {},
+          () => {},
+        ),
+        columns: 80,
+        rows: 24,
+        interactive: true,
+      },
+      input: { start: () => () => {} },
+      once: true,
+    })
+
+    const harvestRun = Reflect.get(frontend, 'harvestRun') as (
+      expectedRun: string | undefined,
+    ) => Promise<void>
+    await harvestRun.call(frontend, run)
+    return (await store.getRepoEvents(repo)).slice(before)
+  }
+  const start = async (store: MemoryBuildStore, repo: string): Promise<void> => {
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'h_frontend',
+        observations: [{ build: 'source', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+  }
+  const fail = async (store: MemoryBuildStore, repo: string): Promise<void> => {
+    await start(store, repo)
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'harvest.failed',
+      payload: {
+        run: 'h_frontend',
+        step: 'scan',
+        attempt: 1,
+        error: 'store unavailable',
+        willRetry: false,
+      },
+    })
+  }
+  const reportMessages = (events: Awaited<ReturnType<typeof invoke>>): string[] =>
+    events.flatMap((event) =>
+      event.type === 'dispatcher.operator-reported' ? [event.payload.message] : [],
+    )
+
+  const missing = await invoke('missing', async () => {}, undefined)
+  expect(missing.map((event) => event.type)).toEqual(['dispatcher.operator-reported'])
+  expect(reportMessages(missing)).toEqual([
+    'harvest run action ignored: selected run is no longer active',
+  ])
+
+  const unavailable = await invoke(
+    'unavailable',
+    async (store, repo) => {
+      await start(store, repo)
+      const projected = projectHarvest(await store.getRepoEvents(repo))
+      expect(projected).toMatchObject({ run: 'h_frontend', status: 'running' })
+      expect(projected?.action).toBeUndefined()
+    },
+    'h_frontend',
+  )
+  expect(unavailable.map((event) => event.type)).toEqual(['dispatcher.operator-reported'])
+  expect(reportMessages(unavailable)).toEqual([
+    'harvest run action ignored: selected run is no longer active',
+  ])
+  expect(reportMessages(unavailable)).not.toContain('harvest run has no available action')
+
+  const successful = await invoke('successful', fail, 'h_frontend')
+  expect(successful.map((event) => event.type)).toEqual([
+    'harvest.resume-requested',
+    'dispatcher.operator-reported',
+  ])
+  expect(reportMessages(successful)).toEqual(['harvest: resume requested'])
+
+  const pending = await invoke(
+    'pending',
+    async (store, repo) => {
+      await fail(store, repo)
+      await store.appendRepo(repo, {
+        actor: humanActor('other-operator'),
+        type: 'harvest.resume-requested',
+        payload: {},
+      })
+    },
+    'h_frontend',
+  )
+  expect(pending.map((event) => event.type)).toEqual(['dispatcher.operator-reported'])
+  expect(reportMessages(pending)).toEqual(['harvest run: resume acknowledgement pending'])
 })
 
 test('frontend reveals a reclaimed-session message against the candidate detail model', async () => {
