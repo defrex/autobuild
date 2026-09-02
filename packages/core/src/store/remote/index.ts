@@ -3,7 +3,7 @@ export type { RemoteBuildStoreOptions, RemoteStoreIdentity } from './client'
 export { createStoreServer, startStoreServer } from './server'
 export type { StartStoreServerOptions, StoreServer, StoreServerOptions } from './server'
 export { mintToken, tokenResource, verifyToken } from './token'
-export type { TokenScope } from './token'
+export type { OperatorTokenScope, TokenScope } from './token'
 export {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,

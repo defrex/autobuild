@@ -197,7 +197,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * dimension is write attribution.
    */
   function authorizeSession(scope: TokenScope | null, actor: unknown): void {
-    if (scope === null || scope.session === '*') return
+    if (scope === null || !('session' in scope) || scope.session === '*') return
     const session = agentSession(actor)
     if (session !== scope.session) {
       throw new RequestError(

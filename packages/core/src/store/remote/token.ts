@@ -28,9 +28,16 @@ export interface ResourceTokenScope {
   exp: number
 }
 
+/** Operator authority is deliberately disjoint from raw store authority. The
+ * signed nonblank user claim is the actor used by every operator event. */
+export interface OperatorTokenScope {
+  operator: { user: string }
+  exp: number
+}
+
 /** Legacy build scopes remain valid; repository-scoped agent sessions use the
  * explicit resource form so a repo token cannot read any build stream. */
-export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope
+export type TokenScope = LegacyBuildTokenScope | ResourceTokenScope | OperatorTokenScope
 
 const commonScope = {
   session: z.string().min(1),
@@ -45,12 +52,17 @@ const tokenScopeSchema = z.union([
     }),
     ...commonScope,
   }),
+  z.strictObject({
+    operator: z.strictObject({ user: z.string().trim().min(1) }),
+    exp: z.number().int(),
+  }),
 ])
 
 export function tokenResource(scope: TokenScope): {
-  kind: 'build' | 'repo' | 'admin'
+  kind: 'build' | 'repo' | 'admin' | 'operator'
   id: string
 } {
+  if ('operator' in scope) return { kind: 'operator', id: scope.operator.user }
   if ('build' in scope) {
     return scope.build === '*' ? { kind: 'admin', id: '*' } : { kind: 'build', id: scope.build }
   }
