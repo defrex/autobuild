@@ -2,6 +2,7 @@
 import { mintToken } from 'autobuild/remote-store'
 
 const USAGE = `Usage:
+  ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint build --build SLUG --session SESSION (--ttl-seconds N | --expires-at ISO-8601)`
 
@@ -42,8 +43,11 @@ function expiry(args: string[], now: Date): number {
 }
 
 export function mintTokenFromArgs(args: string[], env: Env, now = new Date()): string {
-  if (args[0] !== 'mint' || (args[1] !== 'admin' && args[1] !== 'build')) {
-    throw new Error('expected "mint admin" or "mint build"')
+  if (
+    args[0] !== 'mint' ||
+    (args[1] !== 'operator' && args[1] !== 'admin' && args[1] !== 'build')
+  ) {
+    throw new Error('expected "mint operator", "mint admin", or "mint build"')
   }
   const secret = env.AB_STORE_SECRET?.trim()
   if (!secret) throw new Error('AB_STORE_SECRET is required and must be nonblank')
@@ -56,9 +60,11 @@ export function mintTokenFromArgs(args: string[], env: Env, now = new Date()): s
     '--expires-at',
     option(args, '--expires-at'),
   ])
-  if (args[1] === 'admin') {
+  if (args[1] === 'operator' || args[1] === 'admin') {
     for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
-    return mintToken(secret, { build: '*', session: '*', exp })
+    return args[1] === 'operator'
+      ? mintToken(secret, { operator: true, session: '*', exp })
+      : mintToken(secret, { build: '*', session: '*', exp })
   }
   const build = option(args, '--build')?.trim()
   const session = option(args, '--session')?.trim()

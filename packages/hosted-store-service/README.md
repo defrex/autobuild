@@ -1,8 +1,9 @@
 # `@autobuild/hosted-store-service`
 
-The optional hosted Autobuild store composes the remote HTTP protocol with
-`@autobuild/postgres-store`. It is a host-neutral Fetch handler started by the
-repository's root `server.ts`; Vercel and ordinary Bun hosts run the same code.
+The optional hosted Autobuild service composes the remote BuildStore and the
+full TicketSource HTTP protocol with `@autobuild/postgres-store`. It is a
+host-neutral Fetch handler started by the repository's root `server.ts`; Vercel
+and ordinary Bun hosts run the same code.
 
 ## Configure and run locally
 
@@ -29,11 +30,14 @@ URL and an offline-minted token:
 
 ```sh
 export AB_STORE=https://store.example.com
-export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint admin --ttl-seconds 3600)"
+export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator --ttl-seconds 3600)"
 ab dispatch
 ```
 
-Mint a least-privilege build/session token with an explicit future expiry:
+Operator tokens cover store and ticket operations, allowing one dispatcher
+credential. Legacy admin tokens still cover store administration but cannot
+access tickets. Mint a least-privilege build/session token with an explicit
+future expiry:
 
 ```sh
 AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint build \
@@ -43,6 +47,17 @@ AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint build \
 Minting is entirely local: the command reads only `AB_STORE_SECRET`, contacts no
 server, and prints only the token. Do not put the signing secret in a repository,
 browser, client host, command history, or logs; rotate it to revoke all tokens.
+
+A deployment has one ticket backend. `AB_TICKET_BACKEND` defaults to `database`,
+which stores team-scoped tickets, comments, and blockers in PostgreSQL with the
+`Triage`, `Ready`, `Doing`, and `Done` lifecycle. Override those distinct names
+with `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
+`AB_TICKET_DOING_STATE`, and `AB_TICKET_DONE_STATE`. Set the backend to `linear`
+and provide `LINEAR_API_KEY` on the service to pass every request to the
+existing Linear adapter. That key never belongs on dispatcher or browser
+hosts. Team and claim/create policy arrive per request from repository config.
+Run the migration before deployment; it adds a separately versioned ticket
+schema without changing an existing BuildStore v1 marker.
 
 Each artifact is content-by-value and limited to **1,048,576 decoded bytes (1
 MiB)**. Base64 and JSON make the HTTP body larger. A larger deposit receives a
@@ -58,8 +73,9 @@ JSON 413 error naming that ceiling and does not mutate the store.
    and `PORT` are for ordinary hosts and need not be set by Vercel.
 4. Run the PostgreSQL migration against the production database before the
    first deployment, then deploy.
-5. Verify `/health`, mint a short-lived admin token offline, and round-trip a 1
-   MiB artifact from a client before directing dispatchers at the service.
+5. Verify `/health`, mint a short-lived operator token offline, and round-trip a
+   ticket plus a 1 MiB artifact from a client before directing dispatchers at
+   the service.
 
 The shape follows Vercel's [Bun runtime](https://vercel.com/docs/functions/runtimes/bun).
 The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'

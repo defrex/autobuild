@@ -27,7 +27,7 @@ describe('loadPlugins', () => {
   test('an empty list performs no resolution and returns builtin reservations', async () => {
     const repo = await fixture()
     const registry = await loadPlugins([], repo)
-    expect([...registry.ticketSources.keys()]).toEqual(['file', 'linear'])
+    expect([...registry.ticketSources.keys()]).toEqual(['file', 'hosted', 'linear'])
   })
 
   test('loads a repository-relative default manifest', async () => {

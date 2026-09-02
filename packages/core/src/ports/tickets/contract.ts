@@ -227,6 +227,21 @@ export function describeTicketSourceContract(
       })
     })
 
+    test('comment accepts known tickets and rejects unknown tickets', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          { title: contractTicketTitle('comment'), body: CONTRACT_TICKET_BODY },
+          { state: harness.states.ready },
+        )
+        await expect(
+          harness.source.comment(created.ref.id, 'contract comment'),
+        ).resolves.toBeUndefined()
+        const unknown = contractIdempotencyKey()
+        await expect(harness.source.comment(unknown, 'missing')).rejects.toThrow(unknown)
+      })
+    })
+
     test('transition is visible through get and state-filtered listReady', async () => {
       await withTicketSource(factory, async (harness) => {
         const created = await createTracked(

@@ -4,6 +4,9 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createTerminalModeController } from '../../core/src/cli/terminal-restore'
 import { abDispatch } from '../../core/src/cli/dispatch'
+import { createTicketSource } from '../../core/src/ports/tickets/create'
+import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
+import type { TicketSource } from '../../core/src/ports/types'
 import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
 import { RemoteBuildStore, mintToken } from 'autobuild/remote-store'
 import {
@@ -25,10 +28,19 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const requests: Array<{ method: string; path: string; authorization: string | null }> = []
   let serviceUrl = ''
   let serviceToken = ''
+  let hostedTickets: TicketSource | undefined
+  const ticketBackend = new FakeTicketSource([
+    { ...readyTicket('T-1'), blockedBy: ['T-blocker'] },
+    readyTicket('T-blocker', { state: 'Triage', title: 'Dependency' }),
+  ])
+  const hostedConfig = CONFIG_TOML.replace(
+    'source = "file"',
+    'source = "hosted"\nteamKey = "ENG"',
+  ).replace('capacity = 2', 'capacity = 2\nforge = "local-git"')
   const h = await makeHarness({
     handlers: happyHandlers(),
-    tickets: [readyTicket('T-1')],
-    configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"'),
+    ticketSource: ticketBackend,
+    configToml: hostedConfig,
     localGitForge: true,
     processCli: true,
     storeAdapter: async (backing) => {
@@ -44,6 +56,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
           AB_S3_SECRET_ACCESS_KEY: 'injected',
         },
         openStore: async () => backing,
+        sourceFor: () => ticketBackend,
       })
       const server = Bun.serve({
         hostname: '127.0.0.1',
@@ -59,7 +72,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       })
       serviceUrl = `http://127.0.0.1:${server.port}`
       serviceToken = mintToken(secret, {
-        build: '*',
+        operator: true,
         session: '*',
         exp: Date.now() + 60 * 60 * 1000,
       })
@@ -73,7 +86,13 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   })
   harnesses.push(h)
 
-  const { store: _store, storeRef: _storeRef, token: _token, ...ports } = h.wiring
+  const {
+    store: _store,
+    storeRef: _storeRef,
+    token: _token,
+    tickets: _tickets,
+    ...ports
+  } = h.wiring
   const dispatch = () =>
     abDispatch({
       targetRepo: h.origin,
@@ -83,13 +102,42 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       stderr: () => {},
       once: true,
       plain: true,
-      nonStoreWire: () => ports,
+      nonStoreWire: async (config, opts, state, plugins) => {
+        hostedTickets = await createTicketSource(
+          config.tickets,
+          opts.env,
+          state.repo,
+          state.localStateRoot,
+          plugins,
+        )
+        return { ...ports, tickets: hostedTickets }
+      },
     })
-  await dispatch()
 
+  // The first real dispatch tick reaches the hosted source, closes the
+  // dependency graph, and leaves the blocked ticket unclaimed.
+  await dispatch()
+  expect(ticketBackend.claims).not.toContain('T-1')
+  expect(requests.some((entry) => entry.path === '/tickets/dependency-states')).toBe(true)
+
+  // Completing the dependency through HTTP makes the next tick claim,
+  // comment on, and ultimately complete the target through the same service.
+  if (hostedTickets === undefined) throw new Error('hosted ticket source was not constructed')
+  await hostedTickets.transition('T-blocker', 'Done')
+  await dispatch()
   const events = await h.events('add-rate-limiting')
   expect(h.cliErrors).toEqual([])
   expect(typesOf(events)).toContain('finalize.completed')
+  expect(ticketBackend.claims).toContain('T-1')
+  expect(ticketBackend.comments).toEqual([
+    { id: 'T-1', body: 'build add-rate-limiting dispatched' },
+  ])
+  // A second ready ticket with an invalid spec exercises the dispatcher's
+  // hosted comment + handback transition path without launching another build.
+  ticketBackend.add(readyTicket('T-handback', { body: 'not a conforming spec' }))
+  await dispatch()
+  expect(ticketBackend.comments.some((comment) => comment.id === 'T-handback')).toBe(true)
+  expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'Triage' })
   expect(requests.some((entry) => entry.method === 'POST' && entry.path.endsWith('/events'))).toBe(
     true,
   )
@@ -112,10 +160,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   // can safely own this dashboard tick without invoking an external agent.
   await writeFile(
     join(h.origin, 'autobuild.toml'),
-    CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"').replace(
-      'runtime = "scripted"',
-      'runtime = "pi"',
-    ),
+    hostedConfig.replace('runtime = "scripted"', 'runtime = "pi"'),
   )
   let dashboardOutput = ''
   const dashboardWrite = (chunk: string): void => {

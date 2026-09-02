@@ -6,10 +6,19 @@ export {
   MIGRATE_COMMAND,
   SCHEMA_CHECKSUM,
   SCHEMA_VERSION,
+  TICKET_SCHEMA_CHECKSUM,
+  TICKET_SCHEMA_VERSION,
   assertSchema,
+  assertTicketSchema,
   migratePostgres,
 } from './schema'
 export { openPostgresBuildStore, PostgresBuildStore } from './store'
 export type { PostgresBuildStoreOptions } from './store'
+export {
+  openPostgresTicketDatabase,
+  PostgresTicketDatabase,
+  PostgresTicketSource,
+} from './tickets'
+export type { PostgresTicketContext, PostgresTicketLifecycle } from './tickets'
 export { VercelBlobStore } from './vercel'
 export type { VercelBlobStoreOptions } from './vercel'

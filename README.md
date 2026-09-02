@@ -32,14 +32,15 @@ latent bugs, worthwhile refactors, follow-ups they noticed but rightly left
 alone. A harvester distills them into proposed tickets and files them for
 triage; approve one and it runs the same loop.
 
-Every seam is an adapter: ticket sources (Linear, local files, or a configured
-plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge
+Every seam is an adapter: ticket sources (the hosted service with database or
+Linear backend, direct Linear, local files, or a configured plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge
 (GitHub via `gh`, credential-free local Git, or a configured plugin), workspaces,
 and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
 `autobuild/plugin-sdk` surface. Teams that need one durable store across hosts
-can deploy the optional [hosted store service](packages/hosted-store-service/README.md).
+can deploy the optional [hosted service](packages/hosted-store-service/README.md),
+which can also own ticket persistence and external tracker credentials.
 
 ## Quickstart
 
