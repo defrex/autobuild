@@ -6,14 +6,17 @@ repository's root `server.ts`; Vercel and ordinary Bun hosts run the same code.
 
 ## Configure and run locally
 
-Migrate the database first (the migration is idempotent):
+The service and PostgreSQL adapter are distributed in Autobuild's GitHub
+releases rather than npm. Clone the compatible release tag and install it as
+shown in the [complete environment reference](../../docs/configuration.md), then
+migrate the database (the migration is idempotent):
 
 ```sh
-AB_POSTGRES_URL=postgres://… bunx @autobuild/postgres-store migrate
+AB_POSTGRES_URL=postgres://… bun run postgres:migrate
 ```
 
-Set `AB_STORE_SECRET`, `AB_POSTGRES_URL`, and one blob backend from the
-[complete environment reference](../../docs/configuration.md). Then run:
+Set `AB_STORE_SECRET`, `AB_POSTGRES_URL`, and one blob backend in that pinned
+checkout. Then run:
 
 ```sh
 bun run hosted-store
@@ -26,14 +29,14 @@ URL and an offline-minted token:
 
 ```sh
 export AB_STORE=https://store.example.com
-export AB_TOKEN="$(AB_STORE_SECRET='…' bunx @autobuild/hosted-store-service mint admin --ttl-seconds 3600)"
+export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint admin --ttl-seconds 3600)"
 ab dispatch
 ```
 
 Mint a least-privilege build/session token with an explicit future expiry:
 
 ```sh
-AB_STORE_SECRET='…' bunx @autobuild/hosted-store-service mint build \
+AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint build \
   --build my-build --session implement --expires-at 2026-09-03T00:00:00Z
 ```
 

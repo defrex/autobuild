@@ -115,20 +115,15 @@ export class PostgresBuildStore implements BuildStore {
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
     const ts = this.now()
-    try {
-      const rows: Row[] = await this.sql`INSERT INTO builds
+    return this.sql.begin(async (tx) => {
+      const inserted: Row[] = await tx`INSERT INTO builds
         (slug, repo, ticket, branch, created_at, updated_at)
         VALUES (${input.slug}, ${input.repo}, ${input.ticket ?? null}, ${input.branch ?? null}, ${ts}, ${ts})
-        RETURNING *`
-      return this.record(rows[0]!)
-    } catch (error) {
-      const code =
-        (error as { code?: string; errno?: string }).errno ?? (error as { code?: string }).code
-      if (code === '23505') {
-        throw new Error(`build "${input.slug}" already exists`)
-      }
-      throw error
-    }
+        ON CONFLICT (slug) DO NOTHING RETURNING slug`
+      const row = await this.lockBuild(tx, input.slug)
+      if (!inserted[0]) throw new Error(`build "${input.slug}" already exists`)
+      return this.record(row)
+    })
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
@@ -382,9 +377,11 @@ export class PostgresBuildStore implements BuildStore {
   async ensureRepo(repo: string): Promise<RepositoryRecord> {
     if (!repo) throw new Error('repo is required')
     const ts = this.now()
-    const rows: Row[] = await this.sql`INSERT INTO repo_streams (repo, created_at, updated_at)
-      VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO UPDATE SET repo=EXCLUDED.repo RETURNING *`
-    return this.repoRecord(rows[0]!)
+    return this.sql.begin(async (tx) => {
+      await tx`INSERT INTO repo_streams (repo, created_at, updated_at)
+        VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO NOTHING`
+      return this.repoRecord(await this.lockRepo(tx, repo))
+    })
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {

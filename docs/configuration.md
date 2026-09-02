@@ -13,12 +13,26 @@ example](#complete-example) is valid on its own.
 
 ## Hosted service and PostgreSQL BuildStore environment
 
-The optional `@autobuild/hosted-store-service` is configured entirely through
-the environment and inherits the PostgreSQL/blob variables below. It is
-installed separately, so an ordinary `autobuild` CLI install does not acquire
-server, PostgreSQL, or blob-provider dependencies. Before starting the service,
-run the idempotent `bunx @autobuild/postgres-store migrate` step. The complete
-run, deployment, and token procedure is in the [hosted service
+The optional `@autobuild/hosted-store-service` and its
+`@autobuild/postgres-store` adapter are configured entirely through the
+environment. They are distributed in Autobuild's GitHub releases rather than
+npm, so an ordinary `autobuild` CLI install does not acquire the service,
+PostgreSQL, or blob-provider dependencies. Choose the compatible tag shown in
+[GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
+revision into a dedicated checkout, and run the idempotent migration there:
+
+```sh
+git clone --depth 1 --branch v0.6.0 --single-branch https://github.com/defrex/autobuild.git autobuild-v0.6.0
+cd autobuild-v0.6.0
+bun install --frozen-lockfile
+AB_POSTGRES_URL=postgres://… bun run postgres:migrate
+```
+
+Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
+`postgres:migrate` script is relative to that pinned checkout. The database
+identity needs permission to create tables during migration and to select,
+insert, and update those tables at runtime. The complete run, deployment, and
+token procedure is in the [hosted service
 guide](../packages/hosted-store-service/README.md).
 
 | Variable | Required when | Values / purpose |
@@ -30,7 +44,7 @@ guide](../packages/hosted-store-service/README.md).
 | `AB_TOKEN` | Authenticated remote client | Offline-minted bearer token; this is not the signing secret. |
 
 The following variables configure the service-side durable adapter (or a direct
-installation of the optional `@autobuild/postgres-store` adapter).
+use of `@autobuild/postgres-store`).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|
