@@ -188,7 +188,15 @@ export function encodeBase64(bytes: Uint8Array): string {
 }
 
 export function decodeBase64(text: string): Uint8Array {
-  return new Uint8Array(Buffer.from(text, 'base64'))
+  if (
+    text.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)
+  ) {
+    throw new Error('artifact content is not valid base64')
+  }
+  const bytes = new Uint8Array(Buffer.from(text, 'base64'))
+  if (encodeBase64(bytes) !== text) throw new Error('artifact content is not valid base64')
+  return bytes
 }
 
 // ── Placeholder refs for atomic deposits ─────────────────────────────────────

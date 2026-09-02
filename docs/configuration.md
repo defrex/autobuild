@@ -11,12 +11,13 @@ This document covers the complete accepted TOML surface. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 
-## PostgreSQL BuildStore environment
+## Hosted service and PostgreSQL BuildStore environment
 
-The optional `@autobuild/postgres-store` adapter is configured only through the
-environment. It is distributed in Autobuild's GitHub releases rather than npm,
-so an ordinary `autobuild` CLI install does not acquire its PostgreSQL or
-blob-provider dependencies. Choose the adapter-compatible tag shown in
+The optional `@autobuild/hosted-store-service` and its
+`@autobuild/postgres-store` adapter are configured entirely through the
+environment. They are distributed in Autobuild's GitHub releases rather than
+npm, so an ordinary `autobuild` CLI install does not acquire the service,
+PostgreSQL, or blob-provider dependencies. Choose the compatible tag shown in
 [GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
 revision into a dedicated checkout, and run the idempotent migration there:
 
@@ -30,7 +31,20 @@ AB_POSTGRES_URL=postgres://… bun run postgres:migrate
 Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
 `postgres:migrate` script is relative to that pinned checkout. The database
 identity needs permission to create tables during migration and to select,
-insert, and update those tables at runtime.
+insert, and update those tables at runtime. The complete run, deployment, and
+token procedure is in the [hosted service
+guide](../packages/hosted-store-service/README.md).
+
+| Variable | Required when | Values / purpose |
+|---|---|---|
+| `AB_STORE_SECRET` | Hosted service | Nonblank HMAC signing secret. Service-side only; never give it to clients. |
+| `AB_HOST` | Optional, ordinary Bun host | Bind hostname; defaults to `0.0.0.0`. Vercel supplies its own listener. |
+| `PORT` | Optional, ordinary Bun host | Integer 1–65535; defaults to `3000`. Vercel supplies its own listener. |
+| `AB_STORE` | Remote client | Hosted service base URL used by the kernel, phase commands, and dashboard. |
+| `AB_TOKEN` | Authenticated remote client | Offline-minted bearer token; this is not the signing secret. |
+
+The following variables configure the service-side durable adapter (or a direct
+use of `@autobuild/postgres-store`).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|

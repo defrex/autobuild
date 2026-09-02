@@ -19,6 +19,11 @@
       "types": "./packages/core/src/plugin-sdk/index.ts",
       "import": "./packages/core/src/plugin-sdk/index.ts",
       "default": "./packages/core/src/plugin-sdk/index.ts"
+    },
+    "./remote-store": {
+      "types": "./packages/core/src/store/remote/index.ts",
+      "import": "./packages/core/src/store/remote/index.ts",
+      "default": "./packages/core/src/store/remote/index.ts"
     }
   },
   "files": [
@@ -33,6 +38,7 @@
   ],
   "scripts": {
     "dev": "bun --hot --no-clear-screen bin/ab-dev.ts",
+    "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:readme-headline": "bun tools/readme-headline.ts",
     "release": "bun tools/release.ts",

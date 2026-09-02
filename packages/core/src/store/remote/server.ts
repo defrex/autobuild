@@ -40,6 +40,12 @@ import {
   type ErrorKind,
 } from './protocol'
 import { tokenResource, verifyToken, type TokenScope } from './token'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from './version'
 
 export interface StoreServerOptions {
   store: BuildStore
@@ -47,6 +53,8 @@ export interface StoreServerOptions {
   secret?: string
   /** Time source for token expiry checks; defaults to the system clock. */
   clock?: Clock
+  /** Maximum decoded size of each artifact. Unlimited when omitted. */
+  maxArtifactBytes?: number
 }
 
 export interface StoreServer {
@@ -115,6 +123,35 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * scope (null in open local-dev mode) so event-write routes can enforce
    * the session dimension.
    */
+  function validateIdentity(req: Request): void {
+    const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
+    const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
+    if (clientAutobuild !== AUTOBUILD_VERSION || clientProtocol !== REMOTE_STORE_PROTOCOL_VERSION) {
+      throw new RequestError(
+        409,
+        'conflict',
+        `remote store version mismatch: client Autobuild ${clientAutobuild ?? '(missing)'} protocol ${clientProtocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
+      )
+    }
+  }
+
+  function decodeArtifact(contentBase64: string): Uint8Array {
+    let content: Uint8Array
+    try {
+      content = decodeBase64(contentBase64)
+    } catch {
+      throw new RequestError(400, 'validation', 'artifact content is not valid base64')
+    }
+    if (opts.maxArtifactBytes !== undefined && content.byteLength > opts.maxArtifactBytes) {
+      throw new RequestError(
+        413,
+        'validation',
+        `artifact exceeds decoded byte ceiling of ${opts.maxArtifactBytes} bytes`,
+      )
+    }
+    return content
+  }
+
   function authorize(
     req: Request,
     kind: 'build' | 'repo' | 'admin',
@@ -217,7 +254,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         authorizeSession(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
-          content: decodeBase64(artifact.contentBase64),
+          content: decodeArtifact(artifact.contentBase64),
           ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         }))
         const result = await store.appendRepoWithArtifacts(
@@ -238,7 +275,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           201,
           await store.putRepoArtifact(repo, {
             kind: body.kind,
-            content: decodeBase64(body.contentBase64),
+            content: decodeArtifact(body.contentBase64),
             ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
           }),
         )
@@ -310,7 +347,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         authorizeSession(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
-          content: decodeBase64(artifact.contentBase64),
+          content: decodeArtifact(artifact.contentBase64),
           ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
         }))
         // The wire's makeEvent: substitute the deposited revisions for the
@@ -333,7 +370,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const body = await readBody(req, putArtifactBodySchema)
         const meta = await store.putArtifact(slug, {
           kind: body.kind,
-          content: decodeBase64(body.contentBase64),
+          content: decodeArtifact(body.contentBase64),
           ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
         })
         return json(201, meta)
@@ -385,8 +422,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
 
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
-      return json(200, { ok: true })
+      return json(200, {
+        ok: true,
+        autobuildVersion: AUTOBUILD_VERSION,
+        protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+      })
     }
+    if (segments[0] === 'repos' || segments[0] === 'builds') validateIdentity(req)
     if (segments[0] === 'repos') {
       if (segments.length === 1) return repoAdminRoute(req)
       const repo = segments[1]!

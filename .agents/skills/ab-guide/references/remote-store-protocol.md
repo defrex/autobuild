@@ -18,6 +18,12 @@ document and the package's executable contracts together.
 - The transport is JSON over HTTP or HTTPS. There is no API version prefix.
   Point Autobuild at the server's base URL with `--store`, or set that URL in
   `AB_STORE`; the shipped client appends the routes below.
+- Every `/builds` and `/repos` request sends `X-Autobuild-Version` with the
+  exact client package version and `X-Autobuild-Protocol-Version` with the
+  remote protocol version (`1` in this distribution). Before authentication,
+  body parsing, or resource lookup, the server compares both exact strings.
+  Missing or different values receive `409 {"kind":"conflict","error":"…"}`;
+  the diagnostic names the client and server package and protocol versions.
 - Clients send `Content-Type: application/json` for requests with bodies. Every
   response, including errors and `null` artifact results, has
   `Content-Type: application/json`.
@@ -25,8 +31,12 @@ document and the package's executable contracts together.
 - A build slug or repository id in a path is one percent-encoded path segment.
   In particular, a repository id such as `acme/widgets` is sent as
   `acme%2Fwidgets`, not as two segments.
-- Artifact bytes are represented by `contentBase64`, using standard base64
-  (not base64url). The shipped client emits canonical padded base64.
+- Artifact bytes are represented by `contentBase64`, using strict, canonical,
+  padded standard base64 (not base64url). A server may impose a documented
+  decoded-byte ceiling. It decodes and checks every standalone or bundled
+  artifact before any backing mutation; excess content receives `413
+  {"kind":"validation","error":"…"}` naming the byte ceiling. The shipped
+  hosted service ceiling is 1,048,576 decoded bytes (1 MiB).
 - Store-assigned times are ISO-8601 UTC strings in JavaScript
   `Date.toISOString()` form, for example `2026-07-15T12:00:00.000Z`.
 - Event sequence numbers and artifact revisions are integers assigned by the
@@ -344,10 +354,11 @@ A server configured with a secret requires this header on every `/builds` and
 Authorization: Bearer <token>
 ```
 
-`GET /health` is always unauthenticated. Authorization occurs before request
-body processing on collection routes and before resource lookup on resource
-routes. A caller with the wrong scope therefore cannot use existence or
-validation differences to inspect another resource.
+`GET /health` is always unauthenticated. Package/protocol identity validation
+occurs first on machine routes. Authorization then occurs before request body
+processing on collection routes and before resource lookup on resource routes.
+A caller with the wrong scope therefore cannot use existence or validation
+differences to inspect another resource.
 
 ### Token encoding
 
@@ -474,7 +485,8 @@ The shipped server maps failures as follows:
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
 | `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, or unknown repository |
-| `409` | `conflict` | Duplicate build creation or a backing conflict reported as already existing |
+| `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, or a backing conflict reported as already existing |
+| `413` | `validation` | Decoded artifact exceeds the configured ceiling; the message names the ceiling |
 | `422` | `validation` | `EventValidationError` from build or repository catalog validation; its message is preserved verbatim |
 | `500` | `internal` | Any other unexpected backing or server failure; the thrown error message is returned |
 
@@ -551,7 +563,8 @@ Four shipped behaviors do not add `BuildStore` routes:
 - `RemoteBuildStore.close()` is a no-op. The remote server owns its backing
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
-  returns exactly `200 {"ok":true}`. It reports HTTP-process availability,
+  returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
+  "protocolVersion":"1"}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
 There is no push/WebSocket subscription protocol, batch-read route,

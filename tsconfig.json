@@ -15,8 +15,10 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"]
+      "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
+      "autobuild/remote-store": ["./packages/core/src/store/remote/index.ts"],
+      "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"]
     }
   },
-  "include": ["packages/*/src", "bin", "tools", "drizzle.config.ts"]
+  "include": ["packages/*/src", "bin", "tools", "server.ts", "drizzle.config.ts"]
 }

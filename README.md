@@ -38,7 +38,8 @@ plugin), agent runtimes (Claude, Codex, Pi, or a configured plugin), the forge
 and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
-`autobuild/plugin-sdk` surface.
+`autobuild/plugin-sdk` surface. Teams that need one durable store across hosts
+can deploy the optional [hosted store service](packages/hosted-store-service/README.md).
 
 ## Quickstart
 
