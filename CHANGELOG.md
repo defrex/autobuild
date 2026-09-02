@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#240](https://github.com/defrex/autobuild/pull/240) — Align PostgreSQL migrations and blob uploads with release contracts
 - [#239](https://github.com/defrex/autobuild/pull/239) — Add serverless PostgreSQL and network blob storage
 - [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs
 - [#237](https://github.com/defrex/autobuild/pull/237) — Document the Bun workspace migration
