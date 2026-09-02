@@ -43,6 +43,20 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `PORT` | Optional, ordinary Bun host | Integer 1–65535; defaults to `3000`. Vercel supplies its own listener. |
 | `AB_STORE` | Remote client | Hosted service base URL used by the kernel, phase commands, and dashboard. |
 | `AB_TOKEN` | Authenticated remote client | Offline-minted bearer token; this is not the signing secret. |
+| `BETTER_AUTH_SECRET` | Web dashboard | Independent server-only session secret with at least 32 high-entropy characters. |
+| `BETTER_AUTH_URL` | Web dashboard | Exact HTTP(S) origin, without credentials or a path; HTTPS is mandatory in production. |
+| `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
+| `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
+| `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
+| `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
+| `AB_WEB_REPOSITORIES` | Web dashboard | Nonempty comma-separated repository allowlist exposed to signed-in operators. |
+
+GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
+the `user:email` scope (or GitHub App read-only email permission). Sessions are
+database-backed and represented in the browser only by an HTTP-only cookie.
+Allowlist removal takes effect on the next web API request. Never expose these
+secrets, `AB_STORE_SECRET`, database/blob credentials, machine tokens, or OAuth
+account tokens through a `NEXT_PUBLIC_` variable.
 
 The following variables configure the service-side durable adapter (or a direct
 use of `@autobuild/postgres-store`).
