@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import { formatElapsed, reconcileDashboard } from './view-model'
+import { TicketQueue } from './TicketQueue'
 
 const glyph = { done: '✓', current: '▶', provisional: '!', pending: '·' } as const
 
@@ -62,6 +63,7 @@ interface ClientProps {
 export function DashboardClient({ identity, repositories }: ClientProps) {
   const [repo, setRepo] = useState(repositories[0] ?? '')
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
+  const [surface, setSurface] = useState<'builds' | 'tickets'>('builds')
   const [selected, setSelected] = useState<string>()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
@@ -71,7 +73,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
 
   const poll = useCallback(
     async (signal?: AbortSignal) => {
-      if (!repo) return
+      if (!repo || surface !== 'builds') return
       const current = ++sequence.current
       try {
         const next = await api.dashboard(repo, signal)
@@ -82,12 +84,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         if (!signal?.aborted) setError(cause instanceof Error ? cause.message : String(cause))
       }
     },
-    [repo],
+    [repo, surface],
   )
 
   useEffect(() => {
     setSnapshot(undefined)
-    setSelected(undefined)
     setTranscript(undefined)
     const controller = new AbortController()
     void poll(controller.signal)
@@ -166,238 +167,274 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           </select>
         </label>
       </nav>
+      <nav className="surfaceNav" aria-label="Operator surface">
+        <button
+          type="button"
+          aria-pressed={surface === 'builds'}
+          onClick={() => setSurface('builds')}
+        >
+          Builds
+        </button>
+        <button
+          type="button"
+          aria-pressed={surface === 'tickets'}
+          onClick={() => setSurface('tickets')}
+        >
+          Tickets
+        </button>
+      </nav>
       {error && (
         <p className="error banner" role="alert">
           {error}
         </p>
       )}
-      {!model ? (
-        <p aria-live="polite">Loading dashboard…</p>
-      ) : (
-        <>
-          <section className="statusbar" aria-label="Dispatcher settings">
-            <strong>
-              active {model.active.current}/{model.active.limit}
-            </strong>
-            <span>queued {model.queued}</span>
-            <strong>repository {model.repositoryPaused ? 'PAUSED' : 'RUNNING'}</strong>
-            <span>
-              unclaimed observations {model.observations.current}/{model.observations.limit}
-            </span>
-            <button
-              type="button"
-              disabled={!!pending}
-              onClick={() => act('intake', () => api.setting(repo, 'intake', model.drained))}
-            >
-              intake {model.drained ? 'OFF' : 'ON'}
-            </button>
-            <button
-              type="button"
-              disabled={!!pending}
-              onClick={() =>
-                act('default-merge', () =>
-                  api.setting(repo, 'auto-merge-default', !model.defaultAutoMerge),
-                )
-              }
-            >
-              auto merge {model.defaultAutoMerge ? 'ON' : 'OFF'}
-            </button>
-            <button
-              type="button"
-              disabled={!!pending}
-              onClick={() =>
-                act('harvest-toggle', () => api.harvest(repo, { action: 'toggle-gate' }))
-              }
-            >
-              harvest {model.harvestPaused ? 'OFF' : 'ON'}
-            </button>
-            <button
-              type="button"
-              disabled={!!pending || !repoActions?.bulkPause}
-              onClick={() => act('bulk-pause', () => api.bulk(repo, 'pause'))}
-            >
-              Pause all
-            </button>
-            <button
-              type="button"
-              disabled={!!pending || !repoActions?.bulkResume}
-              onClick={() => act('bulk-resume', () => api.bulk(repo, 'resume'))}
-            >
-              Resume all
-            </button>
-          </section>
-          {model.warningLines?.map((line) => (
-            <p className="warning" key={line}>
-              {line}
-            </p>
-          ))}
-          <section className="tableRegion" aria-label="Build pipelines">
-            <table>
-              <thead>
-                <tr>
-                  <th>Build</th>
-                  <th>Status</th>
-                  <th>Pipeline</th>
-                  <th>Pull request</th>
-                  <th>Controls</th>
-                </tr>
-              </thead>
-              <tbody>
-                {model.builds.map((row) => {
-                  const available = buildActionAvailability(row)
-                  return (
-                    <tr key={row.slug} className={selected === row.slug ? 'selected' : ''}>
-                      <th scope="row">
-                        <button
-                          type="button"
-                          className="linkButton"
-                          onClick={() => {
-                            setSelected(row.slug)
-                            setTranscript(undefined)
-                          }}
-                        >
-                          {row.ticketId ? `${row.ticketId} · ` : ''}
-                          {row.slug}
-                        </button>
-                        {row.dispatch && <small>{row.dispatch}</small>}
-                        {row.setupError && <small className="error">{row.setupError}</small>}
-                      </th>
-                      <td>
-                        <strong>{row.status.toUpperCase()}</strong>
-                        {model.repositoryPaused && row.status === 'queued' && <small>(held)</small>}
-                        {row.alsoPaused && <small>also paused</small>}
-                        {row.abortProgress && <small>{row.abortProgress}</small>}
-                      </td>
-                      <td>
-                        <StepList build={row} now={now} />
-                      </td>
-                      <td>
-                        {row.pr ? <a href={row.pr.url}>{row.pr.state}</a> : '—'}
-                        <small>auto merge {row.autoMerge}</small>
-                      </td>
-                      <td>
-                        <div className="controls">
-                          {available.primary && (
-                            <button
-                              type="button"
-                              disabled={!!pending}
-                              onClick={() =>
-                                act(`${row.slug}:primary`, () =>
-                                  api.buildControl(repo, row.slug, { action: available.primary! }),
-                                )
-                              }
-                            >
-                              {available.primary}
-                            </button>
-                          )}
+      {surface === 'tickets' && (
+        <TicketQueue
+          key={repo}
+          repo={repo}
+          onError={setError}
+          onOpenBuild={(slug) => {
+            setSelected(slug)
+            setSurface('builds')
+          }}
+        />
+      )}
+      {surface === 'builds' &&
+        (!model ? (
+          <p aria-live="polite">Loading dashboard…</p>
+        ) : (
+          <>
+            <section className="statusbar" aria-label="Dispatcher settings">
+              <strong>
+                active {model.active.current}/{model.active.limit}
+              </strong>
+              <span>queued {model.queued}</span>
+              <strong>repository {model.repositoryPaused ? 'PAUSED' : 'RUNNING'}</strong>
+              <span>
+                unclaimed observations {model.observations.current}/{model.observations.limit}
+              </span>
+              <button
+                type="button"
+                disabled={!!pending}
+                onClick={() => act('intake', () => api.setting(repo, 'intake', model.drained))}
+              >
+                intake {model.drained ? 'OFF' : 'ON'}
+              </button>
+              <button
+                type="button"
+                disabled={!!pending}
+                onClick={() =>
+                  act('default-merge', () =>
+                    api.setting(repo, 'auto-merge-default', !model.defaultAutoMerge),
+                  )
+                }
+              >
+                auto merge {model.defaultAutoMerge ? 'ON' : 'OFF'}
+              </button>
+              <button
+                type="button"
+                disabled={!!pending}
+                onClick={() =>
+                  act('harvest-toggle', () => api.harvest(repo, { action: 'toggle-gate' }))
+                }
+              >
+                harvest {model.harvestPaused ? 'OFF' : 'ON'}
+              </button>
+              <button
+                type="button"
+                disabled={!!pending || !repoActions?.bulkPause}
+                onClick={() => act('bulk-pause', () => api.bulk(repo, 'pause'))}
+              >
+                Pause all
+              </button>
+              <button
+                type="button"
+                disabled={!!pending || !repoActions?.bulkResume}
+                onClick={() => act('bulk-resume', () => api.bulk(repo, 'resume'))}
+              >
+                Resume all
+              </button>
+            </section>
+            {model.warningLines?.map((line) => (
+              <p className="warning" key={line}>
+                {line}
+              </p>
+            ))}
+            <section className="tableRegion" aria-label="Build pipelines">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Build</th>
+                    <th>Status</th>
+                    <th>Pipeline</th>
+                    <th>Pull request</th>
+                    <th>Controls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {model.builds.map((row) => {
+                    const available = buildActionAvailability(row)
+                    return (
+                      <tr
+                        id={`build-${encodeURIComponent(row.slug)}`}
+                        key={row.slug}
+                        className={selected === row.slug ? 'selected' : ''}
+                      >
+                        <th scope="row">
                           <button
                             type="button"
-                            disabled={!!pending || !available.autoMerge}
-                            onClick={() =>
-                              act(`${row.slug}:merge`, () =>
-                                api.buildControl(repo, row.slug, {
-                                  action:
-                                    row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-                                }),
-                              )
-                            }
-                          >
-                            {row.autoMerge === 'off' ? 'Enable' : 'Disable'} auto merge
-                          </button>
-                          {available.discard && (
-                            <button
-                              type="button"
-                              disabled={!!pending}
-                              onClick={() =>
-                                act(`${row.slug}:discard`, () =>
-                                  api.buildControl(repo, row.slug, { action: 'discard' }),
-                                )
-                              }
-                            >
-                              Discard
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="danger"
-                            disabled={!!pending || !available.abort}
+                            className="linkButton"
                             onClick={() => {
-                              if (window.confirm(`Abort ${row.slug}?`))
-                                void act(`${row.slug}:abort`, () =>
-                                  api.buildControl(repo, row.slug, { action: 'abort' }),
-                                )
+                              setSelected(row.slug)
+                              setTranscript(undefined)
                             }}
                           >
-                            Abort
+                            {row.ticketId ? `${row.ticketId} · ` : ''}
+                            {row.slug}
                           </button>
-                        </div>
+                          {row.dispatch && <small>{row.dispatch}</small>}
+                          {row.setupError && <small className="error">{row.setupError}</small>}
+                        </th>
+                        <td>
+                          <strong>{row.status.toUpperCase()}</strong>
+                          {model.repositoryPaused && row.status === 'queued' && (
+                            <small>(held)</small>
+                          )}
+                          {row.alsoPaused && <small>also paused</small>}
+                          {row.abortProgress && <small>{row.abortProgress}</small>}
+                        </td>
+                        <td>
+                          <StepList build={row} now={now} />
+                        </td>
+                        <td>
+                          {row.pr ? <a href={row.pr.url}>{row.pr.state}</a> : '—'}
+                          <small>auto merge {row.autoMerge}</small>
+                        </td>
+                        <td>
+                          <div className="controls">
+                            {available.primary && (
+                              <button
+                                type="button"
+                                disabled={!!pending}
+                                onClick={() =>
+                                  act(`${row.slug}:primary`, () =>
+                                    api.buildControl(repo, row.slug, {
+                                      action: available.primary!,
+                                    }),
+                                  )
+                                }
+                              >
+                                {available.primary}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={!!pending || !available.autoMerge}
+                              onClick={() =>
+                                act(`${row.slug}:merge`, () =>
+                                  api.buildControl(repo, row.slug, {
+                                    action:
+                                      row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
+                                  }),
+                                )
+                              }
+                            >
+                              {row.autoMerge === 'off' ? 'Enable' : 'Disable'} auto merge
+                            </button>
+                            {available.discard && (
+                              <button
+                                type="button"
+                                disabled={!!pending}
+                                onClick={() =>
+                                  act(`${row.slug}:discard`, () =>
+                                    api.buildControl(repo, row.slug, { action: 'discard' }),
+                                  )
+                                }
+                              >
+                                Discard
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="danger"
+                              disabled={!!pending || !available.abort}
+                              onClick={() => {
+                                if (window.confirm(`Abort ${row.slug}?`))
+                                  void act(`${row.slug}:abort`, () =>
+                                    api.buildControl(repo, row.slug, { action: 'abort' }),
+                                  )
+                              }}
+                            >
+                              Abort
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {model.harvest && (
+                    <tr>
+                      <th scope="row">Harvest · {model.harvest.run}</th>
+                      <td>
+                        <strong>{model.harvest.status.toUpperCase()}</strong>
+                        <small>
+                          {model.harvest.observations} observations · {model.harvest.rounds} rounds
+                        </small>
+                      </td>
+                      <td>
+                        <ol className="steps">
+                          {model.harvest.steps.map((step) => (
+                            <li key={step.label}>
+                              {glyph[step.state]} {step.label} {formatElapsed(step.timing, now)}
+                            </li>
+                          ))}
+                        </ol>
+                      </td>
+                      <td>—</td>
+                      <td>
+                        <button
+                          type="button"
+                          disabled={!!pending || !model.harvest.action}
+                          onClick={() =>
+                            act('harvest-run', () =>
+                              api.harvest(repo, { action: 'run', run: model.harvest!.run }),
+                            )
+                          }
+                        >
+                          {model.harvest.action ?? 'Running'}
+                        </button>
                       </td>
                     </tr>
-                  )
-                })}
-                {model.harvest && (
-                  <tr>
-                    <th scope="row">Harvest · {model.harvest.run}</th>
-                    <td>
-                      <strong>{model.harvest.status.toUpperCase()}</strong>
-                      <small>
-                        {model.harvest.observations} observations · {model.harvest.rounds} rounds
-                      </small>
-                    </td>
-                    <td>
-                      <ol className="steps">
-                        {model.harvest.steps.map((step) => (
-                          <li key={step.label}>
-                            {glyph[step.state]} {step.label} {formatElapsed(step.timing, now)}
-                          </li>
-                        ))}
-                      </ol>
-                    </td>
-                    <td>—</td>
-                    <td>
-                      <button
-                        type="button"
-                        disabled={!!pending || !model.harvest.action}
-                        onClick={() =>
-                          act('harvest-run', () =>
-                            api.harvest(repo, { action: 'run', run: model.harvest!.run }),
-                          )
-                        }
-                      >
-                        {model.harvest.action ?? 'Running'}
-                      </button>
-                    </td>
-                  </tr>
-                )}
-                {!model.harvest && (
-                  <tr>
-                    <th scope="row">Harvest</th>
-                    <td>{model.harvestPaused ? 'PAUSED' : 'IDLE'}</td>
-                    <td>—</td>
-                    <td>—</td>
-                    <td>No active run</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </section>
-          {build && (
-            <BuildDetail
-              build={build}
-              transcript={transcript}
-              pending={pending}
-              onTranscript={loadTranscript}
-              onAnswer={(body) =>
-                act(`${build.slug}:answer`, () => api.answerBuild(repo, build.slug, body))
-              }
-              onClose={() => {
-                setSelected(undefined)
-                setTranscript(undefined)
-              }}
-            />
-          )}
-        </>
-      )}
+                  )}
+                  {!model.harvest && (
+                    <tr>
+                      <th scope="row">Harvest</th>
+                      <td>{model.harvestPaused ? 'PAUSED' : 'IDLE'}</td>
+                      <td>—</td>
+                      <td>—</td>
+                      <td>No active run</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </section>
+            {build && (
+              <BuildDetail
+                build={build}
+                transcript={transcript}
+                pending={pending}
+                onTranscript={loadTranscript}
+                onAnswer={(body) =>
+                  act(`${build.slug}:answer`, () => api.answerBuild(repo, build.slug, body))
+                }
+                onClose={() => {
+                  setSelected(undefined)
+                  setTranscript(undefined)
+                }}
+              />
+            )}
+          </>
+        ))}
     </main>
   )
 }

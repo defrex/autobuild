@@ -73,7 +73,7 @@ with `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
 `AB_TICKET_DOING_STATE`, and `AB_TICKET_DONE_STATE`. Set the backend to `linear`
 and provide `LINEAR_API_KEY` on the service to pass every request to the
 existing Linear adapter. That key never belongs on dispatcher or browser
-hosts. Team and claim/create policy arrive per request from repository config.
+hosts. Team and claim/create policy arrive per request from repository config. The signed-in web Tickets surface uses the same durable effective config, discovers lifecycle names from this configured backend, and polls every two seconds. Its create/edit/move/block operations are delegated through short-lived attributed operator tokens; provider credentials and bearer tokens never reach the browser.
 Run the migration before deployment; it adds separately versioned ticket and
 Better Auth schemas without changing an existing BuildStore v1 marker. Startup
 never creates or changes schema.

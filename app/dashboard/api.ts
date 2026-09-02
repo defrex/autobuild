@@ -2,6 +2,10 @@ import type {
   OperatorAnswerRequest,
   OperatorBuildControlRequest,
   OperatorDashboardSnapshot,
+  OperatorTicketCreateRequest,
+  OperatorTicketDetail,
+  OperatorTicketQueue,
+  OperatorTicketUpdateRequest,
 } from 'autobuild/operator-api'
 
 export class WebOperatorError extends Error {
@@ -43,6 +47,43 @@ export async function webRequest<T>(repo: string, path: string, init?: RequestIn
 
 export const dashboard = (repo: string, signal?: AbortSignal) =>
   webRequest<OperatorDashboardSnapshot>(repo, 'dashboard', { signal })
+export const tickets = (
+  repo: string,
+  filters: { state?: string; labels?: string[] } = {},
+  signal?: AbortSignal,
+) => {
+  const query = new URLSearchParams()
+  if (filters.state !== undefined) query.set('state', filters.state)
+  for (const label of filters.labels ?? []) query.append('label', label)
+  return webRequest<OperatorTicketQueue>(repo, `tickets${query.size ? `?${query}` : ''}`, {
+    signal,
+  })
+}
+export const ticket = (repo: string, id: string, signal?: AbortSignal) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}`, { signal })
+export const createTicket = (repo: string, value: OperatorTicketCreateRequest) =>
+  webRequest<OperatorTicketDetail>(repo, 'tickets', { method: 'POST', body: JSON.stringify(value) })
+export const updateTicket = (repo: string, id: string, value: OperatorTicketUpdateRequest) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(value),
+  })
+export const moveTicket = (repo: string, id: string, state: string) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ state }),
+  })
+export const changeBlockers = (
+  repo: string,
+  id: string,
+  blockerIds: string[],
+  operation: 'block' | 'unblock',
+) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}/${operation}`, {
+    method: 'POST',
+    body: JSON.stringify({ blockerIds }),
+  })
+
 export const buildControl = (repo: string, slug: string, body: OperatorBuildControlRequest) =>
   webRequest(repo, `builds/${encodeURIComponent(slug)}/control`, {
     method: 'POST',

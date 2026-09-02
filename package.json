@@ -74,7 +74,7 @@
     "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
-    "test": "bun test packages/*/src tools bin",
+    "test": "bun test packages/*/src tools bin app",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -84,6 +84,8 @@
     "pg": "8.18.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "semver": "^7.7.4",
     "smol-toml": "^1.7.0",
     "zod": "^4.4.3"
