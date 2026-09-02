@@ -80,6 +80,29 @@ async function runningStore(): Promise<MemoryBuildStore> {
   return store
 }
 
+async function artifactRequest(store: MemoryBuildStore, rev?: string): Promise<Response> {
+  const query = rev === undefined ? '' : `?rev=${encodeURIComponent(rev)}`
+  return createOperatorServer({ store, secret, clock }).fetch(
+    new Request(
+      `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/artifacts/notes${query}`,
+      {
+        headers: {
+          authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+      },
+    ),
+  )
+}
+
+async function storeWithArtifactRevisions(): Promise<MemoryBuildStore> {
+  const store = await runningStore()
+  await store.putArtifact('demo', { kind: 'notes', content: 'revision zero' })
+  await store.putArtifact('demo', { kind: 'notes', content: 'revision one' })
+  return store
+}
+
 describe('operator HTTP API', () => {
   test('operator token claims are strict and identify a distinct resource', () => {
     const valid = mintToken(secret, {
@@ -151,6 +174,61 @@ describe('operator HTTP API', () => {
     const artifact = await client.downloadArtifact(repo, 'demo', 'notes/report', 0)
     expect([...artifact.content]).toEqual([0, 1, 255])
     expect(artifact).toMatchObject({ kind: 'notes/report', revision: 0 })
+  })
+
+  describe('artifact revision query validation', () => {
+    test('an omitted revision selects the latest artifact', async () => {
+      const response = await artifactRequest(await storeWithArtifactRevisions())
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('1')
+      expect(await response.text()).toBe('revision one')
+    })
+
+    test('a valid decimal revision retrieves the requested artifact', async () => {
+      const response = await artifactRequest(await storeWithArtifactRevisions(), '1')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('1')
+      expect(await response.text()).toBe('revision one')
+    })
+
+    test('the lower boundary revision zero is accepted', async () => {
+      const response = await artifactRequest(await storeWithArtifactRevisions(), '0')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('0')
+      expect(await response.text()).toBe('revision zero')
+    })
+
+    test('the upper safe-integer boundary passes validation', async () => {
+      const response = await artifactRequest(
+        await storeWithArtifactRevisions(),
+        String(Number.MAX_SAFE_INTEGER),
+      )
+
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({ kind: 'not-found' })
+    })
+
+    test.each([
+      ['empty', ''],
+      ['whitespace', ' '],
+      ['hexadecimal', '0x1'],
+      ['exponent', '1e0'],
+      ['fractional', '1.0'],
+      ['infinite', 'Infinity'],
+      ['NaN', 'NaN'],
+      ['signed', '+1'],
+      ['negative', '-1'],
+      ['trailing characters', '1junk'],
+      ['above the safe-integer range', '9007199254740992'],
+    ] as const)('rejects a supplied %s revision', async (_label, rev) => {
+      const response = await artifactRequest(await storeWithArtifactRevisions(), rev)
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ kind: 'validation' })
+    })
   })
 
   test('per-build projection retains aborted cleanup rows until completion', async () => {
