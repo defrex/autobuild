@@ -1,5 +1,6 @@
-import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { inc as incrementSemver, valid as validSemver } from 'semver'
 import { readWorkspaceManifests } from './workspace-manifest-check'
@@ -20,6 +21,7 @@ export interface CommandRequest {
   args: readonly string[]
   cwd: string
   stdin?: string
+  env?: Record<string, string>
 }
 
 export interface CommandResult {
@@ -39,6 +41,8 @@ export interface ReleaseDependencies {
   run?: CommandRunner
   output?: ReleaseOutput
   today?: () => string
+  /** Test seam; production releases always use the canonical GitHub repository. */
+  repositoryUrl?: string
 }
 
 export interface ChangelogRelease {
@@ -55,6 +59,10 @@ interface ReleaseConfig {
     test: string
   }
 }
+
+export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild.git'
+export const MIGRATION_SCRIPT = 'postgres:migrate'
+export const MISSING_POSTGRES_URL_DIAGNOSTIC = 'AB_POSTGRES_URL is required and must be nonblank'
 
 const defaultOutput: ReleaseOutput = {
   log: (message) => console.log(message),
@@ -280,10 +288,11 @@ function readReleaseConfig(content: string): ReleaseConfig {
   return { baseBranch, commands: configured }
 }
 
-export const spawnCommand: CommandRunner = async ({ command, args, cwd, stdin }) => {
+export const spawnCommand: CommandRunner = async ({ command, args, cwd, stdin, env }) => {
   try {
     const child = Bun.spawn([command, ...args], {
       cwd,
+      ...(env === undefined ? {} : { env }),
       stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
       stdout: 'pipe',
       stderr: 'pipe',
@@ -409,6 +418,91 @@ function printCandidate(output: ReleaseOutput, path: string, content: string): v
   )
 }
 
+function migrationEnvironment(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] =>
+        entry[0] !== 'AB_POSTGRES_URL' && entry[1] !== undefined,
+    ),
+  )
+}
+
+async function smokeMigrationCheckout(
+  run: CommandRunner,
+  source: string,
+  tag: string,
+  expectedCommit: string,
+): Promise<void> {
+  const parent = await mkdtemp(join(tmpdir(), 'autobuild-release-smoke-'))
+  const checkout = join(parent, 'checkout')
+  try {
+    await checked(
+      run,
+      {
+        command: 'git',
+        args: [
+          'clone',
+          '--quiet',
+          '--depth',
+          '1',
+          '--branch',
+          tag,
+          '--single-branch',
+          source,
+          checkout,
+        ],
+        cwd: parent,
+      },
+      `could not clone ${tag} from ${source}`,
+    )
+    const head = (
+      await git(run, checkout, ['rev-parse', 'HEAD'], `could not resolve ${tag} smoke checkout`)
+    ).stdout.trim()
+    if (head !== expectedCommit) {
+      throw new Error(
+        `${tag} smoke checkout resolved to ${head || '(blank)'}, expected release commit ${expectedCommit}`,
+      )
+    }
+    await checked(
+      run,
+      {
+        command: 'bun',
+        args: ['install', '--frozen-lockfile'],
+        cwd: checkout,
+        env: migrationEnvironment(),
+      },
+      `could not install ${tag} smoke checkout`,
+    )
+    const migration = await run({
+      command: 'bun',
+      args: ['run', '--silent', MIGRATION_SCRIPT],
+      cwd: checkout,
+      env: migrationEnvironment(),
+    })
+    const output = `${migration.stdout}${migration.stderr}`.trim()
+    if (migration.exitCode === 0 || output !== MISSING_POSTGRES_URL_DIAGNOSTIC) {
+      throw new Error(
+        `${tag} migration smoke expected a nonzero exit with "${MISSING_POSTGRES_URL_DIAGNOSTIC}", got status ${migration.exitCode}: ${output || '(no output)'}`,
+      )
+    }
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
+}
+
+function canonicalSmokeRecoveryCommand(tag: string, commit: string): string {
+  return [
+    'checkout="$(mktemp -d)"',
+    `git clone --depth 1 --branch ${tag} --single-branch ${CANONICAL_REPOSITORY_URL} "$checkout"`,
+    `test "$(git -C "$checkout" rev-parse HEAD)" = '${commit}'`,
+    '(cd "$checkout" && bun install --frozen-lockfile)',
+    `migration_output="$(cd "$checkout" && env -u AB_POSTGRES_URL bun run --silent ${MIGRATION_SCRIPT} 2>&1)" && migration_status=0 || migration_status=$?`,
+    'test "$migration_status" -ne 0',
+    `test "$migration_output" = '${MISSING_POSTGRES_URL_DIAGNOSTIC}'`,
+    'rm -rf "$checkout"',
+  ].join('\n')
+}
+
 function githubReleaseRecoveryCommand(tag: string, notes: string): string {
   const noteLines = new Set(notes.split(/\r?\n/))
   let delimiter = 'AUTOBUILD_RELEASE_NOTES'
@@ -425,6 +519,7 @@ export async function runRelease(
   const run = dependencies.run ?? spawnCommand
   const output = dependencies.output ?? defaultOutput
   const today = dependencies.today ?? (() => new Date().toISOString().slice(0, 10))
+  const repositoryUrl = dependencies.repositoryUrl ?? CANONICAL_REPOSITORY_URL
   const arguments_ = parseReleaseArguments(args)
 
   const rootResult = await checked(
@@ -565,9 +660,11 @@ export async function runRelease(
     output.log(
       `Would commit CHANGELOG.md, README.md, and ${manifestCandidates.map((entry) => entry.path).join(', ')} as "chore: release ${tag}".`,
     )
-    output.log(`Would create annotated tag ${tag} and atomically push HEAD plus ${tag} to origin.`)
     output.log(
-      `Would publish GitHub Release ${tag} with the exact cut changelog section as its notes.`,
+      `Would create annotated tag ${tag}, smoke its migration script from a clean local checkout, and atomically push HEAD plus ${tag} to origin.`,
+    )
+    output.log(
+      `Would clone exact tag ${tag} from ${CANONICAL_REPOSITORY_URL}, verify its commit and migration entry point, then publish the GitHub Release with the exact cut changelog section as its notes.`,
     )
     return
   }
@@ -576,6 +673,7 @@ export async function runRelease(
     await git(run, root, ['rev-parse', 'HEAD'], 'could not resolve the pre-release HEAD')
   ).stdout.trim()
   let pushed = false
+  let releaseCommit: string | undefined
   try {
     await Promise.all([
       writeFile(resolve(root, 'CHANGELOG.md'), changelog.content),
@@ -620,6 +718,10 @@ export async function runRelease(
       ['tag', '-a', tag, '-m', `Release ${tag}`],
       `could not create annotated tag ${tag}`,
     )
+    releaseCommit = (
+      await git(run, root, ['rev-parse', 'HEAD'], `could not resolve release commit ${tag}`)
+    ).stdout.trim()
+    await smokeMigrationCheckout(run, root, tag, releaseCommit)
     await git(
       run,
       root,
@@ -636,6 +738,18 @@ export async function runRelease(
   } catch (error) {
     if (!pushed) await restoreBeforePush(run, root, originalHead, tag)
     throw error
+  }
+
+  if (releaseCommit === undefined) throw new Error(`release commit ${tag} was not recorded`)
+  try {
+    await smokeMigrationCheckout(run, repositoryUrl, tag, releaseCommit)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `${config.baseBranch} and ${tag} were pushed, but the canonical GitHub-tag migration smoke failed: ${detail}.\n` +
+        `Do not rewrite or delete the public refs. Run these commands verbatim to retry the canonical-tag smoke:\n\n${canonicalSmokeRecoveryCommand(tag, releaseCommit)}\n\n` +
+        `After that smoke passes, publish the GitHub Release with the exact cut-section notes:\n\n${githubReleaseRecoveryCommand(tag, changelog.cutSection)}`,
+    )
   }
 
   const release = await run({
