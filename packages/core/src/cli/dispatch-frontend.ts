@@ -4,7 +4,12 @@ import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import type { BuildState } from '../kernel/reducer'
 import { scanUnclaimedObservations } from '../processes/harvest'
-import { controlHarvestRun, toggleHarvestGate, toggleRepositorySetting } from '../operator/control'
+import {
+  controlHarvestRun,
+  OperatorControlError,
+  toggleHarvestGate,
+  toggleRepositorySetting,
+} from '../operator/control'
 import type { BuildStore, Clock } from '../store/types'
 import { systemClock } from '../store/types'
 import { BuildControlError, buildControlUser, controlBuild } from './build-control'
@@ -609,7 +614,13 @@ export class DispatchFrontend {
       })
       await this.report(`harvest: ${result.action} requested`)
     } catch (error) {
-      await this.report(error instanceof Error ? error.message : String(error))
+      await this.report(
+        error instanceof OperatorControlError && error.code === 'harvest-unavailable'
+          ? 'harvest run action ignored: selected run is no longer active'
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      )
     }
     await this.renderOnce()
   }

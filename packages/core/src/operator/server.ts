@@ -201,9 +201,15 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
       if (req.method === 'GET' && rest[2] === 'artifacts' && rest[3] && rest.length === 4) {
         const rawRev = url.searchParams.get('rev')
-        const rev = rawRev === null ? undefined : Number(rawRev)
-        if (rev !== undefined && (!Number.isInteger(rev) || rev < 0)) {
-          throw new HttpError(400, 'validation', 'rev must be a nonnegative integer')
+        let rev: number | undefined
+        if (rawRev !== null) {
+          if (!/^[0-9]+$/.test(rawRev)) {
+            throw new HttpError(400, 'validation', 'rev must be a nonnegative integer')
+          }
+          rev = Number(rawRev)
+          if (!Number.isSafeInteger(rev)) {
+            throw new HttpError(400, 'validation', 'rev must be a nonnegative integer')
+          }
         }
         const record = await opts.store.getBuild(slug)
         if (record === null || record.repo !== repo)
