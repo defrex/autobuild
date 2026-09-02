@@ -233,6 +233,11 @@ export class LinearTicketSource implements TicketSource {
     this.fetchFn = opts.fetchFn ?? ((url, init) => fetch(url, init))
   }
 
+  /** Exact team workflow names in provider order, used by trusted grooming UIs. */
+  async workflowStateNames(): Promise<string[]> {
+    return [...(await this.getTeamInfo('workflow states')).stateIds.keys()]
+  }
+
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const filter: Record<string, unknown> = {
       team: { key: { eq: this.teamKey } },

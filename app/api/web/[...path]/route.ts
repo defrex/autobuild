@@ -7,3 +7,4 @@ const route = (request: Request) => webGateway().fetch(request)
 export const GET = route
 export const POST = route
 export const PUT = route
+export const PATCH = route

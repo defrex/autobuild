@@ -35,6 +35,8 @@ export interface HostedStoreServiceOptions {
   /** Context-aware backend seam. Production chooses one deployment backend;
    * tests inject a fake while exercising the real authenticated protocol. */
   sourceFor?: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+  /** State discovery seam paired with sourceFor. Defaults to configured database lifecycle. */
+  statesFor?: (context: HostedTicketContext, source: TicketSource) => string[] | Promise<string[]>
   openTicketDatabase?: (
     url: string,
     lifecycle: { triage: string; ready: string; doing: string; done: string },
@@ -87,6 +89,19 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
   if (segments[0] === 'operator') {
     if (segments[1] !== 'v1' || segments[2] !== 'repos' || segments.length < 5) return undefined
     const rest = segments.slice(4)
+    if (rest[0] === 'tickets') {
+      if ((req.method === 'GET' || req.method === 'POST') && rest.length === 1) return 'operator'
+      if ((req.method === 'GET' || req.method === 'PATCH') && rest.length === 2 && rest[1])
+        return 'operator'
+      if (
+        req.method === 'POST' &&
+        rest.length === 3 &&
+        rest[1] &&
+        (rest[2] === 'move' || rest[2] === 'block' || rest[2] === 'unblock')
+      )
+        return 'operator'
+      return undefined
+    }
     if (
       req.method === 'GET' &&
       rest.length === 1 &&
@@ -156,6 +171,15 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     })
   let storeHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
   let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
+  let ticketBackendPromise:
+    | Promise<{
+        sourceFor: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+        statesFor: (
+          context: HostedTicketContext,
+          source: TicketSource,
+        ) => string[] | Promise<string[]>
+      }>
+    | undefined
   const requestsWithInternalFailures = new WeakSet<Request>()
 
   const report = async (error: unknown, req: Request, backend: HostedBackend) => {
@@ -175,6 +199,42 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     return report(error, req, backend)
   }
 
+  const openTicketBackend = () => {
+    ticketBackendPromise ??= (async () => {
+      const config = parseHostedStoreEnv(env)
+      if (options.sourceFor !== undefined) {
+        return {
+          sourceFor: options.sourceFor,
+          statesFor: options.statesFor ?? (() => Object.values(config.ticketLifecycle)),
+        }
+      }
+      if (config.ticketBackend === 'database') {
+        const database = await ticketOpener(config.postgres.url, config.ticketLifecycle)
+        return {
+          sourceFor: (context: HostedTicketContext) => database.source(context),
+          statesFor: () => Object.values(database.lifecycle),
+        }
+      }
+      const apiKey = config.linearApiKey!
+      const sourceFor = (context: HostedTicketContext) =>
+        new LinearTicketSource({
+          apiKey,
+          teamKey: context.teamKey,
+          ...(context.claimedState !== undefined ? { claimedState: context.claimedState } : {}),
+          ...(context.createState !== undefined ? { createState: context.createState } : {}),
+        })
+      return {
+        sourceFor,
+        statesFor: async (_context: HostedTicketContext, source: TicketSource) => {
+          if (!(source instanceof LinearTicketSource))
+            throw new Error('linear state source unavailable')
+          return source.workflowStateNames()
+        },
+      }
+    })()
+    return ticketBackendPromise
+  }
+
   const openStoreHandler = () => {
     if (storeHandlerPromise === undefined) {
       const attempt = (async () => {
@@ -191,6 +251,11 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         const operatorServer = createOperatorServer({
           store,
           secret: config.secret,
+          ticketBackend: {
+            sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
+            statesFor: async (context, source) =>
+              (await openTicketBackend()).statesFor(context, source),
+          },
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
           ...shared,
         })
@@ -210,23 +275,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   const openTicketHandler = () => {
     ticketHandlerPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
-      let sourceFor = options.sourceFor
-      if (sourceFor === undefined && config.ticketBackend === 'database') {
-        const database = await ticketOpener(config.postgres.url, config.ticketLifecycle)
-        sourceFor = (context) => database.source(context)
-      }
-      if (sourceFor === undefined) {
-        // The parser guarantees this credential for the linear backend. It is
-        // captured here and is never represented in request context or output.
-        const apiKey = config.linearApiKey!
-        sourceFor = (context) =>
-          new LinearTicketSource({
-            apiKey,
-            teamKey: context.teamKey,
-            ...(context.claimedState !== undefined ? { claimedState: context.claimedState } : {}),
-            ...(context.createState !== undefined ? { createState: context.createState } : {}),
-          })
-      }
+      const { sourceFor } = await openTicketBackend()
       return createTicketServer({
         secret: config.secret,
         sourceFor,

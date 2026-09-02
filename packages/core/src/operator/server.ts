@@ -18,6 +18,10 @@ import {
   bulkControlRequestSchema,
   harvestControlRequestSchema,
   settingRequestSchema,
+  ticketBlockerRequestSchema,
+  ticketCreateRequestSchema,
+  ticketMoveRequestSchema,
+  ticketUpdateRequestSchema,
 } from './protocol'
 import {
   controlHarvestRun,
@@ -34,11 +38,20 @@ import {
   listOperatorBuilds,
   OperatorQueryError,
 } from './query'
+import { TicketOperationError } from '../ports/tickets/operations'
+import {
+  getOperatorTicket,
+  listOperatorTickets,
+  mutateOperatorTicket,
+  type OperatorTicketBackend,
+} from './tickets'
 
 export interface OperatorServerOptions {
   store: BuildStore
   secret: string
   clock?: Clock
+  /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
+  ticketBackend?: OperatorTicketBackend
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -128,6 +141,86 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     }
     const repo = parts[3]
     const rest = parts.slice(4)
+
+    if (rest[0] === 'tickets') {
+      if (opts.ticketBackend === undefined) {
+        throw new HttpError(409, 'conflict', 'ticket operator backend is not configured')
+      }
+      if (req.method === 'GET' && rest.length === 1) {
+        const state = url.searchParams.get('state')
+        const hasLabels = url.searchParams.has('label')
+        return json(
+          200,
+          await listOperatorTickets({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            ...(state !== null ? { state } : {}),
+            ...(hasLabels ? { labels: url.searchParams.getAll('label') } : {}),
+          }),
+        )
+      }
+      if (req.method === 'POST' && rest.length === 1) {
+        const request = await body(req, ticketCreateRequestSchema)
+        return json(
+          201,
+          await mutateOperatorTicket({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            operation: { kind: 'create', ...request },
+          }),
+        )
+      }
+      const id = rest[1]
+      if (id && req.method === 'GET' && rest.length === 2) {
+        return json(
+          200,
+          await getOperatorTicket({ store: opts.store, repo, backend: opts.ticketBackend, id }),
+        )
+      }
+      if (id && req.method === 'PATCH' && rest.length === 2) {
+        const patch = await body(req, ticketUpdateRequestSchema)
+        return json(
+          200,
+          await mutateOperatorTicket({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            operation: { kind: 'update', id, patch },
+          }),
+        )
+      }
+      if (id && req.method === 'POST' && rest.length === 3 && rest[2] === 'move') {
+        const request = await body(req, ticketMoveRequestSchema)
+        return json(
+          200,
+          await mutateOperatorTicket({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            operation: { kind: 'move', id, state: request.state },
+          }),
+        )
+      }
+      if (
+        id &&
+        req.method === 'POST' &&
+        rest.length === 3 &&
+        (rest[2] === 'block' || rest[2] === 'unblock')
+      ) {
+        const request = await body(req, ticketBlockerRequestSchema)
+        return json(
+          200,
+          await mutateOperatorTicket({
+            store: opts.store,
+            repo,
+            backend: opts.ticketBackend,
+            operation: { kind: rest[2], id, blockerIds: request.blockerIds },
+          }),
+        )
+      }
+    }
 
     if (req.method === 'GET' && rest.length === 1 && rest[0] === 'builds') {
       const parsed = buildListScopeSchema.safeParse(url.searchParams.get('scope') ?? 'active')
@@ -313,6 +406,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         return await route(req)
       } catch (error) {
         if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
+        if (error instanceof TicketOperationError) {
+          return failure(
+            error.code === 'not-found' ? 404 : 409,
+            error.code === 'not-found' ? 'not-found' : 'refusal',
+            error.message,
+            { code: error.code },
+          )
+        }
         if (error instanceof BuildControlError || error instanceof OperatorControlError) {
           return failure(409, 'refusal', error.message, { code: error.code })
         }

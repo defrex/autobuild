@@ -102,6 +102,14 @@ const TEAM_INFO_RESPONSE = {
 }
 
 describe('LinearTicketSource', () => {
+  test('exposes exact workflow state names in provider order and caches team metadata', async () => {
+    const { fetchFn, calls } = fakeLinear([TEAM_INFO_RESPONSE])
+    const source = makeSource(fetchFn)
+    expect(await source.workflowStateNames()).toEqual(['Ready', 'In Progress', 'Done'])
+    expect(await source.workflowStateNames()).toEqual(['Ready', 'In Progress', 'Done'])
+    expect(calls).toHaveLength(1)
+  })
+
   test('listReady sends team + state + and-of-label filters and maps issues to Tickets', async () => {
     const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: { nodes: [gqlIssue()] } } } }])
     const source = makeSource(fetchFn)

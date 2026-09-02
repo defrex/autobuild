@@ -54,7 +54,7 @@ async function requireBuild(store: BuildStore, repo: string, slug: string) {
   return record
 }
 
-async function effectiveConfig(
+export async function effectiveConfig(
   store: BuildStore,
   repo: string,
 ): Promise<{

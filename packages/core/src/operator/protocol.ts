@@ -48,6 +48,29 @@ export const harvestControlRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('run'), run: z.string().min(1) }),
 ])
 
+export const ticketCreateRequestSchema = z.strictObject({
+  title: z.string(),
+  body: z.string(),
+  labels: z.array(z.string()).optional(),
+  state: z.string().min(1).optional(),
+  blockedBy: z.array(z.string().min(1)).optional(),
+})
+export const ticketUpdateRequestSchema = z
+  .strictObject({
+    title: z.string().optional(),
+    body: z.string().optional(),
+    labels: z.array(z.string()).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, 'update must name at least one field')
+export const ticketMoveRequestSchema = z.strictObject({ state: z.string().min(1) })
+export const ticketBlockerRequestSchema = z.strictObject({
+  blockerIds: z.array(z.string().min(1)).min(1),
+})
+export type OperatorTicketCreateRequest = z.infer<typeof ticketCreateRequestSchema>
+export type OperatorTicketUpdateRequest = z.infer<typeof ticketUpdateRequestSchema>
+export type OperatorTicketMoveRequest = z.infer<typeof ticketMoveRequestSchema>
+export type OperatorTicketBlockerRequest = z.infer<typeof ticketBlockerRequestSchema>
+
 export const operatorErrorSchema = z.strictObject({
   kind: z.enum(['validation', 'auth', 'not-found', 'conflict', 'refusal', 'internal']),
   error: z.string(),
