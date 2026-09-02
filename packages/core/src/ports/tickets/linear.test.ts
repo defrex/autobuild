@@ -179,7 +179,9 @@ describe('LinearTicketSource', () => {
     const { fetchFn, calls } = fakeLinear([
       {
         body: {
-          data: { issue: { id: 'uuid-42', state: { name: 'In Progress' } } },
+          data: {
+            issue: { id: 'uuid-42', state: { name: 'In Progress', type: 'started' } },
+          },
         },
       },
     ])
@@ -187,11 +189,40 @@ describe('LinearTicketSource', () => {
     expect(await makeSource(fetchFn).claim('ENG-42')).toBe(false)
     expect(calls).toHaveLength(1)
     expect(calls[0]?.variables).toEqual({ id: 'ENG-42' })
+    expect(calls[0]?.query).toContain('state { name type }')
+  })
+
+  test('claim refuses completed and canceled issues without issuing a mutation', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: { issue: { id: 'uuid-done', state: { name: 'Done', type: 'completed' } } },
+        },
+      },
+      {
+        body: {
+          data: {
+            issue: { id: 'uuid-canceled', state: { name: 'Canceled', type: 'canceled' } },
+          },
+        },
+      },
+    ])
+    const source = makeSource(fetchFn)
+
+    expect(await source.claim('ENG-42')).toBe(false)
+    expect(await source.claim('ENG-43')).toBe(false)
+    expect(calls).toHaveLength(2)
+    expect(calls.every((call) => call.query.includes('state { name type }'))).toBe(true)
+    expect(calls.some((call) => call.query.includes('mutation'))).toBe(false)
   })
 
   test('claim moves an unclaimed issue to the claimed state', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42', state: { name: 'Ready' } } } } },
+      {
+        body: {
+          data: { issue: { id: 'uuid-42', state: { name: 'Ready', type: 'unstarted' } } },
+        },
+      },
       TEAM_INFO_RESPONSE,
       { body: { data: { issueUpdate: { success: true } } } },
     ])
@@ -204,7 +235,11 @@ describe('LinearTicketSource', () => {
 
   test('claim honors a configured claimed state name', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42', state: { name: 'Ready' } } } } },
+      {
+        body: {
+          data: { issue: { id: 'uuid-42', state: { name: 'Ready', type: 'unstarted' } } },
+        },
+      },
       TEAM_INFO_RESPONSE,
       { body: { data: { issueUpdate: { success: true } } } },
     ])
@@ -258,7 +293,11 @@ describe('LinearTicketSource', () => {
 
   test('the issue-UUID cache means claim then comment resolves the issue once', async () => {
     const { fetchFn, calls } = fakeLinear([
-      { body: { data: { issue: { id: 'uuid-42', state: { name: 'Ready' } } } } },
+      {
+        body: {
+          data: { issue: { id: 'uuid-42', state: { name: 'Ready', type: 'unstarted' } } },
+        },
+      },
       TEAM_INFO_RESPONSE,
       { body: { data: { issueUpdate: { success: true } } } },
       { body: { data: { commentCreate: { success: true } } } },

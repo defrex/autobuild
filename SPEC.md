@@ -1152,6 +1152,13 @@ posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
 
+**Claim lifecycle.** Claim acquires nonterminal work: it returns `true` and
+moves a claimable ticket to the source's claimed state. It returns `false` for
+an unknown ticket, an already-claimed or contested ticket, and a ticket that
+the source considers terminal. Refusing a terminal ticket performs no state
+transition and never implicitly reopens completed work. An explicit transition
+back to a nonterminal state makes a later claim possible again.
+
 **Partial listings and source invariants.** A listing returns both valid
 tickets and diagnostics for individually malformed records, which are
 excluded but left byte-untouched — one broken ticket never blocks unrelated

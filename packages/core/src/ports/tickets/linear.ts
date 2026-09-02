@@ -187,7 +187,7 @@ const ISSUE_FIELDS =
 const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!) { issues(filter: $filter) { nodes { ${ISSUE_FIELDS} } } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
-const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name } } }`
+const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
 const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key: { eq: $teamKey } }) { nodes { id states { nodes { id name } } labels { nodes { id name } } } } }`
 const EXACT_TEAM_LABEL_QUERY = `query ExactTeamLabel($teamId: String!, $name: String!) { team(id: $teamId) { labels(filter: { name: { eq: $name } }) { nodes { id name } } } }`
 const CREATE_LABEL_MUTATION = `mutation CreateIssueLabel($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }`
@@ -271,17 +271,31 @@ export class LinearTicketSource implements TicketSource {
 
   /**
    * Claim-before-launch (SPEC §12): refuse if the issue already sits in the
-   * claimed state, else move it there. The check-then-update pair is not
-   * transactional — a concurrent writer could claim between the two calls —
-   * which is acceptable because the dispatcher is the single writer (§12);
-   * the guard defends against re-dispatching an already-claimed ticket.
+   * claimed state or Linear classifies it as terminal, else move it there.
+   * The check-then-update pair is not transactional — a concurrent writer
+   * could claim between the two calls — which is acceptable because the
+   * dispatcher is the single writer (§12); the preflight still prevents claim
+   * from serving as an implicit reopen operation.
    */
   async claim(id: string): Promise<boolean> {
-    const data = await this.gql<{
-      issue: { id: string; state: { name: string } | null } | null
-    }>('claim', ISSUE_STATE_QUERY, { id })
+    let data: {
+      issue: { id: string; state: { name: string; type: string } | null } | null
+    }
+    try {
+      data = await this.gql<{
+        issue: { id: string; state: { name: string; type: string } | null } | null
+      }>('claim', ISSUE_STATE_QUERY, { id })
+    } catch (error) {
+      if (isEntityNotFound(error)) return false
+      throw error
+    }
     if (!data.issue) return false
-    if (data.issue.state?.name === this.claimedState) return false
+    if (
+      data.issue.state?.name === this.claimedState ||
+      RESOLVED_STATE_TYPES.has(data.issue.state?.type ?? '')
+    ) {
+      return false
+    }
     this.issueIds.set(id, data.issue.id)
     await this.updateState('claim', data.issue.id, this.claimedState)
     return true
