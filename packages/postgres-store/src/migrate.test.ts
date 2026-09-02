@@ -69,6 +69,45 @@ if (testUrl) {
       })
     }
 
+    test('refuses a current marker when a required table is missing', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await migratePostgres(harness.url)
+        await sql`DROP TABLE events`
+        const error = await openPostgresBuildStore(harness.url, new MemoryBlobStore()).catch(
+          (caught: unknown) => caught,
+        )
+        expect((error as Error).message).toContain('table events is missing or mismatched')
+        expect((error as Error).message).toContain(MIGRATE_COMMAND)
+
+        await migratePostgres(harness.url)
+        const repaired = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        await repaired.close()
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('refuses a current marker when a required column is altered', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await migratePostgres(harness.url)
+        await sql`ALTER TABLE events ALTER COLUMN type TYPE varchar(100)`
+        const error = await openPostgresBuildStore(harness.url, new MemoryBlobStore()).catch(
+          (caught: unknown) => caught,
+        )
+        expect((error as Error).message).toContain('table events is missing or mismatched')
+        expect((error as Error).message).toContain(MIGRATE_COMMAND)
+        await expect(migratePostgres(harness.url)).rejects.toThrow('table events')
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
     test('opening an uninitialized database names the migration step', async () => {
       const harness = await schemaHarness()
       try {
