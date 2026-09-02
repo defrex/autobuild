@@ -34,7 +34,7 @@
     },
     "packages/postgres-store": {
       "name": "@autobuild/postgres-store",
-      "version": "0.1.0",
+      "version": "0.6.0",
       "bin": {
         "ab-postgres-store": "./src/bin.ts",
       },
@@ -43,7 +43,7 @@
         "@vercel/blob": "^2.0.0",
       },
       "peerDependencies": {
-        "autobuild": ">=0.6.0",
+        "autobuild": ">0.6.0",
       },
     },
   },
