@@ -135,17 +135,23 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   }
 
   const openStoreHandler = () => {
-    storeHandlerPromise ??= (async () => {
-      const config = parseHostedStoreEnv(env)
-      const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
-      return createStoreServer({
-        store,
-        secret: config.secret,
-        maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
-        onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
-        ...(options.clock === undefined ? {} : { clock: options.clock }),
-      }).fetch
-    })()
+    if (storeHandlerPromise === undefined) {
+      const attempt = (async () => {
+        const config = parseHostedStoreEnv(env)
+        const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
+        return createStoreServer({
+          store,
+          secret: config.secret,
+          maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
+          ...(options.clock === undefined ? {} : { clock: options.clock }),
+        }).fetch
+      })()
+      storeHandlerPromise = attempt
+      void attempt.catch(() => {
+        if (storeHandlerPromise === attempt) storeHandlerPromise = undefined
+      })
+    }
     return storeHandlerPromise
   }
 
