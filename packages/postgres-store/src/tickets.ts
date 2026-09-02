@@ -166,7 +166,8 @@ export class PostgresTicketSource implements TicketSource {
   async claim(id: string): Promise<boolean> {
     const rows: Row[] = await this.sql`UPDATE ab_tickets SET state = ${this.claimedState},
       updated_at = ${new Date().toISOString()}
-      WHERE team = ${this.team} AND id = ${id} AND state <> ${this.claimedState} RETURNING id`
+      WHERE team = ${this.team} AND id = ${id}
+        AND state <> ${this.claimedState} AND state <> ${this.lifecycle.done} RETURNING id`
     return rows.length === 1
   }
 

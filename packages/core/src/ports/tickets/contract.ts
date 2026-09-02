@@ -227,6 +227,22 @@ export function describeTicketSourceContract(
       })
     })
 
+    test('claim rejects a completed ticket without reopening it', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('completed claim'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.completed },
+        )
+
+        expect(await harness.source.claim(created.ref.id)).toBe(false)
+        expect((await harness.source.get(created.ref.id))?.state).toBe(harness.states.completed)
+      })
+    })
+
     test('comment accepts known tickets and rejects unknown tickets', async () => {
       await withTicketSource(factory, async (harness) => {
         const created = await createTracked(

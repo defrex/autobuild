@@ -98,12 +98,13 @@ export class FakeTicketSource implements TicketSource {
     return ticket ? cloneTicket(ticket) : null
   }
 
-  /** Claim-before-launch: true once per lifecycle stay. Any later transition
-   * releases the fake claim, mirroring real sources where moving out of the
-   * claimed state restores claimability regardless of the ready state's name. */
+  /** Claim-before-launch: true once per nonterminal lifecycle stay. A later
+   * explicit transition releases the fake claim, but the configured terminal
+   * state remains unclaimable and cannot be used as an implicit reopen. */
   async claim(id: string): Promise<boolean> {
     this.claims.push(id)
-    if (!this.tickets.has(id) || this.claimed.has(id)) return false
+    const ticket = this.tickets.get(id)
+    if (!ticket || ticket.state === this.doneState || this.claimed.has(id)) return false
     this.claimed.add(id)
     return true
   }
