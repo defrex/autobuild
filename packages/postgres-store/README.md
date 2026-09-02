@@ -19,10 +19,13 @@ AB_POSTGRES_URL=postgres://… bun run postgres:migrate
 
 Replace `v0.6.0` with the selected release tag. The migration is idempotent.
 Schema diagnostics refer to the root `postgres:migrate` script in this pinned
-release checkout. The database identity needs permission to create tables for
-migration and to select, insert, and update the resulting tables at runtime.
-Opening against a missing, older/newer, or checksum-mismatched schema fails;
-schema creation is never implicit.
+release checkout. The database identity needs permission to create tables,
+constraints, and migration markers during migration and to select, insert,
+update, and delete the resulting tables at runtime. The ticket schema has its
+own version/checksum marker, so migrating an existing BuildStore v1 database
+adds team-scoped tickets, comments, and blockers without replacing the
+established BuildStore marker. Opening against a missing, older/newer, or
+checksum-mismatched schema fails; schema creation is never implicit.
 
 ## Concurrency
 
@@ -42,6 +45,11 @@ S3 credentials need `GetObject` and `PutObject` on the configured bucket/prefix.
 Only an object-store 404 is treated as absent; authorization and service errors
 are propagated. Vercel supports either a Blob read-write token or a Vercel OIDC
 token paired with its Blob store ID.
+
+`PostgresTicketDatabase.source({ teamKey, claimedState?, createState? })` creates
+a request-bound TicketSource view. The deployment supplies four distinct
+lifecycle names; the defaults are Triage, Ready, Doing, and Done. Ticket bodies
+are stored as PostgreSQL `text` and returned unchanged.
 
 For an authenticated HTTP deployment of this adapter, see the
 [`@autobuild/hosted-store-service` guide](../hosted-store-service/README.md).

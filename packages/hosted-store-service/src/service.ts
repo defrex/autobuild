@@ -1,5 +1,14 @@
-import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
-import type { BuildStore, Clock } from 'autobuild/plugin-sdk'
+import {
+  openPostgresBuildStoreFromEnv,
+  openPostgresTicketDatabase,
+  type PostgresTicketDatabase,
+} from '@autobuild/postgres-store'
+import type { BuildStore, Clock, TicketSource } from 'autobuild/plugin-sdk'
+import {
+  createTicketServer,
+  type HostedTicketContext,
+  LinearTicketSource,
+} from 'autobuild/remote-tickets'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -13,6 +22,13 @@ export interface HostedStoreServiceOptions {
   env?: HostedStoreEnv
   clock?: Clock
   openStore?: (env: HostedStoreEnv, options: { clock?: Clock }) => Promise<BuildStore>
+  /** Context-aware backend seam. Production chooses one deployment backend;
+   * tests inject a fake while exercising the real authenticated protocol. */
+  sourceFor?: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+  openTicketDatabase?: (
+    url: string,
+    lifecycle: { triage: string; ready: string; doing: string; done: string },
+  ) => Promise<PostgresTicketDatabase>
 }
 
 const internalError = (): Response =>
@@ -27,10 +43,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
 } {
   const env = options.env ?? process.env
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
-  let handlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
+  const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
+  let storeHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
+  let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
 
-  const openHandler = (): Promise<(req: Request) => Promise<Response>> => {
-    handlerPromise ??= (async () => {
+  const openStoreHandler = () => {
+    storeHandlerPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
       let store: BuildStore
       try {
@@ -45,7 +63,36 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       }).fetch
     })()
-    return handlerPromise
+    return storeHandlerPromise
+  }
+
+  const openTicketHandler = () => {
+    ticketHandlerPromise ??= (async () => {
+      const config = parseHostedStoreEnv(env)
+      let sourceFor = options.sourceFor
+      if (sourceFor === undefined && config.ticketBackend === 'database') {
+        const database = await ticketOpener(config.postgres.url, config.ticketLifecycle)
+        sourceFor = (context) => database.source(context)
+      }
+      if (sourceFor === undefined) {
+        // The parser guarantees this credential for the linear backend. It is
+        // captured here and is never represented in request context or output.
+        const apiKey = config.linearApiKey!
+        sourceFor = (context) =>
+          new LinearTicketSource({
+            apiKey,
+            teamKey: context.teamKey,
+            ...(context.claimedState !== undefined ? { claimedState: context.claimedState } : {}),
+            ...(context.createState !== undefined ? { createState: context.createState } : {}),
+          })
+      }
+      return createTicketServer({
+        secret: config.secret,
+        sourceFor,
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
+      }).fetch
+    })()
+    return ticketHandlerPromise
   }
 
   return {
@@ -58,7 +105,11 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
         })
       }
-      if (url.pathname.startsWith('/builds') || url.pathname.startsWith('/repos')) {
+      if (
+        url.pathname.startsWith('/builds') ||
+        url.pathname.startsWith('/repos') ||
+        url.pathname.startsWith('/tickets')
+      ) {
         const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
         const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
         if (
@@ -75,7 +126,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         }
       }
       try {
-        return await (await openHandler())(req)
+        return url.pathname.startsWith('/tickets')
+          ? await (await openTicketHandler())(req)
+          : await (await openStoreHandler())(req)
       } catch {
         return internalError()
       }

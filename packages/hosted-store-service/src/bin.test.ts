@@ -5,7 +5,18 @@ import { mintTokenFromArgs, runTokenCli } from './bin'
 const now = new Date('2026-09-02T00:00:00.000Z')
 
 describe('offline token command', () => {
-  test('mints admin and build/session scopes without a service', () => {
+  test('mints operator, admin, and build/session scopes without a service', () => {
+    const operator = mintTokenFromArgs(
+      ['mint', 'operator', '--ttl-seconds', '60'],
+      { AB_STORE_SECRET: 's' },
+      now,
+    )
+    expect(verifyToken('s', operator, now)).toEqual({
+      operator: true,
+      session: '*',
+      exp: now.getTime() + 60_000,
+    })
+
     const admin = mintTokenFromArgs(
       ['mint', 'admin', '--ttl-seconds', '60'],
       { AB_STORE_SECRET: 's' },
