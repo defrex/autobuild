@@ -450,12 +450,17 @@ conformance suite):
    without identity those read forms retain unscoped operator access. This
    preserves the remote adapter's observable resource boundary without making
    the SQLite adapter itself ambient-aware.
-2. **Remote** — the same store interface behind a small self-hosted HTTP API
-   binary, selected by an `http(s)://` reference. What remote sandboxes talk
-   to. The documented [remote store protocol](docs/remote-store-protocol.md)
-   is the public BuildStore extension surface for independently implemented
-   servers; `packages/core/src/store/contract.ts`, driven through the shipped remote client,
-   is the conformance bar. Autobuild does not load in-process BuildStore
+2. **Remote** — the same store interface behind the independently deployed
+   hosted HTTP service, selected by an `http(s)://` reference. Kernels,
+   sandboxes, terminal dashboards, and later human-facing pages share this
+   service tier; it owns token authorization, protocol write validation,
+   artifact policy, and exact package/protocol version-skew enforcement. The
+   later human routes share its deployment so a browser or second service never
+   receives the machine signing secret. Artifacts remain content-by-value. The
+   documented [remote store protocol](docs/remote-store-protocol.md) is the
+   public BuildStore extension surface for independently implemented servers;
+   `packages/core/src/store/contract.ts`, driven through the shipped remote
+   client, is the conformance bar. Autobuild does not load in-process BuildStore
    plugins. Git worktrees and default file tickets necessarily remain local.
 
 `subscribe` is specced in the interface; the v2.0 implementation is polling
@@ -1959,10 +1964,9 @@ or installs releases in the foreground or background.
 3. **[OPEN] Global capacity** — per-repo capacity is the top-level `capacity`
    scalar (§16.1); whether a cross-repo global cap is needed, and where it
    lives, is unresolved.
-4. **[OPEN] Hosted, multi-host deployment** — the remote store (§7.2) and
-   cross-sandbox resumption (§7.4) already permit kernel, operator UI, and
-   builds to run on separate hosts against one store. Undecided: whether those
-   processes reach a hosted store directly or through a service tier that owns
-   write-rule enforcement and version skew between independently deployed
-   clients, and whether artifacts stay content-by-value (§7.1) or become
-   references a front end fetches for itself.
+4. **[DECIDED] Hosted, multi-host deployment** — independently deployed
+   kernels, build sessions, and operator clients reach the hosted HTTP service
+   tier described in §7.2. The tier owns authentication, write-rule and version
+   enforcement and will colocate later session-authenticated human routes.
+   Artifacts remain content-by-value for now; direct-to-blob references are a
+   possible later protocol revision, not a second current deployment path.

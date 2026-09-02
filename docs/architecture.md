@@ -51,11 +51,11 @@ unbundled TypeScript from the private `@autobuild/core` workspace at
 Git installation never requires a separately published core package.
 
 `packages/core` owns the CLI, kernel, adapters, shared types, dashboard
-projection, plugin SDK, and reusable contract suites. `tools/` is
-repository-only maintainer tooling. Future private API and web deployment
-packages will be siblings under `packages/` and depend on core with
-`workspace:*`; they must not enter the root package's `files` list or runtime
-dependency closure. All workspace manifests share one version because the
+projection, plugin SDK, and reusable contract suites. The optional
+`packages/hosted-store-service` workspace composes the public remote-server
+surface with `packages/postgres-store`; neither package enters an ordinary CLI
+installation's runtime dependency closure. `tools/` is repository-only
+maintainer tooling. All workspace manifests share one version because the
 remote-store protocol requires matching client and server versions.
 
 ## Layout
@@ -68,6 +68,8 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `packages/core/src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
+| `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
@@ -85,6 +87,17 @@ remote-store protocol requires matching client and server versions.
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
 ## Key boundaries
+
+**Hosted store service.** `autobuild/remote-store` is the supported protocol
+server/client/token export. The hosted workspace validates its environment,
+serves health without touching persistence, and lazily retains one
+`openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
+no Vercel branch; root `server.ts` is the sole `Bun.serve()` composition point.
+The fixed 1 MiB decoded artifact policy is enforced before backing mutation.
+The `ab-hosted-store` binary signs admin or build/session tokens offline from
+`AB_STORE_SECRET`; the running service exposes no mint endpoint. Machine routes
+and later server-session human routes intentionally share one deployment.
+
 
 Where each mechanism lives, and the one rule worth knowing at the seam. The
 full behavior is specified by each owner's colocated tests.

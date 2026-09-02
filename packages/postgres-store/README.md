@@ -29,3 +29,6 @@ S3 credentials need `GetObject` and `PutObject` on the configured bucket/prefix.
 Only an object-store 404 is treated as absent; authorization and service errors
 are propagated. Vercel supports either a Blob read-write token or a Vercel OIDC
 token paired with its Blob store ID.
+
+For an authenticated HTTP deployment of this adapter, see the
+[`@autobuild/hosted-store-service` guide](../hosted-store-service/README.md).
