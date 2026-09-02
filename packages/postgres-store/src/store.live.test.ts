@@ -85,10 +85,18 @@ if (testUrl) {
 
         const rows = await assertionSql`SELECT * FROM repo_streams WHERE repo = ${'acme/new-repo'}`
         expect(rows).toHaveLength(1)
+        const createdAt = rows[0]?.created_at
+        const updatedAt = rows[0]?.updated_at
         expect(records[0]).toEqual({
           repo: 'acme/new-repo',
-          createdAt: new Date(String(rows[0]?.created_at)).toISOString(),
-          updatedAt: new Date(String(rows[0]?.updated_at)).toISOString(),
+          createdAt:
+            createdAt instanceof Date
+              ? createdAt.toISOString()
+              : new Date(String(createdAt)).toISOString(),
+          updatedAt:
+            updatedAt instanceof Date
+              ? updatedAt.toISOString()
+              : new Date(String(updatedAt)).toISOString(),
         })
       } finally {
         await assertionSql.close()
