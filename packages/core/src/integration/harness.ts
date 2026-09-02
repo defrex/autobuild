@@ -60,6 +60,7 @@ import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/bui
 import { diagnosticArtifact } from '../processes/build-execution-state'
 import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
 import { MemoryBuildStore } from '../store/memory'
+import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 
 // ── The committed autobuild.toml fixture (§16.1) ─────────────────────────────
@@ -307,6 +308,14 @@ export async function makeHarness(opts: {
   pluginForge?: { prAttachments?: boolean }
   /** Exercise the shipped offline forge against a repository with no remote. */
   localGitForge?: boolean
+  /** Optional transport adapter around the backing memory store. Hosted tests
+   * use this to force dispatcher, runner, and CLI traffic through HTTP. */
+  storeAdapter?: (backing: MemoryBuildStore) => Promise<{
+    store: BuildStore
+    storeRef: string
+    token?: string
+    cleanup?: () => Promise<void>
+  }>
 }): Promise<E2eHarness> {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   const originPath = join(tmp, 'origin')
@@ -322,6 +331,8 @@ export async function makeHarness(opts: {
   const ids = sequentialIds()
   const uuids = sequentialUuids()
   const store = new MemoryBuildStore({ clock })
+  const adapted = await opts.storeAdapter?.(store)
+  const activeStore = adapted?.store ?? store
   const config = parseConfig(configToml, 'e2e autobuild.toml')
   // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
   // at the harness boundary rather than relying on production wiring.
@@ -384,7 +395,7 @@ export async function makeHarness(opts: {
       const out: string[] = []
       const err: string[] = []
       const code = await runCli(argv, {
-        store,
+        store: activeStore,
         env,
         workspacePath: ws,
         forge: selectedForge,
@@ -439,8 +450,8 @@ export async function makeHarness(opts: {
     slug: string,
     instance?: string,
   ): Promise<{ runner: BuildRunner; instance: string }> => {
-    const record = await store.getBuild(slug)
-    const workspacePath = openWorkspacePath(await store.getEvents(slug))
+    const record = await activeStore.getBuild(slug)
+    const workspacePath = openWorkspacePath(await activeStore.getEvents(slug))
     if (record === null || workspacePath === null) {
       throw new Error(`launchRunner("${slug}"): no build record or open workspace`)
     }
@@ -449,7 +460,7 @@ export async function makeHarness(opts: {
     return {
       instance: resolvedInstance,
       runner: new BuildRunner({
-        store: store.scopeBuild(slug),
+        store: activeStore.scopeBuild(slug),
         config,
         // Two-axis registry (§9): every runtime is backed by the SAME scripted
         // runner instance, so the `s_1…s_N` session numbering scenarios rely on
@@ -478,7 +489,7 @@ export async function makeHarness(opts: {
   }
 
   const dispatcher = new Dispatcher({
-    store,
+    store: activeStore,
     tickets: ticketSource,
     workspaces,
     forge: selectedForge,
@@ -490,14 +501,14 @@ export async function makeHarness(opts: {
     clock,
   })
   const wiring: DispatchWiring = {
-    store,
+    store: activeStore,
     tickets: ticketSource,
     forge: selectedForge,
     workspaces,
     buildExecution: new InProcessBuildExecution(async (input) => {
       const { runner } = await makeRunner(input.slug, input.instance)
       await runner.run().catch(async (error) => {
-        await store.putArtifact(
+        await activeStore.putArtifact(
           input.slug,
           diagnosticArtifact({
             instance: input.instance,
@@ -516,7 +527,8 @@ export async function makeHarness(opts: {
     runtimes,
     // Scripted agents resolve this ambient value, then invoke runCli against
     // the injected shared store. It is an identity label, never opened.
-    storeRef: 'memory://e2e',
+    storeRef: adapted?.storeRef ?? 'memory://e2e',
+    ...(adapted?.token !== undefined ? { token: adapted.token } : {}),
     ids,
     uuids,
     clock,
@@ -559,12 +571,14 @@ export async function makeHarness(opts: {
       } finally {
         // Direct Dispatcher integration bypasses DispatchLoop's execution
         // supervisor; mirror its exact post-completion lease release here.
-        await store.releaseLease(entry.slug, entry.instance)
+        await activeStore.releaseLease(entry.slug, entry.instance)
       }
     },
     events: (slug) => store.getEvents(slug),
     cleanup: async () => {
-      await store.close()
+      await activeStore.close()
+      if (activeStore !== store) await store.close()
+      await adapted?.cleanup?.()
       await rm(tmp, { recursive: true, force: true })
     },
   }
