@@ -39,6 +39,8 @@ export interface OperatorServerOptions {
   store: BuildStore
   secret: string
   clock?: Clock
+  /** Observes unexpected backing-store failures without exposing them over HTTP. */
+  onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
 
 class HttpError extends Error {
@@ -322,7 +324,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             { code: error.code },
           )
         }
-        return failure(500, 'internal', error instanceof Error ? error.message : String(error))
+        if (opts.onInternalError !== undefined) {
+          try {
+            await opts.onInternalError(error, req)
+          } catch {
+            // Diagnostics must never replace the protocol response.
+          }
+        }
+        return failure(500, 'internal', 'operator API is unavailable')
       }
     },
   }

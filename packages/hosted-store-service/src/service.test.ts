@@ -24,6 +24,17 @@ const env = {
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
 
+const token = mintToken(env.AB_STORE_SECRET, {
+  build: '*',
+  session: '*',
+  exp: now.getTime() + 60_000,
+})
+const machineHeaders = {
+  authorization: `Bearer ${token}`,
+  [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+  [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+}
+
 function clientFor(service: ReturnType<typeof createHostedStoreService>, identity = {}) {
   const token = mintToken(env.AB_STORE_SECRET, {
     build: '*',
@@ -102,6 +113,81 @@ describe('hosted store service', () => {
     })
   })
 
+  test('redacts operator backing failures and reports them with operator context', async () => {
+    const failure = new Error('postgres://operator:secret@db.internal/control')
+    const backing = new MemoryBuildStore({ clock })
+    backing.getRepo = async () => {
+      throw failure
+    }
+    const reports: unknown[][] = []
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+      reportInternalError: (reported, context) => reports.push([reported, context]),
+    })
+    const operator = new OperatorApiClient({
+      url: 'http://hosted.test',
+      token: mintToken(env.AB_STORE_SECRET, {
+        operator: { user: 'Hosted Operator' },
+        exp: now.getTime() + 60_000,
+      }),
+      fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch,
+    })
+
+    const error = await operator.repositoryStatus('acme/repo').catch((caught) => caught)
+    expect(error).toMatchObject({
+      status: 500,
+      kind: 'internal',
+      message: 'hosted store is unavailable',
+    })
+    expect(reports).toEqual([
+      [
+        failure,
+        {
+          backend: 'operator',
+          method: 'GET',
+          pathname: '/operator/v1/repos/acme%2Frepo/status',
+        },
+      ],
+    ])
+  })
+
+  test('unknown and unsupported routes return 404 without opening persistence', async () => {
+    let opens = 0
+    const service = createHostedStoreService({
+      env,
+      openStore: async () => {
+        opens++
+        throw new Error('must not open')
+      },
+      openTicketDatabase: async () => {
+        opens++
+        throw new Error('must not open')
+      },
+    })
+
+    for (const request of [
+      new Request('http://hosted.test/favicon.ico'),
+      new Request('http://hosted.test/builds-extra'),
+      new Request('http://hosted.test/builds', { method: 'DELETE' }),
+      new Request('http://hosted.test/builds/demo/events/extra', { method: 'GET' }),
+      new Request('http://hosted.test/tickets/not-an-operation', { method: 'POST' }),
+      new Request('http://hosted.test/operator/v1/repos/acme%2Frepo/not-an-operation'),
+    ]) {
+      const response = await service.fetch(request)
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({
+        error: `no route: ${request.method} ${new URL(request.url).pathname}`,
+        kind: 'not-found',
+      })
+    }
+    expect(opens).toBe(0)
+  })
+
   test('retries lazy store initialization after a rejected attempt', async () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
@@ -171,7 +257,7 @@ describe('hosted store service', () => {
     expect(await client.listArtifacts('demo', 'too-large')).toEqual([])
   })
 
-  test('reports package skew before authentication and hides opener failures', async () => {
+  test('reports package skew before authentication and redacts opener failures', async () => {
     const service = createHostedStoreService({
       env,
       clock,
@@ -183,20 +269,74 @@ describe('hosted store service', () => {
     expect((error as Error).message).toContain('client Autobuild 99.0.0')
     expect((error as Error).message).toContain(`server Autobuild ${AUTOBUILD_VERSION}`)
 
+    const failure = new Error('postgres://user:password@secret-host/db')
+    const reports: unknown[][] = []
     const failed = createHostedStoreService({
       env,
       openStore: async () => {
-        throw new Error('postgres://user:password@secret-host/db')
+        throw failure
       },
+      reportInternalError: (reported, context) => reports.push([reported, context]),
     })
     const response = await failed.fetch(
+      new Request('http://hosted.test/builds', { headers: machineHeaders }),
+    )
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({
+      error: 'hosted store is unavailable',
+      kind: 'internal',
+    })
+    expect(reports).toEqual([[failure, { backend: 'store', method: 'GET', pathname: '/builds' }]])
+  })
+
+  test('redacts backing-provider failures while retaining original diagnostics', async () => {
+    const failure = new Error(
+      'query SELECT secret FROM builds failed at postgres://admin:credential@db.internal/prod',
+      { cause: new Error('S3 bucket infrastructure timeout') },
+    )
+    const backing = new MemoryBuildStore({ clock })
+    backing.listBuilds = async () => {
+      throw failure
+    }
+    const reports: unknown[][] = []
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+      reportInternalError: (reported, context) => reports.push([reported, context]),
+    })
+
+    const response = await service.fetch(
+      new Request('http://hosted.test/builds', { headers: machineHeaders }),
+    )
+    const text = await response.text()
+
+    expect(response.status).toBe(500)
+    expect(JSON.parse(text)).toEqual({
+      error: 'hosted store is unavailable',
+      kind: 'internal',
+    })
+    for (const sensitive of ['SELECT', 'credential', 'db.internal', 'S3 bucket']) {
+      expect(text).not.toContain(sensitive)
+    }
+    expect(reports).toEqual([[failure, { backend: 'store', method: 'GET', pathname: '/builds' }]])
+    expect((reports[0]![0] as Error).cause).toBe(failure.cause)
+  })
+
+  test('passes expected protocol errors through unchanged', async () => {
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => new MemoryBuildStore({ clock }),
+    })
+    const response = await service.fetch(
       new Request('http://hosted.test/builds', {
-        headers: {
-          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-        },
+        method: 'POST',
+        headers: { ...machineHeaders, 'content-type': 'application/json' },
+        body: '{}',
       }),
     )
-    expect(await response.text()).not.toContain('password')
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ kind: 'validation' })
   })
 })

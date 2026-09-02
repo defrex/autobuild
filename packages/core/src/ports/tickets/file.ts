@@ -209,12 +209,11 @@ export class FileTicketSource implements TicketSource {
    * the claim record — no `claimedBy` field, which is what makes "claiming
    * visibly removes it from ready/" true.
    *
-   * The guard refuses a ticket ALREADY in Doing/Done rather than requiring one
-   * in Ready. That inversion is deliberate: a legal `[tickets] readyState =
-   * "Triage"` would otherwise stall forever — listReady would yield triage/
-   * tickets and every claim would refuse them. Refusing Doing/Done is
-   * sufficient for both obligations: the ticket leaves ready/, and it cannot be
-   * claimed twice.
+   * The guard refuses a ticket already in Doing or in this source's configured
+   * terminal state rather than requiring one in Ready. That inversion is
+   * deliberate: a legal `[tickets] readyState = "Triage"` would otherwise
+   * stall forever. Other nonterminal states remain claimable after an explicit
+   * handback, while terminal work can never be reopened by claim.
    */
   async claim(id: string): Promise<boolean> {
     await this.ensureLayout()
@@ -225,7 +224,7 @@ export class FileTicketSource implements TicketSource {
     // this closes the list→claim window where a human could corrupt a record
     // after it was listed but before the dispatcher claims it.
     await this.loadAt(found)
-    if (found.state === 'Doing' || found.state === 'Done') return false
+    if (found.state === 'Doing' || found.state === this.doneState) return false
     await rename(found.path, this.pathIn('Doing', id))
     return true
   }

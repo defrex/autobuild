@@ -93,4 +93,76 @@ describe('hosted ticket protocol', () => {
     expect(response.status).toBe(403)
     expect(invoked).toBe(0)
   })
+
+  test('reports only unexpected source failures and preserves standalone responses', async () => {
+    const failure = new Error('blob provider credentials rejected')
+    const backend = new FakeTicketSource()
+    backend.listReady = async () => {
+      throw failure
+    }
+    const reports: Array<[unknown, Request]> = []
+    const server = createTicketServer({
+      secret,
+      clock: () => now,
+      sourceFor: () => backend,
+      onInternalError: (error, request) => reports.push([error, request]),
+    })
+    const request = new Request('https://tickets.example/tickets/list-ready', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ context: { teamKey: 'ENG' }, input: {} }),
+    })
+
+    const response = await server.fetch(request)
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toContain(failure.message)
+    expect(reports).toEqual([[failure, request]])
+
+    const denied = await server.fetch(
+      new Request('https://tickets.example/tickets/get', {
+        method: 'POST',
+        headers: {
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+      }),
+    )
+    expect(denied.status).toBe(401)
+    expect(reports).toHaveLength(1)
+  })
+
+  test('a failing internal reporter cannot replace the ticket response', async () => {
+    const backend = new FakeTicketSource()
+    backend.listReady = async () => {
+      throw new Error('source failed')
+    }
+    const server = createTicketServer({
+      secret,
+      clock: () => now,
+      sourceFor: () => backend,
+      onInternalError: () => {
+        throw new Error('logger failed')
+      },
+    })
+    const response = await server.fetch(
+      new Request('https://tickets.example/tickets/list-ready', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input: {} }),
+      }),
+    )
+    expect(response.status).toBe(500)
+    expect(await response.text()).toContain('source failed')
+  })
 })

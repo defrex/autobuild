@@ -55,6 +55,8 @@ export interface StoreServerOptions {
   clock?: Clock
   /** Maximum decoded size of each artifact. Unlimited when omitted. */
   maxArtifactBytes?: number
+  /** Observes unexpected backing-store failures without changing their wire response. */
+  onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
 
 export interface StoreServer {
@@ -488,7 +490,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       try {
         return await route(req)
       } catch (error) {
-        return errorResponse(error)
+        const response = errorResponse(error)
+        if (response.status >= 500 && opts.onInternalError !== undefined) {
+          try {
+            await opts.onInternalError(error, req)
+          } catch {
+            // Diagnostics must never replace the protocol response.
+          }
+        }
+        return response
       }
     },
   }
