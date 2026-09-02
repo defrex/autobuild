@@ -33,7 +33,7 @@ import { resolve } from 'node:path'
 import { PHASE_SPECS, type PhaseSpec } from '../kernel/phases'
 import { readDistSkills } from './init'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
 /** The `ab context` inputs that can materialize `.ab/guidance.json`. */
 function receivesGuidance(spec: PhaseSpec): boolean {

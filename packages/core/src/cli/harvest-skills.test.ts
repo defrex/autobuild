@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-const ROOT = resolve(import.meta.dir, '..', '..')
+const ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
 async function skill(path: string): Promise<string> {
   return await readFile(join(ROOT, path, 'SKILL.md'), 'utf8')

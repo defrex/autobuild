@@ -30,7 +30,7 @@ import { resolvePlanVerifySteps } from '../kernel/plan-verify-selection'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
 
-const ROOT = resolve(import.meta.dir, '..', '..')
+const ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
 const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
 const README_PATH = join(ROOT, 'README.md')

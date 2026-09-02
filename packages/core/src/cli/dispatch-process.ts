@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url'
+import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore } from '../store/types'
@@ -159,8 +159,7 @@ function defaultSpawn(input: {
  * this boundary: options are immutable launch identity and all live facts and
  * commands use BuildStore. */
 export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): DispatchChildHandle {
-  const entrypoint =
-    deps.entrypoint ?? fileURLToPath(new URL('../../bin/ab-dispatch-kernel.ts', import.meta.url))
+  const entrypoint = deps.entrypoint ?? distributionPath('bin', 'ab-dispatch-kernel.ts')
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value
   env[DISPATCH_CHILD_OPTIONS_ENV] = JSON.stringify(deps.options)

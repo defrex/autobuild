@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const spec = await readFile(join(DIST_ROOT, 'skills', 'spec', 'SKILL.md'), 'utf8')
 const tickets = await readFile(join(DIST_ROOT, 'skills', 'tickets', 'SKILL.md'), 'utf8')
 const ticketGuides = [tickets] as const

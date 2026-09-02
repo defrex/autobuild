@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { distributionPath } from '../distribution'
 import { DEFAULT_PROCESS_GROUP_STOP_TIMEOUT_MS } from './process-group'
 
 export const PROCESS_GROUP_REAPER_OPTIONS_ENV = 'AB_PROCESS_GROUP_REAPER_OPTIONS'
@@ -20,19 +20,16 @@ export function launchProcessGroupReaper(
   options: ProcessGroupReaperOptions,
   spawn: typeof Bun.spawn = Bun.spawn,
 ): number {
-  const child = spawn(
-    [process.execPath, resolve(import.meta.dir, '../../bin/ab-process-group-reaper.ts')],
-    {
-      env: {
-        ...process.env,
-        [PROCESS_GROUP_REAPER_OPTIONS_ENV]: JSON.stringify(options),
-      },
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-      detached: true,
+  const child = spawn([process.execPath, distributionPath('bin', 'ab-process-group-reaper.ts')], {
+    env: {
+      ...process.env,
+      [PROCESS_GROUP_REAPER_OPTIONS_ENV]: JSON.stringify(options),
     },
-  )
+    stdin: 'ignore',
+    stdout: 'ignore',
+    stderr: 'ignore',
+    detached: true,
+  })
   child.unref()
   return child.pid
 }

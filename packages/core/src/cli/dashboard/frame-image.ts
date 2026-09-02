@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
+import { distributionPath } from '../../distribution'
 import { graphemes } from './cells'
 
 /**
@@ -307,7 +308,7 @@ function svgFor(
 function fontFiles(): string[] {
   const require = createRequire(import.meta.url)
   const root = dirname(require.resolve('dejavu-fonts-ttf/package.json'))
-  const fallbacks = join(import.meta.dir, '..', '..', '..', 'tools', 'fonts')
+  const fallbacks = distributionPath('tools', 'fonts')
   return [
     join(root, 'ttf', 'DejaVuSansMono.ttf'),
     join(root, 'ttf', 'DejaVuSansMono-Bold.ttf'),

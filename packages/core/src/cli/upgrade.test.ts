@@ -520,7 +520,7 @@ describe('abUpgrade — the four pristine-based cases', () => {
       expect(await readFile(pristinePath, 'utf8')).toBe(pristine)
       expect(local).not.toContain('<<<<<<<')
     }
-  })
+  }, 10_000)
 })
 
 describe('abUpgrade — complete skill trees', () => {

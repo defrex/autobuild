@@ -36,7 +36,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
 async function readSkill(...segments: string[]): Promise<string> {
   return await readFile(join(DIST_ROOT, ...segments), 'utf8')

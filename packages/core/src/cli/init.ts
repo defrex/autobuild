@@ -32,6 +32,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
+import { distributionRoot } from '../distribution'
 import { installedSkillName, SKILL_NAMESPACE } from '../skills'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -62,11 +63,11 @@ export const LOCAL_STATE_IGNORE_RULE = '.autobuild/'
 
 /**
  * The autobuild distribution root, resolved relative to THIS module file
- * (src/cli/init.ts → two levels up) so `ab init` works from any cwd. Its
- * `skills/` and `templates/` directories are the canonical source.
+ * so `ab init` works from any cwd. Its `skills/` and `templates/` directories
+ * are the canonical source.
  */
 export function defaultDistRoot(): string {
-  return resolve(import.meta.dir, '..', '..')
+  return distributionRoot()
 }
 
 function assertSkillRelativePath(file: string): void {

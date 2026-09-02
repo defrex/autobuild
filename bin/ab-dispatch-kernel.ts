@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 /** Private, shipped child for the interactive `ab dispatch` kernel. It owns no
  * terminal handles; the public command launches it with immutable options. */
-import { abDispatch } from '../src/cli/dispatch'
+import { abDispatch } from '../packages/core/src/cli/dispatch'
 import {
   DISPATCH_CHILD_OPTIONS_ENV,
   type DispatchChildOptions,
   installDispatchKernelSignalHandlers,
   watchDispatchParent,
-} from '../src/cli/dispatch-process'
-import { DISPATCHER } from '../src/events/envelope'
-import { spawnExec } from '../src/ports/workspace/git-worktree'
-import { resolveRepoState } from '../src/cli/repo-state'
-import { openStoreForRepoState } from '../src/cli/store-opening'
+} from '../packages/core/src/cli/dispatch-process'
+import { DISPATCHER } from '../packages/core/src/events/envelope'
+import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
+import { resolveRepoState } from '../packages/core/src/cli/repo-state'
+import { openStoreForRepoState } from '../packages/core/src/cli/store-opening'
 
 const raw = process.env[DISPATCH_CHILD_OPTIONS_ENV]
 if (raw === undefined) process.exit(2)

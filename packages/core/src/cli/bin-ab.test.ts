@@ -25,7 +25,7 @@ import { MemoryBuildStore } from '../store/memory'
 import { startStoreServer } from '../store/remote/server'
 import { mintToken } from '../store/remote/token'
 
-const ROOT = join(import.meta.dir, '..', '..')
+const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
 
 let tmp: string
@@ -268,7 +268,7 @@ test('plugin diagnostics and a real contract run are sessionless in the binary',
   await writeFile(
     join(tmp, 'plugin.ts'),
     `
-import { FakeTicketSource } from ${JSON.stringify(join(ROOT, 'src', 'plugin-sdk', 'index.ts'))}
+import { FakeTicketSource } from ${JSON.stringify(join(ROOT, 'packages', 'core', 'src', 'plugin-sdk', 'index.ts'))}
 const adapter = () => new FakeTicketSource()
 const fixture = () => async () => ({
   source: new FakeTicketSource([], { createState: 'Triage', doneState: 'Done' }),

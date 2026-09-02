@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { loadConfig } from './load'
 
 test('repository installs mandatory lint and the path-scoped dashboard verifier', async () => {
-  const config = await loadConfig(join(import.meta.dir, '..', '..', 'autobuild.toml'))
+  const config = await loadConfig(join(import.meta.dir, '..', '..', '..', '..', 'autobuild.toml'))
   expect(config.baseBranch).toBe('main')
   expect(config.capacity).toBe(5)
   expect(config.policy.harvestThreshold).toBe(5)
@@ -26,8 +26,8 @@ test('repository installs mandatory lint and the path-scoped dashboard verifier'
     kind: 'agent',
     skill: 'ab-verify-dashboard',
     paths: [
-      'src/cli/dashboard/**',
-      'src/cli/dispatch.ts',
+      'packages/core/src/cli/dashboard/**',
+      'packages/core/src/cli/dispatch.ts',
       'tools/dashboard-capture.ts',
       '.agents/skills/ab-verify-dashboard/SKILL.md',
     ],

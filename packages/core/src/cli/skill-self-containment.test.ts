@@ -3,7 +3,7 @@ import { posix, resolve } from 'node:path'
 import { markdownTargets, withoutFencedCode } from '../markdown'
 import { readDistSkills } from './init'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
 describe('shipped skill self-containment', () => {
   test('every Autobuild-owned Markdown reference resolves in the installed ab-* tree', async () => {

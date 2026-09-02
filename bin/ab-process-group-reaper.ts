@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /** Private shipped helper: reap one abandoned local build process group. */
-import { terminateProcessGroup } from '../src/processes/process-group'
+import { terminateProcessGroup } from '../packages/core/src/processes/process-group'
 import {
   PROCESS_GROUP_REAPER_OPTIONS_ENV,
   type ProcessGroupReaperOptions,
-} from '../src/processes/process-group-reaper'
+} from '../packages/core/src/processes/process-group-reaper'
 
 const raw = process.env[PROCESS_GROUP_REAPER_OPTIONS_ENV]
 let options: ProcessGroupReaperOptions | undefined

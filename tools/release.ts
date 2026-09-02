@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { inc as incrementSemver, valid as validSemver } from 'semver'
+import { readWorkspaceManifests } from './workspace-manifest-check'
 
 export const README_INSTALL_START = '<!-- release-install:start -->'
 export const README_INSTALL_END = '<!-- release-install:end -->'
@@ -439,8 +440,16 @@ export async function runRelease(
     readFile(resolve(root, 'README.md'), 'utf8'),
   ])
   const config = readReleaseConfig(configText)
+  const workspaceManifests = await readWorkspaceManifests(root)
   const manifest = JSON.parse(manifestText) as { version?: unknown }
   if (typeof manifest.version !== 'string') throw new Error('package.json version must be a string')
+  for (const workspace of workspaceManifests.slice(1)) {
+    if (workspace.manifest.version !== manifest.version) {
+      throw new Error(
+        `${workspace.path} version must match root ${manifest.version} before releasing`,
+      )
+    }
+  }
   const version = resolveReleaseVersion(manifest.version, arguments_)
   const tag = `v${version}`
 
@@ -538,7 +547,10 @@ export async function runRelease(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
   const changelog = renderReleasedChangelog(changelogText, tag, date, summary)
   const readme = replaceReadmeInstall(readmeText, tag)
-  const manifestContent = replacePackageVersion(manifestText, version)
+  const manifestCandidates = workspaceManifests.map((entry) => ({
+    path: entry.path,
+    content: replacePackageVersion(entry.text, version),
+  }))
 
   output.log(`Release ${tag} (${date})`)
   output.log(`Summary: ${summary ?? '[omitted; Claude did not return usable prose]'}`)
@@ -547,8 +559,12 @@ export async function runRelease(
     output.log('DRY RUN — no files, commits, tags, pushes, or GitHub releases will be created.')
     printCandidate(output, 'CHANGELOG.md', changelog.content)
     printCandidate(output, 'README.md', readme)
-    printCandidate(output, 'package.json', manifestContent)
-    output.log(`Would commit CHANGELOG.md, README.md, and package.json as "chore: release ${tag}".`)
+    for (const candidate of manifestCandidates) {
+      printCandidate(output, candidate.path, candidate.content)
+    }
+    output.log(
+      `Would commit CHANGELOG.md, README.md, and ${manifestCandidates.map((entry) => entry.path).join(', ')} as "chore: release ${tag}".`,
+    )
     output.log(`Would create annotated tag ${tag} and atomically push HEAD plus ${tag} to origin.`)
     output.log(
       `Would publish GitHub Release ${tag} with the exact cut changelog section as its notes.`,
@@ -564,13 +580,15 @@ export async function runRelease(
     await Promise.all([
       writeFile(resolve(root, 'CHANGELOG.md'), changelog.content),
       writeFile(resolve(root, 'README.md'), readme),
-      writeFile(resolve(root, 'package.json'), manifestContent),
+      ...manifestCandidates.map((candidate) =>
+        writeFile(resolve(root, candidate.path), candidate.content),
+      ),
     ])
     await git(run, root, ['diff', '--check'], 'release candidates failed git diff --check')
     await git(
       run,
       root,
-      ['add', '--', 'CHANGELOG.md', 'README.md', 'package.json'],
+      ['add', '--', 'CHANGELOG.md', 'README.md', ...manifestCandidates.map((entry) => entry.path)],
       'could not stage release files',
     )
     const staged = await git(
@@ -580,7 +598,11 @@ export async function runRelease(
       'could not inspect staged release files',
     )
     const stagedPaths = staged.stdout.trim().split(/\r?\n/).sort()
-    const expectedPaths = ['CHANGELOG.md', 'README.md', 'package.json'].sort()
+    const expectedPaths = [
+      'CHANGELOG.md',
+      'README.md',
+      ...manifestCandidates.map((entry) => entry.path),
+    ].sort()
     if (JSON.stringify(stagedPaths) !== JSON.stringify(expectedPaths)) {
       throw new Error(
         `release commit must contain exactly ${expectedPaths.join(', ')}; found ${stagedPaths.join(', ')}`,

@@ -42,7 +42,7 @@ import { parseConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const GUIDE_PATH = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
 
 const guide = await readFile(GUIDE_PATH, 'utf8')

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PLUGIN_PORTS } from '../plugins/registry'
 
-const DIST_ROOT = resolve(import.meta.dir, '..', '..')
+const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const GUIDE = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
 const REFERENCE = join(DIST_ROOT, 'skills', 'guide', 'references', 'plugin-authoring.md')
 const roots: string[] = []

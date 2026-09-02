@@ -4,19 +4,26 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "packageManager": "bun@1.4.0",
   "bin": {
     "ab": "bin/ab.ts"
   },
   "exports": {
     "./plugin-sdk": {
-      "types": "./src/plugin-sdk/index.ts",
-      "import": "./src/plugin-sdk/index.ts",
-      "default": "./src/plugin-sdk/index.ts"
+      "types": "./packages/core/src/plugin-sdk/index.ts",
+      "import": "./packages/core/src/plugin-sdk/index.ts",
+      "default": "./packages/core/src/plugin-sdk/index.ts"
     }
   },
   "files": [
     "bin",
-    "src",
+    "packages/core/src",
     "skills",
     "templates",
     "LICENSE",
@@ -29,10 +36,10 @@
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:readme-headline": "bun tools/readme-headline.ts",
     "release": "bun tools/release.ts",
-    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check",
+    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
-    "test": "bun test",
+    "test": "bun test packages/core/src tools bin",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
