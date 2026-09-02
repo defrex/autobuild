@@ -180,6 +180,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
               active {model.active.current}/{model.active.limit}
             </strong>
             <span>queued {model.queued}</span>
+            <strong>repository {model.repositoryPaused ? 'PAUSED' : 'RUNNING'}</strong>
             <span>
               unclaimed observations {model.observations.current}/{model.observations.limit}
             </span>
@@ -263,6 +264,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
                       </th>
                       <td>
                         <strong>{row.status.toUpperCase()}</strong>
+                        {model.repositoryPaused && row.status === 'queued' && <small>(held)</small>}
                         {row.alsoPaused && <small>also paused</small>}
                         {row.abortProgress && <small>{row.abortProgress}</small>}
                       </td>
@@ -335,11 +337,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
                 })}
                 {model.harvest && (
                   <tr>
-                    <th scope="row">
-                      <button type="button" className="linkButton">
-                        Harvest · {model.harvest.run}
-                      </button>
-                    </th>
+                    <th scope="row">Harvest · {model.harvest.run}</th>
                     <td>
                       <strong>{model.harvest.status.toUpperCase()}</strong>
                       <small>
@@ -377,19 +375,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
                     <td>{model.harvestPaused ? 'PAUSED' : 'IDLE'}</td>
                     <td>—</td>
                     <td>—</td>
-                    <td>
-                      <button
-                        type="button"
-                        disabled={!!pending || model.harvestPaused}
-                        onClick={() =>
-                          act('harvest-run', () =>
-                            api.harvest(repo, { action: 'run', run: crypto.randomUUID() }),
-                          )
-                        }
-                      >
-                        Run harvest
-                      </button>
-                    </td>
+                    <td>No active run</td>
                   </tr>
                 )}
               </tbody>
