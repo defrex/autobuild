@@ -22,7 +22,7 @@ and artifact kind as separate URL path segments.
 | Method and path | Result |
 |---|---|
 | `GET …/builds?scope=active\|queued\|all` | Build summaries, newest update first. `queued` means active plus queued, matching `ab builds --queued`. |
-| `GET …/builds/{slug}` | `{detail, dashboardRow}`; the row is `null` for terminal builds. |
+| `GET …/builds/{slug}` | `{detail, dashboardRow}`; `dashboardRow` remains a `CLEANING` row after `build.aborted` and becomes `null` only when the dashboard stops listing it (after cleanup's `build.completed`). |
 | `GET …/dashboard` | `{generatedAt, model, settingsHeader}`. `model` is the dashboard's rows, steps, elapsed timing inputs, harvest row, queue/capacity and settings projection. |
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
@@ -59,17 +59,47 @@ Answer variants:
 {"resolution":"revise-spec","origin":"ticket","body":"current amended ticket body","text":"optional guidance"}
 ```
 
+The retry object is deliberately bare: adding `text` is a `400 validation`
+rather than silently changing the resolution to guidance. A revision object may
+also carry `ceiling` only to receive the shared `incompatible-answer-options`
+refusal; a ceiling and spec revision cannot be performed together.
+
 The hosted service has no ticket-provider credentials. For ticket-origin
 revision, a trusted caller fetches the current ticket body and supplies it; the
 build must still have a recorded ticket. Revision conformance, lazy retry,
 artifact metadata, event ordering, and refusal rules are the same as the CLI.
+
+### Success results
+
+Build control returns one of:
+
+- `{kind:"command",slug,command,event}` after writing a pause, resume, abort,
+  discard, or per-build auto-merge command. `command` is the durable command;
+  successful cancel-pause therefore returns `command:"resume"`.
+- `{kind:"answer-required",slug,escalationIds}` when `action:"resume"` targets
+  a blocked build. This is a successful prompt transition but **does not append
+  an event**; submit one of the answer requests next.
+- `{kind:"answered",slug,count,resolution,resumed,...}` from the answer route.
+  `resolution` is `guidance`, `retry`, `dismiss-finding`, or `revise-spec`.
+  Depending on the operation, the result also includes `remainingOpen`,
+  `reviewRoundCeiling:{loop,value}`, `specRev`, `authorizedEarlier`, or a
+  `terminalSignal` describing a terminal status, pending abort, or ended PR.
+
+Repository setting writes and toggles return `{enabled,event}`. Harvest gate
+toggle returns `{command:"pause"|"resume",event}`; a concrete-run action
+returns `{action:"resume"|"acknowledge",event}`. Bulk control returns
+`{direction,slugs,paused,intake}`, where `slugs` is the write-ordered set of
+builds that received a command. Every `event` is the complete durable envelope
+including repository/build id, sequence, timestamp, actor, type, and payload.
 
 ## Errors
 
 JSON errors have `{kind,error,code?,progress?}`. Malformed input is `400
 validation`; missing resources/artifacts are `404 not-found`; missing/invalid
 credentials are `401 auth`; a valid non-operator scope is `403 auth`; version
-skew and unavailable projections are `409 conflict`. Control refusals are `409
+skew and unavailable projections are `409 conflict`. A build outside the URL's
+repository is deliberately hidden as `404 not-found` with `unknown build`,
+consistently for detail, control, answer, and artifact routes. Control refusals are `409
 refusal` and preserve the shared `BuildControlError` code and exact reason text.
 A partial bulk failure uses code `bulk-partial` and includes the durable write
 progress and unattempted builds. Unexpected failures are `500 internal`.

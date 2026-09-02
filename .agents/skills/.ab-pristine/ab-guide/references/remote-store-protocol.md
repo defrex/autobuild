@@ -20,7 +20,7 @@ document and the package's executable contracts together.
   `AB_STORE`; the shipped client appends the routes below.
 - Every `/builds` and `/repos` request sends `X-Autobuild-Version` with the
   exact client package version and `X-Autobuild-Protocol-Version` with the
-  remote protocol version (`1` in this distribution). Before authentication,
+  remote protocol version (`2` in this distribution). Before authentication,
   body parsing, or resource lookup, the server compares both exact strings.
   Missing or different values receive `409 {"kind":"conflict","error":"…"}`;
   the diagnostic names the client and server package and protocol versions.
@@ -425,6 +425,9 @@ The token's session dimension adds a second gate only to event-bearing writes:
 
 Build and repository scopes never cross: a harvest repository token cannot
 read a build stream, and a build token cannot read a repository journal.
+Operator scopes have `{ "operator": { "user": "nonblank identity" }, "exp": … }`.
+They are accepted only by the [operator API](operator-api.md), never by raw
+store routes; conversely, admin/build/repository scopes are refused there.
 
 ## 6. Atomic deposits
 
@@ -564,7 +567,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"1"}`. It reports HTTP-process availability and identity,
+  "protocolVersion":"2"}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
 There is no push/WebSocket subscription protocol, batch-read route,
