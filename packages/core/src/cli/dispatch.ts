@@ -218,6 +218,8 @@ export interface DispatchWiring {
   plugins?: PluginRegistry
 }
 
+export type DispatchNonStoreWiring = Omit<DispatchWiring, 'store' | 'storeRef' | 'token'>
+
 export interface DispatchOpts {
   /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd. */
   targetRepo: string
@@ -248,6 +250,14 @@ export interface DispatchOpts {
     state: RepoStatePaths,
     plugins: PluginRegistry,
   ) => Promise<DispatchWiring> | DispatchWiring
+  /** Integration seam that substitutes only non-store ports. Store identity,
+   * reference, and token always come from production environment selection. */
+  nonStoreWire?: (
+    config: Config,
+    opts: DispatchOpts,
+    state: RepoStatePaths,
+    plugins: PluginRegistry,
+  ) => Promise<DispatchNonStoreWiring> | DispatchNonStoreWiring
   /** Injectable sleep (watch loop); default a real timer. Tests use `once`. */
   sleep?: (ms: number) => Promise<void>
   /** Force line-oriented output with no terminal control sequences (`--plain`),
@@ -2311,6 +2321,9 @@ class DispatchLoop {
  * and runs until one pass finishes (`--once`) or `opts.signal` aborts (SIGINT).
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
+  if (opts.wire !== undefined && opts.nonStoreWire !== undefined) {
+    throw new Error('dispatch wire and nonStoreWire are mutually exclusive')
+  }
   const state = await resolveRepoState({
     targetRepo: opts.targetRepo,
     exec: opts.exec,
@@ -2333,6 +2346,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (
     resolvedOpts.kernelRunId === undefined &&
     resolvedOpts.wire === undefined &&
+    resolvedOpts.nonStoreWire === undefined &&
     resolvedOpts.plain !== true &&
     resolvedOpts.terminal?.interactive === true &&
     resolvedOpts.input !== undefined
@@ -2386,8 +2400,20 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // Validate the selector against the complete catalog before either custom
   // wiring or production wiring can open state or perform side effects.
   resolveForgeRegistration(config.forge, plugins)
-  const wire = resolvedOpts.wire ?? defaultWire
-  const wired = await wire(config, resolvedOpts, state, plugins)
+  let wired: DispatchWiring
+  if (resolvedOpts.nonStoreWire !== undefined) {
+    const opened = openStoreForRepoState(state, { env: resolvedOpts.env })
+    const ports = await resolvedOpts.nonStoreWire(config, resolvedOpts, state, plugins)
+    wired = {
+      ...ports,
+      store: opened.store,
+      storeRef: opened.storeRef,
+      ...(opened.token !== undefined ? { token: opened.token } : {}),
+    }
+  } else {
+    const wire = resolvedOpts.wire ?? defaultWire
+    wired = await wire(config, resolvedOpts, state, plugins)
+  }
   const runtimes = await materializePluginRuntimes(wired.runtimes, plugins, {
     repoRoot: resolvedOpts.targetRepo,
     env: resolvedOpts.env,
