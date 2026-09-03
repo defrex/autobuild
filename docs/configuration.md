@@ -25,7 +25,7 @@ revision into a dedicated checkout, and run the idempotent migration there:
 git clone --depth 1 --branch v0.6.0 --single-branch https://github.com/defrex/autobuild.git autobuild-v0.6.0
 cd autobuild-v0.6.0
 bun install --frozen-lockfile
-AB_POSTGRES_URL=postgres://… bun run postgres:migrate
+DATABASE_URL=postgres://… bun run postgres:migrate
 ```
 
 Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
@@ -63,7 +63,8 @@ use of `@autobuild/postgres-store`).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|
-| `AB_POSTGRES_URL` | Always | Nonblank PostgreSQL connection URL; this is the adapter's sole database input. |
+| `DATABASE_URL` | Always, unless `AB_POSTGRES_URL` is set | Nonblank PostgreSQL connection URL under its conventional name, as Vercel's Neon and Postgres storage integrations inject it. |
+| `AB_POSTGRES_URL` | Optional override | Explicit Autobuild-specific connection URL; a nonblank value wins over `DATABASE_URL`. No other ambient variable is consulted. |
 | `AB_BLOB_BACKEND` | Always | `s3` or `vercel`. |
 | `AB_BLOB_PREFIX` | Optional | Object pathname prefix; redundant `/` characters are normalized. |
 | `AB_S3_BUCKET` | S3 | Bucket name. |

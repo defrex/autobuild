@@ -1,3 +1,5 @@
+import { resolvePostgresUrl } from '@autobuild/postgres-store/env'
+
 export type WebAuthProvider = 'github'
 export type WebEnv = Record<string, string | undefined>
 
@@ -85,7 +87,7 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
       clientId: required(env, 'GITHUB_CLIENT_ID'),
       clientSecret: required(env, 'GITHUB_CLIENT_SECRET'),
     },
-    postgresURL: required(env, 'AB_POSTGRES_URL'),
+    postgresURL: resolvePostgresUrl(env),
     secureCookies: url.protocol === 'https:',
   }
 }

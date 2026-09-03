@@ -94,6 +94,7 @@
     "@biomejs/biome": "2.5.5",
     "@resvg/resvg-js": "2.6.2",
     "@types/bun": "^1.3.14",
+    "@types/node": "^24.0.0",
     "@types/pg": "8.16.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
@@ -102,6 +103,7 @@
     "drizzle-kit": "^0.31.10",
     "git-format-staged": "4.0.1",
     "husky": "9.1.7",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vercel": "^59.11.2"
   }
 }

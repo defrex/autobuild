@@ -33,3 +33,16 @@ describe('web auth configuration', () => {
     expect(() => parseWebAuthEnv({ ...env, ...patch })).toThrow()
   })
 })
+
+describe('web session database selection', () => {
+  test('accepts the conventional DATABASE_URL and prefers the explicit override', () => {
+    const { AB_POSTGRES_URL: _explicit, ...conventional } = env
+    expect(
+      parseWebAuthEnv({ ...conventional, DATABASE_URL: 'postgres://ambient' }).postgresURL,
+    ).toBe('postgres://ambient')
+    expect(parseWebAuthEnv({ ...env, DATABASE_URL: 'postgres://ambient' }).postgresURL).toBe(
+      'postgres://secret',
+    )
+    expect(() => parseWebAuthEnv(conventional)).toThrow('AB_POSTGRES_URL or DATABASE_URL')
+  })
+})

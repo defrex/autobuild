@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { inc as incrementSemver, valid as validSemver } from 'semver'
+import {
+  MISSING_POSTGRES_URL_MESSAGE,
+  POSTGRES_URL_VARIABLES,
+} from '../packages/postgres-store/src/env'
 import { readWorkspaceManifests } from './workspace-manifest-check'
 
 export const README_INSTALL_START = '<!-- release-install:start -->'
@@ -62,7 +66,10 @@ interface ReleaseConfig {
 
 export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild.git'
 export const MIGRATION_SCRIPT = 'postgres:migrate'
-export const MISSING_POSTGRES_URL_DIAGNOSTIC = 'AB_POSTGRES_URL is required and must be nonblank'
+export const MISSING_POSTGRES_URL_DIAGNOSTIC = MISSING_POSTGRES_URL_MESSAGE
+/** Every URL variable the migration would honor is withheld from the smoke. */
+const MIGRATION_URL_VARIABLES: readonly string[] = POSTGRES_URL_VARIABLES
+const MIGRATION_UNSET_FLAGS = MIGRATION_URL_VARIABLES.map((name) => `-u ${name}`).join(' ')
 
 const defaultOutput: ReleaseOutput = {
   log: (message) => console.log(message),
@@ -422,7 +429,7 @@ function migrationEnvironment(): Record<string, string> {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
-        entry[0] !== 'AB_POSTGRES_URL' && entry[1] !== undefined,
+        !MIGRATION_URL_VARIABLES.includes(entry[0]) && entry[1] !== undefined,
     ),
   )
 }
@@ -496,7 +503,7 @@ function canonicalSmokeRecoveryCommand(tag: string, commit: string): string {
     `git clone --depth 1 --branch ${tag} --single-branch ${CANONICAL_REPOSITORY_URL} "$checkout"`,
     `test "$(git -C "$checkout" rev-parse HEAD)" = '${commit}'`,
     '(cd "$checkout" && bun install --frozen-lockfile)',
-    `migration_output="$(cd "$checkout" && env -u AB_POSTGRES_URL bun run --silent ${MIGRATION_SCRIPT} 2>&1)" && migration_status=0 || migration_status=$?`,
+    `migration_output="$(cd "$checkout" && env ${MIGRATION_UNSET_FLAGS} bun run --silent ${MIGRATION_SCRIPT} 2>&1)" && migration_status=0 || migration_status=$?`,
     'test "$migration_status" -ne 0',
     `test "$migration_output" = '${MISSING_POSTGRES_URL_DIAGNOSTIC}'`,
     'rm -rf "$checkout"',

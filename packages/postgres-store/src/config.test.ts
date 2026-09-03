@@ -76,14 +76,37 @@ describe('PostgreSQL store environment', () => {
     ).toThrow('BLOB_STORE_ID')
   })
 
-  test('does not consult ambient database or AWS credential variables', () => {
+  test('accepts the conventional DATABASE_URL but never ambient AWS credentials', () => {
+    expect(
+      parsePostgresStoreEnv({
+        DATABASE_URL: 'postgres://ambient',
+        AB_BLOB_BACKEND: 'vercel',
+        AB_VERCEL_BLOB_ACCESS: 'private',
+        BLOB_READ_WRITE_TOKEN: 'token',
+      }).url,
+    ).toBe('postgres://ambient')
+    expect(
+      parsePostgresStoreEnv({
+        ...base,
+        DATABASE_URL: 'postgres://ambient',
+        AB_BLOB_BACKEND: 'vercel',
+        AB_VERCEL_BLOB_ACCESS: 'private',
+        BLOB_READ_WRITE_TOKEN: 'token',
+      }).url,
+    ).toBe('postgres://db/app')
     expect(() =>
       parsePostgresStoreEnv({
         DATABASE_URL: 'postgres://ambient',
         AB_BLOB_BACKEND: 's3',
+        AB_S3_BUCKET: 'b',
+        AB_S3_REGION: 'r',
         AWS_ACCESS_KEY_ID: 'ambient',
+        AWS_SECRET_ACCESS_KEY: 'ambient',
       }),
-    ).toThrow('AB_POSTGRES_URL')
+    ).toThrow('AB_S3_ACCESS_KEY_ID')
+    expect(() => parsePostgresStoreEnv({ AB_BLOB_BACKEND: 's3' })).toThrow(
+      'AB_POSTGRES_URL or DATABASE_URL',
+    )
   })
 
   test('root full-stack manifest has no blob provider SDK dependency', async () => {

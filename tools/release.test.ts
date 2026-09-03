@@ -137,7 +137,7 @@ function harness(
         return {
           exitCode: 1,
           stdout: '',
-          stderr: 'AB_POSTGRES_URL is required and must be nonblank\n',
+          stderr: 'AB_POSTGRES_URL or DATABASE_URL is required and must be nonblank\n',
         }
       }
       return spawnCommand(request)
@@ -279,6 +279,7 @@ describe('release orchestration', () => {
     for (const request of smokeBunRequests) {
       expect(request.env).toBeDefined()
       expect(request.env).not.toHaveProperty('AB_POSTGRES_URL')
+      expect(request.env).not.toHaveProperty('DATABASE_URL')
     }
     const pushIndex = testHarness.requests.findIndex(
       (request) => request.command === 'git' && request.args[0] === 'push',
@@ -409,7 +410,7 @@ describe('release orchestration', () => {
     expect(message).toContain('canonical GitHub-tag migration smoke failed')
     expect(message).toContain('https://github.com/defrex/autobuild.git')
     expect(message).toContain('bun install --frozen-lockfile')
-    expect(message).toContain('env -u AB_POSTGRES_URL')
+    expect(message).toContain('env -u AB_POSTGRES_URL -u DATABASE_URL')
     expect(message).toContain('gh release create v2.0.1')
     expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
     const head = (await command(fixture.root, 'git', ['rev-parse', 'HEAD'])).stdout.trim()

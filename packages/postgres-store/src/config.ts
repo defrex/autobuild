@@ -1,5 +1,6 @@
 import { S3Client } from '@aws-sdk/client-s3'
 import type { Clock } from 'autobuild/plugin-sdk'
+import { resolvePostgresUrl } from './env'
 import { S3BlobStore } from './s3'
 import { openPostgresBuildStore, type PostgresBuildStore } from './store'
 import { VercelBlobStore } from './vercel'
@@ -43,7 +44,7 @@ export type PostgresStoreConfig =
     }
 
 export function parsePostgresStoreEnv(env: Env): PostgresStoreConfig {
-  const url = required(env, 'AB_POSTGRES_URL')
+  const url = resolvePostgresUrl(env)
   const backend = required(env, 'AB_BLOB_BACKEND')
   const prefix = optional(env, 'AB_BLOB_PREFIX')
   if (backend === 's3') {

@@ -14,10 +14,11 @@ shown in the [complete environment reference](../../docs/configuration.md), then
 migrate the database (the migration is idempotent):
 
 ```sh
-AB_POSTGRES_URL=postgres://… bun run postgres:migrate
+DATABASE_URL=postgres://… bun run postgres:migrate
 ```
 
-Set `AB_STORE_SECRET`, `AB_POSTGRES_URL`, one blob backend, and the web/auth
+Set `AB_STORE_SECRET`, `DATABASE_URL` (or an explicit `AB_POSTGRES_URL`), one
+blob backend, and the web/auth
 variables below in that pinned checkout. Register a GitHub OAuth app with
 `http://localhost:3000/api/auth/callback/github` as its local callback, then run:
 
@@ -90,7 +91,8 @@ JSON 413 error naming that ceiling and does not mutate the store.
 3. Create a GitHub OAuth app whose callback is
    `https://YOUR_ORIGIN/api/auth/callback/github` and grant read-only email.
 4. Add the store/database/blob variables and every web/auth variable below to
-   each target environment. Generate an independent Better Auth secret with at
+   each target environment. A Neon database and a Blob store connected through
+   Vercel Storage inject `DATABASE_URL` and `BLOB_READ_WRITE_TOKEN` themselves. Generate an independent Better Auth secret with at
    least 32 high-entropy characters. `AB_HOST` and `PORT` are not needed.
 5. Run `bun run postgres:migrate` against production before the first deploy,
    then deploy and verify `/health`, browser sign-in, an operator control, a

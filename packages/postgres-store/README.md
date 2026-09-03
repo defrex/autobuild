@@ -14,10 +14,13 @@ then obtain and install that exact repository revision in a dedicated checkout:
 git clone --depth 1 --branch v0.6.0 --single-branch https://github.com/defrex/autobuild.git autobuild-v0.6.0
 cd autobuild-v0.6.0
 bun install --frozen-lockfile
-AB_POSTGRES_URL=postgres://… bun run postgres:migrate
+DATABASE_URL=postgres://… bun run postgres:migrate
 ```
 
 Replace `v0.6.0` with the selected release tag. The migration is idempotent.
+The adapter reads the conventional `DATABASE_URL`, which Vercel's Neon and
+Postgres storage integrations inject; set `AB_POSTGRES_URL` to override it
+explicitly.
 Schema diagnostics refer to the root `postgres:migrate` script in this pinned
 release checkout. The database identity needs permission to create tables,
 constraints, and migration markers during migration and to select, insert,

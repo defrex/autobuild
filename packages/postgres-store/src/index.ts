@@ -6,6 +6,8 @@ export {
 } from './auth-schema'
 export { openPostgresBuildStoreFromEnv, parsePostgresStoreEnv } from './config'
 export type { PostgresStoreConfig } from './config'
+export { MISSING_POSTGRES_URL_MESSAGE, POSTGRES_URL_VARIABLES, resolvePostgresUrl } from './env'
+export type { PostgresEnv } from './env'
 export { S3BlobStore, blobPath } from './s3'
 export type { S3BlobStoreOptions } from './s3'
 export {
