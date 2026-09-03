@@ -75,7 +75,8 @@ with `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
 and provide `LINEAR_API_KEY` on the service to pass every request to the
 existing Linear adapter. That key never belongs on dispatcher or browser
 hosts. Team and claim/create policy arrive per request from repository config. The signed-in web Tickets surface uses the same durable effective config, discovers lifecycle names from this configured backend, and polls every two seconds. Its create/edit/move/block operations are delegated through short-lived attributed operator tokens; provider credentials and bearer tokens never reach the browser.
-Run the migration before deployment; it adds separately versioned ticket and
+Run the migration before serving (`bun run deploy:build` does so inside a
+hosted build); it adds separately versioned ticket and
 Better Auth schemas without changing an existing BuildStore v1 marker. Startup
 never creates or changes schema.
 
@@ -86,17 +87,21 @@ JSON 413 error naming that ceiling and does not mutate the store.
 ## Deploy to Vercel
 
 1. Import this repository and select its repository root as the project root.
-2. Select Bun. The checked-in `vercel.json` pins Bun 1.4.x; use `bun run build`
-   and the Next.js output. Pages and machine routes are one deployment.
+2. Select Bun. The checked-in `vercel.json` pins Bun 1.4.x and sets the build
+   command to `bun run deploy:build`, which runs the idempotent migration
+   against the deployment's own database URL and then builds the Next.js
+   output. Pages and machine routes are one deployment.
 3. Create a GitHub OAuth app whose callback is
    `https://YOUR_ORIGIN/api/auth/callback/github` and grant read-only email.
 4. Add the store/database/blob variables and every web/auth variable below to
    each target environment. A Neon database and a Blob store connected through
    Vercel Storage inject `DATABASE_URL` and `BLOB_READ_WRITE_TOKEN` themselves. Generate an independent Better Auth secret with at
    least 32 high-entropy characters. `AB_HOST` and `PORT` are not needed.
-5. Run `bun run postgres:migrate` against production before the first deploy,
-   then deploy and verify `/health`, browser sign-in, an operator control, a
-   ticket, and an artifact round-trip.
+5. Deploy, then verify `/health`, browser sign-in, an operator control, a
+   ticket, and an artifact round-trip. The build log names the database host
+   the migration prepared; the build fails, and nothing goes live, when no
+   database URL is configured or the existing schema is incompatible with the
+   release being deployed.
 
 The shape follows Vercel's [Bun runtime](https://vercel.com/docs/functions/runtimes/bun).
 The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'

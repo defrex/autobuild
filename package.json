@@ -65,6 +65,7 @@
     "dev": "bun run --bun next dev",
     "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "build": "bun run --bun next build",
+    "deploy:build": "bun run postgres:migrate && bun run build",
     "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",

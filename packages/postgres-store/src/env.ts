@@ -18,3 +18,14 @@ export function resolvePostgresUrl(env: PostgresEnv): string {
   }
   throw new Error(MISSING_POSTGRES_URL_MESSAGE)
 }
+
+/** Credential-free description of a connection URL for logs: host and database. */
+export function describePostgresTarget(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const database = parsed.pathname.replace(/^\/+/, '')
+    return database ? `${parsed.host}/${database}` : parsed.host
+  } catch {
+    return 'the configured database'
+  }
+}

@@ -29,7 +29,11 @@ DATABASE_URL=postgres://… bun run postgres:migrate
 ```
 
 Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
-`postgres:migrate` script is relative to that pinned checkout. The database
+`postgres:migrate` script is relative to that pinned checkout. A hosted build
+can run the same step itself: `bun run deploy:build` migrates against the
+deployment's database URL, logs the host it prepared, and then builds the web
+application, failing the build when no database URL is configured or the
+schema is incompatible. The database
 identity needs permission to create tables during migration and to select,
 insert, and update those tables at runtime. The complete run, deployment, and
 token procedure is in the [hosted service
