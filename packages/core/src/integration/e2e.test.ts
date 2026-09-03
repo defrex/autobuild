@@ -1145,6 +1145,104 @@ test('a2. reconcile merges the current base when main advances after conflict de
   expect(ofType(final, 'escalation.raised')).toEqual([])
 }, 30_000)
 
+test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile and merge', async () => {
+  const handlers = happyHandlers()
+  const artifactNotes = 'artifact-only implement notes\n'
+  let relocatedImplementNotes: string | undefined
+  let relocatedReconcileInput: string | undefined
+
+  handlers.implement = async (cli) => {
+    await cli.run(['context'])
+    const manifest = JSON.parse(await readFile(join(cli.ws, '.ab/context.json'), 'utf8')) as {
+      notesPath?: string
+    }
+    if (manifest.notesPath === undefined) throw new Error('implement context omitted notesPath')
+    relocatedImplementNotes = manifest.notesPath
+    expect(relocatedImplementNotes).not.toBe('.ab/implement-notes.md')
+    await writeFileIn(cli.ws, 'rate-limit.txt', 'throttle after 5\n')
+    await writeFileIn(cli.ws, 'ok.marker', 'ok\n')
+    await commitAll(cli.ws, 'implement without phase scratch')
+    const notes = await writeFileIn(cli.ws, manifest.notesPath, artifactNotes)
+    await cli.run(['done', '--notes', notes])
+  }
+
+  handlers.reconcile = async (cli) => {
+    await cli.run(['context'])
+    const manifest = JSON.parse(await readFile(join(cli.ws, '.ab/context.json'), 'utf8')) as {
+      notesPath?: string
+      conflict?: { baseSha: string }
+      materialized: Record<string, 'derived' | { kind: string; rev: number }>
+    }
+    const input = Object.entries(manifest.materialized).find(
+      ([, source]) => source !== 'derived' && source.kind === 'implement-notes',
+    )
+    if (input === undefined) throw new Error('reconcile context omitted implement notes')
+    relocatedReconcileInput = `.ab/${input[0]}`
+    expect(relocatedReconcileInput).not.toBe('.ab/implement-notes.md')
+    expect(await readFile(join(cli.ws, relocatedReconcileInput), 'utf8')).toBe(artifactNotes)
+    expect(await readFile(join(cli.ws, '.ab/implement-notes.md'), 'utf8')).toBe(
+      'repository base notes\n',
+    )
+    if (manifest.conflict === undefined) throw new Error('reconcile context omitted base SHA')
+    const merge = await spawnExec(
+      ['git', ...GIT_ID, 'merge', '--no-edit', manifest.conflict.baseSha],
+      { cwd: cli.ws },
+    )
+    expect(merge.exitCode).toBe(0)
+    expect(await readFile(join(cli.ws, '.ab/implement-notes.md'), 'utf8')).toBe(
+      'base advanced notes\n',
+    )
+    if (manifest.notesPath === undefined) throw new Error('reconcile context omitted notesPath')
+    const notes = await writeFileIn(
+      cli.ws,
+      manifest.notesPath,
+      'Inherited the base scratch update.\n',
+    )
+    await cli.run(['done', '--notes', notes])
+  }
+
+  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
+  await writeFileIn(h.origin, '.ab/implement-notes.md', 'repository base notes\n')
+  await commitAll(h.origin, 'base: legacy tracked Autobuild notes')
+  await git(['push', '-q', 'origin', 'main'], h.origin)
+
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  expect((await h.runLatest()).prState).toBe('open')
+  expect(textContent((await h.store.getArtifact(SLUG, 'implement-notes'))!)).toBe(artifactNotes)
+
+  // Main changes the tracked collision after implementation. Reconcile must
+  // merge it normally, without skip-worktree recovery or notes churn.
+  await writeFileIn(h.origin, '.ab/implement-notes.md', 'base advanced notes\n')
+  const advancedBase = await commitAll(h.origin, 'base: advance legacy tracked notes')
+  await git(['push', '-q', 'origin', 'main'], h.origin)
+  h.clock.advance(3_600_001)
+  h.forge.setPrState(1, { state: 'open', mergeable: false })
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), conflicted: 1 })
+  expect((await h.runLatest()).prState).toBe('open')
+
+  const events = await h.events(SLUG)
+  expect(ofType(events, 'reconcile.started')[0]?.payload.baseSha).toBe(advancedBase)
+  expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
+  expect(relocatedImplementNotes).toBeDefined()
+  expect(relocatedReconcileInput).toBeDefined()
+  const trackedObservations = ofType(events, 'observation.recorded').filter((event) =>
+    event.payload.refs?.includes('phase-scratch:tracked-at-provisioned-base'),
+  )
+  expect(trackedObservations).toHaveLength(1)
+  expect(trackedObservations[0]?.payload.files).toEqual(['.ab/implement-notes.md'])
+  expect(h.cliErrors).toEqual([])
+
+  h.forge.setPrState(1, { state: 'merged', sha: 'legacy-scratch-squash' })
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+  expect(reduceBuild(await h.events(SLUG)).outcome).toBe('merged')
+  expect(await git(['show', `${BRANCH}:.ab/implement-notes.md`], h.origin)).toBe(
+    'base advanced notes',
+  )
+  expect(await git(['log', '-p', BRANCH, '--', '.ab/implement-notes.md'], h.origin)).not.toContain(
+    artifactNotes.trim(),
+  )
+}, 30_000)
+
 // ── a3. Conditional verify uses each cycle's live tree diff ──────────────────
 
 test('a3. conditional verify skips initially, then re-evaluates after reconcile against the refreshed base', async () => {

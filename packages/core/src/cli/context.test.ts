@@ -814,6 +814,23 @@ describe('buildContext — tracked legacy scratch', () => {
     if (observation?.type !== 'observation.recorded') throw new Error('missing observation')
     expect(observation.payload.files).toEqual(['.ab/implement-notes.md'])
     expect((await runGit('ls-files', '-v', '.ab/implement-notes.md')).startsWith('H ')).toBe(true)
+
+    // A later base update to the colliding tracked path must merge normally:
+    // context introduced no skip-worktree/assume-unchanged state and kept the
+    // index/worktree copy clean while generated notes remain ignored.
+    const baseBranch = (await runGit('rev-parse', '--abbrev-ref', 'HEAD')).trim()
+    await runGit('checkout', '-qb', 'feature')
+    await writeFile(join(workspace, 'feature.txt'), 'feature\n')
+    await runGit('add', 'feature.txt')
+    await runGit('commit', '-qm', 'feature work')
+    await runGit('checkout', '-q', baseBranch)
+    await writeFile(join(workspace, '.ab/implement-notes.md'), 'advanced base content\n')
+    await runGit('add', '-f', '.ab/implement-notes.md')
+    await runGit('commit', '-qm', 'advance tracked scratch')
+    await runGit('checkout', '-q', 'feature')
+    await runGit('merge', '--no-edit', baseBranch)
+    expect(await abFile('implement-notes.md')).toBe('advanced base content\n')
+    expect((await runGit('status', '--porcelain', '--', '.ab')).trim()).toBe('')
   })
 })
 
