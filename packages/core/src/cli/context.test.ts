@@ -10,7 +10,9 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import type { IdSource } from '../ids'
 import type { Feedback, Finding } from '../ontology'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import type { MemoryBuildStore } from '../store/memory'
 import { buildContext } from './context'
 import { BUILD, makeEnv, seedStore } from './testkit'
@@ -748,6 +750,70 @@ describe('buildContext — reconcile (§8.3: conflict {baseSha} from phase start
       escalation: 'esc_r1',
       answer: 'Keep trying, base settled.',
     })
+  })
+})
+
+describe('buildContext — tracked legacy scratch', () => {
+  test('preserves tracked bytes, relocates notes, ignores generated files, and observes once', async () => {
+    const runGit = async (...args: string[]): Promise<string> => {
+      const result = await spawnExec(['git', ...args], { cwd: workspace })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      return result.stdout
+    }
+    await runGit('init', '-q')
+    await runGit('config', 'user.name', 'Test')
+    await runGit('config', 'user.email', 'test@example.com')
+    await mkdir(join(workspace, '.ab'))
+    await writeFile(join(workspace, '.ab/implement-notes.md'), 'repository content\n')
+    await runGit('add', '-f', '.ab/implement-notes.md')
+    await runGit('commit', '-qm', 'legacy scratch')
+    const baseSha = (await runGit('rev-parse', 'HEAD')).trim()
+    await seedPlanApproved()
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: workspace,
+        path: workspace,
+        branch: `ab/${BUILD}`,
+        base: { source: 'remote', sha: baseSha },
+      },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 1 },
+    })
+    let nextId = 0
+    const ids: IdSource = (prefix) => `${prefix}_${++nextId}`
+    const deps = {
+      store,
+      env: makeEnv({ phase: 'implement', round: 1 }),
+      workspacePath: workspace,
+      exec: spawnExec,
+      ids,
+    }
+
+    const first = await buildContext(deps)
+    expect(first.notesPath).toBe('.ab/generated/1/implement-notes.md')
+    expect(await abFile('implement-notes.md')).toBe('repository content\n')
+    expect((await runGit('status', '--porcelain', '--', '.ab')).trim()).toBe('')
+    expect((await runGit('check-ignore', first.notesPath!)).trim()).toBe(first.notesPath!)
+    expect(await buildContext(deps)).toEqual(first)
+    expect(await abFile('implement-notes.md')).toBe('repository content\n')
+    expect((await runGit('status', '--porcelain', '--', '.ab')).trim()).toBe('')
+    const observations = (await store.getEvents(BUILD)).filter(
+      (event) =>
+        event.type === 'observation.recorded' &&
+        event.payload.refs?.includes('phase-scratch:tracked-at-provisioned-base'),
+    )
+    expect(observations).toHaveLength(1)
+    const observation = observations[0]
+    expect(observation?.type).toBe('observation.recorded')
+    if (observation?.type !== 'observation.recorded') throw new Error('missing observation')
+    expect(observation.payload.files).toEqual(['.ab/implement-notes.md'])
+    expect((await runGit('ls-files', '-v', '.ab/implement-notes.md')).startsWith('H ')).toBe(true)
   })
 })
 
