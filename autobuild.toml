@@ -96,10 +96,12 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
-# Ticket source and lifecycle states. LINEAR_API_KEY is a secret: set it in the
-# environment (a local .env works), never here.
+# Ticket source and lifecycle states. Tickets are served by the hosted Autobuild
+# service (AB_STORE / AB_TOKEN in the dispatcher's environment); the service
+# holds LINEAR_API_KEY and forwards to the Linear team below. Nothing secret
+# lives here.
 [tickets]
-source = "linear"
+source = "hosted"
 teamKey = "AUT"                 # Linear team key ("Auto-build")
 readyState = "Todo"             # sole ready gate here; team AUT has no "Ready" state. Case-sensitive.
 readyLabels = []                # additional label gate ([] = none)
