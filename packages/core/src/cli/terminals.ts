@@ -39,6 +39,11 @@ import {
   type ReviewVerdictKind,
 } from '../ontology'
 import type { Forge } from '../ports/types'
+import {
+  phaseScratchRejection,
+  reconcileScratchViolations,
+  scratchPathsTouchedInRange,
+} from '../ports/workspace/phase-scratch'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
@@ -408,6 +413,13 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       // Resolve the current target and focused divergence BEFORE publication
       // or deposit. A misleading range is worse than rejecting this terminal.
       const { branch, base, head } = await implementationReviewBoundary(deps, events)
+      const scratchPaths = await scratchPathsTouchedInRange(
+        deps.exec,
+        deps.workspacePath,
+        base,
+        head,
+      )
+      if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
       // Push BEFORE the event (walkthrough §8.7 order): a push without an
       // event is a harmless retry — the re-run pushes the same branch again —
       // but an event without a push breaks cross-sandbox resume, which
@@ -550,6 +562,13 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
             'into this branch first (§15.7, D1: never rebase)',
         )
       }
+      const scratchPaths = await reconcileScratchViolations(
+        deps.exec,
+        deps.workspacePath,
+        head,
+        parts.slice(1),
+      )
+      if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
       const branch = await buildBranch(deps)
       // Regular push, NEVER force (D1): the merge commit extends the branch;
       // rewriting it would sever the SHAs recorded in implement.completed.

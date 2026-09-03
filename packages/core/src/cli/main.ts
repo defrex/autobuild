@@ -362,7 +362,9 @@ function renderManifest(manifest: ContextManifest): string[] {
     `context materialized for ${manifest.build} — ${manifest.phase}@${manifest.round}`,
     `required deposits: ${manifest.required.join(', ') || '(none)'}`,
     `allowed terminals: ${manifest.allowedTerminals.join(', ')}`,
+    `manifest: ${manifest.manifestPath}`,
   ]
+  if (manifest.notesPath !== undefined) lines.push(`notes path: ${manifest.notesPath}`)
   if (manifest.commitRange !== undefined) {
     lines.push(`commit range: ${manifest.commitRange.base}..${manifest.commitRange.head}`)
   }

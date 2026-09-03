@@ -465,6 +465,23 @@ describe('ab done — implement', () => {
     expect(await runGit(['ls-files', '.ab'], workspace)).toBe('')
   })
 
+  test('rejects scratch touched and then reverted anywhere in the published range', async () => {
+    await mkdir(join(workspace, '.ab'))
+    await writeFile(join(workspace, '.ab/implement-notes.md'), 'leaked notes\n')
+    await runGit(['add', '-f', '.ab/implement-notes.md'], workspace)
+    await runGit([...GIT_ID, 'commit', '-qm', 'leak phase notes'], workspace)
+    await runGit(['rm', '-q', '.ab/implement-notes.md'], workspace)
+    await runGit([...GIT_ID, 'commit', '-qm', 'remove phase notes'], workspace)
+    const deps = implementDeps()
+
+    await expect(
+      done(deps, { notes: await stash('safe-notes.md', 'not deposited\n') }),
+    ).rejects.toThrow(/publication rejected[\s\S]*\.ab\/implement-notes\.md[\s\S]*retry completion/)
+    expect(deps.forge.pushes).toEqual([])
+    expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+    expect(await eventTypes()).not.toContain('implement.completed')
+  })
+
   test('refreshes a resumed round to the target history the branch absorbed', async () => {
     const deps = implementDeps()
     const notes = await stash('notes.md', 'implemented rate limiting\n')
@@ -1449,6 +1466,38 @@ describe('ab done — reconcile', () => {
     })
     const deposited = await store.getArtifact(BUILD, 'reconcile-notes')
     expect(textContent(deposited!)).toBe('resolved conflicts against main\n')
+  })
+
+  test('rejects force-added reconcile notes in the merge commit before push or deposit', async () => {
+    await runGit(['checkout', '-q', 'main'], workspace)
+    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    await runGit([...GIT_ID, 'merge', '--no-ff', '-m', 'merge main', 'main'], workspace)
+    await mkdir(join(workspace, '.ab'))
+    const notes = join(workspace, '.ab/reconcile-notes.md')
+    await writeFile(notes, 'must stay scratch\n')
+    await runGit(['add', '-f', '.ab/reconcile-notes.md'], workspace)
+    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit'], workspace)
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+    })
+
+    await expect(done(deps, { notes })).rejects.toThrow(
+      /publication rejected[\s\S]*\.ab\/reconcile-notes\.md[\s\S]*retry completion/,
+    )
+    expect(deps.forge.pushes).toEqual([])
+    expect(await store.getArtifact(BUILD, 'reconcile-notes')).toBeNull()
+    expect(await eventTypes()).not.toContain('reconcile.completed')
+
+    await runGit(['rm', '--cached', '-q', '.ab/reconcile-notes.md'], workspace)
+    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit'], workspace)
+    await rm(join(workspace, '.ab'), { recursive: true })
+    const retryNotes = await stash('retry-reconcile-notes.md', 'safe notes\n')
+    const retried = await done(deps, { notes: retryNotes })
+    expect(retried.type).toBe('reconcile.completed')
+    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
   })
 
   test('detached merge HEAD publishes to the durable branch before completion', async () => {

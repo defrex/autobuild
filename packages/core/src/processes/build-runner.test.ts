@@ -315,6 +315,9 @@ interface HarnessOptions {
   finalizeHeads?: Array<FinalizeGitResult<string>>
   /** Successive ancestry checks for changed finalize heads. */
   finalizeAncestors?: Array<FinalizeGitResult<boolean>>
+  /** Commits and first-parent topology exposed to the finalize scratch guard. */
+  finalizeCommits?: string[]
+  finalizeCommitParents?: Record<string, string[]>
   forge?: FakeForge
   sessionEnv?: Record<string, string>
   /** Optional nonconforming/runtime-specific seam; scripted journals remain on Harness.runner. */
@@ -462,6 +465,18 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
         stderr: '',
         exitCode: 0,
       }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'rev-list' && cmd[2] === '--reverse') {
+      return {
+        stdout: options.finalizeCommits?.map((commit) => `${commit}\n`).join('') ?? '',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    if (cmd[0] === 'git' && cmd[1] === 'rev-list' && cmd[2] === '--parents') {
+      const commit = cmd.at(-1)!
+      const parents = options.finalizeCommitParents?.[commit] ?? ['sha-head-1']
+      return { stdout: `${[commit, ...parents].join(' ')}\n`, stderr: '', exitCode: 0 }
     }
     if (cmd[0] === 'git' && cmd[1] === 'status') {
       const status = finalizeStatuses[
@@ -2052,12 +2067,31 @@ describe('finalize post-step publication', () => {
       headSha: FINALIZE_HEAD,
     })
     expect(selectPublishedBranchHead(events)).toBe(FINALIZE_HEAD)
-    expect(h.execCalls.slice(-4).map((call) => call.cmd)).toEqual([
+    expect(h.execCalls.slice(-5).map((call) => call.cmd)).toEqual([
       ['git', 'status', '--porcelain'],
       ['git', 'status', '--porcelain'],
       ['git', 'rev-parse', 'HEAD'],
       ['git', 'merge-base', '--is-ancestor', 'sha-head-1', FINALIZE_HEAD],
+      ['git', 'rev-list', '--reverse', `sha-head-1..${FINALIZE_HEAD}`],
     ])
+  })
+
+  test('scratch commits fail tolerantly with an observation and no push', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ''],
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+      finalizeCommits: [FINALIZE_HEAD],
+      finalizeCommitParents: { [FINALIZE_HEAD]: ['sha-head-1'] },
+      verifyDiffs: [{ paths: ['.ab/release-notes.md'] }],
+    })
+
+    await h.br.step()
+    expect(h.forge.pushes).toEqual([])
+    await expectFailureTolerance(h, 'publication rejected')
+    const observation = ofType(await h.store.getEvents(SLUG), 'observation.recorded').at(-1)
+    expect(observation?.payload.summary).toContain('.ab/release-notes.md')
+    expect(observation?.payload.summary).toContain('retry completion')
   })
 
   test('an unchanged HEAD creates and pushes nothing', async () => {

@@ -76,6 +76,7 @@ import type {
   Forge,
 } from '../ports/types'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
+import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/workspace/phase-scratch'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
@@ -1078,6 +1079,13 @@ export class BuildRunner {
         const head = await this.resolveFinalizeHead()
         if (head !== durableHead) {
           await this.requirePublishedHeadAncestor(durableHead, head)
+          const scratchPaths = await scratchPathsTouchedInRange(
+            this.deps.exec,
+            this.deps.workspacePath,
+            durableHead,
+            head,
+          )
+          if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
           await this.deps.forge.pushBranch(this.deps.workspacePath, this.deps.branch)
           pushedHead = head
         }
