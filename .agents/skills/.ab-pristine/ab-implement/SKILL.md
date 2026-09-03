@@ -12,8 +12,10 @@ You never push — the push is plumbing that happens when you finish.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/context.json` (the manifest), `.ab/spec.md`,
-   `.ab/plan.md` (approved), your own prior-round notes, every verify report
+1. Run `ab context`. Read the manifest path printed by the command (normally
+   `.ab/context.json`); its `materialized` entries are the actual input paths
+   and may be relocated when a legacy repository tracks a conventional path.
+   You get the approved spec and plan, your own prior-round notes, every verify report
    deposited so far under `.ab/verify/`, and this round's feedback when the
    round has any — at most one of `.ab/findings.json` (code-review findings), a
    failed verify step's report in `.ab/verify/`, or `.ab/guidance.json` (a human
@@ -25,12 +27,10 @@ You never push — the push is plumbing that happens when you finish.
 3. Run the repo's checks yourself before finishing (the config's typecheck /
    lint / test commands). A verify failure that a local run would have caught
    is a wasted round trip.
-4. Write `.ab/implement-notes.md` — what you did, where you deviated from
-   the plan and why, what the reviewer should look at hardest — then:
-
-   ```
-   ab done --notes .ab/implement-notes.md
-   ```
+4. Write the manifest's `notesPath` (normally `.ab/implement-notes.md`) — what
+   you did, where you deviated from the plan and why, what the reviewer should
+   look at hardest — then run `ab done --notes <notesPath>`. The notes bytes
+   reach the store only through this flag; the file is never committed.
 
    `ab done` requires a **clean worktree** (everything committed) and the
    notes deposit; it validates, then the branch is pushed and the phase
@@ -65,6 +65,8 @@ You never push — the push is plumbing that happens when you finish.
   `.ab/findings.json` does not exist and no verify step is routed back — the
   answer is the whole of your feedback. With no `feedback` field at all, this
   round has none: build the plan.
+- **Never stage or commit anything under `.ab/`, including with `git add -f`.**
+  It is disposable phase scratch, not part of the build deliverable.
 - **Never rebase, never force-push, never touch the remote.** Local commits
   only; the boundary push is not yours.
 - If the plan is unimplementable as written (the code contradicts its

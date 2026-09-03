@@ -14,9 +14,10 @@ provenance, so it is banned in this system.
 
 ## Session shape
 
-1. Run `ab context`. You get `.ab/spec.md`, `.ab/plan.md`,
-   `.ab/implement-notes.md`, the conflict info (`baseSha` in
-   `.ab/context.json`), and — when a human answered an escalation a previous
+1. Run `ab context`. Read the manifest path printed by the command (normally
+   `.ab/context.json`) and use its `materialized` paths for the spec, plan, and
+   implement notes; legacy tracked paths may relocate them. It also contains
+   conflict info (`baseSha`) and — when a human answered an escalation a previous
    attempt raised — `.ab/guidance.json`, their answer to it. Kernel plumbing
    fetched the PR's configured base and resolved this SHA immediately before
    your session, so the commit already exists locally; it is not the older
@@ -31,12 +32,10 @@ provenance, so it is banned in this system.
 3. Textual conflicts with one faithful resolution: resolve them. Then run
    the repo's checks (typecheck, tests) — a merge that compiles but fails
    tests is not resolved.
-4. Write `.ab/reconcile-notes.md` — each conflicted file, what collided,
-   how you resolved it and why that preserves both sides — then:
-
-   ```
-   ab done --notes .ab/reconcile-notes.md
-   ```
+4. Write the manifest's `notesPath` (normally `.ab/reconcile-notes.md`) with
+   each conflicted file, what collided, and why the resolution preserves both
+   sides; then run `ab done --notes <notesPath>`. The notes bytes reach the
+   store only through this flag; the file is never committed.
 
    `ab done` requires the merge commit to exist and the worktree to be
    clean; the push is plumbing. Verification re-runs in full afterward
@@ -58,6 +57,10 @@ this attempt — resolve the way it says — while the spec remains the contract
 this phase is measured against; if the two cannot both be satisfied, escalate
 again rather than guess. Reconcile has no review round, so guidance is the only
 feedback it ever receives.
+
+Never stage or commit anything under `.ab/`, including with `git add -f`.
+Tracked legacy scratch needs no index flags or stash: leave it untouched and
+let the normal merge inherit, update, or delete it from a parent.
 
 A wrong guess here lands directly on main. Exactly one terminal command:
 `ab done` or `ab escalate`.
