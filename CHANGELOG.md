@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#252](https://github.com/defrex/autobuild/pull/252) — Prevent phase scratch from entering published commits
 - [#251](https://github.com/defrex/autobuild/pull/251) — Add ticket queue grooming to the web dashboard
 - [#250](https://github.com/defrex/autobuild/pull/250) — Add authenticated hosted web dashboard
 - [#249](https://github.com/defrex/autobuild/pull/249) — Preserve harvest no-action frontend report
