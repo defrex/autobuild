@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T20:58:24Z",
+  "generatedAt": "2026-09-07T23:30:00Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -255,7 +255,7 @@
       "name": "Field",
       "kind": "input",
       "refersTo": "field",
-      "description": "Slack label above a reverse-video well; no stroke, square, one row minimum.",
+      "description": "Slack label above a reverse-video well; no stroke, square, one row minimum. Ticket markdown uses one 14-row source-preserving rendered editor with visible marks and ordinary Tab navigation.",
       "html": "<div class=\"ds-tt\"><label class=\"ds-field\"><span>resolution</span><span class=\"ds-selectwrap\"><select><option>Guidance</option><option>Retry</option><option>Dismiss</option></select></span></label><label class=\"ds-field ds-gap\"><span>message</span><textarea placeholder=\"answer the blocker\"></textarea></label></div>",
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-field { display: grid; max-width: 80ch; } .ds-gap { margin-top: var(--row, 22px); } .ds-field > span:first-child { color: var(--slack, #888888); } .ds-field select, .ds-field textarea { font: inherit; color: var(--ink, #e6e6e6); background: var(--well, #141414); border: 0; border-radius: 0; margin: 0; width: 100%; min-height: var(--row, 22px); padding: 0 1ch; caret-color: var(--live, #55b8b8); } .ds-field textarea { min-height: calc(var(--row, 22px) * 4); resize: vertical; } .ds-field textarea::placeholder { color: var(--slack, #888888); } .ds-field select { appearance: none; padding-right: 3ch; } .ds-selectwrap { position: relative; display: inline-block; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-field select:focus-visible, .ds-field textarea:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
     },
@@ -284,12 +284,12 @@
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, monospace); background: var(--ground, #000); padding: var(--row, 22px) 1ch; } .ds-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; } .ds-skeleton-dispatch { display: flex; column-gap: 2ch; height: var(--row, 22px); margin: var(--row, 22px) 0; } .ds-skeleton-dispatch span, .ds-skeleton-row span { display: block; height: var(--row, 22px); background: var(--well, #141414); } .ds-skeleton-dispatch span:nth-child(1) { width: 14ch; } .ds-skeleton-dispatch span:nth-child(2) { width: 20ch; } .ds-skeleton-dispatch span:nth-child(3) { width: 12ch; } .ds-skeleton-row { display: grid; grid-template-columns: 2ch minmax(0, 1fr) 12ch; grid-template-rows: var(--row, 22px) var(--row, 22px); height: calc(var(--row, 22px) * 3); } .ds-skeleton-identity { grid-column: 2; width: min(34ch, 70%); } .ds-skeleton-state { grid-column: 3; justify-self: end; width: 10ch; } .ds-skeleton-row .ds-skeleton-steps { grid-row: 2; grid-column: 2 / 4; width: min(62ch, 80%); background: var(--rule, #292929); }"
     },
     {
-      "name": "Well block",
+      "name": "Ticket queue and editable body",
       "kind": "card",
       "refersTo": "well-block",
-      "description": "Blocker, transcript, and markdown text sit in a reverse-video well; headings keep their # marks.",
-      "html": "<div class=\"ds-tt\"><h3 class=\"ds-h\">Unresolved blockers</h3><pre class=\"ds-block ds-alert\">! The plan needs a decision the spec does not make.\nTHE CONFLICT\nThe list row must withhold this explanation.</pre><div class=\"ds-markdown ds-gap\"><h2>Acceptance</h2><ul><li>Row shape matches the terminal</li><li>Status pinned right</li></ul></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-h { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--ink, #e6e6e6); } .ds-block { margin: 0; font: inherit; padding: 0 1ch; background: var(--well, #141414); white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(var(--row, 22px) * 24); overflow: auto; } .ds-alert { color: var(--alert, #d96868); } .ds-gap { margin-top: var(--row, 22px); } .ds-markdown { padding: 0 1ch; background: var(--well, #141414); overflow-wrap: anywhere; } .ds-markdown > * + * { margin-top: var(--row, 22px); } .ds-markdown h2 { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--title, #d7c84f); } .ds-markdown h2::before { content: \"## \"; color: var(--slack, #888888); font-weight: 400; } .ds-markdown ul { margin: 0; list-style: \"- \"; padding-left: 2ch; } .ds-markdown li + li { margin-top: 0; }"
+      "description": "The configured grooming-state queue opens its first row inline. The ticket body is one rendered, source-preserving editable well; headings, list markers, and rules keep their markdown marks.",
+      "html": "<div class=\"ds-tt\"><h3 class=\"ds-title\">BACKLOG <span>2</span></h3><div class=\"ds-ticket-row\"><b>&gt; CAP-201 Configure queue</b><span>autobuild:proposal</span></div><article class=\"ds-ticket-detail\"><div><span class=\"ds-slack\">state </span>Backlog <span class=\"ds-slack\">labels </span>autobuild:proposal</div><h3 class=\"ds-h\">Body</h3><div class=\"ds-markdown ds-editor\" role=\"textbox\" aria-label=\"Body\"><h2>Acceptance</h2><ul><li>The desk opens the first item</li><li>Tab leaves this editor</li></ul><hr></div><button class=\"ds-promote\">p Move to Todo</button></article></div>",
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-title { color: var(--title, #d7c84f); } .ds-title span { color: var(--ink, #e6e6e6); font-weight: 400; } .ds-ticket-row { display: grid; grid-template-columns: minmax(0, 1fr); padding-left: 2ch; } .ds-ticket-row > span, .ds-slack { color: var(--slack, #888); } .ds-ticket-detail { margin-left: 2ch; max-width: 100ch; } .ds-h { margin: var(--row, 22px) 0 0; font: inherit; font-weight: 700; } .ds-editor { min-height: calc(var(--row, 22px) * 8); padding: 0 1ch; background: var(--well, #141414); } .ds-markdown h2 { margin: 0; font: inherit; font-weight: 700; color: var(--title, #d7c84f); } .ds-markdown h2::before { content: \"## \"; color: var(--slack, #888); font-weight: 400; } .ds-markdown ul { margin: 0; list-style: \"- \"; padding-left: 2ch; } .ds-markdown hr { border: 0; color: var(--rule, #292929); } .ds-markdown hr::before { content: \"────────────────────────\"; } .ds-promote { height: var(--row, 22px); margin-top: var(--row, 22px); padding: 0 1ch; border: 2px solid currentColor; border-radius: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; }"
     }
   ],
   "narrative": {
@@ -301,7 +301,8 @@
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
       "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: default controls are ink outlines, secondary controls are ghost words, active states use reverse video, and the Fastext row carries four fixed-color outlines.",
-      "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion."
+      "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.",
+      "Tickets default to the configured grooming state, unfold below the selected row, and edit source markdown in the same rendered region."
     ],
     "rules": [
       {

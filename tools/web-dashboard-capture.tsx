@@ -164,29 +164,34 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     requires: ['BLOCKED ×2', LONG_FIXTURE_REPO],
   },
   {
-    id: 'tickets-detail-wide',
+    id: 'tickets-backlog-open-wide',
     width: 1440,
     height: 2400,
     requires: [
-      'TRIAGE',
-      'READY',
-      'DOING',
-      'blocked by',
-      'unsaved changes',
-      'Save changes',
-      'Preview',
-      'CLOSE',
-      'SAVE',
-      'NEW TICKET',
+      'BACKLOG',
+      'Todo',
+      'CAP-201',
+      'Capture fixture',
+      'The desk',
+      'unresolved',
       'OPEN BUILD',
+      'NEW TICKET',
     ],
+    forbids: ['Preview', '<textarea', 'TRIAGE', 'READY'],
   },
   {
-    id: 'tickets-narrow',
+    id: 'tickets-backlog-open-narrow',
     width: 390,
     height: 1800,
-    requires: ['TRIAGE', 'READY', 'blocked by', 'NEW TICKET'],
-    forbids: ['unsaved changes'],
+    requires: ['BACKLOG', 'Todo', 'Capture fixture', 'The desk', 'CLOSE'],
+    forbids: ['Preview', '<textarea', 'TRIAGE', 'READY'],
+  },
+  {
+    id: 'tickets-backlog-empty',
+    width: 1440,
+    height: 700,
+    requires: ['BACKLOG', 'Nothing is waiting in Backlog.'],
+    forbids: ['Preview', 'Loading', 'TRIAGE', 'READY'],
   },
   {
     id: 'signin-wide',
@@ -231,80 +236,54 @@ const FIXTURE_TRANSCRIPT: TranscriptPresentation = {
 }
 
 const FIXTURE_TICKET_BODY = [
-  '# Capture fixture: dashboard key legend',
+  '# Capture fixture',
   '',
-  'The terminal dashboard should show a **key legend** at the foot of the frame so an operator never has to guess a shortcut.',
+  'The configured queue should be quick to work through.',
   '',
   '## Acceptance criteria',
   '',
-  '- The legend lists every active key with its label.',
-  '- It changes with the selection: global, build, harvest.',
-  '- `--plain` mode prints the same legend once.',
+  '- The desk opens the first item.',
+  '- The desk keeps markdown marks visible.',
   '',
-  '> Parity note: the web dashboard mirrors this legend as its Fastext row.',
+  '---',
   '',
+  '[Reference](https://example.com/reference)',
 ].join('\n')
 
 /** Synthetic ticket data. CAP-* ids mark it as capture fixture, never real work. */
 function fixtureTicketQueue(): OperatorTicketQueue {
   return {
-    states: ['Triage', 'Ready', 'Doing', 'Done'],
+    states: ['Backlog', 'Todo', 'In Progress', 'Done'],
     diagnostics: [],
-    criteria: {},
+    criteria: { state: 'Backlog' },
+    triageState: 'Backlog',
+    readyState: 'Todo',
     tickets: [
       {
         ref: { id: 'CAP-201', source: 'fixture', url: 'https://tickets.example/CAP-201' },
         title: 'Show harvest proposals in the ticket queue',
-        body: 'Capture fixture body.',
+        body: FIXTURE_TICKET_BODY,
         labels: ['autobuild:proposal'],
-        state: 'Triage',
+        state: 'Backlog',
+        blockedBy: ['CAP-134'],
       },
       {
         ref: { id: 'CAP-202', source: 'fixture', url: 'https://tickets.example/CAP-202' },
         title: 'Retry transient forge errors during finalize',
         body: 'Capture fixture body.',
         labels: ['autobuild:proposal', 'forge'],
-        state: 'Triage',
-      },
-      {
-        ref: { id: 'CAP-134', source: 'fixture', url: 'https://tickets.example/CAP-134' },
-        title: 'Dashboard key legend',
-        body: FIXTURE_TICKET_BODY,
-        labels: ['dashboard'],
-        state: 'Ready',
-      },
-      {
-        ref: { id: 'CAP-138', source: 'fixture', url: 'https://tickets.example/CAP-138' },
-        title: 'Per-repository capacity override',
-        body: 'Capture fixture body.',
-        labels: ['dispatcher'],
-        state: 'Ready',
-        blockedBy: ['CAP-134'],
-      },
-      {
-        ref: { id: 'CAP-129', source: 'fixture', url: 'https://tickets.example/CAP-129' },
-        title: 'Parallel verify steps',
-        body: 'Capture fixture body.',
-        labels: ['pipeline'],
-        state: 'Doing',
-      },
-      {
-        ref: { id: 'CAP-131', source: 'fixture', url: 'https://tickets.example/CAP-131' },
-        title: 'Cache warm on deploy',
-        body: 'Capture fixture body.',
-        labels: [],
-        state: 'Done',
+        state: 'Backlog',
       },
     ],
   }
 }
 
 function fixtureTicketDetail(queue: OperatorTicketQueue): OperatorTicketDetail {
-  const ticket = queue.tickets.find((entry) => entry.ref.id === 'CAP-134')
-  if (!ticket) throw new Error('web dashboard capture: fixture ticket CAP-134 is missing')
+  const ticket = queue.tickets.find((entry) => entry.ref.id === 'CAP-201')
+  if (!ticket) throw new Error('web dashboard capture: fixture ticket CAP-201 is missing')
   return {
     ticket,
-    blockers: [],
+    blockers: [{ id: 'CAP-134', exists: true, resolved: false, blockedBy: [] }],
     build: {
       slug: 'dashboard-key-legend',
       status: 'running',
@@ -385,6 +364,7 @@ function tickets(queue: OperatorTicketQueue, extra: Partial<TicketsViewProps> = 
       onEdit={noop}
       onSave={noop}
       onMove={noop}
+      onPromote={noop}
       onBlock={noop}
       onCreate={noop}
       onToggleCreate={noop}
@@ -466,7 +446,8 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
       )
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
-    case 'tickets-detail-wide': {
+    case 'tickets-backlog-open-wide':
+    case 'tickets-backlog-open-narrow': {
       const detail = fixtureTicketDetail(queue)
       return shell(
         tickets(queue, {
@@ -477,13 +458,15 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
             body: detail.ticket.body,
             labels: [...detail.ticket.labels],
           },
-          dirty: true,
         }),
         { surface: 'tickets', model: models.happy },
       )
     }
-    case 'tickets-narrow':
-      return shell(tickets(queue), { surface: 'tickets', model: models.happy })
+    case 'tickets-backlog-empty':
+      return shell(tickets({ ...queue, tickets: [] }), {
+        surface: 'tickets',
+        model: models.happy,
+      })
     case 'signin-wide':
       return <SignIn providers={['github']} />
     case 'signin-error-narrow':
@@ -738,7 +721,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word and its red lines; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow outlines.',
     '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at reduced emphasis; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. In `tickets-narrow.png`, the contiguous first line is empty red then empty green; the second line is yellow `NEW TICKET` then empty cyan. The capture has deterministically verified all four slot elements in this order.',
-    '- [ ] Tickets frames: uppercase state headings in yellow with a white count, bold titles, gray labels, `blocked by` in yellow; the selected row carries `>`; detail shows the fields in dark wells, a Preview whose headings carry gray `#` marks, Move and Blockers sections, and an `unsaved changes` note; the footer reads CLOSE, SAVE, NEW TICKET, OPEN BUILD.',
+    '- [ ] Tickets frames: BACKLOG is the configured default and Todo is the promotion target. The selected row unfolds inline; its one body region renders yellow headings with visible `#` marks, `- ` list markers, and a rule before the title/label, Move, and Blockers controls. The narrow frame shows the open ticket as the centre view, and the empty frame is calm slack text.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',

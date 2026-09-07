@@ -282,13 +282,14 @@ A dispatcher-shaped neutral line followed by five build-row-shaped placeholders 
 Unfolds in place under the selected row after a box-drawing rule: a kv line (slack keys, ink values), Pipeline as a vertical step list with round or attempt counts, blockers as red well blocks, the answer composer, Sessions as a wrapped kv line with a cyan `open transcript` word, Transcript as prompt then well-block text. Every section is a bold ink heading with content directly beneath; sections are one row apart. The destructive path is two steps: `abort` shows a red `! abort <slug>? Enter confirms, Esc cancels` line and swaps the Fastext row to ABORT and CANCEL before anything writes.
 
 ### Inputs / Fields
-- **Style:** reverse-video well fill, ink text, 1ch side padding, one row minimum, no stroke, square. Selects hide the native arrow and draw a slack `▾` at the right; textareas start at 8 rows (14 in ticket detail) and resize vertically.
+- **Style:** reverse-video well fill, ink text, 1ch side padding, one row minimum, no stroke, square. Selects hide the native arrow and draw a slack `▾` at the right; ordinary textareas start at 8 rows and resize vertically.
+- **Editable body:** one 14-row-minimum well overlays source-preserving input and rendered markdown. Rendering follows each keystroke while the source marks remain visible: headings in title yellow with slack `#`, `##`, or `###`, `- ` list markers, 2ch-indented slack blockquotes, code on ground, and `─` horizontal rules. It has no toolbar, raw-text twin, or separate preview. Tab leaves the editor.
 - **Label:** a slack word on the row above the field.
 - **Focus:** the global 2px cyan outline; the caret is cyan.
 - **Placeholder:** slack.
 
 ### Ticket Row and Pages
-State pages are columns headed by the uppercase state name in title yellow with a weight-400 count in ink. Each row is a 2ch lane and the ticket id then bold title, with a slack meta line beneath (labels, `blocked by` in yellow). Hover turns the title cyan; the selected row shows the `>` lane. Markdown preview sits in a well and keeps its marks: headings in title yellow prefixed by a slack `#`, `##`, or `###`, `- ` list markers, 2ch-indented slack blockquotes, code on ground, `─` horizontal rules.
+Tickets open as one queue for the repository's configured grooming state, named verbatim in an uppercase title-yellow heading with a weight-400 count. The state filter reaches every other backend state. Each row is a 2ch lane and the ticket id then bold title, with a slack meta line beneath (labels, `blocked by` in yellow). The first row opens automatically; pointer and Up/Down move the selection, whose `>` lane marks the ticket. Its document detail unfolds directly under that row and the surrounding queue stays in view at 720px and wider. Below 720px the same inline detail occupies the centre until CLOSE. A configured-target action advances the open ticket and opens the row that takes its index, without changing queue order.
 
 ### Rule
 A one-row run of `─` in the rule color, unselectable, hidden from assistive technology. The only divider.
