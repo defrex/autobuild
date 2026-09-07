@@ -442,6 +442,10 @@ input.short {
 .tokens .am[data-am="cancelling"] {
   color: var(--warn);
 }
+/* A repository hold remains decision-relevant while surrounding row details dim. */
+.tokens .held {
+  color: var(--title);
+}
 .pr[data-pr="open"] {
   color: var(--live);
 }

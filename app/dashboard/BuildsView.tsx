@@ -592,7 +592,7 @@ function BuildRow({
                 PR {row.pr.state}
               </a>
             )}
-            {held && <span className="warn">(held)</span>}
+            {held && <span className="warn held">(held)</span>}
             {row.alsoPaused && <span className="warn">(paused)</span>}
           </span>
         )}

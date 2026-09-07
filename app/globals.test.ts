@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
+const buildsView = readFileSync(new URL('./dashboard/BuildsView.tsx', import.meta.url), 'utf8')
 const designSidecar = JSON.parse(
   readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
 ) as {
@@ -97,6 +98,11 @@ test('slack text on the well meets the text contrast floor', () => {
 
 test('component CSS contains no literal colors outside the initial root', () => {
   expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
+})
+
+test('held queued builds keep their canonical yellow warning while rows dim', () => {
+  expect(buildsView).toContain('<span className="warn held">(held)</span>')
+  expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
 })
 
 test('design sidecar preserves the fine-pointer lane contract', () => {
