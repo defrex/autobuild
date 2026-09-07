@@ -31,6 +31,7 @@
   --ink: var(--tt-white);
   --title: var(--tt-yellow);
   --live: var(--tt-cyan);
+  --lane-preview: var(--tt-cyan);
   --ok: var(--tt-green);
   --warn: var(--tt-yellow);
   --alert: var(--tt-red);
@@ -364,11 +365,20 @@ h3 {
 }
 .rowline .lane {
   color: var(--live);
-  font-weight: 700;
 }
+.row[data-hovered] .lane {
+  color: var(--lane-preview);
+  font-weight: 400;
+}
+.row[data-hovered] .lane::before,
 .row[data-selected] .lane::before,
 .trow[aria-pressed="true"] .lane::before {
   content: ">";
+}
+.row[data-selected] .lane,
+.trow[aria-pressed="true"] .lane {
+  color: var(--live);
+  font-weight: 700;
 }
 .rowhead {
   grid-column: 2 / 4;
