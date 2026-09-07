@@ -14,3 +14,11 @@ node_modules/
 .DS_Store
 .vercel
 .env*
+
+# impeccable design skill: downloaded platform binary and transient round state
+.agents/skills/impeccable/scripts/bin/
+.claude/skills/impeccable/scripts/bin/
+.impeccable/questions/
+.impeccable/review/
+.impeccable/build/
+.impeccable/mocks/

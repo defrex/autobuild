@@ -6,7 +6,9 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignoreUnknown": true
+    "ignoreUnknown": true,
+    // Vendored third-party skill code is not this repository's to format or lint.
+    "includes": ["**", "!.agents/skills/impeccable", "!.claude/skills/impeccable"]
   },
   "formatter": {
     "enabled": true,
