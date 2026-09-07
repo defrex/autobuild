@@ -124,8 +124,7 @@ product code, and the web app has a recorded design system. Any change under
   surface, `bolder`, `overdrive`, `live`, or a redesign) needs a human at the
   table and is never done inside an unattended build. Record the need with
   `ab observe` or stop with `ab escalate`. The open decisions listed in
-  `DESIGN.md` (page numbers, palette tuning) stay open until a human closes
-  them in a ticket.
+  `DESIGN.md` (page numbers) stay open until a human closes them in a ticket.
 - **Prove it with pixels.** `bun run capture:web-dashboard` renders the real
   views over the scripted dispatch models and screenshots them with a local
   Chromium into `.ab/web-dashboard-frames/`; open every PNG before finishing.

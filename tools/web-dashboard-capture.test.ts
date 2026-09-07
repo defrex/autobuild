@@ -150,6 +150,21 @@ test('multi-repository capture frame exposes the selector and both options', () 
   expect(html).toContain('<option>example/alternate</option>')
 })
 
+test('ticket narrow keeps two complete Fastext identity rows', () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'tickets-narrow')
+  if (!spec) throw new Error('tickets narrow frame spec is missing')
+  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const footer = html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0]
+
+  expect(footer).toContain('data-slot="red" data-empty="true"')
+  expect(footer).toContain('data-slot="green" data-empty="true"')
+  expect(footer).toContain('data-slot="yellow"><kbd>n</kbd><span>NEW TICKET</span>')
+  expect(footer).toContain('data-slot="cyan" data-empty="true"')
+  expect(() =>
+    checkEvidence(spec, html.replace('data-slot="cyan"', 'data-missing="cyan"')),
+  ).toThrow(/expected red, green, yellow, cyan Fastext slots/)
+})
+
 test('loading frames preserve shell landmarks and expose only one hidden announcement', () => {
   const fixtures = models()
   for (const id of ['builds-loading-wide', 'builds-loading-narrow']) {

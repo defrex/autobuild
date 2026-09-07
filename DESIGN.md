@@ -3,15 +3,15 @@ name: Autobuild operator
 description: The terminal dashboard's frame, broadcast on a black character grid where every color is a state.
 colors:
   ground: "#000000"
-  ink: "#ffffff"
-  title-yellow: "#ffff00"
-  live-cyan: "#00ffff"
-  ok-green: "#00ff00"
-  alert-red: "#ff3b3b"
-  nav-blue: "#0000ff"
-  slack: "#8a8a8a"
-  rule: "#2c2c2c"
-  well: "#1c1c1c"
+  ink: "#e6e6e6"
+  title-yellow: "#d7c84f"
+  live-cyan: "#55b8b8"
+  ok-green: "#65b868"
+  alert-red: "#d96868"
+  nav-blue: "#707dcc"
+  slack: "#888888"
+  rule: "#292929"
+  well: "#141414"
 typography:
   body:
     fontFamily: "JetBrains Mono, ui-monospace, Menlo, Consolas, DejaVu Sans Mono, monospace"
@@ -48,7 +48,7 @@ components:
     padding: "0 1ch"
   tab-active:
     backgroundColor: "{colors.nav-blue}"
-    textColor: "{colors.ink}"
+    textColor: "{colors.ground}"
     typography: "{typography.label}"
     padding: "0 1ch"
   word:
@@ -125,14 +125,14 @@ components:
 
 **Creative North Star: "Teletext Dispatch"**
 
-The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.
+The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each tempered teletext hue has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.
 
 The page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.
 
 The system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from reverse-video fills, and from box-drawing rules, all of which the terminal already uses.
 
 **Key Characteristics:**
-- Black ground, dark only; white ink; five saturated teletext primaries, each a state.
+- Black ground, dark only; softened ink; five muted teletext hues, each retaining its established job.
 - One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.
 - Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.
 - Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.
@@ -141,14 +141,14 @@ The system refuses the ops-console vocabulary: no sidebar, no metric cards, no p
 
 ## Colors
 
-The palette is the teletext primary set on black: saturated hues that each carry exactly one meaning, and three neutrals that carry none.
+The palette tempers the teletext primary set with lower chroma and brightness for long sessions on black. Every hue remains immediately recognizable and carries exactly one meaning; the neutrals carry none.
 
 ### Primary
-- **Title Yellow** (`title-yellow`): the repository name in the masthead, ticket-queue state headings, markdown headings and table heads. Doubles as the warn tone: PAUSED, PAUSING, CLEANING, ESCALATED status words, `(held)` and `(paused)` notes, OFF toggle words, provisional `[~]` steps, dirty-state and diagnostic notices.
-- **Live Cyan** (`live-cyan`): the current `[>]` step in bold, QUEUED and RESUMING status words, open pull requests, requested auto merge, links, selected and fine-pointer preview lane `>` glyphs, caret and focus outline, and every hover on a text control. Cyan means "this is where things are moving or where your pointer is".
-- **OK Green** (`ok-green`): done `[x]` steps, RUNNING status, merged pull requests, enabled auto merge, ON toggle words, the PR READY and MERGED imperatives. Green is quiet good news.
-- **Alert Red** (`alert-red`): BLOCKED, FAILED, and ABORTING status words, the BLOCKED and FAILED imperatives, conflicted pull requests, blocker text, setup errors, the abort confirmation line, the sign-in REFUSED word and refusal notice. Tuned from pure red to keep body text legible on black.
-- **Nav Blue** (`nav-blue`): the reverse-video fill behind the active surface tab, and nothing else. Blue is a place, not a state.
+- **Title Yellow** (`title-yellow`): a muted gold-yellow for the repository name in the masthead, ticket-queue state headings, markdown headings and table heads. Doubles as the warn tone: PAUSED, PAUSING, CLEANING, ESCALATED status words, `(held)` and `(paused)` notes, OFF toggle words, provisional `[~]` steps, dirty-state and diagnostic notices.
+- **Live Cyan** (`live-cyan`): a softened cyan for the current `[>]` step in bold, QUEUED and RESUMING status words, open pull requests, requested auto merge, links, selected and fine-pointer preview lane `>` glyphs, caret and focus outline, and every hover on a text control. Cyan means "this is where things are moving or where your pointer is".
+- **OK Green** (`ok-green`): a restrained green for done `[x]` steps, RUNNING status, merged pull requests, enabled auto merge, ON toggle words, and the PR READY and MERGED imperatives. Green is quiet good news.
+- **Alert Red** (`alert-red`): a tempered coral-red for BLOCKED, FAILED, and ABORTING status words, the BLOCKED and FAILED imperatives, conflicted pull requests, blocker text, setup errors, the abort confirmation line, the sign-in REFUSED word and refusal notice.
+- **Nav Blue** (`nav-blue`): a quiet periwinkle-blue reverse-video fill behind the active surface tab, and nothing else. It uses ground-colored ink for contrast. Blue is a place, not a state.
 
 ### Neutral
 - **Ground** (`ground`): the page, the only background at rest, and the ink on every reverse-video fill (tabs, buttons, Fastext cells, the flash).
@@ -156,6 +156,11 @@ The palette is the teletext primary set on black: saturated hues that each carry
 - **Slack** (`slack`): everything that recedes. Pending `[ ]` steps, key labels in kv lines, field labels, placeholders, separators, identity, closed pull requests, disabled words, and every dimmed row when another row has focus.
 - **Well** (`well`): the reverse-video field. Inputs, selects, textareas, transcript and blocker blocks, markdown preview, and the disabled state of the primary button. Also the dropped ink color of a disabled Fastext cell.
 - **Rule** (`rule`): the color of box-drawing rules only.
+
+### Contrast floor
+- Text on ground: ink 16.83:1, title/warn yellow 12.26:1, current/live cyan 8.93:1, done/running green 8.61:1, blocked/failed red 6.13:1, nav blue 5.49:1, and slack 5.92:1.
+- Ground-colored text on reverse-video fills uses the corresponding ratio: ink 16.83:1, yellow 12.26:1, cyan 8.93:1, green 8.61:1, red 6.13:1, and blue 5.49:1.
+- Resolved `nav-ink` on `nav-fill` is ground on nav blue at 5.49:1. Slack on the well is 5.20:1.
 
 ### Named Rules
 **The Color Is State Rule.** A saturated color appears only where it encodes the state it is assigned to. Yellow warns or titles, cyan is current, green is done, red is blocked or failed, blue is the active tab. Never use a primary for emphasis, decoration, or brand.
@@ -219,7 +224,7 @@ A one-row header in the natural-proportion display register. Repository name in 
 
 ### Navigation
 - **Style:** a line of uppercase bold tab words (BUILDS, TICKETS) padded 1ch, followed by the repo select only when two or more repositories are configured, with identity and `sign out` in slack pinned right. The `repo` label and selector are both absent when there is no choice.
-- **Active:** reverse video in nav blue fill with white ink; there is no underline or indicator glyph.
+- **Active:** reverse video in nav blue fill with ground-colored ink; there is no underline or indicator glyph.
 - **Hover:** inactive tabs turn live cyan.
 - **Mobile:** the line wraps by whole items; nothing collapses into a menu.
 

@@ -512,6 +512,14 @@ export function evidenceText(html: string): string {
 /** Throws naming the first missing or forbidden evidence string. */
 export function checkEvidence(spec: WebFrameSpec, html: string): void {
   const text = evidenceText(html)
+  const fastextSlots = [...html.matchAll(/class="ft" data-slot="(red|green|yellow|cyan)"/g)].map(
+    (match) => match[1],
+  )
+  if (html.includes('class="fastext"') && fastextSlots.join(',') !== 'red,green,yellow,cyan') {
+    throw new Error(
+      `web dashboard capture ${spec.id}: expected red, green, yellow, cyan Fastext slots; got ${fastextSlots.join(',') || 'none'}`,
+    )
+  }
   for (const required of spec.requires) {
     if (!text.includes(required)) {
       throw new Error(
@@ -705,11 +713,12 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
     '- [ ] Dispatcher line: queue, active, observations, repository state, and the intake, auto merge, and harvest toggle words with bold ON in green or OFF in yellow. The happy frames show everything ON and RUNNING; the mixed frames show PAUSED and OFF.',
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
+    '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, RUNNING/green, PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
     '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once without shifting row text: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word and its red lines; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow fills.',
-    '- [ ] Fastext footer: four cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; labels never truncate; a disabled cell keeps its fill with a quiet dark label; an empty cell keeps its fill with no label. Slot colors never change with state.',
+    '- [ ] Fastext footer: four cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; labels never truncate; a disabled cell keeps its fill with a quiet dark label; an empty cell keeps its fill with no label. Slot colors never change with state. In `tickets-narrow.png`, the contiguous first line is empty red then empty green; the second line is yellow `NEW TICKET` then empty cyan. The capture has deterministically verified all four slot elements in this order.',
     '- [ ] Tickets frames: uppercase state headings in yellow with a white count, bold titles, gray labels, `blocked by` in yellow; the selected row carries `>`; detail shows the fields in dark wells, a Preview whose headings carry gray `#` marks, Move and Blockers sections, and an `unsaved changes` note; the footer reads CLOSE, SAVE, NEW TICKET, OPEN BUILD.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and a green `Continue with GitHub` cell; the error variant adds REFUSED in the masthead and a red `!` notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no hairline borders, shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
