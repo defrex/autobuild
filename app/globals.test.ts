@@ -2,6 +2,9 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
+const designSidecar = JSON.parse(
+  readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
+) as { components: Array<{ css: string }> }
 const rootMatch = stylesheet.match(/:root\s*\{([\s\S]*?)\n\}/)
 
 if (!rootMatch?.[1]) throw new Error('app/globals.css must define an initial :root block')
@@ -87,4 +90,30 @@ test('slack text on the well meets the text contrast floor', () => {
 
 test('component CSS contains no literal colors outside the initial root', () => {
   expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
+})
+
+test('design sidecar previews use valid canonical fallback colors', () => {
+  const previewCss = designSidecar.components.map(({ css }) => css).join('\n')
+  const hexLiterals = previewCss.match(/#[\da-f]+/gi) ?? []
+
+  expect(hexLiterals.length).toBeGreaterThan(0)
+  for (const literal of hexLiterals) {
+    expect(literal, `invalid sidecar preview color ${literal}`).toMatch(
+      /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i,
+    )
+  }
+
+  for (const canonical of [
+    '#e6e6e6',
+    '#d7c84f',
+    '#55b8b8',
+    '#65b868',
+    '#d96868',
+    '#707dcc',
+    '#888888',
+    '#292929',
+    '#141414',
+  ]) {
+    expect(previewCss, `missing sidecar preview fallback ${canonical}`).toContain(canonical)
+  }
 })
