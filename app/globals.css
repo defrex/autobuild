@@ -887,11 +887,9 @@ textarea {
 .filterline input {
   width: 24ch;
 }
-.pages {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(40ch, 1fr));
-  column-gap: 4ch;
-  row-gap: var(--row);
+.ticketPage {
+  width: 100%;
+  max-width: 120ch;
   margin-top: var(--row);
 }
 .page h2 {
@@ -900,6 +898,16 @@ textarea {
 .page h2 .count {
   color: var(--ink);
   font-weight: 400;
+}
+.ticketPage > ol:has(> li[data-selected]) > li:not([data-selected]) {
+  color: var(--slack);
+  opacity: 0.62;
+}
+.ticketPage > ol > li[data-selected] {
+  opacity: 1;
+}
+.emptyTickets {
+  margin-top: var(--row);
 }
 .trow {
   display: grid;
@@ -925,13 +933,59 @@ textarea {
   color: var(--slack);
 }
 .tdetail {
+  width: calc(100% - 2ch);
   max-width: 100ch;
+  margin-left: 2ch;
 }
 .tdetail input {
   max-width: 80ch;
 }
 .tdetail textarea {
   min-height: calc(var(--row) * 14);
+}
+.ticketIdentity {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 2ch;
+}
+.ticketIdentity h3 {
+  flex-basis: 100%;
+}
+.bodySection {
+  margin-top: var(--row);
+}
+.markdownBodyEditor {
+  background: var(--well);
+  min-height: calc(var(--row) * 14);
+  outline-offset: 0;
+}
+.markdownBodyEditor:focus-within {
+  outline: 2px solid var(--live);
+}
+.markdownEditorHost,
+.markdownEditorHost .overtype-container,
+.markdownEditorHost .overtype-wrapper {
+  min-height: calc(var(--row) * 14);
+}
+.markdownEditorHost .overtype-input,
+.markdownEditorHost .overtype-preview,
+.markdownEditorHost .overtype-preview * {
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: var(--row);
+}
+.markdownEditorHost .overtype-container,
+.markdownEditorHost .overtype-wrapper,
+.markdownEditorHost .overtype-input,
+.markdownEditorHost .overtype-preview {
+  border: 0;
+  border-radius: 0;
+  background: var(--well);
+}
+.promoteControl kbd {
+  font: inherit;
+  font-weight: 400;
+  margin-right: 1ch;
 }
 .markdown {
   padding: 0 1ch;
@@ -1101,8 +1155,17 @@ textarea {
   .filterline input {
     width: 100%;
   }
-  .pages {
-    grid-template-columns: minmax(0, 1fr);
+  .ticketPage > ol:has(> li[data-selected]) > li:not([data-selected]) {
+    display: none;
+  }
+  .ticketQueue:has(.ticketPage li[data-selected] .tdetail) .filterline,
+  .ticketQueue:has(.ticketPage li[data-selected] .tdetail) .ticketPage > h2,
+  .ticketPage li[data-selected] > .trow {
+    display: none;
+  }
+  .ticketPage li[data-selected] .tdetail {
+    width: 100%;
+    margin-left: 0;
   }
 }
 

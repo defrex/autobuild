@@ -5,11 +5,11 @@ import {
   createTicket,
   moveTicket,
   requireTicket,
-  ticketListCriteria,
   updateTicket,
 } from '../ports/tickets/operations'
 import type { DependencyState, Ticket, TicketSource, TicketUpdate } from '../ports/types'
 import type { BuildStore } from '../store/types'
+import { defaultTriageState } from '../processes/dispatcher'
 import { effectiveConfig, OperatorQueryError } from './query'
 
 export interface OperatorTicketContext {
@@ -28,6 +28,9 @@ export interface OperatorTicketQueue {
   tickets: Ticket[]
   diagnostics: string[]
   criteria: { state?: string; labels?: string[] }
+  /** Effective repository lifecycle names; clients must not invent provider states. */
+  triageState: string
+  readyState: string
 }
 
 export interface OperatorTicketBuild {
@@ -76,15 +79,26 @@ export async function listOperatorTickets(opts: {
   labels?: string[]
 }): Promise<OperatorTicketQueue> {
   const { config, context, source } = await openOperatorTickets(opts)
-  const criteria = ticketListCriteria(config, {
-    ...(opts.state !== undefined ? { state: opts.state } : {}),
+  const triageState = defaultTriageState(config)
+  const readyState = config.tickets.readyState
+  // The operator surface is a grooming queue. Unlike the CLI's ticket list,
+  // labels narrow the default state instead of replacing its lifecycle gate.
+  const criteria = {
+    state: opts.state ?? triageState,
     ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
-  })
+  }
   const [listing, states] = await Promise.all([
     source.listReady(criteria),
     opts.backend.statesFor(context, source),
   ])
-  return { states, tickets: listing.tickets, diagnostics: listing.diagnostics, criteria }
+  return {
+    states,
+    tickets: listing.tickets,
+    diagnostics: listing.diagnostics,
+    criteria,
+    triageState,
+    readyState,
+  }
 }
 
 async function matchingBuild(

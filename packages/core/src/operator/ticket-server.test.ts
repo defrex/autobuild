@@ -14,7 +14,8 @@ const config = parseConfig(`
 [tickets]
 source = "hosted"
 teamKey = "AUT"
-readyState = "Ready"
+triageState = "Backlog"
+readyState = "Todo"
 [verify]
 steps = []
 [finalize]
@@ -47,7 +48,10 @@ async function setup(source: FakeTicketSource) {
     store,
     secret,
     clock: () => now,
-    ticketBackend: { sourceFor: async () => source, statesFor: async () => ['Ready', 'Done'] },
+    ticketBackend: {
+      sourceFor: async () => source,
+      statesFor: async () => ['Backlog', 'Todo', 'Done'],
+    },
   })
   const client = new OperatorApiClient({
     url: 'http://operator.test',
@@ -62,8 +66,13 @@ async function setup(source: FakeTicketSource) {
 
 describe('operator ticket HTTP routes', () => {
   test('supports create, detail, update, move, block and unblock', async () => {
-    const source = new FakeTicketSource([], { createState: 'Ready', doneState: 'Done' })
+    const source = new FakeTicketSource([], { createState: 'Backlog', doneState: 'Done' })
     const client = await setup(source)
+    expect(await client.listTickets(repo)).toMatchObject({
+      triageState: 'Backlog',
+      readyState: 'Todo',
+      criteria: { state: 'Backlog' },
+    })
     const blocker = await client.createTicket(repo, { title: 'Blocker', body: 'body' })
     const created = await client.createTicket(repo, {
       title: 'Target',
