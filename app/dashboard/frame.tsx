@@ -157,6 +157,42 @@ export function Rule() {
   return <div className="rule" aria-hidden />
 }
 
+export function DashboardSurface({ children, footer }: { children: ReactNode; footer: ReactNode }) {
+  return (
+    <section className="dashboard-surface">
+      <div className="surface-scroll">{children}</div>
+      {footer}
+    </section>
+  )
+}
+
+const LOADING_ROWS = ['first', 'second', 'third', 'fourth', 'fifth'] as const
+
+/** Static, decorative row geometry with one assistive loading announcement. */
+export function LoadingRows({ label }: { label: string }) {
+  return (
+    <div className="loading-state">
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {label}
+      </p>
+      <div className="skeletons" aria-hidden="true">
+        <div className="skeleton-dispatch">
+          <span />
+          <span />
+          <span />
+        </div>
+        {LOADING_ROWS.map((row) => (
+          <div className="skeleton-row" data-loading-row="" key={row}>
+            <span className="skeleton-identity" />
+            <span className="skeleton-state" />
+            <span className="skeleton-steps" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export interface FastextCell {
   /** The terminal key this cell mirrors. Hidden on coarse pointers. */
   key?: string

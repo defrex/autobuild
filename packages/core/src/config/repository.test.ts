@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { loadConfig } from './load'
 
-test('repository installs mandatory lint and the path-scoped dashboard verifier', async () => {
+test('repository installs mandatory lint and the path-scoped dashboard verifiers', async () => {
   const config = await loadConfig(join(import.meta.dir, '..', '..', '..', '..', 'autobuild.toml'))
   expect(config.baseBranch).toBe('main')
   expect(config.capacity).toBe(5)

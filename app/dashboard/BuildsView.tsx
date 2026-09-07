@@ -16,9 +16,11 @@ import {
 import { type CSSProperties, type PointerEvent, type PointerEventHandler, useState } from 'react'
 import {
   columnWidths,
+  DashboardSurface,
   Fastext,
   type FastextCell,
   Flash,
+  LoadingRows,
   MessagePreview,
   Rule,
   StepLine,
@@ -259,12 +261,9 @@ export function BuildsView(props: BuildsViewProps) {
   }
   if (!model) {
     return (
-      <>
-        <p className="slack dispatch" aria-live="polite">
-          polling {repo || 'no repository'} for its first frame...
-        </p>
-        <Fastext label="Controls" cells={EMPTY_CELLS} />
-      </>
+      <DashboardSurface footer={<Fastext label="Controls" cells={EMPTY_CELLS} />}>
+        <LoadingRows label={`Loading builds for ${repo || 'the selected repository'}.`} />
+      </DashboardSurface>
     )
   }
 
@@ -291,7 +290,7 @@ export function BuildsView(props: BuildsViewProps) {
     selectedBuild === undefined
 
   return (
-    <>
+    <DashboardSurface footer={<Fastext label="Controls" cells={fastextCells(props)} />}>
       <DispatcherLine
         model={model}
         pending={props.pending}
@@ -369,8 +368,7 @@ export function BuildsView(props: BuildsViewProps) {
         ))}
         {model.builds.length === 0 && !model.harvest && <li className="slack">no active builds</li>}
       </ol>
-      <Fastext label="Controls" cells={fastextCells(props)} />
-    </>
+    </DashboardSurface>
   )
 }
 

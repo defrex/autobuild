@@ -95,12 +95,14 @@ export function OperatorShell({
           </button>
         </span>
       </nav>
-      {error && (
-        <p className="alert notice" role="alert">
-          {error}
-        </p>
-      )}
-      {children}
+      <div className="shell-body">
+        {error && (
+          <p className="alert notice shell-notice" role="alert">
+            {error}
+          </p>
+        )}
+        {children}
+      </div>
     </main>
   )
 }
