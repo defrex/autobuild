@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T19:21:56.000Z",
+  "generatedAt": "2026-09-07T19:37:26.000Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -157,8 +157,8 @@
     },
     "typographyMeta": {
       "display": {
-        "displayName": "Display (double height)",
-        "purpose": "The masthead only: repository, imperative word, sign-in title. Same size as body, stretched by scaleY(2) over two rows."
+        "displayName": "Display (one row)",
+        "purpose": "The masthead only: repository, imperative word, sign-in title. Bold at the same natural-proportion size as body over one row."
       },
       "body": {
         "displayName": "Body",
@@ -223,9 +223,9 @@
       "name": "Masthead",
       "kind": "custom",
       "refersTo": "masthead-title",
-      "description": "Double-height header: repository in title yellow, one imperative in its tone, poll clock right.",
-      "html": "<div class=\"ds-tt\"><header class=\"ds-masthead\"><h1 class=\"ds-dh ds-title\"><span>org/repository</span></h1><p class=\"ds-dh ds-imperative\" data-tone=\"alert\"><span>BLOCKED ×2</span></p><span class=\"ds-clock\">12:10:00</span></header></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) max-content 1fr auto; column-gap: 2ch; align-items: start; height: calc(var(--row, 22px) * 2); } .ds-dh { display: block; margin: 0; height: calc(var(--row, 22px) * 2); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-dh > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; transform: scaleY(2); transform-origin: 0 0; } .ds-title { color: var(--title, #ffff00); } .ds-imperative[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-imperative[data-tone=\"ready\"] { color: var(--ok, #00ff00); } .ds-clock { grid-column: 4; color: var(--ink, #fff); }"
+      "description": "One-row natural-proportion header: repository in title yellow, one bold imperative in its tone, poll clock right.",
+      "html": "<div class=\"ds-tt\"><header class=\"ds-masthead\"><h1 class=\"ds-masthead-copy ds-title\"><span>org/repository</span></h1><p class=\"ds-masthead-copy ds-imperative\" data-tone=\"alert\"><span>BLOCKED ×2</span></p><span class=\"ds-clock\">12:10:00</span></header></div>",
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) max-content 1fr auto; column-gap: 2ch; align-items: start; height: var(--row, 22px); } .ds-masthead-copy { display: block; margin: 0; height: var(--row, 22px); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-masthead-copy > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; } .ds-title { color: var(--title, #ffff00); } .ds-imperative[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-imperative[data-tone=\"ready\"] { color: var(--ok, #00ff00); } .ds-clock { grid-column: 4; color: var(--ink, #fff); }"
     },
     {
       "name": "Surface tabs",
@@ -294,10 +294,10 @@
   ],
   "narrative": {
     "northStar": "Teletext Dispatch",
-    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size; the only exception is the masthead, which stretches that same size to double height the way a teletext header row does. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from reverse-video fills, and from box-drawing rules, all of which the terminal already uses.",
+    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from reverse-video fills, and from box-drawing rules, all of which the terminal already uses.",
     "keyCharacteristics": [
       "Black ground, dark only; white ink; five saturated teletext primaries, each a state.",
-      "One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.",
+      "One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.",
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
       "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: controls are text, active surfaces are reverse video, the Fastext row carries four fixed-color cells.",
@@ -326,7 +326,7 @@
       },
       {
         "name": "The One Cell Rule",
-        "body": "The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size. Emphasis is weight or color, never size; the only taller text is the masthead's `scaleY(2)`.",
+        "body": "The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size, and no element scales one axis independently. Emphasis is weight or role color, never size; the masthead's bold display register occupies exactly one row.",
         "section": "typography"
       },
       {
@@ -362,7 +362,7 @@
       "Do make destructive intent a second step with a red `!` confirmation line."
     ],
     "donts": [
-      "Don't introduce a second face, a second size, letterspacing, or a lighter or heavier weight than 400 and 700; the only taller text is the masthead's `scaleY(2)`.",
+      "Don't introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.",
       "Don't draw hairline borders, shadows, gradients, or translucent surfaces. Separate with a `─` rule, a fill change, or an empty row.",
       "Don't round a corner.",
       "Don't use a saturated color for anything but its assigned state, and never encode state in a Fastext slot color.",
