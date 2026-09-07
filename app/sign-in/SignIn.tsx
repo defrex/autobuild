@@ -50,8 +50,7 @@ export function SignIn({ providers, error }: { providers: readonly string[]; err
               <button
                 key={provider}
                 type="button"
-                className="ft"
-                data-slot="green"
+                className="btn"
                 disabled={pending}
                 onClick={() => signIn(provider)}
               >

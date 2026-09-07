@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
 const buildsView = readFileSync(new URL('./dashboard/BuildsView.tsx', import.meta.url), 'utf8')
+const dashboardFrame = readFileSync(new URL('./dashboard/frame.tsx', import.meta.url), 'utf8')
+const signIn = readFileSync(new URL('./sign-in/SignIn.tsx', import.meta.url), 'utf8')
 const designSidecar = JSON.parse(
   readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
 ) as {
@@ -56,6 +58,15 @@ function contrast(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
+function compositeOnBlack(foreground: string, opacity: number): string {
+  const channels = [1, 3, 5].map((offset) =>
+    Math.round(Number.parseInt(foreground.slice(offset, offset + 2), 16) * opacity)
+      .toString(16)
+      .padStart(2, '0'),
+  )
+  return `#${channels.join('')}`
+}
+
 test('the initial root owns the canonical browser palette and active-tab ink', () => {
   for (const [token, value] of Object.entries(canonicalTokens)) {
     expect(declaration(token), token).toBe(value)
@@ -76,11 +87,11 @@ const textOnGround = [
 ] as const
 
 const groundOnFill = [
-  ['ground on ink button fill', ground, canonicalTokens['--tt-white']],
-  ['ground on yellow Fastext fill', ground, canonicalTokens['--tt-yellow']],
-  ['ground on cyan Fastext fill', ground, canonicalTokens['--tt-cyan']],
-  ['ground on green Fastext fill', ground, canonicalTokens['--tt-green']],
-  ['ground on red Fastext fill', ground, canonicalTokens['--tt-red']],
+  ['ground on active ink button fill', ground, canonicalTokens['--tt-white']],
+  ['ground on active yellow Fastext fill', ground, canonicalTokens['--tt-yellow']],
+  ['ground on active cyan Fastext fill', ground, canonicalTokens['--tt-cyan']],
+  ['ground on active green Fastext fill', ground, canonicalTokens['--tt-green']],
+  ['ground on active red Fastext fill', ground, canonicalTokens['--tt-red']],
   ['resolved nav-ink on nav-fill', ground, canonicalTokens['--tt-blue']],
 ] as const
 
@@ -88,6 +99,23 @@ for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill])
   test(`${pair} meets the text contrast floor`, () => {
     expect(contrast(foreground, background), pair).toBeGreaterThanOrEqual(4.5)
   })
+}
+
+for (const [name, color] of [
+  ['ink outline', canonicalTokens['--tt-white']],
+  ['red Fastext outline', canonicalTokens['--tt-red']],
+  ['green Fastext outline', canonicalTokens['--tt-green']],
+  ['yellow Fastext outline', canonicalTokens['--tt-yellow']],
+  ['cyan Fastext outline', canonicalTokens['--tt-cyan']],
+] as const) {
+  test(`${name} meets the non-text contrast floor against ground`, () => {
+    expect(contrast(color, ground), name).toBeGreaterThanOrEqual(3)
+  })
+  if (name.includes('Fastext')) {
+    test(`disabled ${name} label remains readable at reduced emphasis`, () => {
+      expect(contrast(compositeOnBlack(color, 0.9), ground), name).toBeGreaterThanOrEqual(4.5)
+    })
+  }
 }
 
 test('slack text on the well meets the text contrast floor', () => {
@@ -98,6 +126,49 @@ test('slack text on the well meets the text contrast floor', () => {
 
 test('component CSS contains no literal colors outside the initial root', () => {
   expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
+})
+
+test('outline, ghost, and Fastext controls expose the complete state contract', () => {
+  expect(declaration('--button-border')).toBe('2px')
+  expect(stylesheet).toMatch(
+    /\.btn\s*\{[\s\S]*?height:\s*var\(--row\);[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*var\(--button-border\) solid currentColor;/,
+  )
+  expect(stylesheet).toMatch(
+    /\.ft\s*\{[\s\S]*?height:\s*var\(--row\);[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*var\(--button-border\) solid currentColor;/,
+  )
+  expect(stylesheet).toMatch(/\.btn:hover:not\(:disabled\)/)
+  expect(stylesheet).toMatch(/\.btn:active:not\(:disabled\)/)
+  expect(stylesheet).toMatch(/\.btn:disabled/)
+  expect(stylesheet).toMatch(/:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--live\)/)
+
+  expect(stylesheet).toMatch(/\.word\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*0;/)
+  expect(stylesheet).toMatch(/\.word:hover:not\(:disabled\)/)
+  expect(stylesheet).toMatch(/\.word:active:not\(:disabled\)/)
+  expect(stylesheet).toMatch(/\.word:disabled/)
+})
+
+test('Fastext keeps slot hue through rest, interaction, empty, and disabled states', () => {
+  for (const slot of ['red', 'green', 'yellow', 'cyan']) {
+    expect(stylesheet).toContain(`.ft[data-slot="${slot}"] {\n  --ft-color: var(--ft-${slot});`)
+  }
+  expect(stylesheet).toMatch(
+    /\.ft:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?text-decoration:\s*underline;/,
+  )
+  expect(stylesheet).toMatch(
+    /\.ft:active:not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--ft-color\);[\s\S]*?border-color:\s*var\(--ft-color\);/,
+  )
+  expect(stylesheet).toMatch(
+    /\.ft:disabled\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*var\(--ft-color\);[\s\S]*?opacity:\s*0\.9;/,
+  )
+  expect(stylesheet).not.toContain('--ft-dim-ink')
+  expect(dashboardFrame).toContain('data-empty')
+})
+
+test('sign-in uses the primary outline instead of a Fastext slot', () => {
+  expect(signIn).toContain('className="btn"')
+  expect(signIn).not.toContain('className="ft"')
+  expect(signIn).not.toContain('data-slot=')
+  expect(stylesheet).toMatch(/\.providers \.btn\s*\{\s*padding:\s*0 2ch;/)
 })
 
 test('held queued builds keep their canonical yellow warning while rows dim', () => {
