@@ -30,6 +30,7 @@ import { captureDashboardFrames, RENDER_NOW } from './dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const FIXTURE_REPO = 'example/repository'
+const ALTERNATE_FIXTURE_REPO = 'example/alternate'
 const LONG_FIXTURE_REPO = 'example/operator-dashboard-capture-fixture-repository'
 const FIXTURE_IDENTITY = 'operator@example.com'
 /** RENDER_NOW as the header shows it; fixed so the clock never depends on the host zone. */
@@ -85,6 +86,17 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 1700,
     requires: ['MERGED', 'Harvest', 'RUNNING', '[x]', 'PAUSE ALL', 'INTAKE'],
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
+  },
+  {
+    id: 'builds-multirepo-wide',
+    width: 1440,
+    height: 1000,
+    requires: [
+      'MERGED',
+      `repo ${FIXTURE_REPO} ${ALTERNATE_FIXTURE_REPO}`,
+      FIXTURE_REPO,
+      ALTERNATE_FIXTURE_REPO,
+    ],
   },
   {
     id: 'builds-mixed-hover-wide',
@@ -294,13 +306,15 @@ function shell(
     model?: DashboardModel
     surface?: 'builds' | 'tickets'
     repo?: string
+    repositories?: readonly string[]
     error?: string
   } = {},
 ) {
+  const repo = opts.repo ?? FIXTURE_REPO
   return (
     <OperatorShell
-      repo={opts.repo ?? FIXTURE_REPO}
-      repositories={[opts.repo ?? FIXTURE_REPO]}
+      repo={repo}
+      repositories={opts.repositories ?? [repo]}
       identity={FIXTURE_IDENTITY}
       surface={opts.surface ?? 'builds'}
       imperative={opts.model ? dashboardImperative(opts.model) : undefined}
@@ -398,6 +412,11 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
     case 'builds-happy-wide':
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
+    case 'builds-multirepo-wide':
+      return shell(builds(models.happy), {
+        model: models.happy,
+        repositories: [FIXTURE_REPO, ALTERNATE_FIXTURE_REPO],
+      })
     case 'builds-mixed-hover-wide': {
       const selection = blockedSelection(models.mixed)
       return shell(
@@ -688,6 +707,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '',
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. Empty black below the content is the fixed viewport height, not a defect.',
     '- [ ] Compare loading and loaded Builds at both widths, then Builds, Tickets, and sign-in: the masthead is exactly one cell row high with identical coordinates in every state and surface. Navigation and the top and bottom edges of the Fastext footer are also stable where present.',
+    '- [ ] Navigation: `builds-multirepo-wide.png` shows the `repo` label and selector with both repository options; every other Builds and Tickets frame is configured with one repository and omits the complete selector and label.',
     '- [ ] Loading frames show five static, neutral placeholder rows at the normal three-row build rhythm, with no digits, status words, imperative, synthetic values, or animation. The old polling sentence is absent.',
     '- [ ] The document itself does not scroll. Builds, Tickets filters/queue/forms/detail, and open build detail are clipped only by and scroll within the centre between navigation and Fastext; the shell anchors do not move.',
     '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
