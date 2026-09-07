@@ -4,7 +4,14 @@ import { readFileSync } from 'node:fs'
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
 const designSidecar = JSON.parse(
   readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
-) as { components: Array<{ css: string }> }
+) as {
+  extensions: { glyphs: Record<string, string>; tokenSource: string }
+  components: Array<{ css: string }>
+  narrative: {
+    keyCharacteristics: string[]
+    rules: Array<{ name: string; body: string }>
+  }
+}
 const rootMatch = stylesheet.match(/:root\s*\{([\s\S]*?)\n\}/)
 
 if (!rootMatch?.[1]) throw new Error('app/globals.css must define an initial :root block')
@@ -90,6 +97,18 @@ test('slack text on the well meets the text contrast floor', () => {
 
 test('component CSS contains no literal colors outside the initial root', () => {
   expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
+})
+
+test('design sidecar preserves the fine-pointer lane contract', () => {
+  expect(designSidecar.extensions.glyphs.selectedLane).toBe('> (bold)')
+  expect(designSidecar.extensions.glyphs.hoverPreviewLane).toBe('> (regular)')
+  expect(designSidecar.extensions.tokenSource).toContain('--lane-preview')
+  expect(designSidecar.narrative.keyCharacteristics).toContain(
+    'Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.',
+  )
+  expect(designSidecar.narrative.rules.find(({ name }) => name === 'The Glyph Rule')?.body).toBe(
+    'Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.',
+  )
 })
 
 test('design sidecar previews use valid canonical fallback colors', () => {

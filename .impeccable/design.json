@@ -209,13 +209,14 @@
       "current": "[>]",
       "provisional": "[~]",
       "pending": "[ ]",
-      "selectedLane": ">",
+      "selectedLane": "> (bold)",
+      "hoverPreviewLane": "> (regular)",
       "message": "!",
       "select": "▾",
       "rule": "─",
       "imperativeCount": "×N"
     },
-    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --ok --warn --alert --slack --rule --well --nav-fill --nav-ink, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
+    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well --nav-fill --nav-ink, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
   },
   "components": [
     {
@@ -290,7 +291,7 @@
       "Black ground, dark only; softened ink; five muted teletext hues, each retaining its established job.",
       "One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.",
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
-      "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for messages, box-drawing `─` for rules.",
+      "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: controls are text, active surfaces are reverse video, the Fastext row carries four fixed-color cells.",
       "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion."
     ],
@@ -322,7 +323,7 @@
       },
       {
         "name": "The Glyph Rule",
-        "body": "Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.",
+        "body": "Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.",
         "section": "typography"
       },
       {
