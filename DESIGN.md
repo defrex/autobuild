@@ -28,9 +28,9 @@ typography:
     letterSpacing: "normal"
   display:
     fontFamily: "JetBrains Mono, ui-monospace, Menlo, Consolas, DejaVu Sans Mono, monospace"
-    fontSize: "1em, transform scaleY(2)"
+    fontSize: "1em"
     fontWeight: 700
-    lineHeight: "1 row, occupying 2 rows"
+    lineHeight: "1 row"
     letterSpacing: "normal"
 rounded:
   none: "0"
@@ -125,7 +125,7 @@ components:
 
 **Creative North Star: "Teletext Dispatch"**
 
-The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size; the only exception is the masthead, which stretches that same size to double height the way a teletext header row does. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.
+The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.
 
 The page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.
 
@@ -133,7 +133,7 @@ The system refuses the ops-console vocabulary: no sidebar, no metric cards, no p
 
 **Key Characteristics:**
 - Black ground, dark only; white ink; five saturated teletext primaries, each a state.
-- One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.
+- One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.
 - Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.
 - Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.
 - Words act: controls are text, active surfaces are reverse video, the Fastext row carries four fixed-color cells.
@@ -172,16 +172,16 @@ The palette is the teletext primary set on black: saturated hues that each carry
 **Body Font:** JetBrains Mono (same stack)
 **Label/Mono Font:** JetBrains Mono (same stack)
 
-**Character:** One face engineers already have in their terminals, loaded through next/font in weights 400 and 700 with `font-display: optional`, ligatures and contextual alternates off, and tabular numerals on so columns and ticking timers hold their width. The optional display strategy prevents a late face swap from reflowing text after first paint. There is no scale in the conventional sense: one size per viewport, bold for emphasis, and double height for the masthead.
+**Character:** One face engineers already have in their terminals, loaded through next/font in weights 400 and 700 with `font-display: optional`, ligatures and contextual alternates off, and tabular numerals on so columns and ticking timers hold their width. The optional display strategy prevents a late face swap from reflowing text after first paint. There is no scale in the conventional sense: one natural-proportion size per viewport, with bold weight and role color for masthead emphasis.
 
 ### Hierarchy
-- **Display** (700, 1em stretched by `scaleY(2)`, one row of line height occupying two rows): the masthead only. Repository name in title yellow, the imperative word in its tone, on the sign-in page "Autobuild operator" and REFUSED. Truncates with an ellipsis; the imperative never truncates before the repository name does.
+- **Display** (700, 1em at the face's natural proportions, one row): the masthead only. Repository name in title yellow, the imperative word in its tone, on the sign-in page "Autobuild operator" and REFUSED. The repository truncates with an ellipsis before the imperative, which always renders whole and remains the most prominent word.
 - **Title** (700, 1em, one row): section headings inside detail (Pipeline, Unresolved blockers, Sessions, Transcript), the slug in a build row, the title in a ticket row, the current `[>]` step, STATUS words, ON/OFF toggle words, tab labels. Ticket-queue state headings are uppercase in title yellow with a weight-400 count.
 - **Body** (400, 1em, one row): everything else. Reading measure is capped at 80ch for composers and 100ch for ticket detail; row content wraps only on narrow viewports.
 - **Label** (400 or 700, 1em, one row): kv keys and field labels in slack at 400; Fastext labels uppercase at 700 with a 400 key letter.
 
 ### Named Rules
-**The One Cell Rule.** The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size. Emphasis is weight or color, never size; the only taller text is the masthead's `scaleY(2)`.
+**The One Cell Rule.** The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size, and no element scales one axis independently. Emphasis is weight or role color, never size; the masthead's bold display register occupies exactly one row.
 
 **The Glyph Rule.** Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.
 
@@ -208,14 +208,14 @@ There are no shadows, no gradients, no blur, and no layered surfaces. Depth is c
 
 ## Shapes
 
-Every corner is square (`border-radius: 0`) and every shape is a run of whole cells. There are no hairline borders anywhere: horizontal rules are a row of `─` box-drawing glyphs in the rule color, fields are reverse-video wells with no stroke, and the focus indicator is a 2px cyan outline offset 1px, which is the one line thinner than a cell and exists for keyboard accessibility. The masthead is the one non-rectangular gesture, and it is still a rectangle two rows tall.
+Every corner is square (`border-radius: 0`) and every shape is a run of whole cells. There are no hairline borders anywhere: horizontal rules are a row of `─` box-drawing glyphs in the rule color, fields are reverse-video wells with no stroke, and the focus indicator is a 2px cyan outline offset 1px, which is the one line thinner than a cell and exists for keyboard accessibility. The masthead is a one-row rectangle on the same cell grid.
 
 **The No Hairline Rule.** Borders finer than a cell are not drawn. Separation is a row of `─`, a change of fill, or a row of empty space.
 
 ## Components
 
 ### Masthead
-A two-row header in the display register. Repository name in title yellow at left, then the imperative word in its tone (alert red for BLOCKED and FAILED, ok green for PR READY and MERGED) with `×N` when more than one row carries it, then the poll clock `HH:MM:SS` pinned right in ink, slack while a poll is pending. One imperative per frame, chosen by priority BLOCKED > FAILED > PR READY > MERGED; nothing is shown when nothing needs a human. The clock is hidden below 720px. The sign-in page reuses the masthead with the product name and REFUSED on a refused sign-in.
+A one-row header in the natural-proportion display register. Repository name in title yellow at left, then the bold imperative word in its tone (alert red for BLOCKED and FAILED, ok green for PR READY and MERGED) with `×N` when more than one row carries it, then the poll clock `HH:MM:SS` pinned right in ink, slack while a poll is pending. The repository is the shrinkable column and ellipsizes before the max-content imperative, which always renders whole. One imperative per frame, chosen by priority BLOCKED > FAILED > PR READY > MERGED; nothing is shown when nothing needs a human. The clock is hidden below 720px. The sign-in page reuses the masthead with the product name and REFUSED on a refused sign-in.
 
 ### Navigation
 - **Style:** a line of uppercase bold tab words (BUILDS, TICKETS) padded 1ch, followed by the repo select, with identity and `sign out` in slack pinned right.
@@ -269,7 +269,7 @@ The system's one motion. When a state word (a STATUS, an imperative, a toggle) c
 - **Do** make destructive intent a second step with a red `!` confirmation line.
 
 ### Don't:
-- **Don't** introduce a second face, a second size, letterspacing, or a lighter or heavier weight than 400 and 700; the only taller text is the masthead's `scaleY(2)`.
+- **Don't** introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.
 - **Don't** draw hairline borders, shadows, gradients, or translucent surfaces. Separate with a `─` rule, a fill change, or an empty row.
 - **Don't** round a corner.
 - **Don't** use a saturated color for anything but its assigned state, and never encode state in a Fastext slot color.
