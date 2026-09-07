@@ -135,7 +135,7 @@ The system refuses the ops-console vocabulary: no sidebar, no metric cards, no p
 - Black ground, dark only; white ink; five saturated teletext primaries, each a state.
 - One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.
 - Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.
-- Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for messages, box-drawing `─` for rules.
+- Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.
 - Words act: controls are text, active surfaces are reverse video, the Fastext row carries four fixed-color cells.
 - One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.
 
@@ -145,7 +145,7 @@ The palette is the teletext primary set on black: saturated hues that each carry
 
 ### Primary
 - **Title Yellow** (`title-yellow`): the repository name in the masthead, ticket-queue state headings, markdown headings and table heads. Doubles as the warn tone: PAUSED, PAUSING, CLEANING, ESCALATED status words, `(held)` and `(paused)` notes, OFF toggle words, provisional `[~]` steps, dirty-state and diagnostic notices.
-- **Live Cyan** (`live-cyan`): the current `[>]` step in bold, QUEUED and RESUMING status words, open pull requests, requested auto merge, links, the selected lane `>` glyph, caret and focus outline, and every hover on a text control. Cyan means "this is where things are moving or where your pointer is".
+- **Live Cyan** (`live-cyan`): the current `[>]` step in bold, QUEUED and RESUMING status words, open pull requests, requested auto merge, links, selected and fine-pointer preview lane `>` glyphs, caret and focus outline, and every hover on a text control. Cyan means "this is where things are moving or where your pointer is".
 - **OK Green** (`ok-green`): done `[x]` steps, RUNNING status, merged pull requests, enabled auto merge, ON toggle words, the PR READY and MERGED imperatives. Green is quiet good news.
 - **Alert Red** (`alert-red`): BLOCKED, FAILED, and ABORTING status words, the BLOCKED and FAILED imperatives, conflicted pull requests, blocker text, setup errors, the abort confirmation line, the sign-in REFUSED word and refusal notice. Tuned from pure red to keep body text legible on black.
 - **Nav Blue** (`nav-blue`): the reverse-video fill behind the active surface tab, and nothing else. Blue is a place, not a state.
@@ -183,7 +183,7 @@ The palette is the teletext primary set on black: saturated hues that each carry
 ### Named Rules
 **The One Cell Rule.** The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size. Emphasis is weight or color, never size; the only taller text is the masthead's `scaleY(2)`.
 
-**The Glyph Rule.** Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.
+**The Glyph Rule.** Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.
 
 ## Layout
 
@@ -232,7 +232,7 @@ A two-row header in the display register. Repository name in title yellow at lef
 The key legend fills the non-scrolling final shell slot with four cells, left to right red, green, yellow, cyan. Each cell is one row tall, ground-colored bold text on the slot color, a weight-400 key letter (`a`, `r`, `m`, `↵`, `Esc`) then the uppercase label. The key letter is hidden on coarse pointers. Cells change contents per context (list, detail, abort confirmation, ticket queue) but never change color; an empty slot renders as a colored cell with no text; a disabled cell keeps its fill, drops the key, and falls to weight 400 in well-colored ink. Hover fills white. Two per line below 720px. The sign-in provider button is a single green Fastext cell with 2ch padding.
 
 ### Build Row
-Lane (`>` in cyan when selected), ticket id in a frame-wide column, bold slug, right-pinned tokens, and the bold STATUS word in its status color pinned to the right edge. The step line beneath carries each step as glyph, label, and a parenthesised note (`plan(3s)`, `merge(waiting, 8m47s)`) in the terminal's duration format `38s`, `4m12s`, `1h04m`. A build-owned message shows as a three-row preview: `!` on the first row, two-space indent on the rest, a `... N more rows - Enter details` line when truncated, all in the message's tone. Hover turns the identity cyan. When any row is selected, every other row dims to slack except its STATUS word and its red lines.
+Lane (`>` in cyan), ticket id in a frame-wide column, bold slug, right-pinned tokens, and the bold STATUS word in its status color pinned to the right edge. Committed selection draws the lane marker bold; on devices with a fine hovering primary pointer, hovering a build or Harvest row draws a regular-weight preview marker in the same reserved lane, and leaving the list removes it. Selection and preview may appear on different rows at once; only committed selection drives focus dimming, detail, ARIA state, and Fastext context. The step line beneath carries each step as glyph, label, and a parenthesised note (`plan(3s)`, `merge(waiting, 8m47s)`) in the terminal's duration format `38s`, `4m12s`, `1h04m`. A build-owned message shows as a three-row preview: `!` on the first row, two-space indent on the rest, a `... N more rows - Enter details` line when truncated, all in the message's tone. Hover turns the identity cyan. When any row is selected, every other row dims to slack except its STATUS word and its red lines.
 
 ### Loading Rows
 A dispatcher-shaped neutral line followed by five build-row-shaped placeholders reserves the first loaded frame's register. Bars use only well and rule neutrals, remain static, contain no glyphs or values, and are hidden from assistive technology. One visually hidden polite live message names the loading surface once.

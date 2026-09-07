@@ -46,6 +46,7 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach
    ab artifact put web-dashboard-frame:builds-happy-narrow:png .ab/web-dashboard-frames/builds-happy-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-hover-wide:png .ab/web-dashboard-frames/builds-mixed-hover-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-wide:png .ab/web-dashboard-frames/builds-mixed-detail-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-abort-wide:png .ab/web-dashboard-frames/builds-mixed-abort-wide.png --attach

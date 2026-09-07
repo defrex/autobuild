@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
+import { canPreviewPointer } from '../app/dashboard/BuildsView'
 import {
   checkEvidence,
   chromiumBinary,
@@ -142,6 +143,39 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(html).not.toContain('polling')
     expect(html).not.toContain('class="status"')
   }
+})
+
+test('hover frame keeps committed and preview state independent', () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-hover-wide')
+  if (!spec) throw new Error('hover frame spec is missing')
+  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  expect(html.match(/data-selected="true"/g)).toHaveLength(1)
+  expect(html.match(/data-hovered="true"/g)).toHaveLength(1)
+  const selectedRow = html.match(/<li class="row"[^>]*data-selected="true"[^>]*>/)?.[0]
+  const hoveredRow = html.match(/<li class="row"[^>]*data-hovered="true"[^>]*>/)?.[0]
+  expect(selectedRow).toBeDefined()
+  expect(hoveredRow).toBeDefined()
+  expect(selectedRow).not.toBe(hoveredRow)
+  expect(evidenceText(html)).toContain('ABORT')
+  expect(evidenceText(html)).toContain('RESUME')
+  expect(evidenceText(html)).toContain('DETAILS')
+  expect(evidenceText(html)).not.toContain('Unresolved blockers')
+})
+
+test('narrow capture frames never supply a hover preview', () => {
+  const fixtures = models()
+  for (const spec of WEB_FRAME_SPECS.filter((frame) => frame.width === 390)) {
+    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    expect(html, spec.id).not.toContain('data-hovered="true"')
+  }
+})
+
+test('hover preview requires a fine hovering mouse', () => {
+  expect(canPreviewPointer('mouse', true)).toBe(true)
+  expect(canPreviewPointer('mouse', false)).toBe(false)
+  expect(canPreviewPointer('touch', true)).toBe(false)
+  expect(canPreviewPointer('pen', true)).toBe(false)
 })
 
 test('evidence text decodes the entities the renderer escapes', () => {

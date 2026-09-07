@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T18:28:05.077Z",
+  "generatedAt": "2026-09-07T19:21:56.000Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -209,13 +209,14 @@
       "current": "[>]",
       "provisional": "[~]",
       "pending": "[ ]",
-      "selectedLane": ">",
+      "selectedLane": "> (bold)",
+      "hoverPreviewLane": "> (regular)",
       "message": "!",
       "select": "▾",
       "rule": "─",
       "imperativeCount": "×N"
     },
-    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --ok --warn --alert --slack --rule --well --nav-fill --nav-ink, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
+    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well --nav-fill --nav-ink, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
   },
   "components": [
     {
@@ -270,9 +271,9 @@
       "name": "Build row",
       "kind": "card",
       "refersTo": "status",
-      "description": "Lane, ticket id, bold slug, right-pinned tokens and STATUS, then the glyph step line and a three-row message preview.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-row\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-PLAN</span><span class=\"ds-slug\">plan-blocked-dashboard</span></span><span class=\"ds-tokens\"><span class=\"ds-pr\">PR open</span></span><span class=\"ds-status\" data-status=\"blocked\">BLOCKED</span></div><ol class=\"ds-steps\"><li data-state=\"current\">[&gt;] plan(3s)</li><li data-state=\"pending\">[ ] plan-review</li><li data-state=\"pending\">[ ] implement</li><li data-state=\"pending\">[ ] code-review</li><li data-state=\"pending\">[ ] verify:unit</li><li data-state=\"pending\">[ ] finalize</li><li data-state=\"pending\">[ ] merge(waiting)</li></ol><div class=\"ds-message\" data-tone=\"alert\"><p>! The plan needs a decision the spec does not make.</p><p>&nbsp;&nbsp;... 4 more rows - Enter details</p></div></div><div class=\"ds-rule\"></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #00ffff); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #fff); } .ds-rowhead:hover { color: var(--live, #00ffff); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-pr { color: var(--live, #00ffff); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #ff3b3b); } .ds-status[data-status=\"running\"] { color: var(--ok, #00ff00); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #00ffff); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #ffff00); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #00ff00); } .ds-steps li[data-state=\"current\"] { color: var(--live, #00ffff); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #ffff00); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #8a8a8a); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #2c2c2c); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; }"
+      "description": "Lane, ticket id, bold slug, right-pinned tokens and STATUS, then the glyph step line and a three-row message preview. Committed selection uses a bold cyan >; fine-pointer hover uses a regular cyan > without changing selection, detail, dimming, ARIA, or Fastext.",
+      "html": "<div class=\"ds-tt\"><div class=\"ds-row\" data-selected=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-PLAN</span><span class=\"ds-slug\">plan-blocked-dashboard</span></span><span class=\"ds-tokens\"><span class=\"ds-pr\">PR open</span></span><span class=\"ds-status\" data-status=\"blocked\">BLOCKED</span></div><ol class=\"ds-steps\"><li data-state=\"current\">[&gt;] plan(3s)</li><li data-state=\"pending\">[ ] plan-review</li><li data-state=\"pending\">[ ] implement</li><li data-state=\"pending\">[ ] code-review</li><li data-state=\"pending\">[ ] verify:unit</li><li data-state=\"pending\">[ ] finalize</li><li data-state=\"pending\">[ ] merge(waiting)</li></ol><div class=\"ds-message\" data-tone=\"alert\"><p>! The plan needs a decision the spec does not make.</p><p>&nbsp;&nbsp;... 4 more rows - Enter details</p></div></div><div class=\"ds-row\" data-hovered=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-NEXT</span><span class=\"ds-slug\">hover-preview-dashboard</span></span><span class=\"ds-status\" data-status=\"queued\">QUEUED</span></div></div><div class=\"ds-rule\"></div></div>",
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #00ffff); } .ds-row[data-hovered] .ds-lane { color: var(--lane-preview, #00ffff); font-weight: 400; } .ds-row[data-selected] .ds-lane { color: var(--live, #00ffff); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #fff); } .ds-rowhead:hover { color: var(--live, #00ffff); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-pr { color: var(--live, #00ffff); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #ff3b3b); } .ds-status[data-status=\"running\"] { color: var(--ok, #00ff00); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #00ffff); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #ffff00); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #00ff00); } .ds-steps li[data-state=\"current\"] { color: var(--live, #00ffff); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #ffff00); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #8a8a8a); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #2c2c2c); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; }"
     },
     {
       "name": "Loading rows",
@@ -298,7 +299,7 @@
       "Black ground, dark only; white ink; five saturated teletext primaries, each a state.",
       "One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.",
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
-      "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for messages, box-drawing `─` for rules.",
+      "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: controls are text, active surfaces are reverse video, the Fastext row carries four fixed-color cells.",
       "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion."
     ],
@@ -330,7 +331,7 @@
       },
       {
         "name": "The Glyph Rule",
-        "body": "Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.",
+        "body": "Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.",
         "section": "typography"
       },
       {

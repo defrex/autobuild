@@ -37,6 +37,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
   const [surface, setSurface] = useState<Surface>('builds')
   const [selection, setSelection] = useState<Selection>()
+  const [hoverPreview, setHoverPreview] = useState<Selection>()
   const [detailOpen, setDetailOpen] = useState(false)
   const [confirmingAbort, setConfirmingAbort] = useState(false)
   const [linkedBuild, setLinkedBuild] = useState<{ repo: string; build: OperatorTicketBuild }>()
@@ -65,6 +66,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   useEffect(() => {
     setSnapshot(undefined)
     setTranscript(undefined)
+    setHoverPreview(undefined)
     const controller = new AbortController()
     void poll(controller.signal)
     const timer = window.setInterval(() => void poll(controller.signal), 2000)
@@ -246,8 +248,12 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
       pending={pending !== undefined}
       error={error}
-      onSurface={setSurface}
+      onSurface={(next) => {
+        setHoverPreview(undefined)
+        setSurface(next)
+      }}
       onRepo={(next) => {
+        setHoverPreview(undefined)
         setRepo(next)
         deselect()
       }}
@@ -276,11 +282,13 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           now={now}
           pending={pending}
           selection={selection}
+          hoverPreview={hoverPreview}
           detailOpen={detailOpen}
           confirmingAbort={confirmingAbort}
           transcript={transcript}
           linkedBuild={linkedBuild?.repo === repo ? linkedBuild.build : undefined}
           onActivate={activate}
+          onHoverPreview={setHoverPreview}
           onDeselect={deselect}
           onToggleDetail={() => setDetailOpen((open) => !open)}
           onBuildControl={control}

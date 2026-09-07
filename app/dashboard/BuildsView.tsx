@@ -13,7 +13,7 @@ import {
   repositoryActionAvailability,
   type TranscriptPresentation,
 } from 'autobuild/operator-presentation'
-import { type CSSProperties, useState } from 'react'
+import { type CSSProperties, type PointerEvent, type PointerEventHandler, useState } from 'react'
 import {
   columnWidths,
   DashboardSurface,
@@ -36,17 +36,23 @@ export function sameSelection(a: Selection | undefined, b: Selection | undefined
   return a.kind === 'harvest' || (b.kind === 'build' && a.slug === b.slug)
 }
 
+export function canPreviewPointer(pointerType: string, fineHover: boolean): boolean {
+  return pointerType === 'mouse' && fineHover
+}
+
 export interface BuildsViewProps {
   repo: string
   model?: DashboardModel
   now: number
   pending?: string
   selection?: Selection
+  hoverPreview?: Selection
   detailOpen: boolean
   confirmingAbort: boolean
   transcript?: TranscriptPresentation
   linkedBuild?: OperatorTicketBuild
   onActivate: (selection: Selection) => void
+  onHoverPreview: (selection: Selection | undefined) => void
   onDeselect: () => void
   onToggleDetail: () => void
   onBuildControl: (slug: string, action: BuildControlAction) => void
@@ -241,7 +247,18 @@ export function fastextCells(
 }
 
 export function BuildsView(props: BuildsViewProps) {
-  const { model, repo, now, selection, detailOpen, confirmingAbort, linkedBuild } = props
+  const { model, repo, now, selection, hoverPreview, detailOpen, confirmingAbort, linkedBuild } =
+    props
+  const preview = (next: Selection) => (event: PointerEvent) => {
+    if (
+      canPreviewPointer(
+        event.pointerType,
+        window.matchMedia('(hover: hover) and (pointer: fine)').matches,
+      )
+    ) {
+      props.onHoverPreview(next)
+    }
+  }
   if (!model) {
     return (
       <DashboardSurface footer={<Fastext label="Controls" cells={EMPTY_CELLS} />}>
@@ -315,6 +332,7 @@ export function BuildsView(props: BuildsViewProps) {
         data-ticket-col={widths.ticket}
         data-focused={focused || undefined}
         aria-label="Build pipelines"
+        onPointerLeave={() => props.onHoverPreview(undefined)}
       >
         {model.harvest && (
           <HarvestRow
@@ -322,7 +340,9 @@ export function BuildsView(props: BuildsViewProps) {
             now={now}
             hasTicketColumn={widths.ticket > 0}
             selected={selection?.kind === 'harvest'}
+            hovered={hoverPreview?.kind === 'harvest'}
             dimmed={focused && selection?.kind !== 'harvest'}
+            onPointerEnter={preview({ kind: 'harvest' })}
             onActivate={props.onActivate}
           />
         )}
@@ -334,10 +354,12 @@ export function BuildsView(props: BuildsViewProps) {
             now={now}
             pending={props.pending}
             selected={selection?.kind === 'build' && selection.slug === row.slug}
+            hovered={hoverPreview?.kind === 'build' && hoverPreview.slug === row.slug}
             dimmed={focused && !(selection?.kind === 'build' && selection.slug === row.slug)}
             detailOpen={detailOpen}
             confirmingAbort={confirmingAbort}
             transcript={props.transcript}
+            onPointerEnter={preview({ kind: 'build', slug: row.slug })}
             onActivate={props.onActivate}
             onToggleDetail={props.onToggleDetail}
             onAnswer={props.onAnswer}
@@ -425,14 +447,18 @@ function HarvestRow({
   now,
   hasTicketColumn,
   selected,
+  hovered,
   dimmed,
+  onPointerEnter,
   onActivate,
 }: {
   harvest: DashboardHarvest
   now: number
   hasTicketColumn: boolean
   selected: boolean
+  hovered: boolean
   dimmed: boolean
+  onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
 }) {
   return (
@@ -440,7 +466,9 @@ function HarvestRow({
       className="row harvest"
       data-status={harvest.status}
       data-selected={selected || undefined}
+      data-hovered={hovered || undefined}
       data-dimmed={dimmed || undefined}
+      onPointerEnter={onPointerEnter}
     >
       <div className="rowline">
         <span className="lane" aria-hidden />
@@ -488,10 +516,12 @@ function BuildRow({
   now,
   pending,
   selected,
+  hovered,
   dimmed,
   detailOpen,
   confirmingAbort,
   transcript,
+  onPointerEnter,
   onActivate,
   onToggleDetail,
   onAnswer,
@@ -502,10 +532,12 @@ function BuildRow({
   now: number
   pending?: string
   selected: boolean
+  hovered: boolean
   dimmed: boolean
   detailOpen: boolean
   confirmingAbort: boolean
   transcript?: TranscriptPresentation
+  onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
   onToggleDetail: BuildsViewProps['onToggleDetail']
   onAnswer: BuildsViewProps['onAnswer']
@@ -523,7 +555,9 @@ function BuildRow({
       id={`build-${encodeURIComponent(row.slug)}`}
       data-status={row.status}
       data-selected={selected || undefined}
+      data-hovered={hovered || undefined}
       data-dimmed={dimmed || undefined}
+      onPointerEnter={onPointerEnter}
     >
       <div className="rowline">
         <span className="lane" aria-hidden />
