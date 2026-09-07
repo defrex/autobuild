@@ -69,6 +69,7 @@
     "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
+    "capture:web-dashboard": "bun tools/web-dashboard-capture.tsx",
     "capture:readme-headline": "bun tools/readme-headline.ts",
     "release": "bun tools/release.ts",
     "postgres:migrate": "bun packages/postgres-store/src/bin.ts migrate",

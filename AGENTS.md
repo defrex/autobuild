@@ -100,3 +100,44 @@ Only `verify:*` and `finalize:*` are configurable extension points. Agents inter
 - Validate every event write and derive status through `packages/core/src/kernel/reducer.ts`; events record facts, never derived state.
 - Keep phase behavior centralized in `packages/core/src/kernel/phases.ts` and deterministic transitions in `packages/core/src/kernel/engine.ts`.
 - Do not commit `.ab/`, `.autobuild/`, `.env`, build artifacts, or transcripts.
+
+## Working on the dashboards
+
+Two frontends read the same event log: the terminal dashboard in
+`packages/core/src/cli/dashboard/` and the operator web app in `app/`. Both are
+product code, and the web app has a recorded design system. Any change under
+`app/**` is design work as well as engineering work:
+
+- **Invoke the `impeccable` skill before editing UI.** Run
+  `.agents/skills/impeccable/scripts/impeccable context --target <file>` from
+  the repository root (`.claude/skills/impeccable` is the same skill for the
+  Claude harness). It loads `PRODUCT.md`, `DESIGN.md`, and the surface brief;
+  follow its directives and load `reference/craft-floor.md` before writing UI
+  code. Use its refinement commands (`polish`, `adapt`, `harden`, `clarify`,
+  `critique`, `audit`) as the task calls for them.
+- **`DESIGN.md` is the visual authority.** Extend the recorded system through
+  the tokens in `app/globals.css`, the cell grid, and the named rules. Never
+  add a second face, a second size, a hairline border, a shadow, a gradient,
+  an icon set, or an emoji glyph.
+- **Visual-world changes are human decisions.** Replacing the recorded world,
+  running a direction round, or opening a decision page (`shape` of a new
+  surface, `bolder`, `overdrive`, `live`, or a redesign) needs a human at the
+  table and is never done inside an unattended build. Record the need with
+  `ab observe` or stop with `ab escalate`. The open decisions listed in
+  `DESIGN.md` (page numbers, palette tuning) stay open until a human closes
+  them in a ticket.
+- **Prove it with pixels.** `bun run capture:web-dashboard` renders the real
+  views over the scripted dispatch models and screenshots them with a local
+  Chromium into `.ab/web-dashboard-frames/`; open every PNG before finishing.
+  The `web-dashboard` verify step runs the same capture through the
+  repository-local `verify-web-dashboard` skill for any build that touches
+  `app/**`. The terminal dashboard keeps its own `dashboard` step and
+  `readme-headline` check.
+- **Parity is the vocabulary, not the pixels.** A change to what a row says
+  belongs in the shared projection under `packages/core/src/cli/dashboard/`,
+  never in one frontend alone; presentation may differ, terms may not.
+
+Design tickets name the surface and the states they touch, cite the `DESIGN.md`
+rule they extend, and say which open decision, if any, a human has already
+made. Live sign-in works only on the production origin, so review evidence
+comes from the capture, not from a preview deploy.

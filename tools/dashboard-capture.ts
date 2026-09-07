@@ -19,7 +19,7 @@ import {
   type SkillHandlers,
 } from '../packages/core/src/integration/harness'
 
-const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
+export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 
 type CaptureScenario = 'mixed' | 'happy'
 

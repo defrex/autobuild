@@ -19,7 +19,7 @@ test = "bun run test"
 # optional steps in its opening `verifySteps` front matter; a plan without that
 # metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "dashboard"]
+steps = ["lint", "types", "unit", "dashboard", "web-dashboard"]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
@@ -40,6 +40,14 @@ command = "test"
 kind = "agent"
 skill = "ab-verify-dashboard"
 paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.ts", "tools/dashboard-capture.ts", ".agents/skills/ab-verify-dashboard/SKILL.md"]
+
+# Visual evidence for the operator web app in app/. Same shape as the terminal
+# step: the kernel decides applicability from the diff, the repository-local
+# skill judges rendered frames against DESIGN.md and attaches them on a pass.
+[verify.web-dashboard]
+kind = "agent"
+skill = "verify-web-dashboard"
+paths = ["app/**", "tools/web-dashboard-capture.tsx", ".agents/skills/verify-web-dashboard/SKILL.md", "DESIGN.md"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.

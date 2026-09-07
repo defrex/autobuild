@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "capture mono",
+        "createdAt": "2026-09-07T17:58:24.158Z",
+        "reason": "capture-tool alias binding --font-mono to the host's installed mono face for offline verification screenshots; not a design token (decided by Claude from the verify tooling design, DESIGN.md unchanged)"
+      }
+    ]
+  }
+}
