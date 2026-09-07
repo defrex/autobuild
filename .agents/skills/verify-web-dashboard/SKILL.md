@@ -32,7 +32,10 @@ inspect the diff and not to decide applicability again.
 4. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
    tool, both viewports. Judge the images themselves. The `.html` files are
    human evidence and may help identify a frame, but they are not a basis for
-   your verdict.
+   your verdict. Narrow Fastext rows are contiguous: in `tickets-narrow.png`,
+   inspect both bottom rows—the first is empty red/green and the second is
+   yellow `NEW TICKET`/empty cyan—rather than assigning the second-row label
+   to the red cell above it.
 5. Append criterion-by-criterion visual observations to the generated report,
    ticking or failing each checklist item. In its **Web dashboard visual
    verdict** section, record pass or fail explicitly. On a guidance-assisted

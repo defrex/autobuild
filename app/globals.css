@@ -950,6 +950,7 @@ textarea {
   }
   .fastext {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, var(--row));
   }
   .tokens,
   .rows[data-ticket-col="0"] .tokens {
