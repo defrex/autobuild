@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 
+const PROVIDER_NAMES: Record<string, string> = { github: 'GitHub' }
+
 export function SignIn({ providers, error }: { providers: readonly string[]; error?: string }) {
   const [pending, setPending] = useState(false)
   async function signIn(provider: string) {
@@ -24,23 +26,45 @@ export function SignIn({ providers, error }: { providers: readonly string[]; err
     else setPending(false)
   }
   return (
-    <main className="signin">
+    <main className="frame signin">
+      <header className="masthead">
+        <h1 className="dh title">
+          <span>Autobuild operator</span>
+        </h1>
+        <p className="dh imperative" data-tone={error ? 'alert' : undefined}>
+          {error && <span>REFUSED</span>}
+        </p>
+        <span className="clock" aria-hidden />
+      </header>
       <section className="card" aria-labelledby="signin-title">
-        <p className="eyebrow">Autobuild operator</p>
-        <h1 id="signin-title">Sign in</h1>
-        <p>Use an identity allowed by this deployment’s operator.</p>
+        <h2 id="signin-title">Sign in</h2>
+        <p>Use an identity allowed by this deployment's operator.</p>
         {error && (
-          <p className="error" role="alert">
+          <p className="alert notice" role="alert">
             Access was refused. Ask the deployment operator to check the allowlist.
           </p>
         )}
-        {providers.map((provider) => (
-          <button key={provider} type="button" disabled={pending} onClick={() => signIn(provider)}>
-            {pending
-              ? 'Redirecting…'
-              : `Continue with ${provider === 'github' ? 'GitHub' : provider}`}
-          </button>
-        ))}
+        <div className="providers">
+          {providers.map((provider) => (
+            <button
+              key={provider}
+              type="button"
+              className="ft"
+              data-slot="green"
+              disabled={pending}
+              onClick={() => signIn(provider)}
+            >
+              <span>
+                {pending
+                  ? 'Redirecting...'
+                  : `Continue with ${PROVIDER_NAMES[provider] ?? provider}`}
+              </span>
+            </button>
+          ))}
+          {providers.length === 0 && (
+            <p className="warn notice">No sign-in provider is configured for this deployment.</p>
+          )}
+        </div>
       </section>
     </main>
   )
