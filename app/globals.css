@@ -437,7 +437,8 @@ h3 {
   padding-bottom: var(--row);
 }
 /* Focus by dimming: the selection keeps its colors, the rest drop to slack.
- * Alerts stay red: a blocked row is never dimmed away. */
+ * STATUS and alert colors resolve outside these row tokens; the held annotation
+ * likewise uses --title because a repository hold remains decision-relevant. */
 .rows[data-focused] .row[data-dimmed] {
   --ink: var(--slack);
   --live: var(--slack);
@@ -532,7 +533,7 @@ input.short {
 .tokens .am[data-am="cancelling"] {
   color: var(--warn);
 }
-/* A repository hold remains decision-relevant while surrounding row details dim. */
+/* Keep this warning on --title while --warn dims with surrounding row details. */
 .tokens .held {
   color: var(--title);
 }
@@ -854,6 +855,8 @@ textarea {
   color: var(--ground);
   text-decoration: none;
 }
+/* Reduced opacity de-emphasizes only the slot-colored foreground and outline;
+ * the resting surface remains transparent on the uniform black ground. */
 .ft:disabled {
   background: transparent;
   color: var(--ft-color);

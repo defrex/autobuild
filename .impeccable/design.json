@@ -263,7 +263,7 @@
       "name": "Fastext row",
       "kind": "custom",
       "refersTo": "fastext-red",
-      "description": "Four transparent outline buttons in the non-scrolling final shell slot; border and label keep the fixed red, green, yellow, cyan slot hue in every state, including empty and disabled.",
+      "description": "Four transparent outline buttons in the non-scrolling final shell slot; border and label keep the fixed red, green, yellow, cyan slot hue in every state. A disabled cell drops its key, uses normal weight and a not-allowed cursor, and reduces only its colored foreground and outline to 0.9 opacity over the unchanged transparent resting surface.",
       "html": "<div class=\"ds-tt\"><div class=\"ds-fastext\" role=\"toolbar\"><button class=\"ds-ft\" data-slot=\"red\"><kbd>a</kbd><span>ABORT</span></button><button class=\"ds-ft\" data-slot=\"green\" disabled><kbd>r</kbd><span>RESUME</span></button><button class=\"ds-ft\" data-slot=\"yellow\"><kbd>m</kbd><span>AUTO MERGE</span></button><button class=\"ds-ft\" data-slot=\"cyan\"><kbd>↵</kbd><span>DETAILS</span></button></div></div>",
       "css": ".ds-tt { --button-border: 2px; font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-fastext { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 1ch; } .ds-ft { display: flex; box-sizing: border-box; align-items: center; column-gap: 1ch; height: var(--row, 22px); padding: 0 1ch; font: inherit; background: transparent; border: var(--button-border) solid currentColor; border-radius: 0; color: var(--ft-color); font-weight: 700; white-space: nowrap; overflow: hidden; cursor: pointer; } .ds-ft[data-slot=\"red\"] { --ft-color: var(--ft-red, #d96868); } .ds-ft[data-slot=\"green\"] { --ft-color: var(--ft-green, #65b868); } .ds-ft[data-slot=\"yellow\"] { --ft-color: var(--ft-yellow, #d7c84f); } .ds-ft[data-slot=\"cyan\"] { --ft-color: var(--ft-cyan, #55b8b8); } .ds-ft:hover:not(:disabled) { background: transparent; text-decoration: underline; text-underline-offset: 0.15em; } .ds-ft:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-ft:active:not(:disabled) { background: var(--ft-color); border-color: var(--ft-color); color: var(--ground, #000); text-decoration: none; } .ds-ft:disabled { background: transparent; color: var(--ft-color); font-weight: 400; opacity: 0.9; cursor: not-allowed; } .ds-ft:disabled kbd { display: none; }"
     },
@@ -271,7 +271,7 @@
       "name": "Build row",
       "kind": "card",
       "refersTo": "status",
-      "description": "Lane, ticket id, bold slug, right-pinned tokens and STATUS, then the glyph step line and a three-row message preview. Committed selection uses a bold cyan >; fine-pointer hover uses a regular cyan > without changing selection, detail, dimming, ARIA, or Fastext.",
+      "description": "Lane, ticket id, bold slug, right-pinned tokens and STATUS, then the glyph step line and a three-row message preview. Committed selection uses a bold cyan >; fine-pointer hover uses a regular cyan > without changing selection, detail, dimming, ARIA, or Fastext. Unfocused rows dim except for full-color STATUS words, yellow (held) annotations, and red alert lines.",
       "html": "<div class=\"ds-tt\"><div class=\"ds-row\" data-selected=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-PLAN</span><span class=\"ds-slug\">plan-blocked-dashboard</span></span><span class=\"ds-tokens\"><span class=\"ds-pr\">PR open</span></span><span class=\"ds-status\" data-status=\"blocked\">BLOCKED</span></div><ol class=\"ds-steps\"><li data-state=\"current\">[&gt;] plan(3s)</li><li data-state=\"pending\">[ ] plan-review</li><li data-state=\"pending\">[ ] implement</li><li data-state=\"pending\">[ ] code-review</li><li data-state=\"pending\">[ ] verify:unit</li><li data-state=\"pending\">[ ] finalize</li><li data-state=\"pending\">[ ] merge(waiting)</li></ol><div class=\"ds-message\" data-tone=\"alert\"><p>! The plan needs a decision the spec does not make.</p><p>&nbsp;&nbsp;... 4 more rows - Enter details</p></div></div><div class=\"ds-row\" data-hovered=\"true\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-NEXT</span><span class=\"ds-slug\">hover-preview-dashboard</span></span><span class=\"ds-status\" data-status=\"queued\">QUEUED</span></div></div><div class=\"ds-rule\"></div></div>",
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #55b8b8); } .ds-row[data-hovered] .ds-lane { color: var(--lane-preview, #55b8b8); font-weight: 400; } .ds-row[data-selected] .ds-lane { color: var(--live, #55b8b8); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #e6e6e6); } .ds-rowhead:hover { color: var(--live, #55b8b8); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-pr { color: var(--live, #55b8b8); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #d96868); } .ds-status[data-status=\"running\"] { color: var(--ok, #65b868); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #55b8b8); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #d7c84f); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #65b868); } .ds-steps li[data-state=\"current\"] { color: var(--live, #55b8b8); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #d7c84f); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #888888); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #d96868); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #292929); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; }"
     },
@@ -311,12 +311,12 @@
       },
       {
         "name": "The Fastext Identity Rule",
-        "body": "The four Fastext slot colors (red, green, yellow, cyan, left to right) are the slot identity and never encode state. Each transparent cell carries its hue in both outline and label; empty and disabled slots keep it. Hover underlines without changing hue and active fills only with the same slot hue.",
+        "body": "The four Fastext slot colors (red, green, yellow, cyan, left to right) are the slot identity and never encode state. Each transparent cell carries its hue in both outline and label; an empty slot keeps its outline. A disabled cell keeps the same hue on its colored foreground and outline at 0.9 opacity, drops its key letter, and uses normal weight and a not-allowed cursor. This narrowly reduces disabled-state emphasis over the unchanged transparent resting surface; it does not create a translucent surface. Hover underlines without changing hue and active fills only with the same slot hue.",
         "section": "colors"
       },
       {
         "name": "The Alert Never Dims Rule",
-        "body": "Focus by dimming lowers ink, cyan, green, yellow, and step colors of unfocused rows to slack; STATUS words and red alert lines keep full color. A blocked row is never dimmed away.",
+        "body": "Focus by dimming lowers ink, cyan, green, yellow, and step colors of unfocused rows to slack; STATUS words, the yellow `(held)` annotation, and red alert lines keep full color because they remain decision-relevant. A blocked row is never dimmed away.",
         "section": "colors"
       },
       {
@@ -341,7 +341,7 @@
       },
       {
         "name": "The Flat Grid Rule",
-        "body": "Nothing casts a shadow and nothing is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well.",
+        "body": "Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well. The narrow disabled Fastext exception renders only its colored foreground and outline at 0.9 opacity over the unchanged transparent resting surface, so it de-emphasizes the control without introducing a translucent surface.",
         "section": "elevation"
       },
       {
@@ -354,19 +354,19 @@
       "Do size everything in cells: widths in `ch`, heights in multiples of `--row`, 2ch indents, 1ch between glyph tokens.",
       "Do keep the document fixed to the viewport and put every surface's dynamic content in the sole scrolling centre.",
       "Do read role tokens and the step and status maps; the `--tt-*` primaries are set once in `:root` and never referenced by a component.",
-      "Do keep the Fastext row's four same-hue outlines fixed left to right and let the labels carry the action.",
+      "Do keep the Fastext row's four same-hue outlines fixed left to right and let the labels carry the action; disabled cells retain that hue at 0.9 opacity only on their foreground and outline.",
       "Do put one imperative in the masthead by priority (BLOCKED > FAILED > PR READY > MERGED) and leave it empty when nothing needs a human.",
       "Do rest buttons transparently on the ground; use reverse video only for active tabs, a button's pressed state, and the flash.",
-      "Do keep STATUS words and red alert lines at full color when dimming the frame around a selection.",
+      "Do keep STATUS words, yellow `(held)` annotations, and red alert lines at full color when dimming the frame around a selection.",
       "Do carry state in a word and a color together; screen-reader text names the step state the glyph shows.",
       "Do make destructive intent a second step with a red `!` confirmation line."
     ],
     "donts": [
       "Don't introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.",
-      "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces. Separate non-controls with a `─` rule, a fill change, or an empty row.",
+      "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Disabled Fastext opacity de-emphasizes only its colored foreground and outline over an unchanged transparent resting surface. Separate non-controls with a `─` rule, a fill change, or an empty row.",
       "Don't round a corner.",
       "Don't use a saturated color for anything but its assigned state, and never encode state in a Fastext slot color.",
-      "Don't dim a red line or a STATUS word, or truncate the imperative before the repository name.",
+      "Don't dim a red line, a STATUS word, or a yellow `(held)` annotation, or truncate the imperative before the repository name.",
       "Don't add motion beyond the 180ms state-word flash, and never animate under reduced motion.",
       "Don't use icon fonts, SVG icon sets, or emoji glyphs in the interface; the glyph set is `[x] [>] [~] [ ]`, `>`, `!`, `▾`, `─`, `×`.",
       "Don't build a sidebar, metric cards, a pill-status table, a drawer, or a modal; detail unfolds in place under its row.",
