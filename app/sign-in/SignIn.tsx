@@ -28,10 +28,10 @@ export function SignIn({ providers, error }: { providers: readonly string[]; err
   return (
     <main className="frame signin">
       <header className="masthead">
-        <h1 className="dh title">
+        <h1 className="masthead-copy title">
           <span>Autobuild operator</span>
         </h1>
-        <p className="dh imperative" data-tone={error ? 'alert' : undefined}>
+        <p className="masthead-copy imperative" data-tone={error ? 'alert' : undefined}>
           {error && <span>REFUSED</span>}
         </p>
         <span className="clock" aria-hidden />

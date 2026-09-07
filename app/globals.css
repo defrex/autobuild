@@ -222,31 +222,29 @@ h3 {
   scrollbar-gutter: stable;
 }
 
-/* Double height: the teletext header attribute. Two rows tall, one cell wide. */
+/* Masthead copy: one natural-proportion row, bold within the shared cell grid. */
 .masthead {
   display: grid;
   grid-template-columns: minmax(0, max-content) max-content 1fr auto;
   column-gap: 2ch;
   align-items: start;
-  height: calc(var(--row) * 2);
+  height: var(--row);
   margin-top: var(--row);
 }
-.dh {
+.masthead-copy {
   display: block;
-  height: calc(var(--row) * 2);
+  height: var(--row);
   line-height: var(--row);
   white-space: nowrap;
   overflow: hidden;
 }
-.dh > span {
+.masthead-copy > span {
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: top;
   font-weight: 700;
-  transform: scaleY(2);
-  transform-origin: 0 0;
 }
 .masthead .title {
   color: var(--title);
