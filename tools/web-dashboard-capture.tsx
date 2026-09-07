@@ -48,6 +48,20 @@ export interface WebFrameSpec {
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
   {
+    id: 'builds-loading-wide',
+    width: 1440,
+    height: 1000,
+    requires: ['Loading builds'],
+    forbids: ['polling', 'RUNNING', 'BLOCKED', 'MERGED', 'PAUSE ALL'],
+  },
+  {
+    id: 'builds-loading-narrow',
+    width: 390,
+    height: 1700,
+    requires: ['Loading builds'],
+    forbids: ['polling', 'RUNNING', 'BLOCKED', 'MERGED', 'PAUSE ALL'],
+  },
+  {
     id: 'builds-happy-wide',
     width: 1440,
     height: 1000,
@@ -301,7 +315,7 @@ function shell(
   )
 }
 
-function builds(model: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
+function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
   return (
     <BuildsView
       repo={FIXTURE_REPO}
@@ -378,6 +392,9 @@ function abortableSelection(model: DashboardModel): Selection {
 function frameNode(id: string, models: WebFixtureModels): ReactNode {
   const queue = fixtureTicketQueue()
   switch (id) {
+    case 'builds-loading-wide':
+    case 'builds-loading-narrow':
+      return shell(builds())
     case 'builds-happy-wide':
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
@@ -670,7 +687,10 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '## Visual criteria',
     '',
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. Empty black below the content is the fixed viewport height, not a defect.',
-    '- [ ] Masthead: the repository name in yellow at left, one imperative word in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), the poll clock at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name ellipsizes and `BLOCKED ×2` renders whole.',
+    '- [ ] Compare loading and loaded Builds at both widths, then Builds, Tickets, and sign-in: the masthead is exactly one cell row high with identical coordinates in every state and surface. Navigation and the top and bottom edges of the Fastext footer are also stable where present.',
+    '- [ ] Loading frames show five static, neutral placeholder rows at the normal three-row build rhythm, with no digits, status words, imperative, synthetic values, or animation. The old polling sentence is absent.',
+    '- [ ] The document itself does not scroll. Builds, Tickets filters/queue/forms/detail, and open build detail are clipped only by and scroll within the centre between navigation and Fastext; the shell anchors do not move.',
+    '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
     '- [ ] Dispatcher line: queue, active, observations, repository state, and the intake, auto merge, and harvest toggle words with bold ON in green or OFF in yellow. The happy frames show everything ON and RUNNING; the mixed frames show PAUSED and OFF.',
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
     '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, RUNNING/green, PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',

@@ -23,8 +23,8 @@ export interface OperatorShellProps {
 }
 
 /**
- * The frame every operator page shares: a double-height masthead carrying
- * the repository, one imperative, and the poll clock; then the surface line.
+ * The frame every operator page shares: a one-row masthead carrying the
+ * repository, one imperative, and the poll clock; then the surface line.
  * Pure presentation so a fixture can render the same frame the operator sees.
  */
 export function OperatorShell({
@@ -44,10 +44,15 @@ export function OperatorShell({
   return (
     <main className="frame">
       <header className="masthead">
-        <h1 className="dh title">
+        <h1 className="masthead-copy title">
           <span>{repo || 'no repository configured'}</span>
         </h1>
-        <p className="dh imperative" data-tone={imperative?.tone} aria-live="polite" aria-atomic>
+        <p
+          className="masthead-copy imperative"
+          data-tone={imperative?.tone}
+          aria-live="polite"
+          aria-atomic
+        >
           {imperative && (
             <span>
               {imperative.word}
@@ -95,12 +100,14 @@ export function OperatorShell({
           </button>
         </span>
       </nav>
-      {error && (
-        <p className="alert notice" role="alert">
-          {error}
-        </p>
-      )}
-      {children}
+      <div className="shell-body">
+        {error && (
+          <p className="alert notice shell-notice" role="alert">
+            {error}
+          </p>
+        )}
+        {children}
+      </div>
     </main>
   )
 }

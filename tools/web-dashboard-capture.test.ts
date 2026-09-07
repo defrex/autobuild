@@ -136,6 +136,30 @@ test('ticket narrow keeps two complete Fastext identity rows', () => {
   ).toThrow(/expected red, green, yellow, cyan Fastext slots/)
 })
 
+test('loading frames preserve shell landmarks and expose only one hidden announcement', () => {
+  const fixtures = models()
+  for (const id of ['builds-loading-wide', 'builds-loading-narrow']) {
+    const spec = WEB_FRAME_SPECS.find((entry) => entry.id === id)
+    expect(spec).toBeDefined()
+    const html = renderWebFrame(spec!, fixtures, { css: '', fontCss: '' })
+    expect(html).toContain('<main class="frame">')
+    expect(html).toContain('<header class="masthead">')
+    expect(html).toContain('<nav class="line navline"')
+    expect(html).toContain('role="toolbar"')
+    expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
+    const loadingStart = html.indexOf('<div class="loading-state">')
+    const skeletonStart = html.indexOf('<div class="skeletons"', loadingStart)
+    const loadingAnnouncement = html.slice(loadingStart, skeletonStart)
+    expect(loadingStart).toBeGreaterThan(-1)
+    expect(skeletonStart).toBeGreaterThan(loadingStart)
+    expect(loadingAnnouncement.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(html.match(/data-loading-row=""/g)).toHaveLength(5)
+    expect(html).toContain('<div class="skeletons" aria-hidden="true">')
+    expect(html).not.toContain('polling')
+    expect(html).not.toContain('class="status"')
+  }
+})
+
 test('hover frame keeps committed and preview state independent', () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-hover-wide')
   if (!spec) throw new Error('hover frame spec is missing')
