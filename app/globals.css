@@ -978,10 +978,6 @@ textarea {
 
 /* ── Sign-in ──────────────────────────────────────────────────────────── */
 
-.signin .masthead {
-  flex: none;
-  margin-top: 0;
-}
 .signin-centre {
   display: flex;
   flex: 1 1 auto;
