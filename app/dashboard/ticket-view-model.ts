@@ -80,6 +80,21 @@ export function groupTickets(tickets: Ticket[]): Array<{ state: string; tickets:
   return [...groups].map(([state, grouped]) => ({ state, tickets: grouped }))
 }
 
+/** Keep a live selection, otherwise open the first item in queue order. */
+export function queueSelection(tickets: Ticket[], selected?: string): string | undefined {
+  return selected !== undefined && tickets.some((ticket) => ticket.ref.id === selected)
+    ? selected
+    : tickets[0]?.ref.id
+}
+
+/** Select the item that occupies the removed row's index, or the new final row. */
+export function selectionAfterRemoval(tickets: Ticket[], removed: string): string | undefined {
+  const index = tickets.findIndex((ticket) => ticket.ref.id === removed)
+  if (index === -1) return queueSelection(tickets)
+  const remaining = tickets.filter((ticket) => ticket.ref.id !== removed)
+  return remaining[Math.min(index, remaining.length - 1)]?.ref.id
+}
+
 /** Polled details replace clean drafts only; an operator's bytes always win while dirty. */
 export function reconcileTicketDetail(
   current: OperatorTicketDetail | undefined,

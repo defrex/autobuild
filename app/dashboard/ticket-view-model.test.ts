@@ -4,7 +4,9 @@ import {
   bodyFromEditor,
   draftFromTicket,
   groupTickets,
+  queueSelection,
   reconcileTicketDetail,
+  selectionAfterRemoval,
   ticketFilterQuery,
   ticketUpdatePatch,
 } from './ticket-view-model'
@@ -13,7 +15,7 @@ const ticket: Ticket = {
   ref: { source: 'linear', id: 'AUT-1', title: 'One' },
   title: 'One',
   body: 'first\r\nsecond  \nno-final-newline',
-  state: 'Ready',
+  state: 'Backlog',
   labels: ['a', 'b'],
 }
 
@@ -50,7 +52,29 @@ describe('ticket view model', () => {
       groupTickets([ticket, { ...ticket, ref: { ...ticket.ref, id: 'AUT-2' }, state: 'Done' }]).map(
         (group) => group.state,
       ),
-    ).toEqual(['Ready', 'Done'])
+    ).toEqual(['Backlog', 'Done'])
+  })
+
+  test('opens, retains, and advances selection without reordering', () => {
+    const tickets = [
+      ticket,
+      { ...ticket, ref: { ...ticket.ref, id: 'AUT-2' } },
+      { ...ticket, ref: { ...ticket.ref, id: 'AUT-3' } },
+    ]
+    expect(queueSelection(tickets)).toBe('AUT-1')
+    expect(queueSelection(tickets, 'AUT-2')).toBe('AUT-2')
+    expect(queueSelection(tickets, 'gone')).toBe('AUT-1')
+    expect(selectionAfterRemoval(tickets, 'AUT-2')).toBe('AUT-3')
+    expect(selectionAfterRemoval(tickets, 'AUT-3')).toBe('AUT-2')
+    expect(selectionAfterRemoval([ticket], 'AUT-1')).toBeUndefined()
+  })
+
+  test('clears dirty state when an exact edit is reverted', () => {
+    const draft = draftFromTicket(ticket)
+    draft.body = `${draft.body}\nchanged  `
+    expect(ticketUpdatePatch(ticket, draft)).not.toBeNull()
+    draft.body = draftFromTicket(ticket).body
+    expect(ticketUpdatePatch(ticket, draft)).toBeNull()
   })
 
   test('keeps a dirty detail across polling', () => {

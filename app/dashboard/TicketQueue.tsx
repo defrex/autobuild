@@ -7,15 +7,15 @@ import type {
   OperatorTicketQueue,
 } from 'autobuild/operator-api'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import * as api from './api'
 import { DashboardSurface, Fastext, type FastextCell, LoadingRows, Rule } from './frame'
+import { MarkdownBodyEditor } from './MarkdownBodyEditor'
 import {
   draftFromTicket,
-  groupTickets,
   parseLabels,
+  queueSelection,
   reconcileTicketDetail,
+  selectionAfterRemoval,
   type TicketDraft,
   ticketUpdatePatch,
 } from './ticket-view-model'
@@ -38,20 +38,30 @@ export interface TicketsViewProps {
   onEdit: (draft: TicketDraft) => void
   onSave: () => void
   onMove: (state: string) => void
+  onPromote: () => void
   onBlock: (ids: string[], operation: 'block' | 'unblock') => void
   onCreate: (value: OperatorTicketCreateRequest) => void
   onToggleCreate: () => void
   onOpenBuild: (build: OperatorTicketBuild) => void
 }
 
-/** The Tickets surface as pure presentation over the polled queue. */
+/** The Tickets surface as pure presentation over one configured-state queue. */
 export function TicketsView(props: TicketsViewProps) {
   const { repo, queue, selected, detail, draft, dirty, pending, creating } = props
+  const promotable =
+    detail !== undefined && queue !== undefined && detail.ticket.state === queue.triageState
   const cells: readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?] = [
     selected ? { key: 'Esc', label: 'CLOSE', onPress: props.onClose } : undefined,
-    detail && draft
-      ? { key: 's', label: 'SAVE', disabled: pending || !dirty, onPress: props.onSave }
-      : undefined,
+    promotable
+      ? {
+          key: 'p',
+          label: `TO ${queue.readyState.toUpperCase()}`,
+          disabled: pending,
+          onPress: props.onPromote,
+        }
+      : detail && dirty
+        ? { key: 's', label: 'SAVE', disabled: pending, onPress: props.onSave }
+        : undefined,
     { key: 'n', label: creating ? 'CANCEL NEW' : 'NEW TICKET', onPress: props.onToggleCreate },
     detail?.build
       ? { key: 'b', label: 'OPEN BUILD', onPress: () => props.onOpenBuild(detail.build!) }
@@ -60,7 +70,7 @@ export function TicketsView(props: TicketsViewProps) {
 
   return (
     <DashboardSurface footer={<Fastext label="Ticket controls" cells={cells} />}>
-      <section className="ticketQueue" aria-label="Ticket queue">
+      <section className="ticketQueue" aria-label="Ticket list">
         <div className="line filterline">
           <label>
             <span className="slack">state</span>
@@ -69,10 +79,12 @@ export function TicketsView(props: TicketsViewProps) {
                 value={props.stateFilter}
                 onChange={(event) => props.onStateFilter(event.target.value)}
               >
-                <option value="">Ready criteria (default)</option>
-                {queue?.states.map((state) => (
-                  <option key={state}>{state}</option>
-                ))}
+                <option value="">{queue?.triageState ?? 'Configured default'}</option>
+                {queue?.states
+                  .filter((state) => state !== queue.triageState)
+                  .map((state) => (
+                    <option key={state}>{state}</option>
+                  ))}
               </select>
             </span>
           </label>
@@ -102,24 +114,29 @@ export function TicketsView(props: TicketsViewProps) {
         {!queue ? (
           <LoadingRows label={`Loading the ticket queue for ${repo}.`} />
         ) : (
-          <div className="pages">
-            {groupTickets(queue.tickets).map((group) => (
-              <section className="page" key={group.state} aria-label={`${group.state} tickets`}>
-                <h2>
-                  {group.state.toUpperCase()} <span className="count">{group.tickets.length}</span>
-                </h2>
-                <ol>
-                  {group.tickets.map((ticket) => (
-                    <li key={ticket.ref.id}>
+          <section
+            className="page ticketPage"
+            aria-label={`${queue.criteria.state ?? queue.triageState} tickets`}
+          >
+            <h2>
+              {(queue.criteria.state ?? queue.triageState).toUpperCase()}{' '}
+              <span className="count">{queue.tickets.length}</span>
+            </h2>
+            {queue.tickets.length > 0 ? (
+              <ol>
+                {queue.tickets.map((ticket) => {
+                  const open = selected === ticket.ref.id
+                  return (
+                    <li key={ticket.ref.id} data-selected={open || undefined}>
                       <button
                         type="button"
                         className="trow"
-                        aria-pressed={selected === ticket.ref.id}
-                        onClick={() =>
-                          selected === ticket.ref.id ? props.onClose() : props.onOpen(ticket.ref.id)
-                        }
+                        aria-pressed={open}
+                        onClick={() => props.onOpen(ticket.ref.id)}
                       >
-                        <span className="lane" aria-hidden />
+                        <span className="lane" aria-hidden>
+                          {open ? '>' : ''}
+                        </span>
                         <span>
                           <span className="tid">{ticket.ref.id}</span>{' '}
                           <span className="ttitle">{ticket.title}</span>
@@ -134,28 +151,35 @@ export function TicketsView(props: TicketsViewProps) {
                           ) : null}
                         </span>
                       </button>
+                      {open && detail && draft && (
+                        <TicketDetail
+                          value={detail}
+                          draft={draft}
+                          states={queue.states}
+                          readyState={queue.readyState}
+                          promotable={promotable}
+                          dirty={dirty}
+                          disabled={pending}
+                          onEdit={props.onEdit}
+                          onClose={props.onClose}
+                          onSave={props.onSave}
+                          onMove={props.onMove}
+                          onPromote={props.onPromote}
+                          onBlock={props.onBlock}
+                          onOpenBuild={props.onOpenBuild}
+                          onNew={props.onToggleCreate}
+                        />
+                      )}
                     </li>
-                  ))}
-                </ol>
-              </section>
-            ))}
-            {queue.tickets.length === 0 && <p className="slack">no tickets matched</p>}
-          </div>
-        )}
-        {detail && draft && (
-          <TicketDetail
-            value={detail}
-            draft={draft}
-            states={queue?.states ?? []}
-            dirty={dirty}
-            disabled={pending}
-            onEdit={props.onEdit}
-            onClose={props.onClose}
-            onSave={props.onSave}
-            onMove={props.onMove}
-            onBlock={props.onBlock}
-            onOpenBuild={props.onOpenBuild}
-          />
+                  )
+                })}
+              </ol>
+            ) : (
+              <p className="slack emptyTickets">
+                Nothing is waiting in {queue.criteria.state ?? queue.triageState}.
+              </p>
+            )}
+          </section>
         )}
       </section>
     </DashboardSurface>
@@ -177,41 +201,53 @@ export function TicketQueue({
   const [draft, setDraft] = useState<TicketDraft>()
   const [dirty, setDirty] = useState(false)
   const dirtyRef = useRef(false)
+  const selectionClosed = useRef(false)
   const [stateFilter, setStateFilter] = useState('')
   const [labelFilter, setLabelFilter] = useState('')
   const [pending, setPending] = useState(false)
   const [creating, setCreating] = useState(false)
   const sequence = useRef(0)
 
+  const filters = useCallback(() => {
+    const labels = labelFilter === '' ? undefined : parseLabels(labelFilter)
+    return {
+      ...(stateFilter !== '' ? { state: stateFilter } : {}),
+      ...(labels !== undefined ? { labels } : {}),
+    }
+  }, [stateFilter, labelFilter])
+
   const poll = useCallback(
     async (signal?: AbortSignal) => {
       if (!repo) return
       const current = ++sequence.current
       try {
-        const labels = labelFilter === '' ? undefined : parseLabels(labelFilter)
         const [nextQueue, nextDetail] = await Promise.all([
-          api.tickets(
-            repo,
-            {
-              ...(stateFilter !== '' ? { state: stateFilter } : {}),
-              ...(labels !== undefined ? { labels } : {}),
-            },
-            signal,
-          ),
+          api.tickets(repo, filters(), signal),
           selected ? api.ticket(repo, selected, signal) : Promise.resolve(undefined),
         ])
         if (current !== sequence.current) return
+        const nextSelected = selectionClosed.current
+          ? selected && nextQueue.tickets.some((ticket) => ticket.ref.id === selected)
+            ? selected
+            : undefined
+          : queueSelection(nextQueue.tickets, selected)
         setQueue(nextQueue)
-        if (nextDetail) {
+        setSelected(nextSelected)
+        if (nextDetail && nextDetail.ticket.ref.id === nextSelected) {
           setDetail((old) => reconcileTicketDetail(old, nextDetail, dirtyRef.current))
           if (!dirtyRef.current) setDraft(draftFromTicket(nextDetail.ticket))
+        } else if (nextSelected !== selected) {
+          setDetail(undefined)
+          setDraft(undefined)
+          setDirty(false)
+          dirtyRef.current = false
         }
         onError(undefined)
       } catch (cause) {
         if (!signal?.aborted) onError(cause instanceof Error ? cause.message : String(cause))
       }
     },
-    [repo, stateFilter, labelFilter, selected, onError],
+    [repo, filters, selected, onError],
   )
 
   useEffect(() => {
@@ -224,16 +260,21 @@ export function TicketQueue({
     }
   }, [poll])
 
+  const installDetail = (next: OperatorTicketDetail) => {
+    setDetail(next)
+    setSelected(next.ticket.ref.id)
+    setDraft(draftFromTicket(next.ticket))
+    setDirty(false)
+    dirtyRef.current = false
+    selectionClosed.current = false
+  }
+
   const act = async (operation: () => Promise<OperatorTicketDetail>) => {
     setPending(true)
     onError(undefined)
     try {
       const next = await operation()
-      setDetail(next)
-      setSelected(next.ticket.ref.id)
-      setDraft(draftFromTicket(next.ticket))
-      setDirty(false)
-      dirtyRef.current = false
+      installDetail(next)
       setCreating(false)
       await poll()
     } catch (cause) {
@@ -244,11 +285,14 @@ export function TicketQueue({
   }
 
   const edit = (next: TicketDraft) => {
+    const changed = detail ? ticketUpdatePatch(detail.ticket, next) !== null : false
     setDraft(next)
-    setDirty(true)
-    dirtyRef.current = true
+    setDirty(changed)
+    dirtyRef.current = changed
   }
   const openTicket = (id: string) => {
+    if (id === selected) return
+    selectionClosed.current = false
     setSelected(id)
     setDetail(undefined)
     setDraft(undefined)
@@ -257,6 +301,7 @@ export function TicketQueue({
   }
   const close = () => {
     sequence.current += 1
+    selectionClosed.current = true
     setSelected(undefined)
     setDetail(undefined)
     setDraft(undefined)
@@ -269,14 +314,77 @@ export function TicketQueue({
     if (patch) void act(() => api.updateTicket(repo, detail.ticket.ref.id, patch))
   }
 
-  // Esc backs out, the same way it closes a build detail.
+  const promote = async () => {
+    if (!queue || !detail || detail.ticket.state !== queue.triageState) return
+    const promotedId = detail.ticket.ref.id
+    const successor = selectionAfterRemoval(queue.tickets, promotedId)
+    setPending(true)
+    onError(undefined)
+    sequence.current += 1
+    try {
+      await api.moveTicket(repo, promotedId, queue.readyState)
+      const nextQueue = await api.tickets(repo, filters())
+      const nextSelected =
+        successor && nextQueue.tickets.some((ticket) => ticket.ref.id === successor)
+          ? successor
+          : queueSelection(nextQueue.tickets)
+      const nextDetail = nextSelected ? await api.ticket(repo, nextSelected) : undefined
+      setQueue(nextQueue)
+      setSelected(nextSelected)
+      setDetail(nextDetail)
+      setDraft(nextDetail ? draftFromTicket(nextDetail.ticket) : undefined)
+      setDirty(false)
+      dirtyRef.current = false
+      selectionClosed.current = false
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const changeStateFilter = (value: string) => {
+    sequence.current += 1
+    selectionClosed.current = false
+    setStateFilter(value)
+    setSelected(undefined)
+    setDetail(undefined)
+    setDraft(undefined)
+    setDirty(false)
+    dirtyRef.current = false
+  }
+
   const keyHandler = useRef<(event: KeyboardEvent) => void>(() => {})
   keyHandler.current = (event) => {
-    if (event.key !== 'Escape') return
+    const key = event.key.toLowerCase()
+    if (key === 'escape') {
+      event.preventDefault()
+      if (creating) setCreating(false)
+      else if (selected) close()
+      return
+    }
     const target = event.target instanceof HTMLElement ? event.target : null
-    if (target?.closest('input, textarea, select')) return
-    if (creating) setCreating(false)
-    else if (selected) close()
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+    if (key === 'arrowup' || key === 'arrowdown') {
+      if (!queue?.tickets.length) return
+      event.preventDefault()
+      const index = queue.tickets.findIndex((ticket) => ticket.ref.id === selected)
+      const delta = key === 'arrowup' ? -1 : 1
+      const next = queue.tickets[Math.max(0, Math.min(queue.tickets.length - 1, index + delta))]
+      if (next) openTicket(next.ref.id)
+    } else if (key === 'p') {
+      event.preventDefault()
+      void promote()
+    } else if (key === 's' && dirty) {
+      event.preventDefault()
+      save()
+    } else if (key === 'n') {
+      event.preventDefault()
+      setCreating((value) => !value)
+    } else if (key === 'b' && detail?.build) {
+      event.preventDefault()
+      onOpenBuild(detail.build)
+    }
   }
   useEffect(() => {
     const listen = (event: KeyboardEvent) => keyHandler.current(event)
@@ -296,7 +404,7 @@ export function TicketQueue({
       creating={creating}
       stateFilter={stateFilter}
       labelFilter={labelFilter}
-      onStateFilter={setStateFilter}
+      onStateFilter={changeStateFilter}
       onLabelFilter={setLabelFilter}
       onOpen={openTicket}
       onClose={close}
@@ -305,6 +413,7 @@ export function TicketQueue({
       onMove={(state) => {
         if (detail) void act(() => api.moveTicket(repo, detail.ticket.ref.id, state))
       }}
+      onPromote={() => void promote()}
       onBlock={(ids, operation) => {
         if (detail) void act(() => api.changeBlockers(repo, detail.ticket.ref.id, ids, operation))
       }}
@@ -400,26 +509,34 @@ function TicketDetail({
   value,
   draft,
   states,
+  readyState,
+  promotable,
   dirty,
   disabled,
   onEdit,
   onClose,
   onSave,
   onMove,
+  onPromote,
   onBlock,
   onOpenBuild,
+  onNew,
 }: {
   value: OperatorTicketDetail
   draft: TicketDraft
   states: string[]
+  readyState: string
+  promotable: boolean
   dirty: boolean
   disabled: boolean
   onEdit: (draft: TicketDraft) => void
   onClose: () => void
   onSave: () => void
   onMove: (state: string) => void
+  onPromote: () => void
   onBlock: (ids: string[], operation: 'block' | 'unblock') => void
   onOpenBuild: (build: OperatorTicketBuild) => void
+  onNew: () => void
 }) {
   const [move, setMove] = useState(value.ticket.state ?? '')
   const [blocker, setBlocker] = useState('')
@@ -427,11 +544,17 @@ function TicketDetail({
   return (
     <article className="detail tdetail" aria-labelledby={titleId}>
       <Rule />
-      <div className="kv">
-        <h3 id={titleId}>{value.ticket.ref.id}</h3>
+      <div className="kv ticketIdentity">
+        <h3 id={titleId}>
+          {value.ticket.ref.id} {value.ticket.title}
+        </h3>
         <span>
           <span className="k">state </span>
           {value.ticket.state ?? '(unknown)'}
+        </span>
+        <span>
+          <span className="k">labels </span>
+          {value.ticket.labels.join(', ') || 'none'}
         </span>
         {value.ticket.ref.url && (
           <a href={value.ticket.ref.url} target="_blank" rel="noreferrer">
@@ -452,8 +575,25 @@ function TicketDetail({
         {dirty && <span className="warn">unsaved changes</span>}
       </div>
 
+      <section className="section bodySection">
+        <h3>Body</h3>
+        <MarkdownBodyEditor
+          value={draft.body}
+          disabled={disabled}
+          onChange={(body) => onEdit({ ...draft, body })}
+        />
+      </section>
+
+      {promotable && (
+        <div className="controls promoteControl">
+          <button type="button" className="btn" disabled={disabled} onClick={onPromote}>
+            <kbd>p</kbd> Move to {readyState}
+          </button>
+        </div>
+      )}
+
       <form
-        className="composer"
+        className="composer ticketFields"
         onSubmit={(event) => {
           event.preventDefault()
           onSave()
@@ -467,34 +607,20 @@ function TicketDetail({
           />
         </label>
         <label className="field">
-          <span>body</span>
-          <textarea
-            value={draft.body}
-            onChange={(event) => onEdit({ ...draft, body: event.target.value })}
-          />
-        </label>
-        <label className="field">
           <span>labels, complete replacement</span>
           <input
             value={draft.labels.join(', ')}
             onChange={(event) => onEdit({ ...draft, labels: parseLabels(event.target.value) })}
           />
         </label>
-        <div className="controls">
-          <button type="submit" className="btn" disabled={disabled || !dirty}>
-            Save changes
-          </button>
-        </div>
+        {dirty && (
+          <div className="controls">
+            <button type="submit" className="btn" disabled={disabled}>
+              Save changes
+            </button>
+          </div>
+        )}
       </form>
-
-      <section className="section">
-        <h3>Preview</h3>
-        <div className="markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-            {draft.body}
-          </ReactMarkdown>
-        </div>
-      </section>
 
       <section className="section">
         <h3>Move</h3>
@@ -566,6 +692,9 @@ function TicketDetail({
       <div className="controls">
         <button type="button" className="word" onClick={onClose}>
           close ticket
+        </button>
+        <button type="button" className="word" onClick={onNew}>
+          new ticket
         </button>
       </div>
       <Rule />
