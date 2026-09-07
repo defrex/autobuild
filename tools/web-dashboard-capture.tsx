@@ -88,6 +88,20 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
+    id: 'builds-harvest-wide',
+    width: 1440,
+    height: 1000,
+    requires: ['Harvest', 'RUNNING', 'HARVEST', 'DESELECT'],
+    forbids: ['PAUSE ALL', 'RESUME ALL'],
+  },
+  {
+    id: 'builds-harvest-narrow',
+    width: 390,
+    height: 1700,
+    requires: ['Harvest', 'RUNNING', 'HARVEST', 'DESELECT'],
+    forbids: ['PAUSE ALL', 'RESUME ALL'],
+  },
+  {
     id: 'builds-multirepo-wide',
     width: 1440,
     height: 1000,
@@ -412,6 +426,11 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
     case 'builds-happy-wide':
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
+    case 'builds-harvest-wide':
+    case 'builds-harvest-narrow':
+      return shell(builds(models.happy, { selection: { kind: 'harvest' } }), {
+        model: models.happy,
+      })
     case 'builds-multirepo-wide':
       return shell(builds(models.happy), {
         model: models.happy,
@@ -717,11 +736,12 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
     '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once without shifting row text: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word and its red lines; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
-    '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow fills.',
-    '- [ ] Fastext footer: four cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; labels never truncate; a disabled cell keeps its fill with a quiet dark label; an empty cell keeps its fill with no label. Slot colors never change with state. In `tickets-narrow.png`, the contiguous first line is empty red then empty green; the second line is yellow `NEW TICKET` then empty cyan. The capture has deterministically verified all four slot elements in this order.',
+    '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow outlines.',
+    '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at reduced emphasis; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. In `tickets-narrow.png`, the contiguous first line is empty red then empty green; the second line is yellow `NEW TICKET` then empty cyan. The capture has deterministically verified all four slot elements in this order.',
     '- [ ] Tickets frames: uppercase state headings in yellow with a white count, bold titles, gray labels, `blocked by` in yellow; the selected row carries `>`; detail shows the fields in dark wells, a Preview whose headings carry gray `#` marks, Move and Blockers sections, and an `unsaved changes` note; the footer reads CLOSE, SAVE, NEW TICKET, OPEN BUILD.',
-    '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and a green `Continue with GitHub` cell; the error variant adds REFUSED in the masthead and a red `!` notice.',
-    '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no hairline borders, shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
+    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
+    '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',
+    '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
     '',
     '## Web dashboard visual verdict',
     '',

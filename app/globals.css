@@ -12,6 +12,7 @@
   --fs: 14px;
   --lh: 20px;
   --row: var(--lh);
+  --button-border: 2px;
 
   /* Muted teletext hues: lower chroma and glare, with contrast preserved. */
   --tt-black: #000000;
@@ -46,7 +47,6 @@
   --ft-green: var(--tt-green);
   --ft-yellow: var(--tt-yellow);
   --ft-cyan: var(--tt-cyan);
-  --ft-dim-ink: var(--tt-well);
 
   /* Step and status colors mirror the terminal renderer's map. */
   --step-done: var(--ok);
@@ -299,15 +299,14 @@ h3 {
 /* Text controls: words that act. */
 .word {
   color: inherit;
+  background: transparent;
+  border: 0;
   white-space: nowrap;
 }
 .word:hover:not(:disabled) {
   color: var(--live);
   text-decoration: underline;
   text-underline-offset: 0.15em;
-}
-.word:disabled {
-  color: var(--slack);
 }
 .on {
   color: var(--ok);
@@ -316,6 +315,19 @@ h3 {
 .off {
   color: var(--warn);
   font-weight: 700;
+}
+.word:active:not(:disabled) {
+  background: var(--ink);
+  color: var(--ground);
+  text-decoration: none;
+}
+.word:active:not(:disabled) .on,
+.word:active:not(:disabled) .off {
+  color: inherit;
+}
+.word:disabled {
+  color: var(--slack);
+  background: transparent;
 }
 
 /* Tones for whole lines. */
@@ -736,18 +748,28 @@ textarea {
   align-items: baseline;
 }
 .btn {
-  display: inline-block;
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  height: var(--row);
   padding: 0 1ch;
-  background: var(--ink);
-  color: var(--ground);
+  background: transparent;
+  border: var(--button-border) solid currentColor;
+  color: var(--ink);
   font-weight: 700;
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
-  background: var(--live);
+  background: transparent;
+  color: var(--live);
+}
+.btn:active:not(:disabled) {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--ground);
 }
 .btn:disabled {
-  background: var(--well);
+  background: transparent;
   color: var(--slack);
 }
 
@@ -789,11 +811,14 @@ textarea {
 }
 .ft {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
   column-gap: 1ch;
   height: var(--row);
   padding: 0 1ch;
-  color: var(--ground);
+  background: transparent;
+  border: var(--button-border) solid currentColor;
+  color: var(--ft-color);
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
@@ -807,23 +832,33 @@ textarea {
   font-weight: 400;
 }
 .ft[data-slot="red"] {
-  background: var(--ft-red);
+  --ft-color: var(--ft-red);
 }
 .ft[data-slot="green"] {
-  background: var(--ft-green);
+  --ft-color: var(--ft-green);
 }
 .ft[data-slot="yellow"] {
-  background: var(--ft-yellow);
+  --ft-color: var(--ft-yellow);
 }
 .ft[data-slot="cyan"] {
-  background: var(--ft-cyan);
+  --ft-color: var(--ft-cyan);
 }
 .ft:hover:not(:disabled) {
-  background: var(--ink);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.ft:active:not(:disabled) {
+  background: var(--ft-color);
+  border-color: var(--ft-color);
+  color: var(--ground);
+  text-decoration: none;
 }
 .ft:disabled {
-  color: var(--ft-dim-ink);
+  background: transparent;
+  color: var(--ft-color);
   font-weight: 400;
+  opacity: 0.9;
 }
 .ft:disabled kbd {
   display: none;
@@ -1001,8 +1036,7 @@ textarea {
   column-gap: 2ch;
   row-gap: var(--row);
 }
-.providers .ft {
-  display: inline-flex;
+.providers .btn {
   padding: 0 2ch;
 }
 
