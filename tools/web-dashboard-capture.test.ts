@@ -177,6 +177,8 @@ test('ticket frames render one semantic body inline and a calm empty queue', () 
     expect(html).toContain('<hr/>')
     expect(html).not.toContain('<textarea')
     expect(html).not.toContain('Preview')
+    expect(html).toContain('<span class="lane" aria-hidden="true"></span>')
+    expect(html).not.toContain('<span class="lane" aria-hidden="true">&gt;</span>')
     const selected = html.match(/<li data-selected="true">[\s\S]*?<\/li>/)?.[0]
     expect(selected).toContain('class="trow"')
     expect(selected).toContain('class="detail tdetail"')

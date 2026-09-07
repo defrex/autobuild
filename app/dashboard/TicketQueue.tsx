@@ -134,9 +134,7 @@ export function TicketsView(props: TicketsViewProps) {
                         aria-pressed={open}
                         onClick={() => props.onOpen(ticket.ref.id)}
                       >
-                        <span className="lane" aria-hidden>
-                          {open ? '>' : ''}
-                        </span>
+                        <span className="lane" aria-hidden />
                         <span>
                           <span className="tid">{ticket.ref.id}</span>{' '}
                           <span className="ttitle">{ticket.title}</span>
