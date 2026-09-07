@@ -138,6 +138,34 @@ test('selected Harvest frames keep fixed Fastext slots, empty outlines, and acti
   }
 })
 
+test('singleton capture frames omit the repository selector', () => {
+  const fixtures = models()
+  const singletonFrames = WEB_FRAME_SPECS.filter(
+    (spec) =>
+      (spec.id.startsWith('builds-') || spec.id.startsWith('tickets-')) &&
+      spec.id !== 'builds-multirepo-wide',
+  )
+
+  for (const spec of singletonFrames) {
+    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(nav, spec.id).toBeDefined()
+    expect(nav, spec.id).not.toContain('<label class="repo">')
+    expect(nav, spec.id).not.toContain('<select')
+  }
+})
+
+test('multi-repository capture frame exposes the selector and both options', () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-multirepo-wide')
+  if (!spec) throw new Error('multi-repository frame spec is missing')
+  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  expect(html).toContain('<label class="repo">')
+  expect(html).toContain('<span class="slack">repo </span>')
+  expect(html).toContain('<select>')
+  expect(html).toContain('<option selected="">example/repository</option>')
+  expect(html).toContain('<option>example/alternate</option>')
+})
 test('ticket narrow keeps two complete Fastext identity rows', () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'tickets-narrow')
   if (!spec) throw new Error('tickets narrow frame spec is missing')

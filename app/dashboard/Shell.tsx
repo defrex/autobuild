@@ -82,16 +82,18 @@ export function OperatorShell({
         >
           TICKETS
         </button>
-        <label className="repo">
-          <span className="slack">repo </span>
-          <span className="selectwrap">
-            <select value={repo} onChange={(event) => onRepo(event.target.value)}>
-              {repositories.map((name) => (
-                <option key={name}>{name}</option>
-              ))}
-            </select>
-          </span>
-        </label>
+        {repositories.length > 1 && (
+          <label className="repo">
+            <span className="slack">repo </span>
+            <span className="selectwrap">
+              <select value={repo} onChange={(event) => onRepo(event.target.value)}>
+                {repositories.map((name) => (
+                  <option key={name}>{name}</option>
+                ))}
+              </select>
+            </span>
+          </label>
+        )}
         <span className="spacer" />
         <span className="identity">
           <span>{identity}</span>

@@ -51,6 +51,7 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-happy-narrow:png .ab/web-dashboard-frames/builds-happy-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-wide:png .ab/web-dashboard-frames/builds-harvest-wide.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-narrow:png .ab/web-dashboard-frames/builds-harvest-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-multirepo-wide:png .ab/web-dashboard-frames/builds-multirepo-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-hover-wide:png .ab/web-dashboard-frames/builds-mixed-hover-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-wide:png .ab/web-dashboard-frames/builds-mixed-detail-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
