@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#255](https://github.com/defrex/autobuild/pull/255) — Tone down the web dashboard palette
+- [#254](https://github.com/defrex/autobuild/pull/254) — Preview the build lane cursor on pointer hover
 - [#252](https://github.com/defrex/autobuild/pull/252) — Prevent phase scratch from entering published commits
 - [#251](https://github.com/defrex/autobuild/pull/251) — Add ticket queue grooming to the web dashboard
 - [#250](https://github.com/defrex/autobuild/pull/250) — Add authenticated hosted web dashboard

@@ -73,6 +73,12 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
+    id: 'builds-mixed-hover-wide',
+    width: 1440,
+    height: 1200,
+    requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+  },
+  {
     id: 'builds-mixed-detail-wide',
     width: 1440,
     height: 2000,
@@ -304,6 +310,7 @@ function builds(model: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       detailOpen={false}
       confirmingAbort={false}
       onActivate={noop}
+      onHoverPreview={noop}
       onDeselect={noop}
       onToggleDetail={noop}
       onBuildControl={noop}
@@ -352,6 +359,15 @@ function blockedSelection(model: DashboardModel): Selection {
   return { kind: 'build', slug: blocked.slug }
 }
 
+/** A different mixed-model build, previewed while the blocked selection stays committed. */
+function hoverSelection(model: DashboardModel, selected: Selection): Selection {
+  const candidate = model.builds.find(
+    (build) => selected.kind !== 'build' || build.slug !== selected.slug,
+  )
+  if (!candidate) throw new Error('web dashboard capture: the mixed model has no hover candidate')
+  return { kind: 'build', slug: candidate.slug }
+}
+
 /** A build whose abort control is available, for the two-step confirmation frame. */
 function abortableSelection(model: DashboardModel): Selection {
   const candidate = model.builds.find((build) => buildActionAvailability(build).abort)
@@ -365,6 +381,16 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
     case 'builds-happy-wide':
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
+    case 'builds-mixed-hover-wide': {
+      const selection = blockedSelection(models.mixed)
+      return shell(
+        builds(models.mixed, {
+          selection,
+          hoverPreview: hoverSelection(models.mixed, selection),
+        }),
+        { model: models.mixed },
+      )
+    }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
       return shell(
@@ -622,8 +648,9 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     'use synthetic fixture data (CAP-* ids). Nothing here is a golden image: judge',
     'whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
-    'Interactive states (hover, focus rings, the state-change flash, keyboard',
-    'shortcuts) are not captured; they are code-reviewed, not screenshotted.',
+    'The fine-pointer hover preview is modeled explicitly in the wide hover frame.',
+    'Focus rings, the state-change flash, and keyboard shortcuts are code-reviewed',
+    'rather than screenshotted; narrow frames carry no hover preview.',
     '',
     '## Frames',
     '',
@@ -640,6 +667,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
     '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, RUNNING/green, PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
+    '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once without shifting row text: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word and its red lines; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow fills.',
     '- [ ] Fastext footer: four cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; labels never truncate; a disabled cell keeps its fill with a quiet dark label; an empty cell keeps its fill with no label. Slot colors never change with state.',
