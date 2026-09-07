@@ -13,18 +13,18 @@
   --lh: 20px;
   --row: var(--lh);
 
-  /* Teletext primaries, tuned only where black-ground contrast demands it. */
+  /* Muted teletext hues: lower chroma and glare, with contrast preserved. */
   --tt-black: #000000;
-  --tt-white: #ffffff;
-  --tt-yellow: #ffff00;
-  --tt-cyan: #00ffff;
-  --tt-green: #00ff00;
-  --tt-red: #ff3b3b;
+  --tt-white: #e6e6e6;
+  --tt-yellow: #d7c84f;
+  --tt-cyan: #55b8b8;
+  --tt-green: #65b868;
+  --tt-red: #d96868;
   --tt-magenta: #ff00ff;
-  --tt-blue: #0000ff;
-  --tt-dim: #8a8a8a;
-  --tt-rule: #2c2c2c;
-  --tt-well: #1c1c1c;
+  --tt-blue: #707dcc;
+  --tt-dim: #888888;
+  --tt-rule: #292929;
+  --tt-well: #141414;
 
   /* Roles. */
   --ground: var(--tt-black);
@@ -38,7 +38,7 @@
   --rule: var(--tt-rule);
   --well: var(--tt-well);
   --nav-fill: var(--tt-blue);
-  --nav-ink: var(--tt-white);
+  --nav-ink: var(--ground);
 
   /* Fastext slots: the color is the slot's identity, never a state. */
   --ft-red: var(--tt-red);
