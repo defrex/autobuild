@@ -120,6 +120,24 @@ test('every web frame renders its required evidence and none of the forbidden', 
   }
 })
 
+test('loading frames preserve shell landmarks and expose only one hidden announcement', () => {
+  const fixtures = models()
+  for (const id of ['builds-loading-wide', 'builds-loading-narrow']) {
+    const spec = WEB_FRAME_SPECS.find((entry) => entry.id === id)
+    expect(spec).toBeDefined()
+    const html = renderWebFrame(spec!, fixtures, { css: '', fontCss: '' })
+    expect(html).toContain('<main class="frame">')
+    expect(html).toContain('<header class="masthead">')
+    expect(html).toContain('<nav class="line navline"')
+    expect(html).toContain('role="toolbar"')
+    expect(html.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(html.match(/data-loading-row=""/g)).toHaveLength(5)
+    expect(html).toContain('<div class="skeletons" aria-hidden="true">')
+    expect(html).not.toContain('polling')
+    expect(html).not.toContain('class="status"')
+  }
+})
+
 test('evidence text decodes the entities the renderer escapes', () => {
   expect(evidenceText('<p>[&gt;] plan &amp; review&#x27;s &quot;x&quot;</p>')).toBe(
     ' [>] plan & review\'s "x" ',

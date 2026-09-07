@@ -8,7 +8,7 @@ const mono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
   weight: ['400', '700'],
   variable: '--font-mono',
-  display: 'swap',
+  display: 'optional',
 })
 
 export const metadata: Metadata = {

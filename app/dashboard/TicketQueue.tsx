@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from './api'
-import { Fastext, type FastextCell, Rule } from './frame'
+import { DashboardSurface, Fastext, type FastextCell, LoadingRows, Rule } from './frame'
 import {
   draftFromTicket,
   groupTickets,
@@ -59,7 +59,7 @@ export function TicketsView(props: TicketsViewProps) {
   ]
 
   return (
-    <>
+    <DashboardSurface footer={<Fastext label="Ticket controls" cells={cells} />}>
       <section className="ticketQueue" aria-label="Ticket queue">
         <div className="line filterline">
           <label>
@@ -100,9 +100,7 @@ export function TicketsView(props: TicketsViewProps) {
           />
         )}
         {!queue ? (
-          <p className="slack dispatch" aria-live="polite">
-            polling {repo} for its ticket queue...
-          </p>
+          <LoadingRows label={`Loading the ticket queue for ${repo}.`} />
         ) : (
           <div className="pages">
             {groupTickets(queue.tickets).map((group) => (
@@ -160,8 +158,7 @@ export function TicketsView(props: TicketsViewProps) {
           />
         )}
       </section>
-      <Fastext label="Ticket controls" cells={cells} />
-    </>
+    </DashboardSurface>
   )
 }
 

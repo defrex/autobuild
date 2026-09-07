@@ -47,7 +47,12 @@ export function OperatorShell({
         <h1 className="dh title">
           <span>{repo || 'no repository configured'}</span>
         </h1>
-        <p className="dh imperative" data-tone={imperative?.tone} aria-live="polite" aria-atomic>
+        <p
+          className="dh imperative"
+          data-tone={imperative?.tone}
+          aria-live={imperative ? 'polite' : undefined}
+          aria-atomic
+        >
           {imperative && (
             <span>
               {imperative.word}
@@ -95,12 +100,14 @@ export function OperatorShell({
           </button>
         </span>
       </nav>
-      {error && (
-        <p className="alert notice" role="alert">
-          {error}
-        </p>
-      )}
-      {children}
+      <div className="shell-body">
+        {error && (
+          <p className="alert notice shell-notice" role="alert">
+            {error}
+          </p>
+        )}
+        {children}
+      </div>
     </main>
   )
 }
