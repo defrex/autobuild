@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T17:43:36.558Z",
+  "generatedAt": "2026-09-07T18:39:05.157Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -22,7 +22,7 @@
       "ink": {
         "role": "neutral",
         "displayName": "Ink",
-        "canonical": "oklch(100.0% 0.000 0.0)",
+        "canonical": "oklch(92.5% 0.000 0.0)",
         "tonalRamp": [
           "oklch(15.0% 0.000 0.0)",
           "oklch(26.0% 0.000 0.0)",
@@ -37,82 +37,82 @@
       "title-yellow": {
         "role": "primary",
         "displayName": "Title Yellow",
-        "canonical": "oklch(96.8% 0.211 109.8)",
+        "canonical": "oklch(82.3% 0.141 102.2)",
         "tonalRamp": [
-          "oklch(15.0% 0.200 109.8)",
-          "oklch(26.0% 0.200 109.8)",
-          "oklch(38.0% 0.200 109.8)",
-          "oklch(50.0% 0.200 109.8)",
-          "oklch(62.0% 0.200 109.8)",
-          "oklch(74.0% 0.200 109.8)",
-          "oklch(85.0% 0.200 109.8)",
-          "oklch(95.0% 0.200 109.8)"
+          "oklch(15.0% 0.141 102.2)",
+          "oklch(26.0% 0.141 102.2)",
+          "oklch(38.0% 0.141 102.2)",
+          "oklch(50.0% 0.141 102.2)",
+          "oklch(62.0% 0.141 102.2)",
+          "oklch(74.0% 0.141 102.2)",
+          "oklch(85.0% 0.141 102.2)",
+          "oklch(95.0% 0.141 102.2)"
         ]
       },
       "live-cyan": {
         "role": "primary",
         "displayName": "Live Cyan",
-        "canonical": "oklch(90.5% 0.155 194.8)",
+        "canonical": "oklch(72.4% 0.092 195.3)",
         "tonalRamp": [
-          "oklch(15.0% 0.155 194.8)",
-          "oklch(26.0% 0.155 194.8)",
-          "oklch(38.0% 0.155 194.8)",
-          "oklch(50.0% 0.155 194.8)",
-          "oklch(62.0% 0.155 194.8)",
-          "oklch(74.0% 0.155 194.8)",
-          "oklch(85.0% 0.155 194.8)",
-          "oklch(95.0% 0.155 194.8)"
+          "oklch(15.0% 0.092 195.3)",
+          "oklch(26.0% 0.092 195.3)",
+          "oklch(38.0% 0.092 195.3)",
+          "oklch(50.0% 0.092 195.3)",
+          "oklch(62.0% 0.092 195.3)",
+          "oklch(74.0% 0.092 195.3)",
+          "oklch(85.0% 0.092 195.3)",
+          "oklch(95.0% 0.092 195.3)"
         ]
       },
       "ok-green": {
         "role": "primary",
         "displayName": "OK Green",
-        "canonical": "oklch(86.6% 0.295 142.5)",
+        "canonical": "oklch(71.0% 0.140 144.7)",
         "tonalRamp": [
-          "oklch(15.0% 0.200 142.5)",
-          "oklch(26.0% 0.200 142.5)",
-          "oklch(38.0% 0.200 142.5)",
-          "oklch(50.0% 0.200 142.5)",
-          "oklch(62.0% 0.200 142.5)",
-          "oklch(74.0% 0.200 142.5)",
-          "oklch(85.0% 0.200 142.5)",
-          "oklch(95.0% 0.200 142.5)"
+          "oklch(15.0% 0.140 144.7)",
+          "oklch(26.0% 0.140 144.7)",
+          "oklch(38.0% 0.140 144.7)",
+          "oklch(50.0% 0.140 144.7)",
+          "oklch(62.0% 0.140 144.7)",
+          "oklch(74.0% 0.140 144.7)",
+          "oklch(85.0% 0.140 144.7)",
+          "oklch(95.0% 0.140 144.7)"
         ]
       },
       "alert-red": {
         "role": "primary",
         "displayName": "Alert Red",
-        "canonical": "oklch(65.5% 0.231 26.4)",
+        "canonical": "oklch(65.2% 0.142 21.8)",
         "tonalRamp": [
-          "oklch(15.0% 0.200 26.4)",
-          "oklch(26.0% 0.200 26.4)",
-          "oklch(38.0% 0.200 26.4)",
-          "oklch(50.0% 0.200 26.4)",
-          "oklch(62.0% 0.200 26.4)",
-          "oklch(74.0% 0.200 26.4)",
-          "oklch(85.0% 0.200 26.4)",
-          "oklch(95.0% 0.200 26.4)"
+          "oklch(15.0% 0.142 21.8)",
+          "oklch(26.0% 0.142 21.8)",
+          "oklch(38.0% 0.142 21.8)",
+          "oklch(50.0% 0.142 21.8)",
+          "oklch(62.0% 0.142 21.8)",
+          "oklch(74.0% 0.142 21.8)",
+          "oklch(85.0% 0.142 21.8)",
+          "oklch(95.0% 0.142 21.8)"
         ]
       },
       "nav-blue": {
         "role": "primary",
         "displayName": "Nav Blue",
-        "canonical": "oklch(45.2% 0.313 264.1)",
+        "canonical": "oklch(61.4% 0.120 275.2)",
         "tonalRamp": [
-          "oklch(15.0% 0.200 264.1)",
-          "oklch(26.0% 0.200 264.1)",
-          "oklch(38.0% 0.200 264.1)",
-          "oklch(50.0% 0.200 264.1)",
-          "oklch(62.0% 0.200 264.1)",
-          "oklch(74.0% 0.200 264.1)",
-          "oklch(85.0% 0.200 264.1)",
-          "oklch(95.0% 0.200 264.1)"
+          "oklch(15.0% 0.120 275.2)",
+          "oklch(26.0% 0.120 275.2)",
+          "oklch(38.0% 0.120 275.2)",
+          "oklch(50.0% 0.120 275.2)",
+          "oklch(62.0% 0.120 275.2)",
+          "oklch(74.0% 0.120 275.2)",
+          "oklch(85.0% 0.120 275.2)",
+          "oklch(95.0% 0.120 275.2)"
         ]
       },
       "slack": {
         "role": "neutral",
         "displayName": "Slack",
-        "canonical": "oklch(63.3% 0.000 0.0)",
+        "canonical": "oklch(62.7% 0.000 0.0)",
         "tonalRamp": [
           "oklch(15.0% 0.000 0.0)",
           "oklch(26.0% 0.000 0.0)",
@@ -127,7 +127,7 @@
       "rule": {
         "role": "neutral",
         "displayName": "Rule",
-        "canonical": "oklch(29.3% 0.000 0.0)",
+        "canonical": "oklch(28.1% 0.000 0.0)",
         "tonalRamp": [
           "oklch(15.0% 0.000 0.0)",
           "oklch(26.0% 0.000 0.0)",
@@ -142,7 +142,7 @@
       "well": {
         "role": "neutral",
         "displayName": "Well",
-        "canonical": "oklch(22.6% 0.000 0.0)",
+        "canonical": "oklch(19.1% 0.000 0.0)",
         "tonalRamp": [
           "oklch(15.0% 0.000 0.0)",
           "oklch(26.0% 0.000 0.0)",
@@ -224,15 +224,15 @@
       "refersTo": "masthead-title",
       "description": "Double-height header: repository in title yellow, one imperative in its tone, poll clock right.",
       "html": "<div class=\"ds-tt\"><header class=\"ds-masthead\"><h1 class=\"ds-dh ds-title\"><span>org/repository</span></h1><p class=\"ds-dh ds-imperative\" data-tone=\"alert\"><span>BLOCKED ×2</span></p><span class=\"ds-clock\">12:10:00</span></header></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) max-content 1fr auto; column-gap: 2ch; align-items: start; height: calc(var(--row, 22px) * 2); } .ds-dh { display: block; margin: 0; height: calc(var(--row, 22px) * 2); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-dh > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; transform: scaleY(2); transform-origin: 0 0; } .ds-title { color: var(--title, #ffff00); } .ds-imperative[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-imperative[data-tone=\"ready\"] { color: var(--ok, #00ff00); } .ds-clock { grid-column: 4; color: var(--ink, #fff); }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) max-content 1fr auto; column-gap: 2ch; align-items: start; height: calc(var(--row, 22px) * 2); } .ds-dh { display: block; margin: 0; height: calc(var(--row, 22px) * 2); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-dh > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; transform: scaleY(2); transform-origin: 0 0; } .ds-title { color: var(--title, #e6e6e6f00); } .ds-imperative[data-tone=\"alert\"] { color: var(--alert, #d96868); } .ds-imperative[data-tone=\"ready\"] { color: var(--ok, #65b868); } .ds-clock { grid-column: 4; color: var(--ink, #e6e6e6); }"
     },
     {
       "name": "Surface tabs",
       "kind": "nav",
       "refersTo": "tab-active",
-      "description": "Bold uppercase tab words; the active surface is reverse video in nav blue.",
+      "description": "Bold uppercase tab words; the active surface is reverse video in muted nav blue with ground-colored ink.",
       "html": "<div class=\"ds-tt\"><nav class=\"ds-navline\"><button class=\"ds-tab\" aria-pressed=\"true\">BUILDS</button><button class=\"ds-tab\" aria-pressed=\"false\">TICKETS</button><span class=\"ds-slack\">repo</span><span class=\"ds-spacer\"></span><span class=\"ds-slack\">operator@example.com</span><button class=\"ds-word\">sign out</button></nav></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 2ch; min-height: var(--row, 22px); } .ds-spacer { flex: 1 1 auto; } .ds-tab { font: inherit; background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 1ch; font-weight: 700; color: var(--ink, #fff); cursor: pointer; } .ds-tab[aria-pressed=\"true\"] { background: var(--nav-fill, #0000ff); color: var(--ink, #fff); } .ds-tab:hover:not([aria-pressed=\"true\"]) { color: var(--live, #00ffff); } .ds-tab:focus-visible, .ds-word:focus-visible { outline: 2px solid var(--live, #00ffff); outline-offset: 1px; } .ds-slack { color: var(--slack, #8a8a8a); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: var(--slack, #8a8a8a); cursor: pointer; white-space: nowrap; } .ds-word:hover { color: var(--live, #00ffff); text-decoration: underline; text-underline-offset: 0.15em; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 2ch; min-height: var(--row, 22px); } .ds-spacer { flex: 1 1 auto; } .ds-tab { font: inherit; background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 1ch; font-weight: 700; color: var(--ink, #e6e6e6); cursor: pointer; } .ds-tab[aria-pressed=\"true\"] { background: var(--nav-fill, #707dcc); color: var(--ground, #000); } .ds-tab:hover:not([aria-pressed=\"true\"]) { color: var(--live, #55b8b8); } .ds-tab:focus-visible, .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-slack { color: var(--slack, #888888); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: var(--slack, #888888); cursor: pointer; white-space: nowrap; } .ds-word:hover { color: var(--live, #55b8b8); text-decoration: underline; text-underline-offset: 0.15em; }"
     },
     {
       "name": "Word control",
@@ -240,7 +240,7 @@
       "refersTo": "word",
       "description": "A text word that acts; toggle labels name the action and the ON/OFF word carries state.",
       "html": "<div class=\"ds-tt\"><span class=\"ds-dispatch\">queue 0 <span class=\"ds-sep\">|</span> active 4/4 <button class=\"ds-word\">intake <b class=\"ds-on\">ON</b></button> <button class=\"ds-word\">auto merge <b class=\"ds-off\">OFF</b></button> <button class=\"ds-word\" disabled>harvest <b class=\"ds-on\">ON</b></button></span></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-dispatch { display: inline-flex; flex-wrap: wrap; column-gap: 2ch; } .ds-sep { color: var(--slack, #8a8a8a); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer; white-space: nowrap; } .ds-word:hover:not(:disabled) { color: var(--live, #00ffff); text-decoration: underline; text-underline-offset: 0.15em; } .ds-word:disabled { color: var(--slack, #8a8a8a); cursor: not-allowed; } .ds-word:focus-visible { outline: 2px solid var(--live, #00ffff); outline-offset: 1px; } .ds-on { color: var(--ok, #00ff00); font-weight: 700; } .ds-off { color: var(--warn, #ffff00); font-weight: 700; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-dispatch { display: inline-flex; flex-wrap: wrap; column-gap: 2ch; } .ds-sep { color: var(--slack, #888888); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer; white-space: nowrap; } .ds-word:hover:not(:disabled) { color: var(--live, #55b8b8); text-decoration: underline; text-underline-offset: 0.15em; } .ds-word:disabled { color: var(--slack, #888888); cursor: not-allowed; } .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-on { color: var(--ok, #65b868); font-weight: 700; } .ds-off { color: var(--warn, #e6e6e6f00); font-weight: 700; }"
     },
     {
       "name": "Primary button",
@@ -248,7 +248,7 @@
       "refersTo": "btn",
       "description": "Reverse-video ink button for a form submit; cyan on hover, well fill when disabled.",
       "html": "<div class=\"ds-tt\"><div class=\"ds-controls\"><button class=\"ds-btn\">Answer escalation</button><button class=\"ds-btn\" disabled>Save</button><button class=\"ds-word\">close detail</button></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-controls { display: flex; flex-wrap: wrap; column-gap: 2ch; row-gap: var(--row, 22px); align-items: baseline; } .ds-btn { display: inline-block; font: inherit; border: 0; border-radius: 0; margin: 0; padding: 0 1ch; background: var(--ink, #fff); color: var(--ground, #000); font-weight: 700; white-space: nowrap; cursor: pointer; } .ds-btn:hover:not(:disabled) { background: var(--live, #00ffff); } .ds-btn:disabled { background: var(--well, #1c1c1c); color: var(--slack, #8a8a8a); cursor: not-allowed; } .ds-btn:focus-visible { outline: 2px solid var(--live, #00ffff); outline-offset: 1px; } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer; } .ds-word:hover { color: var(--live, #00ffff); text-decoration: underline; text-underline-offset: 0.15em; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-controls { display: flex; flex-wrap: wrap; column-gap: 2ch; row-gap: var(--row, 22px); align-items: baseline; } .ds-btn { display: inline-block; font: inherit; border: 0; border-radius: 0; margin: 0; padding: 0 1ch; background: var(--ink, #e6e6e6); color: var(--ground, #000); font-weight: 700; white-space: nowrap; cursor: pointer; } .ds-btn:hover:not(:disabled) { background: var(--live, #55b8b8); } .ds-btn:disabled { background: var(--well, #141414); color: var(--slack, #888888); cursor: not-allowed; } .ds-btn:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: inherit; cursor: pointer; } .ds-word:hover { color: var(--live, #55b8b8); text-decoration: underline; text-underline-offset: 0.15em; }"
     },
     {
       "name": "Field",
@@ -256,7 +256,7 @@
       "refersTo": "field",
       "description": "Slack label above a reverse-video well; no stroke, square, one row minimum.",
       "html": "<div class=\"ds-tt\"><label class=\"ds-field\"><span>resolution</span><span class=\"ds-selectwrap\"><select><option>Guidance</option><option>Retry</option><option>Dismiss</option></select></span></label><label class=\"ds-field ds-gap\"><span>message</span><textarea placeholder=\"answer the blocker\"></textarea></label></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-field { display: grid; max-width: 80ch; } .ds-gap { margin-top: var(--row, 22px); } .ds-field > span:first-child { color: var(--slack, #8a8a8a); } .ds-field select, .ds-field textarea { font: inherit; color: var(--ink, #fff); background: var(--well, #1c1c1c); border: 0; border-radius: 0; margin: 0; width: 100%; min-height: var(--row, 22px); padding: 0 1ch; caret-color: var(--live, #00ffff); } .ds-field textarea { min-height: calc(var(--row, 22px) * 4); resize: vertical; } .ds-field textarea::placeholder { color: var(--slack, #8a8a8a); } .ds-field select { appearance: none; padding-right: 3ch; } .ds-selectwrap { position: relative; display: inline-block; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #8a8a8a); pointer-events: none; } .ds-field select:focus-visible, .ds-field textarea:focus-visible { outline: 2px solid var(--live, #00ffff); outline-offset: 1px; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-field { display: grid; max-width: 80ch; } .ds-gap { margin-top: var(--row, 22px); } .ds-field > span:first-child { color: var(--slack, #888888); } .ds-field select, .ds-field textarea { font: inherit; color: var(--ink, #e6e6e6); background: var(--well, #141414); border: 0; border-radius: 0; margin: 0; width: 100%; min-height: var(--row, 22px); padding: 0 1ch; caret-color: var(--live, #55b8b8); } .ds-field textarea { min-height: calc(var(--row, 22px) * 4); resize: vertical; } .ds-field textarea::placeholder { color: var(--slack, #888888); } .ds-field select { appearance: none; padding-right: 3ch; } .ds-selectwrap { position: relative; display: inline-block; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-field select:focus-visible, .ds-field textarea:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
     },
     {
       "name": "Fastext row",
@@ -264,7 +264,7 @@
       "refersTo": "fastext-red",
       "description": "Four fixed-color key cells; the color is the slot, the label is the action, disabled keeps the fill.",
       "html": "<div class=\"ds-tt\"><div class=\"ds-fastext\" role=\"toolbar\"><button class=\"ds-ft\" data-slot=\"red\"><kbd>a</kbd><span>ABORT</span></button><button class=\"ds-ft\" data-slot=\"green\" disabled><kbd>r</kbd><span>RESUME</span></button><button class=\"ds-ft\" data-slot=\"yellow\"><kbd>m</kbd><span>AUTO MERGE</span></button><button class=\"ds-ft\" data-slot=\"cyan\"><kbd>↵</kbd><span>DETAILS</span></button></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-fastext { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 1ch; } .ds-ft { display: flex; align-items: center; column-gap: 1ch; height: var(--row, 22px); padding: 0 1ch; font: inherit; border: 0; border-radius: 0; margin: 0; color: var(--ground, #000); font-weight: 700; white-space: nowrap; overflow: hidden; cursor: pointer; text-align: left; } .ds-ft > span { overflow: hidden; text-overflow: ellipsis; } .ds-ft kbd { flex: none; font: inherit; font-weight: 400; } .ds-ft[data-slot=\"red\"] { background: var(--ft-red, #ff3b3b); } .ds-ft[data-slot=\"green\"] { background: var(--ft-green, #00ff00); } .ds-ft[data-slot=\"yellow\"] { background: var(--ft-yellow, #ffff00); } .ds-ft[data-slot=\"cyan\"] { background: var(--ft-cyan, #00ffff); } .ds-ft:hover:not(:disabled) { background: var(--ink, #fff); } .ds-ft:disabled { color: var(--ft-dim-ink, #1c1c1c); font-weight: 400; cursor: not-allowed; } .ds-ft:disabled kbd { display: none; } .ds-ft:focus-visible { outline: 2px solid var(--live, #00ffff); outline-offset: 1px; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-fastext { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 1ch; } .ds-ft { display: flex; align-items: center; column-gap: 1ch; height: var(--row, 22px); padding: 0 1ch; font: inherit; border: 0; border-radius: 0; margin: 0; color: var(--ground, #000); font-weight: 700; white-space: nowrap; overflow: hidden; cursor: pointer; text-align: left; } .ds-ft > span { overflow: hidden; text-overflow: ellipsis; } .ds-ft kbd { flex: none; font: inherit; font-weight: 400; } .ds-ft[data-slot=\"red\"] { background: var(--ft-red, #d96868); } .ds-ft[data-slot=\"green\"] { background: var(--ft-green, #65b868); } .ds-ft[data-slot=\"yellow\"] { background: var(--ft-yellow, #e6e6e6f00); } .ds-ft[data-slot=\"cyan\"] { background: var(--ft-cyan, #55b8b8); } .ds-ft:hover:not(:disabled) { background: var(--ink, #e6e6e6); } .ds-ft:disabled { color: var(--ft-dim-ink, #141414); font-weight: 400; cursor: not-allowed; } .ds-ft:disabled kbd { display: none; } .ds-ft:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
     },
     {
       "name": "Build row",
@@ -272,7 +272,7 @@
       "refersTo": "status",
       "description": "Lane, ticket id, bold slug, right-pinned tokens and STATUS, then the glyph step line and a three-row message preview.",
       "html": "<div class=\"ds-tt\"><div class=\"ds-row\"><div class=\"ds-rowline\"><span class=\"ds-lane\">&gt;</span><span class=\"ds-rowhead\"><span class=\"ds-ticket\">CAP-PLAN</span><span class=\"ds-slug\">plan-blocked-dashboard</span></span><span class=\"ds-tokens\"><span class=\"ds-pr\">PR open</span></span><span class=\"ds-status\" data-status=\"blocked\">BLOCKED</span></div><ol class=\"ds-steps\"><li data-state=\"current\">[&gt;] plan(3s)</li><li data-state=\"pending\">[ ] plan-review</li><li data-state=\"pending\">[ ] implement</li><li data-state=\"pending\">[ ] code-review</li><li data-state=\"pending\">[ ] verify:unit</li><li data-state=\"pending\">[ ] finalize</li><li data-state=\"pending\">[ ] merge(waiting)</li></ol><div class=\"ds-message\" data-tone=\"alert\"><p>! The plan needs a decision the spec does not make.</p><p>&nbsp;&nbsp;... 4 more rows - Enter details</p></div></div><div class=\"ds-rule\"></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #00ffff); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #fff); } .ds-rowhead:hover { color: var(--live, #00ffff); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-pr { color: var(--live, #00ffff); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #ff3b3b); } .ds-status[data-status=\"running\"] { color: var(--ok, #00ff00); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #00ffff); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #ffff00); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #00ff00); } .ds-steps li[data-state=\"current\"] { color: var(--live, #00ffff); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #ffff00); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #8a8a8a); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #ff3b3b); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #2c2c2c); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-rowline { display: grid; grid-template-columns: 2ch max-content minmax(0, 1fr) auto auto; align-items: baseline; } .ds-lane { color: var(--live, #55b8b8); font-weight: 700; } .ds-rowhead { grid-column: 2 / 4; display: grid; grid-template-columns: subgrid; min-width: 0; color: var(--ink, #e6e6e6); } .ds-rowhead:hover { color: var(--live, #55b8b8); } .ds-ticket, .ds-slug { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-slug { font-weight: 700; padding-left: 2ch; } .ds-tokens { grid-column: 4; display: inline-flex; column-gap: 2ch; padding-left: 2ch; white-space: nowrap; } .ds-pr { color: var(--live, #55b8b8); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em; } .ds-status { grid-column: 5; display: inline-block; padding-left: 2ch; text-align: right; font-weight: 700; white-space: nowrap; } .ds-status[data-status=\"blocked\"], .ds-status[data-status=\"failed\"], .ds-status[data-status=\"aborting\"] { color: var(--alert, #d96868); } .ds-status[data-status=\"running\"] { color: var(--ok, #65b868); } .ds-status[data-status=\"queued\"], .ds-status[data-status=\"resuming\"] { color: var(--live, #55b8b8); } .ds-status[data-status=\"paused\"], .ds-status[data-status=\"pausing\"], .ds-status[data-status=\"cleaning\"], .ds-status[data-status=\"escalated\"] { color: var(--warn, #e6e6e6f00); } .ds-steps { display: flex; flex-wrap: wrap; column-gap: 1ch; margin: 0; padding: 0 0 0 2ch; list-style: none; } .ds-steps li { white-space: nowrap; } .ds-steps li[data-state=\"done\"] { color: var(--ok, #65b868); } .ds-steps li[data-state=\"current\"] { color: var(--live, #55b8b8); font-weight: 700; } .ds-steps li[data-state=\"provisional\"] { color: var(--warn, #e6e6e6f00); } .ds-steps li[data-state=\"pending\"] { color: var(--slack, #888888); } .ds-message { padding-left: 2ch; } .ds-message p { margin: 0; white-space: pre-wrap; } .ds-message[data-tone=\"alert\"] { color: var(--alert, #d96868); } .ds-rule { height: var(--row, 22px); margin-top: var(--row, 22px); overflow: hidden; white-space: nowrap; color: var(--rule, #292929); user-select: none; } .ds-rule::before { content: \"────────────────────────────────────────────────────────────────────────────────────────────────\"; }"
     },
     {
       "name": "Well block",
@@ -280,14 +280,14 @@
       "refersTo": "well-block",
       "description": "Blocker, transcript, and markdown text sit in a reverse-video well; headings keep their # marks.",
       "html": "<div class=\"ds-tt\"><h3 class=\"ds-h\">Unresolved blockers</h3><pre class=\"ds-block ds-alert\">! The plan needs a decision the spec does not make.\nTHE CONFLICT\nThe list row must withhold this explanation.</pre><div class=\"ds-markdown ds-gap\"><h2>Acceptance</h2><ul><li>Row shape matches the terminal</li><li>Status pinned right</li></ul></div></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #fff); padding: var(--row, 22px) 1ch; } .ds-h { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--ink, #fff); } .ds-block { margin: 0; font: inherit; padding: 0 1ch; background: var(--well, #1c1c1c); white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(var(--row, 22px) * 24); overflow: auto; } .ds-alert { color: var(--alert, #ff3b3b); } .ds-gap { margin-top: var(--row, 22px); } .ds-markdown { padding: 0 1ch; background: var(--well, #1c1c1c); overflow-wrap: anywhere; } .ds-markdown > * + * { margin-top: var(--row, 22px); } .ds-markdown h2 { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--title, #ffff00); } .ds-markdown h2::before { content: \"## \"; color: var(--slack, #8a8a8a); font-weight: 400; } .ds-markdown ul { margin: 0; list-style: \"- \"; padding-left: 2ch; } .ds-markdown li + li { margin-top: 0; }"
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-h { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--ink, #e6e6e6); } .ds-block { margin: 0; font: inherit; padding: 0 1ch; background: var(--well, #141414); white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(var(--row, 22px) * 24); overflow: auto; } .ds-alert { color: var(--alert, #d96868); } .ds-gap { margin-top: var(--row, 22px); } .ds-markdown { padding: 0 1ch; background: var(--well, #141414); overflow-wrap: anywhere; } .ds-markdown > * + * { margin-top: var(--row, 22px); } .ds-markdown h2 { margin: 0; font-size: inherit; line-height: inherit; font-weight: 700; color: var(--title, #e6e6e6f00); } .ds-markdown h2::before { content: \"## \"; color: var(--slack, #888888); font-weight: 400; } .ds-markdown ul { margin: 0; list-style: \"- \"; padding-left: 2ch; } .ds-markdown li + li { margin-top: 0; }"
     }
   ],
   "narrative": {
     "northStar": "Teletext Dispatch",
-    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size; the only exception is the masthead, which stretches that same size to double height the way a teletext header row does. Color is never decoration. Each of the teletext primaries has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from reverse-video fills, and from box-drawing rules, all of which the terminal already uses.",
+    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size; the only exception is the masthead, which stretches that same size to double height the way a teletext header row does. Color is never decoration. Each tempered teletext hue has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from reverse-video fills, and from box-drawing rules, all of which the terminal already uses.",
     "keyCharacteristics": [
-      "Black ground, dark only; white ink; five saturated teletext primaries, each a state.",
+      "Black ground, dark only; softened ink; five muted teletext hues, each retaining its established job.",
       "One monospace face (JetBrains Mono) at one size per viewport, weights 400 and 700 only; double height via `scaleY(2)` is the whole display register.",
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
       "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected lane, `!` for messages, box-drawing `─` for rules.",

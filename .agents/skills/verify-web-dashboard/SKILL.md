@@ -72,8 +72,10 @@ inspect the diff and not to decide applicability again.
 - A visual difference from an earlier build is not itself a failure. There is
   no golden-frame comparison; judge whether this capture is usable, coherent,
   and inside the recorded system. The monospace face may differ between hosts.
-- Two decisions are deliberately open in `DESIGN.md`: page numbers and palette
-  tuning off pure primaries. Their absence or presence is not a criterion.
+- Page numbers remain deliberately open in `DESIGN.md`; their absence or
+  presence is not a criterion. The tuned palette is canonical: judge that its
+  chroma is muted while BLOCKED/red, RUNNING/green, PAUSED/yellow, and
+  QUEUED/cyan remain distinguishable at a glance.
 - Human guidance may clarify how to perform the retry or interpret the
   evidence, but it cannot change the visual criteria or verdict semantics,
   authorize a pass that contradicts a visibly failed criterion, or authorize
