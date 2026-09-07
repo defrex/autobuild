@@ -218,7 +218,7 @@ Every corner is square (`border-radius: 0`) and every shape is a run of whole ce
 A one-row header in the natural-proportion display register. Repository name in title yellow at left, then the bold imperative word in its tone (alert red for BLOCKED and FAILED, ok green for PR READY and MERGED) with `×N` when more than one row carries it, then the poll clock `HH:MM:SS` pinned right in ink, slack while a poll is pending. The repository is the shrinkable column and ellipsizes before the max-content imperative, which always renders whole. One imperative per frame, chosen by priority BLOCKED > FAILED > PR READY > MERGED; nothing is shown when nothing needs a human. The clock is hidden below 720px. The sign-in page reuses the masthead with the product name and REFUSED on a refused sign-in.
 
 ### Navigation
-- **Style:** a line of uppercase bold tab words (BUILDS, TICKETS) padded 1ch, followed by the repo select, with identity and `sign out` in slack pinned right.
+- **Style:** a line of uppercase bold tab words (BUILDS, TICKETS) padded 1ch, followed by the repo select only when two or more repositories are configured, with identity and `sign out` in slack pinned right. The `repo` label and selector are both absent when there is no choice.
 - **Active:** reverse video in nav blue fill with white ink; there is no underline or indicator glyph.
 - **Hover:** inactive tabs turn live cyan.
 - **Mobile:** the line wraps by whole items; nothing collapses into a menu.
