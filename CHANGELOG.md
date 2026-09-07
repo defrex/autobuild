@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#261](https://github.com/defrex/autobuild/pull/261) — Turn Tickets into a configured triage desk
 - [#259](https://github.com/defrex/autobuild/pull/259) — Replace filled dashboard controls with outline buttons
 - [#258](https://github.com/defrex/autobuild/pull/258) — Hide repository selector when there is no choice
 - [#257](https://github.com/defrex/autobuild/pull/257) — Render mastheads at natural monospace proportions
