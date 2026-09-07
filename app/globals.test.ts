@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
+const designDocument = readFileSync(new URL('../DESIGN.md', import.meta.url), 'utf8')
 const buildsView = readFileSync(new URL('./dashboard/BuildsView.tsx', import.meta.url), 'utf8')
 const dashboardFrame = readFileSync(new URL('./dashboard/frame.tsx', import.meta.url), 'utf8')
 const signIn = readFileSync(new URL('./sign-in/SignIn.tsx', import.meta.url), 'utf8')
@@ -9,10 +10,12 @@ const designSidecar = JSON.parse(
   readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
 ) as {
   extensions: { glyphs: Record<string, string>; tokenSource: string }
-  components: Array<{ css: string }>
+  components: Array<{ name: string; description: string; css: string }>
   narrative: {
     keyCharacteristics: string[]
     rules: Array<{ name: string; body: string }>
+    dos: string[]
+    donts: string[]
   }
 }
 const rootMatch = stylesheet.match(/:root\s*\{([\s\S]*?)\n\}/)
@@ -65,6 +68,10 @@ function compositeOnBlack(foreground: string, opacity: number): string {
       .padStart(2, '0'),
   )
   return `#${channels.join('')}`
+}
+
+function sidecarRule(name: string): string {
+  return designSidecar.narrative.rules.find((rule) => rule.name === name)?.body ?? ''
 }
 
 test('the initial root owns the canonical browser palette and active-tab ink', () => {
@@ -162,6 +169,16 @@ test('Fastext keeps slot hue through rest, interaction, empty, and disabled stat
   )
   expect(stylesheet).not.toContain('--ft-dim-ink')
   expect(dashboardFrame).toContain('data-empty')
+
+  for (const source of [designDocument, sidecarRule('The Fastext Identity Rule')]) {
+    expect(source).toContain('colored foreground and outline at 0.9 opacity')
+    expect(source).toContain('unchanged transparent resting surface')
+  }
+  expect(
+    designSidecar.components.find(({ name }) => name === 'Fastext row')?.description,
+  ).toContain(
+    'foreground and outline to 0.9 opacity over the unchanged transparent resting surface',
+  )
 })
 
 test('sign-in uses the primary outline instead of a Fastext slot', () => {
@@ -174,6 +191,22 @@ test('sign-in uses the primary outline instead of a Fastext slot', () => {
 test('held queued builds keep their canonical yellow warning while rows dim', () => {
   expect(buildsView).toContain('<span className="warn held">(held)</span>')
   expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
+
+  const documentedException = 'STATUS words, the yellow `(held)` annotation, and red alert lines'
+  expect(designDocument).toContain(documentedException)
+  expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
+})
+
+test('flat-grid documentation forbids translucent surfaces without forbidding disabled emphasis', () => {
+  const flatGridRule = sidecarRule('The Flat Grid Rule')
+  for (const source of [designDocument, flatGridRule]) {
+    expect(source).toContain('no surface, fill, panel, or overlay is translucent')
+    expect(source).toContain('colored foreground and outline at 0.9 opacity')
+    expect(source).toContain('unchanged transparent resting surface')
+  }
+  expect(designSidecar.narrative.donts).toContain(
+    "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Disabled Fastext opacity de-emphasizes only its colored foreground and outline over an unchanged transparent resting surface. Separate non-controls with a `─` rule, a fill change, or an empty row.",
+  )
 })
 
 test('design sidecar preserves the fine-pointer lane contract', () => {
