@@ -11,7 +11,8 @@ const config = parseConfig(`
 [tickets]
 source = "hosted"
 teamKey = "AUT"
-readyState = "Ready"
+triageState = "Backlog"
+readyState = "Todo"
 readyLabels = ["autobuild"]
 [verify]
 steps = []
@@ -48,7 +49,7 @@ const seed = {
   ref: { source: 'fake', id: 'AUT-1', title: 'Ticket' },
   title: 'Ticket',
   body: 'body\r\nwithout-final-newline',
-  state: 'Ready',
+  state: 'Backlog',
   labels: ['autobuild'],
   blockedBy: ['AUT-2', 'AUT-404'],
 }
@@ -63,18 +64,27 @@ const blocker = {
 function backend(source: FakeTicketSource) {
   return {
     sourceFor: async () => source,
-    statesFor: async () => ['Inbox', 'Ready', 'Doing', 'Done'],
+    statesFor: async () => ['Backlog', 'Todo', 'In Progress', 'Done'],
   }
 }
 
 describe('operator ticket projections', () => {
-  test('uses effective ready criteria and explicit filters', async () => {
+  test('uses configured triage by default and exact explicit filters', async () => {
     const store = await configuredStore()
     const source = new FakeTicketSource([seed, blocker], { doneState: 'Done' })
-    const ready = await listOperatorTickets({ store, repo, backend: backend(source) })
-    expect(ready.criteria).toEqual({ state: 'Ready', labels: ['autobuild'] })
-    expect(ready.tickets.map((ticket) => ticket.ref.id)).toEqual(['AUT-1'])
-    expect(ready.states).toEqual(['Inbox', 'Ready', 'Doing', 'Done'])
+    const backlog = await listOperatorTickets({ store, repo, backend: backend(source) })
+    expect(backlog.criteria).toEqual({ state: 'Backlog' })
+    expect(backlog.triageState).toBe('Backlog')
+    expect(backlog.readyState).toBe('Todo')
+    expect(backlog.tickets.map((ticket) => ticket.ref.id)).toEqual(['AUT-1'])
+    expect(backlog.states).toEqual(['Backlog', 'Todo', 'In Progress', 'Done'])
+    const labelled = await listOperatorTickets({
+      store,
+      repo,
+      backend: backend(source),
+      labels: ['autobuild'],
+    })
+    expect(labelled.criteria).toEqual({ state: 'Backlog', labels: ['autobuild'] })
     const done = await listOperatorTickets({ store, repo, backend: backend(source), state: 'Done' })
     expect(done.criteria).toEqual({ state: 'Done' })
   })

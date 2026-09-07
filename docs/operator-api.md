@@ -28,7 +28,7 @@ and artifact kind as separate URL path segments.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
-| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria}`. With no query filters, `criteria` is the repository's effective `readyState` and conjunctive `readyLabels`; repeated `label` parameters are AND filters. State names come from the backend. |
+| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria,triageState,readyState}`. The two lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. |
 | `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 
 For artifact reads, an absent `rev` selects the latest revision. A supplied value
@@ -39,7 +39,9 @@ supplied forms return `400 validation`.
 Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
-Clients poll these reads; streaming is not provided.
+Clients poll these reads; streaming is not provided. `triageState`, `readyState`,
+and every entry in `states` are backend state names and must be sent back verbatim
+when used with the move control.
 
 ## Controls
 
@@ -129,7 +131,8 @@ the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
 code. Responses are private/no-store; a 401 sends the application back to sign
 in. Browser clients poll the visible dashboard or ticket queue/detail every two seconds; live transcript
-streaming is not provided. Dirty ticket drafts survive polling. Markdown is rendered without raw HTML,
-and ticket-provider credentials and delegated bearer tokens remain server-side.
+streaming is not provided. Dirty ticket drafts survive polling. Ticket bodies are rendered and edited in
+one source-preserving markdown region without raw HTML; ticket-provider credentials and delegated
+bearer tokens remain server-side.
 
 The API does not expose phase-session commands, runner startup, streaming, or a generic event-append operation.

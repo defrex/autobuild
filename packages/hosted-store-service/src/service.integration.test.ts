@@ -139,7 +139,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   ticketBackend.add(readyTicket('T-handback', { body: 'not a conforming spec' }))
   await dispatch()
   expect(ticketBackend.comments.some((comment) => comment.id === 'T-handback')).toBe(true)
-  expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'Triage' })
+  expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'Backlog' })
   expect(requests.some((entry) => entry.method === 'POST' && entry.path.endsWith('/events'))).toBe(
     true,
   )

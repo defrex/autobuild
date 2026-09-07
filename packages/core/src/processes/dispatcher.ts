@@ -103,10 +103,16 @@ export function readyCriteria(config: Config): { labels: string[]; state: string
  * readiness is: the file tracker's grooming area IS the `triage/` directory,
  * while a Linear team only has a "Triage" workflow state when the team's
  * triage feature is enabled — Backlog is the state every Linear team has.
- * Plugin sources use the neutral `Triage` fallback unless configured.
+ * The hosted source is the credential-bearing Linear proxy and shares that
+ * fallback. Plugin sources use the neutral `Triage` fallback unless configured.
  */
 export function defaultTriageState(config: Config): string {
-  return config.tickets.triageState ?? (config.tickets.source === 'linear' ? 'Backlog' : 'Triage')
+  return (
+    config.tickets.triageState ??
+    (config.tickets.source === 'linear' || config.tickets.source === 'hosted'
+      ? 'Backlog'
+      : 'Triage')
+  )
 }
 
 /**
