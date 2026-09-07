@@ -713,14 +713,15 @@ function seededTicket(overrides: Partial<Ticket> = {}): Ticket {
 }
 
 describe('abTicketList', () => {
-  test('an unfiltered list uses the dispatcher defaults for file and Linear', async () => {
+  test('an unfiltered CLI list uses ready-state defaults, not operator triage defaults', async () => {
     const cases = [
       {
-        config: '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+        config: '[tickets]\nsource = "file"\ntriageState = "backlog"\nreadyState = "ready"\n',
         expected: { labels: [], state: 'ready' },
       },
       {
-        config: '[tickets]\nsource = "linear"\nteamKey = "AUT"\nreadyState = "Todo"\n',
+        config:
+          '[tickets]\nsource = "linear"\nteamKey = "AUT"\ntriageState = "Backlog"\nreadyState = "Todo"\n',
         expected: { labels: ['autobuild'], state: 'Todo' },
       },
     ]
