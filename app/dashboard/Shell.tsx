@@ -47,12 +47,7 @@ export function OperatorShell({
         <h1 className="dh title">
           <span>{repo || 'no repository configured'}</span>
         </h1>
-        <p
-          className="dh imperative"
-          data-tone={imperative?.tone}
-          aria-live={imperative ? 'polite' : undefined}
-          aria-atomic
-        >
+        <p className="dh imperative" data-tone={imperative?.tone} aria-live="polite" aria-atomic>
           {imperative && (
             <span>
               {imperative.word}
