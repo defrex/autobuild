@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#259](https://github.com/defrex/autobuild/pull/259) — Replace filled dashboard controls with outline buttons
 - [#257](https://github.com/defrex/autobuild/pull/257) — Render mastheads at natural monospace proportions
 - [#256](https://github.com/defrex/autobuild/pull/256) — Stabilize the dashboard shell during loading
 - [#255](https://github.com/defrex/autobuild/pull/255) — Tone down the web dashboard palette
