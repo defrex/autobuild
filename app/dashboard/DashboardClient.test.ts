@@ -89,7 +89,7 @@ test('requesting row abort selects and confirms locally without dispatching unti
   expect(confirmation.state().detail).toBe(true)
 })
 
-test('DETAILS toggles only its named row and opens after switching targets', () => {
+test('title detail toggling affects only its named row and opens after switching targets', () => {
   const same = harness({ kind: 'build', slug: 'selected-build' })
   same.handlers.toggleDetail('selected-build')
   expect(same.state().detail).toBe(false)
@@ -99,6 +99,16 @@ test('DETAILS toggles only its named row and opens after switching targets', () 
   different.handlers.toggleDetail('detail-target')
   expect(different.state().detail).toBe(true)
   expect(different.state().selected).toEqual({ kind: 'build', slug: 'detail-target' })
+})
+
+test('auto-merge indicator commands select their target without toggling same-row detail', () => {
+  const value = harness({ kind: 'build', slug: 'merge-target' })
+
+  value.handlers.buildControl('merge-target', 'auto-merge-on')
+
+  expect(value.state().selected).toEqual({ kind: 'build', slug: 'merge-target' })
+  expect(value.state().detail).toBe(true)
+  expect(value.controls).toEqual([{ slug: 'merge-target', action: 'auto-merge-on' }])
 })
 
 test('Harvest row actions select their run before dispatch', () => {

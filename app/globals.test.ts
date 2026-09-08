@@ -176,9 +176,11 @@ test('row controls reserve in-flow geometry and share the documented reveal cont
     /@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.row\[data-hovered\] \.row-controls/,
   )
   expect(stylesheet).toMatch(
-    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?height:\s*calc\(var\(--row\) \* 2\);/,
+    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?grid-template-rows:\s*var\(--row\);[\s\S]*?height:\s*var\(--row\);/,
   )
-  expect(designDocument).toContain('A reserved in-flow control register sits beneath the headline')
+  expect(designDocument).toContain(
+    'A reserved one-row in-flow control register then sits beneath the previews',
+  )
   expect(designDocument).toContain('Hidden words leave the tab order')
   expect(designDocument).toContain('the repository Harvest gate remains global')
   expect(designSidecar.components.find(({ name }) => name === 'Build row')?.description).toContain(
