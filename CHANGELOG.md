@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#262](https://github.com/defrex/autobuild/pull/262) — Protect CLI ticket defaults from operator queue changes
 - [#261](https://github.com/defrex/autobuild/pull/261) — Turn Tickets into a configured triage desk
 - [#260](https://github.com/defrex/autobuild/pull/260) — Document disabled and held state emphasis exceptions
 - [#259](https://github.com/defrex/autobuild/pull/259) — Replace filled dashboard controls with outline buttons
