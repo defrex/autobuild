@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T23:30:00Z",
+  "generatedAt": "2026-09-08T00:00:00Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -94,21 +94,6 @@
           "oklch(95.0% 0.142 21.8)"
         ]
       },
-      "nav-blue": {
-        "role": "primary",
-        "displayName": "Nav Blue",
-        "canonical": "oklch(61.4% 0.120 275.2)",
-        "tonalRamp": [
-          "oklch(15.0% 0.120 275.2)",
-          "oklch(26.0% 0.120 275.2)",
-          "oklch(38.0% 0.120 275.2)",
-          "oklch(50.0% 0.120 275.2)",
-          "oklch(62.0% 0.120 275.2)",
-          "oklch(74.0% 0.120 275.2)",
-          "oklch(85.0% 0.120 275.2)",
-          "oklch(95.0% 0.120 275.2)"
-        ]
-      },
       "slack": {
         "role": "neutral",
         "displayName": "Slack",
@@ -166,7 +151,7 @@
       },
       "label": {
         "displayName": "Label (bold)",
-        "purpose": "Slugs, STATUS words, section headings, tabs, ON/OFF, current step, Fastext labels. Weight is the only emphasis."
+        "purpose": "Slugs, STATUS words, section headings, ON/OFF, current step, and Fastext labels. Weight is the only emphasis."
       }
     },
     "shadows": [],
@@ -216,7 +201,7 @@
       "rule": "─",
       "imperativeCount": "×N"
     },
-    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well --nav-fill --nav-ink, shared --button-border, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
+    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well, shared --button-border, Fastext --ft-*, step and status maps); app/layout.tsx (--font-mono)."
   },
   "components": [
     {
@@ -228,12 +213,12 @@
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-masthead { display: grid; grid-template-columns: minmax(0, max-content) max-content 1fr auto; column-gap: 2ch; align-items: start; height: var(--row, 22px); } .ds-masthead-copy { display: block; margin: 0; height: var(--row, 22px); line-height: var(--row, 22px); font-size: inherit; white-space: nowrap; overflow: hidden; } .ds-masthead-copy > span { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 700; } .ds-title { color: var(--title, #d7c84f); } .ds-imperative[data-tone=\"alert\"] { color: var(--alert, #d96868); } .ds-imperative[data-tone=\"ready\"] { color: var(--ok, #65b868); } .ds-clock { grid-column: 4; color: var(--ink, #e6e6e6); }"
     },
     {
-      "name": "Surface tabs",
+      "name": "Operator control line",
       "kind": "nav",
-      "refersTo": "tab-active",
-      "description": "Bold uppercase tab words; the active surface is reverse video in muted nav blue with ground-colored ink. The repo label and selector render only when two or more repositories are configured.",
-      "html": "<div class=\"ds-tt\"><nav class=\"ds-navline\"><button class=\"ds-tab\" aria-pressed=\"true\">BUILDS</button><button class=\"ds-tab\" aria-pressed=\"false\">TICKETS</button><label class=\"ds-repo\"><span class=\"ds-slack\">repo </span><span class=\"ds-selectwrap\"><select><option>org/repository</option><option>org/alternate</option></select></span></label><span class=\"ds-spacer\"></span><span class=\"ds-slack\">operator@example.com</span><button class=\"ds-word\">sign out</button></nav></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 2ch; min-height: var(--row, 22px); } .ds-repo { display: inline-flex; min-width: 0; } .ds-repo select { width: 100%; min-height: var(--row, 22px); padding: 0 3ch 0 1ch; appearance: none; background: var(--well, #141414); color: var(--ink, #e6e6e6); border: 0; border-radius: 0; font: inherit; } .ds-selectwrap { position: relative; display: inline-block; min-width: 0; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-repo select:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-spacer { flex: 1 1 auto; } .ds-tab { font: inherit; background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 1ch; font-weight: 700; color: var(--ink, #e6e6e6); cursor: pointer; } .ds-tab[aria-pressed=\"true\"] { background: var(--nav-fill, #707dcc); color: var(--ground, #000); } .ds-tab:hover:not([aria-pressed=\"true\"]) { color: var(--live, #55b8b8); } .ds-tab:focus-visible, .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-slack { color: var(--slack, #888888); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; margin: 0; color: var(--slack, #888888); cursor: pointer; white-space: nowrap; } .ds-word:hover { color: var(--live, #55b8b8); text-decoration: underline; text-underline-offset: 0.15em; }"
+      "refersTo": "word",
+      "description": "A control line with the repository selector only when there is a choice, followed by identity and sign out pinned right.",
+      "html": "<div class=\"ds-tt\"><nav class=\"ds-navline\" aria-label=\"Operator controls\"><label class=\"ds-repo\"><span class=\"ds-slack\">repo </span><span class=\"ds-selectwrap\"><select><option>org/repository</option><option>org/alternate</option></select></span></label><span class=\"ds-spacer\"></span><span class=\"ds-identity\">operator@example.com <button class=\"ds-word\">sign out</button></span></nav></div>",
+      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-navline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 2ch; min-height: var(--row, 22px); } .ds-repo { display: inline-flex; min-width: 0; } .ds-repo select { width: 100%; min-height: var(--row, 22px); padding: 0 3ch 0 1ch; appearance: none; background: var(--well, #141414); color: var(--ink, #e6e6e6); border: 0; border-radius: 0; font: inherit; } .ds-selectwrap { position: relative; display: inline-block; min-width: 0; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-repo select:focus-visible, .ds-word:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-spacer { flex: 1 1 auto; } .ds-identity { display: inline-flex; column-gap: 2ch; color: var(--slack, #888888); } .ds-word { font: inherit; background: transparent; border: 0; padding: 0; color: inherit; cursor: pointer; } .ds-word:hover { color: var(--live, #55b8b8); text-decoration: underline; text-underline-offset: 0.15em; }"
     },
     {
       "name": "Word control",
@@ -248,14 +233,14 @@
       "kind": "button",
       "refersTo": "btn",
       "description": "Transparent default action with one shared 2px ink outline; cyan hover, ink reverse-video active, slack disabled, and an offset cyan keyboard-focus ring.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-controls\"><button class=\"ds-btn\">Answer escalation</button><button class=\"ds-btn\" disabled>Save</button><button class=\"ds-word\">close detail</button></div></div>",
+      "html": "<div class=\"ds-tt\"><div class=\"ds-controls\"><button class=\"ds-btn\">Answer escalation</button><button class=\"ds-btn\" disabled>Answer escalation</button><button class=\"ds-word\">close detail</button></div></div>",
       "css": ".ds-tt { --button-border: 2px; font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-controls { display: flex; flex-wrap: wrap; column-gap: 2ch; row-gap: var(--row, 22px); align-items: baseline; } .ds-btn { display: inline-flex; box-sizing: border-box; align-items: center; height: var(--row, 22px); font: inherit; border: var(--button-border) solid currentColor; border-radius: 0; margin: 0; padding: 0 1ch; background: transparent; color: var(--ink, #e6e6e6); font-weight: 700; white-space: nowrap; cursor: pointer; } .ds-btn:hover:not(:disabled) { background: transparent; color: var(--live, #55b8b8); } .ds-btn:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-btn:active:not(:disabled) { background: var(--ink, #e6e6e6); border-color: var(--ink, #e6e6e6); color: var(--ground, #000); } .ds-btn:disabled { background: transparent; color: var(--slack, #888888); cursor: not-allowed; }"
     },
     {
       "name": "Field",
       "kind": "input",
       "refersTo": "field",
-      "description": "Slack label above a reverse-video well; no stroke, square, one row minimum. Ticket markdown uses one 14-row source-preserving rendered editor with visible marks and ordinary Tab navigation.",
+      "description": "Slack label above a reverse-video well; no stroke, square, and one row minimum.",
       "html": "<div class=\"ds-tt\"><label class=\"ds-field\"><span>resolution</span><span class=\"ds-selectwrap\"><select><option>Guidance</option><option>Retry</option><option>Dismiss</option></select></span></label><label class=\"ds-field ds-gap\"><span>message</span><textarea placeholder=\"answer the blocker\"></textarea></label></div>",
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); font-variant-numeric: tabular-nums; font-feature-settings: \"calt\" 0, \"liga\" 0; background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-field { display: grid; max-width: 80ch; } .ds-gap { margin-top: var(--row, 22px); } .ds-field > span:first-child { color: var(--slack, #888888); } .ds-field select, .ds-field textarea { font: inherit; color: var(--ink, #e6e6e6); background: var(--well, #141414); border: 0; border-radius: 0; margin: 0; width: 100%; min-height: var(--row, 22px); padding: 0 1ch; caret-color: var(--live, #55b8b8); } .ds-field textarea { min-height: calc(var(--row, 22px) * 4); resize: vertical; } .ds-field textarea::placeholder { color: var(--slack, #888888); } .ds-field select { appearance: none; padding-right: 3ch; } .ds-selectwrap { position: relative; display: inline-block; } .ds-selectwrap::after { content: \"▾\"; position: absolute; right: 1ch; top: 0; color: var(--slack, #888888); pointer-events: none; } .ds-field select:focus-visible, .ds-field textarea:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; }"
     },
@@ -282,37 +267,28 @@
       "description": "Five static neutral placeholders reserve the dispatcher and build-row register before the first frame; geometry is decorative and one hidden polite message announces loading.",
       "html": "<div class=\"ds-tt\"><p class=\"ds-sr\" aria-live=\"polite\">Loading builds.</p><div class=\"ds-skeletons\" aria-hidden=\"true\"><div class=\"ds-skeleton-dispatch\"><span></span><span></span><span></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div><div class=\"ds-skeleton-row\"><span class=\"ds-skeleton-identity\"></span><span class=\"ds-skeleton-state\"></span><span class=\"ds-skeleton-steps\"></span></div></div></div>",
       "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, monospace); background: var(--ground, #000); padding: var(--row, 22px) 1ch; } .ds-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; } .ds-skeleton-dispatch { display: flex; column-gap: 2ch; height: var(--row, 22px); margin: var(--row, 22px) 0; } .ds-skeleton-dispatch span, .ds-skeleton-row span { display: block; height: var(--row, 22px); background: var(--well, #141414); } .ds-skeleton-dispatch span:nth-child(1) { width: 14ch; } .ds-skeleton-dispatch span:nth-child(2) { width: 20ch; } .ds-skeleton-dispatch span:nth-child(3) { width: 12ch; } .ds-skeleton-row { display: grid; grid-template-columns: 2ch minmax(0, 1fr) 12ch; grid-template-rows: var(--row, 22px) var(--row, 22px); height: calc(var(--row, 22px) * 3); } .ds-skeleton-identity { grid-column: 2; width: min(34ch, 70%); } .ds-skeleton-state { grid-column: 3; justify-self: end; width: 10ch; } .ds-skeleton-row .ds-skeleton-steps { grid-row: 2; grid-column: 2 / 4; width: min(62ch, 80%); background: var(--rule, #292929); }"
-    },
-    {
-      "name": "Ticket queue and editable body",
-      "kind": "card",
-      "refersTo": "well-block",
-      "description": "The configured grooming-state queue opens its first row inline. The ticket body is one rendered, source-preserving editable well; headings, list markers, and rules keep their markdown marks.",
-      "html": "<div class=\"ds-tt\"><h3 class=\"ds-title\">BACKLOG <span>2</span></h3><div class=\"ds-ticket-row\"><b>&gt; CAP-201 Configure queue</b><span>autobuild:proposal</span></div><article class=\"ds-ticket-detail\"><div><span class=\"ds-slack\">state </span>Backlog <span class=\"ds-slack\">labels </span>autobuild:proposal</div><h3 class=\"ds-h\">Body</h3><div class=\"ds-markdown ds-editor\" role=\"textbox\" aria-label=\"Body\"><h2>Acceptance</h2><ul><li>The desk opens the first item</li><li>Tab leaves this editor</li></ul><hr></div><button class=\"ds-promote\">p Move to Todo</button></article></div>",
-      "css": ".ds-tt { font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-title { color: var(--title, #d7c84f); } .ds-title span { color: var(--ink, #e6e6e6); font-weight: 400; } .ds-ticket-row { display: grid; grid-template-columns: minmax(0, 1fr); padding-left: 2ch; } .ds-ticket-row > span, .ds-slack { color: var(--slack, #888); } .ds-ticket-detail { margin-left: 2ch; max-width: 100ch; } .ds-h { margin: var(--row, 22px) 0 0; font: inherit; font-weight: 700; } .ds-editor { min-height: calc(var(--row, 22px) * 8); padding: 0 1ch; background: var(--well, #141414); } .ds-markdown h2 { margin: 0; font: inherit; font-weight: 700; color: var(--title, #d7c84f); } .ds-markdown h2::before { content: \"## \"; color: var(--slack, #888); font-weight: 400; } .ds-markdown ul { margin: 0; list-style: \"- \"; padding-left: 2ch; } .ds-markdown hr { border: 0; color: var(--rule, #292929); } .ds-markdown hr::before { content: \"────────────────────────\"; } .ds-promote { height: var(--row, 22px); margin-top: var(--row, 22px); padding: 0 1ch; border: 2px solid currentColor; border-radius: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; }"
     }
   ],
   "narrative": {
     "northStar": "Teletext Dispatch",
-    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each tempered teletext hue has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed, blue is the navigation surface), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no decorative hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from the shared button outline, from reverse video for active states, and from box-drawing rules.",
+    "overview": "The web dashboard is the `ab dispatch` terminal frame broadcast onto a black character grid. Everything on screen is text set in one monospace face at one size and at the face's natural proportions; the masthead distinguishes itself through bold weight and role color while remaining one row tall. Color is never decoration. Each tempered teletext hue has one job (yellow titles and warns, cyan is current and live, green is done and running, red is blocked and failed), so an operator glancing from a second monitor or a phone reads state from color before reading a word.\n\nThe page is dense on purpose and quiet on purpose. Rows stack in cell rhythm, detail unfolds in place beneath the row it belongs to, and the one thing that may raise its voice is the masthead's imperative: a single word (BLOCKED, FAILED, PR READY, MERGED) chosen by priority, in its own tone, that says whether anything needs a human. The story is glance, read one word, act on one row, leave.\n\nThe system refuses the ops-console vocabulary: no sidebar, no metric cards, no pill-status table, no decorative hairline borders, no shadows, no gradients, no icon font. Structure comes from the grid, from the shared outline on buttons, from reverse video for pressed states, and from box-drawing rules.",
     "keyCharacteristics": [
-      "Black ground, dark only; softened ink; five muted teletext hues, each retaining its established job.",
+      "Black ground, dark only; softened ink; four muted teletext hues, each retaining its established job.",
       "One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.",
       "Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.",
       "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: default controls are ink outlines, secondary controls are ghost words, active states use reverse video, and the Fastext row carries four fixed-color outlines.",
-      "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.",
-      "Tickets default to the configured grooming state, unfold below the selected row, and edit source markdown in the same rendered region."
+      "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion."
     ],
     "rules": [
       {
         "name": "The Color Is State Rule",
-        "body": "A saturated color appears only where it encodes the state it is assigned to. Yellow warns or titles, cyan is current, green is done, red is blocked or failed, blue is the active tab. Never use a primary for emphasis, decoration, or brand.",
+        "body": "A saturated color appears only where it encodes the state it is assigned to. Yellow warns or titles, cyan is current, green is done, and red is blocked or failed. Never use a primary for emphasis, decoration, or brand.",
         "section": "colors"
       },
       {
         "name": "The Fastext Identity Rule",
-        "body": "The four Fastext slot colors (red, green, yellow, cyan, left to right) are the slot identity and never encode state. Each transparent cell carries its hue in both outline and label; an empty slot keeps its outline. A disabled cell keeps the same hue on its colored foreground and outline at 0.9 opacity, drops its key letter, and uses normal weight and a not-allowed cursor. This narrowly reduces disabled-state emphasis over the unchanged transparent resting surface; it does not create a translucent surface. Hover underlines without changing hue and active fills only with the same slot hue.",
+        "body": "The four Fastext slot colors (red, green, yellow, cyan, left to right) are the slot's identity and never encode state. Each transparent cell carries its hue in both outline and label. An empty slot keeps its outline. A disabled cell keeps the same hue on its colored foreground and outline at 0.9 opacity, drops its key letter, and uses normal weight and a not-allowed cursor. This narrowly reduces disabled-state emphasis over the unchanged transparent resting surface; it does not create a translucent surface. Hover underlines without changing hue; active temporarily fills with that same slot hue.",
         "section": "colors"
       },
       {
@@ -342,12 +318,12 @@
       },
       {
         "name": "The Flat Grid Rule",
-        "body": "Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well. The narrow disabled Fastext exception renders only its colored foreground and outline at 0.9 opacity over the unchanged transparent resting surface, so it de-emphasizes the control without introducing a translucent surface.",
+        "body": "Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well; that is the full vocabulary. The narrow disabled Fastext exception renders only its colored foreground and outline at 0.9 opacity over the unchanged transparent resting surface, so it de-emphasizes the control without introducing a translucent surface.",
         "section": "elevation"
       },
       {
         "name": "The No Hairline Rule",
-        "body": "The shared 2px button outline is the sole component-border exception. No other component draws a border; separation uses a row of `─`, a fill change, or empty space. The offset 2px focus outline remains the keyboard-accessibility indicator.",
+        "body": "The shared 2px button outline is the sole component-border exception. No other component draws a border: separation is a row of `─`, a change of fill, or a row of empty space. The offset 2px focus outline remains the keyboard-accessibility indicator.",
         "section": "shapes"
       }
     ],
@@ -357,7 +333,7 @@
       "Do read role tokens and the step and status maps; the `--tt-*` primaries are set once in `:root` and never referenced by a component.",
       "Do keep the Fastext row's four same-hue outlines fixed left to right and let the labels carry the action; disabled cells retain that hue at 0.9 opacity only on their foreground and outline.",
       "Do put one imperative in the masthead by priority (BLOCKED > FAILED > PR READY > MERGED) and leave it empty when nothing needs a human.",
-      "Do rest buttons transparently on the ground; use reverse video only for active tabs, a button's pressed state, and the flash.",
+      "Do rest buttons transparently on the ground; use reverse video only for a button's pressed state and the flash.",
       "Do keep STATUS words, yellow `(held)` annotations, and red alert lines at full color when dimming the frame around a selection.",
       "Do carry state in a word and a color together; screen-reader text names the step state the glyph shows.",
       "Do make destructive intent a second step with a red `!` confirmation line."

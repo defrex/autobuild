@@ -3,20 +3,16 @@
 import type { ReactNode } from 'react'
 import type { Imperative } from './imperative'
 
-export type Surface = 'builds' | 'tickets'
-
 export interface OperatorShellProps {
   repo: string
   repositories: readonly string[]
   identity: string
-  surface: Surface
   /** The one word the header carries, or nothing when nothing needs a human. */
   imperative?: Imperative
   /** The last poll's wall clock, formatted; absent before the first frame. */
   clock?: string
   pending?: boolean
   error?: string
-  onSurface: (surface: Surface) => void
   onRepo: (repo: string) => void
   onSignOut: () => void
   children: ReactNode
@@ -24,19 +20,17 @@ export interface OperatorShellProps {
 
 /**
  * The frame every operator page shares: a one-row masthead carrying the
- * repository, one imperative, and the poll clock; then the surface line.
+ * repository, one imperative, and the poll clock; then the control line.
  * Pure presentation so a fixture can render the same frame the operator sees.
  */
 export function OperatorShell({
   repo,
   repositories,
   identity,
-  surface,
   imperative,
   clock,
   pending,
   error,
-  onSurface,
   onRepo,
   onSignOut,
   children,
@@ -65,23 +59,7 @@ export function OperatorShell({
           {clock ?? '--:--:--'}
         </span>
       </header>
-      <nav className="line navline" aria-label="Operator surface">
-        <button
-          type="button"
-          className="tab"
-          aria-pressed={surface === 'builds'}
-          onClick={() => onSurface('builds')}
-        >
-          BUILDS
-        </button>
-        <button
-          type="button"
-          className="tab"
-          aria-pressed={surface === 'tickets'}
-          onClick={() => onSurface('tickets')}
-        >
-          TICKETS
-        </button>
+      <nav className="line navline" aria-label="Operator controls">
         {repositories.length > 1 && (
           <label className="repo">
             <span className="slack">repo </span>

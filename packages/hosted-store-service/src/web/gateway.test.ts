@@ -99,64 +99,66 @@ describe('web operator gateway', () => {
     ).toBe(404)
   })
 
-  test('allows only exact ticket shapes and applies write origin/content-type checks', async () => {
-    const delegated: string[] = []
+  test('refuses every former browser ticket route without delegation', async () => {
     const gateway = createWebGateway({
       env,
       getSession: session,
-      delegate: async (request) => {
-        delegated.push(`${request.method} ${new URL(request.url).pathname}`)
-        return Response.json({ ok: true })
+      delegate: async () => {
+        throw new Error('must not delegate')
       },
     })
-    expect(
-      (
-        await gateway.fetch(
-          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets?state=Ready'),
-        )
-      ).status,
-    ).toBe(200)
-    expect(
-      (
-        await gateway.fetch(
-          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1'),
-        )
-      ).status,
-    ).toBe(200)
-    expect(
-      (
-        await gateway.fetch(
-          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/move', {
-            method: 'POST',
-            headers: { origin: 'https://operator.example', 'content-type': 'application/json' },
-            body: '{"state":"Done"}',
-          }),
-        )
-      ).status,
-    ).toBe(200)
-    expect(
-      (
-        await gateway.fetch(
-          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/comments'),
-        )
-      ).status,
-    ).toBe(404)
-    expect(
-      (
-        await gateway.fetch(
-          new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets', {
-            method: 'POST',
-            headers: { origin: 'https://operator.example', 'content-type': 'text/plain' },
-            body: '{}',
-          }),
-        )
-      ).status,
-    ).toBe(400)
-    expect(delegated).toEqual([
-      'GET /operator/v1/repos/owner%2Frepo/tickets',
-      'GET /operator/v1/repos/owner%2Frepo/tickets/AUT-1',
-      'POST /operator/v1/repos/owner%2Frepo/tickets/AUT-1/move',
-    ])
+    const writes = {
+      headers: { origin: 'https://operator.example', 'content-type': 'application/json' },
+      body: '{}',
+    }
+    const requests = [
+      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets?state=Ready'),
+      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets', {
+        method: 'POST',
+        ...writes,
+      }),
+      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1'),
+      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1', {
+        method: 'PATCH',
+        ...writes,
+      }),
+      ...['move', 'block', 'unblock'].map(
+        (action) =>
+          new Request(
+            `https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/${action}`,
+            { method: 'POST', ...writes },
+          ),
+      ),
+    ]
+
+    for (const request of requests) {
+      const response = await gateway.fetch(request)
+      expect(response.status, `${request.method} ${request.url}`).toBe(404)
+      expect(await response.json()).toEqual({ kind: 'not-found', error: 'unknown web route' })
+    }
+  })
+
+  test('valid write routes still require application/json', async () => {
+    const gateway = createWebGateway({
+      env,
+      getSession: session,
+      delegate: async () => {
+        throw new Error('must not delegate')
+      },
+    })
+    const response = await gateway.fetch(
+      new Request('https://operator.example/api/web/repos/owner%2Frepo/bulk-control', {
+        method: 'POST',
+        headers: { origin: 'https://operator.example', 'content-type': 'text/plain' },
+        body: '{}',
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      kind: 'validation',
+      error: 'controls require application/json',
+    })
   })
 
   test('preserves artifact bytes without exposing configured canaries', async () => {

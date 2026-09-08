@@ -32,10 +32,8 @@ inspect the diff and not to decide applicability again.
 4. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
    tool, both viewports. Judge the images themselves. The `.html` files are
    human evidence and may help identify a frame, but they are not a basis for
-   your verdict. Narrow Fastext rows are contiguous: in `tickets-narrow.png`,
-   inspect both bottom rows—the first is empty red/green and the second is
-   yellow `NEW TICKET`/empty cyan—rather than assigning the second-row label
-   to the red cell above it.
+   your verdict. Confirm the signed-in control line has no surface tab words,
+   while the multi-repository frame retains its repository selector.
 5. Append criterion-by-criterion visual observations to the generated report,
    ticking or failing each checklist item. In its **Web dashboard visual
    verdict** section, record pass or fail explicitly. On a guidance-assisted
@@ -57,8 +55,6 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-abort-wide:png .ab/web-dashboard-frames/builds-mixed-abort-wide.png --attach
    ab artifact put web-dashboard-frame:builds-longrepo-narrow:png .ab/web-dashboard-frames/builds-longrepo-narrow.png --attach
-   ab artifact put web-dashboard-frame:tickets-detail-wide:png .ab/web-dashboard-frames/tickets-detail-wide.png --attach
-   ab artifact put web-dashboard-frame:tickets-narrow:png .ab/web-dashboard-frames/tickets-narrow.png --attach
    ab artifact put web-dashboard-frame:signin-wide:png .ab/web-dashboard-frames/signin-wide.png --attach
    ab artifact put web-dashboard-frame:signin-error-narrow:png .ab/web-dashboard-frames/signin-error-narrow.png --attach
    ab verdict pass --notes .ab/web-dashboard-frames/verify-report.md

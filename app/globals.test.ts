@@ -33,7 +33,6 @@ const canonicalTokens = {
   '--tt-green': '#65b868',
   '--tt-red': '#d96868',
   '--tt-magenta': '#ff00ff',
-  '--tt-blue': '#707dcc',
   '--tt-dim': '#888888',
   '--tt-rule': '#292929',
   '--tt-well': '#141414',
@@ -74,12 +73,12 @@ function sidecarRule(name: string): string {
   return designSidecar.narrative.rules.find((rule) => rule.name === name)?.body ?? ''
 }
 
-test('the initial root owns the canonical browser palette and active-tab ink', () => {
+test('the initial root owns the canonical browser palette', () => {
   for (const [token, value] of Object.entries(canonicalTokens)) {
     expect(declaration(token), token).toBe(value)
   }
-  expect(declaration('--nav-fill')).toBe('var(--tt-blue)')
-  expect(declaration('--nav-ink')).toBe('var(--ground)')
+  expect(declaration('--nav-fill')).toBeUndefined()
+  expect(declaration('--nav-ink')).toBeUndefined()
 })
 
 const ground = canonicalTokens['--tt-black']
@@ -89,7 +88,6 @@ const textOnGround = [
   ['current and live cyan on ground', canonicalTokens['--tt-cyan'], ground],
   ['done and running green on ground', canonicalTokens['--tt-green'], ground],
   ['blocked and failed red on ground', canonicalTokens['--tt-red'], ground],
-  ['nav blue on ground', canonicalTokens['--tt-blue'], ground],
   ['slack on ground', canonicalTokens['--tt-dim'], ground],
 ] as const
 
@@ -99,7 +97,6 @@ const groundOnFill = [
   ['ground on active cyan Fastext fill', ground, canonicalTokens['--tt-cyan']],
   ['ground on active green Fastext fill', ground, canonicalTokens['--tt-green']],
   ['ground on active red Fastext fill', ground, canonicalTokens['--tt-red']],
-  ['resolved nav-ink on nav-fill', ground, canonicalTokens['--tt-blue']],
 ] as const
 
 for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill]) {
@@ -238,7 +235,6 @@ test('design sidecar previews use valid canonical fallback colors', () => {
     '#55b8b8',
     '#65b868',
     '#d96868',
-    '#707dcc',
     '#888888',
     '#292929',
     '#141414',

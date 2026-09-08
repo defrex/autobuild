@@ -13,7 +13,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'Autobuild operator',
-  description: 'Watch builds and groom the Autobuild ticket queue',
+  description: 'Watch and control Autobuild pipelines',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

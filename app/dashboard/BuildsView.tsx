@@ -1,10 +1,6 @@
 'use client'
 
-import type {
-  OperatorAnswerRequest,
-  OperatorBuildControlRequest,
-  OperatorTicketBuild,
-} from 'autobuild/operator-api'
+import type { OperatorAnswerRequest, OperatorBuildControlRequest } from 'autobuild/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,
@@ -50,7 +46,6 @@ export interface BuildsViewProps {
   detailOpen: boolean
   confirmingAbort: boolean
   transcript?: TranscriptPresentation
-  linkedBuild?: OperatorTicketBuild
   onActivate: (selection: Selection) => void
   onHoverPreview: (selection: Selection | undefined) => void
   onDeselect: () => void
@@ -247,8 +242,7 @@ export function fastextCells(
 }
 
 export function BuildsView(props: BuildsViewProps) {
-  const { model, repo, now, selection, hoverPreview, detailOpen, confirmingAbort, linkedBuild } =
-    props
+  const { model, repo, now, selection, hoverPreview, detailOpen, confirmingAbort } = props
   const preview = (next: Selection) => (event: PointerEvent) => {
     if (
       canPreviewPointer(
@@ -283,12 +277,6 @@ export function BuildsView(props: BuildsViewProps) {
   const focused =
     selection !== undefined &&
     (selection.kind === 'harvest' ? model.harvest !== undefined : selectedBuild !== undefined)
-  const showTerminalNotice =
-    linkedBuild !== undefined &&
-    selection?.kind === 'build' &&
-    selection.slug === linkedBuild.slug &&
-    selectedBuild === undefined
-
   return (
     <DashboardSurface footer={<Fastext label="Controls" cells={fastextCells(props)} />}>
       <DispatcherLine
@@ -310,21 +298,6 @@ export function BuildsView(props: BuildsViewProps) {
             </p>
           )}
         </div>
-      )}
-      {showTerminalNotice && (
-        <section
-          className="terminal-notice"
-          id={`build-${encodeURIComponent(linkedBuild.slug)}`}
-          aria-label="Most recent ticket build"
-        >
-          <p>
-            <b>Build {linkedBuild.slug}</b>{' '}
-            <span className="status" data-status={linkedBuild.status}>
-              {linkedBuild.status.toUpperCase()}
-            </span>
-          </p>
-          <p className="slack">This terminal build is not part of the active pipeline table.</p>
-        </section>
       )}
       <ol
         className="rows"
