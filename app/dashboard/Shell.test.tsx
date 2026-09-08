@@ -12,6 +12,7 @@ function renderShell(repositories: readonly string[]): string {
       identity="operator@example.com"
       onRepo={noop}
       onSignOut={noop}
+      controls={<span data-testid="dispatcher-controls">queue 0 intake ON</span>}
     >
       <p>build content</p>
     </OperatorShell>,
@@ -52,4 +53,20 @@ test('shell renders every repository when there is a choice', () => {
   expect(html).toContain('<option selected="">example/repository</option>')
   expect(html).toContain('<option>example/alternate</option>')
   expectTabless(html)
+})
+
+test('shell composes selector, page controls, and account actions in one named landmark', () => {
+  const html = renderShell(['example/repository', 'example/alternate'])
+  const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+
+  expect(nav).toBeDefined()
+  expect(html.match(/aria-label="Operator controls"/g)).toHaveLength(1)
+  expect(nav!.indexOf('class="repo"')).toBeLessThan(
+    nav!.indexOf('data-testid="dispatcher-controls"'),
+  )
+  expect(nav!.indexOf('data-testid="dispatcher-controls"')).toBeLessThan(
+    nav!.indexOf('class="identity"'),
+  )
+  expect(nav).toContain('operator@example.com')
+  expect(nav).toContain('sign out')
 })

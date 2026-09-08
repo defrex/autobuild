@@ -214,6 +214,9 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
     expect(html).toContain('<nav class="line navline"')
+    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(nav).toContain('class="loading-controls"')
+    expect(nav?.match(/class="skeleton-control control-item"/g)).toHaveLength(6)
     expect(html).not.toContain('role="toolbar"')
     expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
     const loadingStart = html.indexOf('<div class="loading-state">')
@@ -224,9 +227,24 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(loadingAnnouncement.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(html.match(/data-loading-row=""/g)).toHaveLength(5)
     expect(html).toContain('<div class="skeletons" aria-hidden="true">')
+    expect(html).not.toContain('skeleton-dispatch')
     expect(html).not.toContain('polling')
     expect(html).not.toContain('class="status"')
   }
+})
+
+test('running and paused repositories use terminal-compatible control vocabulary', () => {
+  const fixtures = models()
+  const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  const mixedSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
+  const mixed = renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
+  const controlLandmark = (html: string) =>
+    html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0] ?? ''
+
+  expect(controlLandmark(happy)).not.toContain('repository RUNNING')
+  expect(controlLandmark(happy)).not.toContain('repository PAUSED')
+  expect(controlLandmark(mixed)).toContain('repository <b class="off">PAUSED</b>')
 })
 
 test('build row controls contain only authoritative lifecycle and destructive actions', () => {
@@ -374,13 +392,27 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     const toolbar = html.match(
       /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
     )?.[0]
+    const unrelatedToolbar = html.match(
+      /<div class="row-controls" role="toolbar" aria-label="Controls for implement-blocked-dashboard"[\s\S]*?<\/div>/,
+    )?.[0]
 
     expect(html).toContain('class="answer-step"')
     expect(html).toContain('optional guidance (empty retries)')
     expect(html).toContain('<input autofocus="" type="text"')
     expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
     expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
+    expect(html).toMatch(
+      /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
+    )
+    expect(html).toMatch(
+      /<button type="button" class="word am" data-am="off" disabled="" aria-label="Auto merge off for plan-blocked-dashboard"/,
+    )
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
+    for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
+      expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
+    }
+    expect(unrelatedToolbar).toContain('aria-label="RESUME implement-blocked-dashboard"')
+    expect(unrelatedToolbar).toContain('aria-label="ABORT implement-blocked-dashboard"')
     expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
@@ -405,6 +437,21 @@ test('pending answer context disables row-local submit and cancel', () => {
   expect(pendingHtml).toContain(
     `<button type="button" class="word row-control" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
   )
+})
+
+test('post-cancel abort frame replaces answer mode with local confirmation controls', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const toolbar = html.match(
+    /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+  )?.[0]
+
+  expect(html).not.toContain('class="answer-step"')
+  expect(html).toContain('abort plan-blocked-dashboard? Enter confirms, Esc cancels')
+  expect(evidenceText(toolbar ?? '')).toBe(' CONFIRM ABORT CANCEL ')
+  expect(toolbar).not.toContain('aria-label="RESUME plan-blocked-dashboard"')
+  expect(toolbar).not.toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
 })
 
 test('narrow capture frames never supply a hover preview', () => {

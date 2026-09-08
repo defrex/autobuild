@@ -231,13 +231,39 @@ h3 {
 .navline {
   margin-top: var(--row);
 }
+.navline .repo {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+.repo-selectwrap {
+  max-width: min(42ch, 100%);
+}
+.navline .repo select {
+  min-width: 0;
+}
 .navline .spacer {
   flex: 1 1 auto;
 }
+.control-item {
+  display: inline-flex;
+  flex: 0 0 auto;
+  column-gap: 2ch;
+  white-space: nowrap;
+}
+.control-item .sep {
+  color: var(--slack);
+}
+.fact-item {
+  column-gap: 1ch;
+  margin-right: -1ch;
+}
 .identity {
   display: inline-flex;
+  flex: 0 0 auto;
   column-gap: 2ch;
-  flex-wrap: wrap;
+  white-space: nowrap;
   color: var(--slack);
 }
 
@@ -310,31 +336,40 @@ h3 {
   content: "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
 }
 
-/* ── Dispatcher line ──────────────────────────────────────────────────── */
+/* ── Unified controls and loading geometry ────────────────────────────── */
 
 .loading-state {
   min-height: 0;
 }
-.skeleton-dispatch {
-  display: flex;
-  column-gap: 2ch;
-  height: var(--row);
-  margin: var(--row) 0;
+.loading-controls {
+  display: contents;
 }
-.skeleton-dispatch span,
+.skeleton-control,
 .skeleton-row span {
   display: block;
   height: var(--row);
   background: var(--well);
 }
-.skeleton-dispatch span:nth-child(1) {
-  width: 14ch;
+.skeleton-control[data-control="queue"] {
+  width: 7ch;
 }
-.skeleton-dispatch span:nth-child(2) {
-  width: 20ch;
+.skeleton-control[data-control="active"] {
+  width: 10ch;
 }
-.skeleton-dispatch span:nth-child(3) {
-  width: 12ch;
+.skeleton-control[data-control="observations"] {
+  width: 16ch;
+}
+.skeleton-control[data-control="intake"] {
+  width: 9ch;
+}
+.skeleton-control[data-control="merge"] {
+  width: 13ch;
+}
+.skeleton-control[data-control="harvest"] {
+  width: 10ch;
+}
+.skeletons {
+  margin-top: var(--row);
 }
 .skeleton-row {
   display: grid;
@@ -358,17 +393,6 @@ h3 {
   background: var(--rule);
 }
 
-.dispatch {
-  margin-top: var(--row);
-}
-.dispatch .sep {
-  color: var(--slack);
-}
-.dispatch .settings {
-  display: inline-flex;
-  flex-wrap: wrap;
-  column-gap: 2ch;
-}
 .messages {
   display: grid;
 }
@@ -828,11 +852,15 @@ textarea {
   .rowhead .slug {
     white-space: normal;
   }
-  .dispatch .sep {
+  .control-item .sep {
     display: none;
   }
-  .skeleton-dispatch span:nth-child(2) {
+  .navline .spacer {
     display: none;
+  }
+  .navline .identity {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
   .skeleton-row {
     grid-template-columns: 2ch minmax(0, 1fr) 9ch;

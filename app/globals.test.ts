@@ -131,6 +131,18 @@ test('outline and ghost controls expose the complete state contract', () => {
   expect(stylesheet).toMatch(/\.word:disabled/)
 })
 
+test('the unified control line wraps whole items and reserves a narrow account row', () => {
+  expect(stylesheet).toMatch(
+    /\.control-item\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
+  )
+  expect(stylesheet).toMatch(
+    /@media \(max-width: 719px\)[\s\S]*?\.navline \.identity\s*\{[\s\S]*?flex-basis:\s*100%;[\s\S]*?justify-content:\s*flex-end;/,
+  )
+  expect(stylesheet).not.toContain('.dispatch')
+  expect(stylesheet).not.toContain('.skeleton-dispatch')
+  expect(dashboardFrame).not.toContain('skeleton-dispatch')
+})
+
 test('retired footer presentation is absent from app and design artifacts', () => {
   for (const source of [stylesheet, buildsView, dashboardFrame, designDocument]) {
     expect(source).not.toMatch(/fastext/i)
