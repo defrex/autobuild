@@ -483,7 +483,10 @@ describe('ab-guide — source-agnostic ticket operations', () => {
       'deduplicate their list and validate the target plus every blocker id before',
       'fails\nthe whole invocation without a partial write',
       'Adding a blocker\nto a ticket that has already been claimed into a build does not stop that build',
-      'create a dependency chain in\ndependency order',
+      'Dependency order and JSON id extraction are still required',
+      'stage outside ready, verify all blocker relationships',
+      'move to ready last',
+      'one `create --blocked-by` call is not atomic publication',
       'must not be parsed for ids',
     ]) {
       expect(guide).toContain(behavior)

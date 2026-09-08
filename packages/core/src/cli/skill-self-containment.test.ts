@@ -81,7 +81,7 @@ describe('shipped skill self-containment', () => {
     const guide = skills.find((skill) => skill.installName === 'ab-guide')
     expect(guide).toBeDefined()
 
-    for (const name of ['spec-standard.md', 'remote-store-protocol.md']) {
+    for (const name of ['spec-standard.md', 'remote-store-protocol.md', 'ticket-dependencies.md']) {
       const installed = guide!.files.find((file) => file.path === `references/${name}`)
       expect(installed, `missing ab-guide/references/${name}`).toBeDefined()
       expect(installed!.content).toBe(await Bun.file(`${DIST_ROOT}/docs/${name}`).text())
