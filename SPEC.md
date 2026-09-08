@@ -142,9 +142,12 @@ available compatibility details.
 Builtin registration names and names registered by an earlier plugin are
 reserved per port; collisions fail atomically, identify the conflicting adapter
 and owners, and shadow nothing. The same name may exist on different ports.
-`[workspace].provider` selects from the
-workspace catalog; omission selects `git-worktree`. The selected factory is
-invoked lazily with `[workspace.config]`, environment, and repository root.
+`[workspace].provider` selects from the workspace catalog; omission selects
+`git-worktree`, while `vercel-sandbox` is the shipped opt-in remote execution
+provider. Plugin factories are invoked lazily with `[workspace.config]`,
+environment, and repository root. The Vercel builtin instead consumes its
+strict typed config and requires an HTTPS Store/scoped token and HTTPS GitHub
+origin before any ticket claim.
 
 Each adapter map value may remain a bare factory or may be an object containing
 that factory plus an optional `contract: { factory, live? }` descriptor; ticket
@@ -1705,9 +1708,12 @@ forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
 #[workspace]                     # optional; default provider = "git-worktree"
-#provider = "company-container" # builtin or plugin-registered name
-#[workspace.config]              # selected plugin's declarative config
-#image = "ghcr.io/acme/build:bun"
+#provider = "vercel-sandbox"    # shipped remote provider, or plugin name
+#[workspace.config]
+#image = "vercel/sandbox/universal:latest"
+#vcpus = 4
+#timeoutSeconds = 2700
+#environmentVariables = ["ANTHROPIC_API_KEY"]
 
 #[pr.imageHost]                 # optional public inline rendering for attached images
 #provider = "github-release"
@@ -1772,10 +1778,17 @@ to `[]`, preserving repositories with no plugin configuration. Every nonblank
 config validation with the duplicate position, first position, and
 remove/deduplicate guidance. `[workspace]` defaults to
 `provider = "git-worktree"` and empty config; the strict selector
-envelope permits open plugin-owned values only under `[workspace.config]`.
-Unknown providers fail with the complete available-name list. Providers still
-yield a locally reachable working-copy path; remote execution remains a later
-sandbox project. Declarative (TOML), not executable config: the
+envelope permits plugin-owned values under `[workspace.config]`; selecting the
+Vercel builtin applies its closed image/vCPU/timeout/region/environment-name
+schema. Unknown providers fail with the complete available-name list. A
+workspace records provider `ref`, absolute execution-environment `path`, and an
+optional dispatcher-reachable `localPath`. Vercel runs setup, all agent/check
+phases, review/reconciliation, and finalize post-steps in its guest checkout.
+Its child uses environment-owned supervision rather than a host-PID watchdog.
+Remote publication is a durable request settled by the local supervisor only
+after command exit, VM stop, and lease release; credentials are transformed by
+the firewall only for an exact fixed push, and Forge/PR calls remain local.
+Declarative (TOML), not executable config: the
 kernel, dispatcher, CLI, and any future tooling parse it without evaluating
 anything; commands are plain shell strings. Parsing is strict — an unknown table or key is an error, so a
 typo cannot silently disable a verifier. The full config surface, field

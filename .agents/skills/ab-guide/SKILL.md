@@ -215,9 +215,10 @@ tables are **errors**, not warnings — a typo must not silently disable a
 verifier. The open maps are `[commands]`, `[roles]`, `[workspace.config]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild strictly validates the
 repository-defined command, role, and step entries. `[workspace.config]` is
-instead plugin-owned and passed through unchanged to the selected provider;
-the builtin `git-worktree` provider requires it to be empty. Every other known
-table is closed to unknown keys. The removed `[dashboardFrames]`, `[project]`,
+plugin-owned and passed through unchanged for plugins; the builtin `git-worktree` provider requires it to be
+empty, while `vercel-sandbox`
+interprets it as a closed typed table.
+Every other known table is closed to unknown keys. The removed `[dashboardFrames]`, `[project]`,
 `[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
 shims; they fail as ordinary unknown top-level keys.
 
@@ -304,10 +305,39 @@ plugin-owned table.
 
 A selected plugin factory receives the nested config, process environment, and
 absolute repository root. Unknown names fail before claims and list all
-available providers. Providers retain the existing local-working-copy contract:
-`path` is absolute and locally reachable, while provider-scoped `ref` may differ;
-both are durable evidence and historical logs fall back from missing `path` to
-`ref`. Remote sandbox execution remains a separate project.
+available providers. A handle's `path` is absolute in its execution environment,
+`ref` is provider-scoped, and optional `localPath` alone promises dispatcher
+reachability.
+
+`provider = "vercel-sandbox"` runs the complete build in a persistent Vercel VM
+and requires an HTTPS hosted Store/scoped token, GitHub HTTPS origin, GitHub
+forge, and either `VERCEL_OIDC_TOKEN` or the `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/
+`VERCEL_PROJECT_ID` tuple:
+
+```toml
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 2700
+image = "vercel/sandbox/universal:latest"
+vcpus = 4
+environmentVariables = ["ANTHROPIC_API_KEY"]
+# private repository only; dedicated contents-read/no-write identity:
+gitUsernameEnv = "AB_GIT_READ_USER"
+gitPasswordEnv = "AB_GIT_READ_TOKEN"
+```
+
+`timeoutSeconds` is required (60–86400; Hobby currently caps at 2700), `vcpus`
+is 1–32, and optional `region`/unique `failoverRegions` select placement. Only
+the named runtime variables and scoped `AB_STORE`/`AB_TOKEN` enter guest
+commands. Never list Store, Forge, Vercel, or private-clone credentials there.
+The clone identity is upload-pack-only and scrubbed from Git config before an
+agent starts. Agents cannot push. Remote phase terminals deposit a durable
+publication request and park; after VM stop and lease release, the local kernel
+publishes the exact SHA/branch through a temporary narrow firewall transform,
+verifies it, and performs PR work locally. Ordinary completion deletes the VM.
+Branch config, installed skills, relative/package plugins, setup, and phase CLI
+commands resolve from the guest checkout, never dispatcher paths.
 
 ### `[commands]`
 

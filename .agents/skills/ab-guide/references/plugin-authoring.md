@@ -31,6 +31,13 @@ reservations while blocker recording is unfinished. Legacy tickets may omit the
 field and continue to dispatch normally. A plugin relying on this host gate
 should declare an API range containing `^1.4.0`.
 
+Plugin API 1.5 makes remote workspace locations explicit. `path` is the path in
+the workspace environment; set optional `localPath` only when that same working
+copy is directly reachable by the dispatcher. Workspace-owned executors receive
+the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID
+supervision remains host-owned. A workspace plugin relying on these fields
+should declare an API range containing `^1.5.0`.
+
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the
 colocated language-neutral

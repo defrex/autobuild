@@ -38,7 +38,12 @@ Linear backend, direct Linear, local files, or a configured plugin), agent runti
 and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
-`autobuild/plugin-sdk` surface. Teams that need one durable store across hosts
+`autobuild/plugin-sdk` surface. Repositories may also opt into the shipped
+`vercel-sandbox` workspace provider: the complete build runs in an isolated
+Vercel VM while the local supervisor retains credentialed branch/PR publication.
+The default remains a local Git worktree. See the [workspace configuration and
+security contract](docs/configuration.md#vercel-sandbox).
+Teams that need one durable store across hosts
 can deploy the optional [hosted service](packages/hosted-store-service/README.md),
 which also serves a GitHub-authenticated browser dashboard and can own ticket
 persistence and external tracker credentials. The web UI uses a server-managed
