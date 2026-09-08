@@ -634,7 +634,7 @@ async function screenshot(
   htmlPath: string,
   pngPath: string,
   spec: WebFrameSpec,
-  userDataDir: string,
+  profileDir: string,
 ): Promise<void> {
   const proc = Bun.spawn(
     [
@@ -645,7 +645,9 @@ async function screenshot(
       '--no-sandbox',
       '--no-first-run',
       '--disable-extensions',
-      `--user-data-dir=${userDataDir}`,
+      '--run-all-compositor-stages-before-draw',
+      '--disable-features=PaintHolding',
+      `--user-data-dir=${profileDir}`,
       '--force-device-scale-factor=1',
       `--window-size=${spec.width},${spec.height}`,
       '--virtual-time-budget=5000',
@@ -806,7 +808,9 @@ export async function captureWebDashboardFrames(
       const htmlPath = join(outputDir, `${spec.id}.html`)
       const pngPath = join(outputDir, `${spec.id}.png`)
       await writeFile(htmlPath, html)
-      await screenshot(chromium, htmlPath, pngPath, spec, userDataDir)
+      // Chromium can leave profile child processes alive briefly after its CLI exits.
+      // Isolating each frame prevents a later capture from attaching to stale paint state.
+      await screenshot(chromium, htmlPath, pngPath, spec, join(userDataDir, spec.id))
       frames.push({ id: spec.id, width: spec.width, height: spec.height, htmlPath, pngPath })
     }
     const reportPath = join(outputDir, 'verify-report.md')
