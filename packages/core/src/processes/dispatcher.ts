@@ -702,6 +702,13 @@ export class Dispatcher {
     }
   }
 
+  private forgeWorkspacePath(events: AbEvent[]): string {
+    const open = openWorkspace(events)
+    return open?.provider === 'vercel-sandbox'
+      ? this.deps.repo
+      : (open?.localPath ?? open?.path ?? open?.ref ?? this.deps.repo)
+  }
+
   private hasLiveExecutionLease(record: BuildRecord): boolean {
     return (
       record.lease !== undefined &&
@@ -754,7 +761,7 @@ export class Dispatcher {
       try {
         const result = await closePr!.call(
           forge,
-          openWorkspace(events)?.path ?? openWorkspace(events)?.ref ?? this.deps.repo,
+          this.forgeWorkspacePath(events),
           reduced.pr.number,
         )
         await append(
@@ -897,11 +904,7 @@ export class Dispatcher {
     if (!pr) return
     // Forge calls run from the workspace when it still exists (it does until
     // the build completes); fall back to the repo itself for odd logs.
-    const open = openWorkspace(events)
-    const workspacePath =
-      open?.provider === 'vercel-sandbox'
-        ? this.deps.repo
-        : (open?.localPath ?? open?.path ?? open?.ref ?? this.deps.repo)
+    const workspacePath = this.forgeWorkspacePath(events)
     const prState = await forge.getPrState(workspacePath, pr.number)
     const autoMerge = prState.state === 'open' ? pendingAutoMerge(state) : undefined
 

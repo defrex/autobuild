@@ -422,8 +422,10 @@ not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
 credential. Provisioning writes its readiness marker only after all scrubbing,
-distribution installation, and dependency bootstrap complete; a retry deletes
-any named sandbox without that marker instead of adopting partial setup. Branch
+distribution installation, and dependency bootstrap complete; distribution
+packing/install disables package lifecycle scripts so checkout-only hooks such
+as Husky are not provisioning dependencies. A retry deletes any named sandbox
+without that marker instead of adopting partial setup. Branch
 publication is requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential

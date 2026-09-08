@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
-import type { Exec } from './git-worktree'
+import { spawnExec, type Exec } from './git-worktree'
 import {
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   isMissingVercelSandbox,
+  packageAutobuildDistribution,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
 } from './vercel-sandbox'
@@ -17,6 +21,7 @@ class FakeSandbox implements VercelSandboxHandle {
   readonly policies: NetworkPolicy[] = []
   writes: Array<{ path: string; content: Uint8Array }> = []
   stops = 0
+  stopFailures = 0
   deletes = 0
   failPush = false
   failRestore = false
@@ -50,6 +55,10 @@ class FakeSandbox implements VercelSandboxHandle {
   }
   async stop() {
     this.stops += 1
+    if (this.stopFailures > 0) {
+      this.stopFailures -= 1
+      throw new Error('sandbox stop failed')
+    }
   }
   async delete() {
     this.deletes += 1
@@ -64,9 +73,11 @@ function harness(options: { publishedSha?: string | null } = {}) {
   const sandbox = new FakeSandbox()
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
+  let created = false
   const facade: VercelSandboxFacade = {
-    get: async () => null,
+    get: async () => (created && sandbox.deletes === 0 ? sandbox : null),
     create: async (input) => {
+      created = true
       createInput = input
       return sandbox
     },
@@ -125,6 +136,28 @@ function harness(options: { publishedSha?: string | null } = {}) {
 }
 
 describe('VercelSandboxProvider', () => {
+  test('packs, extracts, and production-installs the real distribution without lifecycle scripts', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-package-'))
+    const archivePath = join(tmp, 'autobuild.tgz')
+    const extracted = join(tmp, 'autobuild')
+    try {
+      await writeFile(archivePath, await packageAutobuildDistribution())
+      await mkdir(extracted)
+      const unpacked = await spawnExec(
+        ['tar', '-xzf', archivePath, '--strip-components=1', '-C', extracted],
+        { cwd: tmp },
+      )
+      expect(unpacked).toMatchObject({ exitCode: 0, stderr: '' })
+      const installed = await spawnExec(['bun', 'install', '--production', '--ignore-scripts'], {
+        cwd: extracted,
+      })
+      expect(installed.exitCode).toBe(0)
+      expect(installed.stderr).not.toContain('husky')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   test('classifies the real SDK not-found and stale-snapshot response shapes only', () => {
     expect(isMissingVercelSandbox({ response: { status: 404 } })).toBe(true)
     expect(
@@ -279,6 +312,50 @@ describe('VercelSandboxProvider', () => {
     expect(JSON.parse(env.AB_BUILD_RUNNER_OPTIONS!).supervision).toEqual({ kind: 'environment' })
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('a transient environment stop failure does not poison future starts or release', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.stopFailures = 1
+    const failed = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-stop-fails',
+      workspaceRef: workspace.ref,
+    })
+    await expect(failed.completion).rejects.toThrow(/sandbox stop failed/)
+
+    const retried = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-stop-retry',
+      workspaceRef: workspace.ref,
+    })
+    expect(await retried.completion).toEqual({ exitCode: 0 })
+    await h.provider.release(workspace)
+    expect(h.sandbox.deletes).toBe(1)
+
+    const aborted = harness()
+    const abortWorkspace = await aborted.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    aborted.sandbox.stopFailures = 1
+    const abortExecution = await aborted.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-stop-abort',
+      workspaceRef: abortWorkspace.ref,
+    })
+    await expect(abortExecution.completion).rejects.toThrow(/sandbox stop failed/)
+    await aborted.provider.release(abortWorkspace)
+    expect(aborted.sandbox.deletes).toBe(1)
   })
 
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {

@@ -221,12 +221,12 @@ async function commandOrThrow(
     throw new Error(`sandbox command ${params.cmd} exited ${result.exitCode}`)
 }
 
-async function defaultPackageArchive(): Promise<Uint8Array> {
+export async function packageAutobuildDistribution(): Promise<Uint8Array> {
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
   try {
     await execOrThrow(
       spawnExec,
-      ['bun', 'pm', 'pack', '--destination', destination],
+      ['bun', 'pm', 'pack', '--ignore-scripts', '--destination', destination],
       distributionRoot(),
     )
     const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
@@ -383,7 +383,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           if (result.exitCode !== 0 && result.exitCode !== 5)
             throw new Error(`failed to scrub git config ${key}`)
         }
-        const archive = await (this.options.packageArchive ?? defaultPackageArchive)()
+        const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
         await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
         await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
         await commandOrThrow(sandbox, {
@@ -392,7 +392,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         })
         await commandOrThrow(sandbox, {
           cmd: 'bun',
-          args: ['install', '--production'],
+          args: ['install', '--production', '--ignore-scripts'],
           cwd: VERCEL_AUTOBUILD_PATH,
         })
         // Repository dependencies precede branch-owned package plugin loading.
@@ -469,9 +469,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.active.add(ref)
     let environmentStop: Promise<void> | undefined
     const stopEnvironment = async (): Promise<void> => {
-      environmentStop ??= sandbox.stop().then(() => {
-        this.active.delete(ref)
-      })
+      environmentStop ??= (async () => {
+        try {
+          await sandbox.stop()
+        } catch (error) {
+          // Do not retain a potentially expired/stale SDK handle. A later
+          // execution or abort cleanup re-resolves the named sandbox.
+          this.sessions.delete(ref)
+          throw error
+        } finally {
+          this.active.delete(ref)
+        }
+      })()
       await environmentStop
     }
     let stopping: Promise<void> | undefined
