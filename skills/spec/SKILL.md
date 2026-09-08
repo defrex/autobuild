@@ -57,34 +57,38 @@ human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
 readiness gates are satisfied.
 
-If grooming established that this work is blocked by other tickets, pass them
-at creation:
-
-```
-ab ticket create "…" --body spec.md --blocked-by AUT-8,AUT-9
-```
-
-The ids are source-local — whatever the repo's `[tickets]` source uses (e.g.
-`AUT-8` for linear, `file-1` for file). The dispatcher will hold the ticket
-unclaimed until every blocker completes.
+If grooming established prerequisites, follow the complete
+[safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
+A single `ab ticket create --blocked-by` invocation does not publish atomically:
+Linear (including hosted Linear) exposes the issue before separate blocker writes.
+For a ready destination, create in a known non-ready staging state, pass all
+blockers at creation, read back and verify them, then move to ready last. The
+human's requested final placement still wins; temporary staging needs no new
+placement question. Never assume the source default is non-ready.
 
 For a dependency chain, create in dependency order and obtain each new id from
-the command's complete JSON result. For example, to make B depend on A and C
-depend on B:
+the command's complete JSON result. This example assumes the repository's triage
+state is `Triage`, its ready state is `Ready`, and the human requested ready:
 
 ```sh
-ab ticket create "A" --body a.md --json > a-ticket.json
+ab ticket create "A" --body a.md --json --state Triage > a-ticket.json
 a_id="$(jq -r '.ref.id' a-ticket.json)"
-ab ticket create "B" --body b.md --blocked-by "$a_id" --json > b-ticket.json
+ab ticket create "B" --body b.md --blocked-by "$a_id" --json --state Triage > b-ticket.json
 b_id="$(jq -r '.ref.id' b-ticket.json)"
-ab ticket create "C" --body c.md --blocked-by "$b_id" --json > c-ticket.json
+ab ticket create "C" --body c.md --blocked-by "$b_id" --json --state Triage > c-ticket.json
+c_id="$(jq -r '.ref.id' c-ticket.json)"
+ab ticket show "$b_id" --json
+ab ticket show "$c_id" --json
+# Verify both tickets remain in Triage and their full blocker sets are present.
+ab ticket move "$a_id" Ready --json
+ab ticket move "$b_id" Ready --json
+ab ticket move "$c_id" Ready --json
 ```
 
 Never parse an id from the human-readable confirmation line: it can contain the
-new ticket id and blocker ids in the same source-local form. This order is
-especially important when `[tickets].createState` equals
-`[tickets].readyState`, or when `--state` files directly into the ready state.
-Blockers are evaluated when the dispatcher claims a ticket; adding a blocker
+new ticket id and blocker ids in the same source-local form. Dependency order
+alone does not close the ready-publication race. Blockers are evaluated when
+the dispatcher claims a ticket; adding a blocker
 after a ticket has already been claimed does not stop its active build.
 
 ## With a ticket argument: flesh out

@@ -15,6 +15,8 @@ export interface OperatorShellProps {
   error?: string
   onRepo: (repo: string) => void
   onSignOut: () => void
+  /** Page-specific facts and controls placed in the shared operator landmark. */
+  controls: ReactNode
   children: ReactNode
 }
 
@@ -33,6 +35,7 @@ export function OperatorShell({
   error,
   onRepo,
   onSignOut,
+  controls,
   children,
 }: OperatorShellProps) {
   return (
@@ -63,7 +66,7 @@ export function OperatorShell({
         {repositories.length > 1 && (
           <label className="repo">
             <span className="slack">repo </span>
-            <span className="selectwrap">
+            <span className="selectwrap repo-selectwrap">
               <select value={repo} onChange={(event) => onRepo(event.target.value)}>
                 {repositories.map((name) => (
                   <option key={name}>{name}</option>
@@ -72,6 +75,7 @@ export function OperatorShell({
             </span>
           </label>
         )}
+        {controls}
         <span className="spacer" />
         <span className="identity">
           <span>{identity}</span>

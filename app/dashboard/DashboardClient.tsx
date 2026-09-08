@@ -13,12 +13,13 @@ import * as api from './api'
 import {
   type BuildControlAction,
   BuildsView,
+  DispatcherControls,
   type HarvestControl,
   sameSelection,
   type Selection,
 } from './BuildsView'
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
-import { clockText } from './frame'
+import { clockText, LoadingControls } from './frame'
 import { dashboardImperative } from './imperative'
 import { OperatorShell } from './Shell'
 import { reconcileDashboard } from './view-model'
@@ -417,6 +418,18 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         await fetch('/api/auth/sign-out', { method: 'POST' })
         window.location.assign('/sign-in')
       }}
+      controls={
+        model ? (
+          <DispatcherControls
+            model={model}
+            pending={pending}
+            onSetting={setting}
+            onHarvest={harvest}
+          />
+        ) : (
+          <LoadingControls />
+        )
+      }
     >
       <BuildsView
         repo={repo}
@@ -441,8 +454,6 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onCancelAnswerStep={cancelAnswerStep}
         onAnswer={answer}
         onTranscript={loadTranscript}
-        onSetting={setting}
-        onHarvest={harvest}
         onRowHarvest={rowControls.runHarvest}
       />
     </OperatorShell>

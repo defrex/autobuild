@@ -19,7 +19,13 @@ import { pathToFileURL } from 'node:url'
 import type { DashboardModel, TranscriptPresentation } from 'autobuild/operator-presentation'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BuildsView, type BuildsViewProps, type Selection } from '../app/dashboard/BuildsView'
+import {
+  BuildsView,
+  type BuildsViewProps,
+  DispatcherControls,
+  type Selection,
+} from '../app/dashboard/BuildsView'
+import { LoadingControls } from '../app/dashboard/frame'
 import { dashboardImperative } from '../app/dashboard/imperative'
 import { OperatorShell } from '../app/dashboard/Shell'
 import { SignIn } from '../app/sign-in/SignIn'
@@ -72,7 +78,6 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'AUT-131',
       'PR merged',
       'Harvest',
-      'RUNNING',
       '[x]',
       'merge(waiting)',
       'auto merge',
@@ -84,32 +89,34 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-happy-narrow',
     width: 390,
     height: 1700,
-    requires: ['MERGED', 'AUT-131', 'Harvest', 'RUNNING', '[x]', 'auto merge', 'intake'],
+    requires: ['MERGED', 'AUT-131', 'Harvest', '[x]', 'auto merge', 'intake'],
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
     id: 'builds-empty-wide',
     width: 1440,
     height: 1000,
-    requires: ['RUNNING', 'intake', 'auto merge', 'harvest', 'no active builds'],
+    requires: ['intake', 'auto merge', 'harvest', 'no active builds'],
+    forbids: ['repository RUNNING'],
   },
   {
     id: 'builds-empty-narrow',
     width: 390,
     height: 1000,
-    requires: ['RUNNING', 'intake', 'auto merge', 'harvest', 'no active builds'],
+    requires: ['intake', 'auto merge', 'harvest', 'no active builds'],
+    forbids: ['repository RUNNING'],
   },
   {
     id: 'builds-harvest-wide',
     width: 1440,
     height: 1000,
-    requires: ['Harvest', 'RUNNING', 'RESUME', 'harvest'],
+    requires: ['Harvest', 'RESUME', 'harvest'],
   },
   {
     id: 'builds-harvest-narrow',
     width: 390,
     height: 1700,
-    requires: ['Harvest', 'RUNNING', 'RESUME', 'harvest'],
+    requires: ['Harvest', 'RESUME', 'harvest'],
   },
   {
     id: 'builds-multirepo-wide',
@@ -126,14 +133,14 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-rest-wide',
     width: 1440,
     height: 1200,
-    requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
   },
   {
     id: 'builds-mixed-hover-wide',
     width: 1440,
     height: 1200,
     emulateFineHover: true,
-    requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
   },
   {
     id: 'builds-mixed-selected-narrow',
@@ -148,7 +155,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     requires: [
       'BLOCKED ×2',
       'CAP-PLAN',
-      'PAUSED',
+      'repository PAUSED',
       '(held)',
       'QUEUED',
       'more rows - Enter details',
@@ -268,6 +275,13 @@ function shell(
       error={opts.error}
       onRepo={noop}
       onSignOut={noop}
+      controls={
+        opts.model ? (
+          <DispatcherControls model={opts.model} onSetting={noop} onHarvest={noop} />
+        ) : (
+          <LoadingControls />
+        )
+      }
     >
       {children}
     </OperatorShell>
@@ -293,8 +307,6 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       onCancelAnswerStep={noop}
       onAnswer={noop}
       onTranscript={noop}
-      onSetting={noop}
-      onHarvest={noop}
       onRowHarvest={noop}
       {...extra}
     />
@@ -474,6 +486,9 @@ export function checkEvidence(spec: WebFrameSpec, html: string): void {
   const text = evidenceText(html)
   if (spec.id.startsWith('builds-') && (text.includes('BUILDS') || text.includes('TICKETS'))) {
     throw new Error(`web dashboard capture ${spec.id}: signed-in frame contains a surface tab word`)
+  }
+  if (spec.id.startsWith('builds-') && text.includes('repository RUNNING')) {
+    throw new Error(`web dashboard capture ${spec.id}: frame contains repository RUNNING`)
   }
   if (spec.id.startsWith('builds-') && html.includes('class="fastext"')) {
     throw new Error(`web dashboard capture ${spec.id}: signed-in frame contains a footer toolbar`)
@@ -674,13 +689,14 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '',
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. On short states, empty black below the last row is the natural end of the document, not a reserved footer slot.',
     '- [ ] Compare loading, empty, and loaded Builds at both widths, then sign-in: the masthead is exactly one cell row high with identical coordinates in every state, followed by the control line and content at the recorded one-row rhythm.',
-    '- [ ] Control line: no signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` shows the `repo` label and selector with both repository options; every other Builds frame is configured with one repository and omits the complete selector and label.',
-    '- [ ] Loading frames show five static, neutral placeholder rows at the normal four-row build rhythm, with no digits, status words, imperative, synthetic values, footer, or animation. The old polling sentence is absent. Empty frames show the dispatcher and `no active builds` at natural content height.',
+    '- [ ] Control line: one line beneath the masthead carries the conditional repository selector, queue/active/observation facts, intake/auto merge/harvest toggles, and the account controls pinned right. No signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` alone shows the `repo` selector.',
+    '- [ ] At 390px the control line wraps only between complete items, with identity and `sign out` together on their own right-aligned line; no item clips, overlaps, or collapses into a menu.',
+    '- [ ] Loading frames put neutral control placeholders inside that same control landmark and show five static neutral build-row placeholders at the normal four-row rhythm, with no dispatcher-shaped row among them, digits, status words, imperative, synthetic values, footer, or animation. The old polling sentence is absent.',
     '- [ ] The browser document is the sole scroll container: tall Builds and open detail extend document height and move masthead, controls, rows, and detail together; no shell block is fixed or pinned and no inner rows/detail scroller clips content.',
     '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
-    '- [ ] Dispatcher line: queue, active, observations, repository state, and the intake, auto merge, and harvest toggle words with bold ON in green or OFF in yellow. The happy frames show everything ON and RUNNING; the mixed frames show PAUSED and OFF.',
+    '- [ ] Repository state: no frame shows `repository RUNNING`. Running repositories omit the token; paused mixed frames show `repository PAUSED` in yellow, alongside toggle words with bold ON in green or OFF in yellow.',
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
-    '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, RUNNING/green, PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
+    '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, build or Harvest RUNNING/green, repository PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
     '- [ ] Row controls: every row reserves an in-grid control register beneath its headline. Compare `builds-mixed-rest-wide.png` with `builds-mixed-hover-wide.png`: build identity and STATUS coordinates are identical, while the dimmed hovered row gains its ghost-word controls. The selected row keeps visible controls in both frames.',
     '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the selected blocked row register keeps ABORT, RESUME, and DETAILS. No 390px frame carries a preview marker.',

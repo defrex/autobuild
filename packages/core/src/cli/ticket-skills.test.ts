@@ -17,12 +17,21 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).not.toContain("Changing* an existing ticket's dependencies is not available")
   })
 
-  test('spec builds dependency chains from JSON ids instead of prose', () => {
-    expect(spec).toContain('ab ticket create "A" --body a.md --json')
+  test('spec stages dependency chains and verifies blockers before ready publication', () => {
+    expect(spec).toContain('ab ticket create "A" --body a.md --json --state Triage')
     expect(spec).toContain("jq -r '.ref.id' a-ticket.json")
-    expect(spec).toContain('ab ticket create "B" --body b.md --blocked-by "$a_id" --json')
+    expect(spec).toContain(
+      'ab ticket create "B" --body b.md --blocked-by "$a_id" --json --state Triage',
+    )
     expect(spec).toContain("jq -r '.ref.id' b-ticket.json")
-    expect(spec).toContain('ab ticket create "C" --body c.md --blocked-by "$b_id" --json')
+    expect(spec).toContain(
+      'ab ticket create "C" --body c.md --blocked-by "$b_id" --json --state Triage',
+    )
+    expect(spec.indexOf('ab ticket show "$c_id" --json')).toBeLessThan(
+      spec.indexOf('ab ticket move "$a_id" Ready --json'),
+    )
+    expect(spec).toContain('ab ticket move "$b_id" Ready --json')
+    expect(spec).toContain('ab ticket move "$c_id" Ready --json')
     expect(spec).toContain('Never parse an id from the human-readable confirmation line')
     expect(spec).toContain(
       'adding a blocker\nafter a ticket has already been claimed does not stop its active build',

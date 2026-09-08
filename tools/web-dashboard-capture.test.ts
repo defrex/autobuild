@@ -213,6 +213,9 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
     expect(html).toContain('<nav class="line navline"')
+    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(nav).toContain('class="loading-controls"')
+    expect(nav?.match(/class="skeleton-control control-item"/g)).toHaveLength(6)
     expect(html).not.toContain('role="toolbar"')
     expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
     const loadingStart = html.indexOf('<div class="loading-state">')
@@ -223,9 +226,24 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(loadingAnnouncement.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(html.match(/data-loading-row=""/g)).toHaveLength(5)
     expect(html).toContain('<div class="skeletons" aria-hidden="true">')
+    expect(html).not.toContain('skeleton-dispatch')
     expect(html).not.toContain('polling')
     expect(html).not.toContain('class="status"')
   }
+})
+
+test('running and paused repositories use terminal-compatible control vocabulary', () => {
+  const fixtures = models()
+  const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  const mixedSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
+  const mixed = renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
+  const controlLandmark = (html: string) =>
+    html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0] ?? ''
+
+  expect(controlLandmark(happy)).not.toContain('repository RUNNING')
+  expect(controlLandmark(happy)).not.toContain('repository PAUSED')
+  expect(controlLandmark(mixed)).toContain('repository <b class="off">PAUSED</b>')
 })
 
 test('build row controls follow authoritative status availability', () => {
