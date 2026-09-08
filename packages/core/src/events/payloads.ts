@@ -202,12 +202,46 @@ export const eventPayloadSchemas = {
   'workspace.provisioned': z.strictObject({
     provider: z.string().min(1),
     ref: z.string().min(1),
-    /** Locally reachable working copy. Optional for historical event replay. */
+    /** Working-copy path in the provider execution environment. Optional only
+     * for historical event replay. */
     path: z.string().min(1).optional(),
+    /** Dispatcher-reachable path. Remote providers intentionally omit it. */
+    localPath: z.string().min(1).optional(),
     branch: z.string().min(1),
     base: workspaceBaseSchema,
   }),
   'workspace.released': empty,
+  /** Remote phases deposit their output and park before trusted publication.
+   * The dispatcher settles the request only after the VM session and execution
+   * lease are gone, then appends the ordinary phase completion fact. */
+  'publication.requested': z.discriminatedUnion('operation', [
+    z.strictObject({
+      operation: z.literal('implement'),
+      branch: z.string().min(1),
+      sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      round,
+      base: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      artifact: artifactRefSchema,
+    }),
+    z.strictObject({
+      operation: z.literal('reconcile'),
+      branch: z.string().min(1),
+      sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      artifact: artifactRefSchema,
+    }),
+    z.strictObject({
+      operation: z.literal('finalize'),
+      branch: z.string().min(1),
+      sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      description: artifactRefSchema,
+    }),
+    z.strictObject({
+      operation: z.literal('finalize-step'),
+      branch: z.string().min(1),
+      sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      step: z.string().min(1),
+    }),
+  ]),
   /** Checkpoints in the dispatcher-owned, retry-safe abort cleanup saga. */
   'abort.remote-branch-deleted': z.strictObject({ branch: z.string().min(1) }),
   'abort.local-branch-deleted': z.strictObject({ branch: z.string().min(1) }),

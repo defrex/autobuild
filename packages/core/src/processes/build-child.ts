@@ -37,6 +37,12 @@ export async function runBuildChild(
     if (workspace === null) {
       throw new Error(`build ${JSON.stringify(input.slug)} has no open durable workspace`)
     }
+    if (workspace.ref !== input.workspaceRef) {
+      throw new Error(
+        `build ${JSON.stringify(input.slug)} workspace changed from launch ref ` +
+          `${JSON.stringify(input.workspaceRef)} to ${JSON.stringify(workspace.ref)}`,
+      )
+    }
     const configArtifact = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
     if (configArtifact === null) {
       throw new Error(`build ${JSON.stringify(input.slug)} has no effective config artifact`)

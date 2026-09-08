@@ -1,10 +1,11 @@
 import { resolve } from 'node:path'
-import type { WorkspaceConfig } from '../../config/schema'
+import { vercelSandboxConfigSchema, type WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
 import type { BuildExecution } from './build-execution'
 import { GitWorktreeProvider } from './git-worktree'
 import { LocalBuildExecution } from './local-build-execution'
+import { VercelSandboxProvider } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -13,6 +14,9 @@ export interface CreateWorkspaceProviderOptions {
   /** Absolute repository root supplied to plugin factories. */
   repoRoot: string
   env: Record<string, string | undefined>
+  /** Required only by remote builtins. */
+  storeRef?: string
+  storeToken?: string
 }
 
 export interface WorkspaceRuntime {
@@ -36,15 +40,31 @@ export async function createWorkspaceProvider(
   }
 
   if (registration.owner.kind === 'builtin') {
-    if (config.provider !== 'git-worktree') {
-      throw new Error(
-        `workspace provider "${config.provider}" is registered as a builtin but has no constructor`,
-      )
+    if (config.provider === 'git-worktree') {
+      if (Object.keys(config.config).length > 0) {
+        throw new Error(
+          '[workspace.config] is not supported by the builtin "git-worktree" provider',
+        )
+      }
+      return new GitWorktreeProvider({ root: resolve(opts.worktreeRoot) })
     }
-    if (Object.keys(config.config).length > 0) {
-      throw new Error('[workspace.config] is not supported by the builtin "git-worktree" provider')
+    if (config.provider === 'vercel-sandbox') {
+      const parsed = vercelSandboxConfigSchema.safeParse(config.config)
+      if (!parsed.success) throw new Error(`invalid vercel-sandbox config: ${parsed.error.message}`)
+      if (opts.storeRef === undefined || opts.storeToken === undefined) {
+        throw new Error('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
+      }
+      return new VercelSandboxProvider({
+        config: parsed.data,
+        env: opts.env,
+        storeRef: opts.storeRef,
+        storeToken: opts.storeToken,
+        repo: resolve(opts.repoRoot),
+      })
     }
-    return new GitWorktreeProvider({ root: resolve(opts.worktreeRoot) })
+    throw new Error(
+      `workspace provider "${config.provider}" is registered as a builtin but has no constructor`,
+    )
   }
 
   const factory = registration.factory

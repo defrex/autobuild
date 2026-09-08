@@ -448,6 +448,45 @@ describe('ab done — implement', () => {
     expect(await eventTypes()).not.toContain('implement.completed')
   })
 
+  test('remote implementation deposits a publication request without pushing or completing', async () => {
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-remote',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'existing', sha: implementationBase },
+      },
+    })
+    const deps = implementDeps()
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    const event = await done(deps, {
+      notes: await stash('remote-notes.md', 'remote implementation\n'),
+    })
+
+    expect(event.type).toBe('publication.requested')
+    expect(event.payload).toEqual({
+      operation: 'implement',
+      branch: BRANCH,
+      sha: head,
+      round: 1,
+      base: implementationBase,
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(deps.forge.pushes).toEqual([])
+    expect(await eventTypes()).not.toContain('implement.completed')
+    await expect(
+      done(deps, { notes: await stash('remote-notes-again.md', 'duplicate\n') }),
+    ).rejects.toThrow(/second terminal call rejected.*Remote publication is pending/s)
+    expect(
+      (await store.getEvents(BUILD)).filter(
+        (candidate) => candidate.type === 'publication.requested',
+      ),
+    ).toHaveLength(1)
+  })
+
   test('.ab/ scratch never dirties the worktree — ab context establishes the gitignore itself (§7, §8.3)', async () => {
     // The fixture repo, like any real repo, does NOT gitignore .ab/ — the
     // product must establish "the gitignored .ab/" (§7) on its own, or every
@@ -802,6 +841,38 @@ describe('ab done — finalize', () => {
       /requires a deposited pr-description artifact.*ab artifact put pr-description/s,
     )
     expect(deps.forge.opened).toEqual([])
+  })
+
+  test('remote finalize requests exact-head publication and performs no PR side effect', async () => {
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Remote PR\n\nRemote body.\n',
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-finalize',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'existing', sha: 'a'.repeat(40) },
+      },
+    })
+    const deps = makeDeps({ store, env: makeEnv({ phase: 'finalize' }), workspacePath: workspace })
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+
+    const event = await done(deps)
+
+    expect(event.type).toBe('publication.requested')
+    expect(event.payload).toEqual({
+      operation: 'finalize',
+      branch: BRANCH,
+      sha: head,
+      description: { kind: 'pr-description', rev: 0 },
+    })
+    expect(deps.forge.opened).toEqual([])
+    expect(await eventTypes()).not.toContain('finalize.completed')
   })
 
   test('opens the PR (title = first line sans #, body = rest), appends kernel-actor event, posts the summary', async () => {
@@ -1425,6 +1496,56 @@ describe('ab done — reconcile', () => {
       /HEAD to be a merge commit \(2\+ parents\).*has 1 parent/s,
     )
     expect(deps.forge.pushes).toEqual([])
+  })
+
+  test('remote reconcile requests exact merge publication without pushing or completing', async () => {
+    await runGit(['checkout', '-q', 'main'], workspace)
+    await commitFile(workspace, 'base.ts', 'base moved on\n', 'base work')
+    await runGit(['checkout', '-q', BRANCH], workspace)
+    await runGit(
+      [
+        '-c',
+        'user.email=ab@test.invalid',
+        '-c',
+        'user.name=ab-test',
+        '-c',
+        'commit.gpgsign=false',
+        'merge',
+        '--no-ff',
+        '-m',
+        'merge main into branch',
+        'main',
+      ],
+      workspace,
+    )
+    const mergeSha = await runGit(['rev-parse', 'HEAD'], workspace)
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-reconcile',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'existing', sha: 'a'.repeat(40) },
+      },
+    })
+    const deps = makeDeps({
+      store,
+      env: makeEnv({ phase: 'reconcile', round: 1 }),
+      workspacePath: workspace,
+    })
+    const event = await done(deps, { notes: await stash('remote-rec.md', 'merged base\n') })
+
+    expect(event.type).toBe('publication.requested')
+    expect(event.payload).toEqual({
+      operation: 'reconcile',
+      branch: BRANCH,
+      sha: mergeSha,
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    })
+    expect(deps.forge.pushes).toEqual([])
+    expect(await eventTypes()).not.toContain('reconcile.completed')
   })
 
   test('on a real merge commit: pushes (never force) and records the merge commit', async () => {

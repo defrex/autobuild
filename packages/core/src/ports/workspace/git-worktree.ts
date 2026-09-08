@@ -301,6 +301,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         provider: this.name,
         ref: worktrees.attached.path,
         path: worktrees.attached.path,
+        localPath: worktrees.attached.path,
         branch,
         base: { source: 'existing', sha },
       }
@@ -334,6 +335,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
           provider: this.name,
           ref: worktrees.detached.path,
           path: worktrees.detached.path,
+          localPath: worktrees.detached.path,
           branch,
           base: { source: 'existing', sha: recoveredSha },
         }
@@ -348,6 +350,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         provider: this.name,
         ref: worktreePath,
         path: worktreePath,
+        localPath: worktreePath,
         branch,
         base: { source: 'existing', sha },
       }
@@ -374,6 +377,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       provider: this.name,
       ref: worktreePath,
       path: worktreePath,
+      localPath: worktreePath,
       branch,
       base: { ...base, sha: actualSha },
     }

@@ -5,9 +5,47 @@ export interface BuildExecutionStart {
   slug: string
   storeRef: string
   instance: string
-  /** Expected supervising kernel pid. The local child uses this immutable
-   * identity even if it is reparented before its modules finish loading. */
-  parentPid: number
+  /** Provider-native locator from the current workspace.provisioned fact. */
+  workspaceRef: string
+}
+
+/** Serialized private-child envelope. Host PIDs are meaningful only to the
+ * local executor; an environment-owned VM is supervised as one unit by its
+ * provider. Keeping the modes discriminated prevents accidental cross-namespace
+ * signalling. */
+export type BuildChildLaunch = BuildExecutionStart &
+  (
+    | { supervision: { kind: 'local-parent'; parentPid: number } }
+    | { supervision: { kind: 'environment' } }
+  )
+
+export function parseBuildChildLaunch(value: unknown): BuildChildLaunch | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as Partial<BuildChildLaunch> & { supervision?: Record<string, unknown> }
+  if (
+    typeof candidate.slug !== 'string' ||
+    candidate.slug.length === 0 ||
+    typeof candidate.storeRef !== 'string' ||
+    candidate.storeRef.length === 0 ||
+    typeof candidate.instance !== 'string' ||
+    candidate.instance.length === 0 ||
+    typeof candidate.workspaceRef !== 'string' ||
+    candidate.workspaceRef.length === 0 ||
+    candidate.supervision === undefined
+  )
+    return undefined
+  const supervision = candidate.supervision
+  if (supervision.kind === 'environment') {
+    if (Object.hasOwn(supervision, 'parentPid')) return undefined
+    return candidate as BuildChildLaunch
+  }
+  if (
+    supervision.kind === 'local-parent' &&
+    Number.isInteger(supervision.parentPid) &&
+    (supervision.parentPid as number) > 0
+  )
+    return candidate as BuildChildLaunch
+  return undefined
 }
 
 export const BUILD_EXECUTION_LEASE_TTL_MS = 60_000

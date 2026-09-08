@@ -41,7 +41,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.4.0')
+    expect(PLUGIN_API_VERSION).toBe('1.5.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -225,7 +225,7 @@ describe('plugin SDK package surface', () => {
           describeTicketSourceContract,
         } from 'autobuild/plugin-sdk'
 
-        if (PLUGIN_API_VERSION !== '1.4.0') {
+        if (PLUGIN_API_VERSION !== '1.5.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
@@ -264,7 +264,7 @@ describe('plugin SDK package surface', () => {
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      'autobuild 0.6.0\nplugin API 1.4.0',
+      'autobuild 0.6.0\nplugin API 1.5.0',
     )
 
     const initialized = join(destination, 'initialized')

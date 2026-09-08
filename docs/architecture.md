@@ -319,9 +319,10 @@ builtin-plus-plugin registry once during production wiring and pairs it with a
 that seam; otherwise the shipped local subprocess capability is used. The builtin stays
 store-root-aware; selected plugin factories receive their nested config,
 environment, and absolute repository root. `WorkspaceHandle.ref` remains a
-provider identifier while `path` is the locally reachable working copy used by
-runners and forge calls; both are recorded, with `ref` as the historical-event
-fallback. `packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
+provider identifier, `path` is absolute inside the execution environment, and
+optional `localPath` explicitly identifies dispatcher reachability. Local Forge
+operations fall back to the main checkout when `localPath` is absent.
+`packages/core/src/ports/workspace/git-worktree.ts` selects the branch-cut base once
 at first creation, fetching into a build-scoped private ref; re-provisioning
 resumes at the branch tip and never re-cuts, so the first provisioning fact
 remains immutable provenance. Separately, each successful implementation terminal in
@@ -333,6 +334,24 @@ It fails before publication/deposit on fetch, ref, ancestry, or ambiguity
 errors and writes neither `FETCH_HEAD` nor operator refs. Reconcile's
 execution-time target refresh in `packages/core/src/processes/build-runner.ts` remains a
 third, deliberately separate boundary and also fails closed.
+
+The builtin `vercel-sandbox` adapter provisions an exact GitHub revision into a
+fixed guest path, installs the running Autobuild distribution and repository
+dependencies there, and starts the same private build child with environment
+supervision. Local children carry a positive parent PID and retain their
+watchdog/process-group reaper; remote children cannot see a meaningful host PID,
+so the detached SDK command plus VM stop owns full teardown. Scoped Store facts
+are the only state channel. Remote terminals append `publication.requested` and
+park. Only confirmed VM teardown plus execution-lease release permits the local
+supervisor to use the provider's exact SHA/branch publication capability; a
+rejected/uncertain executor completion leaves the request pending. The supervisor
+verifies the remote head and records the ordinary completion; PR API operations
+remain on the dispatcher. A failed finalize post-step publication records the
+ordinary failure-tolerant step outcome and follow-up observation rather than
+wedging the green build. Every guest launch first reasserts the normal
+receive-pack-free network policy, so even a failed publication-policy restore
+fails closed before setup or plugin code runs. Normal VM sessions never receive
+Forge credentials.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),

@@ -61,6 +61,7 @@ import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './das
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
+import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
 import { createProductionRuntimes } from '../ports/runner/production'
@@ -74,6 +75,7 @@ import {
   type BuildExecutionHandle,
 } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
+import { validateVercelGithubOrigin } from '../ports/workspace/vercel-sandbox'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   BUILD_RUNNER_DIAGNOSTIC_ARTIFACT,
@@ -324,6 +326,19 @@ async function defaultWire(
   state: RepoStatePaths,
   plugins: PluginRegistry,
 ): Promise<DispatchWiring> {
+  if (config.workspace.provider === 'vercel-sandbox') {
+    if (config.forge !== 'github') {
+      throw new Error('vercel-sandbox requires the builtin github forge')
+    }
+    const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], { cwd: opts.targetRepo })
+    if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
+    validateVercelGithubOrigin(origin.stdout.trim())
+    if (!opts.env.GITHUB_TOKEN && !opts.env.GH_TOKEN) {
+      throw new Error(
+        'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
+      )
+    }
+  }
   const forge = await createForge({
     name: config.forge,
     registry: plugins,
@@ -348,6 +363,8 @@ async function defaultWire(
     worktreeRoot: opened.worktreeRoot,
     repoRoot: opened.repo,
     env: opts.env,
+    storeRef: opened.storeRef,
+    ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
   return {
@@ -1697,6 +1714,22 @@ class DispatchLoop {
     return null
   }
 
+  private async settlePendingPublication(slug: string): Promise<void> {
+    await settleWorkspacePublication(
+      {
+        store: this.wiring.store,
+        storeRef: this.wiring.storeRef,
+        publication: this.wiring.workspaces.publication,
+        forge: this.wiring.forge,
+        workspacePath: this.opts.targetRepo,
+        exec: this.opts.exec,
+        ids: this.wiring.ids,
+        runId: this.opts.kernelRunId!,
+      },
+      slug,
+    )
+  }
+
   /** Start one workspace-adjacent executor without handing it workspace,
    * config, or outcome channels. Capacity and local single-flight remain
    * kernel decisions; the kernel reserves the durable execution lease before
@@ -1727,11 +1760,18 @@ class DispatchLoop {
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
+      const launchEvents = await this.wiring.store.getEvents(slug)
+      let workspaceRef: string | undefined
+      for (const event of launchEvents) {
+        if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
+        else if (event.type === 'workspace.released') workspaceRef = undefined
+      }
+      if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
       const handle = await this.wiring.buildExecution.start({
         slug,
         storeRef: this.wiring.storeRef,
         instance,
-        parentPid: process.pid,
+        workspaceRef,
       })
       active.handle = handle
 
@@ -1779,9 +1819,13 @@ class DispatchLoop {
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
               await this.wiring.store.releaseLease(slug, instance)
+              await this.settlePendingPublication(slug)
             }
           },
           async (error) => {
+            // A rejected executor completion cannot prove the remote VM was
+            // stopped. Release liveness ownership, but leave publication
+            // pending until a later confirmed execution teardown.
             await this.wiring.store.releaseLease(slug, instance)
             throw error
           },

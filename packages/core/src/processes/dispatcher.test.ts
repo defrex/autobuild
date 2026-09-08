@@ -3476,6 +3476,28 @@ describe('Dispatcher janitor', () => {
     })
   })
 
+  test('aborted remote build closes its PR from the dispatcher checkout before releasing the sandbox', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { slug: 'remote-abort', pr: PR })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-remote-abort',
+        path: '/vercel/sandbox/workspace',
+        branch: `ab/${slug}`,
+        base: { source: 'existing', sha: 'a'.repeat(40) },
+      },
+    })
+    h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+    expect(h.forge.closePrCalls).toEqual([{ workspacePath: REPO, number: PR.number }])
+    expect(h.workspaces.releases.at(-1)?.ref).toBe('sandbox-remote-abort')
+  })
+
   test.each([
     ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
     ['already closed', { state: 'closed' } as const, 'pr.closed'],

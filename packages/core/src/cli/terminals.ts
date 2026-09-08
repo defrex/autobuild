@@ -129,6 +129,22 @@ function assertNoPriorTerminal(events: AbEvent[], env: CliEnv): void {
           'Every phase ends with exactly one terminal command (§8.4).',
       )
     }
+    if (
+      event.type === 'publication.requested' &&
+      event.actor.kind === 'agent' &&
+      event.actor.session === env.session &&
+      ((env.phase === 'implement' &&
+        event.payload.operation === 'implement' &&
+        event.payload.round === env.round) ||
+        (env.phase === 'reconcile' && event.payload.operation === 'reconcile') ||
+        (env.phase === 'finalize' && event.payload.operation === 'finalize'))
+    ) {
+      throw new Error(
+        `second terminal call rejected (D5): ${event.type} for ` +
+          `${env.phase}@${env.round} already recorded at seq ${event.seq}. ` +
+          'Remote publication is pending; do not run ab done again (§8.4).',
+      )
+    }
     if (event.type !== spec.terminalEvent) continue
     if (
       (event.type === 'verify.completed' || event.type === 'finalize.completed') &&
@@ -239,6 +255,15 @@ function requireImplementationProvisioning(events: AbEvent[]): void {
   )
 }
 
+function remotePublication(events: readonly AbEvent[]): boolean {
+  let remote = false
+  for (const event of events) {
+    if (event.type === 'workspace.provisioned') remote = event.payload.provider === 'vercel-sandbox'
+    else if (event.type === 'workspace.released') remote = false
+  }
+  return remote
+}
+
 async function buildBranch(deps: TerminalDeps): Promise<string> {
   const build = await deps.store.getBuild(deps.env.build)
   if (build === null) {
@@ -345,6 +370,88 @@ export interface DoneOpts {
   notes?: string
 }
 
+export interface FinalizePrInput {
+  branch: string
+  baseBranch: string
+  title: string
+  body: string
+  mergeMessage: string
+  /** Remote settlement pins the PR to the already-verified published head. */
+  expectedHeadSha?: string
+}
+
+/** Shared local/remote finalize plumbing. The caller must publish the exact
+ * requested head before entering this idempotent PR-side sequence. */
+export async function completeFinalizePr(
+  deps: TerminalDeps,
+  events: AbEvent[],
+  input: FinalizePrInput,
+): Promise<EventEnvelope> {
+  const { env, store } = deps
+  const pr = await deps.forge.openPr({
+    workspacePath: deps.workspacePath,
+    head: input.branch,
+    base: input.baseBranch,
+    title: input.title,
+    body: input.body,
+    mergeMessage: input.mergeMessage,
+  })
+  if (input.expectedHeadSha !== undefined && pr.headSha !== input.expectedHeadSha) {
+    throw new Error(
+      `PR head ${pr.headSha} did not match published request ${input.expectedHeadSha}`,
+    )
+  }
+
+  await preparePrAttachments(deps, events, pr.url)
+
+  const latest = await store.getEvents(env.build)
+  const autoMerge = pendingAutoMerge(reduceBuild(latest))
+  const autoMergeResult =
+    autoMerge === undefined
+      ? undefined
+      : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled)
+
+  const event = await store.append(env.build, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: { pr },
+  })
+
+  if (autoMerge !== undefined) {
+    try {
+      if (autoMergeResult?.kind === 'applied') {
+        await store.append(env.build, {
+          actor: KERNEL,
+          type: autoMergeApplicationType(autoMerge.enabled),
+          payload: { commandSeq: autoMerge.commandSeq },
+        })
+      } else if (autoMergeResult?.kind === 'deferred' && autoMergeResult.reason !== undefined) {
+        await recordAutoMergeDeferralObservation(
+          store,
+          env.build,
+          autoMergeResult.reason,
+          pr.number,
+          autoMerge.commandSeq,
+          deps.ids('obs'),
+        )
+      }
+    } catch {
+      // The janitor retries unmatched commands and provider diagnostics.
+    }
+  }
+
+  try {
+    await deps.forge.commentOnPr(
+      deps.workspacePath,
+      pr.number,
+      renderPrSummary(env, await store.getEvents(env.build)),
+    )
+  } catch {
+    // The durable audit trail remains authoritative.
+  }
+  return event
+}
+
 export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<EventEnvelope> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
@@ -420,10 +527,26 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         head,
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
-      // Push BEFORE the event (walkthrough §8.7 order): a push without an
-      // event is a harmless retry — the re-run pushes the same branch again —
-      // but an event without a push breaks cross-sandbox resume, which
-      // fetches the branch at the recorded head (§15.6-C, D3).
+      if (remotePublication(events)) {
+        const { event } = await store.appendWithArtifacts(
+          env.build,
+          [{ kind: 'implement-notes', content: notes }],
+          (deposited) => ({
+            actor,
+            type: 'publication.requested',
+            payload: {
+              operation: 'implement',
+              branch,
+              sha: head,
+              round: env.round,
+              base,
+              artifact: refOf(deposited[0]),
+            },
+          }),
+        )
+        return event
+      }
+      // Local publication remains immediate and push-before-fact.
       await deps.forge.pushBranch(deps.workspacePath, branch)
       const { event } = await store.appendWithArtifacts(
         env.build,
@@ -431,11 +554,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         (deposited) => ({
           actor,
           type: 'implement.completed',
-          payload: {
-            round: env.round,
-            commits: { base, head },
-            artifact: refOf(deposited[0]),
-          },
+          payload: { round: env.round, commits: { base, head }, artifact: refOf(deposited[0]) },
         }),
       )
       return event
@@ -463,87 +582,27 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       }
       const baseBranch = baseBranchOf(events)
       const branch = await buildBranch(deps)
-      // §15.3/D7: the kernel opens the PR after the agent's `ab done` — this
-      // CLI call IS that kernel plumbing, so the event's actor is KERNEL.
-      // openPr runs BEFORE the event (same rationale as implement's push): a
-      // PR without an event is a harmless retry — which holds only because
-      // Forge.openPr is IDEMPOTENT by head branch (it adopts an existing open
-      // PR rather than erroring, §8.7's crash-after-plumbing path).
-      const pr = await deps.forge.openPr({
-        workspacePath: deps.workspacePath,
-        head: branch,
-        base: baseBranch,
+      if (remotePublication(events)) {
+        await assertCleanWorktree(deps)
+        const head = await git(deps, ['rev-parse', '--verify', 'HEAD^{commit}'])
+        return await store.append(env.build, {
+          actor,
+          type: 'publication.requested',
+          payload: {
+            operation: 'finalize',
+            branch,
+            sha: head.trim(),
+            description: { kind: description.meta.kind, rev: description.meta.revision },
+          },
+        })
+      }
+      return completeFinalizePr(deps, events, {
+        branch,
+        baseBranch,
         title: firstLine,
         body,
         mergeMessage: text,
       })
-
-      // The PR URL is part of each deterministic hosted-asset identity, so PR
-      // adoption/creation happens before optional publication. Provider
-      // failures become follow-up observations; durable upload facts land
-      // before the finalize terminal so retries can adopt external writes.
-      await preparePrAttachments(deps, events, pr.url)
-
-      // An operator command may land while finalize or optional hosting is
-      // running. Re-read so the latest human intent is applied at the first
-      // instant a PR exists. The setter is idempotent: if the forge call
-      // succeeds but this process dies before either event append, retry adopts
-      // the PR and safely applies the same desired state again.
-      const latest = await store.getEvents(env.build)
-      const autoMerge = pendingAutoMerge(reduceBuild(latest))
-      const autoMergeResult =
-        autoMerge === undefined
-          ? undefined
-          : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled)
-
-      const event = await store.append(env.build, {
-        actor: KERNEL,
-        type: 'finalize.completed',
-        payload: { pr },
-      })
-
-      // The PR terminal is the D5 commit point. Its secondary correlated fact
-      // is best-effort after that point: if this append fails, the janitor sees
-      // the still-unmatched command and retries the idempotent forge operation.
-      if (autoMerge !== undefined) {
-        try {
-          if (autoMergeResult?.kind === 'applied') {
-            await store.append(env.build, {
-              actor: KERNEL,
-              type: autoMergeApplicationType(autoMerge.enabled),
-              payload: { commandSeq: autoMerge.commandSeq },
-            })
-          } else if (autoMergeResult?.kind === 'deferred' && autoMergeResult.reason !== undefined) {
-            await recordAutoMergeDeferralObservation(
-              store,
-              env.build,
-              autoMergeResult.reason,
-              pr.number,
-              autoMerge.commandSeq,
-              deps.ids('obs'),
-            )
-          }
-        } catch {
-          // Both application facts and diagnostics are recoverable by
-          // Dispatcher.checkPr on its next open-PR poll.
-        }
-      }
-
-      // §7.5: the PR gets a summary comment — verdict history, verification
-      // results, store refs. Best-effort AFTER the terminal committed: the
-      // comment is a projection, not the record, and a comment failure must
-      // not turn a recorded finalize.completed into a CLI error (the agent's
-      // retry would be rejected as a second terminal — D5).
-      try {
-        await deps.forge.commentOnPr(
-          deps.workspacePath,
-          pr.number,
-          renderPrSummary(env, await store.getEvents(env.build)),
-        )
-      } catch {
-        // The audit trail stays queryable in the store (§7.5).
-      }
-      return event
     }
 
     case 'reconcile': {
@@ -570,8 +629,24 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
       const branch = await buildBranch(deps)
-      // Regular push, NEVER force (D1): the merge commit extends the branch;
-      // rewriting it would sever the SHAs recorded in implement.completed.
+      if (remotePublication(events)) {
+        const { event } = await store.appendWithArtifacts(
+          env.build,
+          [{ kind: 'reconcile-notes', content: notes }],
+          (deposited) => ({
+            actor,
+            type: 'publication.requested',
+            payload: {
+              operation: 'reconcile',
+              branch,
+              sha: head,
+              artifact: refOf(deposited[0]),
+            },
+          }),
+        )
+        return event
+      }
+      // Regular push, NEVER force (D1): the merge commit extends the branch.
       await deps.forge.pushBranch(deps.workspacePath, branch)
       const { event } = await store.appendWithArtifacts(
         env.build,

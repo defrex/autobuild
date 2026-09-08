@@ -376,6 +376,51 @@ function continueMessage(spec: SessionSpec): string {
 
 // ── The runner ───────────────────────────────────────────────────────────────
 
+function isPublicationBoundary(event: AbEvent, spec: SessionSpec, session: string): boolean {
+  if (
+    event.type !== 'publication.requested' ||
+    event.actor.kind !== 'agent' ||
+    event.actor.session !== session
+  )
+    return false
+  if (spec.phase === 'implement')
+    return event.payload.operation === 'implement' && event.payload.round === spec.round
+  if (spec.phase === 'reconcile') return event.payload.operation === 'reconcile'
+  if (spec.phase === 'finalize') return event.payload.operation === 'finalize'
+  return false
+}
+
+export function publicationPending(events: readonly AbEvent[]): boolean {
+  return events.some(
+    (request) =>
+      request.type === 'publication.requested' &&
+      !events.some((event) => {
+        if (event.seq <= request.seq) return false
+        if (request.payload.operation === 'implement')
+          return (
+            event.type === 'implement.completed' &&
+            event.payload.round === request.payload.round &&
+            event.payload.commits.base === request.payload.base &&
+            event.payload.commits.head === request.payload.sha
+          )
+        if (request.payload.operation === 'reconcile')
+          return (
+            event.type === 'reconcile.completed' &&
+            event.payload.mergeCommit === request.payload.sha
+          )
+        if (request.payload.operation === 'finalize')
+          return (
+            event.type === 'finalize.completed' && event.payload.pr.headSha === request.payload.sha
+          )
+        return (
+          event.type === 'finalize.step-completed' &&
+          event.payload.step === request.payload.step &&
+          (!event.payload.ok || event.payload.headSha === request.payload.sha)
+        )
+      }),
+  )
+}
+
 export class BuildRunner {
   private readonly maxPhaseAttempts: number
   private readonly heartbeatMs: number
@@ -666,10 +711,14 @@ export class BuildRunner {
       }
     }
     try {
+      if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
+        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+      }
       for (;;) {
         await this.ensureLease()
         const decision = await this.step()
         if (decision.kind === 'wait') break
+        if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
       }
       return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
     } finally {
@@ -1086,6 +1135,23 @@ export class BuildRunner {
             head,
           )
           if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
+          const remote = events.some(
+            (event) =>
+              event.type === 'workspace.provisioned' && event.payload.provider === 'vercel-sandbox',
+          )
+          if (remote) {
+            await this.deps.store.append(this.deps.slug, {
+              actor,
+              type: 'publication.requested',
+              payload: {
+                operation: 'finalize-step',
+                branch: this.deps.branch,
+                sha: head,
+                step,
+              },
+            })
+            return
+          }
           await this.deps.forge.pushBranch(this.deps.workspacePath, this.deps.branch)
           pushedHead = head
         }
@@ -1619,6 +1685,7 @@ export class BuildRunner {
       const terminal = since.some(
         (event) =>
           spec.isTerminal(event) ||
+          isPublicationBoundary(event, spec, session) ||
           (event.type === 'escalation.raised' &&
             event.actor.kind === 'agent' &&
             event.actor.session === session),
@@ -1878,6 +1945,7 @@ export class BuildRunner {
     const terminal = since.some(
       (event) =>
         spec.isTerminal(event) ||
+        isPublicationBoundary(event, spec, session) ||
         (event.type === 'escalation.raised' &&
           event.actor.kind === 'agent' &&
           event.actor.session === session),

@@ -9,6 +9,7 @@ import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
 } from './build-execution-state'
+import { BUILD_RUNNER_OPTIONS_ENV } from '../ports/workspace/local-build-execution'
 import { runBuildChild } from './build-child'
 
 const config = parseConfig(`forge = "local-git"
@@ -18,6 +19,93 @@ runtime = "pi"
 source = "file"
 readyState = "ready"
 `)
+
+test('the real entrypoint stays alive past the local watchdog interval in environment mode', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-environment-'))
+  const stateRoot = join(tmp, 'store')
+  const workspace = join(tmp, 'workspace')
+  const slug = 'environment-supervision'
+  const instance = 'environment-child-1'
+  const store = openLocalStore(stateRoot)
+  let child: ReturnType<typeof Bun.spawn> | undefined
+  try {
+    await mkdir(workspace, { recursive: true })
+    await store.createBuild({
+      slug,
+      repo: tmp,
+      branch: `ab/${slug}`,
+      ticket: { source: 'file', id: 'T-ENV', title: 'Environment supervision' },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'file', id: 'T-ENV', title: 'Environment supervision' },
+        repo: tmp,
+        baseBranch: 'main',
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-environment',
+        path: workspace,
+        branch: `ab/${slug}`,
+        base: { source: 'remote', sha: 'base-sha' },
+      },
+    })
+    const slowConfig = parseConfig(`forge = "local-git"
+[roles.default]
+runtime = "pi"
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+setup = "sleep 2"
+`)
+    await store.putArtifact(slug, {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(slowConfig),
+    })
+    await store.close()
+
+    child = Bun.spawn(
+      [process.execPath, new URL('../../../../bin/ab-build-runner.ts', import.meta.url).pathname],
+      {
+        env: {
+          ...process.env,
+          [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
+            slug,
+            storeRef: stateRoot,
+            instance,
+            workspaceRef: 'sandbox-environment',
+            supervision: { kind: 'environment' },
+          }),
+        },
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+      },
+    )
+    await Bun.sleep(700)
+    expect(child.exitCode).toBeNull()
+    child.kill('SIGTERM')
+    await child.exited
+  } finally {
+    if (child?.exitCode === null) {
+      child.kill('SIGKILL')
+      await child.exited
+    }
+    try {
+      await store.close()
+    } catch {
+      // Closed before the subprocess opens the same SQLite store.
+    }
+    await rm(tmp, { recursive: true, force: true })
+  }
+}, 10_000)
 
 test('build child uses durable location and a close failure cannot falsify a clean park', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-build-child-'))
@@ -69,7 +157,7 @@ test('build child uses durable location and a close failure cannot falsify a cle
     process.chdir(misleadingCwd)
     try {
       await runBuildChild(
-        { slug, storeRef: stateRoot, instance: 'child-1', parentPid: process.pid },
+        { slug, storeRef: stateRoot, instance: 'child-1', workspaceRef: durableWorkspace },
         process.env,
         (ref) => {
           const opened = openLocalStore(ref)

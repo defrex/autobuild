@@ -1171,7 +1171,11 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (parsed.positionals.length > 0) throw new Error(usage)
       const notes = stringFlag(parsed, 'notes')
       const event = await done(session, notes !== undefined ? { notes } : {})
-      stdout(`${event.type} recorded (seq ${event.seq})`)
+      stdout(
+        event.type === 'publication.requested'
+          ? `${event.type} recorded (seq ${event.seq}); remote publication is pending — do not run ab done again`
+          : `${event.type} recorded (seq ${event.seq})`,
+      )
       return 0
     }
 

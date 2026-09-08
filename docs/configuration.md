@@ -93,10 +93,11 @@ Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
 command references are errors. The open maps are `[commands]`, `[roles]`,
 `[workspace.config]`, `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
-validates the repository-defined command, role, and step entries.
-`[workspace.config]` is instead plugin-owned and passed through unchanged to
-the selected provider; the builtin `git-worktree` provider requires it to be
-empty. Every other known table is closed to unknown keys.
+validates repository-defined command, role, and step entries.
+`[workspace.config]` is plugin-owned and passed through unchanged for plugin
+providers; the builtin `git-worktree` provider requires it to be empty, while
+`vercel-sandbox` interprets it as a closed, typed table.
+Every other known table is closed to unknown keys.
 
 There are three validation layers:
 
@@ -375,18 +376,71 @@ writableCache = true
 The builtin `git-worktree` provider needs no table and accepts no adapter
 configuration. A plugin factory receives exactly `[workspace.config]`, the
 process environment, and the absolute repository root. Every declared key
-reaches the factory verbatim, including names such as `__proto__` that collide
-with inherited object properties; the map has a null prototype, so reading an
-undeclared key answers `undefined` rather than an inherited member. Factory
-invocation is lazy: registering an unselected provider constructs nothing. An
-unknown name fails before claims and lists every available builtin and plugin
-provider.
+reaches the factory verbatim. Factory invocation is lazy; unknown names fail
+before claims and list every available builtin and plugin provider.
 
-Every provider must satisfy the exported `WorkspaceProvider` contract and
-return a locally reachable absolute working-copy `path`. Its provider-scoped
-`ref` need not be that path; both are retained as durable workspace evidence.
-Remote sandbox execution, where build processes run off-host, is a separate
-architecture and is not enabled by this selector.
+### Vercel Sandbox
+
+Remote execution is explicit and requires the hosted HTTPS BuildStore plus its
+scoped token, an HTTPS `github.com/owner/repository` origin, `forge = "github"`,
+and Vercel authentication. Use either `VERCEL_OIDC_TOKEN`, or all of
+`VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`. The dispatcher also
+requires a push-capable `GITHUB_TOKEN` or `GH_TOKEN`; this is validated before
+ready tickets are listed or claimed. Keyring-only `gh auth login` is not enough
+because publication injects the credential through Vercel's network transform.
+
+<!-- config-fragment:workspace-vercel -->
+```toml
+[workspace]
+provider = "vercel-sandbox"
+
+[workspace.config]
+image = "vercel/sandbox/universal:latest"
+vcpus = 4
+timeoutSeconds = 2700
+region = "iad1"
+failoverRegions = ["sfo1"]
+environmentVariables = ["ANTHROPIC_API_KEY"]
+# Private repositories only:
+gitUsernameEnv = "AB_GIT_READ_USER"
+gitPasswordEnv = "AB_GIT_READ_TOKEN"
+```
+
+| Vercel field | Default | Constraints |
+|---|---:|---|
+| `image` | `vercel/sandbox/universal:latest` | nonempty managed/VCR image |
+| `vcpus` | `4` | integer 1–32 (account limits may be lower) |
+| `timeoutSeconds` | — | required, integer 60–86400; Hobby currently permits at most 2700 |
+| `region` | Vercel default | nonempty region |
+| `failoverRegions` | `[]` | unique and different from `region` |
+| `environmentVariables` | `[]` | unique variable names copied into agent/check commands |
+| `gitUsernameEnv`, `gitPasswordEnv` | — | optional pair naming a dedicated read-only clone identity |
+
+The private-repository token must grant repository contents read and no
+contents write. It must be distinct from Forge and Vercel credentials and may
+not also appear in `environmentVariables`. Autobuild gives its firewall broker
+only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
+helpers, and extra headers after clone, and gives normal sessions no Forge
+credential. Provisioning writes its readiness marker only after all scrubbing,
+distribution installation, and dependency bootstrap complete; distribution
+packing/install disables package lifecycle scripts so checkout-only hooks such
+as Husky are not provisioning dependencies. A retry deletes any named sandbox
+without that marker instead of adopting partial setup. Branch
+publication is requested durably, then performed by the
+local supervisor only after the remote command exits, the VM is stopped, and
+the execution lease is released. The supervisor uses a narrow credential
+transform for a fixed non-force push and verifies the remote head before
+recording completion; PR API work stays local. Before every guest runner launch,
+the provider reasserts the normal receive-pack-free policy, so a failed policy
+restore cannot expose publication authority to later setup or plugin code.
+Ordinary completion deletes the sandbox.
+
+Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
+`ref`; they omit dispatcher-local path evidence. Branch config, relative/package
+plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
+resolve in the guest checkout. Only names in `environmentVariables` plus
+scoped `AB_STORE`/`AB_TOKEN` enter commands—dispatcher environment variables
+are never copied wholesale.
 
 ## `[commands]`
 

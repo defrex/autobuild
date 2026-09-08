@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
+    "@vercel/sandbox": "^3.1.0",
     "better-auth": "1.4.18",
     "drizzle-orm": "^0.45.2",
     "next": "16.1.6",
