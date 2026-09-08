@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#273](https://github.com/defrex/autobuild/pull/273) — Protect build-row child interactions
 - [#272](https://github.com/defrex/autobuild/pull/272) — Make Vercel sandbox provisioning failure-safe
 - [#271](https://github.com/defrex/autobuild/pull/271) — Run Autobuild builds in Vercel Sandbox
 - [#270](https://github.com/defrex/autobuild/pull/270) — Move build actions below progress and add direct controls
