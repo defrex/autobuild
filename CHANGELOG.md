@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#265](https://github.com/defrex/autobuild/pull/265) — Route blocked web RESUME into the answer step
 - [#262](https://github.com/defrex/autobuild/pull/262) — Protect CLI ticket defaults from operator queue changes
 - [#261](https://github.com/defrex/autobuild/pull/261) — Turn Tickets into a configured triage desk
 - [#260](https://github.com/defrex/autobuild/pull/260) — Document disabled and held state emphasis exceptions
