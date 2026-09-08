@@ -93,9 +93,19 @@ const envNameSchema = z
 
 /** Strict built-in Vercel configuration. Values are operational policy only;
  * credentials are referenced by variable name and never accepted as literals. */
+const vercelUniversalImageSchema = z
+  .string()
+  .refine(
+    (image) =>
+      /^vercel\/sandbox\/universal(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[0-9a-fA-F]{64})?$/.test(
+        image,
+      ),
+    'Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest',
+  )
+
 export const vercelSandboxConfigSchema = z
   .strictObject({
-    image: z.string().min(1).default('vercel/sandbox/universal:latest'),
+    image: vercelUniversalImageSchema.default('vercel/sandbox/universal:latest'),
     vcpus: z.number().int().min(1).max(32).default(4),
     timeoutSeconds: z.number().int().min(60).max(86_400),
     region: z.string().min(1).optional(),
