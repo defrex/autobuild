@@ -88,50 +88,6 @@ components:
     padding: "0 1ch"
     height: "{spacing.row}"
     rounded: "{rounded.none}"
-  fastext-red:
-    backgroundColor: "transparent"
-    border: "2px solid {colors.alert-red}"
-    textColor: "{colors.alert-red}"
-    typography: "{typography.label}"
-    padding: "0 1ch"
-    height: "{spacing.row}"
-  fastext-green:
-    backgroundColor: "transparent"
-    border: "2px solid {colors.ok-green}"
-    textColor: "{colors.ok-green}"
-    typography: "{typography.label}"
-    padding: "0 1ch"
-    height: "{spacing.row}"
-  fastext-yellow:
-    backgroundColor: "transparent"
-    border: "2px solid {colors.title-yellow}"
-    textColor: "{colors.title-yellow}"
-    typography: "{typography.label}"
-    padding: "0 1ch"
-    height: "{spacing.row}"
-  fastext-cyan:
-    backgroundColor: "transparent"
-    border: "2px solid {colors.live-cyan}"
-    textColor: "{colors.live-cyan}"
-    typography: "{typography.label}"
-    padding: "0 1ch"
-    height: "{spacing.row}"
-  fastext-hover:
-    backgroundColor: "transparent"
-    textDecoration: "underline"
-  fastext-focus:
-    outline: "2px solid {colors.live-cyan}"
-    outlineOffset: "1px"
-  fastext-active:
-    backgroundColor: "slot color"
-    borderColor: "slot color"
-    textColor: "{colors.ground}"
-  fastext-disabled:
-    backgroundColor: "transparent"
-    borderColor: "slot color"
-    textColor: "slot color"
-    opacity: "0.9"
-    typography: "{typography.body}"
   status:
     typography: "{typography.label}"
     padding: "0 0 0 2ch"
@@ -161,7 +117,7 @@ The system refuses the ops-console vocabulary: no sidebar, no metric cards, no p
 - One monospace face (JetBrains Mono) at one natural-proportion size per viewport, weights 400 and 700 only; bold one-row text is the whole display register.
 - Every dimension is a whole cell: widths in `ch`, heights in rows, three integer cell sizes across three viewports.
 - Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.
-- Words act: default controls are ink outlines, secondary controls are ghost words, active states use reverse video, and the Fastext row carries four fixed-color outlines.
+- Words act: default controls are ink outlines, row and secondary controls are ghost words, and active states use reverse video.
 - One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.
 
 ## Colors
@@ -174,7 +130,7 @@ The palette tempers the teletext primary set with lower chroma and brightness fo
 - **OK Green** (`ok-green`): a restrained green for done `[x]` steps, RUNNING status, merged pull requests, enabled auto merge, ON toggle words, and the PR READY and MERGED imperatives. Green is quiet good news.
 - **Alert Red** (`alert-red`): a tempered coral-red for BLOCKED, FAILED, and ABORTING status words, the BLOCKED and FAILED imperatives, conflicted pull requests, blocker text, setup errors, the abort confirmation line, the sign-in REFUSED word and refusal notice.
 ### Neutral
-- **Ground** (`ground`): the page and the only button background at rest; it is also the ink on reverse-video active states (pressed buttons, pressed Fastext cells, the flash).
+- **Ground** (`ground`): the page and the only button background at rest; it is also the ink on reverse-video active states and the flash.
 - **Ink** (`ink`): default text, row identity, section headings, the clock, and the border and label of a primary button. It temporarily fills a pressed primary or ghost control.
 - **Slack** (`slack`): everything that recedes. Pending `[ ]` steps, key labels in kv lines, field labels, placeholders, separators, identity, closed pull requests, disabled words, and every dimmed row when another row has focus.
 - **Well** (`well`): the reverse-video field. Inputs, selects, textareas, transcript and blocker blocks use it; button states do not.
@@ -184,12 +140,10 @@ The palette tempers the teletext primary set with lower chroma and brightness fo
 - Text on ground: ink 16.83:1, title/warn yellow 12.26:1, current/live cyan 8.93:1, done/running green 8.61:1, blocked/failed red 6.13:1, and slack 5.92:1.
 - Ground-colored text on reverse-video fills uses the corresponding ratio: ink 16.83:1, yellow 12.26:1, cyan 8.93:1, green 8.61:1, red 6.13:1, and blue 5.49:1.
 - Slack on the well is 5.20:1.
-- Button outlines on ground use ink at 16.83:1 or a Fastext slot hue at 6.13:1 or better, exceeding the 3:1 non-text floor. Disabled Fastext at 0.9 opacity still keeps red, the limiting hue, above 4.5:1 for its label.
+- Button outlines on ground use ink at 16.83:1, exceeding the 3:1 non-text floor.
 
 ### Named Rules
 **The Color Is State Rule.** A saturated color appears only where it encodes the state it is assigned to. Yellow warns or titles, cyan is current, green is done, and red is blocked or failed. Never use a primary for emphasis, decoration, or brand.
-
-**The Fastext Identity Rule.** The four Fastext slot colors (red, green, yellow, cyan, left to right) are the slot's identity and never encode state. Each transparent cell carries its hue in both outline and label. An empty slot keeps its outline. A disabled cell keeps the same hue on its colored foreground and outline at 0.9 opacity, drops its key letter, and uses normal weight and a not-allowed cursor. This narrowly reduces disabled-state emphasis over the unchanged transparent resting surface; it does not create a translucent surface. Hover underlines without changing hue; active temporarily fills with that same slot hue.
 
 **The Alert Never Dims Rule.** Focus by dimming lowers ink, cyan, green, yellow, and step colors of unfocused rows to slack; STATUS words, the yellow `(held)` annotation, and red alert lines keep full color because they remain decision-relevant. A blocked row is never dimmed away.
 
@@ -207,7 +161,7 @@ The palette tempers the teletext primary set with lower chroma and brightness fo
 - **Display** (700, 1em at the face's natural proportions, one row): the masthead only. Repository name in title yellow, the imperative word in its tone, on the sign-in page "Autobuild operator" and REFUSED. The repository truncates with an ellipsis before the imperative, which always renders whole and remains the most prominent word.
 - **Title** (700, 1em, one row): section headings inside detail (Pipeline, Unresolved blockers, Sessions, Transcript), the slug in a build row, the current `[>]` step, STATUS words, ON/OFF toggle words.
 - **Body** (400, 1em, one row): everything else. Reading measure is capped at 80ch for composers; row content wraps only on narrow viewports.
-- **Label** (400 or 700, 1em, one row): kv keys and field labels in slack at 400; Fastext labels uppercase at 700 with a 400 key letter.
+- **Label** (400 or 700, 1em, one row): kv keys and field labels in slack at 400; action and state words use 700 where specified.
 
 ### Named Rules
 **The One Cell Rule.** The cell is 14/20 below 720px, 15/22 to 1279px, 16/24 from 1280px. Nothing sets its own font size, and no element scales one axis independently. Emphasis is weight or role color, never size; the masthead's bold display register occupies exactly one row.
@@ -216,27 +170,27 @@ The palette tempers the teletext primary set with lower chroma and brightness fo
 
 ## Layout
 
-The frame is a single centered column, at most 160ch wide, padded 1ch each side, and exactly `100dvh` high. The document never scrolls. Masthead, navigation, and Fastext occupy non-shrinking shell rows; the centre between navigation and Fastext is the sole overflow container, with contained overscroll and stable scrollbar space. Build detail stays inside that centre and scrolls with it. Every vertical measure is a whole row (`--row`) and every horizontal measure is whole characters; the page reflows by cells and never scales fractionally. The three breakpoints do not change the layout so much as the cell: 14/20 to 719px, 15/22 from 720px, 16/24 from 1280px.
+The frame is a single centered column, at most 160ch wide and padded 1ch each side. Masthead, navigation, dispatcher, rows, and inline detail render in ordinary document flow at their natural height. The browser document is the only scroll container; no shell block is fixed or pinned, and rows and detail never scroll inside an inner element. Every vertical measure is a whole row (`--row`) and every horizontal measure is whole characters; the page reflows by cells and never scales fractionally. The three breakpoints do not change the layout so much as the cell: 14/20 to 719px, 15/22 from 720px, 16/24 from 1280px.
 
-Vertical rhythm is one row between blocks (masthead, nav line, dispatcher line, rows, detail sections) and zero rows between lines inside a block. Indentation is 2ch per level: the lane column is 2ch, step lines and messages sit 2ch under their row, detail sits 2ch under the row it unfolds from. Horizontal gaps between words that belong together are 2ch; between adjacent glyph tokens (steps, Fastext key and label) 1ch.
+Vertical rhythm is one row between blocks (masthead, nav line, dispatcher line, rows, detail sections) and zero rows between lines inside a block. Indentation is 2ch per level: the lane column is 2ch, step lines and messages sit 2ch under their row, detail sits 2ch under the row it unfolds from. Horizontal gaps between words that belong together are 2ch; adjacent step glyph tokens use 1ch.
 
 Before the first frame, five static neutral placeholders reserve the dispatcher and build-list register. Each placeholder occupies the same four-row rhythm as a normal build row and uses only slack/well geometry: no digits, status words, imperative, synthetic values, or animation. Decorative geometry is hidden from assistive technology; one visually hidden polite message announces loading.
 
-**The Fixed Frame Rule.** Masthead, navigation, and Fastext never move; all dynamic surface content and inline detail scroll only in the bounded centre.
+**The Flowing Document Rule.** The browser document is the sole scroll container. Masthead, navigation, dispatcher, rows, and inline detail stay in ordinary flow at natural height; no block is pinned and no nested element scrolls rows or detail.
 
-The build row is a grid: a 2ch lane, a ticket-id column sized to the frame's longest id so ids align down the page, a bold slug that fills, right-pinned tokens (auto merge, PR state, held and paused notes), and a right-aligned STATUS column sized to the frame's longest status word. A reserved in-flow control register sits beneath the headline, indented to column 2, before the step line; hiding or revealing its ghost-word controls never changes row geometry. The step line sits beneath, wrapping by whole steps. Below 720px the row drops to three headline columns: STATUS stays pinned right on the first line, the id and slug become inline text that wraps, tokens move to a second line, the control register reserves two rows for two controls per line, the dispatcher separators disappear, and the masthead clock is hidden. The Fastext row goes from four cells to two per line.
- Detail is never a panel or drawer: it unfolds in place beneath the selected row, sets a one-row gap between its sections, and dims the rest of the frame.
+The build row is a grid: a 2ch lane, a ticket-id column sized to the frame's longest id so ids align down the page, a bold slug that fills, right-pinned tokens (auto merge, PR state, held and paused notes), and a right-aligned STATUS column sized to the frame's longest status word. A reserved in-flow control register sits beneath the headline, indented to column 2, before the step line; hiding or revealing its ghost-word controls never changes row geometry. The step line sits beneath, wrapping by whole steps. Below 720px the row drops to three headline columns: STATUS stays pinned right on the first line, the id and slug become inline text that wraps, tokens move to a second line, the control register reserves two rows for two controls per line, the dispatcher separators disappear, and the masthead clock is hidden.
+Detail is never a panel or drawer: it unfolds in place beneath the selected row, sets a one-row gap between its sections, and dims the rest of the frame.
 
 ## Elevation & Depth
 
-There are no shadows, no gradients, no blur, and no layered or translucent surfaces, fills, panels, or overlays. Buttons rest transparently on the uniform black ground; reverse video appears only while a control is pressed or during a flash. A field or block sits in a slightly lifted well. The Fastext row occupies the non-scrolling final slot of the viewport shell on the ground; it does not overlay centre content. A disabled Fastext cell may reduce only its colored foreground and outline to 0.9 opacity while its transparent resting surface stays unchanged.
+There are no shadows, no gradients, no blur, and no layered or translucent surfaces, fills, panels, or overlays. Buttons rest transparently on the uniform black ground; reverse video appears only while a control is pressed or during a flash. A field or block sits in a slightly lifted well.
 
 ### Named Rules
-**The Flat Grid Rule.** Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well; that is the full vocabulary. The narrow disabled Fastext exception renders only its colored foreground and outline at 0.9 opacity over the unchanged transparent resting surface, so it de-emphasizes the control without introducing a translucent surface.
+**The Flat Grid Rule.** Nothing casts a shadow, and no surface, fill, panel, or overlay is translucent. A control is distinguished by the shared outline or a ghost word, an active state may invert to reverse video, and a field may sit in the well; that is the full vocabulary.
 
 ## Shapes
 
-Every corner is square (`border-radius: 0`) and every shape is a run of whole cells. A shared 2px outline is permitted on buttons and nowhere else: default buttons use ink and Fastext uses the fixed slot hue. Horizontal rules remain a row of `─` box-drawing glyphs, fields remain reverse-video wells with no stroke, and the keyboard focus indicator is a 2px cyan outline offset 1px. The masthead is a one-row rectangle on the same cell grid.
+Every corner is square (`border-radius: 0`) and every shape is a run of whole cells. A shared 2px ink outline is permitted on default buttons and nowhere else. Horizontal rules remain a row of `─` box-drawing glyphs, fields remain reverse-video wells with no stroke, and the keyboard focus indicator is a 2px cyan outline offset 1px. The masthead is a one-row rectangle on the same cell grid.
 
 **The No Hairline Rule.** The shared 2px button outline is the sole component-border exception. No other component draws a border: separation is a row of `─`, a change of fill, or a row of empty space. The offset 2px focus outline remains the keyboard-accessibility indicator.
 
@@ -251,20 +205,17 @@ A one-row header in the natural-proportion display register. Repository name in 
 
 ### Buttons
 - **Primary / default (`btn`):** transparent on the black ground with a shared 2px ink border and matching bold label, 1ch side padding, square corners, and exactly one row in border-box sizing. This is the form/action treatment for `Answer escalation` and `Continue with GitHub`; the sign-in provider keeps 2ch side padding. Hover changes border and label together to live cyan while remaining transparent. Focus-visible keeps the offset cyan ring outside the border. Active temporarily fills ink with ground text. Disabled remains transparent with a slack border and label and a not-allowed cursor.
-- **Secondary / ghost (`word`):** transparent and borderless at rest, inheriting the surrounding ink. This covers row controls, close detail, cancel, sign out, open transcript, and dispatcher toggle words. Row controls use uppercase Fastext vocabulary and sit in reserved in-grid space rather than an overlay. Hover turns cyan and underlines; focus-visible gets the cyan ring; active temporarily fills ink with ground text (including nested ON/OFF text); disabled drops to slack and keeps a transparent ground with a not-allowed cursor.
+- **Secondary / ghost (`word`):** transparent and borderless at rest, inheriting the surrounding ink. This covers row controls, close detail, cancel, sign out, open transcript, and dispatcher toggle words. Row controls use uppercase action vocabulary and sit in reserved in-grid space rather than an overlay. Hover turns cyan and underlines; focus-visible gets the cyan ring; active temporarily fills ink with ground text (including nested ON/OFF text); disabled drops to slack and keeps a transparent ground with a not-allowed cursor.
 - **Shape and contrast:** every outline is the same 2px width. Labels meet 4.5:1 and button outlines meet 3:1 against the ground. All controls have distinct rest, hover, focus-visible, active, and disabled states.
 
-### Fastext
-The global keyboard legend occupies the non-scrolling final shell slot with four transparent outline buttons, left to right red, green, yellow, cyan. It keeps repository-wide actions and key letters, and may repeat the committed build or Harvest row's actions for keyboard parity; pointer operation belongs to the controls carried by each row. Each cell is exactly one border-box row tall. Its shared 2px border and bold label use the fixed slot hue; a weight-400 key letter (`a`, `r`, `m`, `↵`, `Esc`) precedes the uppercase label and is hidden on coarse pointers. Cells change contents per context (global, build, Harvest, blocked-build answering, abort confirmation) but never change hue. An empty slot renders its colored outline with no text. Hover underlines without hue substitution; focus-visible adds the cyan ring; active temporarily fills with the same slot hue and ground text. A disabled cell keeps its border and label hue at 0.9 opacity, drops the key, falls to weight 400, and uses a not-allowed cursor; only that colored foreground and outline are de-emphasized, while the transparent black-ground resting surface remains unchanged. Two cells per line below 720px. Labels remain PAUSE ALL, RESUME ALL, AUTO MERGE, INTAKE, ABORT, DETAILS, CLOSE, SUBMIT, CONFIRM ABORT, and CANCEL as their contexts require. While answering a blocked build, only red-slot SUBMIT and cyan-slot CANCEL are named; green and yellow retain empty outlines. The sign-in provider is not Fastext; it uses the primary ink outline.
-
 ### Build Row
-Lane (`>` in cyan), ticket id in a frame-wide column, bold slug, right-pinned tokens, and the bold STATUS word in its status color pinned to the right edge. A fixed-height, in-flow register beneath the headline reserves room for the actions available to that status: ABORT; PAUSE, CANCEL PAUSE, RESUME, or DISCARD; AUTO MERGE; and DETAILS or CLOSE. Harvest reserves the same register for its available RESUME or ACKNOWLEDGE run action; the repository Harvest gate remains global. Register words are hidden with visibility at rest, and become visible for committed selection, keyboard focus within the row, or a fine-pointer hover. Hidden words leave the tab order; the row head precedes them in DOM order so focusing it reveals the controls before forward Tab reaches them. At narrow width the register always reserves two rows. Each control's accessible name includes its build slug or Harvest run, and activating it commits that target without toggling detail; DETAILS/CLOSE alone controls detail. Committed selection draws the lane marker bold; on devices with a fine hovering primary pointer, hovering a build or Harvest row draws a regular-weight preview marker in the same reserved lane, and leaving the list removes it. Selection and preview may appear on different rows at once; only committed selection drives focus dimming, detail, ARIA state, and Fastext context. The step line beneath carries each step as glyph, label, and a parenthesised note (`plan(3s)`, `merge(waiting, 8m47s)`) in the terminal's duration format `38s`, `4m12s`, `1h04m`. A build-owned message shows as a three-row preview: `!` on the first row, two-space indent on the rest, a `... N more rows - Enter details` line when truncated, all in the message's tone. Hover turns the identity cyan. When any row is selected, every other row dims to slack except its STATUS word, its yellow `(held)` annotation, and its red lines; the hold remains full-color because it is decision-relevant.
+Lane (`>` in cyan), ticket id in a frame-wide column, bold slug, right-pinned tokens, and the bold STATUS word in its status color pinned to the right edge. A fixed-height, in-flow register beneath the headline reserves room for the actions available to that status: ABORT; PAUSE, CANCEL PAUSE, RESUME, or DISCARD; AUTO MERGE; and DETAILS or CLOSE. Harvest reserves the same register for its available RESUME or ACKNOWLEDGE run action; the repository Harvest gate remains global. Register words are hidden with visibility at rest, and become visible for committed selection, keyboard focus within the row, or a fine-pointer hover. Hidden words leave the tab order; the row head precedes them in DOM order so focusing it reveals the controls before forward Tab reaches them. At narrow width the register always reserves two rows. Each control's accessible name includes its build slug or Harvest run, and activating it commits that target without toggling detail; DETAILS/CLOSE alone controls detail. Committed selection draws the lane marker bold; on devices with a fine hovering primary pointer, hovering a build or Harvest row draws a regular-weight preview marker in the same reserved lane, and leaving the list removes it. Selection and preview may appear on different rows at once; only committed selection drives focus dimming, detail, and ARIA state. The step line beneath carries each step as glyph, label, and a parenthesised note (`plan(3s)`, `merge(waiting, 8m47s)`) in the terminal's duration format `38s`, `4m12s`, `1h04m`. A build-owned message shows as a three-row preview: `!` on the first row, two-space indent on the rest, a `... N more rows - Enter details` line when truncated, all in the message's tone. Hover turns the identity cyan. When any row is selected, every other row dims to slack except its STATUS word, its yellow `(held)` annotation, and its red lines; the hold remains full-color because it is decision-relevant.
 
 ### Loading Rows
 A dispatcher-shaped neutral line followed by five build-row-shaped placeholders reserves the first loaded frame's register. Bars use only well and rule neutrals, remain static, contain no glyphs or values, and are hidden from assistive technology. One visually hidden polite live message names the loading surface once.
 
 ### Detail
-Unfolds in place under the selected row after a box-drawing rule: a kv line (slack keys, ink values), Pipeline as a vertical step list with round or attempt counts, blockers as red well blocks, the answer composer, Sessions as a wrapped kv line with a cyan `open transcript` word, Transcript as prompt then well-block text. Every section is a bold ink heading with content directly beneath; sections are one row apart. The operator path off a blocked build is also a focused inline step: RESUME opens a red `!` blocker line and a focused optional-guidance field beneath the selected row, without changing whether full detail is open. Empty submit retries, text submits guidance, and Esc or CANCEL returns to the same build context without writing. While this step is open Fastext contains only SUBMIT and CANCEL; the full detail composer keeps Guidance, Retry, Dismiss, Review ceiling, and both revised-spec choices. The destructive path remains two steps: ABORT selects its target and shows a red `! abort <slug>? Enter confirms, Esc cancels` line at that row, then swaps that row's register and Fastext to CONFIRM ABORT and CANCEL before anything writes.
+Unfolds in place under the selected row after a box-drawing rule: a kv line (slack keys, ink values), Pipeline as a vertical step list with round or attempt counts, blockers as red well blocks, the answer composer, Sessions as a wrapped kv line with a cyan `open transcript` word, Transcript as prompt then well-block text. Every section is a bold ink heading with content directly beneath; sections are one row apart. The operator path off a blocked build is also a focused inline step: RESUME opens a red `!` blocker line and a focused optional-guidance field beneath the selected row, without changing whether full detail is open. Empty submit retries, text submits guidance, and Esc or CANCEL returns to the same build context without writing. While this step is open, the row register contains SUBMIT and CANCEL; the full detail composer keeps Guidance, Retry, Dismiss, Review ceiling, and both revised-spec choices. The destructive path remains two steps: ABORT selects its target and shows a red `! abort <slug>? Enter confirms, Esc cancels` line at that row, then swaps that row's register to CONFIRM ABORT and CANCEL before anything writes.
 
 ### Inputs / Fields
 - **Style:** reverse-video well fill, ink text, 1ch side padding, one row minimum, no stroke, square. Selects hide the native arrow and draw a slack `▾` at the right; ordinary textareas start at 8 rows and resize vertically.
@@ -282,9 +233,8 @@ The system's one motion. When a state word (a STATUS, an imperative, a toggle) c
 
 ### Do:
 - **Do** size everything in cells: widths in `ch`, heights in multiples of `--row`, 2ch indents, 1ch between glyph tokens.
-- **Do** keep the document fixed to the viewport and put every surface's dynamic content in the sole scrolling centre.
+- **Do** keep every shell block in ordinary document flow and let only the browser document scroll.
 - **Do** read role tokens and the step and status maps; the `--tt-*` primaries are set once in `:root` and never referenced by a component.
-- **Do** keep the Fastext row's four same-hue outlines fixed left to right and let the labels carry the action; disabled cells retain that hue at 0.9 opacity only on their foreground and outline.
 - **Do** put one imperative in the masthead by priority (BLOCKED > FAILED > PR READY > MERGED) and leave it empty when nothing needs a human.
 - **Do** rest buttons transparently on the ground; use reverse video only for a button's pressed state and the flash.
 - **Do** keep STATUS words, yellow `(held)` annotations, and red alert lines at full color when dimming the frame around a selection.
@@ -293,9 +243,9 @@ The system's one motion. When a state word (a STATUS, an imperative, a toggle) c
 
 ### Don't:
 - **Don't** introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.
-- **Don't** draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Disabled Fastext opacity de-emphasizes only its colored foreground and outline over an unchanged transparent resting surface. Separate non-controls with a `─` rule, a fill change, or an empty row.
+- **Don't** draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Separate non-controls with a `─` rule, a fill change, or an empty row.
 - **Don't** round a corner.
-- **Don't** use a saturated color for anything but its assigned state, and never encode state in a Fastext slot color.
+- **Don't** use a saturated color for anything but its assigned state.
 - **Don't** dim a red line, a STATUS word, or a yellow `(held)` annotation, or truncate the imperative before the repository name.
 - **Don't** add motion beyond the 180ms state-word flash, and never animate under reduced motion.
 - **Don't** use icon fonts, SVG icon sets, or emoji glyphs in the interface; the glyph set is `[x] [>] [~] [ ]`, `>`, `!`, `▾`, `─`, `×`.

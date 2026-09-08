@@ -417,13 +417,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         transcript={transcript}
         onActivate={activate}
         onHoverPreview={setHoverPreview}
-        onDeselect={deselect}
-        onToggleDetail={() => setDetailOpen((open) => !open)}
-        onBuildControl={control}
         onRowBuildControl={rowControls.buildControl}
-        onRequestAbort={() => {
-          if (selectedBuild) setConfirmingAbort(selectedBuild.slug)
-        }}
         onRowRequestAbort={rowControls.requestAbort}
         onCancelAbort={() => setConfirmingAbort(undefined)}
         onRowToggleDetail={rowControls.toggleDetail}
@@ -433,7 +427,6 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onAnswer={answer}
         onTranscript={loadTranscript}
         onSetting={setting}
-        onBulk={bulk}
         onHarvest={harvest}
         onRowHarvest={rowControls.runHarvest}
       />
