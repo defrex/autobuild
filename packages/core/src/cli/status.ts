@@ -30,6 +30,7 @@
  */
 import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
+import type { EventPayload } from '../events/payloads'
 import type { Actor } from '../events/envelope'
 import { loadConfig } from '../config/load'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
@@ -131,6 +132,11 @@ export interface BuildDetail extends BuildSummary {
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
   setupFailure?: SetupFailureDetail
+  /** Latest provider execution and current lifecycle failure. Full history is
+   * available with --events. */
+  execution?: EventPayload<'execution.started'> & { seq: number }
+  infrastructureFailure?: EventPayload<'infrastructure.failed'> & { seq: number }
+  cleanupPending: boolean
   verify: VerifyProgress
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
   /** Present only with `--events <n>`: the newest n, chronological. */
@@ -280,6 +286,13 @@ export function detail(
           },
         }
       : {}),
+    ...(state.executions.at(-1) !== undefined ? { execution: state.executions.at(-1)! } : {}),
+    ...(state.infrastructureFailure !== undefined
+      ? { infrastructureFailure: state.infrastructureFailure }
+      : {}),
+    cleanupPending:
+      state.infrastructureFailure?.cleanupPending === true ||
+      state.cleanupAttempts.at(-1)?.outcome === 'unknown',
     verify: {
       // Preserve the status API's display counter while sourcing it explicitly
       // from the reducer's full-log high-water, never from cycle membership.
@@ -488,6 +501,23 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     )
   } else if (d.decision?.kind === 'unavailable') {
     lines.push(`  decision: unavailable — ${d.decision.diagnostic}`)
+  }
+
+  if (d.execution !== undefined) {
+    lines.push(
+      `  execution: ${safeStatusText(d.execution.provider)} workspace=${safeStatusText(d.execution.workspaceRef)} instance=${safeStatusText(d.execution.instance)}`,
+    )
+    if (d.execution.environmentId !== undefined)
+      lines.push(`    environment: ${safeStatusText(d.execution.environmentId)}`)
+    if (d.execution.sessionId !== undefined)
+      lines.push(`    session: ${safeStatusText(d.execution.sessionId)}`)
+  }
+  if (d.infrastructureFailure !== undefined) {
+    lines.push(
+      `  infrastructure failure: ${d.infrastructureFailure.operation} attempt ${d.infrastructureFailure.attempt} (${d.infrastructureFailure.cause})`,
+    )
+    lines.push(`    error: ${safeStatusText(d.infrastructureFailure.error)}`)
+    if (d.cleanupPending) lines.push('    cleanup: pending provider reconciliation')
   }
 
   if (d.setupFailure !== undefined) {

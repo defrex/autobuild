@@ -1341,7 +1341,7 @@ The families, with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
+| Build lifecycle | `build.created`, `workspace.provisioned`, `workspace.released`, `execution.started`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`) |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
@@ -1509,9 +1509,13 @@ The setup target belongs only to escalation metadata and is not a pipeline `Phas
 
 **D — sandbox death:** log ends at `session.started {session: old}` after
 `implement.started {round: 2}`; heartbeat goes stale → dispatcher expires the
-lease, provisions a fresh sandbox → `workspace.provisioned {base: {source:
-existing, sha}}` → the workspace execution capability starts a fresh build
-process. The supervising kernel first claims the lease for that execution
+lease, records the old execution identity, stops/deletes its exact deterministic
+sandbox name, and confirms absence before recording `workspace.released` → it
+provisions the next generation from the published build head (or the original
+recorded branch-cut SHA when no checkpoint exists) → `workspace.provisioned
+{base: {source: existing, sha}}` → the workspace execution capability starts a
+fresh process and records the replacement sandbox/session identity. The
+supervising kernel first claims the lease for that execution
 instance; the process reads its workspace location from the durable event,
 renews the same-holder lease, captures the current resume boundary, and appends
 `session.ended {session: old, outcome: reclaimed, reclaimedBy: {instance,
@@ -1713,6 +1717,7 @@ plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 #image = "vercel/sandbox/universal:latest"
 #vcpus = 4
 #timeoutSeconds = 2700
+#operationTimeoutMs = 30000       # provider calls, not VM/session lifetime
 #environmentVariables = ["ANTHROPIC_API_KEY"]
 
 #[pr.imageHost]                 # optional public inline rendering for attached images
@@ -1761,6 +1766,7 @@ sessionBudgetSeconds = 3600       # non-infinite default for build agent session
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
+maxInfrastructureAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5            # observation-count pressure in dispatch

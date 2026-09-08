@@ -775,7 +775,7 @@ export class Dispatcher {
     }
 
     try {
-      const released = await this.releaseWorkspace(record.slug, events)
+      const released = await this.releaseWorkspace(record.slug, events, 'abort')
       if (released !== undefined) events.push(released)
     } catch (error) {
       fail('workspace release', `build ${record.slug}`, error)
@@ -870,7 +870,7 @@ export class Dispatcher {
     report: TickReport,
   ): Promise<void> {
     const { store, tickets } = this.deps
-    await this.releaseWorkspace(record.slug, events)
+    await this.releaseWorkspace(record.slug, events, 'discard')
     if (record.lease !== undefined) {
       await store.releaseLease(record.slug, record.lease.holder)
     }
@@ -931,11 +931,15 @@ export class Dispatcher {
       // pending (a `reconcile.completed` returns it to 'open').
       if (state.prState === 'conflicted') return
       const baseSha = await this.baseSha(baseBranchOf(events, this.deps.config))
-      await store.append(record.slug, {
+      const conflicted = await store.append(record.slug, {
         actor: DISPATCHER,
         type: 'pr.conflicted',
         payload: { baseSha },
       } satisfies EventWrite<'pr.conflicted'>)
+      events.push(conflicted)
+      if (openWorkspace(events) === null && this.deps.workspaces.recovery !== undefined) {
+        await this.provisionReplacement(record, events)
+      }
       // The dispatcher never runs agents (§15.7): re-attach a build-runner,
       // which executes the reconcile epilogue phase.
       await this.launch(record.slug, launched)
@@ -1092,9 +1096,201 @@ export class Dispatcher {
     }
   }
 
+  private recoveryCheckpoint(events: AbEvent[]): string | undefined {
+    let published: string | undefined
+    let original: string | undefined
+    for (const event of events) {
+      if (event.type === 'workspace.provisioned' && original === undefined) {
+        original = event.payload.base.sha
+      } else if (event.type === 'publication.requested') {
+        published = event.payload.sha
+      }
+    }
+    return published ?? original
+  }
+
+  private async recordInfrastructureFailure(
+    slug: string,
+    events: AbEvent[],
+    input: {
+      provider: string
+      workspaceRef: string
+      operation: 'provision' | 'start' | 'wait' | 'stop' | 'delete' | 'reconcile'
+      error: unknown
+      cleanupPending: boolean
+    },
+  ): Promise<void> {
+    const lastReset = events.reduce(
+      (seq, event) =>
+        event.type === 'execution.started' ||
+        (event.type === 'escalation.answered' && event.payload.resolution === 'retry')
+          ? event.seq
+          : seq,
+      0,
+    )
+    const attempt =
+      events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
+        .length + 1
+    const message =
+      (input.error instanceof Error ? input.error.message : String(input.error)).trim() ||
+      'provider operation failed without an error message'
+    const execution = [...events].reverse().find((event) => event.type === 'execution.started')
+    const failure = await this.deps.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'infrastructure.failed',
+      payload: {
+        provider: input.provider,
+        workspaceRef: input.workspaceRef,
+        instance:
+          execution?.type === 'execution.started'
+            ? execution.payload.instance
+            : 'dispatcher-recovery',
+        ...(execution?.type === 'execution.started' && execution.payload.environmentId !== undefined
+          ? { environmentId: execution.payload.environmentId }
+          : {}),
+        ...(execution?.type === 'execution.started' && execution.payload.sessionId !== undefined
+          ? { sessionId: execution.payload.sessionId }
+          : {}),
+        operation: input.operation,
+        cause: /timeout|abort/i.test(message)
+          ? 'timeout'
+          : /limit|quota|cpu|duration/i.test(message)
+            ? 'provider-limit'
+            : input.cleanupPending
+              ? 'unknown-outcome'
+              : 'provider-error',
+        attempt,
+        retryable: true,
+        cleanupPending: input.cleanupPending,
+        error: message,
+      },
+    })
+    events.push(failure)
+    const limit = this.deps.config.policy.maxInfrastructureAttempts
+    if (
+      attempt >= limit &&
+      !events.some(
+        (event) =>
+          event.seq > lastReset &&
+          event.type === 'escalation.raised' &&
+          event.payload.policyCause === 'infrastructure-failure-limit',
+      )
+    ) {
+      const raised = await this.deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: this.deps.ids('esc'),
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'infrastructure-failure-limit',
+          question: `maxInfrastructureAttempts (${limit}) exhausted during ${input.operation}: ${message}`,
+          refs: [input.workspaceRef],
+        },
+      })
+      events.push(raised)
+    }
+  }
+
+  /** Fence and remove a stale remote environment. A replacement is created
+   * only after exact-name cleanup is durably acknowledged. */
+  private async reapStaleWorkspace(
+    slug: string,
+    events: AbEvent[],
+    reason: 'pause' | 'blocked' | 'replacement',
+  ): Promise<boolean> {
+    const open = openWorkspace(events)
+    const recovery = this.deps.workspaces.recovery
+    if (open === null || recovery === undefined) return false
+    const attempt =
+      events.filter(
+        (event) =>
+          event.type === 'infrastructure.cleanup-attempted' &&
+          event.payload.workspaceRef === open.ref,
+      ).length + 1
+    try {
+      const outcome = await recovery.reap({
+        provider: open.provider,
+        ref: open.ref,
+        path: open.path ?? open.ref,
+        ...(open.localPath !== undefined ? { localPath: open.localPath } : {}),
+        branch: open.branch,
+      })
+      const cleaned = await this.deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'infrastructure.cleanup-attempted',
+        payload: {
+          provider: open.provider,
+          workspaceRef: open.ref,
+          operation: 'reconcile',
+          attempt,
+          outcome,
+        },
+      })
+      events.push(cleaned)
+      const released = await this.deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'workspace.released',
+        payload: { ref: open.ref, reason },
+      })
+      events.push(released)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failed = await this.deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'infrastructure.cleanup-attempted',
+        payload: {
+          provider: open.provider,
+          workspaceRef: open.ref,
+          operation: 'reconcile',
+          attempt,
+          outcome: 'unknown',
+          error: message || 'cleanup failed without an error message',
+        },
+      })
+      events.push(failed)
+      await this.recordInfrastructureFailure(slug, events, {
+        provider: open.provider,
+        workspaceRef: open.ref,
+        operation: 'reconcile',
+        error,
+        cleanupPending: true,
+      })
+      return false
+    }
+  }
+
+  private async provisionReplacement(record: BuildRecord, events: AbEvent[]): Promise<void> {
+    const handle = await this.deps.workspaces.provision({
+      repo: this.deps.repo,
+      baseBranch: baseBranchOf(events, this.deps.config),
+      branch: record.branch ?? `ab/${record.slug}`,
+      revision: this.recoveryCheckpoint(events),
+      generation: events.filter((event) => event.type === 'workspace.provisioned').length,
+    })
+    const provisioned = await this.deps.store.append(record.slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: handle.provider,
+        ref: handle.ref,
+        path: handle.path,
+        ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
+        branch: handle.branch,
+        base: handle.base,
+      },
+    })
+    events.push(provisioned)
+  }
+
   /** Release the build's workspace if the log shows one still provisioned;
    * append `workspace.released`. Log-deduped, so re-runs are no-ops. */
-  private async releaseWorkspace(slug: string, events: AbEvent[]): Promise<AbEvent | undefined> {
+  private async releaseWorkspace(
+    slug: string,
+    events: AbEvent[],
+    reason: 'completion' | 'abort' | 'pause' | 'blocked' | 'replacement' | 'discard' = 'completion',
+  ): Promise<AbEvent | undefined> {
     const open = openWorkspace(events)
     if (!open) return undefined
     await this.deps.workspaces.release({
@@ -1106,7 +1302,7 @@ export class Dispatcher {
     return this.deps.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.released',
-      payload: {},
+      payload: { ref: open.ref, reason },
     } satisfies EventWrite<'workspace.released'>)
   }
 
@@ -1188,10 +1384,19 @@ export class Dispatcher {
 
       stage = 'workspace'
       if (openWorkspace(events) === null) {
+        const priorGenerations = events.filter(
+          (event) => event.type === 'workspace.provisioned',
+        ).length
         const handle = await this.deps.workspaces.provision({
           repo: this.deps.repo,
           baseBranch: baseBranchOf(events, config),
           branch: record.branch ?? `ab/${record.slug}`,
+          ...(priorGenerations > 0
+            ? {
+                revision: this.recoveryCheckpoint(events),
+                generation: priorGenerations,
+              }
+            : {}),
         })
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -1292,6 +1497,16 @@ export class Dispatcher {
       return true
     } catch (error) {
       const events = await store.getEvents(record.slug)
+      if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
+        const open = openWorkspace(events)
+        await this.recordInfrastructureFailure(record.slug, events, {
+          provider: this.deps.workspaces.name,
+          workspaceRef: open?.ref ?? record.slug,
+          operation: 'provision',
+          error,
+          cleanupPending: true,
+        })
+      }
       const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
       const message = (error instanceof Error ? error.message : String(error)).trim()
       await store.append(record.slug, {
@@ -1381,6 +1596,9 @@ export class Dispatcher {
         }
         continue
       }
+      // Disposable remote environments must pass through the stale-lease
+      // fencing sweep below; startup must never attach directly to an old VM.
+      if (this.deps.workspaces.recovery !== undefined) continue
       const result = await this.launch(record.slug, launched)
       if (result === 'scheduled') report.resumed += 1
     }
@@ -1429,10 +1647,63 @@ export class Dispatcher {
       const state = reduceBuild(events)
       if (
         (state.status === 'queued' && state.discardRequest !== undefined) ||
-        heldByRepositoryPause(state, paused) ||
-        decideNext(events, this.deps.config).kind === 'wait'
+        heldByRepositoryPause(state, paused)
       ) {
         continue
+      }
+      const decision = decideNext(events, this.deps.config)
+      const open = openWorkspace(events)
+      if (open !== null && this.deps.workspaces.recovery !== undefined) {
+        const parked = decision.kind === 'wait'
+        const reason =
+          state.status === 'paused'
+            ? ('pause' as const)
+            : state.status === 'blocked'
+              ? ('blocked' as const)
+              : ('replacement' as const)
+        const reaped = await this.reapStaleWorkspace(record.slug, events, reason)
+        if (!reaped) continue
+        if (!parked) {
+          try {
+            await this.provisionReplacement(record, events)
+          } catch (error) {
+            await this.recordInfrastructureFailure(record.slug, events, {
+              provider: this.deps.workspaces.name,
+              workspaceRef: open.ref,
+              operation: 'provision',
+              error,
+              cleanupPending: true,
+            })
+            // Provision remains fact-free and retryable. The deterministic
+            // generation/name adopts an unknown create on the next tick.
+            continue
+          }
+        }
+      }
+      if (decision.kind === 'wait') continue
+      if (
+        openWorkspace(events) === null &&
+        this.deps.workspaces.recovery !== undefined &&
+        events.some((event) => event.type === 'workspace.provisioned')
+      ) {
+        try {
+          await this.provisionReplacement(record, events)
+        } catch (error) {
+          const latestRef = [...events]
+            .reverse()
+            .find((event) => event.type === 'workspace.released')
+          await this.recordInfrastructureFailure(record.slug, events, {
+            provider: this.deps.workspaces.name,
+            workspaceRef:
+              latestRef?.type === 'workspace.released' && 'ref' in latestRef.payload
+                ? latestRef.payload.ref
+                : record.slug,
+            operation: 'provision',
+            error,
+            cleanupPending: true,
+          })
+          continue
+        }
       }
       const result = await this.launch(record.slug, launched)
       if (result === 'scheduled') report.swept += 1
