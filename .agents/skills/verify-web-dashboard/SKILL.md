@@ -17,10 +17,10 @@ inspect the diff and not to decide applicability again.
    answered escalation for the retried verification: read it first and apply
    the guidance while performing the same capture and inspection below. If the
    file is absent, continue unchanged.
-2. Read `DESIGN.md` once. Its named rules (The Color Is State Rule, The Fastext
-   Identity Rule, The Alert Never Dims Rule, The One Cell Rule, The Glyph Rule,
-   The No Hairline Rule) are the criteria you judge against, alongside the
-   checklist the capture writes.
+2. Read `DESIGN.md` once. Its named rules (The Color Is State Rule, The Alert
+   Never Dims Rule, The One Cell Rule, The Glyph Rule, The Flowing Document
+   Rule, and The No Hairline Rule) are the criteria you judge against, alongside
+   the checklist the capture writes.
 3. Run `bun run capture:web-dashboard`. It drives the repo-local scripted
    dispatch harness for real dashboard models, renders the web app's pure views
    over the real stylesheet, screenshots them with a local Chromium, and writes
@@ -47,12 +47,18 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach
    ab artifact put web-dashboard-frame:builds-happy-narrow:png .ab/web-dashboard-frames/builds-happy-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-empty-wide:png .ab/web-dashboard-frames/builds-empty-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-empty-narrow:png .ab/web-dashboard-frames/builds-empty-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-wide:png .ab/web-dashboard-frames/builds-harvest-wide.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-narrow:png .ab/web-dashboard-frames/builds-harvest-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-multirepo-wide:png .ab/web-dashboard-frames/builds-multirepo-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-rest-wide:png .ab/web-dashboard-frames/builds-mixed-rest-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-hover-wide:png .ab/web-dashboard-frames/builds-mixed-hover-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-selected-narrow:png .ab/web-dashboard-frames/builds-mixed-selected-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-wide:png .ab/web-dashboard-frames/builds-mixed-detail-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-answer-wide:png .ab/web-dashboard-frames/builds-mixed-answer-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-answer-narrow:png .ab/web-dashboard-frames/builds-mixed-answer-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-abort-wide:png .ab/web-dashboard-frames/builds-mixed-abort-wide.png --attach
    ab artifact put web-dashboard-frame:builds-longrepo-narrow:png .ab/web-dashboard-frames/builds-longrepo-narrow.png --attach
    ab artifact put web-dashboard-frame:signin-wide:png .ab/web-dashboard-frames/signin-wide.png --attach
@@ -69,11 +75,11 @@ inspect the diff and not to decide applicability again.
 ## Verdict rules
 
 - **Fail** if the capture crashes, produces no frame, any PNG cannot be opened,
-  or an image visibly clips, overlaps, truncates a Fastext label, loses the row
-  grammar, loses a same-hue Fastext outline (including an empty or disabled slot),
-  shows a resting button fill, breaks a rule recorded in `DESIGN.md`, or is
-  otherwise incoherent. The shared 2px outline on buttons is the sole
-  component-border exception to the No Hairline Rule.
+  or an image visibly clips, overlaps, loses the row grammar, introduces an
+  inner rows/detail scroller or fixed shell block, renders a footer/global
+  button row, shows a resting button fill, breaks a rule recorded in
+  `DESIGN.md`, or is otherwise incoherent. The shared 2px outline on buttons is
+  the sole component-border exception to the No Hairline Rule.
 - **Fail** when no Chromium binary is available. That is a host setup problem
   for the operator, not a reason to skip: record the missing binary and
   `CHROMIUM_BIN` in the report and use the failing terminal.

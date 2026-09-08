@@ -3,7 +3,6 @@ import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presenta
 import {
   buildRowActions,
   canPreviewPointer,
-  fastextCells,
   handleRowControlKey,
 } from '../app/dashboard/BuildsView'
 import {
@@ -11,7 +10,6 @@ import {
   checkEvidence,
   chromiumBinary,
   evidenceText,
-  fastextMarkup,
   renderWebFrame,
   WEB_FRAME_SPECS,
   type WebFixtureModels,
@@ -125,24 +123,25 @@ test('every web frame renders its required evidence and none of the forbidden', 
     expect(() => checkEvidence(spec, html), spec.id).not.toThrow()
     expect(html, spec.id).not.toContain('<script')
     expect(html, spec.id).toContain('<!doctype html>')
+    if (spec.id.startsWith('builds-')) {
+      expect(html, spec.id).not.toContain('class="fastext"')
+      for (const retired of ['PAUSE ALL', 'RESUME ALL', 'DESELECT']) {
+        expect(evidenceText(html), spec.id).not.toContain(retired)
+      }
+    }
   }
 })
 
-test('selected Harvest frames keep fixed Fastext slots and repeat the row run action', () => {
+test('selected Harvest frames keep the run action in the row register without a footer', () => {
   const fixtures = models()
   for (const id of ['builds-harvest-wide', 'builds-harvest-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = fastextMarkup(html)
 
-    expect(footer).toContain('data-slot="red" data-empty="true"')
-    expect(footer).toContain('data-slot="green"><kbd>p</kbd><span>RESUME</span>')
-    expect(footer).toContain('data-slot="yellow"><kbd>h</kbd><span>HARVEST</span>')
     expect(html).toContain('aria-label="RESUME Harvest run h1"')
-    expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>DESELECT</span>')
-    expect(evidenceText(footer ?? '')).not.toContain('PAUSE ALL')
-    expect(evidenceText(footer ?? '')).not.toContain('RESUME ALL')
+    expect(html).not.toContain('class="fastext"')
+    expect(evidenceText(html)).not.toContain('DESELECT')
   }
 })
 
@@ -214,7 +213,7 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
     expect(html).toContain('<nav class="line navline"')
-    expect(html).toContain('role="toolbar"')
+    expect(html).not.toContain('role="toolbar"')
     expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
     const loadingStart = html.indexOf('<div class="loading-state">')
     const skeletonStart = html.indexOf('<div class="skeletons"', loadingStart)
@@ -229,7 +228,7 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
   }
 })
 
-test('build row controls follow authoritative status availability and Fastext labels', () => {
+test('build row controls follow authoritative status availability', () => {
   const expected: Array<[DashboardBuild['status'], string[]]> = [
     ['queued', ['ABORT', 'DISCARD', 'AUTO MERGE', 'DETAILS']],
     ['running', ['ABORT', 'PAUSE', 'AUTO MERGE', 'DETAILS']],
@@ -290,22 +289,23 @@ test('hover frame keeps committed and preview state independent', () => {
   )
 })
 
-test('answer frames expose only submit and cancel while retaining focused input and detail', () => {
+test('answer frames expose only row-local submit and cancel while retaining focused input and detail', () => {
   const fixtures = models()
   for (const id of ['builds-mixed-answer-wide', 'builds-mixed-answer-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = fastextMarkup(html)
+    const toolbar = html.match(
+      /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+    )?.[0]
 
     expect(html).toContain('class="answer-step"')
     expect(html).toContain('optional guidance (empty retries)')
     expect(html).toContain('<input autofocus="" type="text"')
-    expect(footer).toContain('data-slot="red"><kbd>↵</kbd><span>SUBMIT</span>')
-    expect(footer).toContain('data-slot="green" data-empty="true"')
-    expect(footer).toContain('data-slot="yellow" data-empty="true"')
-    expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>CANCEL</span>')
-    expect(evidenceText(footer ?? '')).not.toContain('RESUME')
+    expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
+    expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
+    expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
+    expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
   expect(evidenceText(renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
@@ -313,30 +313,22 @@ test('answer frames expose only submit and cancel while retaining focused input 
   )
 })
 
-test('pending answer context disables submit and cancel', () => {
-  const model = models().mixed
+test('pending answer context disables row-local submit and cancel', () => {
+  const fixtures = models()
+  const model = fixtures.mixed
   const selected = model.builds.find((row) => row.blockers.length > 0)!
-  const cells = fastextCells({
-    model,
-    pending: `${selected.slug}:answer`,
-    selection: { kind: 'build', slug: selected.slug },
-    detailOpen: false,
-    confirmingAbort: undefined,
-    answerStep: { slug: selected.slug, escalationIds: ['esc-1'], input: '' },
-    answerPending: true,
-    onDeselect: () => {},
-    onToggleDetail: () => {},
-    onBuildControl: () => {},
-    onRequestAbort: () => {},
-    onCancelAbort: () => {},
-    onSubmitAnswerStep: () => {},
-    onCancelAnswerStep: () => {},
-    onSetting: () => {},
-    onBulk: () => {},
-    onHarvest: () => {},
+  const base = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
+  const pendingHtml = renderWebFrame({ ...base, answerPending: true }, fixtures, {
+    css: '',
+    fontCss: '',
   })
-  expect(cells[0]?.disabled).toBe(true)
-  expect(cells[3]?.disabled).toBe(true)
+
+  expect(pendingHtml).toContain(
+    `<button type="button" class="word row-control" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
+  )
+  expect(pendingHtml).toContain(
+    `<button type="button" class="word row-control" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
+  )
 })
 
 test('narrow capture frames never supply a hover preview', () => {
