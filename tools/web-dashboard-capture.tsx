@@ -16,7 +16,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { OperatorTicketDetail, OperatorTicketQueue } from 'autobuild/operator-api'
 import type { DashboardModel, TranscriptPresentation } from 'autobuild/operator-presentation'
 import { buildActionAvailability } from 'autobuild/operator-presentation'
 import type { ReactNode } from 'react'
@@ -24,7 +23,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { BuildsView, type BuildsViewProps, type Selection } from '../app/dashboard/BuildsView'
 import { dashboardImperative } from '../app/dashboard/imperative'
 import { OperatorShell } from '../app/dashboard/Shell'
-import { TicketsView, type TicketsViewProps } from '../app/dashboard/TicketQueue'
 import { SignIn } from '../app/sign-in/SignIn'
 import { captureDashboardFrames, RENDER_NOW } from './dashboard-capture'
 
@@ -68,6 +66,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 1000,
     requires: [
       'MERGED',
+      'AUT-131',
       'PR merged',
       'Harvest',
       'RUNNING',
@@ -84,7 +83,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-happy-narrow',
     width: 390,
     height: 1700,
-    requires: ['MERGED', 'Harvest', 'RUNNING', '[x]', 'PAUSE ALL', 'INTAKE'],
+    requires: ['MERGED', 'AUT-131', 'Harvest', 'RUNNING', '[x]', 'PAUSE ALL', 'INTAKE'],
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
@@ -124,6 +123,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 2000,
     requires: [
       'BLOCKED ×2',
+      'CAP-PLAN',
       'PAUSED',
       '(held)',
       'QUEUED',
@@ -185,36 +185,6 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     requires: ['BLOCKED ×2', LONG_FIXTURE_REPO],
   },
   {
-    id: 'tickets-backlog-open-wide',
-    width: 1440,
-    height: 2400,
-    requires: [
-      'BACKLOG',
-      'Todo',
-      'CAP-201',
-      'Capture fixture',
-      'The desk',
-      'unresolved',
-      'OPEN BUILD',
-      'NEW TICKET',
-    ],
-    forbids: ['Preview', '<textarea', 'TRIAGE', 'READY'],
-  },
-  {
-    id: 'tickets-backlog-open-narrow',
-    width: 390,
-    height: 1800,
-    requires: ['BACKLOG', 'Todo', 'Capture fixture', 'The desk', 'CLOSE'],
-    forbids: ['Preview', '<textarea', 'TRIAGE', 'READY'],
-  },
-  {
-    id: 'tickets-backlog-empty',
-    width: 1440,
-    height: 700,
-    requires: ['BACKLOG', 'Nothing is waiting in Backlog.'],
-    forbids: ['Preview', 'Loading', 'TRIAGE', 'READY'],
-  },
-  {
     id: 'signin-wide',
     width: 1440,
     height: 700,
@@ -256,69 +226,10 @@ const FIXTURE_TRANSCRIPT: TranscriptPresentation = {
   ],
 }
 
-const FIXTURE_TICKET_BODY = [
-  '# Capture fixture',
-  '',
-  'The configured queue should be quick to work through.',
-  '',
-  '## Acceptance criteria',
-  '',
-  '- The desk opens the first item.',
-  '- The desk keeps markdown marks visible.',
-  '',
-  '---',
-  '',
-  '[Reference](https://example.com/reference)',
-].join('\n')
-
-/** Synthetic ticket data. CAP-* ids mark it as capture fixture, never real work. */
-function fixtureTicketQueue(): OperatorTicketQueue {
-  return {
-    states: ['Backlog', 'Todo', 'In Progress', 'Done'],
-    diagnostics: [],
-    criteria: { state: 'Backlog' },
-    triageState: 'Backlog',
-    readyState: 'Todo',
-    tickets: [
-      {
-        ref: { id: 'CAP-201', source: 'fixture', url: 'https://tickets.example/CAP-201' },
-        title: 'Groom harvest proposals',
-        body: FIXTURE_TICKET_BODY,
-        labels: ['autobuild:proposal'],
-        state: 'Backlog',
-        blockedBy: ['CAP-134'],
-      },
-      {
-        ref: { id: 'CAP-202', source: 'fixture', url: 'https://tickets.example/CAP-202' },
-        title: 'Retry transient forge errors during finalize',
-        body: 'Capture fixture body.',
-        labels: ['autobuild:proposal', 'forge'],
-        state: 'Backlog',
-      },
-    ],
-  }
-}
-
-function fixtureTicketDetail(queue: OperatorTicketQueue): OperatorTicketDetail {
-  const ticket = queue.tickets.find((entry) => entry.ref.id === 'CAP-201')
-  if (!ticket) throw new Error('web dashboard capture: fixture ticket CAP-201 is missing')
-  return {
-    ticket,
-    blockers: [{ id: 'CAP-134', exists: true, resolved: false, blockedBy: [] }],
-    build: {
-      slug: 'dashboard-key-legend',
-      status: 'running',
-      updatedAt: '2026-07-15T12:09:00.000Z',
-      link: '/builds/dashboard-key-legend',
-    },
-  }
-}
-
 function shell(
   children: ReactNode,
   opts: {
     model?: DashboardModel
-    surface?: 'builds' | 'tickets'
     repo?: string
     repositories?: readonly string[]
     error?: string
@@ -330,11 +241,9 @@ function shell(
       repo={repo}
       repositories={opts.repositories ?? [repo]}
       identity={FIXTURE_IDENTITY}
-      surface={opts.surface ?? 'builds'}
       imperative={opts.model ? dashboardImperative(opts.model) : undefined}
       clock={opts.model ? FIXTURE_CLOCK : undefined}
       error={opts.error}
-      onSurface={noop}
       onRepo={noop}
       onSignOut={noop}
     >
@@ -372,33 +281,6 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
   )
 }
 
-function tickets(queue: OperatorTicketQueue, extra: Partial<TicketsViewProps> = {}) {
-  return (
-    <TicketsView
-      repo={FIXTURE_REPO}
-      queue={queue}
-      dirty={false}
-      pending={false}
-      creating={false}
-      stateFilter=""
-      labelFilter=""
-      onStateFilter={noop}
-      onLabelFilter={noop}
-      onOpen={noop}
-      onClose={noop}
-      onEdit={noop}
-      onSave={noop}
-      onMove={noop}
-      onPromote={noop}
-      onBlock={noop}
-      onCreate={noop}
-      onToggleCreate={noop}
-      onOpenBuild={noop}
-      {...extra}
-    />
-  )
-}
-
 /** The first build parked on a human in the mixed scenario, selected for detail. */
 function blockedSelection(model: DashboardModel): Selection {
   const blocked = model.builds.find((build) => build.blockers.length > 0)
@@ -423,7 +305,6 @@ function abortableSelection(model: DashboardModel): Selection {
 }
 
 function frameNode(id: string, models: WebFixtureModels): ReactNode {
-  const queue = fixtureTicketQueue()
   switch (id) {
     case 'builds-loading-wide':
     case 'builds-loading-narrow':
@@ -484,27 +365,6 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
       )
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
-    case 'tickets-backlog-open-wide':
-    case 'tickets-backlog-open-narrow': {
-      const detail = fixtureTicketDetail(queue)
-      return shell(
-        tickets(queue, {
-          selected: detail.ticket.ref.id,
-          detail,
-          draft: {
-            title: detail.ticket.title,
-            body: detail.ticket.body,
-            labels: [...detail.ticket.labels],
-          },
-        }),
-        { surface: 'tickets', model: models.happy },
-      )
-    }
-    case 'tickets-backlog-empty':
-      return shell(tickets({ ...queue, tickets: [] }), {
-        surface: 'tickets',
-        model: models.happy,
-      })
     case 'signin-wide':
       return <SignIn providers={['github']} />
     case 'signin-error-narrow':
@@ -552,6 +412,9 @@ export function evidenceText(html: string): string {
 /** Throws naming the first missing or forbidden evidence string. */
 export function checkEvidence(spec: WebFrameSpec, html: string): void {
   const text = evidenceText(html)
+  if (spec.id.startsWith('builds-') && (text.includes('BUILDS') || text.includes('TICKETS'))) {
+    throw new Error(`web dashboard capture ${spec.id}: signed-in frame contains a surface tab word`)
+  }
   const fastextSlots = [...html.matchAll(/class="ft" data-slot="(red|green|yellow|cyan)"/g)].map(
     (match) => match[1],
   )
@@ -724,13 +587,12 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '# Web dashboard visual verification',
     '',
     `Generated by \`bun run capture:web-dashboard\` with Chromium at \`${chromium}\`.`,
-    "Frames render the operator web app's pure views (OperatorShell, BuildsView,",
-    'TicketsView, SignIn) over the scripted dispatch models from',
+    "Frames render the operator web app's pure views (OperatorShell, BuildsView, SignIn)",
+    'over the scripted dispatch models from',
     '`tools/dashboard-capture.ts` (`headline-happy-wide` and `mixed-wide`), the real',
     '`app/globals.css`, and a locally installed monospace face (JetBrains Mono when',
-    'the host has it, otherwise DejaVu Sans Mono). Ticket-queue and sign-in frames',
-    'use synthetic fixture data (CAP-* ids). Nothing here is a golden image: judge',
-    'whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
+    'the host has it, otherwise DejaVu Sans Mono). Nothing here is a golden image:',
+    'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
     'The fine-pointer hover preview is modeled explicitly in the wide hover frame.',
     'Focus rings, the state-change flash, and keyboard shortcuts are code-reviewed',
@@ -746,10 +608,10 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '## Visual criteria',
     '',
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. Empty black below the content is the fixed viewport height, not a defect.',
-    '- [ ] Compare loading and loaded Builds at both widths, then Builds, Tickets, and sign-in: the masthead is exactly one cell row high with identical coordinates in every state and surface. Navigation and the top and bottom edges of the Fastext footer are also stable where present.',
-    '- [ ] Navigation: `builds-multirepo-wide.png` shows the `repo` label and selector with both repository options; every other Builds and Tickets frame is configured with one repository and omits the complete selector and label.',
+    '- [ ] Compare loading and loaded Builds at both widths, then sign-in: the masthead is exactly one cell row high with identical coordinates in every state. The control line and the top and bottom edges of the Fastext footer are also stable where present.',
+    '- [ ] Control line: no signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` shows the `repo` label and selector with both repository options; every other Builds frame is configured with one repository and omits the complete selector and label.',
     '- [ ] Loading frames show five static, neutral placeholder rows at the normal three-row build rhythm, with no digits, status words, imperative, synthetic values, or animation. The old polling sentence is absent.',
-    '- [ ] The document itself does not scroll. Builds, Tickets filters/queue/forms/detail, and open build detail are clipped only by and scroll within the centre between navigation and Fastext; the shell anchors do not move.',
+    '- [ ] The document itself does not scroll. Builds and open build detail are clipped only by and scroll within the centre between the control line and Fastext; the shell anchors do not move.',
     '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
     '- [ ] Dispatcher line: queue, active, observations, repository state, and the intake, auto merge, and harvest toggle words with bold ON in green or OFF in yellow. The happy frames show everything ON and RUNNING; the mixed frames show PAUSED and OFF.',
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
@@ -759,8 +621,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Answer frames: the blocked row unfolds a red `!` blocker line and a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry. The footer contains only red `SUBMIT`, cyan `CANCEL`, and empty green/yellow outlined slots; the 390px frame keeps the two-row footer unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
     '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow outlines.',
-    '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at 0.9 opacity on only its foreground and outline, while its resting surface remains transparent on the black ground; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. In `tickets-backlog-open-narrow.png`, the first line is red `CLOSE` then green `TO TODO`; the second is yellow `NEW TICKET` then cyan `OPEN BUILD`. The capture has deterministically verified all four slot elements in this order.',
-    '- [ ] Tickets frames: BACKLOG is the configured default and Todo is the promotion target. The selected row unfolds inline; its one body region renders yellow headings with visible `#` marks, `- ` list markers, and a rule before the title/label, Move, and Blockers controls. The narrow frame shows the open ticket as the centre view, and the empty frame is calm slack text.',
+    '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at 0.9 opacity on only its foreground and outline, while its resting surface remains transparent on the black ground; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. The capture has deterministically verified all four slot elements in this order.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',

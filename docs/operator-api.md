@@ -124,15 +124,13 @@ progress and unattempted builds. Unexpected failures are `500 internal`.
 The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`.
 That route is not a second public bearer-token API: it requires a current
 Better Auth HTTP-only cookie, rechecks the deployment email and repository
-allowlists, rejects cross-origin JSON controls, and delegates only the operator
-suffixes listed above. It replaces caller-supplied authorization/version
+allowlists, rejects cross-origin JSON controls, and delegates only the dashboard,
+build, settings, and harvest operator suffixes listed above. It replaces caller-supplied authorization/version
 headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
 code. Responses are private/no-store; a 401 sends the application back to sign
-in. Browser clients poll the visible dashboard or ticket queue/detail every two seconds; live transcript
-streaming is not provided. Dirty ticket drafts survive polling. Ticket bodies are rendered and edited in
-one source-preserving markdown region without raw HTML; ticket-provider credentials and delegated
-bearer tokens remain server-side.
+in. Browser clients poll the visible dashboard every two seconds; live transcript
+streaming is not provided. Delegated bearer tokens remain server-side.
 
 The API does not expose phase-session commands, runner startup, streaming, or a generic event-append operation.

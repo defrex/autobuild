@@ -15,10 +15,10 @@ web
 
 The primary user is the **operator**: the engineer who runs Autobuild against
 one or more repositories. They groom tickets in and review pull requests out;
-everything between is headless. On the web dashboard their job is to keep many
-concurrent builds moving with as little attention as possible: see status at a
-glance, find blocked builds, answer escalations, pause or resume work, and
-inspect any build's trail.
+everything between is headless. The browser has one surface, Builds. There the
+operator keeps many concurrent builds moving with as little attention as
+possible: see status at a glance, find blocked builds, answer escalations,
+pause or resume work, and inspect any build's trail.
 
 Confirmed audiences, in the order they exist today:
 
@@ -29,10 +29,9 @@ Confirmed audiences, in the order they exist today:
 3. A future multi-tenant hosted product where anyone signs in and sees their
    own repositories. Committed direction, not yet built.
 
-Ticket authoring is mostly not a web job. Operators write tickets through the
-`/ab-spec` skill inside their coding agent (README); the maintainer did not
-name sat-down grooming sessions as a web usage scene. The web Tickets surface
-exists to groom, edit, block, and move what is already filed.
+Ticket authoring and grooming are not browser jobs. Operators write tickets
+through the `/ab-spec` skill inside their coding agent (README) and manage them
+through the agent or `ab ticket` CLI workflow.
 
 ## Product Purpose
 
@@ -71,8 +70,8 @@ appended to the same log.
   escalations from a phone while away from the desk. Escalation answering and
   build controls must work on a narrow screen.
 - **Shared between teammates.** Two operators may watch the same repository's
-  builds and tickets and coordinate. Settings show acknowledged durable state,
-  never one person's optimistic view.
+  builds and coordinate. Settings show acknowledged durable state, never one
+  person's optimistic view.
 - **Parity with the terminal dashboard.** `ab dispatch` renders a live TTY
   dashboard (see `docs/assets/headline-wide.png`). The web dashboard is a
   first-class sibling front on the same event log and keeps the same mental
@@ -87,15 +86,12 @@ appended to the same log.
   no push channel. Elapsed timers tick locally between polls.
 - **Multi-repository.** One deployment serves several repositories; the
   operator views one at a time.
-- **Lifecycle names come from the backend.** The database ticket backend uses
-  Triage, Ready, Doing, Done by default; a Linear backend exposes Linear's own
-  state names. The UI never hardcodes them.
 
 ## Capabilities and Constraints
 
 Confirmed capabilities of the web dashboard today:
 
-- **Builds surface.** A dispatcher status bar (active/limit, queued,
+- **Builds, the only surface.** A dispatcher status bar (active/limit, queued,
   repository paused or running, unclaimed observations/threshold) with toggles
   for intake, default auto merge, and the harvest gate, plus Pause all and
   Resume all. A pipeline table with one row per nonterminal build: ticket id
@@ -105,10 +101,6 @@ Confirmed capabilities of the web dashboard today:
   escalations, an answer composer (guidance, retry, dismiss, review-round
   ceiling, revised spec from a supplied body or the amended ticket), session
   rows with token usage, and transcript viewing.
-- **Tickets surface.** Filter by state and labels; create a ticket with title,
-  markdown body, labels, state, and blockers; a queue grouped by state; a
-  ticket detail with editing, markdown preview, move between states, and
-  blocker management; a link from a ticket to its most recent build.
 - **Sign-in page.** Provider buttons and an access-refused message.
 
 Constraints future work must preserve:

@@ -22,7 +22,6 @@
   --tt-green: #65b868;
   --tt-red: #d96868;
   --tt-magenta: #ff00ff;
-  --tt-blue: #707dcc;
   --tt-dim: #888888;
   --tt-rule: #292929;
   --tt-well: #141414;
@@ -39,8 +38,6 @@
   --slack: var(--tt-dim);
   --rule: var(--tt-rule);
   --well: var(--tt-well);
-  --nav-fill: var(--tt-blue);
-  --nav-ink: var(--ground);
 
   /* Fastext slots: the color is the slot's identity, never a state. */
   --ft-red: var(--tt-red);
@@ -277,18 +274,6 @@ h3 {
 .navline .spacer {
   flex: 1 1 auto;
 }
-.tab {
-  padding: 0 1ch;
-  font-weight: 700;
-  color: var(--ink);
-}
-.tab[aria-pressed="true"] {
-  background: var(--nav-fill);
-  color: var(--nav-ink);
-}
-.tab:hover:not([aria-pressed="true"]) {
-  color: var(--live);
-}
 .identity {
   display: inline-flex;
   column-gap: 2ch;
@@ -462,12 +447,10 @@ h3 {
   font-weight: 400;
 }
 .row[data-hovered] .lane::before,
-.row[data-selected] .lane::before,
-.trow[aria-pressed="true"] .lane::before {
+.row[data-selected] .lane::before {
   content: ">";
 }
-.row[data-selected] .lane,
-.trow[aria-pressed="true"] .lane {
+.row[data-selected] .lane {
   color: var(--live);
   font-weight: 700;
 }
@@ -808,10 +791,6 @@ textarea {
   overflow-wrap: anywhere;
 }
 
-.terminal-notice {
-  margin-top: var(--row);
-}
-
 /* ── Fastext ──────────────────────────────────────────────────────────── */
 
 .fastext {
@@ -882,206 +861,6 @@ textarea {
   .ft kbd {
     display: none;
   }
-}
-
-/* ── Tickets ──────────────────────────────────────────────────────────── */
-
-.filterline {
-  margin-top: var(--row);
-  row-gap: 0;
-}
-.filterline label {
-  display: inline-flex;
-  column-gap: 1ch;
-  align-items: baseline;
-  min-width: 0;
-}
-.filterline input {
-  width: 24ch;
-}
-.ticketPage {
-  width: 100%;
-  max-width: 120ch;
-  margin-top: var(--row);
-}
-.page h2 {
-  color: var(--title);
-}
-.page h2 .count {
-  color: var(--ink);
-  font-weight: 400;
-}
-.ticketPage > ol:has(> li[data-selected]) > li:not([data-selected]) {
-  color: var(--slack);
-  opacity: 0.62;
-}
-.ticketPage > ol > li[data-selected] {
-  opacity: 1;
-}
-.emptyTickets {
-  margin-top: var(--row);
-}
-.trow {
-  display: grid;
-  grid-template-columns: 2ch minmax(0, 1fr);
-  width: 100%;
-  color: var(--ink);
-}
-.trow .lane {
-  color: var(--live);
-  font-weight: 700;
-}
-.trow .tid {
-  display: inline;
-}
-.trow .ttitle {
-  font-weight: 700;
-}
-.trow:hover .ttitle {
-  color: var(--live);
-}
-.trow .meta {
-  grid-column: 2;
-  color: var(--slack);
-}
-.tdetail {
-  width: calc(100% - 2ch);
-  max-width: 100ch;
-  margin-left: 2ch;
-}
-.tdetail input {
-  max-width: 80ch;
-}
-.tdetail textarea {
-  min-height: calc(var(--row) * 14);
-}
-.ticketIdentity {
-  display: flex;
-  flex-wrap: wrap;
-  column-gap: 2ch;
-}
-.ticketIdentity h3 {
-  flex-basis: 100%;
-}
-.bodySection {
-  margin-top: var(--row);
-}
-.markdownBodyEditor {
-  background: var(--well);
-  min-height: calc(var(--row) * 14);
-  outline-offset: 0;
-}
-.markdownBodyEditor:focus-within {
-  outline: 2px solid var(--live);
-}
-.markdownEditorHost,
-.markdownEditorHost .overtype-container,
-.markdownEditorHost .overtype-wrapper {
-  min-height: calc(var(--row) * 14);
-}
-.markdownEditorHost .overtype-input,
-.markdownEditorHost .overtype-preview,
-.markdownEditorHost .overtype-preview * {
-  font-family: var(--font-mono);
-  font-size: inherit;
-  line-height: var(--row);
-}
-.markdownEditorHost .overtype-container,
-.markdownEditorHost .overtype-wrapper,
-.markdownEditorHost .overtype-input,
-.markdownEditorHost .overtype-preview {
-  border: 0;
-  border-radius: 0;
-  background: var(--well);
-}
-.promoteControl kbd {
-  font: inherit;
-  font-weight: 400;
-  margin-right: 1ch;
-}
-.markdown {
-  padding: 0 1ch;
-  background: var(--well);
-  overflow-wrap: anywhere;
-}
-.markdown > * + * {
-  margin-top: var(--row);
-}
-.markdown h1,
-.markdown h2,
-.markdown h3,
-.markdown h4,
-.markdown h5,
-.markdown h6 {
-  color: var(--title);
-}
-.markdown h1::before {
-  content: "# ";
-  color: var(--slack);
-  font-weight: 400;
-}
-.markdown h2::before {
-  content: "## ";
-  color: var(--slack);
-  font-weight: 400;
-}
-.markdown h3::before,
-.markdown h4::before,
-.markdown h5::before,
-.markdown h6::before {
-  content: "### ";
-  color: var(--slack);
-  font-weight: 400;
-}
-.markdown ul {
-  list-style: "- ";
-  padding-left: 2ch;
-}
-.markdown ol {
-  list-style: decimal;
-  padding-left: 3ch;
-}
-.markdown li + li {
-  margin-top: 0;
-}
-.markdown pre,
-.markdown code {
-  background: var(--ground);
-  font: inherit;
-}
-.markdown pre {
-  padding: 0 1ch;
-  overflow: auto;
-}
-.markdown blockquote {
-  margin: 0;
-  padding-left: 2ch;
-  color: var(--slack);
-}
-.markdown img {
-  max-width: 100%;
-  display: block;
-}
-.markdown table {
-  border-collapse: collapse;
-}
-.markdown th,
-.markdown td {
-  padding: 0 1ch;
-  text-align: left;
-  vertical-align: top;
-}
-.markdown th {
-  color: var(--title);
-}
-.markdown hr {
-  border: 0;
-  height: var(--row);
-  overflow: hidden;
-  color: var(--rule);
-}
-.markdown hr::before {
-  content: "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
 }
 
 /* ── Sign-in ──────────────────────────────────────────────────────────── */
@@ -1163,21 +942,6 @@ textarea {
   }
   .masthead .clock {
     display: none;
-  }
-  .filterline input {
-    width: 100%;
-  }
-  .ticketPage > ol:has(> li[data-selected]) > li:not([data-selected]) {
-    display: none;
-  }
-  .ticketQueue:has(.ticketPage li[data-selected] .tdetail) .filterline,
-  .ticketQueue:has(.ticketPage li[data-selected] .tdetail) .ticketPage > h2,
-  .ticketPage li[data-selected] > .trow {
-    display: none;
-  }
-  .ticketPage li[data-selected] .tdetail {
-    width: 100%;
-    margin-left: 0;
   }
 }
 

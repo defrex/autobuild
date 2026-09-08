@@ -1,10 +1,6 @@
 'use client'
 
-import type {
-  OperatorAnswerRequest,
-  OperatorDashboardSnapshot,
-  OperatorTicketBuild,
-} from 'autobuild/operator-api'
+import type { OperatorAnswerRequest, OperatorDashboardSnapshot } from 'autobuild/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,
@@ -24,8 +20,7 @@ import {
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
 import { clockText } from './frame'
 import { dashboardImperative } from './imperative'
-import { OperatorShell, type Surface } from './Shell'
-import { TicketQueue } from './TicketQueue'
+import { OperatorShell } from './Shell'
 import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
@@ -36,7 +31,6 @@ interface ClientProps {
 export function DashboardClient({ identity, repositories }: ClientProps) {
   const [repo, setRepo] = useState(repositories[0] ?? '')
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
-  const [surface, setSurface] = useState<Surface>('builds')
   const [selection, setSelection] = useState<Selection>()
   const [hoverPreview, setHoverPreview] = useState<Selection>()
   const [detailOpen, setDetailOpen] = useState(false)
@@ -46,7 +40,6 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     escalationIds: string[]
     input: string
   }>()
-  const [linkedBuild, setLinkedBuild] = useState<{ repo: string; build: OperatorTicketBuild }>()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
@@ -56,7 +49,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
 
   const poll = useCallback(
     async (signal?: AbortSignal) => {
-      if (!repo || surface !== 'builds') return
+      if (!repo) return
       const current = ++sequence.current
       try {
         const next = await api.dashboard(repo, signal)
@@ -72,7 +65,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         if (!signal?.aborted) setError(cause instanceof Error ? cause.message : String(cause))
       }
     },
-    [repo, surface],
+    [repo],
   )
 
   useEffect(() => {
@@ -234,7 +227,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   // render through a ref so the listener binds once.
   const keyHandler = useRef<(event: KeyboardEvent) => void>(() => {})
   keyHandler.current = (event) => {
-    if (surface !== 'builds' || !model) return
+    if (!model) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target instanceof HTMLElement ? event.target : null
     if (answerStep) {
@@ -337,17 +330,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       repo={repo}
       repositories={repositories}
       identity={identity}
-      surface={surface}
       imperative={imperative}
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
       pending={pending !== undefined}
       error={error}
-      onSurface={(next) => {
-        if (answerPending.current) return
-        setHoverPreview(undefined)
-        setAnswerStep(undefined)
-        setSurface(next)
-      }}
       onRepo={(next) => {
         if (answerPending.current) return
         setHoverPreview(undefined)
@@ -359,50 +345,34 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         window.location.assign('/sign-in')
       }}
     >
-      {surface === 'tickets' && (
-        <TicketQueue
-          key={repo}
-          repo={repo}
-          onError={setError}
-          onOpenBuild={(ticketBuild) => {
-            setLinkedBuild({ repo, build: ticketBuild })
-            select({ kind: 'build', slug: ticketBuild.slug })
-            setDetailOpen(true)
-            setSurface('builds')
-          }}
-        />
-      )}
-      {surface === 'builds' && (
-        <BuildsView
-          repo={repo}
-          model={model}
-          now={now}
-          pending={pending}
-          selection={selection}
-          hoverPreview={hoverPreview}
-          detailOpen={detailOpen}
-          confirmingAbort={confirmingAbort}
-          answerStep={answerStep}
-          answerPending={answerPending.current}
-          transcript={transcript}
-          linkedBuild={linkedBuild?.repo === repo ? linkedBuild.build : undefined}
-          onActivate={activate}
-          onHoverPreview={setHoverPreview}
-          onDeselect={deselect}
-          onToggleDetail={() => setDetailOpen((open) => !open)}
-          onBuildControl={control}
-          onRequestAbort={() => setConfirmingAbort(true)}
-          onCancelAbort={() => setConfirmingAbort(false)}
-          onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
-          onSubmitAnswerStep={submitAnswerStep}
-          onCancelAnswerStep={cancelAnswerStep}
-          onAnswer={answer}
-          onTranscript={loadTranscript}
-          onSetting={setting}
-          onBulk={bulk}
-          onHarvest={harvest}
-        />
-      )}
+      <BuildsView
+        repo={repo}
+        model={model}
+        now={now}
+        pending={pending}
+        selection={selection}
+        hoverPreview={hoverPreview}
+        detailOpen={detailOpen}
+        confirmingAbort={confirmingAbort}
+        answerStep={answerStep}
+        answerPending={answerPending.current}
+        transcript={transcript}
+        onActivate={activate}
+        onHoverPreview={setHoverPreview}
+        onDeselect={deselect}
+        onToggleDetail={() => setDetailOpen((open) => !open)}
+        onBuildControl={control}
+        onRequestAbort={() => setConfirmingAbort(true)}
+        onCancelAbort={() => setConfirmingAbort(false)}
+        onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
+        onSubmitAnswerStep={submitAnswerStep}
+        onCancelAnswerStep={cancelAnswerStep}
+        onAnswer={answer}
+        onTranscript={loadTranscript}
+        onSetting={setting}
+        onBulk={bulk}
+        onHarvest={harvest}
+      />
     </OperatorShell>
   )
 }

@@ -33,7 +33,6 @@ const canonicalTokens = {
   '--tt-green': '#65b868',
   '--tt-red': '#d96868',
   '--tt-magenta': '#ff00ff',
-  '--tt-blue': '#707dcc',
   '--tt-dim': '#888888',
   '--tt-rule': '#292929',
   '--tt-well': '#141414',
@@ -70,16 +69,25 @@ function compositeOnBlack(foreground: string, opacity: number): string {
   return `#${channels.join('')}`
 }
 
+function designRule(name: string): string {
+  const marker = `**${name}.**`
+  const start = designDocument.indexOf(marker)
+  if (start === -1 || (start > 0 && designDocument[start - 1] !== '\n')) return ''
+
+  const end = designDocument.indexOf('\n\n', start)
+  return designDocument.slice(start, end === -1 ? designDocument.length : end)
+}
+
 function sidecarRule(name: string): string {
   return designSidecar.narrative.rules.find((rule) => rule.name === name)?.body ?? ''
 }
 
-test('the initial root owns the canonical browser palette and active-tab ink', () => {
+test('the initial root owns the canonical browser palette', () => {
   for (const [token, value] of Object.entries(canonicalTokens)) {
     expect(declaration(token), token).toBe(value)
   }
-  expect(declaration('--nav-fill')).toBe('var(--tt-blue)')
-  expect(declaration('--nav-ink')).toBe('var(--ground)')
+  expect(declaration('--nav-fill')).toBeUndefined()
+  expect(declaration('--nav-ink')).toBeUndefined()
 })
 
 const ground = canonicalTokens['--tt-black']
@@ -89,7 +97,6 @@ const textOnGround = [
   ['current and live cyan on ground', canonicalTokens['--tt-cyan'], ground],
   ['done and running green on ground', canonicalTokens['--tt-green'], ground],
   ['blocked and failed red on ground', canonicalTokens['--tt-red'], ground],
-  ['nav blue on ground', canonicalTokens['--tt-blue'], ground],
   ['slack on ground', canonicalTokens['--tt-dim'], ground],
 ] as const
 
@@ -99,7 +106,6 @@ const groundOnFill = [
   ['ground on active cyan Fastext fill', ground, canonicalTokens['--tt-cyan']],
   ['ground on active green Fastext fill', ground, canonicalTokens['--tt-green']],
   ['ground on active red Fastext fill', ground, canonicalTokens['--tt-red']],
-  ['resolved nav-ink on nav-fill', ground, canonicalTokens['--tt-blue']],
 ] as const
 
 for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill]) {
@@ -170,7 +176,10 @@ test('Fastext keeps slot hue through rest, interaction, empty, and disabled stat
   expect(stylesheet).not.toContain('--ft-dim-ink')
   expect(dashboardFrame).toContain('data-empty')
 
-  for (const source of [designDocument, sidecarRule('The Fastext Identity Rule')]) {
+  for (const source of [
+    designRule('The Fastext Identity Rule'),
+    sidecarRule('The Fastext Identity Rule'),
+  ]) {
     expect(source).toContain('colored foreground and outline at 0.9 opacity')
     expect(source).toContain('unchanged transparent resting surface')
   }
@@ -193,13 +202,14 @@ test('held queued builds keep their canonical yellow warning while rows dim', ()
   expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
 
   const documentedException = 'STATUS words, the yellow `(held)` annotation, and red alert lines'
-  expect(designDocument).toContain(documentedException)
+  expect(designRule('The Alert Never Dims Rule')).toContain(documentedException)
   expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
 })
 
 test('flat-grid documentation forbids translucent surfaces without forbidding disabled emphasis', () => {
-  const flatGridRule = sidecarRule('The Flat Grid Rule')
-  for (const source of [designDocument, flatGridRule]) {
+  const flatGridRule = designRule('The Flat Grid Rule')
+  const flatGridSidecarRule = sidecarRule('The Flat Grid Rule')
+  for (const source of [flatGridRule, flatGridSidecarRule]) {
     expect(source).toContain('no surface, fill, panel, or overlay is translucent')
     expect(source).toContain('colored foreground and outline at 0.9 opacity')
     expect(source).toContain('unchanged transparent resting surface')
@@ -238,7 +248,6 @@ test('design sidecar previews use valid canonical fallback colors', () => {
     '#55b8b8',
     '#65b868',
     '#d96868',
-    '#707dcc',
     '#888888',
     '#292929',
     '#141414',

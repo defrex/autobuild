@@ -45,11 +45,11 @@ function models(): WebFixtureModels {
     builds: [
       build({
         slug: 'cache-warm-on-deploy',
-        ticketId: 'AUT-1',
+        ticketId: 'AUT-131',
         steps: HAPPY_STEPS,
         pr: { url: 'https://forge.example/pr/1', state: 'merged' },
       }),
-      build({ slug: 'dashboard-key-legend', ticketId: 'AUT-2', steps: HAPPY_STEPS }),
+      build({ slug: 'dashboard-key-legend', ticketId: 'AUT-129', steps: HAPPY_STEPS }),
     ],
     harvest: {
       kind: 'harvest',
@@ -141,9 +141,7 @@ test('selected Harvest frames keep fixed Fastext slots, empty outlines, and acti
 test('singleton capture frames omit the repository selector', () => {
   const fixtures = models()
   const singletonFrames = WEB_FRAME_SPECS.filter(
-    (spec) =>
-      (spec.id.startsWith('builds-') || spec.id.startsWith('tickets-')) &&
-      spec.id !== 'builds-multirepo-wide',
+    (spec) => spec.id.startsWith('builds-') && spec.id !== 'builds-multirepo-wide',
   )
 
   for (const spec of singletonFrames) {
@@ -166,47 +164,22 @@ test('multi-repository capture frame exposes the selector and both options', () 
   expect(html).toContain('<option selected="">example/repository</option>')
   expect(html).toContain('<option>example/alternate</option>')
 })
-test('ticket frames render one semantic body inline and a calm empty queue', () => {
+test('signed-in frames are tabless and Builds ticket ids remain plain text', () => {
   const fixtures = models()
-  for (const id of ['tickets-backlog-open-wide', 'tickets-backlog-open-narrow']) {
-    const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
-    if (!spec) throw new Error(`${id} frame spec is missing`)
+  for (const spec of WEB_FRAME_SPECS.filter((frame) => frame.id.startsWith('builds-'))) {
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    expect(html).toContain('<h1>Capture fixture</h1>')
-    expect(html).toContain('<ul>')
-    expect(html).toContain('<hr/>')
-    expect(html).not.toContain('<textarea')
-    expect(html).not.toContain('Preview')
-    expect(html).toContain('<span class="lane" aria-hidden="true"></span>')
-    expect(html).not.toContain('<span class="lane" aria-hidden="true">&gt;</span>')
-    const selected = html.match(/<li data-selected="true">[\s\S]*?<\/li>/)?.[0]
-    expect(selected).toContain('class="trow"')
-    expect(selected).toContain('class="detail tdetail"')
-    expect(selected!.indexOf('class="detail tdetail"')).toBeGreaterThan(
-      selected!.indexOf('class="trow"'),
-    )
+    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(nav, spec.id).toBeDefined()
+    expect(nav, spec.id).not.toContain('BUILDS')
+    expect(nav, spec.id).not.toContain('TICKETS')
+    expect(nav, spec.id).not.toContain('class="tab"')
   }
 
-  const emptySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'tickets-backlog-empty')
-  if (!emptySpec) throw new Error('ticket empty frame spec is missing')
-  const empty = renderWebFrame(emptySpec, fixtures, { css: '', fontCss: '' })
-  expect(evidenceText(empty)).toContain('Nothing is waiting in Backlog.')
-  expect(empty).not.toContain('loading-state')
-})
-
-test('ticket narrow keeps two complete Fastext identity rows', () => {
-  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'tickets-backlog-open-narrow')
-  if (!spec) throw new Error('tickets narrow frame spec is missing')
-  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
-  const footer = html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0]
-
-  expect(footer).toContain('data-slot="red"><kbd>Esc</kbd><span>CLOSE</span>')
-  expect(footer).toContain('data-slot="green"><kbd>p</kbd><span>TO TODO</span>')
-  expect(footer).toContain('data-slot="yellow"><kbd>n</kbd><span>NEW TICKET</span>')
-  expect(footer).toContain('data-slot="cyan"><kbd>b</kbd><span>OPEN BUILD</span>')
-  expect(() =>
-    checkEvidence(spec, html.replace('data-slot="cyan"', 'data-missing="cyan"')),
-  ).toThrow(/expected red, green, yellow, cyan Fastext slots/)
+  const happy = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')
+  if (!happy) throw new Error('happy frame spec is missing')
+  const html = renderWebFrame(happy, fixtures, { css: '', fontCss: '' })
+  expect(html).toContain('<span class="ticket">AUT-131</span>')
+  expect(html).not.toMatch(/<a[^>]*>AUT-131<\/a>/)
 })
 
 test('loading frames preserve shell landmarks and expose only one hidden announcement', () => {
