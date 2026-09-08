@@ -43,6 +43,22 @@ export function canPreviewPointer(pointerType: string, fineHover: boolean): bool
   return pointerType === 'mouse' && fineHover
 }
 
+interface RowControlKeyEvent {
+  key: string
+  preventDefault: () => void
+  stopPropagation: () => void
+}
+
+/** Keep button activation from also reaching dashboard shortcuts; Esc cancels local abort. */
+export function handleRowControlKey(event: RowControlKeyEvent, cancelAbort?: () => void): void {
+  if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+  if (cancelAbort && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelAbort()
+  }
+}
+
 export interface BuildsViewProps {
   repo: string
   model?: DashboardModel
@@ -51,7 +67,7 @@ export interface BuildsViewProps {
   selection?: Selection
   hoverPreview?: Selection
   detailOpen: boolean
-  confirmingAbort: boolean
+  confirmingAbort?: string
   answerStep?: { slug: string; escalationIds: string[]; input: string }
   answerPending: boolean
   transcript?: TranscriptPresentation
@@ -60,8 +76,11 @@ export interface BuildsViewProps {
   onDeselect: () => void
   onToggleDetail: () => void
   onBuildControl: (slug: string, action: BuildControlAction) => void
+  onRowBuildControl: (slug: string, action: BuildControlAction) => void
   onRequestAbort: () => void
+  onRowRequestAbort: (slug: string) => void
   onCancelAbort: () => void
+  onRowToggleDetail: (slug: string) => void
   onAnswerStepInput: (input: string) => void
   onSubmitAnswerStep: () => void
   onCancelAnswerStep: () => void
@@ -70,6 +89,7 @@ export interface BuildsViewProps {
   onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
   onBulk: (action: 'pause' | 'resume') => void
   onHarvest: (body: HarvestControl) => void
+  onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
 
 type Tone = 'alert' | 'warn' | 'live' | 'ok'
@@ -172,7 +192,7 @@ export function fastextCells(
     ]
   }
 
-  if (build && props.confirmingAbort) {
+  if (build && props.confirmingAbort === build.slug) {
     return [
       {
         key: '↵',
@@ -276,6 +296,34 @@ export function fastextCells(
   ]
 }
 
+export interface BuildRowAction {
+  label: string
+  action: BuildControlAction | 'request-abort' | 'toggle-detail'
+}
+
+/** Actions shown in a build's reserved row register, in Fastext order. */
+export function buildRowActions(row: DashboardBuild, detailOpen: boolean): BuildRowAction[] {
+  const available = buildActionAvailability(row)
+  const actions: BuildRowAction[] = []
+  if (available.abort) actions.push({ label: 'ABORT', action: 'request-abort' })
+  if (available.primary) {
+    actions.push({
+      label: available.primary.replace('-', ' ').toUpperCase(),
+      action: available.primary,
+    })
+  } else if (available.discard) {
+    actions.push({ label: 'DISCARD', action: 'discard' })
+  }
+  if (available.autoMerge) {
+    actions.push({
+      label: 'AUTO MERGE',
+      action: row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
+    })
+  }
+  actions.push({ label: detailOpen ? 'CLOSE' : 'DETAILS', action: 'toggle-detail' })
+  return actions
+}
+
 export function BuildsView(props: BuildsViewProps) {
   const { model, repo, now, selection, hoverPreview, detailOpen, confirmingAbort } = props
   const preview = (next: Selection) => (event: PointerEvent) => {
@@ -350,8 +398,10 @@ export function BuildsView(props: BuildsViewProps) {
             selected={selection?.kind === 'harvest'}
             hovered={hoverPreview?.kind === 'harvest'}
             dimmed={focused && selection?.kind !== 'harvest'}
+            pending={props.pending}
             onPointerEnter={preview({ kind: 'harvest' })}
             onActivate={props.onActivate}
+            onRowHarvest={props.onRowHarvest}
           />
         )}
         {model.builds.map((row) => (
@@ -365,13 +415,16 @@ export function BuildsView(props: BuildsViewProps) {
             hovered={hoverPreview?.kind === 'build' && hoverPreview.slug === row.slug}
             dimmed={focused && !(selection?.kind === 'build' && selection.slug === row.slug)}
             detailOpen={detailOpen}
-            confirmingAbort={confirmingAbort}
+            confirmingAbort={confirmingAbort === row.slug}
             answerStep={props.answerStep}
             answerPending={props.answerPending}
             transcript={props.transcript}
             onPointerEnter={preview({ kind: 'build', slug: row.slug })}
             onActivate={props.onActivate}
-            onToggleDetail={props.onToggleDetail}
+            onRowBuildControl={props.onRowBuildControl}
+            onRowRequestAbort={props.onRowRequestAbort}
+            onRowToggleDetail={props.onRowToggleDetail}
+            onCancelAbort={props.onCancelAbort}
             onAnswerStepInput={props.onAnswerStepInput}
             onSubmitAnswerStep={props.onSubmitAnswerStep}
             onCancelAnswerStep={props.onCancelAnswerStep}
@@ -462,8 +515,10 @@ function HarvestRow({
   selected,
   hovered,
   dimmed,
+  pending,
   onPointerEnter,
   onActivate,
+  onRowHarvest,
 }: {
   harvest: DashboardHarvest
   now: number
@@ -471,8 +526,10 @@ function HarvestRow({
   selected: boolean
   hovered: boolean
   dimmed: boolean
+  pending?: string
   onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
+  onRowHarvest: BuildsViewProps['onRowHarvest']
 }) {
   return (
     <li
@@ -511,6 +568,24 @@ function HarvestRow({
           <Flash value={harvest.status}>{harvest.status.toUpperCase()}</Flash>
         </span>
       </div>
+      <div
+        className="row-controls"
+        role="toolbar"
+        aria-label={`Controls for Harvest run ${harvest.run}`}
+        onKeyDown={(event) => handleRowControlKey(event)}
+      >
+        {harvest.action && (
+          <button
+            type="button"
+            className="word row-control"
+            disabled={pending !== undefined}
+            aria-label={`${harvest.action.toUpperCase()} Harvest run ${harvest.run}`}
+            onClick={() => onRowHarvest({ action: 'run', run: harvest.run })}
+          >
+            {harvest.action.toUpperCase()}
+          </button>
+        )}
+      </div>
       <StepLine steps={harvest.steps} now={now} label="Harvest pipeline" />
       {harvest.detail !== undefined && (
         <MessagePreview
@@ -538,7 +613,10 @@ function BuildRow({
   transcript,
   onPointerEnter,
   onActivate,
-  onToggleDetail,
+  onRowBuildControl,
+  onRowRequestAbort,
+  onRowToggleDetail,
+  onCancelAbort,
   onAnswerStepInput,
   onSubmitAnswerStep,
   onCancelAnswerStep,
@@ -559,7 +637,10 @@ function BuildRow({
   transcript?: TranscriptPresentation
   onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
-  onToggleDetail: BuildsViewProps['onToggleDetail']
+  onRowBuildControl: BuildsViewProps['onRowBuildControl']
+  onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
+  onRowToggleDetail: BuildsViewProps['onRowToggleDetail']
+  onCancelAbort: BuildsViewProps['onCancelAbort']
   onAnswerStepInput: BuildsViewProps['onAnswerStepInput']
   onSubmitAnswerStep: BuildsViewProps['onSubmitAnswerStep']
   onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
@@ -569,6 +650,7 @@ function BuildRow({
   const tone = statusTone(row.status)
   const ceiling = reviewCeilingText(row)
   const detailId = `detail-${encodeURIComponent(row.slug)}`
+  const abortConfirmationId = `abort-confirmation-${encodeURIComponent(row.slug)}`
   const open = selected && detailOpen
   const held = model.repositoryPaused && row.status === 'queued'
   const hasTokens = row.autoMerge !== 'off' || row.pr !== undefined || held || row.alsoPaused
@@ -621,6 +703,55 @@ function BuildRow({
           <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
         </span>
       </div>
+      <div
+        className="row-controls"
+        role="toolbar"
+        aria-label={`Controls for ${row.slug}`}
+        aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
+        onKeyDown={(event) =>
+          handleRowControlKey(event, confirmingAbort ? onCancelAbort : undefined)
+        }
+      >
+        {confirmingAbort ? (
+          <>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined}
+              aria-label={`CONFIRM ABORT ${row.slug}`}
+              onClick={() => onRowBuildControl(row.slug, 'abort')}
+            >
+              CONFIRM ABORT
+            </button>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined}
+              aria-label={`CANCEL abort ${row.slug}`}
+              onClick={onCancelAbort}
+            >
+              CANCEL
+            </button>
+          </>
+        ) : (
+          buildRowActions(row, open).map((control) => (
+            <button
+              type="button"
+              className="word row-control"
+              key={control.action}
+              disabled={pending !== undefined && control.action !== 'toggle-detail'}
+              aria-label={`${control.label} ${row.slug}`}
+              onClick={() => {
+                if (control.action === 'request-abort') onRowRequestAbort(row.slug)
+                else if (control.action === 'toggle-detail') onRowToggleDetail(row.slug)
+                else onRowBuildControl(row.slug, control.action)
+              }}
+            >
+              {control.label}
+            </button>
+          ))
+        )}
+      </div>
       {ceiling && <p className="sub">{ceiling}</p>}
       {row.abortProgress !== undefined ? (
         <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
@@ -636,7 +767,7 @@ function BuildRow({
         <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
       ))}
       {selected && confirmingAbort && (
-        <p className="message alert" role="status">
+        <p className="message alert" id={abortConfirmationId} role="status">
           <span aria-hidden>! </span>abort {row.slug}? Enter confirms, Esc cancels
         </p>
       )}
@@ -659,7 +790,7 @@ function BuildRow({
           transcript={transcript}
           onAnswer={onAnswer}
           onTranscript={onTranscript}
-          onClose={onToggleDetail}
+          onClose={() => onRowToggleDetail(row.slug)}
         />
       )}
     </li>

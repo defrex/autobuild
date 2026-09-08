@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#266](https://github.com/defrex/autobuild/pull/266) — Add target-aware controls to dashboard rows
 - [#265](https://github.com/defrex/autobuild/pull/265) — Route blocked web RESUME into the answer step
 - [#264](https://github.com/defrex/autobuild/pull/264) — Scope design consistency checks to named rules
 - [#263](https://github.com/defrex/autobuild/pull/263) — Remove ticket management from the web dashboard
