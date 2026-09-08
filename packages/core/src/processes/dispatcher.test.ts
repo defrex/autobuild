@@ -16,7 +16,7 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type { Ticket } from '../ports/types'
+import type { Ticket, WorkspaceProvider } from '../ports/types'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -107,6 +107,7 @@ function harness(
     /** A store to dispatch over instead of a fresh in-memory one — the seam
      * the restart tests use to hand a second Dispatcher a reopened store. */
     store?: BuildStore
+    workspaceProvider?: WorkspaceProvider
   } = {},
 ) {
   const clock = manualClock()
@@ -138,7 +139,7 @@ function harness(
   const dispatcher = new Dispatcher({
     store,
     tickets,
-    workspaces,
+    workspaces: opts.workspaceProvider ?? workspaces,
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
@@ -3983,6 +3984,60 @@ describe('Dispatcher startup resume', () => {
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
 describe('Dispatcher lease sweep', () => {
+  test('remote recovery fences the stale identity before provisioning from the durable checkpoint', async () => {
+    const operations: string[] = []
+    let recoveredRevision: string | undefined
+    let recoveredGeneration: number | undefined
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          operations.push(`reap:${handle.ref}`)
+          return 'confirmed'
+        },
+      },
+      async provision(opts) {
+        operations.push('provision')
+        recoveredRevision = opts.revision
+        recoveredGeneration = opts.generation
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision! },
+        }
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'old-instance',
+        environmentId: 'sandbox-g0',
+        sessionId: 'old-session',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'old-instance', 100)).toBe(true)
+    h.clock.advance(101)
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
+    expect(recoveredRevision).toBe('fake-base-sha')
+    expect(recoveredGeneration).toBe(1)
+    expect(h.launches).toEqual([slug])
+    const events = await h.store.getEvents(slug)
+    expect(events.filter((event) => event.type === 'workspace.released')).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'workspace.provisioned').at(-1)?.payload.ref,
+    ).toBe('sandbox-g1')
+  })
+
   test('expired lease + running: relaunch', async () => {
     const h = harness()
     const slug = await seedBuild(h)
