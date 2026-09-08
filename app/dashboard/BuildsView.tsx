@@ -6,7 +6,6 @@ import {
   type DashboardBuild,
   type DashboardHarvest,
   type DashboardModel,
-  repositoryActionAvailability,
   type TranscriptPresentation,
 } from 'autobuild/operator-presentation'
 import {
@@ -20,8 +19,6 @@ import {
 import {
   columnWidths,
   DashboardSurface,
-  Fastext,
-  type FastextCell,
   Flash,
   LoadingRows,
   MessagePreview,
@@ -73,11 +70,7 @@ export interface BuildsViewProps {
   transcript?: TranscriptPresentation
   onActivate: (selection: Selection) => void
   onHoverPreview: (selection: Selection | undefined) => void
-  onDeselect: () => void
-  onToggleDetail: () => void
-  onBuildControl: (slug: string, action: BuildControlAction) => void
   onRowBuildControl: (slug: string, action: BuildControlAction) => void
-  onRequestAbort: () => void
   onRowRequestAbort: (slug: string) => void
   onCancelAbort: () => void
   onRowToggleDetail: (slug: string) => void
@@ -87,7 +80,6 @@ export interface BuildsViewProps {
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
   onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
   onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
-  onBulk: (action: 'pause' | 'resume') => void
   onHarvest: (body: HarvestControl) => void
   onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
@@ -132,176 +124,12 @@ interface CellVars extends CSSProperties {
   '--status-w'?: string
 }
 
-const EMPTY_CELLS: readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?] = [
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-]
-
-/**
- * The key legend as four Fastext cells. Slot colors are fixed; the labels
- * follow the selection context exactly as the terminal legend does.
- */
-export function fastextCells(
-  props: Pick<
-    BuildsViewProps,
-    | 'model'
-    | 'pending'
-    | 'selection'
-    | 'detailOpen'
-    | 'confirmingAbort'
-    | 'answerStep'
-    | 'answerPending'
-    | 'onDeselect'
-    | 'onToggleDetail'
-    | 'onBuildControl'
-    | 'onRequestAbort'
-    | 'onCancelAbort'
-    | 'onSubmitAnswerStep'
-    | 'onCancelAnswerStep'
-    | 'onSetting'
-    | 'onBulk'
-    | 'onHarvest'
-  >,
-): readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?] {
-  const { model, selection } = props
-  if (!model) return EMPTY_CELLS
-  const busy = props.pending !== undefined
-  const build =
-    selection?.kind === 'build'
-      ? model.builds.find((row) => row.slug === selection.slug)
-      : undefined
-
-  if (build && props.answerStep?.slug === build.slug) {
-    return [
-      {
-        key: '↵',
-        label: 'SUBMIT',
-        disabled: busy || props.answerPending,
-        onPress: props.onSubmitAnswerStep,
-      },
-      undefined,
-      undefined,
-      {
-        key: 'Esc',
-        label: 'CANCEL',
-        disabled: busy || props.answerPending,
-        onPress: props.onCancelAnswerStep,
-      },
-    ]
-  }
-
-  if (build && props.confirmingAbort === build.slug) {
-    return [
-      {
-        key: '↵',
-        label: 'CONFIRM ABORT',
-        disabled: busy,
-        onPress: () => props.onBuildControl(build.slug, 'abort'),
-      },
-      undefined,
-      undefined,
-      { key: 'Esc', label: 'CANCEL', onPress: props.onCancelAbort },
-    ]
-  }
-
-  if (build) {
-    const available = buildActionAvailability(build)
-    const primary: FastextCell | undefined = available.primary
-      ? {
-          key: available.primary === 'resume' ? 'r' : 'p',
-          label: available.primary.replace('-', ' ').toUpperCase(),
-          disabled: busy,
-          onPress: () => props.onBuildControl(build.slug, available.primary!),
-        }
-      : available.discard
-        ? {
-            key: 'd',
-            label: 'DISCARD',
-            disabled: busy,
-            onPress: () => props.onBuildControl(build.slug, 'discard'),
-          }
-        : undefined
-    return [
-      {
-        key: 'a',
-        label: 'ABORT',
-        disabled: busy || !available.abort,
-        onPress: props.onRequestAbort,
-      },
-      primary,
-      {
-        key: 'm',
-        label: 'AUTO MERGE',
-        disabled: busy || !available.autoMerge,
-        onPress: () =>
-          props.onBuildControl(
-            build.slug,
-            build.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-          ),
-      },
-      { key: '↵', label: props.detailOpen ? 'CLOSE' : 'DETAILS', onPress: props.onToggleDetail },
-    ]
-  }
-
-  if (selection?.kind === 'harvest' && model.harvest) {
-    const harvest = model.harvest
-    return [
-      undefined,
-      harvest.action
-        ? {
-            key: 'p',
-            label: harvest.action.toUpperCase(),
-            disabled: busy,
-            onPress: () => props.onHarvest({ action: 'run', run: harvest.run }),
-          }
-        : undefined,
-      {
-        key: 'h',
-        label: 'HARVEST',
-        disabled: busy,
-        onPress: () => props.onHarvest({ action: 'toggle-gate' }),
-      },
-      { key: 'Esc', label: 'DESELECT', onPress: props.onDeselect },
-    ]
-  }
-
-  const repository = repositoryActionAvailability(model)
-  return [
-    {
-      key: 'p',
-      label: 'PAUSE ALL',
-      disabled: busy || !repository.bulkPause,
-      onPress: () => props.onBulk('pause'),
-    },
-    {
-      key: 'r',
-      label: 'RESUME ALL',
-      disabled: busy || !repository.bulkResume,
-      onPress: () => props.onBulk('resume'),
-    },
-    {
-      key: 'm',
-      label: 'AUTO MERGE',
-      disabled: busy,
-      onPress: () => props.onSetting('auto-merge-default', !model.defaultAutoMerge),
-    },
-    {
-      key: 'i',
-      label: 'INTAKE',
-      disabled: busy,
-      onPress: () => props.onSetting('intake', model.drained),
-    },
-  ]
-}
-
 export interface BuildRowAction {
   label: string
   action: BuildControlAction | 'request-abort' | 'toggle-detail'
 }
 
-/** Actions shown in a build's reserved row register, in Fastext order. */
+/** Actions shown in a build's reserved row register. */
 export function buildRowActions(row: DashboardBuild, detailOpen: boolean): BuildRowAction[] {
   const available = buildActionAvailability(row)
   const actions: BuildRowAction[] = []
@@ -338,7 +166,7 @@ export function BuildsView(props: BuildsViewProps) {
   }
   if (!model) {
     return (
-      <DashboardSurface footer={<Fastext label="Controls" cells={EMPTY_CELLS} />}>
+      <DashboardSurface>
         <LoadingRows label={`Loading builds for ${repo || 'the selected repository'}.`} />
       </DashboardSurface>
     )
@@ -361,7 +189,7 @@ export function BuildsView(props: BuildsViewProps) {
     selection !== undefined &&
     (selection.kind === 'harvest' ? model.harvest !== undefined : selectedBuild !== undefined)
   return (
-    <DashboardSurface footer={<Fastext label="Controls" cells={fastextCells(props)} />}>
+    <DashboardSurface>
       <DispatcherLine
         model={model}
         pending={props.pending}
@@ -652,6 +480,7 @@ function BuildRow({
   const detailId = `detail-${encodeURIComponent(row.slug)}`
   const abortConfirmationId = `abort-confirmation-${encodeURIComponent(row.slug)}`
   const open = selected && detailOpen
+  const answering = selected && answerStep?.slug === row.slug
   const held = model.repositoryPaused && row.status === 'queued'
   const hasTokens = row.autoMerge !== 'off' || row.pr !== undefined || held || row.alsoPaused
   return (
@@ -709,10 +538,34 @@ function BuildRow({
         aria-label={`Controls for ${row.slug}`}
         aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
         onKeyDown={(event) =>
-          handleRowControlKey(event, confirmingAbort ? onCancelAbort : undefined)
+          handleRowControlKey(
+            event,
+            answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
+          )
         }
       >
-        {confirmingAbort ? (
+        {answering ? (
+          <>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`SUBMIT answer for ${row.slug}`}
+              onClick={onSubmitAnswerStep}
+            >
+              SUBMIT
+            </button>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`CANCEL answer for ${row.slug}`}
+              onClick={onCancelAnswerStep}
+            >
+              CANCEL
+            </button>
+          </>
+        ) : confirmingAbort ? (
           <>
             <button
               type="button"
@@ -826,6 +679,7 @@ function BlockedAnswerStep({
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
+          event.stopPropagation()
           if (!pending) onCancel()
         }
       }}

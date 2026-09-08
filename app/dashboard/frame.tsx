@@ -157,13 +157,8 @@ export function Rule() {
   return <div className="rule" aria-hidden />
 }
 
-export function DashboardSurface({ children, footer }: { children: ReactNode; footer: ReactNode }) {
-  return (
-    <section className="dashboard-surface">
-      <div className="surface-scroll">{children}</div>
-      {footer}
-    </section>
-  )
+export function DashboardSurface({ children }: { children: ReactNode }) {
+  return <section className="dashboard-surface">{children}</section>
 }
 
 const LOADING_ROWS = ['first', 'second', 'third', 'fourth', 'fifth'] as const
@@ -189,50 +184,6 @@ export function LoadingRows({ label }: { label: string }) {
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-export interface FastextCell {
-  /** The terminal key this cell mirrors. Hidden on coarse pointers. */
-  key?: string
-  label: string
-  onPress?: () => void
-  disabled?: boolean
-}
-
-const SLOTS = ['red', 'green', 'yellow', 'cyan'] as const
-
-/**
- * The key legend as a Fastext row: four cells in fixed colors. The color is
- * the slot's identity, never a state; the label carries the action.
- */
-export function Fastext({
-  cells,
-  label,
-}: {
-  cells: readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?]
-  label: string
-}) {
-  return (
-    <div className="fastext" role="toolbar" aria-label={label}>
-      {SLOTS.map((slot, index) => {
-        const cell = cells[index]
-        if (!cell) return <span key={slot} className="ft" data-slot={slot} data-empty aria-hidden />
-        return (
-          <button
-            key={slot}
-            type="button"
-            className="ft"
-            data-slot={slot}
-            disabled={cell.disabled || cell.onPress === undefined}
-            onClick={cell.onPress}
-          >
-            {cell.key && <kbd>{cell.key}</kbd>}
-            <span>{cell.label}</span>
-          </button>
-        )
-      })}
     </div>
   )
 }
