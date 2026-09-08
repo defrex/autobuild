@@ -376,6 +376,38 @@ function continueMessage(spec: SessionSpec): string {
 
 // ── The runner ───────────────────────────────────────────────────────────────
 
+export function publicationPending(events: readonly AbEvent[]): boolean {
+  return events.some(
+    (request) =>
+      request.type === 'publication.requested' &&
+      !events.some((event) => {
+        if (event.seq <= request.seq) return false
+        if (request.payload.operation === 'implement')
+          return (
+            event.type === 'implement.completed' &&
+            event.payload.round === request.payload.round &&
+            event.payload.commits.base === request.payload.base &&
+            event.payload.commits.head === request.payload.sha
+          )
+        if (request.payload.operation === 'reconcile')
+          return (
+            event.type === 'reconcile.completed' &&
+            event.payload.mergeCommit === request.payload.sha
+          )
+        if (request.payload.operation === 'finalize')
+          return (
+            event.type === 'finalize.completed' && event.payload.pr.headSha === request.payload.sha
+          )
+        return (
+          event.type === 'finalize.step-completed' &&
+          event.payload.ok &&
+          event.payload.step === request.payload.step &&
+          event.payload.headSha === request.payload.sha
+        )
+      }),
+  )
+}
+
 export class BuildRunner {
   private readonly maxPhaseAttempts: number
   private readonly heartbeatMs: number
@@ -658,32 +690,6 @@ export class BuildRunner {
    * closes any live producer sessions (their per-round transcripts are
    * already deposited — see module doc).
    */
-  private publicationPending(events: readonly AbEvent[]): boolean {
-    let implementCompletion = 0
-    let reconcileCompletion = 0
-    let finalizeCompletion = 0
-    const finalizeSteps = new Map<string, number>()
-    for (const event of events) {
-      if (event.type === 'implement.completed') implementCompletion = event.seq
-      else if (event.type === 'reconcile.completed') reconcileCompletion = event.seq
-      else if (event.type === 'finalize.completed') finalizeCompletion = event.seq
-      else if (event.type === 'finalize.step-completed')
-        finalizeSteps.set(event.payload.step, event.seq)
-    }
-    return events.some(
-      (event) =>
-        event.type === 'publication.requested' &&
-        event.seq >
-          (event.payload.operation === 'implement'
-            ? implementCompletion
-            : event.payload.operation === 'reconcile'
-              ? reconcileCompletion
-              : event.payload.operation === 'finalize'
-                ? finalizeCompletion
-                : (finalizeSteps.get(event.payload.step) ?? 0)),
-    )
-  }
-
   async run(): Promise<BuildState> {
     if (!this.attached) {
       const attachment = await this.attach()
@@ -692,14 +698,14 @@ export class BuildRunner {
       }
     }
     try {
-      if (this.publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
+      if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
         return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
       }
       for (;;) {
         await this.ensureLease()
         const decision = await this.step()
         if (decision.kind === 'wait') break
-        if (this.publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
+        if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
       }
       return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
     } finally {

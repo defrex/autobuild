@@ -75,6 +75,18 @@ function sdkCredentials(env: Record<string, string | undefined>): Record<string,
   return { token, teamId, projectId }
 }
 
+export function isMissingVercelSandbox(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false
+  const candidate = error as {
+    response?: { status?: number }
+    json?: { error?: { code?: string } }
+  }
+  return (
+    candidate.response?.status === 404 ||
+    (candidate.response?.status === 410 && candidate.json?.error?.code === 'snapshot_not_found')
+  )
+}
+
 export function createVercelSdkFacade(
   env: Record<string, string | undefined>,
 ): VercelSandboxFacade {
@@ -84,13 +96,15 @@ export function createVercelSdkFacade(
       try {
         return await Sandbox.get({ name, ...credentials })
       } catch (error) {
-        const code = (error as { code?: string }).code
-        if (code === 'not_found' || code === 'snapshot_not_found') return null
+        if (isMissingVercelSandbox(error)) return null
         throw error
       }
     },
     async create(input) {
-      return await Sandbox.create({
+      // get() returning null includes stale snapshots. getOrCreate performs the
+      // SDK's required stale-name deletion before recreating and also closes a
+      // concurrent provision race safely.
+      return await Sandbox.getOrCreate({
         ...input,
         region: input.region as SandboxRegion | undefined,
         failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
@@ -459,7 +473,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (!/^[0-9a-f]{40,64}$/i.test(input.sha) || !/^ab\/[a-z0-9][a-z0-9-]*$/.test(input.branch)) {
       throw new Error('publication requires an exact commit SHA and canonical build branch')
     }
-    const token = requireValue(this.options.env, 'GITHUB_TOKEN')
+    const token = this.options.env.GITHUB_TOKEN || this.options.env.GH_TOKEN
+    if (!token) {
+      throw new Error('vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN')
+    }
     const origin =
       this.origins.get(input.ref) ??
       cleanGithubOrigin(
@@ -480,11 +497,20 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         [origin.host]: [
           {
             match: {
-              method: ['GET', 'POST'],
-              path: {
-                regex: `^${origin.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:info/refs|git-receive-pack)$`,
-              },
+              method: ['GET'],
+              path: { exact: `${origin.path}/info/refs` },
+              queryString: [{ key: { exact: 'service' }, value: { exact: 'git-receive-pack' } }],
             },
+            transform: [
+              {
+                headers: {
+                  authorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+                },
+              },
+            ],
+          },
+          {
+            match: { method: ['POST'], path: { exact: `${origin.path}/git-receive-pack` } },
             transform: [
               {
                 headers: {
@@ -515,8 +541,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       if (published !== input.sha)
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
     } finally {
-      await sandbox.update({ networkPolicy: normal })
-      await sandbox.stop()
+      try {
+        await sandbox.update({ networkPolicy: normal })
+      } finally {
+        await sandbox.stop()
+      }
     }
   }
 }

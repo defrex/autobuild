@@ -384,7 +384,10 @@ before claims and list every available builtin and plugin provider.
 Remote execution is explicit and requires the hosted HTTPS BuildStore plus its
 scoped token, an HTTPS `github.com/owner/repository` origin, `forge = "github"`,
 and Vercel authentication. Use either `VERCEL_OIDC_TOKEN`, or all of
-`VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`.
+`VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`. The dispatcher also
+requires a push-capable `GITHUB_TOKEN` or `GH_TOKEN`; this is validated before
+ready tickets are listed or claimed. Keyring-only `gh auth login` is not enough
+because publication injects the credential through Vercel's network transform.
 
 <!-- config-fragment:workspace-vercel -->
 ```toml

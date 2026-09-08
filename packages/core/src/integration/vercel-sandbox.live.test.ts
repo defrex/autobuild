@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { abDispatch } from '../cli/dispatch'
 import { openProductionStore } from '../cli/store-opening'
+import type { AbEvent } from '../events/catalog'
+import { humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
+import { createVercelSdkFacade } from '../ports/workspace/vercel-sandbox'
 
 const enabled = process.env.AB_RUN_VERCEL_SANDBOX_LIVE === '1'
 
@@ -34,29 +37,68 @@ describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
       )
       await beforeStore.close()
 
-      await abDispatch({
-        targetRepo: repo,
-        env: process.env,
-        exec: spawnExec,
-        stdout: () => undefined,
-        stderr: () => undefined,
-        once: true,
-        storeRef,
-        plain: true,
-      })
+      const dispatchOnce = () =>
+        abDispatch({
+          targetRepo: repo,
+          env: process.env,
+          exec: spawnExec,
+          stdout: () => undefined,
+          stderr: () => undefined,
+          once: true,
+          storeRef,
+          plain: true,
+        })
 
-      const store = openProductionStore(storeRef, token)
-      try {
-        const build = (await store.listBuilds())
-          .filter((build) => build.repo === repo)
-          .find((candidate) => !before.has(candidate.slug))
-        expect(build).toBeDefined()
-        const events = await store.getEvents(build!.slug)
-        expect(events.some((event) => event.type === 'publication.requested')).toBe(true)
-        expect(events.some((event) => event.type === 'finalize.completed')).toBe(true)
-      } finally {
-        await store.close()
+      let slug: string | undefined
+      let events: AbEvent[] = []
+      for (let pass = 0; pass < 20; pass += 1) {
+        await dispatchOnce()
+        const observed = openProductionStore(storeRef, token)
+        try {
+          slug ??= (await observed.listBuilds())
+            .filter((build) => build.repo === repo)
+            .find((candidate) => !before.has(candidate.slug))?.slug
+          if (slug !== undefined) events = await observed.getEvents(slug)
+        } finally {
+          await observed.close()
+        }
+        if (events.some((event) => event.type === 'finalize.completed')) break
       }
+
+      expect(slug).toBeDefined()
+      expect(events.some((event) => event.type === 'publication.requested')).toBe(true)
+      const finalized = events.findLast((event) => event.type === 'finalize.completed')
+      expect(finalized?.type).toBe('finalize.completed')
+      const lastPublication = events.findLast((event) => event.type === 'publication.requested')
+      expect(lastPublication?.type).toBe('publication.requested')
+      const remote = await spawnExec(
+        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/ab/${slug}`],
+        { cwd: repo },
+      )
+      expect(remote.exitCode).toBe(0)
+      expect(remote.stdout.split(/\s+/)[0]).toBe(lastPublication!.payload.sha)
+
+      const cleanupStore = openProductionStore(storeRef, token)
+      await cleanupStore.append(slug!, {
+        actor: humanActor('vercel-live-test'),
+        type: 'build.abort-requested',
+        payload: { reason: 'live test cleanup' },
+      })
+      await cleanupStore.close()
+      for (let pass = 0; pass < 10; pass += 1) {
+        await dispatchOnce()
+        const observed = openProductionStore(storeRef, token)
+        try {
+          events = await observed.getEvents(slug!)
+        } finally {
+          await observed.close()
+        }
+        if (events.some((event) => event.type === 'workspace.released')) break
+      }
+      const provisioned = events.findLast((event) => event.type === 'workspace.provisioned')
+      expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+      expect(provisioned?.type).toBe('workspace.provisioned')
+      expect(await createVercelSdkFacade(process.env).get(provisioned!.payload.ref)).toBeNull()
     },
     30 * 60_000,
   )

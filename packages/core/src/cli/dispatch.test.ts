@@ -42,7 +42,7 @@ import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
-import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
+import { GitWorktreeProvider, spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { MemoryBuildStore } from '../store/memory'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
@@ -327,6 +327,37 @@ describe('abDispatch guards', () => {
         }),
       ).rejects.toThrow('tickets.readyState')
       expect(wired).toBe(false)
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('vercel publication credentials fail before production wiring can list or claim tickets', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-vercel-auth-'))
+    const repo = join(tmp, 'repo')
+    const toml =
+      'forge = "github"\n' +
+      '[workspace]\nprovider = "vercel-sandbox"\n' +
+      '[workspace.config]\ntimeoutSeconds = 2700\n' +
+      '[roles.default]\nruntime = "claude"\n' +
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n'
+    try {
+      await initOrigin(repo, toml)
+      const exec: Exec = async (cmd, opts) =>
+        cmd.includes('get-url')
+          ? { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+          : spawnExec(cmd, opts)
+      await expect(
+        abDispatch({
+          targetRepo: repo,
+          env: { VERCEL_OIDC_TOKEN: 'oidc', AB_TOKEN: 'scoped' },
+          exec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          storeRef: 'https://store.example.test',
+        }),
+      ).rejects.toThrow(/publication requires GITHUB_TOKEN or GH_TOKEN/)
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }

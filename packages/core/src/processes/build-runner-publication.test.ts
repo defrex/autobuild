@@ -1,0 +1,82 @@
+import { describe, expect, test } from 'bun:test'
+import type { AbEvent } from '../events/catalog'
+import { publicationPending } from './build-runner'
+
+function event(seq: number, type: string, payload: unknown): AbEvent {
+  return {
+    seq,
+    ts: '2026-01-01T00:00:00.000Z',
+    actor: { kind: 'kernel' },
+    type,
+    payload,
+  } as AbEvent
+}
+
+describe('publicationPending', () => {
+  test('parks on an unsettled request and resumes after its matching completion', () => {
+    const request = event(4, 'publication.requested', {
+      operation: 'implement',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+      round: 1,
+      base: 'b'.repeat(40),
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(publicationPending([request])).toBe(true)
+    expect(
+      publicationPending([
+        request,
+        event(5, 'implement.completed', {
+          round: 1,
+          commits: { base: 'b'.repeat(40), head: 'a'.repeat(40) },
+          artifact: { kind: 'implement-notes', rev: 0 },
+        }),
+      ]),
+    ).toBe(false)
+  })
+
+  test('does not accept a later completion for the wrong SHA or implementation round', () => {
+    const request = event(4, 'publication.requested', {
+      operation: 'implement',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+      round: 2,
+      base: 'b'.repeat(40),
+      artifact: { kind: 'implement-notes', rev: 1 },
+    })
+    expect(
+      publicationPending([
+        request,
+        event(5, 'implement.completed', {
+          round: 1,
+          commits: { base: 'b'.repeat(40), head: 'c'.repeat(40) },
+          artifact: { kind: 'implement-notes', rev: 0 },
+        }),
+      ]),
+    ).toBe(true)
+  })
+
+  test('correlates finalize-step completion by step and sequence', () => {
+    const earlier = event(2, 'finalize.step-completed', { step: 'format', ok: true })
+    const request = event(3, 'publication.requested', {
+      operation: 'finalize-step',
+      step: 'format',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+    })
+    const other = event(4, 'finalize.step-completed', { step: 'docs', ok: true })
+    expect(publicationPending([earlier, request, other])).toBe(true)
+    expect(
+      publicationPending([
+        earlier,
+        request,
+        other,
+        event(5, 'finalize.step-completed', {
+          step: 'format',
+          ok: true,
+          headSha: 'a'.repeat(40),
+        }),
+      ]),
+    ).toBe(false)
+  })
+})

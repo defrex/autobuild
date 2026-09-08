@@ -49,13 +49,18 @@ export function parseEffectiveBuildConfig(artifact: Artifact): Config {
 /** Latest workspace location not followed by release. Historical events use
  * the provider ref as the path compatibility fallback. */
 export function selectOpenWorkspace(events: readonly AbEvent[]): {
+  ref: string
   path: string
   branch: string
 } | null {
-  let open: { path: string; branch: string } | null = null
+  let open: { ref: string; path: string; branch: string } | null = null
   for (const event of events) {
     if (event.type === 'workspace.provisioned') {
-      open = { path: event.payload.path ?? event.payload.ref, branch: event.payload.branch }
+      open = {
+        ref: event.payload.ref,
+        path: event.payload.path ?? event.payload.ref,
+        branch: event.payload.branch,
+      }
     } else if (event.type === 'workspace.released') {
       open = null
     }

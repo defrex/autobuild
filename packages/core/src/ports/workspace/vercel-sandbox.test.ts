@@ -4,6 +4,7 @@ import type { Exec } from './git-worktree'
 import {
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
+  isMissingVercelSandbox,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
 } from './vercel-sandbox'
@@ -17,18 +18,26 @@ class FakeSandbox implements VercelSandboxHandle {
   writes: Array<{ path: string; content: Uint8Array }> = []
   stops = 0
   deletes = 0
+  failPush = false
+  failRestore = false
+  detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
 
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
     if (params.detached === true) {
       return {
         exitCode: null,
-        wait: async () => ({ exitCode: 0 }),
+        wait: this.detachedWait,
         kill: async () => undefined,
       }
     }
     return {
-      exitCode: params.cmd === 'git' && (params.args as string[])?.includes('--unset-all') ? 5 : 0,
+      exitCode:
+        params.cmd === 'git' && (params.args as string[])?.includes('--unset-all')
+          ? 5
+          : this.failPush && (params.args as string[])?.includes('push')
+            ? 1
+            : 0,
     }
   }
   async writeFiles(files: Array<{ path: string; content: Uint8Array }>) {
@@ -42,11 +51,13 @@ class FakeSandbox implements VercelSandboxHandle {
   }
   async update(params: { networkPolicy: NetworkPolicy }) {
     this.policies.push(params.networkPolicy)
+    if (this.failRestore && this.policies.length === 2) throw new Error('restore failed')
   }
 }
 
-function harness() {
+function harness(options: { publishedSha?: string | null } = {}) {
   const sandbox = new FakeSandbox()
+  let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
   const facade: VercelSandboxFacade = {
     get: async () => null,
@@ -60,8 +71,18 @@ function harness() {
       return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
     if (cmd.includes('ls-remote')) {
       const ref = cmd.at(-1)
+      const buildBranch = ref === 'refs/heads/ab/remote-build'
+      if (buildBranch) buildBranchLookups += 1
+      const sha =
+        ref === 'refs/heads/main'
+          ? SHA
+          : buildBranch && buildBranchLookups > 1
+            ? options.publishedSha === undefined
+              ? SHA
+              : options.publishedSha
+            : null
       return {
-        stdout: ref === 'refs/heads/main' ? `${SHA}\t${ref}\n` : '',
+        stdout: sha === null ? '' : `${sha}\t${ref}\n`,
         stderr: '',
         exitCode: 0,
       }
@@ -99,6 +120,18 @@ function harness() {
 }
 
 describe('VercelSandboxProvider', () => {
+  test('classifies the real SDK not-found and stale-snapshot response shapes only', () => {
+    expect(isMissingVercelSandbox({ response: { status: 404 } })).toBe(true)
+    expect(
+      isMissingVercelSandbox({
+        response: { status: 410 },
+        json: { error: { code: 'snapshot_not_found' } },
+      }),
+    ).toBe(true)
+    expect(isMissingVercelSandbox({ response: { status: 410 } })).toBe(false)
+    expect(isMissingVercelSandbox({ code: 'not_found' })).toBe(false)
+  })
+
   test('provisions from an exact authoritative revision and returns a remote-only location', async () => {
     const h = harness()
     const result = await h.provider.provision({
@@ -145,6 +178,91 @@ describe('VercelSandboxProvider', () => {
     expect(JSON.parse(env.AB_BUILD_RUNNER_OPTIONS!).supervision).toEqual({ kind: 'environment' })
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    await h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch })
+    expect(h.sandbox.commands).toContainEqual({
+      cmd: 'git',
+      args: ['push', '--no-verify', 'origin', `${SHA}:refs/heads/ab/remote-build`],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    expect(h.sandbox.policies).toHaveLength(2)
+    const temporary = JSON.stringify(h.sandbox.policies[0])
+    expect(temporary).toContain('git-receive-pack')
+    expect(temporary).toContain(Buffer.from('x-access-token:forge-secret').toString('base64'))
+    expect(JSON.stringify(h.sandbox.policies[1])).not.toContain('forge-secret')
+  })
+
+  test('restores the normal policy when push fails and rejects mismatched remote heads', async () => {
+    const failed = harness()
+    const workspace = await failed.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    failed.sandbox.failPush = true
+    await expect(
+      failed.provider.publication.publish({
+        ref: workspace.ref,
+        sha: SHA,
+        branch: workspace.branch,
+      }),
+    ).rejects.toThrow(/git exited 1/)
+    expect(failed.sandbox.policies).toHaveLength(2)
+
+    const restore = harness()
+    const restoreWorkspace = await restore.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    restore.sandbox.failRestore = true
+    await expect(
+      restore.provider.publication.publish({
+        ref: restoreWorkspace.ref,
+        sha: SHA,
+        branch: restoreWorkspace.branch,
+      }),
+    ).rejects.toThrow(/restore failed/)
+    expect(restore.sandbox.stops).toBe(3)
+
+    const mismatch = harness({ publishedSha: 'b'.repeat(40) })
+    const other = await mismatch.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    await expect(
+      mismatch.provider.publication.publish({ ref: other.ref, sha: SHA, branch: other.branch }),
+    ).rejects.toThrow(/did not match/)
+    expect(mismatch.sandbox.policies).toHaveLength(2)
+  })
+
+  test('forbids publication while an environment execution remains live', async () => {
+    const h = harness()
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-live',
+      workspaceRef: workspace.ref,
+    })
+    await expect(
+      h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
+    ).rejects.toThrow(/execution is live/)
+    await execution.stop()
   })
 
   test('fails closed for local Stores and missing scoped authority', () => {

@@ -311,8 +311,9 @@ reachability.
 
 `provider = "vercel-sandbox"` runs the complete build in a persistent Vercel VM
 and requires an HTTPS hosted Store/scoped token, GitHub HTTPS origin, GitHub
-forge, and either `VERCEL_OIDC_TOKEN` or the `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/
-`VERCEL_PROJECT_ID` tuple:
+forge, a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`, and either
+`VERCEL_OIDC_TOKEN` or the `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/
+`VERCEL_PROJECT_ID` tuple. These credentials are validated before claims:
 
 ```toml
 [workspace]
