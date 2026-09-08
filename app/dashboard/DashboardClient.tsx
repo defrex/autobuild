@@ -28,6 +28,54 @@ interface ClientProps {
   repositories: readonly string[]
 }
 
+interface RowControlHandlerDependencies {
+  selection?: Selection
+  setSelection: (selection: Selection) => void
+  clearTranscript: () => void
+  clearAnswerStep: () => void
+  setConfirmingAbort: (slug: string | undefined) => void
+  setDetailOpen: (value: boolean | ((open: boolean) => boolean)) => void
+  control: (slug: string, action: BuildControlAction) => void
+  harvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
+}
+
+/** Target-aware row interactions, extracted so their state policy is directly testable. */
+export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
+  const selectTarget = (next: Selection) => {
+    const changed = !sameSelection(deps.selection, next)
+    deps.setSelection(next)
+    deps.clearTranscript()
+    deps.setConfirmingAbort(undefined)
+    deps.clearAnswerStep()
+    if (changed) deps.setDetailOpen(false)
+  }
+  return {
+    buildControl(slug: string, action: BuildControlAction) {
+      selectTarget({ kind: 'build', slug })
+      deps.control(slug, action)
+    },
+    requestAbort(slug: string) {
+      selectTarget({ kind: 'build', slug })
+      deps.setConfirmingAbort(slug)
+    },
+    toggleDetail(slug: string) {
+      deps.clearTranscript()
+      deps.setConfirmingAbort(undefined)
+      deps.clearAnswerStep()
+      if (deps.selection?.kind === 'build' && deps.selection.slug === slug) {
+        deps.setDetailOpen((open) => !open)
+      } else {
+        deps.setSelection({ kind: 'build', slug })
+        deps.setDetailOpen(true)
+      }
+    },
+    runHarvest(body: Extract<HarvestControl, { action: 'run' }>) {
+      selectTarget({ kind: 'harvest' })
+      deps.harvest(body)
+    },
+  }
+}
+
 export function DashboardClient({ identity, repositories }: ClientProps) {
   const [repo, setRepo] = useState(repositories[0] ?? '')
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
@@ -156,36 +204,16 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     void act(`bulk-${action}`, () => api.bulk(repo, action))
   const harvest = (body: HarvestControl) =>
     void act(`harvest-${body.action}`, () => api.harvest(repo, body))
-  const selectRowControl = (next: Selection) => {
-    setSelection(next)
-    setTranscript(undefined)
-    setConfirmingAbort(undefined)
-    setAnswerStep(undefined)
-    setDetailOpen(false)
-  }
-  const rowBuildControl = (slug: string, action: BuildControlAction) => {
-    selectRowControl({ kind: 'build', slug })
-    control(slug, action)
-  }
-  const rowRequestAbort = (slug: string) => {
-    selectRowControl({ kind: 'build', slug })
-    setConfirmingAbort(slug)
-  }
-  const rowToggleDetail = (slug: string) => {
-    setTranscript(undefined)
-    setConfirmingAbort(undefined)
-    setAnswerStep(undefined)
-    if (selection?.kind === 'build' && selection.slug === slug) {
-      setDetailOpen((open) => !open)
-    } else {
-      setSelection({ kind: 'build', slug })
-      setDetailOpen(true)
-    }
-  }
-  const rowHarvest = (body: Extract<HarvestControl, { action: 'run' }>) => {
-    selectRowControl({ kind: 'harvest' })
-    harvest(body)
-  }
+  const rowControls = createRowControlHandlers({
+    selection,
+    setSelection,
+    clearTranscript: () => setTranscript(undefined),
+    clearAnswerStep: () => setAnswerStep(undefined),
+    setConfirmingAbort,
+    setDetailOpen,
+    control,
+    harvest,
+  })
   const answer = (slug: string, body: OperatorAnswerRequest) => {
     const key = `${slug}:answer`
     setPending(key)
@@ -392,13 +420,13 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onDeselect={deselect}
         onToggleDetail={() => setDetailOpen((open) => !open)}
         onBuildControl={control}
-        onRowBuildControl={rowBuildControl}
+        onRowBuildControl={rowControls.buildControl}
         onRequestAbort={() => {
           if (selectedBuild) setConfirmingAbort(selectedBuild.slug)
         }}
-        onRowRequestAbort={rowRequestAbort}
+        onRowRequestAbort={rowControls.requestAbort}
         onCancelAbort={() => setConfirmingAbort(undefined)}
-        onRowToggleDetail={rowToggleDetail}
+        onRowToggleDetail={rowControls.toggleDetail}
         onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
         onSubmitAnswerStep={submitAnswerStep}
         onCancelAnswerStep={cancelAnswerStep}
@@ -407,7 +435,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onSetting={setting}
         onBulk={bulk}
         onHarvest={harvest}
-        onRowHarvest={rowHarvest}
+        onRowHarvest={rowControls.runHarvest}
       />
     </OperatorShell>
   )

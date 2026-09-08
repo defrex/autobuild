@@ -42,6 +42,8 @@ export interface WebFrameSpec {
   requires: readonly string[]
   /** Text the rendered frame must not contain. */
   forbids?: readonly string[]
+  /** Force the fine-hover reveal that headless Chromium CLI cannot emulate. */
+  emulateFineHover?: boolean
 }
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
@@ -121,6 +123,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-hover-wide',
     width: 1440,
     height: 1200,
+    emulateFineHover: true,
     requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
   },
   {
@@ -410,6 +413,13 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
   }
 }
 
+/** Capture-only state emulation for capabilities unavailable through Chromium's CLI. */
+export function captureStateCss(spec: WebFrameSpec): string {
+  return spec.emulateFineHover
+    ? '.row[data-hovered] .row-controls { visibility: visible; pointer-events: auto; }'
+    : ''
+}
+
 /** One complete fixture page: the rendered view inside the real stylesheet. */
 export function renderWebFrame(
   spec: WebFrameSpec,
@@ -426,6 +436,7 @@ export function renderWebFrame(
     `<title>${spec.id}</title>`,
     `<style>${assets.fontCss}</style>`,
     `<style>${assets.css}</style>`,
+    `<style data-capture-state>${captureStateCss(spec)}</style>`,
     '</head>',
     `<body>${markup}</body>`,
     '</html>',
@@ -637,7 +648,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
     'The wide rest/hover pair uses one model and selection so row coordinates can be compared.',
-    'The fine-pointer hover preview is modeled explicitly in the wide hover frame.',
+    "The fine-pointer hover preview is modeled explicitly in the wide hover frame; its capture-only CSS emulates the media capability that headless Chromium's CLI does not expose.",
     'Focus rings, the state-change flash, and keyboard shortcuts are code-reviewed',
     'rather than screenshotted; narrow frames carry no hover preview.',
     '',

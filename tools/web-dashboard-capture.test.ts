@@ -1,7 +1,13 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
-import { buildRowActions, canPreviewPointer, fastextCells } from '../app/dashboard/BuildsView'
 import {
+  buildRowActions,
+  canPreviewPointer,
+  fastextCells,
+  handleRowControlKey,
+} from '../app/dashboard/BuildsView'
+import {
+  captureStateCss,
   checkEvidence,
   chromiumBinary,
   evidenceText,
@@ -277,6 +283,11 @@ test('hover frame keeps committed and preview state independent', () => {
   expect(evidenceText(html)).toContain('RESUME')
   expect(evidenceText(html)).toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
+  expect(spec.emulateFineHover).toBe(true)
+  expect(captureStateCss(spec)).toContain('.row[data-hovered] .row-controls')
+  expect(html).toContain(
+    '<style data-capture-state>.row[data-hovered] .row-controls { visibility: visible;',
+  )
 })
 
 test('answer frames expose only submit and cancel while retaining focused input and detail', () => {
@@ -334,6 +345,21 @@ test('narrow capture frames never supply a hover preview', () => {
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     expect(html, spec.id).not.toContain('data-hovered="true"')
   }
+})
+
+test('row control keys isolate button activation and cancel abort locally', () => {
+  const calls: string[] = []
+  const event = (key: string) => ({
+    key,
+    preventDefault: () => calls.push(`prevent:${key}`),
+    stopPropagation: () => calls.push(`stop:${key}`),
+  })
+
+  handleRowControlKey(event('Enter'))
+  handleRowControlKey(event('Escape'), () => calls.push('cancel'))
+  handleRowControlKey(event('Escape'))
+
+  expect(calls).toEqual(['stop:Enter', 'prevent:Escape', 'stop:Escape', 'cancel'])
 })
 
 test('hover preview requires a fine hovering mouse', () => {

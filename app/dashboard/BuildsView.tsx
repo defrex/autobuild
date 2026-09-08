@@ -43,6 +43,22 @@ export function canPreviewPointer(pointerType: string, fineHover: boolean): bool
   return pointerType === 'mouse' && fineHover
 }
 
+interface RowControlKeyEvent {
+  key: string
+  preventDefault: () => void
+  stopPropagation: () => void
+}
+
+/** Keep button activation from also reaching dashboard shortcuts; Esc cancels local abort. */
+export function handleRowControlKey(event: RowControlKeyEvent, cancelAbort?: () => void): void {
+  if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+  if (cancelAbort && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelAbort()
+  }
+}
+
 export interface BuildsViewProps {
   repo: string
   model?: DashboardModel
@@ -556,9 +572,7 @@ function HarvestRow({
         className="row-controls"
         role="toolbar"
         aria-label={`Controls for Harvest run ${harvest.run}`}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
-        }}
+        onKeyDown={(event) => handleRowControlKey(event)}
       >
         {harvest.action && (
           <button
@@ -694,14 +708,9 @@ function BuildRow({
         role="toolbar"
         aria-label={`Controls for ${row.slug}`}
         aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
-          if (confirmingAbort && event.key === 'Escape') {
-            event.preventDefault()
-            event.stopPropagation()
-            onCancelAbort()
-          }
-        }}
+        onKeyDown={(event) =>
+          handleRowControlKey(event, confirmingAbort ? onCancelAbort : undefined)
+        }
       >
         {confirmingAbort ? (
           <>
