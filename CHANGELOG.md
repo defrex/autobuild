@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#265](https://github.com/defrex/autobuild/pull/265) — Route blocked web RESUME into the answer step
 - [#264](https://github.com/defrex/autobuild/pull/264) — Scope design consistency checks to named rules
 - [#263](https://github.com/defrex/autobuild/pull/263) — Remove ticket management from the web dashboard
 - [#262](https://github.com/defrex/autobuild/pull/262) — Protect CLI ticket defaults from operator queue changes

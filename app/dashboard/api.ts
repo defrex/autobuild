@@ -1,5 +1,6 @@
 import type {
   OperatorAnswerRequest,
+  OperatorApiClient,
   OperatorBuildControlRequest,
   OperatorDashboardSnapshot,
 } from 'autobuild/operator-api'
@@ -43,13 +44,15 @@ export async function webRequest<T>(repo: string, path: string, init?: RequestIn
 
 export const dashboard = (repo: string, signal?: AbortSignal) =>
   webRequest<OperatorDashboardSnapshot>(repo, 'dashboard', { signal })
+type BuildControlResult = Awaited<ReturnType<OperatorApiClient['controlBuild']>>
+
 export const buildControl = (repo: string, slug: string, body: OperatorBuildControlRequest) =>
-  webRequest(repo, `builds/${encodeURIComponent(slug)}/control`, {
+  webRequest<BuildControlResult>(repo, `builds/${encodeURIComponent(slug)}/control`, {
     method: 'POST',
     body: JSON.stringify(body),
   })
 export const answerBuild = (repo: string, slug: string, body: OperatorAnswerRequest) =>
-  webRequest(repo, `builds/${encodeURIComponent(slug)}/answer`, {
+  webRequest<BuildControlResult>(repo, `builds/${encodeURIComponent(slug)}/answer`, {
     method: 'POST',
     body: JSON.stringify(body),
   })

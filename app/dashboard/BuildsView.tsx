@@ -9,7 +9,14 @@ import {
   repositoryActionAvailability,
   type TranscriptPresentation,
 } from 'autobuild/operator-presentation'
-import { type CSSProperties, type PointerEvent, type PointerEventHandler, useState } from 'react'
+import {
+  type CSSProperties,
+  type PointerEvent,
+  type PointerEventHandler,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import {
   columnWidths,
   DashboardSurface,
@@ -45,6 +52,8 @@ export interface BuildsViewProps {
   hoverPreview?: Selection
   detailOpen: boolean
   confirmingAbort: boolean
+  answerStep?: { slug: string; escalationIds: string[]; input: string }
+  answerPending: boolean
   transcript?: TranscriptPresentation
   onActivate: (selection: Selection) => void
   onHoverPreview: (selection: Selection | undefined) => void
@@ -53,6 +62,9 @@ export interface BuildsViewProps {
   onBuildControl: (slug: string, action: BuildControlAction) => void
   onRequestAbort: () => void
   onCancelAbort: () => void
+  onAnswerStepInput: (input: string) => void
+  onSubmitAnswerStep: () => void
+  onCancelAnswerStep: () => void
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
   onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
   onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
@@ -119,11 +131,15 @@ export function fastextCells(
     | 'selection'
     | 'detailOpen'
     | 'confirmingAbort'
+    | 'answerStep'
+    | 'answerPending'
     | 'onDeselect'
     | 'onToggleDetail'
     | 'onBuildControl'
     | 'onRequestAbort'
     | 'onCancelAbort'
+    | 'onSubmitAnswerStep'
+    | 'onCancelAnswerStep'
     | 'onSetting'
     | 'onBulk'
     | 'onHarvest'
@@ -136,6 +152,25 @@ export function fastextCells(
     selection?.kind === 'build'
       ? model.builds.find((row) => row.slug === selection.slug)
       : undefined
+
+  if (build && props.answerStep?.slug === build.slug) {
+    return [
+      {
+        key: '↵',
+        label: 'SUBMIT',
+        disabled: busy || props.answerPending,
+        onPress: props.onSubmitAnswerStep,
+      },
+      undefined,
+      undefined,
+      {
+        key: 'Esc',
+        label: 'CANCEL',
+        disabled: busy || props.answerPending,
+        onPress: props.onCancelAnswerStep,
+      },
+    ]
+  }
 
   if (build && props.confirmingAbort) {
     return [
@@ -331,10 +366,15 @@ export function BuildsView(props: BuildsViewProps) {
             dimmed={focused && !(selection?.kind === 'build' && selection.slug === row.slug)}
             detailOpen={detailOpen}
             confirmingAbort={confirmingAbort}
+            answerStep={props.answerStep}
+            answerPending={props.answerPending}
             transcript={props.transcript}
             onPointerEnter={preview({ kind: 'build', slug: row.slug })}
             onActivate={props.onActivate}
             onToggleDetail={props.onToggleDetail}
+            onAnswerStepInput={props.onAnswerStepInput}
+            onSubmitAnswerStep={props.onSubmitAnswerStep}
+            onCancelAnswerStep={props.onCancelAnswerStep}
             onAnswer={props.onAnswer}
             onTranscript={props.onTranscript}
           />
@@ -493,10 +533,15 @@ function BuildRow({
   dimmed,
   detailOpen,
   confirmingAbort,
+  answerStep,
+  answerPending,
   transcript,
   onPointerEnter,
   onActivate,
   onToggleDetail,
+  onAnswerStepInput,
+  onSubmitAnswerStep,
+  onCancelAnswerStep,
   onAnswer,
   onTranscript,
 }: {
@@ -509,10 +554,15 @@ function BuildRow({
   dimmed: boolean
   detailOpen: boolean
   confirmingAbort: boolean
+  answerStep?: BuildsViewProps['answerStep']
+  answerPending: boolean
   transcript?: TranscriptPresentation
   onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
   onToggleDetail: BuildsViewProps['onToggleDetail']
+  onAnswerStepInput: BuildsViewProps['onAnswerStepInput']
+  onSubmitAnswerStep: BuildsViewProps['onSubmitAnswerStep']
+  onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
   onAnswer: BuildsViewProps['onAnswer']
   onTranscript: BuildsViewProps['onTranscript']
 }) {
@@ -590,6 +640,16 @@ function BuildRow({
           <span aria-hidden>! </span>abort {row.slug}? Enter confirms, Esc cancels
         </p>
       )}
+      {selected && answerStep?.slug === row.slug && (
+        <BlockedAnswerStep
+          blocker={row.blockers[0] ?? `Answer required for ${row.slug}.`}
+          input={answerStep.input}
+          pending={answerPending}
+          onInput={onAnswerStepInput}
+          onSubmit={onSubmitAnswerStep}
+          onCancel={onCancelAnswerStep}
+        />
+      )}
       {open && (
         <BuildDetail
           id={detailId}
@@ -603,6 +663,59 @@ function BuildRow({
         />
       )}
     </li>
+  )
+}
+
+function BlockedAnswerStep({
+  blocker,
+  input,
+  pending,
+  onInput,
+  onSubmit,
+  onCancel,
+}: {
+  blocker: string
+  input: string
+  pending: boolean
+  onInput: (input: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => inputRef.current?.focus(), [])
+
+  return (
+    <form
+      className="answer-step"
+      aria-label="Answer blocker"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!pending) onSubmit()
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          if (!pending) onCancel()
+        }
+      }}
+    >
+      <p className="alert answer-blocker" role="status">
+        <span aria-hidden>! </span>
+        {blocker}
+      </p>
+      <label className="field">
+        <span>optional guidance (empty retries)</span>
+        <input
+          ref={inputRef}
+          // biome-ignore lint/a11y/noAutofocus: opening the keyboard-driven answer step must focus its only field
+          autoFocus
+          type="text"
+          value={input}
+          disabled={pending}
+          onChange={(event) => onInput(event.target.value)}
+        />
+      </label>
+    </form>
   )
 }
 

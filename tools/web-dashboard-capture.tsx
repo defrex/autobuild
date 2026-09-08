@@ -152,6 +152,27 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     ],
   },
   {
+    id: 'builds-mixed-answer-wide',
+    width: 1440,
+    height: 2000,
+    requires: [
+      'BLOCKED ×2',
+      'optional guidance (empty retries)',
+      'SUBMIT',
+      'CANCEL',
+      'Unresolved blockers',
+      'Answer escalation',
+    ],
+    forbids: ['RESUME', 'ABORT', 'DETAILS'],
+  },
+  {
+    id: 'builds-mixed-answer-narrow',
+    width: 390,
+    height: 1700,
+    requires: ['BLOCKED ×2', 'optional guidance (empty retries)', 'SUBMIT', 'CANCEL'],
+    forbids: ['RESUME', 'ABORT', 'DETAILS'],
+  },
+  {
     id: 'builds-mixed-abort-wide',
     width: 1440,
     height: 1200,
@@ -239,6 +260,7 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       now={RENDER_NOW}
       detailOpen={false}
       confirmingAbort={false}
+      answerPending={false}
       onActivate={noop}
       onHoverPreview={noop}
       onDeselect={noop}
@@ -246,6 +268,9 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       onBuildControl={noop}
       onRequestAbort={noop}
       onCancelAbort={noop}
+      onAnswerStepInput={noop}
+      onSubmitAnswerStep={noop}
+      onCancelAnswerStep={noop}
       onAnswer={noop}
       onTranscript={noop}
       onSetting={noop}
@@ -317,6 +342,19 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
         }),
         { model: models.mixed },
       )
+    case 'builds-mixed-answer-wide':
+    case 'builds-mixed-answer-narrow': {
+      const selection = blockedSelection(models.mixed)
+      if (selection.kind !== 'build') throw new Error('blocked selection is not a build')
+      return shell(
+        builds(models.mixed, {
+          selection,
+          detailOpen: id === 'builds-mixed-answer-wide',
+          answerStep: { slug: selection.slug, escalationIds: ['esc-capture'], input: '' },
+        }),
+        { model: models.mixed },
+      )
+    }
     case 'builds-mixed-abort-wide':
       return shell(
         builds(models.mixed, {
@@ -581,6 +619,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
     '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once without shifting row text: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
+    '- [ ] Answer frames: the blocked row unfolds a red `!` blocker line and a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry. The footer contains only red `SUBMIT`, cyan `CANCEL`, and empty green/yellow outlined slots; the 390px frame keeps the two-row footer unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
     '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow outlines.',
     '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at 0.9 opacity on only its foreground and outline, while its resting surface remains transparent on the black ground; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. The capture has deterministically verified all four slot elements in this order.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
