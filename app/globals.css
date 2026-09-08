@@ -379,8 +379,8 @@ h3 {
 .skeleton-row {
   display: grid;
   grid-template-columns: 2ch minmax(0, 1fr) 12ch;
-  grid-template-rows: var(--row) var(--row);
-  height: calc(var(--row) * 3);
+  grid-template-rows: repeat(3, var(--row));
+  height: calc(var(--row) * 4);
 }
 .skeleton-identity {
   grid-column: 2;
@@ -392,7 +392,7 @@ h3 {
   width: 10ch;
 }
 .skeleton-row .skeleton-steps {
-  grid-row: 2;
+  grid-row: 3;
   grid-column: 2 / 4;
   width: min(62ch, 80%);
   background: var(--rule);
@@ -575,6 +575,33 @@ input.short {
 }
 .rows[data-ticket-col="0"] .rowline .status {
   grid-column: 4;
+}
+/* The register always occupies its row. visibility hides its controls from
+ * paint and the tab order without changing any row geometry. */
+.row-controls {
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  align-items: baseline;
+  column-gap: 2ch;
+  height: var(--row);
+  padding-left: 2ch;
+  visibility: hidden;
+  pointer-events: none;
+}
+.row[data-selected] .row-controls,
+.row:focus-within .row-controls {
+  visibility: visible;
+  pointer-events: auto;
+}
+@media (hover: hover) and (pointer: fine) {
+  .row[data-hovered] .row-controls {
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+.row-control {
+  min-width: 0;
+  color: var(--ink);
 }
 .sub {
   padding-left: 2ch;
@@ -924,6 +951,11 @@ textarea {
   .fastext {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: repeat(2, var(--row));
+  }
+  .row-controls {
+    grid-template-columns: repeat(2, max-content);
+    grid-template-rows: repeat(2, var(--row));
+    height: calc(var(--row) * 2);
   }
   .tokens,
   .rows[data-ticket-col="0"] .tokens {
