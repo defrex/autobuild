@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#270](https://github.com/defrex/autobuild/pull/270) — Move build actions below progress and add direct controls
 - [#269](https://github.com/defrex/autobuild/pull/269) — Make blocked-build answer mode exclusive
 - [#268](https://github.com/defrex/autobuild/pull/268) — Unify dashboard build controls
 - [#267](https://github.com/defrex/autobuild/pull/267) — Remove the Fastext footer from Builds

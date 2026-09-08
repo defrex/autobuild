@@ -52,6 +52,15 @@ interface RowControlHandlerDependencies {
   harvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
 
+interface ClosestTarget {
+  closest: (selectors: string) => unknown
+}
+
+/** Let native button keyboard activation run instead of dashboard-wide shortcuts. */
+export function isButtonKeyboardActivation(key: string, target: ClosestTarget | null): boolean {
+  return (key === 'Enter' || key === ' ') && target?.closest('button') != null
+}
+
 /** Target-aware row interactions, extracted so their state policy is directly testable. */
 export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
   const selectTarget = (next: Selection) => {
@@ -301,6 +310,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     if (!model) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target instanceof HTMLElement ? event.target : null
+    if (isButtonKeyboardActivation(event.key, target)) return
     const editorTarget = Boolean(
       target?.closest('input, textarea, select, [contenteditable="true"]'),
     )

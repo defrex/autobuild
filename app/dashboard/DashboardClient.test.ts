@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { OperatorBuildControlRequest } from 'autobuild/operator-api'
 import type { Selection } from './BuildsView'
-import { answerModeKeyAction, createRowControlHandlers } from './DashboardClient'
+import {
+  answerModeKeyAction,
+  createRowControlHandlers,
+  isButtonKeyboardActivation,
+} from './DashboardClient'
 
 type Action = OperatorBuildControlRequest['action']
 
@@ -50,6 +54,19 @@ function harness(selection?: Selection, openAnswer?: { slug: string; input: stri
     state: () => ({ detail, selected, answer }),
   }
 }
+
+test('native button activation is excluded from dashboard-wide keyboard shortcuts', () => {
+  const button = {
+    closest: (selector: string) => (selector === 'button' ? button : null),
+  }
+  const nonButton = { closest: () => null }
+
+  expect(isButtonKeyboardActivation('Enter', button)).toBe(true)
+  expect(isButtonKeyboardActivation(' ', button)).toBe(true)
+  expect(isButtonKeyboardActivation('Enter', nonButton)).toBe(false)
+  expect(isButtonKeyboardActivation('Escape', button)).toBe(false)
+  expect(isButtonKeyboardActivation('Enter', null)).toBe(false)
+})
 
 test('a same-row action preserves open detail and keeps a blocked resume answer on its slug', () => {
   const slug = 'blocked-build'
@@ -147,7 +164,7 @@ test('requesting row abort selects and confirms locally without dispatching unti
   expect(confirmation.state().detail).toBe(true)
 })
 
-test('DETAILS toggles only its named row and opens after switching targets', () => {
+test('title detail toggling affects only its named row and opens after switching targets', () => {
   const same = harness({ kind: 'build', slug: 'selected-build' })
   same.handlers.toggleDetail('selected-build')
   expect(same.state().detail).toBe(false)
@@ -157,6 +174,16 @@ test('DETAILS toggles only its named row and opens after switching targets', () 
   different.handlers.toggleDetail('detail-target')
   expect(different.state().detail).toBe(true)
   expect(different.state().selected).toEqual({ kind: 'build', slug: 'detail-target' })
+})
+
+test('auto-merge indicator commands select their target without toggling same-row detail', () => {
+  const value = harness({ kind: 'build', slug: 'merge-target' })
+
+  value.handlers.buildControl('merge-target', 'auto-merge-on')
+
+  expect(value.state().selected).toEqual({ kind: 'build', slug: 'merge-target' })
+  expect(value.state().detail).toBe(true)
+  expect(value.controls).toEqual([{ slug: 'merge-target', action: 'auto-merge-on' }])
 })
 
 test('Harvest row actions select their run before dispatch', () => {

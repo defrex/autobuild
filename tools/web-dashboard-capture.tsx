@@ -49,6 +49,10 @@ export interface WebFrameSpec {
   forbids?: readonly string[]
   /** Force the fine-hover reveal that headless Chromium CLI cannot emulate. */
   emulateFineHover?: boolean
+  /** Force the keyboard focus ring that static markup cannot establish. */
+  emulateKeyboardFocus?: boolean
+  /** Render all controls in their request-pending state. */
+  controlPending?: boolean
   /** Render the answer register in its disabled request-pending state. */
   answerPending?: boolean
 }
@@ -133,20 +137,45 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-rest-wide',
     width: 1440,
     height: 1200,
-    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'auto merge off'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-mixed-hover-wide',
     width: 1440,
     height: 1200,
     emulateFineHover: true,
-    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+    requires: ['BLOCKED ×2', 'repository PAUSED', '(held)', 'ABORT', 'RESUME', 'auto merge off'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
+  },
+  {
+    id: 'builds-mixed-focus-wide',
+    width: 1440,
+    height: 1200,
+    emulateKeyboardFocus: true,
+    requires: ['BLOCKED ×2', 'ABORT', 'RESUME', 'auto merge off'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
+  },
+  {
+    id: 'builds-mixed-paused-wide',
+    width: 1440,
+    height: 1200,
+    requires: ['PAUSED', 'ABORT', 'RESUME', 'auto merge off'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
+  },
+  {
+    id: 'builds-auto-merge-on-wide',
+    width: 1440,
+    height: 1200,
+    requires: ['auto merge enabled', 'ABORT', 'RESUME'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-mixed-selected-narrow',
     width: 390,
     height: 1700,
-    requires: ['BLOCKED ×2', 'ABORT', 'RESUME', 'DETAILS'],
+    requires: ['BLOCKED ×2', 'ABORT', 'RESUME', 'auto merge off'],
+    forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-mixed-detail-wide',
@@ -166,7 +195,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'Transcript',
       'ABORT',
       'RESUME',
-      'CLOSE',
+      'auto merge off',
     ],
   },
   {
@@ -179,7 +208,7 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       'Unresolved blockers',
       'Answer escalation',
       'ABORT',
-      'CLOSE',
+      'auto merge off',
     ],
   },
   {
@@ -352,6 +381,20 @@ function actionableHarvestModel(model: DashboardModel): DashboardModel {
   }
 }
 
+function selectedBuildModel(
+  model: DashboardModel,
+  selection: Selection,
+  changes: Partial<DashboardModel['builds'][number]>,
+): DashboardModel {
+  if (selection.kind !== 'build') throw new Error('capture selection is not a build')
+  return {
+    ...model,
+    builds: model.builds.map((build) =>
+      build.slug === selection.slug ? { ...build, ...changes } : build,
+    ),
+  }
+}
+
 function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
   switch (spec.id) {
     case 'builds-loading-wide':
@@ -376,10 +419,16 @@ function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
         repositories: [FIXTURE_REPO, ALTERNATE_FIXTURE_REPO],
       })
     case 'builds-mixed-rest-wide':
+      return shell(builds(models.mixed), { model: models.mixed })
     case 'builds-mixed-selected-narrow':
-      return shell(builds(models.mixed, { selection: blockedSelection(models.mixed) }), {
-        model: models.mixed,
-      })
+    case 'builds-mixed-focus-wide':
+      return shell(
+        builds(models.mixed, {
+          selection: blockedSelection(models.mixed),
+          pending: spec.controlPending ? 'capture:pending' : undefined,
+        }),
+        { model: models.mixed },
+      )
     case 'builds-mixed-hover-wide': {
       const selection = blockedSelection(models.mixed)
       return shell(
@@ -389,6 +438,16 @@ function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
         }),
         { model: models.mixed },
       )
+    }
+    case 'builds-mixed-paused-wide': {
+      const selection = blockedSelection(models.mixed)
+      const model = selectedBuildModel(models.mixed, selection, { status: 'paused' })
+      return shell(builds(model, { selection }), { model })
+    }
+    case 'builds-auto-merge-on-wide': {
+      const selection = blockedSelection(models.mixed)
+      const model = selectedBuildModel(models.mixed, selection, { autoMerge: 'enabled' })
+      return shell(builds(model, { selection }), { model })
     }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
@@ -440,9 +499,16 @@ function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
 
 /** Capture-only state emulation for capabilities unavailable through Chromium's CLI. */
 export function captureStateCss(spec: WebFrameSpec): string {
-  return spec.emulateFineHover
-    ? '.row[data-hovered] .row-controls { visibility: visible; pointer-events: auto; }'
-    : ''
+  return [
+    spec.emulateFineHover
+      ? '.row[data-hovered] .row-controls { visibility: visible; pointer-events: auto; }'
+      : '',
+    spec.emulateKeyboardFocus
+      ? '.row[data-selected] .rowhead { outline: 2px solid var(--live); outline-offset: 1px; }'
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 /** One complete fixture page: the rendered view inside the real stylesheet. */
@@ -576,7 +642,7 @@ async function screenshot(
   htmlPath: string,
   pngPath: string,
   spec: WebFrameSpec,
-  userDataDir: string,
+  profileDir: string,
 ): Promise<void> {
   const proc = Bun.spawn(
     [
@@ -587,7 +653,9 @@ async function screenshot(
       '--no-sandbox',
       '--no-first-run',
       '--disable-extensions',
-      `--user-data-dir=${userDataDir}`,
+      '--run-all-compositor-stages-before-draw',
+      '--disable-features=PaintHolding',
+      `--user-data-dir=${profileDir}`,
       '--force-device-scale-factor=1',
       `--window-size=${spec.width},${spec.height}`,
       '--virtual-time-budget=5000',
@@ -673,10 +741,9 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     'the host has it, otherwise DejaVu Sans Mono). Nothing here is a golden image:',
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
-    'The wide rest/hover pair uses one model and selection so row coordinates can be compared.',
-    "The fine-pointer hover preview is modeled explicitly in the wide hover frame; its capture-only CSS emulates the media capability that headless Chromium's CLI does not expose.",
-    'Focus rings, the state-change flash, and keyboard shortcuts are code-reviewed',
-    'rather than screenshotted; narrow frames carry no hover preview.',
+    'The wide rest/hover pair uses one model so row coordinates can be compared.',
+    'Fine-pointer hover and keyboard focus are modeled explicitly in dedicated wide frames; capture-only CSS emulates capabilities that static Chromium markup cannot establish.',
+    'The state-change flash and keyboard shortcuts are code-reviewed; narrow frames carry no hover preview.',
     '',
     '## Frames',
     '',
@@ -698,14 +765,16 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
     '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, build or Harvest RUNNING/green, repository PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
-    '- [ ] Row controls: every row reserves an in-grid control register beneath its headline. Compare `builds-mixed-rest-wide.png` with `builds-mixed-hover-wide.png`: build identity and STATUS coordinates are identical, while the dimmed hovered row gains its ghost-word controls. The selected row keeps visible controls in both frames.',
-    '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the selected blocked row register keeps ABORT, RESUME, and DETAILS. No 390px frame carries a preview marker.',
-    '- [ ] `builds-mixed-selected-narrow.png` shows the selected row controls without hover; labels fit the fixed two-row register with no clipping or overlap and other rows keep the same reserved height.',
+    '- [ ] Row controls: every build reserves a one-row in-grid register after its pipeline and every message preview. Compare `builds-mixed-rest-wide.png`, `builds-mixed-hover-wide.png`, and `builds-mixed-focus-wide.png`: build identity, previews, and neighboring-row coordinates are identical while lifecycle/destructive ghost words reveal. No normal register contains AUTO MERGE, DETAILS, or CLOSE.',
+    '- [ ] Hover and focus frames: the selected lane is bold, a different fine-pointer preview lane is regular weight, and the focus frame visibly outlines the title. The blocked register contains only ABORT and RESUME. No 390px frame carries a preview marker.',
+    '- [ ] `builds-mixed-selected-narrow.png` shows touch-accessible selected controls without hover; both labels fit the fixed one-row register with no clipping or overlap and other rows keep the same reserved height.',
+    '- [ ] Direct controls: every title has a slug-qualified detail name and expanded state. Every row visibly shows auto merge OFF, REQUESTED, ENABLED, or CANCELLING in its state color; compare `builds-mixed-rest-wide.png` and `builds-auto-merge-on-wide.png`. The indicator and title do not duplicate actions in the register.',
+    '- [ ] `builds-mixed-paused-wide.png` shows the paused ABORT / RESUME register beneath progress; no control or state token clips or overlaps at either viewport.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Answer frames: the selected blocked row register contains only row-local `SUBMIT` and `CANCEL`—no selected-row `RESUME`, `ABORT`, auto-merge, or detail accessible names—while unrelated rows retain their ordinary controls. The row unfolds a red `!` blocker line with a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry; the narrow register remains unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
     '- [ ] Abort frame (after leaving answer mode with CANCEL): a red `! abort <slug>? Enter confirms, Esc cancels` line and row-local `CONFIRM ABORT` / `CANCEL` ghost controls under the selected row, with no answer field, no ordinary selected-row controls, and no duplicate global controls.',
     '- [ ] No Builds frame renders a footer or global button row, and PAUSE ALL, RESUME ALL, and DESELECT never appear. Dispatcher intake, auto merge, and harvest toggles remain visible; the selected Harvest run retains its row-local RESUME control.',
-    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including row controls, are borderless transparent words. Row-head focus reveals its following controls for forward Tab, hidden registers leave tab order, and hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
+    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles, auto-merge indicators, and row controls, are borderless transparent words. Title/indicator focus reveals the following register, hidden register words leave tab order, and hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
     '',
@@ -748,7 +817,9 @@ export async function captureWebDashboardFrames(
       const htmlPath = join(outputDir, `${spec.id}.html`)
       const pngPath = join(outputDir, `${spec.id}.png`)
       await writeFile(htmlPath, html)
-      await screenshot(chromium, htmlPath, pngPath, spec, userDataDir)
+      // Chromium can leave profile child processes alive briefly after its CLI exits.
+      // Isolating each frame prevents a later capture from attaching to stale paint state.
+      await screenshot(chromium, htmlPath, pngPath, spec, join(userDataDir, spec.id))
       frames.push({ id: spec.id, width: spec.width, height: spec.height, htmlPath, pngPath })
     }
     const reportPath = join(outputDir, 'verify-report.md')

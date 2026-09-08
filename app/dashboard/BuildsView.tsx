@@ -124,11 +124,15 @@ interface CellVars extends CSSProperties {
 
 export interface BuildRowAction {
   label: string
-  action: BuildControlAction | 'request-abort' | 'toggle-detail'
+  action: BuildControlAction | 'request-abort'
 }
 
-/** Actions shown in a build's reserved row register. */
-export function buildRowActions(row: DashboardBuild, detailOpen: boolean): BuildRowAction[] {
+export function autoMergeAction(row: DashboardBuild): BuildControlAction {
+  return row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off'
+}
+
+/** Lifecycle and destructive actions shown in a build's reserved row register. */
+export function buildRowActions(row: DashboardBuild): BuildRowAction[] {
   const available = buildActionAvailability(row)
   const actions: BuildRowAction[] = []
   if (available.abort) actions.push({ label: 'ABORT', action: 'request-abort' })
@@ -140,13 +144,6 @@ export function buildRowActions(row: DashboardBuild, detailOpen: boolean): Build
   } else if (available.discard) {
     actions.push({ label: 'DISCARD', action: 'discard' })
   }
-  if (available.autoMerge) {
-    actions.push({
-      label: 'AUTO MERGE',
-      action: row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-    })
-  }
-  actions.push({ label: detailOpen ? 'CLOSE' : 'DETAILS', action: 'toggle-detail' })
   return actions
 }
 
@@ -240,7 +237,6 @@ export function BuildsView(props: BuildsViewProps) {
             answerPending={props.answerPending}
             transcript={props.transcript}
             onPointerEnter={preview({ kind: 'build', slug: row.slug })}
-            onActivate={props.onActivate}
             onRowBuildControl={props.onRowBuildControl}
             onRowRequestAbort={props.onRowRequestAbort}
             onRowToggleDetail={props.onRowToggleDetail}
@@ -438,7 +434,6 @@ function BuildRow({
   answerPending,
   transcript,
   onPointerEnter,
-  onActivate,
   onRowBuildControl,
   onRowRequestAbort,
   onRowToggleDetail,
@@ -462,7 +457,6 @@ function BuildRow({
   answerPending: boolean
   transcript?: TranscriptPresentation
   onPointerEnter: PointerEventHandler<HTMLLIElement>
-  onActivate: BuildsViewProps['onActivate']
   onRowBuildControl: BuildsViewProps['onRowBuildControl']
   onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
   onRowToggleDetail: BuildsViewProps['onRowToggleDetail']
@@ -480,7 +474,8 @@ function BuildRow({
   const open = selected && detailOpen
   const answering = selected && answerStep?.slug === row.slug
   const held = model.repositoryPaused && row.status === 'queued'
-  const hasTokens = row.autoMerge !== 'off' || row.pr !== undefined || held || row.alsoPaused
+  const autoMergeAvailable = buildActionAvailability(row).autoMerge
+  const autoMergeOn = row.autoMerge === 'requested' || row.autoMerge === 'enabled'
   return (
     <li
       className="row"
@@ -496,40 +491,60 @@ function BuildRow({
         <button
           type="button"
           className="rowhead"
+          disabled={answering}
+          aria-label={`${open ? 'Close' : 'Open'} details for ${row.slug}`}
           aria-pressed={selected}
-          aria-expanded={selected ? detailOpen : undefined}
-          aria-controls={open ? detailId : undefined}
-          onClick={() => onActivate({ kind: 'build', slug: row.slug })}
+          aria-expanded={open}
+          aria-controls={detailId}
+          onClick={() => onRowToggleDetail(row.slug)}
         >
           <span className="ticket">{row.ticketId ?? ''}</span>
           <span className="slug">{row.slug}</span>
         </button>
-        {hasTokens && (
-          <span className="tokens">
-            {row.autoMerge !== 'off' && (
-              <span className="am" data-am={row.autoMerge}>
-                auto merge
-              </span>
-            )}
-            {row.pr && (
-              <a
-                className="pr"
-                data-pr={row.pr.state}
-                href={row.pr.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                PR {row.pr.state}
-              </a>
-            )}
-            {held && <span className="warn held">(held)</span>}
-            {row.alsoPaused && <span className="warn">(paused)</span>}
-          </span>
-        )}
+        <span className="tokens">
+          <button
+            type="button"
+            className="word am"
+            data-am={row.autoMerge}
+            disabled={answering || pending !== undefined || !autoMergeAvailable}
+            aria-label={`Auto merge ${row.autoMerge} for ${row.slug}`}
+            aria-pressed={autoMergeOn}
+            onClick={() => onRowBuildControl(row.slug, autoMergeAction(row))}
+          >
+            auto merge <b>{row.autoMerge}</b>
+          </button>
+          {row.pr && (
+            <a
+              className="pr"
+              data-pr={row.pr.state}
+              href={row.pr.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              PR {row.pr.state}
+            </a>
+          )}
+          {held && <span className="warn held">(held)</span>}
+          {row.alsoPaused && <span className="warn">(paused)</span>}
+        </span>
         <span className="status" data-status={row.status}>
           <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
         </span>
       </div>
+      {ceiling && <p className="sub">{ceiling}</p>}
+      {row.abortProgress !== undefined ? (
+        <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
+      ) : row.dispatch !== undefined ? (
+        <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
+      ) : (
+        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
+      )}
+      {row.setupError !== undefined && (
+        <MessagePreview value={row.setupError} tone="alert" expandable />
+      )}
+      {row.blockers.map((blocker) => (
+        <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
+      ))}
       <div
         className="row-controls"
         role="toolbar"
@@ -585,16 +600,15 @@ function BuildRow({
             </button>
           </>
         ) : (
-          buildRowActions(row, open).map((control) => (
+          buildRowActions(row).map((control) => (
             <button
               type="button"
               className="word row-control"
               key={control.action}
-              disabled={pending !== undefined && control.action !== 'toggle-detail'}
+              disabled={pending !== undefined}
               aria-label={`${control.label} ${row.slug}`}
               onClick={() => {
                 if (control.action === 'request-abort') onRowRequestAbort(row.slug)
-                else if (control.action === 'toggle-detail') onRowToggleDetail(row.slug)
                 else onRowBuildControl(row.slug, control.action)
               }}
             >
@@ -603,20 +617,6 @@ function BuildRow({
           ))
         )}
       </div>
-      {ceiling && <p className="sub">{ceiling}</p>}
-      {row.abortProgress !== undefined ? (
-        <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
-      ) : row.dispatch !== undefined ? (
-        <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
-      ) : (
-        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
-      )}
-      {row.setupError !== undefined && (
-        <MessagePreview value={row.setupError} tone="alert" expandable />
-      )}
-      {row.blockers.map((blocker) => (
-        <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
-      ))}
       {selected && confirmingAbort && (
         <p className="message alert" id={abortConfirmationId} role="status">
           <span aria-hidden>! </span>abort {row.slug}? Enter confirms, Esc cancels

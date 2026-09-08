@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
 import {
+  autoMergeAction,
   buildRowActions,
   canPreviewPointer,
   handleRowControlKey,
@@ -246,42 +247,106 @@ test('running and paused repositories use terminal-compatible control vocabulary
   expect(controlLandmark(mixed)).toContain('repository <b class="off">PAUSED</b>')
 })
 
-test('build row controls follow authoritative status availability', () => {
+test('build row controls contain only authoritative lifecycle and destructive actions', () => {
   const expected: Array<[DashboardBuild['status'], string[]]> = [
-    ['queued', ['ABORT', 'DISCARD', 'AUTO MERGE', 'DETAILS']],
-    ['running', ['ABORT', 'PAUSE', 'AUTO MERGE', 'DETAILS']],
-    ['pausing', ['ABORT', 'CANCEL PAUSE', 'AUTO MERGE', 'DETAILS']],
-    ['paused', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
-    ['resuming', ['ABORT', 'AUTO MERGE', 'DETAILS']],
-    ['blocked', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
-    ['aborting', ['DETAILS']],
-    ['cleaning', ['DETAILS']],
+    ['queued', ['ABORT', 'DISCARD']],
+    ['running', ['ABORT', 'PAUSE']],
+    ['pausing', ['ABORT', 'CANCEL PAUSE']],
+    ['paused', ['ABORT', 'RESUME']],
+    ['resuming', ['ABORT']],
+    ['blocked', ['ABORT', 'RESUME']],
+    ['aborting', []],
+    ['cleaning', []],
   ]
   for (const [status, labels] of expected) {
     expect(
-      buildRowActions(build({ status }), false).map((action) => action.label),
+      buildRowActions(build({ status })).map((action) => action.label),
       status,
     ).toEqual(labels)
   }
-  expect(buildRowActions(build({ status: 'running' }), true).at(-1)?.label).toBe('CLOSE')
 })
 
-test('rendered row registers follow row heads and qualify control names by target', () => {
+test('rendered build controls follow previews and direct controls name their target', () => {
   const fixtures = models()
-  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
   const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const slug = 'plan-blocked-dashboard'
   const start = html.indexOf(`id="build-${slug}"`)
-  const row = html.slice(start, html.indexOf('</li>', start))
+  const end = html.indexOf('id="build-implement-blocked-dashboard"', start)
+  const row = html.slice(start, end)
 
-  expect(row.indexOf('class="rowhead"')).toBeGreaterThan(-1)
-  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="rowhead"'))
-  for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']) {
+  expect(row).toContain(`aria-label="Open details for ${slug}"`)
+  expect(row).toContain('aria-expanded="false"')
+  expect(row).toContain(`aria-controls="detail-${slug}"`)
+  expect(row).toContain(`aria-label="Auto merge off for ${slug}"`)
+  expect(row).toContain('aria-pressed="false"')
+  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="message alert"'))
+  for (const label of ['ABORT', 'RESUME']) {
     expect(row).toContain(`aria-label="${label} ${slug}"`)
+  }
+  for (const duplicate of ['AUTO MERGE', 'DETAILS', 'CLOSE']) {
+    expect(row).not.toContain(`aria-label="${duplicate} ${slug}"`)
   }
   const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
   const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
   expect(happy).toContain('aria-label="Controls for Harvest run h1"')
+})
+
+test('auto-merge indicator exposes all states and maps desired-state commands', () => {
+  expect(autoMergeAction(build({ autoMerge: 'off' }))).toBe('auto-merge-on')
+  for (const state of ['requested', 'enabled', 'cancelling'] as const) {
+    expect(autoMergeAction(build({ autoMerge: state })), state).toBe('auto-merge-off')
+  }
+
+  const base = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
+  const slug = 'plan-blocked-dashboard'
+  for (const state of ['off', 'requested', 'enabled', 'cancelling'] as const) {
+    const fixtures = {
+      ...base,
+      mixed: {
+        ...base.mixed,
+        builds: base.mixed.builds.map((row) =>
+          row.slug === slug ? { ...row, autoMerge: state } : row,
+        ),
+      },
+    }
+    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const button = html.match(
+      new RegExp(
+        `<button[^>]*(?:data-am="${state}"[^>]*aria-label="Auto merge ${state} for ${slug}"|aria-label="Auto merge ${state} for ${slug}"[^>]*data-am="${state}")[^>]*>`,
+      ),
+    )?.[0]
+    expect(button, state).toBeDefined()
+    expect(button, state).toContain(
+      `aria-pressed="${state === 'requested' || state === 'enabled'}"`,
+    )
+    expect(button?.includes('disabled=""'), state).toBe(false)
+  }
+
+  const pendingHtml = renderWebFrame({ ...spec, controlPending: true }, base, {
+    css: '',
+    fontCss: '',
+  })
+  expect(
+    pendingHtml.match(new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`)),
+  ).toBeTruthy()
+
+  const unavailable = {
+    ...base,
+    mixed: {
+      ...base.mixed,
+      builds: base.mixed.builds.map((row) =>
+        row.slug === slug ? { ...row, status: 'aborting' as const } : row,
+      ),
+    },
+  }
+  const unavailableHtml = renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
+  expect(
+    unavailableHtml.match(
+      new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`),
+    ),
+  ).toBeTruthy()
 })
 
 test('hover frame keeps committed and preview state independent', () => {
@@ -298,13 +363,24 @@ test('hover frame keeps committed and preview state independent', () => {
   expect(selectedRow).not.toBe(hoveredRow)
   expect(evidenceText(html)).toContain('ABORT')
   expect(evidenceText(html)).toContain('RESUME')
-  expect(evidenceText(html)).toContain('DETAILS')
+  expect(evidenceText(html)).not.toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
   expect(spec.emulateFineHover).toBe(true)
   expect(captureStateCss(spec)).toContain('.row[data-hovered] .row-controls')
   expect(html).toContain(
     '<style data-capture-state>.row[data-hovered] .row-controls { visibility: visible;',
   )
+})
+
+test('expanded detail is controlled and named by the build title', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const slug = 'plan-blocked-dashboard'
+
+  expect(html).toContain(`aria-label="Close details for ${slug}"`)
+  expect(html).toContain(`aria-expanded="true" aria-controls="detail-${slug}"`)
+  expect(html).toContain(`id="detail-${slug}" aria-label="${slug} detail"`)
 })
 
 test('answer frames expose only row-local submit and cancel while retaining focused input and detail', () => {
@@ -325,6 +401,12 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).toContain('<input autofocus="" type="text"')
     expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
     expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
+    expect(html).toMatch(
+      /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
+    )
+    expect(html).toMatch(
+      /<button type="button" class="word am" data-am="off" disabled="" aria-label="Auto merge off for plan-blocked-dashboard"/,
+    )
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
     for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
       expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)

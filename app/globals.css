@@ -491,14 +491,27 @@ h3 {
 input.short {
   width: 24ch;
 }
-.tokens .am[data-am="enabled"] {
-  color: var(--ok);
+.tokens .am b {
+  font-weight: 700;
+}
+.tokens .am[data-am="off"],
+.tokens .am[data-am="cancelling"] {
+  color: var(--warn);
 }
 .tokens .am[data-am="requested"] {
   color: var(--live);
 }
-.tokens .am[data-am="cancelling"] {
-  color: var(--warn);
+.tokens .am[data-am="enabled"] {
+  color: var(--ok);
+}
+.tokens .am:hover:not(:disabled) {
+  color: var(--live);
+}
+.tokens .am:active:not(:disabled) {
+  color: var(--ground);
+}
+.tokens .am:disabled {
+  color: var(--slack);
 }
 /* Keep this warning on --title while --warn dims with surrounding row details. */
 .tokens .held {
@@ -560,11 +573,11 @@ input.short {
 .rows[data-ticket-col="0"] .rowline .status {
   grid-column: 4;
 }
-/* The register always occupies its row. visibility hides its controls from
- * paint and the tab order without changing any row geometry. */
+/* The post-preview register always occupies its row. visibility hides its
+ * controls from paint and the tab order without changing any row geometry. */
 .row-controls {
   display: grid;
-  grid-template-columns: repeat(4, max-content);
+  grid-template-columns: repeat(2, max-content);
   align-items: baseline;
   column-gap: 2ch;
   height: var(--row);
@@ -860,8 +873,8 @@ textarea {
   }
   .row-controls {
     grid-template-columns: repeat(2, max-content);
-    grid-template-rows: repeat(2, var(--row));
-    height: calc(var(--row) * 2);
+    grid-template-rows: var(--row);
+    height: var(--row);
   }
   .tokens,
   .rows[data-ticket-col="0"] .tokens {
