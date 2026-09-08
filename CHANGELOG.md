@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#274](https://github.com/defrex/autobuild/pull/274) — Guarantee Bun availability in Vercel sandboxes
 - [#271](https://github.com/defrex/autobuild/pull/271) — Run Autobuild builds in Vercel Sandbox
 - [#270](https://github.com/defrex/autobuild/pull/270) — Move build actions below progress and add direct controls
 - [#269](https://github.com/defrex/autobuild/pull/269) — Make blocked-build answer mode exclusive
