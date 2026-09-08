@@ -376,6 +376,20 @@ function continueMessage(spec: SessionSpec): string {
 
 // ── The runner ───────────────────────────────────────────────────────────────
 
+function isPublicationBoundary(event: AbEvent, spec: SessionSpec, session: string): boolean {
+  if (
+    event.type !== 'publication.requested' ||
+    event.actor.kind !== 'agent' ||
+    event.actor.session !== session
+  )
+    return false
+  if (spec.phase === 'implement')
+    return event.payload.operation === 'implement' && event.payload.round === spec.round
+  if (spec.phase === 'reconcile') return event.payload.operation === 'reconcile'
+  if (spec.phase === 'finalize') return event.payload.operation === 'finalize'
+  return false
+}
+
 export function publicationPending(events: readonly AbEvent[]): boolean {
   return events.some(
     (request) =>
@@ -1672,6 +1686,7 @@ export class BuildRunner {
       const terminal = since.some(
         (event) =>
           spec.isTerminal(event) ||
+          isPublicationBoundary(event, spec, session) ||
           (event.type === 'escalation.raised' &&
             event.actor.kind === 'agent' &&
             event.actor.session === session),
@@ -1931,6 +1946,7 @@ export class BuildRunner {
     const terminal = since.some(
       (event) =>
         spec.isTerminal(event) ||
+        isPublicationBoundary(event, spec, session) ||
         (event.type === 'escalation.raised' &&
           event.actor.kind === 'agent' &&
           event.actor.session === session),

@@ -129,6 +129,22 @@ function assertNoPriorTerminal(events: AbEvent[], env: CliEnv): void {
           'Every phase ends with exactly one terminal command (§8.4).',
       )
     }
+    if (
+      event.type === 'publication.requested' &&
+      event.actor.kind === 'agent' &&
+      event.actor.session === env.session &&
+      ((env.phase === 'implement' &&
+        event.payload.operation === 'implement' &&
+        event.payload.round === env.round) ||
+        (env.phase === 'reconcile' && event.payload.operation === 'reconcile') ||
+        (env.phase === 'finalize' && event.payload.operation === 'finalize'))
+    ) {
+      throw new Error(
+        `second terminal call rejected (D5): ${event.type} for ` +
+          `${env.phase}@${env.round} already recorded at seq ${event.seq}. ` +
+          'Remote publication is pending; do not run ab done again (§8.4).',
+      )
+    }
     if (event.type !== spec.terminalEvent) continue
     if (
       (event.type === 'verify.completed' || event.type === 'finalize.completed') &&

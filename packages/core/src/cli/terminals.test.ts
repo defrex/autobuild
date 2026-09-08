@@ -477,6 +477,14 @@ describe('ab done — implement', () => {
     })
     expect(deps.forge.pushes).toEqual([])
     expect(await eventTypes()).not.toContain('implement.completed')
+    await expect(
+      done(deps, { notes: await stash('remote-notes-again.md', 'duplicate\n') }),
+    ).rejects.toThrow(/second terminal call rejected.*Remote publication is pending/s)
+    expect(
+      (await store.getEvents(BUILD)).filter(
+        (candidate) => candidate.type === 'publication.requested',
+      ),
+    ).toHaveLength(1)
   })
 
   test('.ab/ scratch never dirties the worktree — ab context establishes the gitignore itself (§7, §8.3)', async () => {

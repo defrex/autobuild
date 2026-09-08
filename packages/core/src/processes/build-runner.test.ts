@@ -3887,6 +3887,43 @@ describe('phase-session budget', () => {
   })
 })
 
+describe('remote publication terminal boundary', () => {
+  test('a producer publication request parks cleanly without a false phase failure', async () => {
+    const h = await makeHarness({
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        handlers.implement = async (ctx: ScriptContext) => {
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'implement-notes', content: 'remote implementation complete' }],
+            (deposited) => ({
+              actor: agentActor('implement', sessionOf(ctx)),
+              type: 'publication.requested',
+              payload: {
+                operation: 'implement',
+                branch: BRANCH,
+                sha: 'a'.repeat(40),
+                round: 1,
+                base: 'b'.repeat(40),
+                artifact: refOf(deposited),
+              },
+            }),
+          )
+          return defaultTurnResult('publication requested')
+        }
+        return handlers
+      },
+    })
+
+    await h.br.run()
+
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'publication.requested')).toHaveLength(1)
+    expect(ofType(events, 'phase.failed')).toEqual([])
+    expect(ofType(events, 'session.ended')).toHaveLength(3)
+  })
+})
+
 // ── No terminal (D5, §8.4) ───────────────────────────────────────────────────
 
 describe('no-terminal retry policy (D5)', () => {

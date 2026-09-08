@@ -334,7 +334,8 @@ the named runtime variables and scoped `AB_STORE`/`AB_TOKEN` enter guest
 commands. Never list Store, Forge, Vercel, or private-clone credentials there.
 The clone identity is upload-pack-only and scrubbed from Git config before an
 agent starts. Agents cannot push. Remote phase terminals deposit a durable
-publication request and park; after VM stop and lease release, the local kernel
+publication request and park; that successful `ab done` is the one terminal and
+must not be repeated. After VM stop and lease release, the local kernel
 publishes the exact SHA/branch through a temporary narrow firewall transform,
 verifies it, and performs PR work locally. Ordinary completion deletes the VM.
 Branch config, installed skills, relative/package plugins, setup, and phase CLI

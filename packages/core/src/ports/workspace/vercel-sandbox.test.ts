@@ -20,10 +20,15 @@ class FakeSandbox implements VercelSandboxHandle {
   deletes = 0
   failPush = false
   failRestore = false
+  failSetupCommand: string | undefined
+  provisioned = false
   detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
 
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
+    if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
+    if (params.cmd === 'touch') this.provisioned = true
+    if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
     if (params.detached === true) {
       return {
         exitCode: null,
@@ -152,6 +157,102 @@ describe('VercelSandboxProvider', () => {
       }),
     )
     expect(JSON.stringify(h.sandbox.commands)).not.toContain('forge-secret')
+  })
+
+  test('deletes a partial setup so the next provisioning pass rematerializes cleanly', async () => {
+    const first = new FakeSandbox()
+    first.failSetupCommand = 'tar'
+    const second = new FakeSandbox()
+    let creates = 0
+    const facade: VercelSandboxFacade = {
+      get: async () => (creates === 1 && first.deletes === 0 ? first : null),
+      create: async () => {
+        creates += 1
+        return creates === 1 ? first : second
+      },
+    }
+    const exec: Exec = async (cmd) => {
+      const ref = cmd.at(-1)
+      if (cmd.includes('get-url'))
+        return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+      return {
+        stdout: ref === 'refs/heads/main' ? `${SHA}\t${ref}\n` : '',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    const provider = new VercelSandboxProvider({
+      config: {
+        image: 'vercel/sandbox/universal:latest',
+        vcpus: 4,
+        timeoutSeconds: 2700,
+        failoverRegions: [],
+        environmentVariables: [],
+      },
+      env: { GITHUB_TOKEN: 'forge-secret' },
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-store-token',
+      repo: '/repo',
+      facade,
+      exec,
+      packageArchive: async () => new Uint8Array([1, 2, 3]),
+    })
+
+    await expect(
+      provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(/tar exited 1/)
+    expect(first.deletes).toBe(1)
+
+    const workspace = await provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(workspace.provider).toBe('vercel-sandbox')
+    expect(creates).toBe(2)
+    expect(second.provisioned).toBe(true)
+  })
+
+  test('discards an existing named sandbox without the completed setup marker', async () => {
+    const incomplete = new FakeSandbox()
+    const replacement = new FakeSandbox()
+    let created = false
+    const provider = new VercelSandboxProvider({
+      config: {
+        image: 'vercel/sandbox/universal:latest',
+        vcpus: 4,
+        timeoutSeconds: 2700,
+        failoverRegions: [],
+        environmentVariables: [],
+      },
+      env: { GITHUB_TOKEN: 'forge-secret' },
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-store-token',
+      repo: '/repo',
+      facade: {
+        get: async () => incomplete,
+        create: async () => {
+          created = true
+          return replacement
+        },
+      },
+      exec: async (cmd) => {
+        const ref = cmd.at(-1)
+        if (cmd.includes('get-url'))
+          return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+        return {
+          stdout: ref === 'refs/heads/main' ? `${SHA}\t${ref}\n` : '',
+          stderr: '',
+          exitCode: 0,
+        }
+      },
+      packageArchive: async () => new Uint8Array([1]),
+    })
+
+    await provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+    expect(incomplete.deletes).toBe(1)
+    expect(created).toBe(true)
+    expect(replacement.provisioned).toBe(true)
   })
 
   test('launches the environment-supervised child with only allowlisted and Store values', async () => {

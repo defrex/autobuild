@@ -18,6 +18,7 @@ import { spawnExec } from './git-worktree'
 
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
+export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
 
 export interface VercelCommand {
   readonly exitCode: number | null
@@ -310,6 +311,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
       )
 
+    if (sandbox !== null) {
+      const marker = await sandbox.runCommand({
+        cmd: 'test',
+        args: ['-f', VERCEL_PROVISIONED_MARKER],
+      })
+      if (marker.exitCode === 0) {
+        await sandbox.stop()
+      } else {
+        // A named VM without the marker is a crashed/legacy provisioning
+        // attempt. Never expose its potentially unscrubbed checkout to agents.
+        await sandbox.delete()
+        sandbox = null
+      }
+    }
+
     if (sandbox === null) {
       const username =
         this.options.config.gitUsernameEnv === undefined
@@ -341,55 +357,71 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           : {}),
         networkPolicy: uploadPackPolicy(origin, readAuth),
       })
-      const sourcePath = `/vercel/sandbox/${origin.directory}`
-      await commandOrThrow(sandbox, { cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] })
-      await commandOrThrow(sandbox, {
-        cmd: 'git',
-        args: ['checkout', '-B', opts.branch, base],
-        cwd: VERCEL_WORKSPACE_PATH,
-      })
-      await commandOrThrow(sandbox, {
-        cmd: 'git',
-        args: ['remote', 'set-url', 'origin', origin.url],
-        cwd: VERCEL_WORKSPACE_PATH,
-      })
-      for (const key of [
-        'credential.helper',
-        'http.extraheader',
-        `http.${origin.url}.extraheader`,
-      ]) {
-        const result = await sandbox.runCommand({
+      try {
+        const sourcePath = `/vercel/sandbox/${origin.directory}`
+        await commandOrThrow(sandbox, { cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] })
+        await commandOrThrow(sandbox, {
           cmd: 'git',
-          args: ['config', '--local', '--unset-all', key],
+          args: ['checkout', '-B', opts.branch, base],
           cwd: VERCEL_WORKSPACE_PATH,
         })
-        if (result.exitCode !== 0 && result.exitCode !== 5)
-          throw new Error(`failed to scrub git config ${key}`)
+        await commandOrThrow(sandbox, {
+          cmd: 'git',
+          args: ['remote', 'set-url', 'origin', origin.url],
+          cwd: VERCEL_WORKSPACE_PATH,
+        })
+        for (const key of [
+          'credential.helper',
+          'http.extraheader',
+          `http.${origin.url}.extraheader`,
+        ]) {
+          const result = await sandbox.runCommand({
+            cmd: 'git',
+            args: ['config', '--local', '--unset-all', key],
+            cwd: VERCEL_WORKSPACE_PATH,
+          })
+          if (result.exitCode !== 0 && result.exitCode !== 5)
+            throw new Error(`failed to scrub git config ${key}`)
+        }
+        const archive = await (this.options.packageArchive ?? defaultPackageArchive)()
+        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
+        await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
+        await commandOrThrow(sandbox, {
+          cmd: 'tar',
+          args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
+        })
+        await commandOrThrow(sandbox, {
+          cmd: 'bun',
+          args: ['install', '--production'],
+          cwd: VERCEL_AUTOBUILD_PATH,
+        })
+        // Repository dependencies precede branch-owned package plugin loading.
+        // The fixed bootstrap supports the consuming repository's lockfile; its
+        // configured setup command still runs at every runner attachment.
+        await commandOrThrow(sandbox, {
+          cmd: 'sh',
+          args: [
+            '-c',
+            'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+          ],
+          cwd: VERCEL_WORKSPACE_PATH,
+        })
+        await commandOrThrow(sandbox, {
+          cmd: 'touch',
+          args: [VERCEL_PROVISIONED_MARKER],
+        })
+        await sandbox.stop()
+      } catch (error) {
+        try {
+          await sandbox.delete()
+        } catch (deleteError) {
+          throw new AggregateError(
+            [error, deleteError],
+            `sandbox ${name} setup failed and its incomplete environment could not be deleted`,
+          )
+        }
+        throw error
       }
-      const archive = await (this.options.packageArchive ?? defaultPackageArchive)()
-      await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
-      await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
-      await commandOrThrow(sandbox, {
-        cmd: 'tar',
-        args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
-      })
-      await commandOrThrow(sandbox, {
-        cmd: 'bun',
-        args: ['install', '--production'],
-        cwd: VERCEL_AUTOBUILD_PATH,
-      })
-      // Repository dependencies precede branch-owned package plugin loading.
-      // The fixed bootstrap supports the consuming repository's lockfile; its
-      // configured setup command still runs at every runner attachment.
-      await commandOrThrow(sandbox, {
-        cmd: 'sh',
-        args: [
-          '-c',
-          'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
-        ],
-        cwd: VERCEL_WORKSPACE_PATH,
-      })
-      await sandbox.stop()
     }
     this.origins.set(name, origin)
     this.sessions.set(name, sandbox)

@@ -421,7 +421,10 @@ contents write. It must be distinct from Forge and Vercel credentials and may
 not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
-credential. Branch publication is requested durably, then performed by the
+credential. Provisioning writes its readiness marker only after all scrubbing,
+distribution installation, and dependency bootstrap complete; a retry deletes
+any named sandbox without that marker instead of adopting partial setup. Branch
+publication is requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
