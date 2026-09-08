@@ -259,6 +259,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
   private readonly active = new Set<string>()
+  /** A failed stop leaves execution state unknown until a later stop/delete succeeds. */
+  private readonly uncertain = new Set<string>()
   private readonly origins = new Map<string, ReturnType<typeof cleanGithubOrigin>>()
   private readonly sessions = new Map<string, VercelSandboxHandle>()
 
@@ -439,6 +441,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const sandbox = this.sessions.get(handle.ref) ?? (await this.facade.get(handle.ref))
     if (sandbox === null) return
     await sandbox.delete()
+    this.active.delete(handle.ref)
+    this.uncertain.delete(handle.ref)
     this.sessions.delete(handle.ref)
     this.origins.delete(handle.ref)
   }
@@ -448,6 +452,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (this.active.has(ref)) throw new Error(`sandbox ${ref} already has a live execution`)
     const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref))
     if (sandbox === null) throw new Error(`sandbox ${ref} no longer exists`)
+    if (this.uncertain.has(ref)) {
+      // A prior wait/stop failure may have left agent code alive. Confirm a
+      // stop before starting another runner in the same environment.
+      await sandbox.stop()
+      this.uncertain.delete(ref)
+    }
     this.sessions.set(ref, sandbox)
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
@@ -474,7 +484,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           await sandbox.stop()
         } catch (error) {
           // Do not retain a potentially expired/stale SDK handle. A later
-          // execution or abort cleanup re-resolves the named sandbox.
+          // execution must first re-resolve and confirm teardown.
+          this.uncertain.add(ref)
           this.sessions.delete(ref)
           throw error
         } finally {
@@ -509,8 +520,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }
 
   private async publish(input: { ref: string; sha: string; branch: string }): Promise<void> {
-    if (this.active.has(input.ref))
-      throw new Error('publication is forbidden while a sandbox execution is live')
+    if (this.active.has(input.ref) || this.uncertain.has(input.ref)) {
+      throw new Error('publication is forbidden until sandbox execution teardown is confirmed')
+    }
     if (!/^[0-9a-f]{40,64}$/i.test(input.sha) || !/^ab\/[a-z0-9][a-z0-9-]*$/.test(input.branch)) {
       throw new Error('publication requires an exact commit SHA and canonical build branch')
     }

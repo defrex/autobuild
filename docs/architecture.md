@@ -342,10 +342,13 @@ supervision. Local children carry a positive parent PID and retain their
 watchdog/process-group reaper; remote children cannot see a meaningful host PID,
 so the detached SDK command plus VM stop owns full teardown. Scoped Store facts
 are the only state channel. Remote terminals append `publication.requested` and
-park. Once command completion is observed and the execution lease is released,
-the local supervisor uses the provider's exact SHA/branch publication capability,
-verifies the remote head, and records the ordinary completion; PR API operations
-remain on the dispatcher. Normal VM sessions never receive Forge credentials.
+park. Only confirmed VM teardown plus execution-lease release permits the local
+supervisor to use the provider's exact SHA/branch publication capability; a
+rejected/uncertain executor completion leaves the request pending. The supervisor
+verifies the remote head and records the ordinary completion; PR API operations
+remain on the dispatcher. A failed finalize post-step publication records the
+ordinary failure-tolerant step outcome and follow-up observation rather than
+wedging the green build. Normal VM sessions never receive Forge credentials.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),

@@ -1823,8 +1823,10 @@ class DispatchLoop {
             }
           },
           async (error) => {
+            // A rejected executor completion cannot prove the remote VM was
+            // stopped. Release liveness ownership, but leave publication
+            // pending until a later confirmed execution teardown.
             await this.wiring.store.releaseLease(slug, instance)
-            await this.settlePendingPublication(slug)
             throw error
           },
         )

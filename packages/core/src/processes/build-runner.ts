@@ -414,9 +414,8 @@ export function publicationPending(events: readonly AbEvent[]): boolean {
           )
         return (
           event.type === 'finalize.step-completed' &&
-          event.payload.ok &&
           event.payload.step === request.payload.step &&
-          event.payload.headSha === request.payload.sha
+          (!event.payload.ok || event.payload.headSha === request.payload.sha)
         )
       }),
   )

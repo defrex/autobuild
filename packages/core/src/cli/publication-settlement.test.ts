@@ -174,6 +174,48 @@ describe('settlePendingPublication', () => {
     expect(h.published).toEqual([])
   })
 
+  test('a failed finalize-step publication records the ordinary failed outcome and follow-up', async () => {
+    const h = await seed()
+    let attempts = 0
+    h.deps.publication = {
+      publish: async () => {
+        attempts += 1
+        throw new Error('branch rejected')
+      },
+    }
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'finalize-step',
+        step: 'release-notes',
+        branch: BRANCH,
+        sha: SHA,
+      },
+    })
+
+    await settlePendingPublication(h.deps, SLUG)
+    await settlePendingPublication(h.deps, SLUG)
+
+    expect(attempts).toBe(1)
+    const events = await h.store.getEvents(SLUG)
+    expect(events.find((event) => event.type === 'finalize.step-completed')).toMatchObject({
+      actor: KERNEL,
+      payload: {
+        step: 'release-notes',
+        ok: false,
+        note: 'finalize publication failed: branch rejected',
+      },
+    })
+    expect(events.find((event) => event.type === 'observation.recorded')).toMatchObject({
+      actor: KERNEL,
+      payload: {
+        kind: 'followup',
+        summary: expect.stringContaining('branch rejected'),
+      },
+    })
+  })
+
   test('finalize hosts attachments, applies auto-merge intent, and posts the durable summary', async () => {
     const h = await seed({ attachments: true })
     h.forge.setHeadSha(SHA)

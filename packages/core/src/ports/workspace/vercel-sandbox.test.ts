@@ -329,6 +329,9 @@ describe('VercelSandboxProvider', () => {
       workspaceRef: workspace.ref,
     })
     await expect(failed.completion).rejects.toThrow(/sandbox stop failed/)
+    await expect(
+      h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
+    ).rejects.toThrow(/teardown is confirmed/)
 
     const retried = await h.provider.buildExecution.start({
       slug: 'remote-build',
@@ -439,7 +442,7 @@ describe('VercelSandboxProvider', () => {
     })
     await expect(
       h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
-    ).rejects.toThrow(/execution is live/)
+    ).rejects.toThrow(/teardown is confirmed/)
     await execution.stop()
   })
 

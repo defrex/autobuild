@@ -56,6 +56,21 @@ describe('publicationPending', () => {
     ).toBe(true)
   })
 
+  test('a failed finalize-step outcome settles the publication park without a head SHA', () => {
+    const request = event(3, 'publication.requested', {
+      operation: 'finalize-step',
+      step: 'release-notes',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+    })
+    const failed = event(4, 'finalize.step-completed', {
+      step: 'release-notes',
+      ok: false,
+      note: 'finalize publication failed: rejected',
+    })
+    expect(publicationPending([request, failed])).toBe(false)
+  })
+
   test('correlates finalize-step completion by step and sequence', () => {
     const earlier = event(2, 'finalize.step-completed', { step: 'format', ok: true })
     const request = event(3, 'publication.requested', {

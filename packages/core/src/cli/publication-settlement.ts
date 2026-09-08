@@ -48,9 +48,8 @@ export async function settlePendingPublication(
         )
       return (
         event.type === 'finalize.step-completed' &&
-        event.payload.ok &&
         event.payload.step === request.payload.step &&
-        event.payload.headSha === request.payload.sha
+        (!event.payload.ok || event.payload.headSha === request.payload.sha)
       )
     })
   const request = events.findLast(
@@ -66,7 +65,28 @@ export async function settlePendingPublication(
   if (ref === undefined)
     throw new Error(`build ${slug} has a publication request but no open workspace`)
 
-  await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+  try {
+    await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+  } catch (error) {
+    if (request.payload.operation !== 'finalize-step') throw error
+    const detail = error instanceof Error ? error.message : String(error)
+    const note = `finalize publication failed: ${detail}`
+    await deps.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.step-completed',
+      payload: { step: request.payload.step, ok: false, note },
+    })
+    await deps.store.append(slug, {
+      actor: KERNEL,
+      type: 'observation.recorded',
+      payload: {
+        id: deps.ids('o'),
+        kind: 'followup',
+        summary: `finalize step "${request.payload.step}" failed — needs manual follow-up: ${note}`,
+      },
+    })
+    return
+  }
   events = await deps.store.getEvents(slug)
   if (completed(request)) return
 
