@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#263](https://github.com/defrex/autobuild/pull/263) — Remove ticket management from the web dashboard
 - [#262](https://github.com/defrex/autobuild/pull/262) — Protect CLI ticket defaults from operator queue changes
 - [#261](https://github.com/defrex/autobuild/pull/261) — Turn Tickets into a configured triage desk
 - [#260](https://github.com/defrex/autobuild/pull/260) — Document disabled and held state emphasis exceptions
