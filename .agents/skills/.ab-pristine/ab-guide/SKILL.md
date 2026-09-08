@@ -10,6 +10,10 @@ This skill describes the *system*. It drives no phase and changes no files.
 
 ## How to use this skill
 
+For first-time or existing-repository installation, including the local versus
+Vercel decision and readiness check, follow the canonical
+[repository setup procedure](references/setup.md).
+
 Two rules come first, because they govern everything below.
 
 **The repository decides its own configuration; this guide only describes the

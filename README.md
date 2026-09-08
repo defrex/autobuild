@@ -74,8 +74,17 @@ ab init
 ```
 
 Vendors the editable `ab-*` skills, writes a stack-neutral config, and hands
-repository-aware setup to a coding agent — see the
-[configuration reference](docs/configuration.md) for details.
+repository-aware setup to a coding agent. Follow the canonical
+[installation and setup procedure](docs/setup.md) to keep local worktrees or
+explicitly configure Vercel, then commit the setup and check its real execution
+environment without creating build history:
+
+```sh
+ab init --validate
+```
+
+See the [configuration reference](docs/configuration.md) for every field. Only
+a clean readiness result should be followed by:
 
 ```sh
 ab dispatch
