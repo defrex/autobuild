@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
 import {
+  autoMergeAction,
   buildRowActions,
   canPreviewPointer,
-  fastextCells,
   handleRowControlKey,
 } from '../app/dashboard/BuildsView'
 import {
@@ -11,7 +11,6 @@ import {
   checkEvidence,
   chromiumBinary,
   evidenceText,
-  fastextMarkup,
   renderWebFrame,
   WEB_FRAME_SPECS,
   type WebFixtureModels,
@@ -125,24 +124,25 @@ test('every web frame renders its required evidence and none of the forbidden', 
     expect(() => checkEvidence(spec, html), spec.id).not.toThrow()
     expect(html, spec.id).not.toContain('<script')
     expect(html, spec.id).toContain('<!doctype html>')
+    if (spec.id.startsWith('builds-')) {
+      expect(html, spec.id).not.toContain('class="fastext"')
+      for (const retired of ['PAUSE ALL', 'RESUME ALL', 'DESELECT']) {
+        expect(evidenceText(html), spec.id).not.toContain(retired)
+      }
+    }
   }
 })
 
-test('selected Harvest frames keep fixed Fastext slots and repeat the row run action', () => {
+test('selected Harvest frames keep the run action in the row register without a footer', () => {
   const fixtures = models()
   for (const id of ['builds-harvest-wide', 'builds-harvest-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = fastextMarkup(html)
 
-    expect(footer).toContain('data-slot="red" data-empty="true"')
-    expect(footer).toContain('data-slot="green"><kbd>p</kbd><span>RESUME</span>')
-    expect(footer).toContain('data-slot="yellow"><kbd>h</kbd><span>HARVEST</span>')
     expect(html).toContain('aria-label="RESUME Harvest run h1"')
-    expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>DESELECT</span>')
-    expect(evidenceText(footer ?? '')).not.toContain('PAUSE ALL')
-    expect(evidenceText(footer ?? '')).not.toContain('RESUME ALL')
+    expect(html).not.toContain('class="fastext"')
+    expect(evidenceText(html)).not.toContain('DESELECT')
   }
 })
 
@@ -214,7 +214,10 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
     expect(html).toContain('<nav class="line navline"')
-    expect(html).toContain('role="toolbar"')
+    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(nav).toContain('class="loading-controls"')
+    expect(nav?.match(/class="skeleton-control control-item"/g)).toHaveLength(6)
+    expect(html).not.toContain('role="toolbar"')
     expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
     const loadingStart = html.indexOf('<div class="loading-state">')
     const skeletonStart = html.indexOf('<div class="skeletons"', loadingStart)
@@ -224,47 +227,126 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(loadingAnnouncement.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(html.match(/data-loading-row=""/g)).toHaveLength(5)
     expect(html).toContain('<div class="skeletons" aria-hidden="true">')
+    expect(html).not.toContain('skeleton-dispatch')
     expect(html).not.toContain('polling')
     expect(html).not.toContain('class="status"')
   }
 })
 
-test('build row controls follow authoritative status availability and Fastext labels', () => {
+test('running and paused repositories use terminal-compatible control vocabulary', () => {
+  const fixtures = models()
+  const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  const mixedSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
+  const mixed = renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
+  const controlLandmark = (html: string) =>
+    html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0] ?? ''
+
+  expect(controlLandmark(happy)).not.toContain('repository RUNNING')
+  expect(controlLandmark(happy)).not.toContain('repository PAUSED')
+  expect(controlLandmark(mixed)).toContain('repository <b class="off">PAUSED</b>')
+})
+
+test('build row controls contain only authoritative lifecycle and destructive actions', () => {
   const expected: Array<[DashboardBuild['status'], string[]]> = [
-    ['queued', ['ABORT', 'DISCARD', 'AUTO MERGE', 'DETAILS']],
-    ['running', ['ABORT', 'PAUSE', 'AUTO MERGE', 'DETAILS']],
-    ['pausing', ['ABORT', 'CANCEL PAUSE', 'AUTO MERGE', 'DETAILS']],
-    ['paused', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
-    ['resuming', ['ABORT', 'AUTO MERGE', 'DETAILS']],
-    ['blocked', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
-    ['aborting', ['DETAILS']],
-    ['cleaning', ['DETAILS']],
+    ['queued', ['ABORT', 'DISCARD']],
+    ['running', ['ABORT', 'PAUSE']],
+    ['pausing', ['ABORT', 'CANCEL PAUSE']],
+    ['paused', ['ABORT', 'RESUME']],
+    ['resuming', ['ABORT']],
+    ['blocked', ['ABORT', 'RESUME']],
+    ['aborting', []],
+    ['cleaning', []],
   ]
   for (const [status, labels] of expected) {
     expect(
-      buildRowActions(build({ status }), false).map((action) => action.label),
+      buildRowActions(build({ status })).map((action) => action.label),
       status,
     ).toEqual(labels)
   }
-  expect(buildRowActions(build({ status: 'running' }), true).at(-1)?.label).toBe('CLOSE')
 })
 
-test('rendered row registers follow row heads and qualify control names by target', () => {
+test('rendered build controls follow previews and direct controls name their target', () => {
   const fixtures = models()
-  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
   const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const slug = 'plan-blocked-dashboard'
   const start = html.indexOf(`id="build-${slug}"`)
-  const row = html.slice(start, html.indexOf('</li>', start))
+  const end = html.indexOf('id="build-implement-blocked-dashboard"', start)
+  const row = html.slice(start, end)
 
-  expect(row.indexOf('class="rowhead"')).toBeGreaterThan(-1)
-  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="rowhead"'))
-  for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']) {
+  expect(row).toContain(`aria-label="Open details for ${slug}"`)
+  expect(row).toContain('aria-expanded="false"')
+  expect(row).toContain(`aria-controls="detail-${slug}"`)
+  expect(row).toContain(`aria-label="Auto merge off for ${slug}"`)
+  expect(row).toContain('aria-pressed="false"')
+  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="message alert"'))
+  for (const label of ['ABORT', 'RESUME']) {
     expect(row).toContain(`aria-label="${label} ${slug}"`)
+  }
+  for (const duplicate of ['AUTO MERGE', 'DETAILS', 'CLOSE']) {
+    expect(row).not.toContain(`aria-label="${duplicate} ${slug}"`)
   }
   const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
   const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
   expect(happy).toContain('aria-label="Controls for Harvest run h1"')
+})
+
+test('auto-merge indicator exposes all states and maps desired-state commands', () => {
+  expect(autoMergeAction(build({ autoMerge: 'off' }))).toBe('auto-merge-on')
+  for (const state of ['requested', 'enabled', 'cancelling'] as const) {
+    expect(autoMergeAction(build({ autoMerge: state })), state).toBe('auto-merge-off')
+  }
+
+  const base = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
+  const slug = 'plan-blocked-dashboard'
+  for (const state of ['off', 'requested', 'enabled', 'cancelling'] as const) {
+    const fixtures = {
+      ...base,
+      mixed: {
+        ...base.mixed,
+        builds: base.mixed.builds.map((row) =>
+          row.slug === slug ? { ...row, autoMerge: state } : row,
+        ),
+      },
+    }
+    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const button = html.match(
+      new RegExp(
+        `<button[^>]*(?:data-am="${state}"[^>]*aria-label="Auto merge ${state} for ${slug}"|aria-label="Auto merge ${state} for ${slug}"[^>]*data-am="${state}")[^>]*>`,
+      ),
+    )?.[0]
+    expect(button, state).toBeDefined()
+    expect(button, state).toContain(
+      `aria-pressed="${state === 'requested' || state === 'enabled'}"`,
+    )
+    expect(button?.includes('disabled=""'), state).toBe(false)
+  }
+
+  const pendingHtml = renderWebFrame({ ...spec, controlPending: true }, base, {
+    css: '',
+    fontCss: '',
+  })
+  expect(
+    pendingHtml.match(new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`)),
+  ).toBeTruthy()
+
+  const unavailable = {
+    ...base,
+    mixed: {
+      ...base.mixed,
+      builds: base.mixed.builds.map((row) =>
+        row.slug === slug ? { ...row, status: 'aborting' as const } : row,
+      ),
+    },
+  }
+  const unavailableHtml = renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
+  expect(
+    unavailableHtml.match(
+      new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`),
+    ),
+  ).toBeTruthy()
 })
 
 test('hover frame keeps committed and preview state independent', () => {
@@ -281,7 +363,7 @@ test('hover frame keeps committed and preview state independent', () => {
   expect(selectedRow).not.toBe(hoveredRow)
   expect(evidenceText(html)).toContain('ABORT')
   expect(evidenceText(html)).toContain('RESUME')
-  expect(evidenceText(html)).toContain('DETAILS')
+  expect(evidenceText(html)).not.toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
   expect(spec.emulateFineHover).toBe(true)
   expect(captureStateCss(spec)).toContain('.row[data-hovered] .row-controls')
@@ -290,22 +372,48 @@ test('hover frame keeps committed and preview state independent', () => {
   )
 })
 
-test('answer frames expose only submit and cancel while retaining focused input and detail', () => {
+test('expanded detail is controlled and named by the build title', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const slug = 'plan-blocked-dashboard'
+
+  expect(html).toContain(`aria-label="Close details for ${slug}"`)
+  expect(html).toContain(`aria-expanded="true" aria-controls="detail-${slug}"`)
+  expect(html).toContain(`id="detail-${slug}" aria-label="${slug} detail"`)
+})
+
+test('answer frames expose only row-local submit and cancel while retaining focused input and detail', () => {
   const fixtures = models()
   for (const id of ['builds-mixed-answer-wide', 'builds-mixed-answer-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = fastextMarkup(html)
+    const toolbar = html.match(
+      /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+    )?.[0]
+    const unrelatedToolbar = html.match(
+      /<div class="row-controls" role="toolbar" aria-label="Controls for implement-blocked-dashboard"[\s\S]*?<\/div>/,
+    )?.[0]
 
     expect(html).toContain('class="answer-step"')
     expect(html).toContain('optional guidance (empty retries)')
     expect(html).toContain('<input autofocus="" type="text"')
-    expect(footer).toContain('data-slot="red"><kbd>↵</kbd><span>SUBMIT</span>')
-    expect(footer).toContain('data-slot="green" data-empty="true"')
-    expect(footer).toContain('data-slot="yellow" data-empty="true"')
-    expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>CANCEL</span>')
-    expect(evidenceText(footer ?? '')).not.toContain('RESUME')
+    expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
+    expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
+    expect(html).toMatch(
+      /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
+    )
+    expect(html).toMatch(
+      /<button type="button" class="word am" data-am="off" disabled="" aria-label="Auto merge off for plan-blocked-dashboard"/,
+    )
+    expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
+    for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
+      expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
+    }
+    expect(unrelatedToolbar).toContain('aria-label="RESUME implement-blocked-dashboard"')
+    expect(unrelatedToolbar).toContain('aria-label="ABORT implement-blocked-dashboard"')
+    expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
   expect(evidenceText(renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
@@ -313,30 +421,37 @@ test('answer frames expose only submit and cancel while retaining focused input 
   )
 })
 
-test('pending answer context disables submit and cancel', () => {
-  const model = models().mixed
+test('pending answer context disables row-local submit and cancel', () => {
+  const fixtures = models()
+  const model = fixtures.mixed
   const selected = model.builds.find((row) => row.blockers.length > 0)!
-  const cells = fastextCells({
-    model,
-    pending: `${selected.slug}:answer`,
-    selection: { kind: 'build', slug: selected.slug },
-    detailOpen: false,
-    confirmingAbort: undefined,
-    answerStep: { slug: selected.slug, escalationIds: ['esc-1'], input: '' },
-    answerPending: true,
-    onDeselect: () => {},
-    onToggleDetail: () => {},
-    onBuildControl: () => {},
-    onRequestAbort: () => {},
-    onCancelAbort: () => {},
-    onSubmitAnswerStep: () => {},
-    onCancelAnswerStep: () => {},
-    onSetting: () => {},
-    onBulk: () => {},
-    onHarvest: () => {},
+  const base = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
+  const pendingHtml = renderWebFrame({ ...base, answerPending: true }, fixtures, {
+    css: '',
+    fontCss: '',
   })
-  expect(cells[0]?.disabled).toBe(true)
-  expect(cells[3]?.disabled).toBe(true)
+
+  expect(pendingHtml).toContain(
+    `<button type="button" class="word row-control" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
+  )
+  expect(pendingHtml).toContain(
+    `<button type="button" class="word row-control" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
+  )
+})
+
+test('post-cancel abort frame replaces answer mode with local confirmation controls', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const toolbar = html.match(
+    /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+  )?.[0]
+
+  expect(html).not.toContain('class="answer-step"')
+  expect(html).toContain('abort plan-blocked-dashboard? Enter confirms, Esc cancels')
+  expect(evidenceText(toolbar ?? '')).toBe(' CONFIRM ABORT CANCEL ')
+  expect(toolbar).not.toContain('aria-label="RESUME plan-blocked-dashboard"')
+  expect(toolbar).not.toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
 })
 
 test('narrow capture frames never supply a hover preview', () => {

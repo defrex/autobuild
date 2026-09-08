@@ -21,11 +21,11 @@ Memorable moment: the bold one-row masthead carrying one imperative word.
 
 THESIS: The terminal frame, broadcast. The same rows, glyphs, and words on a black character grid; every color is a state; one header word says what needs a human. Refuses the ops console of sidebar, metric cards, and pill-status table.
 
-OWN-WORLD: Black ground. One mono face and one natural-proportion size, with a bold one-row masthead. Teletext primaries as tokens: white identity, yellow title and warning, cyan current and live, green done and running, red blocked and failed, dim slack. Bracket glyphs [x] [>] [~] [ ]. A Fastext row of four fixed-color cells carrying key letters. No borders finer than a cell, no shadows, no gradients.
+OWN-WORLD: Black ground. One mono face and one natural-proportion size, with a bold one-row masthead. Teletext primaries as tokens: white identity, yellow title and warning, cyan current and live, green done and running, red blocked and failed, dim slack. Bracket glyphs [x] [>] [~] [ ]. Row-local ghost controls and shared ink outlines. No borders finer than a cell, no shadows, no gradients.
 
 STORY: Glance, read one word, act on one row, leave.
 
-FIRST VIEWPORT: One-row masthead, repository yellow left, imperative in its color, clock right. Control line with identity, sign out, and the repository selector when there is a choice. Dispatcher line with ON/OFF toggle words. Build rows: id at a fixed column, bold slug, right-pinned STATUS, step line beneath, detail unfolding in place. Harvest row. Sticky Fastext footer.
+FIRST VIEWPORT: A natural top-to-bottom document flow: one-row masthead with repository yellow left, imperative in its color, and clock right; control line with identity, sign out, and the repository selector when there is a choice; dispatcher line with ON/OFF toggle words; then Build and Harvest rows with detail unfolding in place. No shell block is sticky or pinned.
 
 FORM: Teletext Dispatch, user-steered hybrid of grounded candidates 4 and 1, re-roll round 1; seed key 6c8eba83.
 

@@ -996,6 +996,12 @@ skills, and all seven command families: `ab ticket create`, `update`, `block`,
 `LINEAR_API_KEY` is configured only on the service; direct Linear remains
 supported.
 
+When filing dependent tickets into the ready state, follow the
+[safe blocker-filing workflow](ticket-dependencies.md). Direct and hosted Linear
+create the issue before recording its blockers, so `create --blocked-by` is not
+an atomic publication guarantee. Stage outside ready, verify the relationships,
+then move to the intended ready state last.
+
 A plugin registration is selected the same way. `ab dispatch` and every
 `ab ticket` subcommand load the plugin and route through that source. Within a
 dispatch process, one selected instance serves dependencies, claim/projections,

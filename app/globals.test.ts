@@ -60,15 +60,6 @@ function contrast(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
-function compositeOnBlack(foreground: string, opacity: number): string {
-  const channels = [1, 3, 5].map((offset) =>
-    Math.round(Number.parseInt(foreground.slice(offset, offset + 2), 16) * opacity)
-      .toString(16)
-      .padStart(2, '0'),
-  )
-  return `#${channels.join('')}`
-}
-
 function designRule(name: string): string {
   const marker = `**${name}.**`
   const start = designDocument.indexOf(marker)
@@ -102,10 +93,6 @@ const textOnGround = [
 
 const groundOnFill = [
   ['ground on active ink button fill', ground, canonicalTokens['--tt-white']],
-  ['ground on active yellow Fastext fill', ground, canonicalTokens['--tt-yellow']],
-  ['ground on active cyan Fastext fill', ground, canonicalTokens['--tt-cyan']],
-  ['ground on active green Fastext fill', ground, canonicalTokens['--tt-green']],
-  ['ground on active red Fastext fill', ground, canonicalTokens['--tt-red']],
 ] as const
 
 for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill]) {
@@ -114,22 +101,9 @@ for (const [pair, foreground, background] of [...textOnGround, ...groundOnFill])
   })
 }
 
-for (const [name, color] of [
-  ['ink outline', canonicalTokens['--tt-white']],
-  ['red Fastext outline', canonicalTokens['--tt-red']],
-  ['green Fastext outline', canonicalTokens['--tt-green']],
-  ['yellow Fastext outline', canonicalTokens['--tt-yellow']],
-  ['cyan Fastext outline', canonicalTokens['--tt-cyan']],
-] as const) {
-  test(`${name} meets the non-text contrast floor against ground`, () => {
-    expect(contrast(color, ground), name).toBeGreaterThanOrEqual(3)
-  })
-  if (name.includes('Fastext')) {
-    test(`disabled ${name} label remains readable at reduced emphasis`, () => {
-      expect(contrast(compositeOnBlack(color, 0.9), ground), name).toBeGreaterThanOrEqual(4.5)
-    })
-  }
-}
+test('ink outline meets the non-text contrast floor against ground', () => {
+  expect(contrast(canonicalTokens['--tt-white'], ground)).toBeGreaterThanOrEqual(3)
+})
 
 test('slack text on the well meets the text contrast floor', () => {
   expect(
@@ -141,13 +115,10 @@ test('component CSS contains no literal colors outside the initial root', () => 
   expect(afterRoot).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(|oklch\(/i)
 })
 
-test('outline, ghost, and Fastext controls expose the complete state contract', () => {
+test('outline and ghost controls expose the complete state contract', () => {
   expect(declaration('--button-border')).toBe('2px')
   expect(stylesheet).toMatch(
     /\.btn\s*\{[\s\S]*?height:\s*var\(--row\);[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*var\(--button-border\) solid currentColor;/,
-  )
-  expect(stylesheet).toMatch(
-    /\.ft\s*\{[\s\S]*?height:\s*var\(--row\);[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*var\(--button-border\) solid currentColor;/,
   )
   expect(stylesheet).toMatch(/\.btn:hover:not\(:disabled\)/)
   expect(stylesheet).toMatch(/\.btn:active:not\(:disabled\)/)
@@ -160,37 +131,28 @@ test('outline, ghost, and Fastext controls expose the complete state contract', 
   expect(stylesheet).toMatch(/\.word:disabled/)
 })
 
-test('Fastext keeps slot hue through rest, interaction, empty, and disabled states', () => {
-  for (const slot of ['red', 'green', 'yellow', 'cyan']) {
-    expect(stylesheet).toContain(`.ft[data-slot="${slot}"] {\n  --ft-color: var(--ft-${slot});`)
-  }
+test('the unified control line wraps whole items and reserves a narrow account row', () => {
   expect(stylesheet).toMatch(
-    /\.ft:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?text-decoration:\s*underline;/,
+    /\.control-item\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
   )
   expect(stylesheet).toMatch(
-    /\.ft:active:not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--ft-color\);[\s\S]*?border-color:\s*var\(--ft-color\);/,
+    /@media \(max-width: 719px\)[\s\S]*?\.navline \.identity\s*\{[\s\S]*?flex-basis:\s*100%;[\s\S]*?justify-content:\s*flex-end;/,
   )
-  expect(stylesheet).toMatch(
-    /\.ft:disabled\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*var\(--ft-color\);[\s\S]*?opacity:\s*0\.9;/,
-  )
-  expect(stylesheet).not.toContain('--ft-dim-ink')
-  expect(dashboardFrame).toContain('data-empty')
-
-  for (const source of [
-    designRule('The Fastext Identity Rule'),
-    sidecarRule('The Fastext Identity Rule'),
-  ]) {
-    expect(source).toContain('colored foreground and outline at 0.9 opacity')
-    expect(source).toContain('unchanged transparent resting surface')
-  }
-  expect(
-    designSidecar.components.find(({ name }) => name === 'Fastext row')?.description,
-  ).toContain(
-    'foreground and outline to 0.9 opacity over the unchanged transparent resting surface',
-  )
+  expect(stylesheet).not.toContain('.dispatch')
+  expect(stylesheet).not.toContain('.skeleton-dispatch')
+  expect(dashboardFrame).not.toContain('skeleton-dispatch')
 })
 
-test('sign-in uses the primary outline instead of a Fastext slot', () => {
+test('retired footer presentation is absent from app and design artifacts', () => {
+  for (const source of [stylesheet, buildsView, dashboardFrame, designDocument]) {
+    expect(source).not.toMatch(/fastext/i)
+  }
+  expect(designSidecar.extensions.tokenSource).not.toMatch(/fastext|--ft-/i)
+  expect(designSidecar.components.some(({ name }) => /fastext/i.test(name))).toBe(false)
+  expect(designSidecar.narrative.rules.some(({ name }) => /fastext/i.test(name))).toBe(false)
+})
+
+test('sign-in uses the primary outline', () => {
   expect(signIn).toContain('className="btn"')
   expect(signIn).not.toContain('className="ft"')
   expect(signIn).not.toContain('data-slot=')
@@ -206,16 +168,12 @@ test('held queued builds keep their canonical yellow warning while rows dim', ()
   expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
 })
 
-test('flat-grid documentation forbids translucent surfaces without forbidding disabled emphasis', () => {
-  const flatGridRule = designRule('The Flat Grid Rule')
-  const flatGridSidecarRule = sidecarRule('The Flat Grid Rule')
-  for (const source of [flatGridRule, flatGridSidecarRule]) {
+test('flat-grid documentation forbids translucent surfaces', () => {
+  for (const source of [designRule('The Flat Grid Rule'), sidecarRule('The Flat Grid Rule')]) {
     expect(source).toContain('no surface, fill, panel, or overlay is translucent')
-    expect(source).toContain('colored foreground and outline at 0.9 opacity')
-    expect(source).toContain('unchanged transparent resting surface')
   }
   expect(designSidecar.narrative.donts).toContain(
-    "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Disabled Fastext opacity de-emphasizes only its colored foreground and outline over an unchanged transparent resting surface. Separate non-controls with a `─` rule, a fill change, or an empty row.",
+    "Don't draw component borders outside the shared 2px button outline, or add shadows, gradients, or translucent surfaces, fills, panels, or overlays. Separate non-controls with a `─` rule, a fill change, or an empty row.",
   )
 })
 
@@ -230,17 +188,35 @@ test('row controls reserve in-flow geometry and share the documented reveal cont
     /@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.row\[data-hovered\] \.row-controls/,
   )
   expect(stylesheet).toMatch(
-    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?height:\s*calc\(var\(--row\) \* 2\);/,
+    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?grid-template-rows:\s*var\(--row\);[\s\S]*?height:\s*var\(--row\);/,
   )
-  expect(designDocument).toContain('A reserved in-flow control register sits beneath the headline')
+  expect(designDocument).toContain(
+    'A reserved one-row in-flow control register then sits beneath the previews',
+  )
   expect(designDocument).toContain('Hidden words leave the tab order')
   expect(designDocument).toContain('the repository Harvest gate remains global')
   expect(designSidecar.components.find(({ name }) => name === 'Build row')?.description).toContain(
     'without moving row content; hidden controls leave the tab order',
   )
-  expect(
-    designSidecar.components.find(({ name }) => name === 'Fastext row')?.description,
-  ).toContain('The global keyboard legend')
+})
+
+test('the shell and design contract use browser-owned document flow', () => {
+  expect(stylesheet).not.toMatch(/height:\s*100d?vh|scrollbar-gutter|overscroll-behavior/)
+  expect(stylesheet).not.toContain('.surface-scroll')
+  expect(stylesheet).toMatch(
+    /\.transcript pre,\s*\.detail pre\.block\s*\{(?![\s\S]*?max-height)(?![\s\S]*?overflow:\s*auto)[\s\S]*?\}/,
+  )
+  expect(dashboardFrame).not.toContain('surface-scroll')
+  expect(buildsView).not.toContain('footer=')
+  for (const source of [
+    designRule('The Flowing Document Rule'),
+    sidecarRule('The Flowing Document Rule'),
+  ]) {
+    expect(source).toContain('browser document is the sole scroll container')
+    expect(source).toContain('no block is pinned')
+    expect(source).toContain('no nested element scrolls rows or detail')
+  }
+  expect(designDocument).not.toContain('The Fixed Frame Rule')
 })
 
 test('design sidecar preserves the fine-pointer lane contract', () => {

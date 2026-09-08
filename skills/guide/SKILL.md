@@ -987,11 +987,14 @@ no-ops, so either command is safe to retry.
 
 Blockers gate a ticket when the dispatcher tries to claim it. Adding a blocker
 to a ticket that has already been claimed into a build does not stop that build.
-When `[tickets].createState` equals `[tickets].readyState` (or an explicit
-`--state` creates directly into that ready state), create a dependency chain in
-dependency order: create the earliest prerequisite first, obtain its id from
-`--json`, and pass that id as the next ticket's `--blocked-by` before proceeding
-to later dependents.
+For dependent tickets, follow the
+[safe blocker-filing workflow](references/ticket-dependencies.md): determine the
+intended final destination, stage outside ready, verify all blocker relationships,
+and move to ready last. Direct and hosted Linear create the issue and its blockers
+in separate requests; one `create --blocked-by` call is not atomic publication.
+Harvest's creation reservations cover Harvest only, not interactive CLI creates.
+Dependency order and JSON id extraction are still required, but do not alone
+prevent an active dispatcher from claiming a partially created ready ticket.
 
 Update is partial: omitted fields remain untouched, including labels, assignee,
 and provider metadata. `--labels` is a complete replacement and an explicitly

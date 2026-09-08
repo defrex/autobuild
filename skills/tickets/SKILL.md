@@ -43,6 +43,14 @@ spec gets bounced back to `triage/` by the dispatcher rather than built.
 Blocker ids are source-local; every blocker must exist before creation
 succeeds.
 
+For dependencies on any source, follow the
+[safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
+Direct and hosted Linear record blockers after creating the issue, so a ready
+issue can be claimed before `create --blocked-by` returns. Stage dependents in a
+known non-ready state, verify all blockers with `ab ticket show --json`, then use
+`ab ticket move` to publish the intended ready destination. Do not use the local
+file tracker's default state as an assumption about another configured source.
+
 ## Edit content or blockers
 
 Use the configured TicketSource rather than hand-editing frontmatter/body:

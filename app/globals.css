@@ -39,12 +39,6 @@
   --rule: var(--tt-rule);
   --well: var(--tt-well);
 
-  /* Fastext slots: the color is the slot's identity, never a state. */
-  --ft-red: var(--tt-red);
-  --ft-green: var(--tt-green);
-  --ft-yellow: var(--tt-yellow);
-  --ft-cyan: var(--tt-cyan);
-
   /* Step and status colors mirror the terminal renderer's map. */
   --step-done: var(--ok);
   --step-current: var(--live);
@@ -85,15 +79,11 @@
   box-sizing: border-box;
 }
 html {
-  height: 100%;
-  overflow: hidden;
   background: var(--ground);
 }
 body {
-  height: 100%;
   margin: 0;
   min-width: 320px;
-  overflow: hidden;
   background: var(--ground);
   color: var(--ink);
   font: 400 var(--fs) / var(--lh) var(--font-stack);
@@ -180,43 +170,13 @@ h3 {
 /* ── Frame ────────────────────────────────────────────────────────────── */
 
 .frame {
-  display: flex;
-  flex-direction: column;
   width: 100%;
   max-width: 160ch;
-  height: 100dvh;
   margin: 0 auto;
   padding: 0 1ch;
-  overflow: hidden;
-}
-.masthead,
-.navline {
-  flex: none;
-}
-.shell-body {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
 }
 .shell-notice {
-  flex: none;
   margin-top: var(--row);
-}
-.dashboard-surface {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-rows: minmax(0, 1fr) auto;
-  min-height: 0;
-  overflow: hidden;
-}
-.surface-scroll,
-.signin-centre {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 
 /* Masthead copy: one natural-proportion row, bold within the shared cell grid. */
@@ -271,13 +231,39 @@ h3 {
 .navline {
   margin-top: var(--row);
 }
+.navline .repo {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+.repo-selectwrap {
+  max-width: min(42ch, 100%);
+}
+.navline .repo select {
+  min-width: 0;
+}
 .navline .spacer {
   flex: 1 1 auto;
 }
+.control-item {
+  display: inline-flex;
+  flex: 0 0 auto;
+  column-gap: 2ch;
+  white-space: nowrap;
+}
+.control-item .sep {
+  color: var(--slack);
+}
+.fact-item {
+  column-gap: 1ch;
+  margin-right: -1ch;
+}
 .identity {
   display: inline-flex;
+  flex: 0 0 auto;
   column-gap: 2ch;
-  flex-wrap: wrap;
+  white-space: nowrap;
   color: var(--slack);
 }
 
@@ -350,31 +336,40 @@ h3 {
   content: "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
 }
 
-/* ── Dispatcher line ──────────────────────────────────────────────────── */
+/* ── Unified controls and loading geometry ────────────────────────────── */
 
 .loading-state {
   min-height: 0;
 }
-.skeleton-dispatch {
-  display: flex;
-  column-gap: 2ch;
-  height: var(--row);
-  margin: var(--row) 0;
+.loading-controls {
+  display: contents;
 }
-.skeleton-dispatch span,
+.skeleton-control,
 .skeleton-row span {
   display: block;
   height: var(--row);
   background: var(--well);
 }
-.skeleton-dispatch span:nth-child(1) {
-  width: 14ch;
+.skeleton-control[data-control="queue"] {
+  width: 7ch;
 }
-.skeleton-dispatch span:nth-child(2) {
-  width: 20ch;
+.skeleton-control[data-control="active"] {
+  width: 10ch;
 }
-.skeleton-dispatch span:nth-child(3) {
-  width: 12ch;
+.skeleton-control[data-control="observations"] {
+  width: 16ch;
+}
+.skeleton-control[data-control="intake"] {
+  width: 9ch;
+}
+.skeleton-control[data-control="merge"] {
+  width: 13ch;
+}
+.skeleton-control[data-control="harvest"] {
+  width: 10ch;
+}
+.skeletons {
+  margin-top: var(--row);
 }
 .skeleton-row {
   display: grid;
@@ -398,17 +393,6 @@ h3 {
   background: var(--rule);
 }
 
-.dispatch {
-  margin-top: var(--row);
-}
-.dispatch .sep {
-  color: var(--slack);
-}
-.dispatch .settings {
-  display: inline-flex;
-  flex-wrap: wrap;
-  column-gap: 2ch;
-}
 .messages {
   display: grid;
 }
@@ -507,14 +491,27 @@ h3 {
 input.short {
   width: 24ch;
 }
-.tokens .am[data-am="enabled"] {
-  color: var(--ok);
+.tokens .am b {
+  font-weight: 700;
+}
+.tokens .am[data-am="off"],
+.tokens .am[data-am="cancelling"] {
+  color: var(--warn);
 }
 .tokens .am[data-am="requested"] {
   color: var(--live);
 }
-.tokens .am[data-am="cancelling"] {
-  color: var(--warn);
+.tokens .am[data-am="enabled"] {
+  color: var(--ok);
+}
+.tokens .am:hover:not(:disabled) {
+  color: var(--live);
+}
+.tokens .am:active:not(:disabled) {
+  color: var(--ground);
+}
+.tokens .am:disabled {
+  color: var(--slack);
 }
 /* Keep this warning on --title while --warn dims with surrounding row details. */
 .tokens .held {
@@ -576,11 +573,11 @@ input.short {
 .rows[data-ticket-col="0"] .rowline .status {
   grid-column: 4;
 }
-/* The register always occupies its row. visibility hides its controls from
- * paint and the tab order without changing any row geometry. */
+/* The post-preview register always occupies its row. visibility hides its
+ * controls from paint and the tab order without changing any row geometry. */
 .row-controls {
   display: grid;
-  grid-template-columns: repeat(4, max-content);
+  grid-template-columns: repeat(2, max-content);
   align-items: baseline;
   column-gap: 2ch;
   height: var(--row);
@@ -810,92 +807,15 @@ textarea {
 }
 .transcript pre,
 .detail pre.block {
-  max-height: calc(var(--row) * 24);
-  overflow: auto;
   padding: 0 1ch;
   background: var(--well);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* ── Fastext ──────────────────────────────────────────────────────────── */
-
-.fastext {
-  display: grid;
-  flex: none;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  column-gap: 1ch;
-  padding: var(--row) 0;
-  background: var(--ground);
-}
-.ft {
-  display: flex;
-  box-sizing: border-box;
-  align-items: center;
-  column-gap: 1ch;
-  height: var(--row);
-  padding: 0 1ch;
-  background: transparent;
-  border: var(--button-border) solid currentColor;
-  color: var(--ft-color);
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.ft > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ft kbd {
-  flex: none;
-  font-weight: 400;
-}
-.ft[data-slot="red"] {
-  --ft-color: var(--ft-red);
-}
-.ft[data-slot="green"] {
-  --ft-color: var(--ft-green);
-}
-.ft[data-slot="yellow"] {
-  --ft-color: var(--ft-yellow);
-}
-.ft[data-slot="cyan"] {
-  --ft-color: var(--ft-cyan);
-}
-.ft:hover:not(:disabled) {
-  background: transparent;
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
-}
-.ft:active:not(:disabled) {
-  background: var(--ft-color);
-  border-color: var(--ft-color);
-  color: var(--ground);
-  text-decoration: none;
-}
-/* Reduced opacity de-emphasizes only the slot-colored foreground and outline;
- * the resting surface remains transparent on the uniform black ground. */
-.ft:disabled {
-  background: transparent;
-  color: var(--ft-color);
-  font-weight: 400;
-  opacity: 0.9;
-}
-.ft:disabled kbd {
-  display: none;
-}
-@media (pointer: coarse) {
-  .ft kbd {
-    display: none;
-  }
-}
-
 /* ── Sign-in ──────────────────────────────────────────────────────────── */
 
 .signin-centre {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
   padding: calc(var(--row) * 2) 0 calc(var(--row) * 4);
 }
 .signin .card {
@@ -903,7 +823,6 @@ textarea {
   row-gap: var(--row);
   width: 100%;
   max-width: 60ch;
-  margin: auto 0;
 }
 .providers {
   display: flex;
@@ -933,11 +852,15 @@ textarea {
   .rowhead .slug {
     white-space: normal;
   }
-  .dispatch .sep {
+  .control-item .sep {
     display: none;
   }
-  .skeleton-dispatch span:nth-child(2) {
+  .navline .spacer {
     display: none;
+  }
+  .navline .identity {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
   .skeleton-row {
     grid-template-columns: 2ch minmax(0, 1fr) 9ch;
@@ -948,14 +871,10 @@ textarea {
   .skeleton-state {
     width: 8ch;
   }
-  .fastext {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, var(--row));
-  }
   .row-controls {
     grid-template-columns: repeat(2, max-content);
-    grid-template-rows: repeat(2, var(--row));
-    height: calc(var(--row) * 2);
+    grid-template-rows: var(--row);
+    height: var(--row);
   }
   .tokens,
   .rows[data-ticket-col="0"] .tokens {

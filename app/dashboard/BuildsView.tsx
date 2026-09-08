@@ -6,7 +6,6 @@ import {
   type DashboardBuild,
   type DashboardHarvest,
   type DashboardModel,
-  repositoryActionAvailability,
   type TranscriptPresentation,
 } from 'autobuild/operator-presentation'
 import {
@@ -20,8 +19,6 @@ import {
 import {
   columnWidths,
   DashboardSurface,
-  Fastext,
-  type FastextCell,
   Flash,
   LoadingRows,
   MessagePreview,
@@ -73,11 +70,7 @@ export interface BuildsViewProps {
   transcript?: TranscriptPresentation
   onActivate: (selection: Selection) => void
   onHoverPreview: (selection: Selection | undefined) => void
-  onDeselect: () => void
-  onToggleDetail: () => void
-  onBuildControl: (slug: string, action: BuildControlAction) => void
   onRowBuildControl: (slug: string, action: BuildControlAction) => void
-  onRequestAbort: () => void
   onRowRequestAbort: (slug: string) => void
   onCancelAbort: () => void
   onRowToggleDetail: (slug: string) => void
@@ -86,9 +79,6 @@ export interface BuildsViewProps {
   onCancelAnswerStep: () => void
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
   onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
-  onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
-  onBulk: (action: 'pause' | 'resume') => void
-  onHarvest: (body: HarvestControl) => void
   onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
 
@@ -132,177 +122,17 @@ interface CellVars extends CSSProperties {
   '--status-w'?: string
 }
 
-const EMPTY_CELLS: readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?] = [
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-]
-
-/**
- * The key legend as four Fastext cells. Slot colors are fixed; the labels
- * follow the selection context exactly as the terminal legend does.
- */
-export function fastextCells(
-  props: Pick<
-    BuildsViewProps,
-    | 'model'
-    | 'pending'
-    | 'selection'
-    | 'detailOpen'
-    | 'confirmingAbort'
-    | 'answerStep'
-    | 'answerPending'
-    | 'onDeselect'
-    | 'onToggleDetail'
-    | 'onBuildControl'
-    | 'onRequestAbort'
-    | 'onCancelAbort'
-    | 'onSubmitAnswerStep'
-    | 'onCancelAnswerStep'
-    | 'onSetting'
-    | 'onBulk'
-    | 'onHarvest'
-  >,
-): readonly [FastextCell?, FastextCell?, FastextCell?, FastextCell?] {
-  const { model, selection } = props
-  if (!model) return EMPTY_CELLS
-  const busy = props.pending !== undefined
-  const build =
-    selection?.kind === 'build'
-      ? model.builds.find((row) => row.slug === selection.slug)
-      : undefined
-
-  if (build && props.answerStep?.slug === build.slug) {
-    return [
-      {
-        key: '↵',
-        label: 'SUBMIT',
-        disabled: busy || props.answerPending,
-        onPress: props.onSubmitAnswerStep,
-      },
-      undefined,
-      undefined,
-      {
-        key: 'Esc',
-        label: 'CANCEL',
-        disabled: busy || props.answerPending,
-        onPress: props.onCancelAnswerStep,
-      },
-    ]
-  }
-
-  if (build && props.confirmingAbort === build.slug) {
-    return [
-      {
-        key: '↵',
-        label: 'CONFIRM ABORT',
-        disabled: busy,
-        onPress: () => props.onBuildControl(build.slug, 'abort'),
-      },
-      undefined,
-      undefined,
-      { key: 'Esc', label: 'CANCEL', onPress: props.onCancelAbort },
-    ]
-  }
-
-  if (build) {
-    const available = buildActionAvailability(build)
-    const primary: FastextCell | undefined = available.primary
-      ? {
-          key: available.primary === 'resume' ? 'r' : 'p',
-          label: available.primary.replace('-', ' ').toUpperCase(),
-          disabled: busy,
-          onPress: () => props.onBuildControl(build.slug, available.primary!),
-        }
-      : available.discard
-        ? {
-            key: 'd',
-            label: 'DISCARD',
-            disabled: busy,
-            onPress: () => props.onBuildControl(build.slug, 'discard'),
-          }
-        : undefined
-    return [
-      {
-        key: 'a',
-        label: 'ABORT',
-        disabled: busy || !available.abort,
-        onPress: props.onRequestAbort,
-      },
-      primary,
-      {
-        key: 'm',
-        label: 'AUTO MERGE',
-        disabled: busy || !available.autoMerge,
-        onPress: () =>
-          props.onBuildControl(
-            build.slug,
-            build.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-          ),
-      },
-      { key: '↵', label: props.detailOpen ? 'CLOSE' : 'DETAILS', onPress: props.onToggleDetail },
-    ]
-  }
-
-  if (selection?.kind === 'harvest' && model.harvest) {
-    const harvest = model.harvest
-    return [
-      undefined,
-      harvest.action
-        ? {
-            key: 'p',
-            label: harvest.action.toUpperCase(),
-            disabled: busy,
-            onPress: () => props.onHarvest({ action: 'run', run: harvest.run }),
-          }
-        : undefined,
-      {
-        key: 'h',
-        label: 'HARVEST',
-        disabled: busy,
-        onPress: () => props.onHarvest({ action: 'toggle-gate' }),
-      },
-      { key: 'Esc', label: 'DESELECT', onPress: props.onDeselect },
-    ]
-  }
-
-  const repository = repositoryActionAvailability(model)
-  return [
-    {
-      key: 'p',
-      label: 'PAUSE ALL',
-      disabled: busy || !repository.bulkPause,
-      onPress: () => props.onBulk('pause'),
-    },
-    {
-      key: 'r',
-      label: 'RESUME ALL',
-      disabled: busy || !repository.bulkResume,
-      onPress: () => props.onBulk('resume'),
-    },
-    {
-      key: 'm',
-      label: 'AUTO MERGE',
-      disabled: busy,
-      onPress: () => props.onSetting('auto-merge-default', !model.defaultAutoMerge),
-    },
-    {
-      key: 'i',
-      label: 'INTAKE',
-      disabled: busy,
-      onPress: () => props.onSetting('intake', model.drained),
-    },
-  ]
-}
-
 export interface BuildRowAction {
   label: string
-  action: BuildControlAction | 'request-abort' | 'toggle-detail'
+  action: BuildControlAction | 'request-abort'
 }
 
-/** Actions shown in a build's reserved row register, in Fastext order. */
-export function buildRowActions(row: DashboardBuild, detailOpen: boolean): BuildRowAction[] {
+export function autoMergeAction(row: DashboardBuild): BuildControlAction {
+  return row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off'
+}
+
+/** Lifecycle and destructive actions shown in a build's reserved row register. */
+export function buildRowActions(row: DashboardBuild): BuildRowAction[] {
   const available = buildActionAvailability(row)
   const actions: BuildRowAction[] = []
   if (available.abort) actions.push({ label: 'ABORT', action: 'request-abort' })
@@ -314,13 +144,6 @@ export function buildRowActions(row: DashboardBuild, detailOpen: boolean): Build
   } else if (available.discard) {
     actions.push({ label: 'DISCARD', action: 'discard' })
   }
-  if (available.autoMerge) {
-    actions.push({
-      label: 'AUTO MERGE',
-      action: row.autoMerge === 'off' ? 'auto-merge-on' : 'auto-merge-off',
-    })
-  }
-  actions.push({ label: detailOpen ? 'CLOSE' : 'DETAILS', action: 'toggle-detail' })
   return actions
 }
 
@@ -338,7 +161,7 @@ export function BuildsView(props: BuildsViewProps) {
   }
   if (!model) {
     return (
-      <DashboardSurface footer={<Fastext label="Controls" cells={EMPTY_CELLS} />}>
+      <DashboardSurface>
         <LoadingRows label={`Loading builds for ${repo || 'the selected repository'}.`} />
       </DashboardSurface>
     )
@@ -361,13 +184,7 @@ export function BuildsView(props: BuildsViewProps) {
     selection !== undefined &&
     (selection.kind === 'harvest' ? model.harvest !== undefined : selectedBuild !== undefined)
   return (
-    <DashboardSurface footer={<Fastext label="Controls" cells={fastextCells(props)} />}>
-      <DispatcherLine
-        model={model}
-        pending={props.pending}
-        onSetting={props.onSetting}
-        onHarvest={props.onHarvest}
-      />
+    <DashboardSurface>
       {(model.warningLines?.length || model.availableUpgrade) && (
         <div className="messages">
           {model.warningLines?.map((line) => (
@@ -420,7 +237,6 @@ export function BuildsView(props: BuildsViewProps) {
             answerPending={props.answerPending}
             transcript={props.transcript}
             onPointerEnter={preview({ kind: 'build', slug: row.slug })}
-            onActivate={props.onActivate}
             onRowBuildControl={props.onRowBuildControl}
             onRowRequestAbort={props.onRowRequestAbort}
             onRowToggleDetail={props.onRowToggleDetail}
@@ -438,73 +254,79 @@ export function BuildsView(props: BuildsViewProps) {
   )
 }
 
-function DispatcherLine({
+export interface DispatcherControlsProps {
+  model: DashboardModel
+  pending?: string
+  onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
+  onHarvest: (body: HarvestControl) => void
+}
+
+/** Builds facts and settings composed into the shell's shared control line. */
+export function DispatcherControls({
   model,
   pending,
   onSetting,
   onHarvest,
-}: {
-  model: DashboardModel
-  pending?: string
-  onSetting: BuildsViewProps['onSetting']
-  onHarvest: BuildsViewProps['onHarvest']
-}) {
+}: DispatcherControlsProps) {
   const busy = pending !== undefined
   return (
-    <section className="line dispatch" aria-label="Dispatcher settings">
-      <span>queue {model.queued}</span>
-      <span className="sep" aria-hidden>
-        |
+    <>
+      <span className="control-item fact-item">
+        <span>queue {model.queued}</span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span>
-        active {model.active.current}/{model.active.limit}
+      <span className="control-item fact-item">
+        <span>
+          active {model.active.current}/{model.active.limit}
+        </span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span className="sep" aria-hidden>
-        |
+      <span className="control-item fact-item">
+        <span>
+          observations {model.observations.current}/{model.observations.limit}
+        </span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span>
-        observations {model.observations.current}/{model.observations.limit}
-      </span>
-      <span className="sep" aria-hidden>
-        |
-      </span>
-      <span>
-        repository{' '}
-        <b className={model.repositoryPaused ? 'off' : 'on'}>
-          {model.repositoryPaused ? 'PAUSED' : 'RUNNING'}
+      {model.repositoryPaused && (
+        <span className="control-item repository-state">
+          repository <b className="off">PAUSED</b>
+        </span>
+      )}
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onSetting('intake', model.drained)}
+      >
+        intake <b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
+      >
+        auto merge{' '}
+        <b className={model.defaultAutoMerge ? 'on' : 'off'}>
+          {model.defaultAutoMerge ? 'ON' : 'OFF'}
         </b>
-      </span>
-      <span className="settings">
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onSetting('intake', model.drained)}
-        >
-          intake <b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
-        </button>
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
-        >
-          auto merge{' '}
-          <b className={model.defaultAutoMerge ? 'on' : 'off'}>
-            {model.defaultAutoMerge ? 'ON' : 'OFF'}
-          </b>
-        </button>
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onHarvest({ action: 'toggle-gate' })}
-        >
-          harvest{' '}
-          <b className={model.harvestPaused ? 'off' : 'on'}>{model.harvestPaused ? 'OFF' : 'ON'}</b>
-        </button>
-      </span>
-    </section>
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onHarvest({ action: 'toggle-gate' })}
+      >
+        harvest{' '}
+        <b className={model.harvestPaused ? 'off' : 'on'}>{model.harvestPaused ? 'OFF' : 'ON'}</b>
+      </button>
+    </>
   )
 }
 
@@ -612,7 +434,6 @@ function BuildRow({
   answerPending,
   transcript,
   onPointerEnter,
-  onActivate,
   onRowBuildControl,
   onRowRequestAbort,
   onRowToggleDetail,
@@ -636,7 +457,6 @@ function BuildRow({
   answerPending: boolean
   transcript?: TranscriptPresentation
   onPointerEnter: PointerEventHandler<HTMLLIElement>
-  onActivate: BuildsViewProps['onActivate']
   onRowBuildControl: BuildsViewProps['onRowBuildControl']
   onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
   onRowToggleDetail: BuildsViewProps['onRowToggleDetail']
@@ -652,8 +472,10 @@ function BuildRow({
   const detailId = `detail-${encodeURIComponent(row.slug)}`
   const abortConfirmationId = `abort-confirmation-${encodeURIComponent(row.slug)}`
   const open = selected && detailOpen
+  const answering = selected && answerStep?.slug === row.slug
   const held = model.repositoryPaused && row.status === 'queued'
-  const hasTokens = row.autoMerge !== 'off' || row.pr !== undefined || held || row.alsoPaused
+  const autoMergeAvailable = buildActionAvailability(row).autoMerge
+  const autoMergeOn = row.autoMerge === 'requested' || row.autoMerge === 'enabled'
   return (
     <li
       className="row"
@@ -669,50 +491,94 @@ function BuildRow({
         <button
           type="button"
           className="rowhead"
+          disabled={answering}
+          aria-label={`${open ? 'Close' : 'Open'} details for ${row.slug}`}
           aria-pressed={selected}
-          aria-expanded={selected ? detailOpen : undefined}
-          aria-controls={open ? detailId : undefined}
-          onClick={() => onActivate({ kind: 'build', slug: row.slug })}
+          aria-expanded={open}
+          aria-controls={detailId}
+          onClick={() => onRowToggleDetail(row.slug)}
         >
           <span className="ticket">{row.ticketId ?? ''}</span>
           <span className="slug">{row.slug}</span>
         </button>
-        {hasTokens && (
-          <span className="tokens">
-            {row.autoMerge !== 'off' && (
-              <span className="am" data-am={row.autoMerge}>
-                auto merge
-              </span>
-            )}
-            {row.pr && (
-              <a
-                className="pr"
-                data-pr={row.pr.state}
-                href={row.pr.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                PR {row.pr.state}
-              </a>
-            )}
-            {held && <span className="warn held">(held)</span>}
-            {row.alsoPaused && <span className="warn">(paused)</span>}
-          </span>
-        )}
+        <span className="tokens">
+          <button
+            type="button"
+            className="word am"
+            data-am={row.autoMerge}
+            disabled={answering || pending !== undefined || !autoMergeAvailable}
+            aria-label={`Auto merge ${row.autoMerge} for ${row.slug}`}
+            aria-pressed={autoMergeOn}
+            onClick={() => onRowBuildControl(row.slug, autoMergeAction(row))}
+          >
+            auto merge <b>{row.autoMerge}</b>
+          </button>
+          {row.pr && (
+            <a
+              className="pr"
+              data-pr={row.pr.state}
+              href={row.pr.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              PR {row.pr.state}
+            </a>
+          )}
+          {held && <span className="warn held">(held)</span>}
+          {row.alsoPaused && <span className="warn">(paused)</span>}
+        </span>
         <span className="status" data-status={row.status}>
           <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
         </span>
       </div>
+      {ceiling && <p className="sub">{ceiling}</p>}
+      {row.abortProgress !== undefined ? (
+        <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
+      ) : row.dispatch !== undefined ? (
+        <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
+      ) : (
+        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
+      )}
+      {row.setupError !== undefined && (
+        <MessagePreview value={row.setupError} tone="alert" expandable />
+      )}
+      {row.blockers.map((blocker) => (
+        <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
+      ))}
       <div
         className="row-controls"
         role="toolbar"
         aria-label={`Controls for ${row.slug}`}
         aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
         onKeyDown={(event) =>
-          handleRowControlKey(event, confirmingAbort ? onCancelAbort : undefined)
+          handleRowControlKey(
+            event,
+            answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
+          )
         }
       >
-        {confirmingAbort ? (
+        {answering ? (
+          <>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`SUBMIT answer for ${row.slug}`}
+              onClick={onSubmitAnswerStep}
+            >
+              SUBMIT
+            </button>
+            <button
+              type="button"
+              className="word row-control"
+              disabled={pending !== undefined || answerPending}
+              aria-label={`CANCEL answer for ${row.slug}`}
+              onClick={onCancelAnswerStep}
+            >
+              CANCEL
+            </button>
+          </>
+        ) : confirmingAbort ? (
           <>
             <button
               type="button"
@@ -734,16 +600,15 @@ function BuildRow({
             </button>
           </>
         ) : (
-          buildRowActions(row, open).map((control) => (
+          buildRowActions(row).map((control) => (
             <button
               type="button"
               className="word row-control"
               key={control.action}
-              disabled={pending !== undefined && control.action !== 'toggle-detail'}
+              disabled={pending !== undefined}
               aria-label={`${control.label} ${row.slug}`}
               onClick={() => {
                 if (control.action === 'request-abort') onRowRequestAbort(row.slug)
-                else if (control.action === 'toggle-detail') onRowToggleDetail(row.slug)
                 else onRowBuildControl(row.slug, control.action)
               }}
             >
@@ -752,20 +617,6 @@ function BuildRow({
           ))
         )}
       </div>
-      {ceiling && <p className="sub">{ceiling}</p>}
-      {row.abortProgress !== undefined ? (
-        <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
-      ) : row.dispatch !== undefined ? (
-        <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
-      ) : (
-        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
-      )}
-      {row.setupError !== undefined && (
-        <MessagePreview value={row.setupError} tone="alert" expandable />
-      )}
-      {row.blockers.map((blocker) => (
-        <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
-      ))}
       {selected && confirmingAbort && (
         <p className="message alert" id={abortConfirmationId} role="status">
           <span aria-hidden>! </span>abort {row.slug}? Enter confirms, Esc cancels
@@ -826,6 +677,7 @@ function BlockedAnswerStep({
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
+          event.stopPropagation()
           if (!pending) onCancel()
         }
       }}

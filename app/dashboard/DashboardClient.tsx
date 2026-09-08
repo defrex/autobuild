@@ -13,12 +13,13 @@ import * as api from './api'
 import {
   type BuildControlAction,
   BuildsView,
+  DispatcherControls,
   type HarvestControl,
   sameSelection,
   type Selection,
 } from './BuildsView'
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
-import { clockText } from './frame'
+import { clockText, LoadingControls } from './frame'
 import { dashboardImperative } from './imperative'
 import { OperatorShell } from './Shell'
 import { reconcileDashboard } from './view-model'
@@ -26,6 +27,18 @@ import { reconcileDashboard } from './view-model'
 interface ClientProps {
   identity: string
   repositories: readonly string[]
+}
+
+export type AnswerModeKeyAction = 'cancel' | 'submit' | 'consume' | 'pass'
+
+const DASHBOARD_ROW_SHORTCUTS = new Set(['ArrowDown', 'ArrowUp', 'a', 'p', 'r', 'm', 'd', 'i', 'h'])
+
+/** Answer mode owns its row: only cancellation and non-editor submission may act. */
+export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerModeKeyAction {
+  if (key === 'Escape') return 'cancel'
+  if (key === 'Enter') return editorTarget ? 'pass' : 'submit'
+  if (!editorTarget && DASHBOARD_ROW_SHORTCUTS.has(key)) return 'consume'
+  return 'pass'
 }
 
 interface RowControlHandlerDependencies {
@@ -37,6 +50,15 @@ interface RowControlHandlerDependencies {
   setDetailOpen: (value: boolean | ((open: boolean) => boolean)) => void
   control: (slug: string, action: BuildControlAction) => void
   harvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
+}
+
+interface ClosestTarget {
+  closest: (selectors: string) => unknown
+}
+
+/** Let native button keyboard activation run instead of dashboard-wide shortcuts. */
+export function isButtonKeyboardActivation(key: string, target: ClosestTarget | null): boolean {
+  return (key === 'Enter' || key === ' ') && target?.closest('button') != null
 }
 
 /** Target-aware row interactions, extracted so their state policy is directly testable. */
@@ -288,20 +310,24 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     if (!model) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target instanceof HTMLElement ? event.target : null
+    if (isButtonKeyboardActivation(event.key, target)) return
+    const editorTarget = Boolean(
+      target?.closest('input, textarea, select, [contenteditable="true"]'),
+    )
     if (answerStep) {
-      if (event.key === 'Escape') {
+      const action = answerModeKeyAction(event.key, editorTarget)
+      if (action === 'cancel') {
         event.preventDefault()
         cancelAnswerStep()
-      } else if (
-        event.key === 'Enter' &&
-        !target?.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
+      } else if (action === 'submit') {
         event.preventDefault()
         submitAnswerStep()
+      } else if (action === 'consume') {
+        event.preventDefault()
       }
       return
     }
-    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+    if (editorTarget) return
     const entries: Selection[] = [
       ...(model.harvest ? [{ kind: 'harvest' } as Selection] : []),
       ...model.builds.map((row): Selection => ({ kind: 'build', slug: row.slug })),
@@ -402,6 +428,18 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         await fetch('/api/auth/sign-out', { method: 'POST' })
         window.location.assign('/sign-in')
       }}
+      controls={
+        model ? (
+          <DispatcherControls
+            model={model}
+            pending={pending}
+            onSetting={setting}
+            onHarvest={harvest}
+          />
+        ) : (
+          <LoadingControls />
+        )
+      }
     >
       <BuildsView
         repo={repo}
@@ -417,13 +455,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         transcript={transcript}
         onActivate={activate}
         onHoverPreview={setHoverPreview}
-        onDeselect={deselect}
-        onToggleDetail={() => setDetailOpen((open) => !open)}
-        onBuildControl={control}
         onRowBuildControl={rowControls.buildControl}
-        onRequestAbort={() => {
-          if (selectedBuild) setConfirmingAbort(selectedBuild.slug)
-        }}
         onRowRequestAbort={rowControls.requestAbort}
         onCancelAbort={() => setConfirmingAbort(undefined)}
         onRowToggleDetail={rowControls.toggleDetail}
@@ -432,9 +464,6 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onCancelAnswerStep={cancelAnswerStep}
         onAnswer={answer}
         onTranscript={loadTranscript}
-        onSetting={setting}
-        onBulk={bulk}
-        onHarvest={harvest}
         onRowHarvest={rowControls.runHarvest}
       />
     </OperatorShell>
