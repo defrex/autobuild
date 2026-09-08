@@ -23,6 +23,7 @@ class FakeSandbox implements VercelSandboxHandle {
   stops = 0
   stopFailures = 0
   deletes = 0
+  deleteFailure: Error | undefined
   failPush = false
   failRestore = false
   failSetupCommand: string | undefined
@@ -32,8 +33,8 @@ class FakeSandbox implements VercelSandboxHandle {
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
-    if (params.cmd === 'touch') this.provisioned = true
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
+    if (params.cmd === 'touch') this.provisioned = true
     if (params.detached === true) {
       return {
         exitCode: null,
@@ -62,6 +63,7 @@ class FakeSandbox implements VercelSandboxHandle {
   }
   async delete() {
     this.deletes += 1
+    if (this.deleteFailure !== undefined) throw this.deleteFailure
   }
   async update(params: { networkPolicy: NetworkPolicy }) {
     this.policies.push(params.networkPolicy)
@@ -236,6 +238,8 @@ describe('VercelSandboxProvider', () => {
       provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
     ).rejects.toThrow(/tar exited 1/)
     expect(first.deletes).toBe(1)
+    expect(first.provisioned).toBe(false)
+    expect(first.stops).toBe(0)
 
     const workspace = await provider.provision({
       repo: '/repo',
@@ -245,6 +249,47 @@ describe('VercelSandboxProvider', () => {
     expect(workspace.provider).toBe('vercel-sandbox')
     expect(creates).toBe(2)
     expect(second.provisioned).toBe(true)
+    expect(second.stops).toBe(1)
+    expect(second.commands.map((command) => command.cmd)).toEqual([
+      'mv',
+      'git',
+      'git',
+      'git',
+      'git',
+      'git',
+      'mkdir',
+      'tar',
+      'bun',
+      'sh',
+      'touch',
+    ])
+  })
+
+  test('retains setup and cleanup diagnostics when deleting a partial sandbox fails', async () => {
+    const h = harness()
+    const cleanupError = new Error('sandbox delete failed')
+    h.sandbox.failSetupCommand = 'tar'
+    h.sandbox.deleteFailure = cleanupError
+
+    let rejection: unknown
+    try {
+      await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      })
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBeInstanceOf(AggregateError)
+    const aggregate = rejection as AggregateError
+    expect(aggregate.errors).toHaveLength(2)
+    expect(aggregate.errors[0]).toBeInstanceOf(Error)
+    expect((aggregate.errors[0] as Error).message).toContain('tar exited 1')
+    expect(aggregate.errors[1]).toBe(cleanupError)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.provisioned).toBe(false)
   })
 
   test('discards an existing named sandbox without the completed setup marker', async () => {
