@@ -298,6 +298,9 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     const toolbar = html.match(
       /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
     )?.[0]
+    const unrelatedToolbar = html.match(
+      /<div class="row-controls" role="toolbar" aria-label="Controls for implement-blocked-dashboard"[\s\S]*?<\/div>/,
+    )?.[0]
 
     expect(html).toContain('class="answer-step"')
     expect(html).toContain('optional guidance (empty retries)')
@@ -305,6 +308,11 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
     expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
+    for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
+      expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
+    }
+    expect(unrelatedToolbar).toContain('aria-label="RESUME implement-blocked-dashboard"')
+    expect(unrelatedToolbar).toContain('aria-label="ABORT implement-blocked-dashboard"')
     expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
@@ -329,6 +337,21 @@ test('pending answer context disables row-local submit and cancel', () => {
   expect(pendingHtml).toContain(
     `<button type="button" class="word row-control" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
   )
+})
+
+test('post-cancel abort frame replaces answer mode with local confirmation controls', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const toolbar = html.match(
+    /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+  )?.[0]
+
+  expect(html).not.toContain('class="answer-step"')
+  expect(html).toContain('abort plan-blocked-dashboard? Enter confirms, Esc cancels')
+  expect(evidenceText(toolbar ?? '')).toBe(' CONFIRM ABORT CANCEL ')
+  expect(toolbar).not.toContain('aria-label="RESUME plan-blocked-dashboard"')
+  expect(toolbar).not.toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
 })
 
 test('narrow capture frames never supply a hover preview', () => {
