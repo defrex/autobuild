@@ -430,8 +430,10 @@ publication is requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
-recording completion; PR API work stays local. Ordinary completion deletes the
-sandbox.
+recording completion; PR API work stays local. Before every guest runner launch,
+the provider reasserts the normal receive-pack-free policy, so a failed policy
+restore cannot expose publication authority to later setup or plugin code.
+Ordinary completion deletes the sandbox.
 
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package

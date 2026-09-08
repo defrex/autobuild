@@ -65,7 +65,8 @@ class FakeSandbox implements VercelSandboxHandle {
   }
   async update(params: { networkPolicy: NetworkPolicy }) {
     this.policies.push(params.networkPolicy)
-    if (this.failRestore && this.policies.length === 2) throw new Error('restore failed')
+    const isPublicationPolicy = JSON.stringify(params.networkPolicy).includes('git-receive-pack')
+    if (this.failRestore && !isPublicationPolicy) throw new Error('restore failed')
   }
 }
 
@@ -413,6 +414,26 @@ describe('VercelSandboxProvider', () => {
       }),
     ).rejects.toThrow(/restore failed/)
     expect(restore.sandbox.stops).toBe(3)
+
+    const commandsBeforeRestart = restore.sandbox.commands.length
+    await expect(
+      restore.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-stale-policy',
+        workspaceRef: restoreWorkspace.ref,
+      }),
+    ).rejects.toThrow(/restore failed/)
+    expect(restore.sandbox.commands).toHaveLength(commandsBeforeRestart)
+    restore.sandbox.failRestore = false
+    const safeRetry = await restore.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-safe-policy',
+      workspaceRef: restoreWorkspace.ref,
+    })
+    expect(await safeRetry.completion).toEqual({ exitCode: 0 })
+    expect(JSON.stringify(restore.sandbox.policies.at(-1))).not.toContain('git-receive-pack')
 
     const mismatch = harness({ publishedSha: 'b'.repeat(40) })
     const other = await mismatch.provider.provision({

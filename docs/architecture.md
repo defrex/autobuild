@@ -348,7 +348,10 @@ rejected/uncertain executor completion leaves the request pending. The superviso
 verifies the remote head and records the ordinary completion; PR API operations
 remain on the dispatcher. A failed finalize post-step publication records the
 ordinary failure-tolerant step outcome and follow-up observation rather than
-wedging the green build. Normal VM sessions never receive Forge credentials.
+wedging the green build. Every guest launch first reasserts the normal
+receive-pack-free network policy, so even a failed publication-policy restore
+fails closed before setup or plugin code runs. Normal VM sessions never receive
+Forge credentials.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),

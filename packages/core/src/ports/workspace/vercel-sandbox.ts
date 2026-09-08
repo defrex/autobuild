@@ -447,11 +447,36 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.origins.delete(handle.ref)
   }
 
+  private async normalNetworkPolicy(ref: string): Promise<{
+    origin: ReturnType<typeof cleanGithubOrigin>
+    policy: NetworkPolicy
+  }> {
+    const origin =
+      this.origins.get(ref) ??
+      cleanGithubOrigin(
+        await execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo),
+      )
+    this.origins.set(ref, origin)
+    return {
+      origin,
+      policy: uploadPackPolicy(
+        origin,
+        this.options.config.gitPasswordEnv === undefined
+          ? undefined
+          : `Basic ${Buffer.from(`${requireValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+      ),
+    }
+  }
+
   private async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
     const ref = input.workspaceRef
     if (this.active.has(ref)) throw new Error(`sandbox ${ref} already has a live execution`)
     const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref))
     if (sandbox === null) throw new Error(`sandbox ${ref} no longer exists`)
+    // A prior publication restore may have failed. Reassert the
+    // receive-pack-free policy before any guest command can run.
+    const { policy } = await this.normalNetworkPolicy(ref)
+    await sandbox.update({ networkPolicy: policy })
     if (this.uncertain.has(ref)) {
       // A prior wait/stop failure may have left agent code alive. Confirm a
       // stop before starting another runner in the same environment.
@@ -530,21 +555,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (!token) {
       throw new Error('vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN')
     }
-    const origin =
-      this.origins.get(input.ref) ??
-      cleanGithubOrigin(
-        await execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo),
-      )
+    const { origin, policy: normal } = await this.normalNetworkPolicy(input.ref)
     const sandbox = this.sessions.get(input.ref) ?? (await this.facade.get(input.ref))
     if (sandbox === null) throw new Error(`unknown sandbox ${input.ref}`)
-    this.origins.set(input.ref, origin)
     this.sessions.set(input.ref, sandbox)
-    const normal = uploadPackPolicy(
-      origin,
-      this.options.config.gitPasswordEnv === undefined
-        ? undefined
-        : `Basic ${Buffer.from(`${requireValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
-    )
     const publicationPolicy: NetworkPolicy = {
       allow: {
         [origin.host]: [
