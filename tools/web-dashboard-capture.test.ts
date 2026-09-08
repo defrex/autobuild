@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
-import { canPreviewPointer } from '../app/dashboard/BuildsView'
+import { canPreviewPointer, fastextCells } from '../app/dashboard/BuildsView'
 import {
   checkEvidence,
   chromiumBinary,
@@ -249,6 +249,55 @@ test('hover frame keeps committed and preview state independent', () => {
   expect(evidenceText(html)).toContain('RESUME')
   expect(evidenceText(html)).toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
+})
+
+test('answer frames expose only submit and cancel while retaining focused input and detail', () => {
+  const fixtures = models()
+  for (const id of ['builds-mixed-answer-wide', 'builds-mixed-answer-narrow']) {
+    const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
+    if (!spec) throw new Error(`${id} frame spec is missing`)
+    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const footer = html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0]
+
+    expect(html).toContain('class="answer-step"')
+    expect(html).toContain('optional guidance (empty retries)')
+    expect(html).toContain('<input autofocus="" type="text"')
+    expect(footer).toContain('data-slot="red"><kbd>↵</kbd><span>SUBMIT</span>')
+    expect(footer).toContain('data-slot="green" data-empty="true"')
+    expect(footer).toContain('data-slot="yellow" data-empty="true"')
+    expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>CANCEL</span>')
+    expect(evidenceText(footer ?? '')).not.toContain('RESUME')
+  }
+  const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
+  expect(evidenceText(renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
+    'Answer escalation',
+  )
+})
+
+test('pending answer context disables submit and cancel', () => {
+  const model = models().mixed
+  const selected = model.builds.find((row) => row.blockers.length > 0)!
+  const cells = fastextCells({
+    model,
+    pending: `${selected.slug}:answer`,
+    selection: { kind: 'build', slug: selected.slug },
+    detailOpen: false,
+    confirmingAbort: false,
+    answerStep: { slug: selected.slug, escalationIds: ['esc-1'], input: '' },
+    answerPending: true,
+    onDeselect: () => {},
+    onToggleDetail: () => {},
+    onBuildControl: () => {},
+    onRequestAbort: () => {},
+    onCancelAbort: () => {},
+    onSubmitAnswerStep: () => {},
+    onCancelAnswerStep: () => {},
+    onSetting: () => {},
+    onBulk: () => {},
+    onHarvest: () => {},
+  })
+  expect(cells[0]?.disabled).toBe(true)
+  expect(cells[3]?.disabled).toBe(true)
 })
 
 test('narrow capture frames never supply a hover preview', () => {

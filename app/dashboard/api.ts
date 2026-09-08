@@ -1,5 +1,6 @@
 import type {
   OperatorAnswerRequest,
+  OperatorApiClient,
   OperatorBuildControlRequest,
   OperatorDashboardSnapshot,
   OperatorTicketCreateRequest,
@@ -84,13 +85,15 @@ export const changeBlockers = (
     body: JSON.stringify({ blockerIds }),
   })
 
+type BuildControlResult = Awaited<ReturnType<OperatorApiClient['controlBuild']>>
+
 export const buildControl = (repo: string, slug: string, body: OperatorBuildControlRequest) =>
-  webRequest(repo, `builds/${encodeURIComponent(slug)}/control`, {
+  webRequest<BuildControlResult>(repo, `builds/${encodeURIComponent(slug)}/control`, {
     method: 'POST',
     body: JSON.stringify(body),
   })
 export const answerBuild = (repo: string, slug: string, body: OperatorAnswerRequest) =>
-  webRequest(repo, `builds/${encodeURIComponent(slug)}/answer`, {
+  webRequest<BuildControlResult>(repo, `builds/${encodeURIComponent(slug)}/answer`, {
     method: 'POST',
     body: JSON.stringify(body),
   })

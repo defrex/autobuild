@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T23:30:00Z",
+  "generatedAt": "2026-09-08T15:06:02Z",
   "title": "Design System: Autobuild operator",
   "extensions": {
     "colorMeta": {
@@ -263,8 +263,8 @@
       "name": "Fastext row",
       "kind": "custom",
       "refersTo": "fastext-red",
-      "description": "Four transparent outline buttons in the non-scrolling final shell slot; border and label keep the fixed red, green, yellow, cyan slot hue in every state. A disabled cell drops its key, uses normal weight and a not-allowed cursor, and reduces only its colored foreground and outline to 0.9 opacity over the unchanged transparent resting surface.",
-      "html": "<div class=\"ds-tt\"><div class=\"ds-fastext\" role=\"toolbar\"><button class=\"ds-ft\" data-slot=\"red\"><kbd>a</kbd><span>ABORT</span></button><button class=\"ds-ft\" data-slot=\"green\" disabled><kbd>r</kbd><span>RESUME</span></button><button class=\"ds-ft\" data-slot=\"yellow\"><kbd>m</kbd><span>AUTO MERGE</span></button><button class=\"ds-ft\" data-slot=\"cyan\"><kbd>↵</kbd><span>DETAILS</span></button></div></div>",
+      "description": "Four transparent outline buttons in the non-scrolling final shell slot; border and label keep the fixed red, green, yellow, cyan slot hue in every state. In blocked-build answering context only red SUBMIT and cyan CANCEL are named, with empty green/yellow outlines. A disabled cell drops its key, uses normal weight and a not-allowed cursor, and reduces only its colored foreground and outline to 0.9 opacity over the unchanged transparent resting surface.",
+      "html": "<div class=\"ds-tt\"><p class=\"ds-message\" data-tone=\"alert\">! The build needs operator guidance.</p><label class=\"ds-field\"><span>optional guidance (empty retries)</span><input autofocus></label><div class=\"ds-fastext\" role=\"toolbar\"><button class=\"ds-ft\" data-slot=\"red\"><kbd>↵</kbd><span>SUBMIT</span></button><button class=\"ds-ft\" data-slot=\"green\"></button><button class=\"ds-ft\" data-slot=\"yellow\"></button><button class=\"ds-ft\" data-slot=\"cyan\"><kbd>Esc</kbd><span>CANCEL</span></button></div></div>",
       "css": ".ds-tt { --button-border: 2px; font: 400 var(--fs, 15px) / var(--lh, 22px) var(--font-mono, \"JetBrains Mono\", ui-monospace, Menlo, Consolas, \"DejaVu Sans Mono\", monospace); background: var(--ground, #000); color: var(--ink, #e6e6e6); padding: var(--row, 22px) 1ch; } .ds-fastext { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 1ch; } .ds-ft { display: flex; box-sizing: border-box; align-items: center; column-gap: 1ch; height: var(--row, 22px); padding: 0 1ch; font: inherit; background: transparent; border: var(--button-border) solid currentColor; border-radius: 0; color: var(--ft-color); font-weight: 700; white-space: nowrap; overflow: hidden; cursor: pointer; } .ds-ft[data-slot=\"red\"] { --ft-color: var(--ft-red, #d96868); } .ds-ft[data-slot=\"green\"] { --ft-color: var(--ft-green, #65b868); } .ds-ft[data-slot=\"yellow\"] { --ft-color: var(--ft-yellow, #d7c84f); } .ds-ft[data-slot=\"cyan\"] { --ft-color: var(--ft-cyan, #55b8b8); } .ds-ft:hover:not(:disabled) { background: transparent; text-decoration: underline; text-underline-offset: 0.15em; } .ds-ft:focus-visible { outline: 2px solid var(--live, #55b8b8); outline-offset: 1px; } .ds-ft:active:not(:disabled) { background: var(--ft-color); border-color: var(--ft-color); color: var(--ground, #000); text-decoration: none; } .ds-ft:disabled { background: transparent; color: var(--ft-color); font-weight: 400; opacity: 0.9; cursor: not-allowed; } .ds-ft:disabled kbd { display: none; }"
     },
     {
@@ -302,7 +302,8 @@
       "Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.",
       "Words act: default controls are ink outlines, secondary controls are ghost words, active states use reverse video, and the Fastext row carries four fixed-color outlines.",
       "One motion, a sub-200ms reverse-video flash on a changed state word, off under reduced motion.",
-      "Tickets default to the configured grooming state, unfold below the selected row, and edit source markdown in the same rendered region."
+      "Tickets default to the configured grooming state, unfold below the selected row, and edit source markdown in the same rendered region.",
+      "Blocked RESUME unfolds a focused optional-guidance answer step beneath the selected row; empty submission retries and Fastext names only SUBMIT and CANCEL."
     ],
     "rules": [
       {
@@ -360,7 +361,7 @@
       "Do rest buttons transparently on the ground; use reverse video only for active tabs, a button's pressed state, and the flash.",
       "Do keep STATUS words, yellow `(held)` annotations, and red alert lines at full color when dimming the frame around a selection.",
       "Do carry state in a word and a color together; screen-reader text names the step state the glyph shows.",
-      "Do make destructive intent a second step with a red `!` confirmation line."
+      "Do use a red `!` line for both the blocked-build answer step and destructive confirmation, and make destructive intent a second step."
     ],
     "donts": [
       "Don't introduce a second face, a second size, letterspacing, non-uniform scaling, or a lighter or heavier weight than 400 and 700; the masthead uses the same natural-proportion cell as the rest of the frame.",

@@ -21,6 +21,7 @@ import {
   sameSelection,
   type Selection,
 } from './BuildsView'
+import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
 import { clockText } from './frame'
 import { dashboardImperative } from './imperative'
 import { OperatorShell, type Surface } from './Shell'
@@ -40,12 +41,18 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   const [hoverPreview, setHoverPreview] = useState<Selection>()
   const [detailOpen, setDetailOpen] = useState(false)
   const [confirmingAbort, setConfirmingAbort] = useState(false)
+  const [answerStep, setAnswerStep] = useState<{
+    slug: string
+    escalationIds: string[]
+    input: string
+  }>()
   const [linkedBuild, setLinkedBuild] = useState<{ repo: string; build: OperatorTicketBuild }>()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
   const [transcript, setTranscript] = useState<TranscriptPresentation>()
   const sequence = useRef(0)
+  const answerPending = useRef(false)
 
   const poll = useCallback(
     async (signal?: AbortSignal) => {
@@ -55,6 +62,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         const next = await api.dashboard(repo, signal)
         if (current !== sequence.current) return
         setSnapshot((old) => ({ ...next, model: reconcileDashboard(old?.model, next.model) }))
+        setAnswerStep((step) => {
+          if (!step || answerPending.current) return step
+          const build = next.model.builds.find((row) => row.slug === step.slug)
+          return build && build.blockers.length > 0 ? step : undefined
+        })
         setError(undefined)
       } catch (cause) {
         if (!signal?.aborted) setError(cause instanceof Error ? cause.message : String(cause))
@@ -105,8 +117,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     setSelection(next)
     setTranscript(undefined)
     setConfirmingAbort(false)
+    setAnswerStep(undefined)
   }
   const activate = (next: Selection) => {
+    if (answerPending.current) return
     setConfirmingAbort(false)
     if (sameSelection(selection, next)) {
       setDetailOpen((open) => !open)
@@ -121,7 +135,27 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   }
   const control = (slug: string, action: BuildControlAction) => {
     setConfirmingAbort(false)
-    void act(`${slug}:${action}`, () => api.buildControl(repo, slug, { action }))
+    const key = `${slug}:${action}`
+    setPending(key)
+    setError(undefined)
+    void (async () => {
+      let actionError: string | undefined
+      try {
+        const result = classifyControlReply(slug, await api.buildControl(repo, slug, { action }))
+        if (result.kind === 'answer') {
+          setAnswerStep({ slug: result.slug, escalationIds: result.escalationIds, input: '' })
+        } else if (result.kind === 'unexpected') {
+          actionError = result.text
+        }
+        await poll()
+      } catch (cause) {
+        actionError = cause instanceof Error ? cause.message : String(cause)
+        await poll()
+      } finally {
+        if (actionError !== undefined) setError(actionError)
+        setPending(undefined)
+      }
+    })()
   }
   const setting = (name: 'intake' | 'auto-merge-default', enabled: boolean) =>
     void act(name, () => api.setting(repo, name, enabled))
@@ -129,8 +163,55 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     void act(`bulk-${action}`, () => api.bulk(repo, action))
   const harvest = (body: HarvestControl) =>
     void act(`harvest-${body.action}`, () => api.harvest(repo, body))
-  const answer = (slug: string, body: OperatorAnswerRequest) =>
-    void act(`${slug}:answer`, () => api.answerBuild(repo, slug, body))
+  const answer = (slug: string, body: OperatorAnswerRequest) => {
+    const key = `${slug}:answer`
+    setPending(key)
+    setError(undefined)
+    void (async () => {
+      let actionError: string | undefined
+      try {
+        const result = classifyAnswerReply(slug, await api.answerBuild(repo, slug, body))
+        if (result.kind === 'unexpected') actionError = result.text
+        await poll()
+      } catch (cause) {
+        actionError = cause instanceof Error ? cause.message : String(cause)
+        await poll()
+      } finally {
+        if (actionError !== undefined) setError(actionError)
+        setPending(undefined)
+      }
+    })()
+  }
+  const cancelAnswerStep = () => {
+    if (!answerPending.current) setAnswerStep(undefined)
+  }
+  const submitAnswerStep = () => {
+    if (!answerStep || answerPending.current) return
+    answerPending.current = true
+    const { slug, input } = answerStep
+    const key = `${slug}:answer`
+    setPending(key)
+    setError(undefined)
+    void (async () => {
+      let actionError: string | undefined
+      try {
+        const result = classifyAnswerReply(
+          slug,
+          await api.answerBuild(repo, slug, answerRequest(input)),
+        )
+        if (result.kind === 'answered') setAnswerStep(undefined)
+        else actionError = result.text
+        await poll()
+      } catch (cause) {
+        actionError = cause instanceof Error ? cause.message : String(cause)
+        await poll()
+      } finally {
+        if (actionError !== undefined) setError(actionError)
+        answerPending.current = false
+        setPending(undefined)
+      }
+    })()
+  }
 
   const loadTranscript = async (row: DashboardBuild, kind: string, rev: number) => {
     setPending(`transcript:${row.slug}`)
@@ -156,6 +237,19 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     if (surface !== 'builds' || !model) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target instanceof HTMLElement ? event.target : null
+    if (answerStep) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        cancelAnswerStep()
+      } else if (
+        event.key === 'Enter' &&
+        !target?.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        event.preventDefault()
+        submitAnswerStep()
+      }
+      return
+    }
     if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
     const entries: Selection[] = [
       ...(model.harvest ? [{ kind: 'harvest' } as Selection] : []),
@@ -249,10 +343,13 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       pending={pending !== undefined}
       error={error}
       onSurface={(next) => {
+        if (answerPending.current) return
         setHoverPreview(undefined)
+        setAnswerStep(undefined)
         setSurface(next)
       }}
       onRepo={(next) => {
+        if (answerPending.current) return
         setHoverPreview(undefined)
         setRepo(next)
         deselect()
@@ -285,6 +382,8 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           hoverPreview={hoverPreview}
           detailOpen={detailOpen}
           confirmingAbort={confirmingAbort}
+          answerStep={answerStep}
+          answerPending={answerPending.current}
           transcript={transcript}
           linkedBuild={linkedBuild?.repo === repo ? linkedBuild.build : undefined}
           onActivate={activate}
@@ -294,6 +393,9 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           onBuildControl={control}
           onRequestAbort={() => setConfirmingAbort(true)}
           onCancelAbort={() => setConfirmingAbort(false)}
+          onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
+          onSubmitAnswerStep={submitAnswerStep}
+          onCancelAnswerStep={cancelAnswerStep}
           onAnswer={answer}
           onTranscript={loadTranscript}
           onSetting={setting}

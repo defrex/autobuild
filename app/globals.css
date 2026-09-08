@@ -663,6 +663,18 @@ input.short {
 
 /* ── Detail ───────────────────────────────────────────────────────────── */
 
+.answer-step {
+  display: grid;
+  row-gap: var(--row);
+  max-width: 80ch;
+  margin-top: var(--row);
+  padding-left: 2ch;
+}
+.answer-blocker {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .detail {
   display: grid;
   row-gap: var(--row);
